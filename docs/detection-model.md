@@ -77,7 +77,7 @@ Events carry the same metadata for SIEM filtering:
 
 ## Context Rules
 
-See [detection-content-standard.md](detection-content-standard.md) for the full quality bar: required rule metadata, fixture expectations, false-positive notes, severity rationale, changelog expectations, and deprecation rules.
+See [detection-content-standard.md](detection-content-standard.md) for the full quality bar: required rule metadata, fixture expectations, false-positive notes, severity rationale, documentation expectations, and deprecation rules.
 
 High-risk combinations:
 

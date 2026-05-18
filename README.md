@@ -6,7 +6,7 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
-> Compatibility note: this first public release keeps the existing Rust crate
+> Compatibility note: Telltale currently keeps the existing Rust crate
 > name, binary name, environment variable prefixes, and a few schema fields
 > under `adr` for build and data-format compatibility. The project name is
 > Telltale.
@@ -43,7 +43,7 @@ Set it up around your agent session stores and point the output at your alerting
 
 ## Source support status
 
-This first public release should be read conservatively.
+Current source support should be read conservatively.
 
 - **Most validated so far**: Codex and OpenCode
 - **Some real-world validation**: Claude Code, GitHub Copilot, Gemini CLI
@@ -78,15 +78,9 @@ The fixture tree in `tests/fixtures/` is synthetic and safe for local verificati
 ## Telemetry Output
 
 Telltale is designed to produce structured telemetry that can be searched, charted, and alerted on in a SIEM.
-The first public release keeps SIEM forwarding examples intentionally minimal:
-write append-only JSONL locally, then connect the output to your preferred
+Write append-only JSONL locally, then connect the output to your preferred
 shipper or log pipeline after reviewing your environment's data-handling
 requirements.
-
-The project is meant to produce telemetry that can drive inventory, severity,
-and rule-level visibility in downstream tooling:
-
-![Example Splunk dashboard showing Telltale telemetry](telltale-siem-dashboard.png)
 
 ## Early development and community
 
@@ -119,11 +113,6 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 - [Policy modes](docs/policy-modes.md)
 - [Trust boundaries](docs/trust-boundaries.md)
 - [License and packaging](docs/license-and-packaging.md)
-
-### Public summaries
-- [Public roadmap summary](docs/public-roadmap.md)
-- [Public strategy summary](docs/public-strategy.md)
-- [Public release notes](docs/public-release-notes.md)
 
 ## License
 

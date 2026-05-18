@@ -148,9 +148,8 @@ Bundled rules should include a `falsepositives` list in rule YAML so `adr rules 
 
 ## Changelog Expectations
 
-Every new rule, rule change, or deprecation should be recorded in public
-release notes or another reviewed change log under the appropriate version
-section:
+Every new rule, rule change, or deprecation should be recorded in the relevant
+use-case or detection documentation:
 
 - **New rule**: list the rule ID, category, severity, and the use case or motivation.
 - **Rule change**: describe what changed (score, targets, regex, severity) and why.
@@ -163,7 +162,7 @@ Detection content changes are code changes. They deserve the same review, testin
 When a rule ID must be retired:
 
 1. **Do not reuse the ID.** A retired ID may appear in historical SIEM data, saved searches, and analyst notes. Reusing it creates confusion.
-2. **Add a deprecation note** in the changelog explaining why the rule was removed or replaced.
+2. **Add a deprecation note** in the relevant detection documentation explaining why the rule was removed or replaced.
 3. **If replacing**, introduce the new ID alongside the old one for at least one release cycle, then remove the old one.
 4. **Update fixtures** that depended on the old rule ID to use the new one.
 5. **Update saved searches** and dashboards that reference the old ID.
@@ -185,7 +184,7 @@ Follow this checklist:
 11. Run `adr rules validate --rules <path>` to check YAML syntax and regex compilation.
 12. Run `adr rules test --rules <path> <fixture>` to preview matches.
 13. Run `cargo test` to verify no regressions.
-14. Record the rule in the changelog.
+14. Record the rule in the relevant detection documentation.
 15. If this rule is part of a use case, update [use-cases.md](use-cases.md).
 
 ## Quality Checklist

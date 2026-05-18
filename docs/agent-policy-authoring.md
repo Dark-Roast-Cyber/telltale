@@ -9,7 +9,7 @@ This document defines the first deterministic workflow for turning human-written
 - Help humans define what coding agents may do, must not do, and may do only under conditions.
 - Map those statements to observable ADR categories, rule IDs, fixtures, and validation commands.
 - Keep policy-violation content data-driven in rule YAML instead of hard-coding policy logic.
-- Preserve the existing detection lifecycle: rules, fixtures, validation, coverage, changelog, and SIEM output.
+- Preserve the existing detection lifecycle: rules, fixtures, validation, coverage, documentation, and SIEM output.
 - Mark unobservable controls clearly instead of pretending logs can prove behavior they cannot expose.
 
 ## Concepts
@@ -108,7 +108,7 @@ If a control depends on missing user intent, process ancestry, network packet co
 7. Validate syntax with `adr rules validate`.
 8. Preview fixture behavior with `adr rules test`.
 9. Measure coverage with `adr rules coverage`.
-10. Update public release notes or another reviewed change log, plus relevant use-case docs.
+10. Update the relevant use-case or detection docs.
 
 ## Deterministic Validation
 
