@@ -6,7 +6,10 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
-> Compatibility note: this first public release keeps the existing Rust crate name, binary name, environment variable prefixes, Splunk index/sourcetype examples, and a few schema fields under `adr` for build and data-format compatibility. The project name is Telltale.
+> Compatibility note: this first public release keeps the existing Rust crate
+> name, binary name, environment variable prefixes, and a few schema fields
+> under `adr` for build and data-format compatibility. The project name is
+> Telltale.
 
 ## Why Telltale exists
 
@@ -72,7 +75,7 @@ The fixture tree in `tests/fixtures/` is synthetic and safe for local verificati
 
 - Install and setup guide: [docs/install.md](docs/install.md)
 
-## Example SIEM view
+## Telemetry Output
 
 Telltale is designed to produce structured telemetry that can be searched, charted, and alerted on in a SIEM.
 The first public release keeps SIEM forwarding examples intentionally minimal:

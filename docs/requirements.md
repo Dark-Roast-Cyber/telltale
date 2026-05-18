@@ -8,7 +8,7 @@
 - Support multiple simultaneous rule matches and cumulative scoring.
 - Log informational events for notable activity such as file reads, downloads, installs, and command execution.
 - Trigger Llama Guard and triage-model review when risk exceeds thresholds.
-- Emit append-only JSONL events suitable for Universal Forwarder or Filebeat.
+- Emit append-only JSONL events suitable for local review or downstream log shippers.
 - Preserve enough evidence for investigation without logging raw secrets by default.
 
 ## Security Requirements
