@@ -128,7 +128,7 @@ impl Default for OperationalAlertConfig {
     fn default() -> Self {
         Self {
             max_scanner_errors: 3,
-            max_scan_duration_ms: 300_000, // 5 minutes
+            max_scan_duration_ms: 300_000,     // 5 minutes
             max_source_silence_ms: 86_400_000, // 24 hours
         }
     }
@@ -631,7 +631,10 @@ struct ResolvedEventTime {
     time_override_reason: Option<String>,
 }
 
-fn resolve_event_time(source_event_time: Option<&str>, observed_at: OffsetDateTime) -> ResolvedEventTime {
+fn resolve_event_time(
+    source_event_time: Option<&str>,
+    observed_at: OffsetDateTime,
+) -> ResolvedEventTime {
     let observed_timestamp = format_timestamp(observed_at);
     let Some(raw_event_time) = source_event_time else {
         return ResolvedEventTime {
@@ -725,12 +728,11 @@ fn investigation_summary(severity: &str, rule_ids: &[String], categories: &[Stri
 }
 
 fn redact_error_message(msg: &str) -> String {
-    let redacted = Regex::new(
-        r"(?i)([A-Z]:\\[^\s]+|\\\\[^\s]+|/home/\S+|/Users/\S+|/tmp/\S+|/var/\S+)",
-    )
-        .expect("path redaction regex")
-        .replace_all(msg, "<path>")
-        .into_owned();
+    let redacted =
+        Regex::new(r"(?i)([A-Z]:\\[^\s]+|\\\\[^\s]+|/home/\S+|/Users/\S+|/tmp/\S+|/var/\S+)")
+            .expect("path redaction regex")
+            .replace_all(msg, "<path>")
+            .into_owned();
     let redacted = Regex::new(r"(?i)\b(token|key|secret|password|credential)\s*[:=]\s*\S+")
         .expect("secret redaction regex")
         .replace_all(&redacted, "[redacted-secret]")
@@ -938,7 +940,10 @@ mod tests {
 
         assert_eq!(event.severity, "critical");
         assert_eq!(event.timestamp, "2026-05-01T00:00:00.000Z");
-        assert_eq!(event.event_time.as_deref(), Some("2026-05-01T00:00:00.000Z"));
+        assert_eq!(
+            event.event_time.as_deref(),
+            Some("2026-05-01T00:00:00.000Z")
+        );
         assert_eq!(event.time_source, "source");
         assert_eq!(event.time_confidence, "high");
         let triage = event.triage.expect("triage metadata");
@@ -1112,7 +1117,10 @@ mod tests {
             event.time_override_reason.as_deref(),
             Some("source_timestamp_future_skew")
         );
-        assert_eq!(event.event_time.as_deref(), Some("2999-01-01T00:00:00.000Z"));
+        assert_eq!(
+            event.event_time.as_deref(),
+            Some("2999-01-01T00:00:00.000Z")
+        );
         assert_eq!(event.timestamp, event.observed_at);
         assert_eq!(event.ingested_at, event.observed_at);
     }

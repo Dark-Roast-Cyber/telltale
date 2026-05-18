@@ -787,17 +787,10 @@ mod tests {
                 .rule_ids
                 .contains(&"mcp.server_enumeration".to_string())
         );
-        assert!(
-            event
-                .categories
-                .contains(&"mcp_enumeration".to_string())
-        );
-        assert!(
-            event
-                .evidence
-                .iter()
-                .any(|item| item.field == "command" || item.field == "arguments" || item.field == "tool_result")
-        );
+        assert!(event.categories.contains(&"mcp_enumeration".to_string()));
+        assert!(event.evidence.iter().any(|item| item.field == "command"
+            || item.field == "arguments"
+            || item.field == "tool_result"));
         assert!(
             !event
                 .evidence
@@ -1232,11 +1225,7 @@ mod tests {
                 .rule_ids
                 .contains(&"approval.bypass.context".to_string())
         );
-        assert!(
-            !event
-                .rule_ids
-                .contains(&"secret.env.read".to_string())
-        );
+        assert!(!event.rule_ids.contains(&"secret.env.read".to_string()));
         assert!(
             event
                 .categories
@@ -2581,11 +2570,7 @@ mod tests {
                 .rule_ids
                 .contains(&"approval.bypass.context".to_string())
         );
-        assert!(
-            !event
-                .rule_ids
-                .contains(&"secret.env.read".to_string())
-        );
+        assert!(!event.rule_ids.contains(&"secret.env.read".to_string()));
         assert!(event.categories.contains(&"approval_bypass".to_string()));
         assert!(!event.categories.contains(&"secret_access".to_string()));
         assert!(
@@ -2628,11 +2613,7 @@ mod tests {
                 .rule_ids
                 .contains(&"approval.bypass.context".to_string())
         );
-        assert!(
-            !event
-                .rule_ids
-                .contains(&"secret.env.read".to_string())
-        );
+        assert!(!event.rule_ids.contains(&"secret.env.read".to_string()));
         assert!(event.categories.contains(&"approval_bypass".to_string()));
         assert!(!event.categories.contains(&"secret_access".to_string()));
         assert!(
@@ -3184,7 +3165,11 @@ mod tests {
         assert_eq!(event.session_id, "outbound-upload-exfil");
         assert_eq!(event.severity, "critical");
         assert!(event.rule_ids.contains(&"network.download".to_string()));
-        assert!(event.rule_ids.contains(&"exfil.outbound_upload".to_string()));
+        assert!(
+            event
+                .rule_ids
+                .contains(&"exfil.outbound_upload".to_string())
+        );
         assert!(event.categories.contains(&"download".to_string()));
         assert!(event.categories.contains(&"exfiltration".to_string()));
         assert!(event.tags.contains(&"exfiltration".to_string()));

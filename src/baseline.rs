@@ -726,7 +726,11 @@ mod tests {
         .remove(0);
 
         assert_eq!(current.network_host_counts.get("example.test"), Some(&1));
-        assert!(!current.network_host_counts.contains_key("token@example.test"));
+        assert!(
+            !current
+                .network_host_counts
+                .contains_key("token@example.test")
+        );
     }
 
     #[test]

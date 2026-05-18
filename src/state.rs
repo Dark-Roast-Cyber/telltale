@@ -499,7 +499,11 @@ mod tests {
                 .keys()
                 .all(|host| host.starts_with(BASELINE_HOST_HASH_PREFIX))
         );
-        assert!(!persisted.network_host_counts.contains_key("docs.example.test"));
+        assert!(
+            !persisted
+                .network_host_counts
+                .contains_key("docs.example.test")
+        );
     }
 
     #[test]
@@ -686,8 +690,16 @@ mod tests {
             },
             ..BaselineSummary::default()
         };
-        state.record_baseline_source_contribution(&source_a, "fingerprint-a".to_string(), vec![summary.clone()]);
-        state.record_baseline_source_contribution(&source_b, "fingerprint-b".to_string(), vec![summary]);
+        state.record_baseline_source_contribution(
+            &source_a,
+            "fingerprint-a".to_string(),
+            vec![summary.clone()],
+        );
+        state.record_baseline_source_contribution(
+            &source_b,
+            "fingerprint-b".to_string(),
+            vec![summary],
+        );
         assert_eq!(state.baseline_source_contributions.len(), 2);
     }
 }

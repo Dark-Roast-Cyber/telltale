@@ -582,7 +582,10 @@ fn compile_regex(
         .map_err(|error| format!("invalid regex for rule {rule_id}: {error}").into())
 }
 
-fn matching_field<'a>(rule: &CompiledRule, fields: &'a [(&'a str, &'a str)]) -> Option<MatchedField<'a>> {
+fn matching_field<'a>(
+    rule: &CompiledRule,
+    fields: &'a [(&'a str, &'a str)],
+) -> Option<MatchedField<'a>> {
     fields
         .iter()
         .find(|(name, value)| {
@@ -590,10 +593,7 @@ fn matching_field<'a>(rule: &CompiledRule, fields: &'a [(&'a str, &'a str)]) -> 
                 .iter()
                 .any(|matcher| matcher.target == *name && matcher.regex.is_match(value))
         })
-        .map(|(name, value)| MatchedField {
-            name,
-            value,
-        })
+        .map(|(name, value)| MatchedField { name, value })
 }
 
 fn policy_allows_rule(rule: &RuleDefinition, policy: Option<&RulePolicy>) -> bool {

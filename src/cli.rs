@@ -394,13 +394,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     splunk_hec_token: splunk_hec_token.as_deref(),
                     state_path: &state_path,
                     dry_run,
-                     emit_activity,
-                     allow_fixtures,
-                     backfill,
-                     rebuild_baselines,
-                     rule_paths: &rule_paths,
-                     policy_path: policy.as_deref(),
-                     allowlist_path: allowlist.as_deref(),
+                    emit_activity,
+                    allow_fixtures,
+                    backfill,
+                    rebuild_baselines,
+                    rule_paths: &rule_paths,
+                    policy_path: policy.as_deref(),
+                    allowlist_path: allowlist.as_deref(),
                     baseline_deviation_scoring,
                     clients: &clients,
                     max_sources,
@@ -417,13 +417,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         splunk_hec_token: splunk_hec_token.as_deref(),
                         state_path: &state_path,
                         dry_run,
-                         emit_activity,
-                         allow_fixtures,
-                         backfill,
-                         rebuild_baselines,
-                         rule_paths: &rule_paths,
-                         policy_path: policy.as_deref(),
-                         allowlist_path: allowlist.as_deref(),
+                        emit_activity,
+                        allow_fixtures,
+                        backfill,
+                        rebuild_baselines,
+                        rule_paths: &rule_paths,
+                        policy_path: policy.as_deref(),
+                        allowlist_path: allowlist.as_deref(),
                         baseline_deviation_scoring,
                         clients: &clients,
                         max_sources,
@@ -1406,7 +1406,10 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
         let source_label = if observation.source_instance_id.is_empty() {
             observation.source_id.clone()
         } else {
-            format!("{}/{}", observation.source_id, observation.source_instance_id)
+            format!(
+                "{}/{}",
+                observation.source_id, observation.source_instance_id
+            )
         };
         operational_alerts.push(operational_alert_event(OperationalAlertInput {
             alert_type: "source_silence_threshold_exceeded".to_string(),
@@ -1655,9 +1658,7 @@ fn print_timeline_events(
     Ok(())
 }
 
-fn print_elastic_bulk(
-    events: &[&serde_json::Value],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn print_elastic_bulk(events: &[&serde_json::Value]) -> Result<(), Box<dyn std::error::Error>> {
     for event in events {
         let mut metadata = serde_json::Map::new();
         metadata.insert(
@@ -1868,7 +1869,10 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
-        by_session.entry((session_id, client)).or_default().push(event);
+        by_session
+            .entry((session_id, client))
+            .or_default()
+            .push(event);
     }
 
     let mut timelines = Vec::new();
@@ -2034,11 +2038,13 @@ fn build_source_backed_session_timelines(
     session_filters: &BTreeSet<String>,
     client_filters: &BTreeSet<String>,
 ) -> Vec<serde_json::Value> {
+    type SessionKey = (String, String);
+    type CanonicalSessionRecord = (String, usize, NormalizedRecordV1);
+    type LegacySessionRecord = (String, usize, crate::parser::NormalizedRecord);
+
     let rule_set = load_default_rule_set().expect("rule set");
-    let mut by_session: BTreeMap<(String, String), Vec<(String, usize, NormalizedRecordV1)>> =
-        BTreeMap::new();
-    let mut legacy_by_session: BTreeMap<(String, String), Vec<(String, usize, crate::parser::NormalizedRecord)>> =
-        BTreeMap::new();
+    let mut by_session: BTreeMap<SessionKey, Vec<CanonicalSessionRecord>> = BTreeMap::new();
+    let mut legacy_by_session: BTreeMap<SessionKey, Vec<LegacySessionRecord>> = BTreeMap::new();
     let mut sources = discover_sources(source_root);
     if !client_filters.is_empty() {
         sources.retain(|source| client_filters.contains(source.client.as_str()));
@@ -2079,17 +2085,10 @@ fn build_source_backed_session_timelines(
     by_session
         .into_iter()
         .filter_map(|(session_key, mut records)| {
-            records.sort_by(|left, right| {
-                left.0
-                    .cmp(&right.0)
-                    .then_with(|| left.1.cmp(&right.1))
-            });
+            records.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
             let mut legacy_records = legacy_by_session.remove(&session_key).unwrap_or_default();
-            legacy_records.sort_by(|left, right| {
-                left.0
-                    .cmp(&right.0)
-                    .then_with(|| left.1.cmp(&right.1))
-            });
+            legacy_records
+                .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
             let canonical_records = records
                 .into_iter()
                 .map(|(_, _, record)| record)
@@ -2108,7 +2107,8 @@ fn build_source_backed_timeline_value(
     parsed_records: &[crate::parser::NormalizedRecord],
     rule_set: &CompiledRuleSet,
 ) -> Option<serde_json::Value> {
-    let mut timeline = serde_json::to_value(build_exported_session_timeline(canonical_records)?).ok()?;
+    let mut timeline =
+        serde_json::to_value(build_exported_session_timeline(canonical_records)?).ok()?;
     let summary = build_source_backed_risk_summary(parsed_records, rule_set);
     let max_severity = summary
         .get("max_severity")
@@ -2181,10 +2181,8 @@ fn build_session_risk_summary(session_events: &[&serde_json::Value]) -> serde_js
         }
 
         match event.get("event_type").and_then(|value| value.as_str()) {
-            Some("activity") => {
-                if tool_call_count.is_none() {
-                    tool_call_count = extract_tool_call_count(event);
-                }
+            Some("activity") if tool_call_count.is_none() => {
+                tool_call_count = extract_tool_call_count(event);
             }
             Some("detection") => {
                 detection_count += 1;
@@ -2237,9 +2235,9 @@ fn ranked_summary_values(counts: BTreeMap<String, usize>) -> serde_json::Value {
 
 fn extract_tool_call_count(event: &serde_json::Value) -> Option<u64> {
     let evidence = event.get("evidence")?.as_array()?;
-    let record_counts = evidence.iter().find(|item| {
-        item.get("field").and_then(|value| value.as_str()) == Some("record_counts")
-    })?;
+    let record_counts = evidence
+        .iter()
+        .find(|item| item.get("field").and_then(|value| value.as_str()) == Some("record_counts"))?;
     let counts = record_counts
         .get("redacted_value")
         .and_then(|value| value.as_str())
@@ -2252,9 +2250,7 @@ fn triage_ran_from_event(event: &serde_json::Value) -> bool {
         .get("triage")
         .and_then(|value| value.get("verdict"))
         .and_then(|value| value.as_str())
-        .is_some_and(|verdict| {
-            !matches!(verdict, "pending" | "not_required" | "config_missing")
-        })
+        .is_some_and(|verdict| !matches!(verdict, "pending" | "not_required" | "config_missing"))
 }
 
 fn severity_rank(severity: &str) -> u8 {
@@ -2274,12 +2270,22 @@ fn event_from_json_value(event: &serde_json::Value) -> Option<Event> {
         observed_at: event
             .get("observed_at")
             .and_then(|value| value.as_str())
-            .unwrap_or_else(|| event.get("timestamp").and_then(|value| value.as_str()).unwrap_or(""))
+            .unwrap_or_else(|| {
+                event
+                    .get("timestamp")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+            })
             .to_string(),
         ingested_at: event
             .get("ingested_at")
             .and_then(|value| value.as_str())
-            .unwrap_or_else(|| event.get("timestamp").and_then(|value| value.as_str()).unwrap_or(""))
+            .unwrap_or_else(|| {
+                event
+                    .get("timestamp")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+            })
             .to_string(),
         time_source: event
             .get("time_source")

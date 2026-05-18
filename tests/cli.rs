@@ -1402,7 +1402,13 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
     assert_eq!(envelope["index"], "adr");
     assert_eq!(envelope["sourcetype"], "adr:json");
     assert_eq!(envelope["event"]["event_type"], "health");
-    assert_eq!(envelope["event"]["source_counts"].as_object().unwrap().len(), 0);
+    assert_eq!(
+        envelope["event"]["source_counts"]
+            .as_object()
+            .unwrap()
+            .len(),
+        0
+    );
     assert!(envelope["event"].get("index").is_none());
 }
 
@@ -1421,7 +1427,10 @@ fn scan_once_requires_splunk_hec_endpoint_and_token_together() {
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
-        .args(["--splunk-hec-endpoint", "http://127.0.0.1:8088/services/collector"])
+        .args([
+            "--splunk-hec-endpoint",
+            "http://127.0.0.1:8088/services/collector",
+        ])
         .output()
         .expect("run adr");
 
@@ -1644,9 +1653,18 @@ fn scan_once_max_sources_is_deterministic() {
     let first_summary: Value = serde_json::from_slice(&first.stdout).expect("first summary json");
     let second_summary: Value =
         serde_json::from_slice(&second.stdout).expect("second summary json");
-    assert_eq!(first_summary["source_counts"], second_summary["source_counts"]);
-    assert_eq!(first_summary["activity_count"], second_summary["activity_count"]);
-    assert_eq!(first_summary["detection_count"], second_summary["detection_count"]);
+    assert_eq!(
+        first_summary["source_counts"],
+        second_summary["source_counts"]
+    );
+    assert_eq!(
+        first_summary["activity_count"],
+        second_summary["activity_count"]
+    );
+    assert_eq!(
+        first_summary["detection_count"],
+        second_summary["detection_count"]
+    );
 }
 
 #[test]
@@ -1738,7 +1756,8 @@ fn scan_once_persists_incremental_baseline_snapshots() {
     run_scan();
     let state_after_second = fs::read_to_string(&state_path).expect("second state json");
     let first_state: Value = serde_json::from_str(&state_after_first).expect("first state parses");
-    let second_state: Value = serde_json::from_str(&state_after_second).expect("second state parses");
+    let second_state: Value =
+        serde_json::from_str(&state_after_second).expect("second state parses");
     assert_eq!(
         second_state["baseline_snapshots"], first_state["baseline_snapshots"],
         "repeat scans should not double-count baseline snapshots"
@@ -1752,7 +1771,11 @@ fn scan_once_persists_incremental_baseline_snapshots() {
     let codex_records: u64 = snapshots
         .values()
         .filter(|snapshot| snapshot["key"]["client"] == "codex")
-        .map(|snapshot| snapshot["observations"]["records"].as_u64().unwrap_or_default())
+        .map(|snapshot| {
+            snapshot["observations"]["records"]
+                .as_u64()
+                .unwrap_or_default()
+        })
         .sum();
     assert!(codex_records > 0);
 }
@@ -1811,9 +1834,8 @@ fn scan_once_replaces_changed_source_baseline_contribution() {
     ]);
     run_scan();
 
-    let state: Value =
-        serde_json::from_str(&fs::read_to_string(&state_path).expect("state json"))
-            .expect("state parses");
+    let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).expect("state json"))
+        .expect("state parses");
     let snapshot = state["baseline_snapshots"]["snapshots"]
         .as_object()
         .expect("snapshots")
@@ -1884,9 +1906,8 @@ fn scan_once_persists_distinct_source_contributions_for_same_bucket() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let state: Value =
-        serde_json::from_str(&fs::read_to_string(&state_path).expect("state json"))
-            .expect("state parses");
+    let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).expect("state json"))
+        .expect("state parses");
     let contributions = state["baseline_source_contributions"]
         .as_object()
         .expect("contributions");
@@ -3182,13 +3203,17 @@ fn export_timeline_produces_redacted_session_timeline() {
         codex_timeline["risk_summary"]["top_rule_ids"]
             .as_array()
             .expect("top rule ids")
-            .contains(&Value::String("mcp.tool_metadata.prompt_injection".to_string()))
+            .contains(&Value::String(
+                "mcp.tool_metadata.prompt_injection".to_string()
+            ))
     );
     assert!(
         codex_timeline["risk_summary"]["top_rule_ids"]
             .as_array()
             .expect("top rule ids")
-            .contains(&Value::String("network.controlled_test_domain.darkroast".to_string()))
+            .contains(&Value::String(
+                "network.controlled_test_domain.darkroast".to_string()
+            ))
     );
     assert!(
         codex_timeline["risk_summary"]["top_categories"]
@@ -3358,8 +3383,7 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
     assert!(stdout.contains("Agent: codex | Model: gpt-5 | Provider: openai"));
     assert!(stdout.contains("Entries: 2 | Detections: 1 | Max severity: critical | Triage: yes"));
     assert!(
-        stdout
-            .contains("Risk: tool_calls=1 risky_actions=1 max_severity=critical triage_ran=yes")
+        stdout.contains("Risk: tool_calls=1 risky_actions=1 max_severity=critical triage_ran=yes")
     );
     assert!(stdout.contains("[0] 2026-05-01T00:00:00Z low activity"));
     assert!(stdout.contains("[1] 2026-05-01T00:00:30Z critical detection tool=shell"));
@@ -3427,7 +3451,9 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         .join("\n"),
     )
     .expect("write source fixture");
-    let opencode_dir = temp.path().join("opencode/storage/message/session-source-session");
+    let opencode_dir = temp
+        .path()
+        .join("opencode/storage/message/session-source-session");
     fs::create_dir_all(&opencode_dir).expect("create opencode fixture dir");
     fs::write(
         opencode_dir.join("messages.json"),

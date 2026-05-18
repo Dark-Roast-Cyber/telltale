@@ -2,8 +2,8 @@ use rusqlite::Connection;
 use serde_json::Value;
 use std::fmt;
 use std::fs;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::clients::{ClientId, SourceKind};
 use crate::discovery::Source;

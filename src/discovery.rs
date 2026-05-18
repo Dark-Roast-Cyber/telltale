@@ -357,14 +357,14 @@ fn files_with_name_containing(root: &Path, needle: &str, recursive: bool) -> Vec
 mod tests {
     use std::collections::HashSet;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::clients::{ClientId, ClientSourceDef, PathRoot, SourceKind};
     use tempfile::tempdir;
 
     use super::{
-        HostPlatform, RootResolutionContext, default_config_home, default_data_home,
-        discover_source_from_context, discover_sources, discover_watch_roots,
+        HostPlatform, RootResolutionContext, current_host_platform, default_config_home,
+        default_data_home, discover_source_from_context, discover_sources, discover_watch_roots,
         resolve_path_root_from_context, source_search_root_from_context,
     };
     use crate::clients::supported_clients;
@@ -438,7 +438,11 @@ mod tests {
     fn discovers_host_style_opencode_sources_from_home_root() {
         let temp = tempdir().expect("tempdir");
         let home = temp.path();
-        let data_home = home.join(".local/share/opencode");
+        let data_home = default_data_home(current_host_platform(), home).join("opencode");
+        let data_home_relative = data_home
+            .strip_prefix(home)
+            .expect("data home relative path")
+            .to_path_buf();
         let legacy_dir = data_home.join("storage/message/session-a");
 
         fs::create_dir_all(&legacy_dir).expect("legacy dir");
@@ -464,34 +468,29 @@ mod tests {
         assert!(keys.contains(&(
             ClientId::OpenCode,
             SourceKind::Sqlite,
-            std::path::PathBuf::from(".local/share/opencode/opencode.db")
+            data_home_relative.join("opencode.db")
         )));
         assert!(keys.contains(&(
             ClientId::OpenCode,
             SourceKind::LegacyJson,
-            std::path::PathBuf::from(
-                ".local/share/opencode/storage/message/session-a/message-a.json"
-            )
+            data_home_relative.join("storage/message/session-a/message-a.json")
         )));
     }
 
     #[test]
     fn discovers_existing_fixture_watch_roots() {
         let roots = discover_watch_roots(std::path::Path::new("tests/fixtures/session_stores"));
-        let root_strings = roots
-            .iter()
-            .map(|path| path.to_string_lossy().to_string())
-            .collect::<Vec<_>>();
+        let fixture_root = Path::new("tests").join("fixtures").join("session_stores");
 
         assert!(
-            root_strings
+            roots
                 .iter()
-                .any(|path| path.ends_with("tests/fixtures/session_stores/codex/sessions"))
+                .any(|path| path.ends_with(fixture_root.join("codex").join("sessions")))
         );
         assert!(
-            root_strings
+            roots
                 .iter()
-                .any(|path| path.ends_with("tests/fixtures/session_stores/opencode"))
+                .any(|path| path.ends_with(fixture_root.join("opencode")))
         );
     }
 
@@ -586,18 +585,18 @@ mod tests {
         fs::create_dir_all(codex_home.join("sessions/2026/05")).expect("codex sessions dir");
         fs::create_dir_all(codex_home.join("archived_sessions")).expect("codex archived dir");
         fs::create_dir_all(codex_home.join("headless")).expect("codex headless dir");
+        fs::write(codex_home.join("sessions/2026/05/session-a.jsonl"), b"{}\n")
+            .expect("codex session fixture");
         fs::write(
-            codex_home.join("sessions/2026/05/session-a.jsonl"),
+            codex_home.join("archived_sessions/session-b.jsonl"),
             b"{}\n",
         )
-        .expect("codex session fixture");
-        fs::write(codex_home.join("archived_sessions/session-b.jsonl"), b"{}\n")
-            .expect("codex archived fixture");
+        .expect("codex archived fixture");
         fs::write(codex_home.join("headless/headless-a.jsonl"), b"{}\n")
             .expect("codex headless fixture");
 
-        let roocode_task = config_home
-            .join("Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/task-a");
+        let roocode_task =
+            config_home.join("Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/task-a");
         let kilocode_task =
             config_home.join("Code/User/globalStorage/kilocode.kilo-code/tasks/task-a");
         fs::create_dir_all(&roocode_task).expect("roocode task dir");

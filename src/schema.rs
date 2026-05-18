@@ -631,7 +631,8 @@ mod tests {
         let fixture_root = Path::new("tests/fixtures/session_stores");
         let sources = discover_sources(fixture_root);
         let discovered_clients: BTreeSet<_> = sources.iter().map(|source| source.client).collect();
-        let expected_clients: BTreeSet<_> = supported_clients().iter().map(|client| client.id).collect();
+        let expected_clients: BTreeSet<_> =
+            supported_clients().iter().map(|client| client.id).collect();
 
         assert_eq!(discovered_clients, expected_clients);
 

@@ -171,7 +171,9 @@ fn send_splunk_hec_envelope(
     }
 }
 
-fn parse_http_endpoint(endpoint: &str) -> Result<(String, u16, String), Box<dyn std::error::Error>> {
+fn parse_http_endpoint(
+    endpoint: &str,
+) -> Result<(String, u16, String), Box<dyn std::error::Error>> {
     let endpoint = endpoint
         .strip_prefix("http://")
         .ok_or("only http:// Splunk HEC endpoints are supported")?;
