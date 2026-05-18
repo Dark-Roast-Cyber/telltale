@@ -1,0 +1,5 @@
+{"type":"session_meta","timestamp":"2026-05-09T14:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline-archived","model":"o3"}}
+{"type":"event_msg","timestamp":"2026-05-09T14:00:01Z","payload":{"type":"user_message","message":"Run the tests for this project."}}
+{"type":"event_msg","timestamp":"2026-05-09T14:00:02Z","payload":{"type":"function_call","name":"shell","call_id":"call-archived-001","arguments":{"command":"cargo test"}}}
+{"type":"event_msg","timestamp":"2026-05-09T14:00:03Z","payload":{"type":"function_call_output","call_id":"call-archived-001","output":"running 3 tests\ntest result: ok. 3 passed; 0 failed; 0 ignored"}}
+{"type":"event_msg","timestamp":"2026-05-09T14:00:04Z","payload":{"type":"assistant_message","message":"All 3 tests passed successfully."}}

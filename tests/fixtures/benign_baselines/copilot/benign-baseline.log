@@ -1,0 +1,8 @@
+2026-05-10T13:00:00.000Z [INFO] Session indexing debug: SESSION_INDEXING=false, repository=undefined
+2026-05-10T13:00:00.100Z [INFO] Workspace initialized: copilot-baseline-session (checkpoints: 0)
+2026-05-10T13:00:00.200Z [INFO] Starting Copilot CLI: 1.0.36
+2026-05-10T13:00:00.300Z [INFO] Node.js version: v24.11.1
+2026-05-10T13:00:02.000Z [INFO] Accumulated output items (2): [{"type":"reasoning","id":"r1","summary":[],"encrypted_content":"thinking-about-structure"},{"arguments":"{\"path\":\"/home/user/project/Cargo.toml\"}","call_id":"call_baseline_001","id":"c1","name":"view","status":"completed","type":"function_call"}]
+2026-05-10T13:00:04.000Z [INFO] Accumulated output items (1): [{"arguments":"{\"path\":\"/home/user/project/src/lib.rs\"}","call_id":"call_baseline_002","id":"c2","name":"view","status":"completed","type":"function_call"}]
+2026-05-10T13:00:06.000Z [INFO] Accumulated output items (1): [{"arguments":"{\"path\":\"/home/user/project/README.md\"}","call_id":"call_baseline_003","id":"c3","name":"view","status":"completed","type":"function_call"}]
+2026-05-10T13:00:08.000Z [INFO] Session completed.

@@ -1,0 +1,10 @@
+version: 1
+description: Example ADR suppressions. Entries are AND-matched across populated fields.
+suppressions:
+  - name: example-known-benign-session
+    clients: []
+    session_ids: []
+    tool_names: []
+    rule_ids: []
+    categories: []
+    source_path_hashes: []

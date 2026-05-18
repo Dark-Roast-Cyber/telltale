@@ -1,0 +1,14 @@
+filebeat.inputs:
+  - type: filestream
+    id: adr-jsonl
+    paths:
+      - /srv/telltale/logs/adr-events.jsonl
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+fields:
+  service.name: adr
+  event.module: agentic_detection_response
+fields_under_root: true

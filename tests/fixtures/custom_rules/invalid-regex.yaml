@@ -1,0 +1,15 @@
+version: 1
+description: Invalid custom ADR rule fixture.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: custom.invalid_regex
+    category: custom_agent_behavior
+    severity: high
+    score: 70
+    targets: [assistant_context]
+    regex: '['
+    tags: [custom]
+    explanation: Invalid regex should fail validation.
+modifiers: []

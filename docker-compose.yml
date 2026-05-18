@@ -1,0 +1,39 @@
+# Telltale scanner local development demo.
+#
+# Usage:
+#   SESSION_STORE=~/.codex/sessions docker compose up --build
+#
+# The adr service runs a one-shot scan against the mounted session store and
+# writes JSONL to a shared volume.
+
+services:
+  adr:
+    build: .
+    container_name: adr-scanner
+    volumes:
+      # Agent session store — mount read-only.
+      - ${SESSION_STORE:-./tests/fixtures/session_stores}:/session-stores:ro
+      # Shared log volume.
+      - adr-logs:/var/log/adr
+      # Persist scan state across runs.
+      - adr-state:/var/lib/adr/state
+      # Load rules from the repo.
+      - ./config:/opt/adr/config:ro
+    command:
+      - scan
+      - --once
+      - --emit-activity
+      - --root
+      - /session-stores
+      - --log-path
+      - /var/log/adr/adr-events.jsonl
+      - --state-path
+      - /var/lib/adr/state/adr-state.json
+      - --rules
+      - /opt/adr/config/rules/tool-call-regex.yaml
+    environment:
+      - ADR_LOG_PATH=/var/log/adr/adr-events.jsonl
+      - ADR_STATE_PATH=/var/lib/adr/state/adr-state.json
+volumes:
+  adr-logs:
+  adr-state:

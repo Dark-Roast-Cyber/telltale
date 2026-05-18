@@ -1,0 +1,51 @@
+.env
+.env.*
+!.env.example
+.codex
+.codex/
+opencode.json
+.ralph-tui/*
+logs/
+state/
+runtime/*
+!runtime/ralph/
+runtime/ralph/*
+!runtime/ralph/ralph-diary.md
+tmp/
+!tests/fixtures/session_stores/gemini/tmp/
+!tests/fixtures/session_stores/gemini/tmp/**
+*.log
+!tests/fixtures/**/*.log
+
+.agents/
+
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+target/
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Local automation loops can contain machine-specific commands and logs.
+scripts/ralph-loop.local.zsh
+scripts/inspiration/ralph-loop.local.zsh
+
+# Share project OpenCode skills/agents when useful, but keep local runtime,
+# dependencies, and config files that may contain tokens or host-specific MCPs out.
+.opencode/opencode.json
+.opencode/opencode.jsonc
+.opencode/node_modules/
+.opencode/package-lock.json
+.opencode/bun.lock
+
+# Ralph TUI task working files (local only, not committed)
+tasks/
+
+# Optional local reference checkouts and symlinks.
+references/

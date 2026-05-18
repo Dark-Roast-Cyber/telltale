@@ -1,0 +1,5 @@
+{"type":"user_message","timestamp":"2026-05-10T11:00:00Z","model":"claude-sonnet-4","message":{"role":"user","content":"Read the src/main.rs file and explain what it does."}}
+{"type":"assistant_message","timestamp":"2026-05-10T11:00:01Z","model":"claude-sonnet-4","message":{"role":"assistant","content":"Let me read that file for you."}}
+{"type":"tool_use","timestamp":"2026-05-10T11:00:02Z","model":"claude-sonnet-4","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-baseline-001","name":"Read","input":{"file_path":"/home/user/project/src/main.rs"}}]}}
+{"type":"tool_result","timestamp":"2026-05-10T11:00:03Z","model":"claude-sonnet-4","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu-baseline-001","content":"fn main() {\n    println!(\"Hello, world!\");\n}"}]}}
+{"type":"assistant_message","timestamp":"2026-05-10T11:00:04Z","model":"claude-sonnet-4","message":{"role":"assistant","content":"This is a simple Rust program that prints 'Hello, world!' to the console. It uses the standard main function entry point."}}

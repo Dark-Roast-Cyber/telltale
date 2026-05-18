@@ -1,0 +1,12 @@
+{"type":"session_meta","timestamp":"2026-05-10T09:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline","model":"o3"}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:01Z","payload":{"type":"user_message","message":"Help me understand the project structure. List the top-level files and read the README."}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:02Z","payload":{"type":"assistant_message","message":"I'll look at the project structure for you."}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:03Z","payload":{"type":"function_call","name":"shell","call_id":"call-baseline-001","arguments":{"command":"ls -la"}}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:04Z","payload":{"type":"function_call_output","call_id":"call-baseline-001","output":"total 48\ndrwxr-xr-x  8 user user 4096 May 10 09:00 .\ndrwxr-xr-x  3 user user 4096 May 10 08:00 ..\n-rw-r--r--  1 user user 1234 May 10 09:00 README.md\n-rw-r--r--  1 user user  567 May 10 09:00 Cargo.toml\ndrwxr-xr-x  2 user user 4096 May 10 09:00 src"}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:05Z","payload":{"type":"function_call","name":"shell","call_id":"call-baseline-002","arguments":{"command":"cat README.md"}}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:06Z","payload":{"type":"function_call_output","call_id":"call-baseline-002","output":"# My Project\n\nA sample project for demonstration purposes.\n\n## Usage\n\nRun `cargo build` to compile."}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:07Z","payload":{"type":"assistant_message","message":"The project has a standard Rust layout: README.md, Cargo.toml, and a src/ directory. It's a simple demo project."}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:08Z","payload":{"type":"user_message","message":"Now check the git log for recent commits."}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:09Z","payload":{"type":"function_call","name":"shell","call_id":"call-baseline-003","arguments":{"command":"git log --oneline -5"}}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:10Z","payload":{"type":"function_call_output","call_id":"call-baseline-003","output":"a1b2c3d Add README\ne4f5g6h Initial commit"}}
+{"type":"event_msg","timestamp":"2026-05-10T09:00:11Z","payload":{"type":"assistant_message","message":"There are two commits: the initial commit and a README addition."}}

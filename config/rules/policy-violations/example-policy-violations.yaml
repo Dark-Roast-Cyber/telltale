@@ -1,0 +1,23 @@
+version: 1
+description: Example policy-violation detections for coding-agent behavior controls.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: policy.agent_guardrail_modification
+    title: Agent guardrail or policy file modification
+    category: persistence
+    detection_class: policy_violation
+    signal_type: atomic
+    analytic_intent: audit
+    atlas_tags: []
+    severity: medium
+    score: 45
+    targets: [command, arguments, file_path]
+    regex: '(\.opencode/skills/|\.agents/skills/|\.claude/skills/|AGENTS\.md|CLAUDE\.md|opencode\.json|policy\.ya?ml|guardrail|allowlist|denylist)'
+    tags: [policy-violation, agent-guardrails, configuration]
+    falsepositives:
+      - Legitimate repository maintenance may update agent skills, policy files, or allowlists.
+      - Pair this rule with user-intent review before treating it as malicious.
+    explanation: Agent modified or referenced files that can change agent behavior, policy, or guardrails.
+modifiers: []

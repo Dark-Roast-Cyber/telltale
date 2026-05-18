@@ -1,0 +1,127 @@
+version: 1
+name: example-agent-behavior-policy
+description: Example normalized controls for coding-agent behavior policy authoring.
+owner: security-engineering
+status: draft
+source_documents:
+  - config/policies/examples/corporate-ai-agent-policy.md
+controls:
+  - id: agent.no_secret_exfiltration
+    decision: prohibited
+    summary: Agents must not read local secrets and transmit them externally.
+    rationale: Secret reads followed by outbound transfer create high data-loss risk.
+    observability: observable
+    adr_categories:
+      - secret_access
+      - exfiltration
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0086
+    rule_ids:
+      - secret.env.read
+      - exfil.outbound_upload
+      - chain.secret_then_network
+    detection_bundle: config/rules/tool-call-regex.yaml
+    validation:
+      positive_fixture_required: true
+      negative_fixture_required: true
+      benign_baseline_required: true
+
+  - id: agent.no_approval_bypass
+    decision: prohibited
+    summary: Agents must not hide execution, bypass approval, or silently run privileged actions.
+    rationale: Approval bypass language can indicate malicious instructions or unsafe autonomy.
+    observability: observable
+    adr_categories:
+      - approval_bypass
+    detection_class: policy_violation
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+    rule_ids:
+      - approval.bypass.context
+    detection_bundle: config/rules/tool-call-regex.yaml
+    validation:
+      positive_fixture_required: true
+      negative_fixture_required: true
+      benign_baseline_required: true
+
+  - id: agent.no_cloud_credential_publish_chain
+    decision: prohibited
+    summary: Agents must not read cloud credentials and then publish packages or release artifacts.
+    rationale: Credential harvesting before publishing can indicate supply-chain compromise.
+    observability: observable
+    adr_categories:
+      - credential_harvesting
+      - supply_chain
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags: []
+    rule_ids:
+      - credential.cloud_harvest
+      - supply_chain.publish
+      - chain.credential_then_publish
+    detection_bundle: config/rules/tool-call-regex.yaml
+    validation:
+      positive_fixture_required: true
+      negative_fixture_required: true
+      benign_baseline_required: true
+
+  - id: agent.review_package_install
+    decision: review
+    summary: Agents may install dependencies, but package-manager activity should be visible for review.
+    rationale: Package installation is common in development but useful for audit and investigation.
+    observability: observable
+    adr_categories:
+      - install
+    detection_class: compliance_observation
+    signal_type: atomic
+    analytic_intent: audit
+    atlas_tags: []
+    rule_ids:
+      - install.package_manager
+    detection_bundle: config/rules/tool-call-regex.yaml
+    validation:
+      positive_fixture_required: true
+      negative_fixture_required: false
+      benign_baseline_required: true
+
+  - id: agent.no_untrusted_policy_rewrite
+    decision: prohibited
+    summary: Agents must not alter security policy, CI policy, or agent guardrail files unless explicitly requested.
+    rationale: Policy rewrites can weaken controls or hide later unsafe behavior.
+    observability: partially_observable
+    adr_categories:
+      - persistence
+    detection_class: policy_violation
+    signal_type: atomic
+    analytic_intent: audit
+    atlas_tags: []
+    rule_ids:
+      - policy.agent_guardrail_modification
+    detection_bundle: config/rules/policy-violations/example-policy-violations.yaml
+    validation:
+      positive_fixture_required: true
+      negative_fixture_required: true
+      benign_baseline_required: true
+    notes:
+      - User intent may be unavailable for some clients, so explicit-request checks are source-dependent.
+
+  - id: agent.no_external_identity_actions
+    decision: unobservable
+    summary: Agents must not approve identity-provider changes outside the coding workspace.
+    rationale: Current local session stores do not prove identity-provider state changes.
+    observability: unobservable
+    adr_categories: []
+    rule_ids: []
+    detection_bundle: null
+    validation:
+      positive_fixture_required: false
+      negative_fixture_required: false
+      benign_baseline_required: false
+    notes:
+      - Requires external IAM, IdP, or SaaS audit logs rather than local coding-agent transcripts.

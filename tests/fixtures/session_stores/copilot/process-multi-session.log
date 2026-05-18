@@ -1,0 +1,6 @@
+2026-04-27T16:16:57.841Z [INFO] Workspace initialized: copilot-multi-session-a (checkpoints: 0)
+2026-04-27T16:17:17.990Z [INFO] Accumulated output items (1): [{"arguments":"{\"path\":\"README.md\"}","call_id":"call_multi_001","id":"c1","name":"view","status":"completed","type":"function_call"}]
+2026-04-27T17:01:02.100Z [INFO] Session completed.
+2026-04-27T18:04:11.001Z [INFO] Workspace initialized: copilot-multi-session-b (checkpoints: 0)
+2026-04-27T18:04:31.220Z [INFO] Accumulated output items (1): [{"arguments":"{\"cmd\":\"cargo test --quiet\"}","call_id":"call_multi_002","id":"c2","name":"run_in_terminal","status":"completed","type":"function_call"}]
+2026-04-27T18:05:02.330Z [INFO] Session completed.

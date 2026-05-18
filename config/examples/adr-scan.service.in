@@ -1,0 +1,18 @@
+[Unit]
+Description=Telltale one-shot agent session scan
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_DIR__
+Environment=ADR_LOG_PATH=__LOG_PATH__
+Environment=ADR_STATE_PATH=__STATE_PATH__
+Environment=ADR_SCAN_ROOT=__SCAN_ROOT__
+EnvironmentFile=-__PROJECT_DIR__/.env
+ExecStart=__BINDIR__/adr scan --once --emit-activity --root __SCAN_ROOT__ --log-path __LOG_PATH__ --state-path __STATE_PATH__
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
