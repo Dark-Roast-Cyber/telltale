@@ -83,6 +83,11 @@ write append-only JSONL locally, then connect the output to your preferred
 shipper or log pipeline after reviewing your environment's data-handling
 requirements.
 
+The project is meant to produce telemetry that can drive inventory, severity,
+and rule-level visibility in downstream tooling:
+
+![Example Splunk dashboard showing Telltale telemetry](telltale-siem-dashboard.png)
+
 ## Early development and community
 
 Telltale is still in early development. The project is usable, but source coverage, detections, and operational ergonomics are still evolving.
