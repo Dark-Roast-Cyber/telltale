@@ -82,6 +82,21 @@ Write append-only JSONL locally, then connect the output to your preferred
 shipper or log pipeline after reviewing your environment's data-handling
 requirements.
 
+<p align="center">
+  <img src="runewatch.png" alt="Splunk dashboard showing Telltale telemetry across events, hosts, agents, sessions, severities, event types, rule IDs, and detection categories" width="100%" />
+</p>
+
+Example Splunk dashboard built from Telltale telemetry, showing the kinds of
+inventory, severity, evidence, and trend views defenders can build.
+
+Common use cases include:
+
+- tracking agent activity volume across hosts, clients, and sessions;
+- highlighting high and critical detections for analyst review;
+- breaking down detection categories and evidence rule IDs for triage;
+- spotting spikes, outliers, and session drift over time;
+- feeding dashboards, alerts, and investigations in Splunk or another SIEM.
+
 ## Early development and community
 
 Telltale is still in early development. The project is usable, but source coverage, detections, and operational ergonomics are still evolving.
