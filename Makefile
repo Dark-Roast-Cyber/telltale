@@ -102,19 +102,3 @@ scan:
 ## Clean build artifacts
 clean:
 	cargo clean
-
-## Build Docker image
-docker-build:
-	docker build -t adr:latest .
-
-## Run one-shot scan in container (fixture-safe)
-docker-scan-dry:
-	docker run --rm adr:latest scan --once --dry-run --root /session-stores
-
-## Run Docker Compose
-docker-up:
-	docker compose up --build
-
-## Stop Docker Compose
-docker-down:
-	docker compose down
