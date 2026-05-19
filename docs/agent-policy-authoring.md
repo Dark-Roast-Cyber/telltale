@@ -28,7 +28,7 @@ This document is source material, not executable configuration.
 
 ### Agent Behavior Policy YAML
 
-The agent behavior policy is a normalized planning artifact. It records controls, decisions, observability, ADR mappings, and expected validation evidence. See `config/policies/examples/agent-behavior-policy.yaml`.
+The agent behavior policy is a normalized planning artifact. It records controls, decisions, observability, ADR mappings, and expected validation evidence. Keep examples inline and compact rather than relying on a separate example file.
 
 The first schema is intentionally simple and reviewable:
 
@@ -70,6 +70,31 @@ atlas_tags: []
 ```
 
 See `docs/detection-content-standard.md` and `MITRE_ATLAS_COVERAGE.md`.
+
+### Lean Examples
+
+```yaml
+version: 1
+name: example-agent-policy
+description: Example policy controls for coding agents.
+controls:
+  - id: agent.no_secret_exfiltration
+    decision: prohibited
+    summary: Agents must not read local secrets and transmit them externally.
+    observability: observable
+    adr_categories: [secret_access, exfiltration]
+    rule_ids: [secret.env.read, exfil.outbound_upload, chain.secret_then_network]
+    detection_bundle: config/rules/tool-call-regex.yaml
+    validation:
+      positive_fixture_required: true
+      negative_fixture_required: true
+```
+
+```markdown
+Agents must not read local secrets unless explicitly requested for a security review.
+Agents must not publish packages after reading cloud credentials.
+Agents may install dependencies only from approved package registries.
+```
 
 ## Control Decisions
 
