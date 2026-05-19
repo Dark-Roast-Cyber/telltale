@@ -683,6 +683,7 @@ pub fn parse_event_timestamp(value: &str) -> Option<OffsetDateTime> {
 
 pub fn format_timestamp(timestamp: OffsetDateTime) -> String {
     let timestamp = timestamp
+        .to_offset(time::UtcOffset::UTC)
         .replace_microsecond(0)
         .expect("valid microsecond replacement")
         .replace_nanosecond(0)
@@ -867,8 +868,9 @@ fn display_name(source: &Source) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DetectionEventInput, OperationalAlertInput, detection_event, operational_alert_event,
-        redact_error_message, redact_sensitive_text, scanner_error_event,
+        DetectionEventInput, OperationalAlertInput, detection_event, format_timestamp,
+        operational_alert_event, parse_event_timestamp, redact_error_message,
+        redact_sensitive_text, scanner_error_event,
     };
     use crate::clients::ClientId;
     use crate::scoring::{RiskSeverity, RiskThresholds, assess_risk_with_thresholds};
@@ -1156,6 +1158,46 @@ mod tests {
         assert_eq!(event.event_time, None);
         assert_eq!(event.timestamp, event.observed_at);
         assert_eq!(event.ingested_at, event.observed_at);
+    }
+
+    #[test]
+    fn format_timestamp_normalizes_non_utc_offsets() {
+        let timestamp =
+            parse_event_timestamp("2026-05-01T12:00:00+02:00").expect("parse timestamp");
+
+        assert_eq!(format_timestamp(timestamp), "2026-05-01T10:00:00.000Z");
+    }
+
+    #[test]
+    fn detection_event_normalizes_non_utc_source_timestamp() {
+        let event = detection_event(DetectionEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: "hash".to_string(),
+            tool_name: None,
+            rule_ids: vec!["rule".to_string()],
+            categories: vec!["category".to_string()],
+            detection_classes: Vec::new(),
+            signal_types: Vec::new(),
+            analytic_intents: Vec::new(),
+            atlas_tags: Vec::new(),
+            tags: vec!["tag".to_string()],
+            evidence: Vec::new(),
+            risk_score: 10,
+            event_time: Some("2026-05-01T12:00:00+02:00".to_string()),
+        });
+
+        assert_eq!(event.time_source, "source");
+        assert_eq!(event.time_confidence, "high");
+        assert_eq!(event.time_override_reason, None);
+        assert_eq!(
+            event.event_time.as_deref(),
+            Some("2026-05-01T10:00:00.000Z")
+        );
+        assert_eq!(event.timestamp, "2026-05-01T10:00:00.000Z");
     }
 
     #[test]
