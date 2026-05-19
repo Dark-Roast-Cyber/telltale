@@ -38,7 +38,24 @@ ADR loads the bundled rules by default from `config/rules/tool-call-regex.yaml`.
 adr scan --once --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
 ```
 
-The initial custom rule format is ADR-native and Sigma-inspired. Existing rules may use `targets` plus `regex`; new rules may use a `detection.selection` map with `condition: selection`:
+The simplest valid custom rule uses `targets` plus `regex`:
+
+```yaml
+rules:
+  - id: example.download.curl
+    title: Example curl download
+    category: download
+    severity: low
+    score: 20
+    targets: [command, arguments, url]
+    regex: '(^|\b)curl\b.*https?://'
+    tags: [example, network, download]
+    explanation: Example rule that matches curl-based HTTP downloads.
+    falsepositives:
+      - Setup docs or normal dependency fetches may legitimately use curl.
+```
+
+ADR also supports a Sigma-inspired `detection.selection` map with `condition: selection`:
 
 ```yaml
 rules:
