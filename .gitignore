@@ -40,6 +40,7 @@ scripts/inspiration/ralph-loop.local.zsh
 # dependencies, and config files that may contain tokens or host-specific MCPs out.
 .opencode/opencode.json
 .opencode/opencode.jsonc
+.opencode/package.json
 .opencode/node_modules/
 .opencode/package-lock.json
 .opencode/bun.lock
@@ -60,8 +61,16 @@ IDEAS.md
 PRIVATE_README.md
 docs/internal/
 docs/CHANGELOG.md
+docs/research-urls.md
+docs/siem-logging.md
+docs/splunk-content.md
 skills/
 scripts/ralph*
+scripts/atlas-lookup
+scripts/slunk_uf_set_up
 scripts/RALPH_PLAN.md
 scripts/inspiration/
 runtime/ralph/
+config/examples/splunk-*.conf
+config/examples/splunk-*.xml
+telltale-siem-dashboard.png
