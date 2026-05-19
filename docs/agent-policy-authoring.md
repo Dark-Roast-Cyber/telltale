@@ -138,17 +138,6 @@ cargo run -- scan --once --dry-run \
   --rules config/rules/policy-violations/example-policy-violations.yaml
 ```
 
-## Skill-Assisted Development
-
-Repo-local skills guide agentic development of this workflow:
-
-- `detection-policy-author`: extract and normalize policy controls.
-- `detection-rule-author`: write ADR rule YAML for approved controls.
-- `detection-fixture-author`: create synthetic positive and negative fixtures.
-- `detection-validator`: run deterministic validation and summarize results.
-
-The canonical copies live under `skills/`. OpenCode loads matching project skills from `.opencode/skills/`, so this repository uses symlinks there for shared skill access.
-
 ## Guardrails
 
 - Never use real corporate secrets, real session transcripts, auth files, or customer policy examples containing sensitive details as fixtures.

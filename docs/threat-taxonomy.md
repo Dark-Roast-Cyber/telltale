@@ -44,17 +44,15 @@ ATLAS tags are optional. Add them only when the mapping is specific and defensib
 
 Do not add an ATLAS tag just because a keyword matches. Prefer no ATLAS tag over a weak mapping. Keep ADR categories stable even when ATLAS terminology changes.
 
-## AI Coder Workflow
+## Detection Content Guidance
 
-When creating or changing detection content:
+When authoring or reviewing detection content:
 
-1. Read this file before editing `config/rules/tool-call-regex.yaml`.
-2. Assign exactly one ADR category to each rule.
-3. Use `scripts/atlas-lookup <term>` only against a local `ATLAS.yaml` file when ATLAS context is relevant.
-4. Add ATLAS tags only when a concrete tactic or technique explains the rule.
-5. Keep the rule explanation in ADR terms: what the agent did, why it matters, and what evidence is safe for SIEM.
-6. Add or update synthetic fixtures.
-7. Validate the rule file and run the narrowest relevant tests.
+1. Assign exactly one ADR category to each rule.
+2. Use `scripts/atlas-lookup <term>` only against a local `ATLAS.yaml` file when ATLAS context is relevant.
+3. Add ATLAS tags only when a concrete tactic or technique explains the rule.
+4. Keep rule explanations in ADR terms: what happened, why it matters, and what evidence is safe for SIEM.
+5. Keep fixtures synthetic and validation offline.
 
 ## ADR Categories
 

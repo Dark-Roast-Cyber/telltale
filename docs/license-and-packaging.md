@@ -1,8 +1,7 @@
 # License And Packaging
 
 Telltale Core is licensed under the Apache License 2.0. The root `LICENSE`
-file applies to the open-source core files that are selected for export from
-the single local repository to the public remote.
+file applies to the open-source core in this repository.
 
 ## Apache-2.0 Core Boundary
 
@@ -17,11 +16,11 @@ build, test, configure, and operate it:
   ships in the core crate.
 - JSON event schemas under `schemas/`.
 - Bundled detection rules, ad-hoc examples, policy-violation examples,
-  allowlist examples, and policy examples under `config/`, when those files
-  are selected for public export.
+  allowlist examples, and policy examples under `config/` that ship in the
+  open-source core.
 - Synthetic tests, fixtures, and benchmarks under `tests/` and `benches/`.
-- Public technical documentation under `docs/`, plus public-safe examples and
-  assets selected for export.
+- Public technical documentation under `docs/`, plus reviewed examples and
+  assets that ship in the open-source core.
 
 The core must remain buildable and testable without private services,
 proprietary modules, managed rule feeds, hosted control planes, or enterprise

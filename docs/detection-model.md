@@ -32,7 +32,7 @@ See [threat-taxonomy.md](threat-taxonomy.md) for the ADR category contract, curr
 
 ## Configurable Rules And Policies
 
-ADR loads the bundled rules by default from `config/rules/tool-call-regex.yaml`. Operators can replace that set at scan time with one or more custom YAML files:
+ADR loads the bundled rules by default from `config/rules/tool-call-regex.yaml`. You can replace that set at scan time with one or more custom YAML files:
 
 ```sh
 adr scan --once --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
@@ -66,7 +66,7 @@ disabled_rules: [network.controlled_test_domain.darkroast]
 
 Use `adr rules list`, `adr rules validate`, and `adr rules test` to inspect, compile, and preview configured rules before writing scan output.
 
-Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for operator clarity. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to ADR categories, rule IDs, fixtures, and validation commands.
+Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to ADR categories, rule IDs, fixtures, and validation commands.
 
 Events carry the same metadata for SIEM filtering:
 

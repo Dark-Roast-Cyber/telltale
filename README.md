@@ -72,6 +72,12 @@ cargo test
 ```
 
 The fixture tree in `tests/fixtures/` is synthetic and safe for local verification.
+Use `--dry-run` for fixture checks. Reserve `--allow-fixtures` for intentional
+synthetic writes in CI or local development, not normal scans.
+
+When you are ready to scan real session stores, point `adr scan --root` at the
+directory that contains your actual supported session-store roots, such as `$HOME`
+on a typical single-user workstation, instead of `tests/fixtures/`.
 
 - Install and setup guide: [docs/install.md](docs/install.md)
 
@@ -137,4 +143,4 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 
 Telltale Core is licensed under Apache-2.0. See [LICENSE](LICENSE) and
 [License and packaging](docs/license-and-packaging.md) for the open-source core
-boundary and future separate-license feature boundary.
+boundary and the boundary for future separately licensed features.

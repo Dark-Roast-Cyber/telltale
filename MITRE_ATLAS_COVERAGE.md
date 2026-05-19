@@ -25,7 +25,7 @@ All ADR rules use the same rule structure, regardless of purpose:
 - `analytic_intent`: how analysts should treat the event, such as `alert`, `hunt`, `audit`, `enrich`, or `baseline`.
 - `atlas_tags`: optional ATLAS context tags.
 
-Policy violations, bleeding-edge ad-hoc hunts, and production alerts are all normal ADR rules. They may live in separate bundles for operator clarity, but they use the same syntax, validation, fixture expectations, scoring, redaction, and event schema.
+Policy violations, bleeding-edge ad-hoc hunts, and production alerts are all normal ADR rules. They may live in separate bundles for organizational clarity, but they use the same syntax, validation, fixture expectations, scoring, redaction, and event schema.
 
 ## Coverage Table
 
@@ -42,4 +42,4 @@ Policy violations, bleeding-edge ad-hoc hunts, and production alerts are all nor
 
 ## Open Mapping Work
 
-Rules without `atlas_tags` are not automatically deficient. Prefer no ATLAS tag over a weak mapping. Add tags when the relationship is specific and defensible, then update this file in the same change as the rule YAML.
+Rules without `atlas_tags` are not automatically deficient. Prefer no ATLAS tag over a weak mapping. Add tags only when the relationship is specific and defensible, and keep this reference aligned with the published rule set.

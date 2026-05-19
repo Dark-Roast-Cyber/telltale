@@ -33,12 +33,16 @@ cargo test
 The fixture tree under `tests/fixtures/` is synthetic and safe for local
 verification.
 
+Use `--dry-run` for this verification step. Do not use `--allow-fixtures`
+unless you intentionally want to write synthetic fixture output in CI or local
+development.
+
 ## Scan Real Session Stores
 
 Once the fixture scan looks healthy, run against your local session stores.
 Use the directory that contains the supported session-store roots you want to
 scan; for a typical single-user workstation, that is usually your home
-directory:
+directory. Keep `tests/fixtures/` for dry-run verification only:
 
 ```sh
 cargo run -- scan --once --emit-activity --root "$HOME" --log-path logs/adr-events.jsonl
