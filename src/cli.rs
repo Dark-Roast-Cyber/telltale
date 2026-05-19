@@ -386,56 +386,30 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             clients,
             max_sources,
         } => {
+            let scan_args = ScanCommandArgs {
+                root: &root,
+                log_path: &log_path,
+                splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
+                splunk_hec_token: splunk_hec_token.as_deref(),
+                state_path: &state_path,
+                dry_run,
+                emit_activity,
+                allow_fixtures,
+                backfill,
+                rebuild_baselines,
+                rule_paths: &rule_paths,
+                policy_path: policy.as_deref(),
+                allowlist_path: allowlist.as_deref(),
+                baseline_deviation_scoring,
+                clients: &clients,
+                max_sources,
+            };
             if once {
-                run_scan_once(ScanConfig {
-                    root: &root,
-                    log_path: &log_path,
-                    splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
-                    splunk_hec_token: splunk_hec_token.as_deref(),
-                    state_path: &state_path,
-                    dry_run,
-                    emit_activity,
-                    allow_fixtures,
-                    backfill,
-                    rebuild_baselines,
-                    rule_paths: &rule_paths,
-                    policy_path: policy.as_deref(),
-                    allowlist_path: allowlist.as_deref(),
-                    baseline_deviation_scoring,
-                    clients: &clients,
-                    max_sources,
-                })?;
+                run_scan_once(scan_config(&scan_args))?;
             } else {
                 let interval =
                     interval_seconds.ok_or("scan requires --once or --interval-seconds")?;
-                let mut remaining = iterations;
-                loop {
-                    run_scan_once(ScanConfig {
-                        root: &root,
-                        log_path: &log_path,
-                        splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
-                        splunk_hec_token: splunk_hec_token.as_deref(),
-                        state_path: &state_path,
-                        dry_run,
-                        emit_activity,
-                        allow_fixtures,
-                        backfill,
-                        rebuild_baselines,
-                        rule_paths: &rule_paths,
-                        policy_path: policy.as_deref(),
-                        allowlist_path: allowlist.as_deref(),
-                        baseline_deviation_scoring,
-                        clients: &clients,
-                        max_sources,
-                    })?;
-                    if let Some(value) = remaining.as_mut() {
-                        if *value == 1 {
-                            break;
-                        }
-                        *value -= 1;
-                    }
-                    thread::sleep(Duration::from_secs(interval));
-                }
+                run_scan_loop(&scan_args, iterations, Duration::from_secs(interval))?;
             }
         }
         Command::Rules { command } => match command {
@@ -523,7 +497,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             allowlist,
             baseline_deviation_scoring,
         } => {
-            run_watch(WatchConfig {
+            let watch_args = WatchCommandArgs {
                 root: &root,
                 log_path: &log_path,
                 state_path: &state_path,
@@ -536,7 +510,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 policy_path: policy.as_deref(),
                 allowlist_path: allowlist.as_deref(),
                 baseline_deviation_scoring,
-            })?;
+            };
+            run_watch(watch_config(&watch_args))?;
         }
         Command::Status {
             log_path,
@@ -642,6 +617,22 @@ fn rule_summary_json(rule_set: &CompiledRuleSet) -> serde_json::Value {
     })
 }
 
+#[derive(Clone, Copy)]
+enum RuleServerRoute {
+    Editor,
+    Summary,
+    Validate,
+    Preview,
+    Save,
+    NotFound,
+}
+
+struct HttpRequest {
+    method: String,
+    path: String,
+    body: Vec<u8>,
+}
+
 fn handle_rules_request(
     mut stream: TcpStream,
     state: &mut RuleServerState,
@@ -659,9 +650,23 @@ fn handle_rules_request(
         )?;
         return Ok(());
     }
+    let request = read_http_request(&stream)?;
+    write_rules_route_response(
+        &mut stream,
+        rule_server_route(&request),
+        &request.body,
+        state,
+        rule_paths,
+        policy_path,
+    )?;
+    Ok(())
+}
+
+fn read_http_request(stream: &TcpStream) -> Result<HttpRequest, Box<dyn std::error::Error>> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
+
     let mut content_length = 0_usize;
     loop {
         let mut header = String::new();
@@ -674,53 +679,67 @@ fn handle_rules_request(
             content_length = value.parse::<usize>()?;
         }
     }
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let path = parts.next().unwrap_or_default();
+
     let mut body = vec![0_u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body)?;
     }
 
-    match (method, path) {
-        ("GET", "/") | ("HEAD", "/") => write_http_response(
-            &mut stream,
+    let mut parts = request_line.split_whitespace();
+    Ok(HttpRequest {
+        method: parts.next().unwrap_or_default().to_string(),
+        path: parts.next().unwrap_or_default().to_string(),
+        body,
+    })
+}
+
+fn rule_server_route(request: &HttpRequest) -> RuleServerRoute {
+    match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/") | ("HEAD", "/") => RuleServerRoute::Editor,
+        ("GET", "/api/rules") | ("HEAD", "/api/rules") => RuleServerRoute::Summary,
+        ("POST", "/api/rules/validate") => RuleServerRoute::Validate,
+        ("POST", "/api/rules/preview") => RuleServerRoute::Preview,
+        ("POST", "/api/rules/save") => RuleServerRoute::Save,
+        _ => RuleServerRoute::NotFound,
+    }
+}
+
+fn write_rules_route_response(
+    stream: &mut TcpStream,
+    route: RuleServerRoute,
+    body: &[u8],
+    state: &mut RuleServerState,
+    rule_paths: &[PathBuf],
+    policy_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match route {
+        RuleServerRoute::Editor => write_http_response(
+            stream,
             200,
             "OK",
             "text/html; charset=utf-8",
             RULE_EDITOR_HTML,
-        )?,
-        ("GET", "/api/rules") | ("HEAD", "/api/rules") => write_http_response(
-            &mut stream,
-            200,
-            "OK",
-            "application/json",
-            &serde_json::to_string(&state.rule_summary)?,
-        )?,
-        ("POST", "/api/rules/validate") => {
-            let response = validate_rules_request(&body)?;
-            write_json_api_response(&mut stream, response)?;
+        ),
+        RuleServerRoute::Summary => write_json_response(stream, 200, "OK", &state.rule_summary),
+        RuleServerRoute::Validate => write_json_api_response(stream, validate_rules_request(body)?),
+        RuleServerRoute::Preview => {
+            write_json_api_response(stream, preview_rules_request(body, &state.rule_set)?)
         }
-        ("POST", "/api/rules/preview") => {
-            let response = preview_rules_request(&body, &state.rule_set)?;
-            write_json_api_response(&mut stream, response)?;
-        }
-        ("POST", "/api/rules/save") => {
-            let response = save_rules_request(&body, rule_paths)?;
+        RuleServerRoute::Save => {
+            let response = save_rules_request(body, rule_paths)?;
             if response.status_code == 200 {
                 state.reload(load_rule_set_from_paths(rule_paths, policy_path)?);
             }
-            write_json_api_response(&mut stream, response)?;
+            write_json_api_response(stream, response)
         }
-        _ => write_http_response(
-            &mut stream,
+        RuleServerRoute::NotFound => write_http_response(
+            stream,
             404,
             "Not Found",
             "text/plain; charset=utf-8",
             "not found",
-        )?,
+        ),
     }
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -745,20 +764,32 @@ struct ApiResponse {
     body: serde_json::Value,
 }
 
+impl ApiResponse {
+    fn ok(body: serde_json::Value) -> Self {
+        Self {
+            status_code: 200,
+            reason: "OK",
+            body,
+        }
+    }
+
+    fn bad_request(error: impl Into<String>) -> Self {
+        Self {
+            status_code: 400,
+            reason: "Bad Request",
+            body: serde_json::json!({
+                "status": "error",
+                "error": error.into(),
+            }),
+        }
+    }
+}
+
 fn validate_rules_request(body: &[u8]) -> Result<ApiResponse, Box<dyn std::error::Error>> {
     let request: RuleValidationRequest = serde_json::from_slice(body)?;
     match compile_rule_yaml(&request.rules_yaml, request.policy_yaml.as_deref()) {
-        Ok(rule_set) => Ok(ApiResponse {
-            status_code: 200,
-            reason: "OK",
-            body: serde_json::json!({
-                "status": "ok",
-                "rule_count": rule_set.rule_count(),
-                "policy": rule_set.policy_name(),
-                "rules": rule_set.summaries(),
-            }),
-        }),
-        Err(error) => Ok(api_error_response(400, "Bad Request", error.to_string())),
+        Ok(rule_set) => Ok(ApiResponse::ok(rule_summary_json(&rule_set))),
+        Err(error) => Ok(ApiResponse::bad_request(error.to_string())),
     }
 }
 
@@ -769,12 +800,12 @@ fn preview_rules_request(
     let request: RulePreviewRequest = serde_json::from_slice(body)?;
     let fixture_path = match canonical_fixture_path(&request.fixture_path) {
         Ok(path) => path,
-        Err(error) => return Ok(api_error_response(400, "Bad Request", error.to_string())),
+        Err(error) => return Ok(ApiResponse::bad_request(error.to_string())),
     };
     let rule_set = if let Some(rules_yaml) = request.rules_yaml.as_deref() {
         match compile_rule_yaml(rules_yaml, request.policy_yaml.as_deref()) {
             Ok(rule_set) => rule_set,
-            Err(error) => return Ok(api_error_response(400, "Bad Request", error.to_string())),
+            Err(error) => return Ok(ApiResponse::bad_request(error.to_string())),
         }
     } else {
         default_rule_set.clone()
@@ -790,11 +821,10 @@ fn preview_rules_request(
         .iter()
         .find(|(_, event)| event.event_type == "scanner_error")
     {
-        return Ok(api_error_response(
-            400,
-            "Bad Request",
-            format!("fixture parse failed for {}", event.session_id),
-        ));
+        return Ok(ApiResponse::bad_request(format!(
+            "fixture parse failed for {}",
+            event.session_id
+        )));
     }
     let matches = detections
         .iter()
@@ -810,16 +840,12 @@ fn preview_rules_request(
         })
         .collect::<Vec<_>>();
 
-    Ok(ApiResponse {
-        status_code: 200,
-        reason: "OK",
-        body: serde_json::json!({
-            "status": "ok",
-            "fixture_path": display_fixture_path(&fixture_path),
-            "match_count": matches.len(),
-            "matches": matches,
-        }),
-    })
+    Ok(ApiResponse::ok(serde_json::json!({
+        "status": "ok",
+        "fixture_path": display_fixture_path(&fixture_path),
+        "match_count": matches.len(),
+        "matches": matches,
+    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -841,7 +867,7 @@ fn save_rules_request(
 
     // Validate rules compile before writing.
     if let Err(error) = compile_rule_yaml(&request.rules_yaml, request.policy_yaml.as_deref()) {
-        return Ok(api_error_response(400, "Bad Request", error.to_string()));
+        return Ok(ApiResponse::bad_request(error.to_string()));
     }
 
     // Resolve target path: must be one of the loaded rule_paths.
@@ -858,14 +884,10 @@ fn save_rules_request(
                 .unwrap_or(false)
         });
         if !allowed {
-            return Ok(api_error_response(
-                400,
-                "Bad Request",
-                format!(
-                    "requested path '{}' is not one of the loaded rule files",
-                    requested.display()
-                ),
-            ));
+            return Ok(ApiResponse::bad_request(format!(
+                "requested path '{}' is not one of the loaded rule files",
+                requested.display()
+            )));
         }
         canonical_requested
     } else {
@@ -887,16 +909,12 @@ fn save_rules_request(
     std::fs::write(&tmp, &request.rules_yaml)?;
     std::fs::rename(&tmp, &target)?;
 
-    Ok(ApiResponse {
-        status_code: 200,
-        reason: "OK",
-        body: serde_json::json!({
-            "status": "ok",
-            "saved": target.display().to_string(),
-            "backup": backup.display().to_string(),
-            "rule_count": request.rules_yaml.lines().filter(|l| l.contains("id:")).count(),
-        }),
-    })
+    Ok(ApiResponse::ok(serde_json::json!({
+        "status": "ok",
+        "saved": target.display().to_string(),
+        "backup": backup.display().to_string(),
+        "rule_count": request.rules_yaml.lines().filter(|l| l.contains("id:")).count(),
+    })))
 }
 
 fn compile_rule_yaml(
@@ -929,27 +947,30 @@ fn display_fixture_path(path: &Path) -> String {
         .to_string()
 }
 
-fn api_error_response(status_code: u16, reason: &'static str, error: String) -> ApiResponse {
-    ApiResponse {
-        status_code,
-        reason,
-        body: serde_json::json!({
-            "status": "error",
-            "error": error,
-        }),
-    }
-}
-
 fn write_json_api_response(
     stream: &mut TcpStream,
     response: ApiResponse,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    write_http_response(
+    write_json_response(
         stream,
         response.status_code,
         response.reason,
+        &response.body,
+    )
+}
+
+fn write_json_response(
+    stream: &mut TcpStream,
+    status_code: u16,
+    reason: &str,
+    body: &serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    write_http_response(
+        stream,
+        status_code,
+        reason,
         "application/json",
-        &serde_json::to_string(&response.body)?,
+        &serde_json::to_string(body)?,
     )
 }
 
@@ -1171,7 +1192,82 @@ fn run_rules_coverage(
     Ok(())
 }
 
+fn json_field_or_null(value: &serde_json::Value, key: &str) -> serde_json::Value {
+    value.get(key).cloned().unwrap_or(serde_json::Value::Null)
+}
+
+fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_json::Value {
+    value
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+struct ScanSummaryInput<'a> {
+    emitted_events: &'a [Event],
+    activity_count: usize,
+    detection_count: usize,
+    suppressed_count: usize,
+    rule_count: usize,
+    active_policy_name: Option<&'a str>,
+    dry_run: bool,
+    log_path: &'a Path,
+}
+
+fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "client": summary.emitted_events[0].client,
+        "event_type": summary.emitted_events[0].event_type,
+        "activity_count": summary.activity_count,
+        "detection_count": summary.detection_count,
+        "suppressed_count": summary.suppressed_count,
+        "emitted_count": summary.emitted_events.len().saturating_sub(1),
+        "rule_count": summary.rule_count,
+        "policy": summary.active_policy_name,
+        "log_path": if summary.dry_run { None } else { Some(summary.log_path.display().to_string()) },
+        "source_counts": summary.emitted_events[0].source_counts.clone().unwrap_or_default(),
+    })
+}
+
+fn status_json(
+    health: &serde_json::Value,
+    detection_count: usize,
+    log_path: &Path,
+    state_path: &Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "last_scan_time": json_field_or_null(health, "timestamp"),
+        "log_path": log_path.display().to_string(),
+        "state_path": state_path.display().to_string(),
+        "active_policy_name": json_field_or_null(health, "active_policy_name"),
+        "rule_count": json_field_or_null(health, "rule_count"),
+        "detection_count": detection_count,
+        "threshold_config": json_field_or_null(health, "threshold_config"),
+        "source_counts": json_field_or_empty_object(health, "source_counts"),
+    })
+}
+
 struct ScanConfig<'a> {
+    root: &'a std::path::Path,
+    log_path: &'a std::path::Path,
+    splunk_hec_endpoint: Option<&'a str>,
+    splunk_hec_token: Option<&'a str>,
+    state_path: &'a std::path::Path,
+    dry_run: bool,
+    emit_activity: bool,
+    allow_fixtures: bool,
+    backfill: bool,
+    rebuild_baselines: bool,
+    rule_paths: &'a [PathBuf],
+    policy_path: Option<&'a std::path::Path>,
+    allowlist_path: Option<&'a std::path::Path>,
+    baseline_deviation_scoring: bool,
+    clients: &'a [ClientId],
+    max_sources: Option<usize>,
+}
+
+struct ScanCommandArgs<'a> {
     root: &'a std::path::Path,
     log_path: &'a std::path::Path,
     splunk_hec_endpoint: Option<&'a str>,
@@ -1203,6 +1299,99 @@ struct WatchConfig<'a> {
     policy_path: Option<&'a std::path::Path>,
     allowlist_path: Option<&'a std::path::Path>,
     baseline_deviation_scoring: bool,
+}
+
+struct WatchCommandArgs<'a> {
+    root: &'a std::path::Path,
+    log_path: &'a std::path::Path,
+    state_path: &'a std::path::Path,
+    dry_run: bool,
+    emit_activity: bool,
+    allow_fixtures: bool,
+    iterations: Option<u32>,
+    debounce: Duration,
+    rule_paths: &'a [PathBuf],
+    policy_path: Option<&'a std::path::Path>,
+    allowlist_path: Option<&'a std::path::Path>,
+    baseline_deviation_scoring: bool,
+}
+
+fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
+    ScanConfig {
+        root: args.root,
+        log_path: args.log_path,
+        splunk_hec_endpoint: args.splunk_hec_endpoint,
+        splunk_hec_token: args.splunk_hec_token,
+        state_path: args.state_path,
+        dry_run: args.dry_run,
+        emit_activity: args.emit_activity,
+        allow_fixtures: args.allow_fixtures,
+        backfill: args.backfill,
+        rebuild_baselines: args.rebuild_baselines,
+        rule_paths: args.rule_paths,
+        policy_path: args.policy_path,
+        allowlist_path: args.allowlist_path,
+        baseline_deviation_scoring: args.baseline_deviation_scoring,
+        clients: args.clients,
+        max_sources: args.max_sources,
+    }
+}
+
+fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a> {
+    WatchConfig {
+        root: args.root,
+        log_path: args.log_path,
+        state_path: args.state_path,
+        dry_run: args.dry_run,
+        emit_activity: args.emit_activity,
+        allow_fixtures: args.allow_fixtures,
+        iterations: args.iterations,
+        debounce: args.debounce,
+        rule_paths: args.rule_paths,
+        policy_path: args.policy_path,
+        allowlist_path: args.allowlist_path,
+        baseline_deviation_scoring: args.baseline_deviation_scoring,
+    }
+}
+
+fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
+    ScanConfig {
+        root: config.root,
+        log_path: config.log_path,
+        splunk_hec_endpoint: None,
+        splunk_hec_token: None,
+        state_path: config.state_path,
+        dry_run: config.dry_run,
+        emit_activity: config.emit_activity,
+        allow_fixtures: config.allow_fixtures,
+        backfill: false,
+        rebuild_baselines: false,
+        rule_paths: config.rule_paths,
+        policy_path: config.policy_path,
+        allowlist_path: config.allowlist_path,
+        baseline_deviation_scoring: config.baseline_deviation_scoring,
+        clients: &[],
+        max_sources: None,
+    }
+}
+
+fn run_scan_loop(
+    scan_args: &ScanCommandArgs<'_>,
+    iterations: Option<u32>,
+    interval: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut remaining = iterations;
+    loop {
+        run_scan_once(scan_config(scan_args))?;
+        if let Some(value) = remaining.as_mut() {
+            if *value == 1 {
+                break;
+            }
+            *value -= 1;
+        }
+        thread::sleep(interval);
+    }
+    Ok(())
 }
 
 fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
@@ -1242,24 +1431,7 @@ fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::error::Error>> 
         thread::sleep(config.debounce);
         drain_watch_events(&rx);
 
-        run_scan_once(ScanConfig {
-            root: config.root,
-            log_path: config.log_path,
-            splunk_hec_endpoint: None,
-            splunk_hec_token: None,
-            state_path: config.state_path,
-            dry_run: config.dry_run,
-            emit_activity: config.emit_activity,
-            allow_fixtures: config.allow_fixtures,
-            backfill: false,
-            rebuild_baselines: false,
-            rule_paths: config.rule_paths,
-            policy_path: config.policy_path,
-            allowlist_path: config.allowlist_path,
-            baseline_deviation_scoring: config.baseline_deviation_scoring,
-            clients: &[],
-            max_sources: None,
-        })?;
+        run_scan_once(watch_scan_config(&config))?;
 
         if let Some(value) = remaining.as_mut() {
             if *value == 1 {
@@ -1450,17 +1622,15 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
         state.save(config.state_path)?;
     }
 
-    let summary = serde_json::json!({
-        "client": emitted_events[0].client,
-        "event_type": emitted_events[0].event_type,
-        "activity_count": activity_count,
-        "detection_count": detection_count,
-        "suppressed_count": suppressed_count,
-        "emitted_count": emitted_events.len().saturating_sub(1),
-        "rule_count": rule_count,
-        "policy": active_policy_name.as_deref(),
-        "log_path": if config.dry_run { None } else { Some(config.log_path.display().to_string()) },
-        "source_counts": emitted_events[0].source_counts.clone().unwrap_or_default(),
+    let summary = scan_summary_json(ScanSummaryInput {
+        emitted_events: &emitted_events,
+        activity_count,
+        detection_count,
+        suppressed_count,
+        rule_count,
+        active_policy_name: active_policy_name.as_deref(),
+        dry_run: config.dry_run,
+        log_path: config.log_path,
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
@@ -1522,17 +1692,7 @@ fn run_status(log_path: &Path, state_path: &Path) -> Result<(), Box<dyn std::err
         })
         .count();
 
-    let status = serde_json::json!({
-        "status": "ok",
-        "last_scan_time": health.get("timestamp").cloned().unwrap_or(serde_json::Value::Null),
-        "log_path": log_path.display().to_string(),
-        "state_path": state_path.display().to_string(),
-        "active_policy_name": health.get("active_policy_name").cloned().unwrap_or(serde_json::Value::Null),
-        "rule_count": health.get("rule_count").cloned().unwrap_or(serde_json::Value::Null),
-        "detection_count": detection_count,
-        "threshold_config": health.get("threshold_config").cloned().unwrap_or(serde_json::Value::Null),
-        "source_counts": health.get("source_counts").cloned().unwrap_or_else(|| serde_json::json!({})),
-    });
+    let status = status_json(health, detection_count, log_path, state_path);
     println!("{}", serde_json::to_string(&status)?);
     Ok(())
 }
@@ -1551,7 +1711,42 @@ struct ExportConfig<'a> {
     source_root: Option<&'a Path>,
 }
 
+struct ParsedExportRange {
+    since: Option<OffsetDateTime>,
+    until: Option<OffsetDateTime>,
+}
+
 fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    validate_export_config(&config)?;
+    let range = parse_export_range(&config)?;
+
+    if let Some(source_root) = config.source_root.filter(|_| config.timeline) {
+        return run_source_backed_timeline_export(&config, source_root);
+    }
+
+    let events = read_jsonl_events(config.log_path)?;
+    let filtered = filtered_export_events(&events, &config, &range);
+
+    if config.timeline {
+        let timeline_events = build_session_timelines(&filtered);
+        return print_single_session_timeline(
+            &timeline_events,
+            config.session_ids[0].as_str(),
+            config.format,
+        );
+    }
+
+    let correlation_events = config
+        .correlate
+        .then(|| correlation_events_from_filtered(&filtered));
+    let output_events = correlation_events
+        .as_ref()
+        .map(|events| events.iter().collect::<Vec<_>>())
+        .unwrap_or(filtered);
+    print_export_events(&output_events, config.format)
+}
+
+fn validate_export_config(config: &ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     if config.timeline && config.session_ids.is_empty() {
         return Err("--timeline requires --session-id to select a session".into());
     }
@@ -1584,7 +1779,12 @@ fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>
             return Err("--source-root does not support --since/--until filters".into());
         }
     }
+    Ok(())
+}
 
+fn parse_export_range(
+    config: &ExportConfig<'_>,
+) -> Result<ParsedExportRange, Box<dyn std::error::Error>> {
     let since = parse_export_filter_timestamp(config.since, "--since")?;
     let until = parse_export_filter_timestamp(config.until, "--until")?;
     if let (Some(since), Some(until)) = (since, until)
@@ -1592,25 +1792,35 @@ fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>
     {
         return Err("--since must be less than or equal to --until".into());
     }
+    Ok(ParsedExportRange { since, until })
+}
 
-    if config.timeline
-        && let Some(source_root) = config.source_root
-    {
-        let client_filters = string_set(config.clients);
-        let session_filters = string_set(config.session_ids);
-        let timeline_events =
-            build_source_backed_session_timelines(source_root, &session_filters, &client_filters);
-        ensure_single_timeline_match(&timeline_events, config.session_ids[0].as_str())?;
-        print_timeline_events(&timeline_events, config.format)?;
-        return Ok(());
-    }
+fn run_source_backed_timeline_export(
+    config: &ExportConfig<'_>,
+    source_root: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client_filters = string_set(config.clients);
+    let session_filters = string_set(config.session_ids);
+    let timeline_events =
+        build_source_backed_session_timelines(source_root, &session_filters, &client_filters);
+    print_single_session_timeline(
+        &timeline_events,
+        config.session_ids[0].as_str(),
+        config.format,
+    )
+}
 
-    let events = read_jsonl_events(config.log_path)?;
+fn filtered_export_events<'a>(
+    events: &'a [serde_json::Value],
+    config: &ExportConfig<'_>,
+    range: &ParsedExportRange,
+) -> Vec<&'a serde_json::Value> {
     let severity_filters = lowercase_set(config.severities);
     let client_filters = string_set(config.clients);
     let session_filters = string_set(config.session_ids);
     let rule_filters = string_set(config.rule_ids);
-    let filtered = events
+
+    events
         .iter()
         .filter(|event| {
             event_matches_export_filters(
@@ -1619,53 +1829,52 @@ fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>
                 &client_filters,
                 &session_filters,
                 &rule_filters,
-                since,
-                until,
+                range.since,
+                range.until,
             )
         })
+        .collect()
+}
+
+fn print_single_session_timeline(
+    timeline_events: &[serde_json::Value],
+    requested_session_id: &str,
+    format: ExportFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_single_timeline_match(timeline_events, requested_session_id)?;
+    print_timeline_events(timeline_events, format)
+}
+
+fn correlation_events_from_filtered(filtered: &[&serde_json::Value]) -> Vec<serde_json::Value> {
+    let detection_events = filtered
+        .iter()
+        .filter_map(|event| event_from_json_value(event))
         .collect::<Vec<_>>();
 
-    if config.timeline {
-        let timeline_events = build_session_timelines(&filtered);
-        ensure_single_timeline_match(&timeline_events, config.session_ids[0].as_str())?;
-        print_timeline_events(&timeline_events, config.format)?;
-        return Ok(());
-    }
+    correlation_events_from_detections(&detection_events, &CorrelationConfig::default())
+        .into_iter()
+        .map(|event| serde_json::to_value(event).expect("event serializes"))
+        .collect()
+}
 
-    let correlation_events;
-    let output_events = if config.correlate {
-        let detection_events = filtered
-            .iter()
-            .filter_map(|event| event_from_json_value(event))
-            .collect::<Vec<_>>();
-        correlation_events =
-            correlation_events_from_detections(&detection_events, &CorrelationConfig::default())
-                .into_iter()
-                .map(|event| serde_json::to_value(event).expect("event serializes"))
-                .collect::<Vec<_>>();
-        correlation_events.iter().collect::<Vec<_>>()
-    } else {
-        filtered
-    };
-
-    match config.format {
+fn print_export_events(
+    events: &[&serde_json::Value],
+    format: ExportFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match format {
         ExportFormat::Jsonl => {
-            for event in output_events {
+            for event in events {
                 println!("{}", serde_json::to_string(event)?);
             }
+            Ok(())
         }
         ExportFormat::Summary => {
-            print_export_summary(&output_events);
+            print_export_summary(events);
+            Ok(())
         }
-        ExportFormat::ElasticBulk => {
-            print_elastic_bulk(&output_events)?;
-        }
-        ExportFormat::TimelineText => {
-            return Err("--format timeline-text requires --timeline".into());
-        }
+        ExportFormat::ElasticBulk => print_elastic_bulk(events),
+        ExportFormat::TimelineText => Err("--format timeline-text requires --timeline".into()),
     }
-
-    Ok(())
 }
 
 fn print_timeline_events(

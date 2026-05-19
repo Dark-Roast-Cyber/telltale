@@ -128,12 +128,7 @@ fn normalize_source_record(source: &Source, record: ParsedRecord) -> NormalizedR
 fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
     let raw = fs::read_to_string(&source.path)?;
     let mut records = Vec::new();
-    let default_session_id = source
-        .path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let default_session_id = default_source_file_stem(source);
 
     let mut agent = None;
     let mut provider = None;
@@ -157,13 +152,8 @@ fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError
         let timestamp = string_field(&value, "timestamp");
         let content = record_content(&value);
         let tool_name = tool_name(&value);
-        let arguments = field_as_string(&value, "arguments")
-            .or_else(|| field_as_string(&value, "input"))
-            .or_else(|| claude_tool_input_as_string(&value));
-        let session_id = string_field(&value, "session_id")
-            .or_else(|| string_field(&value, "sessionID"))
-            .or_else(|| string_field(&value, "sessionId"))
-            .unwrap_or_else(|| default_session_id.clone());
+        let arguments = arguments_field(&value).or_else(|| claude_tool_input_as_string(&value));
+        let session_id = session_id_with_fallback(&value, &default_session_id);
 
         records.push(ParsedRecord {
             session_id,
@@ -184,13 +174,7 @@ fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError
 fn extract_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
     let raw = fs::read_to_string(&source.path)?;
     let value = serde_json::from_str::<Value>(&raw)?;
-    let default_session_id = source
-        .path
-        .parent()
-        .and_then(|path| path.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let default_session_id = default_source_parent_name(source);
 
     match value {
         Value::Array(items) => Ok(items
@@ -203,20 +187,15 @@ fn extract_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError>
 }
 
 fn json_record(value: &Value, default_session_id: &str) -> ParsedRecord {
-    let session_id = string_field(value, "session_id")
-        .or_else(|| string_field(value, "sessionID"))
-        .or_else(|| string_field(value, "sessionId"))
-        .unwrap_or_else(|| default_session_id.to_string());
-
     ParsedRecord {
-        session_id,
+        session_id: session_id_with_fallback(value, default_session_id),
         agent: string_field(value, "agent"),
-        model: string_field(value, "modelID").or_else(|| string_field(value, "model")),
-        provider: string_field(value, "providerID").or_else(|| string_field(value, "provider")),
+        model: model_field(value),
+        provider: provider_field(value),
         timestamp: string_field(value, "timestamp").or_else(|| string_field(value, "time")),
         kind: record_kind(value),
         tool_name: tool_name(value),
-        arguments: field_as_string(value, "arguments").or_else(|| field_as_string(value, "input")),
+        arguments: arguments_field(value),
         content: record_content(value),
     }
 }
@@ -228,12 +207,7 @@ fn extract_gemini_json_source(source: &Source) -> Result<Vec<ParsedRecord>, Pars
 
     let raw = fs::read_to_string(&source.path)?;
     let value = serde_json::from_str::<Value>(&raw)?;
-    let default_session_id = source
-        .path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let default_session_id = default_source_file_stem(source);
     let session_id = string_field(&value, "sessionId").unwrap_or(default_session_id);
     let model = string_field(&value, "model");
 
@@ -253,8 +227,7 @@ fn extract_gemini_json_source(source: &Source) -> Result<Vec<ParsedRecord>, Pars
                 .or_else(|| string_field(&value, "startTime")),
             kind: record_kind(message),
             tool_name: tool_name(message),
-            arguments: field_as_string(message, "arguments")
-                .or_else(|| field_as_string(message, "input")),
+            arguments: arguments_field(message),
             content: record_content(message),
         })
         .collect();
@@ -279,21 +252,15 @@ fn extract_sqlite_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseErro
             object.insert(name.clone(), sqlite_value_to_json(value));
         }
         let value = normalize_sqlite_message_value(Value::Object(object));
-        let session_id = string_field(&value, "session_id")
-            .or_else(|| string_field(&value, "sessionID"))
-            .or_else(|| string_field(&value, "sessionId"))
-            .unwrap_or_else(|| "unknown".to_string());
         records.push(ParsedRecord {
-            session_id,
+            session_id: session_id_with_fallback(&value, "unknown"),
             agent: string_field(&value, "agent"),
-            model: string_field(&value, "modelID").or_else(|| string_field(&value, "model")),
-            provider: string_field(&value, "providerID")
-                .or_else(|| string_field(&value, "provider")),
+            model: model_field(&value),
+            provider: provider_field(&value),
             timestamp: string_field(&value, "time").or_else(|| string_field(&value, "timestamp")),
             kind: record_kind(&value),
             tool_name: tool_name(&value),
-            arguments: field_as_string(&value, "arguments")
-                .or_else(|| field_as_string(&value, "input")),
+            arguments: arguments_field(&value),
             content: record_content(&value),
         });
     }
@@ -352,11 +319,8 @@ fn extract_copilot_process_log(source: &Source) -> Result<Vec<ParsedRecord>, Par
                         let tool_name =
                             string_field(item, "name").unwrap_or_else(|| "unknown".to_string());
                         let arguments = string_field(item, "arguments");
-                        let model =
-                            string_field(item, "modelID").or_else(|| string_field(item, "model"));
-                        let provider = string_field(item, "providerID")
-                            .or_else(|| string_field(item, "provider"))
-                            .or_else(|| Some("github".to_string()));
+                        let model = model_field(item);
+                        let provider = provider_field(item).or_else(|| Some("github".to_string()));
                         let call_id = string_field(item, "call_id").unwrap_or_default();
                         let content =
                             format!("function_call: {} (call_id: {})", tool_name, call_id);
@@ -465,6 +429,47 @@ fn collect_strings(value: &Value, output: &mut Vec<String>) {
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
+}
+
+fn default_source_file_stem(source: &Source) -> String {
+    source
+        .path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn default_source_parent_name(source: &Source) -> String {
+    source
+        .path
+        .parent()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn session_id_field(value: &Value) -> Option<String> {
+    string_field(value, "session_id")
+        .or_else(|| string_field(value, "sessionID"))
+        .or_else(|| string_field(value, "sessionId"))
+}
+
+fn session_id_with_fallback(value: &Value, fallback: &str) -> String {
+    session_id_field(value).unwrap_or_else(|| fallback.to_string())
+}
+
+fn model_field(value: &Value) -> Option<String> {
+    string_field(value, "modelID").or_else(|| string_field(value, "model"))
+}
+
+fn provider_field(value: &Value) -> Option<String> {
+    string_field(value, "providerID").or_else(|| string_field(value, "provider"))
+}
+
+fn arguments_field(value: &Value) -> Option<String> {
+    field_as_string(value, "arguments").or_else(|| field_as_string(value, "input"))
 }
 
 fn string_field(value: &Value, key: &str) -> Option<String> {

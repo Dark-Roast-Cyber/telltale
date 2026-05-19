@@ -80,26 +80,10 @@ fn source_watch_root(root: &Path, source_def: ClientSourceDef) -> Option<PathBuf
 fn discover_source(root: &Path, client: ClientId, source_def: ClientSourceDef) -> Vec<Source> {
     let search_root = source_search_root(root, source_def);
 
-    match source_def.pattern {
-        SourcePattern::Extension(extension) => {
-            files_with_extension(&search_root, extension, source_def.recursive)
-                .into_iter()
-                .map(|path| Source::new(client, source_def, path))
-                .collect()
-        }
-        SourcePattern::ExactFile(file_name) => {
-            files_named(&search_root, file_name, source_def.recursive)
-                .into_iter()
-                .map(|path| Source::new(client, source_def, path))
-                .collect()
-        }
-        SourcePattern::FileNameContains(needle) => {
-            files_with_name_containing(&search_root, needle, source_def.recursive)
-                .into_iter()
-                .map(|path| Source::new(client, source_def, path))
-                .collect()
-        }
-    }
+    discover_matching_paths(&search_root, source_def.pattern, source_def.recursive)
+        .into_iter()
+        .map(|path| Source::new(client, source_def, path))
+        .collect()
 }
 
 fn source_search_root(root: &Path, source_def: ClientSourceDef) -> PathBuf {
@@ -160,24 +144,18 @@ fn discover_source_from_context(
 ) -> Vec<Source> {
     let search_root = source_search_root_from_context(context, source_def);
 
-    match source_def.pattern {
-        SourcePattern::Extension(extension) => {
-            files_with_extension(&search_root, extension, source_def.recursive)
-                .into_iter()
-                .map(|path| Source::new(client, source_def, path))
-                .collect()
-        }
-        SourcePattern::ExactFile(file_name) => {
-            files_named(&search_root, file_name, source_def.recursive)
-                .into_iter()
-                .map(|path| Source::new(client, source_def, path))
-                .collect()
-        }
+    discover_matching_paths(&search_root, source_def.pattern, source_def.recursive)
+        .into_iter()
+        .map(|path| Source::new(client, source_def, path))
+        .collect()
+}
+
+fn discover_matching_paths(root: &Path, pattern: SourcePattern, recursive: bool) -> Vec<PathBuf> {
+    match pattern {
+        SourcePattern::Extension(extension) => files_with_extension(root, extension, recursive),
+        SourcePattern::ExactFile(file_name) => files_named(root, file_name, recursive),
         SourcePattern::FileNameContains(needle) => {
-            files_with_name_containing(&search_root, needle, source_def.recursive)
-                .into_iter()
-                .map(|path| Source::new(client, source_def, path))
-                .collect()
+            files_with_name_containing(root, needle, recursive)
         }
     }
 }
