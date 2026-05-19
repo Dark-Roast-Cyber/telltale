@@ -36,7 +36,7 @@ pub struct ActorKey {
     pub provider: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct CorrelatedSession {
     pub session_id: String,
     pub event_id: String,
@@ -89,13 +89,15 @@ pub fn correlate_detection_events(
         }
     }
 
-    let mut correlations = groups
-        .into_iter()
-        .filter_map(|((actor, rule_id), mut candidates)| {
-            candidates.sort_by_key(|candidate| candidate.timestamp);
-            correlate_rule_window(actor, rule_id, candidates, config)
-        })
-        .collect::<Vec<_>>();
+    let mut correlations = aggregate_correlations(
+        groups
+            .into_iter()
+            .filter_map(|((actor, rule_id), mut candidates)| {
+                candidates.sort_by_key(|candidate| candidate.timestamp);
+                correlate_rule_window(actor, rule_id, candidates, config)
+            })
+            .collect(),
+    );
     correlations.sort_by(|left, right| {
         left.window_start
             .cmp(&right.window_start)
@@ -103,6 +105,36 @@ pub fn correlate_detection_events(
             .then(left.shared_rule_ids.cmp(&right.shared_rule_ids))
     });
     correlations
+}
+
+fn aggregate_correlations(
+    correlations: Vec<CrossSessionCorrelation>,
+) -> Vec<CrossSessionCorrelation> {
+    let mut aggregated: BTreeMap<
+        (ActorKey, Vec<CorrelatedSession>, String, String, u32),
+        CrossSessionCorrelation,
+    > = BTreeMap::new();
+
+    for mut correlation in correlations {
+        correlation.shared_rule_ids.sort();
+        correlation.shared_rule_ids.dedup();
+        let key = (
+            correlation.actor.clone(),
+            correlation.sessions.clone(),
+            correlation.window_start.clone(),
+            correlation.window_end.clone(),
+            correlation.max_risk_score,
+        );
+        if let Some(existing) = aggregated.get_mut(&key) {
+            existing.shared_rule_ids.extend(correlation.shared_rule_ids);
+            existing.shared_rule_ids.sort();
+            existing.shared_rule_ids.dedup();
+        } else {
+            aggregated.insert(key, correlation);
+        }
+    }
+
+    aggregated.into_values().collect()
 }
 
 pub fn correlation_events_from_detections(
@@ -393,19 +425,63 @@ mod tests {
     }
 
     #[test]
-    fn builds_schema_shaped_correlation_events() {
-        let detections = vec![
+    fn aggregates_shared_rule_ids_for_identical_actor_windows() {
+        let events = vec![
             detection_event(
                 "session-a",
                 "2026-05-10T10:00:00Z",
-                &["mcp.tool_metadata.prompt_injection"],
+                &[
+                    "mcp.tool_metadata.prompt_injection",
+                    "network.controlled_test_domain.darkroast",
+                ],
                 Some("gpt-5"),
                 90,
             ),
             detection_event(
                 "session-b",
                 "2026-05-10T10:20:00Z",
-                &["mcp.tool_metadata.prompt_injection"],
+                &[
+                    "mcp.tool_metadata.prompt_injection",
+                    "network.controlled_test_domain.darkroast",
+                ],
+                Some("gpt-5"),
+                95,
+            ),
+        ];
+
+        let correlations = correlate_detection_events(&events, &CorrelationConfig::default());
+
+        assert_eq!(correlations.len(), 1);
+        assert_eq!(
+            correlations[0].shared_rule_ids,
+            vec![
+                "mcp.tool_metadata.prompt_injection".to_string(),
+                "network.controlled_test_domain.darkroast".to_string(),
+            ]
+        );
+        assert_eq!(correlations[0].sessions.len(), 2);
+    }
+
+    #[test]
+    fn builds_schema_shaped_correlation_events() {
+        let detections = vec![
+            detection_event(
+                "session-a",
+                "2026-05-10T10:00:00Z",
+                &[
+                    "mcp.tool_metadata.prompt_injection",
+                    "network.controlled_test_domain.darkroast",
+                ],
+                Some("gpt-5"),
+                90,
+            ),
+            detection_event(
+                "session-b",
+                "2026-05-10T10:20:00Z",
+                &[
+                    "mcp.tool_metadata.prompt_injection",
+                    "network.controlled_test_domain.darkroast",
+                ],
                 Some("gpt-5"),
                 95,
             ),
@@ -419,7 +495,10 @@ mod tests {
         assert_eq!(events[0].session_id, "correlation");
         assert_eq!(
             events[0].rule_ids,
-            vec!["mcp.tool_metadata.prompt_injection"]
+            vec![
+                "mcp.tool_metadata.prompt_injection",
+                "network.controlled_test_domain.darkroast",
+            ]
         );
         assert_eq!(events[0].categories, vec!["cross_session_correlation"]);
         assert_eq!(events[0].risk_score, 95);
