@@ -49,3 +49,19 @@ tasks/
 
 # Optional local reference checkouts and symlinks.
 references/
+
+# Local-only development planning and automation files.
+# These are restored from the internal local branch for day-to-day work, but
+# must not be included in public repository commits.
+AGENTS.md
+PLAN.md
+VISION.md
+IDEAS.md
+PRIVATE_README.md
+docs/internal/
+docs/CHANGELOG.md
+skills/
+scripts/ralph*
+scripts/RALPH_PLAN.md
+scripts/inspiration/
+runtime/ralph/
