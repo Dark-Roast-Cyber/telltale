@@ -55,6 +55,7 @@ references/
 # Local-only development planning and automation files.
 # These are restored from the internal local branch for day-to-day work, but
 # must not be included in public repository commits.
+.ai/
 AGENTS.md
 PLAN.md
 VISION.md
