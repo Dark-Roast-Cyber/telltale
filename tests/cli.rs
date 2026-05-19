@@ -2668,6 +2668,23 @@ fn watch_command_is_available_for_realtime_scans() {
 }
 
 #[test]
+fn export_help_mentions_client_for_ambiguous_timeline_session_ids() {
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["export", "--help"])
+        .output()
+        .expect("run adr export help");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Requires --session-id to select a single session"));
+    assert!(stdout.contains("add --client when a session id is ambiguous across clients"));
+}
+
+#[test]
 fn top_level_version_prints_package_version() {
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .arg("--version")
@@ -2813,6 +2830,143 @@ fn export_filters_jsonl_by_event_fields() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["session_id"], "session-a");
     assert_eq!(lines[0]["rule_ids"][0], "mcp.test");
+}
+
+#[test]
+fn export_time_filters_accept_canonical_millisecond_timestamps() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "timestamp": "2026-05-01T00:00:00.000Z",
+            "event_type": "detection",
+            "severity": "critical",
+            "client": "codex",
+            "session_id": "session-a",
+            "rule_ids": ["mcp.test"],
+        })
+        .to_string(),
+    )
+    .expect("write log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .args(["--since", "2026-05-01T00:00:00Z"])
+        .args(["--until", "2026-05-01T00:00:00Z"])
+        .output()
+        .expect("run adr export with canonical timestamp filters");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lines = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("exported json"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["timestamp"], "2026-05-01T00:00:00.000Z");
+}
+
+#[test]
+fn export_time_filters_accept_offset_rfc3339_inputs() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "timestamp": "2026-05-01T10:00:00.000Z",
+            "event_type": "detection",
+            "severity": "critical",
+            "client": "codex",
+            "session_id": "session-a",
+            "rule_ids": ["mcp.test"],
+        })
+        .to_string(),
+    )
+    .expect("write log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .args(["--since", "2026-05-01T12:00:00+02:00"])
+        .args(["--until", "2026-05-01T12:00:00+02:00"])
+        .output()
+        .expect("run adr export with offset timestamp filters");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lines = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("exported json"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["timestamp"], "2026-05-01T10:00:00.000Z");
+}
+
+#[test]
+fn export_rejects_invalid_time_filters() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let since_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .args(["--since", "not-a-timestamp"])
+        .output()
+        .expect("run adr export with invalid since");
+    assert!(!since_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&since_output.stderr)
+            .contains("--since requires a valid RFC3339 timestamp")
+    );
+
+    let until_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .args(["--until", "still-not-a-timestamp"])
+        .output()
+        .expect("run adr export with invalid until");
+    assert!(!until_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&until_output.stderr)
+            .contains("--until requires a valid RFC3339 timestamp")
+    );
+}
+
+#[test]
+fn export_rejects_inverted_time_filter_window() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .args(["--since", "2026-05-01T00:01:00Z"])
+        .args(["--until", "2026-05-01T00:00:00Z"])
+        .output()
+        .expect("run adr export with inverted time window");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--since must be less than or equal to --until")
+    );
 }
 
 #[test]
@@ -3114,7 +3268,7 @@ fn export_timeline_produces_redacted_session_timeline() {
                 "evidence": []
             })
             .to_string(),
-            // Same session_id on a different client — should export as a separate timeline.
+            // Same session_id on a different client — should force client disambiguation.
             serde_json::json!({
                 "schema_version": "1.0",
                 "event_id": "adr-detection-d",
@@ -3153,7 +3307,7 @@ fn export_timeline_produces_redacted_session_timeline() {
         "expected validation error, got: {stderr}"
     );
 
-    // Test 2: --timeline produces a session timeline.
+    // Test 2: ambiguous cross-client session ids require --client disambiguation.
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .arg("export")
         .arg("--log-path")
@@ -3162,6 +3316,23 @@ fn export_timeline_produces_redacted_session_timeline() {
         .args(["--session-id", "session-a"])
         .output()
         .expect("run adr export timeline");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--timeline resolved 2 sessions for session_id 'session-a'; add --client to disambiguate"),
+        "expected ambiguity error, got: {stderr}"
+    );
+
+    // Test 3: adding --client selects a single timeline.
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .args(["--session-id", "session-a"])
+        .args(["--client", "codex"])
+        .output()
+        .expect("run adr export timeline with client filter");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -3174,15 +3345,8 @@ fn export_timeline_produces_redacted_session_timeline() {
         .map(|line| serde_json::from_str::<Value>(line).expect("timeline json"))
         .collect();
 
-    assert_eq!(lines.len(), 2, "expected one timeline per client");
-    let codex_timeline = lines
-        .iter()
-        .find(|timeline| timeline["client"] == "codex")
-        .expect("codex timeline");
-    let opencode_timeline = lines
-        .iter()
-        .find(|timeline| timeline["client"] == "opencode")
-        .expect("opencode timeline");
+    assert_eq!(lines.len(), 1, "expected one selected timeline");
+    let codex_timeline = &lines[0];
 
     // Timeline metadata.
     assert_eq!(codex_timeline["event_type"], "timeline");
@@ -3227,14 +3391,6 @@ fn export_timeline_produces_redacted_session_timeline() {
             .expect("top categories")
             .contains(&Value::String("exfiltration".to_string()))
     );
-    assert_eq!(opencode_timeline["session_id"], "session-a");
-    assert_eq!(opencode_timeline["client"], "opencode");
-    assert_eq!(opencode_timeline["entry_count"], 1);
-    assert_eq!(opencode_timeline["detection_count"], 1);
-    assert_eq!(opencode_timeline["agent"], "opencode");
-    assert_eq!(opencode_timeline["model"], "claude-sonnet");
-    assert_eq!(opencode_timeline["provider"], "anthropic");
-
     // Entries sorted by timestamp.
     let entries = codex_timeline["entries"].as_array().expect("entries array");
     assert_eq!(entries.len(), 3);
@@ -3289,6 +3445,225 @@ fn export_timeline_requires_session_id() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--timeline requires --session-id"));
+}
+
+#[test]
+fn export_timeline_rejects_multiple_session_ids() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .args(["--session-id", "session-a"])
+        .args(["--session-id", "session-b"])
+        .output()
+        .expect("run adr export timeline with multiple session ids");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--timeline requires exactly one --session-id"));
+}
+
+#[test]
+fn export_timeline_rejects_summary_format() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "1.0",
+            "event_type": "activity",
+            "session_id": "timeline-summary-session",
+            "client": "codex",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "severity": "low",
+            "risk_score": 20,
+            "evidence": []
+        })
+        .to_string(),
+    )
+    .expect("write log event");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .args(["--session-id", "timeline-summary-session"])
+        .args(["--format", "summary"])
+        .output()
+        .expect("run adr export timeline summary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--format summary does not support --timeline"));
+}
+
+#[test]
+fn export_timeline_rejects_correlate() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "1.0",
+            "event_type": "detection",
+            "event_id": "adr-detection-correlate",
+            "session_id": "timeline-correlate-session",
+            "client": "codex",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "severity": "high",
+            "risk_score": 80,
+            "rule_ids": ["secret.env.read"],
+            "categories": ["secret_access"],
+            "evidence": []
+        })
+        .to_string(),
+    )
+    .expect("write log event");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .args(["--session-id", "timeline-correlate-session"])
+        .arg("--correlate")
+        .output()
+        .expect("run adr export timeline correlate");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--correlate does not support --timeline"));
+}
+
+#[test]
+fn export_source_root_requires_timeline() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--source-root")
+        .arg(temp.path())
+        .output()
+        .expect("run adr export source-root without timeline");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--source-root requires --timeline"));
+}
+
+#[test]
+fn export_source_root_rejects_summary_format() {
+    let temp = tempdir().expect("tempdir");
+    let source_dir = temp.path().join("codex/sessions/2026/05");
+    fs::create_dir_all(&source_dir).expect("create fixture source dir");
+    fs::write(
+        source_dir.join("source-backed-summary.jsonl"),
+        serde_json::json!({
+            "type": "user",
+            "timestamp": "2026-05-01T00:01:00Z",
+            "session_id": "source-summary-session",
+            "agent": "codex",
+            "model": "gpt-5",
+            "provider": "openai",
+            "content": "Summarize the repository status"
+        })
+        .to_string(),
+    )
+    .expect("write source fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-summary-session"])
+        .args(["--format", "summary"])
+        .output()
+        .expect("run adr export source-root timeline summary");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--format summary does not support --timeline"));
+}
+
+#[test]
+fn export_source_root_rejects_jsonl_only_filters() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let severity_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-session"])
+        .args(["--severity", "critical"])
+        .output()
+        .expect("run adr export source-root with severity filter");
+    assert!(!severity_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&severity_output.stderr)
+            .contains("--source-root does not support --severity filters")
+    );
+
+    let rule_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-session"])
+        .args(["--rule-id", "secret.env.read"])
+        .output()
+        .expect("run adr export source-root with rule filter");
+    assert!(!rule_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&rule_output.stderr)
+            .contains("--source-root does not support --rule-id filters")
+    );
+
+    let time_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-session"])
+        .args(["--since", "2026-05-01T00:00:00Z"])
+        .output()
+        .expect("run adr export source-root with time filter");
+    assert!(!time_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&time_output.stderr)
+            .contains("--source-root does not support --since/--until filters")
+    );
+
+    let correlate_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-session"])
+        .arg("--correlate")
+        .output()
+        .expect("run adr export source-root with correlate");
+    assert!(!correlate_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&correlate_output.stderr)
+            .contains("--correlate does not support --timeline")
+    );
 }
 
 #[test]
@@ -3465,7 +3840,7 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
                 "agent": "opencode",
                 "model": "claude-sonnet",
                 "provider": "anthropic",
-                "content": "OpenCode session sharing the same id should export separately"
+                "content": "OpenCode session sharing the same id should require client disambiguation"
             }
         ])
         .to_string(),
@@ -3480,6 +3855,22 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         .args(["--session-id", "source-session"])
         .output()
         .expect("run adr source-backed timeline export");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--timeline resolved 2 sessions for session_id 'source-session'; add --client to disambiguate"),
+        "expected ambiguity error, got: {stderr}"
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-session"])
+        .args(["--client", "codex"])
+        .output()
+        .expect("run adr source-backed timeline export with client filter");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -3492,15 +3883,8 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str::<Value>(line).expect("timeline json"))
         .collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2);
-    let timeline = lines
-        .iter()
-        .find(|timeline| timeline["client"] == "codex")
-        .expect("codex timeline");
-    let opencode_timeline = lines
-        .iter()
-        .find(|timeline| timeline["client"] == "opencode")
-        .expect("opencode timeline");
+    assert_eq!(lines.len(), 1);
+    let timeline = &lines[0];
     assert_eq!(timeline["event_type"], "timeline");
     assert_eq!(timeline["session_id"], "source-session");
     assert_eq!(timeline["client"], "codex");
@@ -3527,18 +3911,6 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
             .expect("top categories")
             .contains(&Value::String("secret_access".to_string()))
     );
-    assert_eq!(opencode_timeline["session_id"], "source-session");
-    assert_eq!(opencode_timeline["client"], "opencode");
-    assert_eq!(opencode_timeline["agent"], "opencode");
-    assert_eq!(opencode_timeline["model"], "claude-sonnet");
-    assert_eq!(opencode_timeline["provider"], "anthropic");
-    assert_eq!(opencode_timeline["entry_count"], 1);
-    assert_eq!(opencode_timeline["detection_count"], 0);
-    assert_eq!(opencode_timeline["max_severity"], "informational");
-    assert_eq!(opencode_timeline["has_triage"], false);
-    assert_eq!(opencode_timeline["risk_summary"]["tool_call_count"], 0);
-    assert_eq!(opencode_timeline["risk_summary"]["risky_action_count"], 0);
-
     let entries = timeline["entries"].as_array().expect("entries array");
     assert_eq!(entries[0]["event_type"], "user_message");
     assert_eq!(entries[0]["timestamp"], "2026-05-01T00:01:00Z");

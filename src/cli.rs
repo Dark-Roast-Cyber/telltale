@@ -25,7 +25,7 @@ use crate::detection::{
 use crate::discovery::{Source, discover_sources, discover_watch_roots, is_fixture_root};
 use crate::event::{
     Event, HealthEventInput, OperationalAlertInput, evidence_hash, health_event_with_metadata,
-    load_operational_alert_config, operational_alert_event,
+    load_operational_alert_config, operational_alert_event, parse_event_timestamp,
 };
 use crate::parser::parse_source_records;
 use crate::rules::{
@@ -244,7 +244,7 @@ enum Command {
         correlate: bool,
 
         /// Produce a redacted session timeline from the filtered events.
-        /// Requires --session-id to select a single session.
+        /// Requires --session-id to select a single session; add --client when a session id is ambiguous across clients.
         /// Outputs a structured timeline with detection anchors and triage context.
         #[arg(long)]
         timeline: bool,
@@ -1555,11 +1555,42 @@ fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>
     if config.timeline && config.session_ids.is_empty() {
         return Err("--timeline requires --session-id to select a session".into());
     }
+    if config.timeline && config.session_ids.len() > 1 {
+        return Err("--timeline requires exactly one --session-id".into());
+    }
+    if config.timeline && config.correlate {
+        return Err("--correlate does not support --timeline".into());
+    }
+    if config.source_root.is_some() && !config.timeline {
+        return Err("--source-root requires --timeline".into());
+    }
     if !config.timeline && config.format == ExportFormat::TimelineText {
         return Err("--format timeline-text requires --timeline".into());
     }
+    if config.timeline && config.format == ExportFormat::Summary {
+        return Err("--format summary does not support --timeline".into());
+    }
     if config.timeline && config.format == ExportFormat::ElasticBulk {
         return Err("--format elastic-bulk does not support --timeline".into());
+    }
+    if config.source_root.is_some() {
+        if !config.severities.is_empty() {
+            return Err("--source-root does not support --severity filters".into());
+        }
+        if !config.rule_ids.is_empty() {
+            return Err("--source-root does not support --rule-id filters".into());
+        }
+        if config.since.is_some() || config.until.is_some() {
+            return Err("--source-root does not support --since/--until filters".into());
+        }
+    }
+
+    let since = parse_export_filter_timestamp(config.since, "--since")?;
+    let until = parse_export_filter_timestamp(config.until, "--until")?;
+    if let (Some(since), Some(until)) = (since, until)
+        && since > until
+    {
+        return Err("--since must be less than or equal to --until".into());
     }
 
     if config.timeline
@@ -1569,6 +1600,7 @@ fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>
         let session_filters = string_set(config.session_ids);
         let timeline_events =
             build_source_backed_session_timelines(source_root, &session_filters, &client_filters);
+        ensure_single_timeline_match(&timeline_events, config.session_ids[0].as_str())?;
         print_timeline_events(&timeline_events, config.format)?;
         return Ok(());
     }
@@ -1587,14 +1619,15 @@ fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>
                 &client_filters,
                 &session_filters,
                 &rule_filters,
-                config.since,
-                config.until,
+                since,
+                until,
             )
         })
         .collect::<Vec<_>>();
 
     if config.timeline {
         let timeline_events = build_session_timelines(&filtered);
+        ensure_single_timeline_match(&timeline_events, config.session_ids[0].as_str())?;
         print_timeline_events(&timeline_events, config.format)?;
         return Ok(());
     }
@@ -1656,6 +1689,20 @@ fn print_timeline_events(
     }
 
     Ok(())
+}
+
+fn ensure_single_timeline_match(
+    timeline_events: &[serde_json::Value],
+    requested_session_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match timeline_events.len() {
+        0 => Err(format!("no timeline found for session_id '{requested_session_id}'").into()),
+        1 => Ok(()),
+        count => Err(format!(
+            "--timeline resolved {count} sessions for session_id '{requested_session_id}'; add --client to disambiguate"
+        )
+        .into()),
+    }
 }
 
 fn print_elastic_bulk(events: &[&serde_json::Value]) -> Result<(), Box<dyn std::error::Error>> {
@@ -2398,8 +2445,8 @@ fn event_matches_export_filters(
     client_filters: &BTreeSet<String>,
     session_filters: &BTreeSet<String>,
     rule_filters: &BTreeSet<String>,
-    since: Option<&str>,
-    until: Option<&str>,
+    since: Option<OffsetDateTime>,
+    until: Option<OffsetDateTime>,
 ) -> bool {
     if !severity_filters.is_empty()
         && !event
@@ -2442,25 +2489,36 @@ fn event_matches_export_filters(
     {
         return false;
     }
-    if let Some(since) = since
-        && !event
+    if since.is_some() || until.is_some() {
+        let Some(event_timestamp) = event
             .get("timestamp")
             .and_then(|value| value.as_str())
-            .map(|timestamp| timestamp >= since)
-            .unwrap_or(false)
-    {
-        return false;
-    }
-    if let Some(until) = until
-        && !event
-            .get("timestamp")
-            .and_then(|value| value.as_str())
-            .map(|timestamp| timestamp <= until)
-            .unwrap_or(false)
-    {
-        return false;
+            .and_then(parse_event_timestamp)
+        else {
+            return false;
+        };
+
+        if since.is_some_and(|since| event_timestamp < since) {
+            return false;
+        }
+        if until.is_some_and(|until| event_timestamp > until) {
+            return false;
+        }
     }
     true
+}
+
+fn parse_export_filter_timestamp(
+    value: Option<&str>,
+    flag: &str,
+) -> Result<Option<OffsetDateTime>, Box<dyn std::error::Error>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    parse_event_timestamp(value)
+        .ok_or_else(|| format!("{flag} requires a valid RFC3339 timestamp").into())
+        .map(Some)
 }
 
 fn print_export_summary(events: &[&serde_json::Value]) {
