@@ -27,6 +27,7 @@ Run a fixture-safe dry run before scanning real local session stores:
 ```sh
 cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
 cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
+cargo test
 ```
 
 The fixture tree under `tests/fixtures/` is synthetic and safe for local
