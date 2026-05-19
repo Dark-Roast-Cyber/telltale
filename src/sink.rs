@@ -178,6 +178,7 @@ fn parse_http_endpoint(
         .strip_prefix("http://")
         .ok_or("only http:// Splunk HEC endpoints are supported")?;
     let (host_port, path) = match endpoint.split_once('/') {
+        Some((host_port, "")) => (host_port, "/services/collector".to_string()),
         Some((host_port, rest)) => (host_port, format!("/{}", rest)),
         None => (endpoint, "/services/collector".to_string()),
     };
@@ -200,7 +201,8 @@ mod tests {
 
     use crate::event::health_event_with_metadata;
     use crate::sink::{
-        LocalJsonlSink, SplunkHecConfig, SplunkHecHttpSink, emit_events, splunk_hec_envelopes,
+        LocalJsonlSink, SplunkHecConfig, SplunkHecHttpSink, emit_events, parse_http_endpoint,
+        splunk_hec_envelopes,
     };
 
     #[test]
@@ -335,5 +337,15 @@ mod tests {
         assert_eq!(envelope["index"], "adr");
         assert_eq!(envelope["sourcetype"], "adr:json");
         assert_eq!(envelope["event"]["event_type"], "health");
+    }
+
+    #[test]
+    fn parse_http_endpoint_maps_trailing_slash_to_default_collector_path() {
+        let (host, port, path) =
+            parse_http_endpoint("http://127.0.0.1:8088/").expect("parse endpoint");
+
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 8088);
+        assert_eq!(path, "/services/collector");
     }
 }
