@@ -35,10 +35,13 @@ verification.
 
 ## Scan Real Session Stores
 
-Once the fixture scan looks healthy, run against your local session stores:
+Once the fixture scan looks healthy, run against your local session stores.
+Use the directory that contains the supported session-store roots you want to
+scan; for a typical single-user workstation, that is usually your home
+directory:
 
 ```sh
-cargo run -- scan --once --emit-activity --root . --log-path logs/adr-events.jsonl
+cargo run -- scan --once --emit-activity --root "$HOME" --log-path logs/adr-events.jsonl
 ```
 
 Telltale writes append-only JSONL by default so the output can be reviewed
