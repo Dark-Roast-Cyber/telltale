@@ -41,6 +41,7 @@ scripts/inspiration/ralph-loop.local.zsh
 .opencode/opencode.json
 .opencode/opencode.jsonc
 .opencode/package.json
+.opencode/skills/
 .opencode/node_modules/
 .opencode/package-lock.json
 .opencode/bun.lock
