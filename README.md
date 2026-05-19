@@ -88,13 +88,6 @@ Write append-only JSONL locally, then connect the output to your preferred
 shipper or log pipeline after reviewing your environment's data-handling
 requirements.
 
-<p align="center">
-  <img src="runewatch.png" alt="Splunk dashboard showing Telltale telemetry across events, hosts, agents, sessions, severities, event types, rule IDs, and detection categories" width="100%" />
-</p>
-
-Example Splunk dashboard built from Telltale telemetry, showing the kinds of
-inventory, severity, evidence, and trend views defenders can build.
-
 Common use cases include:
 
 - tracking agent activity volume across hosts, clients, and sessions;
@@ -120,24 +113,20 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 
 ## Documentation
 
-- [Install](docs/install.md)
-- [Architecture](docs/architecture.md)
-- [Detection model](docs/detection-model.md)
-- [Detection content standard](docs/detection-content-standard.md)
-- [Agent policy authoring](docs/agent-policy-authoring.md)
-- [Privacy model](docs/privacy-model.md)
-- [Requirements](docs/requirements.md)
-- [Session sources](docs/session-sources.md)
-- [Source validation matrix](docs/source-validation-matrix.md)
-- [Agent capability profiles](docs/agent-capability-profiles.md)
-- [Client capability matrix](docs/client-capability-matrix.md)
-- [Threat taxonomy](docs/threat-taxonomy.md)
-- [MITRE ATLAS coverage](MITRE_ATLAS_COVERAGE.md)
-- [Use cases](docs/use-cases.md)
-- [Normalization schema](docs/normalization-schema.md)
-- [Policy modes](docs/policy-modes.md)
-- [Trust boundaries](docs/trust-boundaries.md)
-- [License and packaging](docs/license-and-packaging.md)
+- Start here:
+  - [Install](docs/install.md)
+  - [Architecture](docs/architecture.md)
+  - [Detection model](docs/detection-model.md)
+  - [Detection content standard](docs/detection-content-standard.md)
+  - [Threat taxonomy](docs/threat-taxonomy.md)
+  - [Privacy model](docs/privacy-model.md)
+- Additional references:
+  - [Session sources](docs/session-sources.md)
+  - [Use cases](docs/use-cases.md)
+  - [Normalization schema](docs/normalization-schema.md)
+  - [Trust boundaries](docs/trust-boundaries.md)
+  - [License and packaging](docs/license-and-packaging.md)
+- Advanced and workflow-specific docs remain under [`docs/`](docs/).
 
 ## License
 

@@ -16,8 +16,8 @@ build, test, configure, and operate it:
   ships in the core crate.
 - JSON event schemas under `schemas/`.
 - Bundled detection rules, ad-hoc examples, policy-violation examples,
-  allowlist examples, and policy examples under `config/` that ship in the
-  open-source core.
+  allowlist examples, and selected configuration examples under `config/`
+  that ship in the open-source core.
 - Synthetic tests, fixtures, and benchmarks under `tests/` and `benches/`.
 - Public technical documentation under `docs/`, plus reviewed examples and
   assets that ship in the open-source core.
