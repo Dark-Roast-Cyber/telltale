@@ -2129,6 +2129,43 @@ fn scan_once_can_emit_session_risk_summary_events() {
 }
 
 #[test]
+fn scan_dry_run_session_risk_summary_does_not_write_log() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--dry-run",
+            "--emit-activity",
+            "--emit-session-risk-summary",
+            "--root",
+            "tests/fixtures/session_stores",
+            "--log-path",
+        ])
+        .arg(&log_path)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["log_path"], Value::Null);
+    assert!(
+        summary["session_risk_summary_count"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(!log_path.exists(), "dry-run should not write JSONL output");
+}
+
+#[test]
 fn shipper_examples_target_default_jsonl_path() {
     let filebeat = include_str!("../config/examples/filebeat-filestream.yml");
     assert!(filebeat.contains("/srv/telltale/logs/adr-events.jsonl"));
