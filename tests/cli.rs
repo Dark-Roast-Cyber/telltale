@@ -4602,4 +4602,7 @@ fn rules_coverage_reports_fixture_and_client_coverage() {
     assert!(stdout.contains("POSITIVE"));
     assert!(stdout.contains("CLIENTS"));
     assert!(stdout.contains("FALSE_POSITIVES"));
+    assert!(stdout.contains("chain.secret_then_network"));
+    assert!(stdout.contains("secret_access+download"));
+    assert!(stdout.contains("Authorized troubleshooting may inspect environment files"));
 }

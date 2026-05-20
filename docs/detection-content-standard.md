@@ -144,7 +144,7 @@ Each use case in [use-cases.md](use-cases.md) should document:
 - Expected false-positive rate on a developer workstation.
 - Mitigation strategies (e.g., suppressing `user_context` from targets, requiring chain modifiers before escalating).
 
-Bundled rules should include a `falsepositives` list in rule YAML so `adr rules coverage` can report whether analyst guidance exists. Keep notes concrete and operational: describe the benign workflow, what context makes it safe, and whether the rule should usually be interpreted alone or as part of a chain.
+Bundled rules and chain modifiers should include a `falsepositives` list in rule YAML so `adr rules coverage` can report whether analyst guidance exists. Keep notes concrete and operational: describe the benign workflow, what context makes it safe, and whether the signal should usually be interpreted alone or as part of a chain.
 
 ## Changelog Expectations
 

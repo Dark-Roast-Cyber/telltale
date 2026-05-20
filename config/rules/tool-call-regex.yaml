@@ -232,18 +232,26 @@ modifiers:
     score: 35
     when_all_categories: [secret_access, download]
     explanation: Secret access near network activity materially increases exfiltration risk.
+    falsepositives:
+      - Authorized troubleshooting may inspect environment files and fetch documented resources in the same session; confirm the network destination and user intent before escalating.
   - id: chain.download_then_execute
     score: 35
     when_all_categories: [download, execution]
     explanation: Download followed by execution is a common malware pattern.
+    falsepositives:
+      - Normal installer workflows often download and execute setup scripts; validate the source, checksum, and explicit user request.
   - id: chain.shell_encoded_payload
     score: 10
     when_all_rule_ids: [execution.shell, execution.encoded_payload]
     explanation: Shell execution of decoded payload content should cross the triage threshold.
+    falsepositives:
+      - Incident response, parser tests, or build tooling may decode payloads under operator control; review whether decoded content was executed or only inspected.
   - id: chain.install_then_persistence
     score: 30
     when_all_categories: [install, persistence]
     explanation: Install plus persistence modification requires triage.
+    falsepositives:
+      - Developer environment setup may install packages and update shell profiles or services when those changes match the requested setup steps.
   - id: chain.mcp_injection_then_egress
     score: 35
     detection_class: security_detection
@@ -254,15 +262,23 @@ modifiers:
       - atlas:AML.T0086
     when_all_categories: [mcp_prompt_injection, exfiltration]
     explanation: MCP prompt injection near outbound egress is the first ADR high-signal alert use case.
+    falsepositives:
+      - ADR security fixtures and controlled validation runs may intentionally pair prompt-injection text with test-domain egress.
   - id: chain.credential_then_publish
     score: 40
     when_all_categories: [credential_harvesting, supply_chain]
     explanation: Credential harvesting followed by package publishing is a supply chain attack pattern.
+    falsepositives:
+      - Authorized release automation may read cloud or package credentials before publishing; verify release intent, credential scope, and package destination.
   - id: chain.harvest_then_exfil
     score: 35
     when_all_categories: [credential_harvesting, exfiltration]
     explanation: Credential harvesting followed by exfiltration is a data theft pattern.
+    falsepositives:
+      - Backup, migration, or inventory work may read credential-adjacent files and upload artifacts when both actions are explicitly approved.
   - id: chain.mcp_enumeration_then_injection
     score: 30
     when_all_categories: [mcp_enumeration, mcp_prompt_injection]
     explanation: MCP server enumeration followed by prompt injection indicates targeted attack.
+    falsepositives:
+      - MCP integration tests may enumerate tools and include synthetic injection strings to validate defenses.

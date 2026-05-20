@@ -100,6 +100,8 @@ pub struct ModifierDefinition {
     pub when_all_categories: Vec<String>,
     #[serde(default)]
     pub when_all_rule_ids: Vec<String>,
+    #[serde(default)]
+    pub falsepositives: Vec<String>,
     pub explanation: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,

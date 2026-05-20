@@ -1090,12 +1090,26 @@ fn run_rules_coverage(
         rule_paths.to_vec()
     };
     let mut all_falsepositives: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut all_rule_categories: BTreeMap<String, String> = BTreeMap::new();
     for path in &paths {
         let raw = fs::read_to_string(path)?;
         let parsed: RuleSet = serde_yaml::from_str(&raw)?;
         for rule in &parsed.rules {
+            all_rule_categories.insert(rule.id.clone(), rule.category.clone());
             if !rule.falsepositives.is_empty() {
                 all_falsepositives.insert(rule.id.clone(), rule.falsepositives.clone());
+            }
+        }
+        for modifier in &parsed.modifiers {
+            if !modifier.when_all_categories.is_empty() {
+                all_rule_categories
+                    .insert(modifier.id.clone(), modifier.when_all_categories.join("+"));
+            } else if !modifier.when_all_rule_ids.is_empty() {
+                all_rule_categories
+                    .insert(modifier.id.clone(), modifier.when_all_rule_ids.join("+"));
+            }
+            if !modifier.falsepositives.is_empty() {
+                all_falsepositives.insert(modifier.id.clone(), modifier.falsepositives.clone());
             }
         }
     }
@@ -1162,11 +1176,16 @@ fn run_rules_coverage(
             .map_or(String::new(), |v| v.join("; "));
 
         // Find category from rule set summaries.
-        let category = rule_set
-            .summaries()
-            .iter()
-            .find(|s| s.id == *rule_id)
-            .map_or(String::new(), |s| s.category.clone());
+        let category = all_rule_categories
+            .get(rule_id)
+            .cloned()
+            .unwrap_or_else(|| {
+                rule_set
+                    .summaries()
+                    .iter()
+                    .find(|s| s.id == *rule_id)
+                    .map_or(String::new(), |s| s.category.clone())
+            });
 
         println!(
             "{:<45} {:<10} {:<10} {:<20} {}",
