@@ -15,6 +15,8 @@ use crate::parser::ParseError;
 use crate::scoring::{RiskThresholds, assess_risk_with_thresholds, load_thresholds};
 
 const SCHEMA_VERSION: &str = "1.0";
+const MAX_REDACTED_EVIDENCE_CHARS: usize = 512;
+const TRUNCATED_EVIDENCE_SUFFIX: &str = "[truncated]";
 
 #[derive(Debug, Serialize)]
 pub struct Event {
@@ -844,7 +846,21 @@ pub fn redact_sensitive_text(text: &str) -> String {
         .expect("encoded blob regex")
         .replace_all(&excerpt, "[encoded-blob]")
         .into_owned();
-    excerpt
+    truncate_redacted_evidence(&excerpt)
+}
+
+fn truncate_redacted_evidence(excerpt: &str) -> String {
+    if excerpt.chars().count() <= MAX_REDACTED_EVIDENCE_CHARS {
+        return excerpt.to_string();
+    }
+
+    let keep_chars = MAX_REDACTED_EVIDENCE_CHARS.saturating_sub(TRUNCATED_EVIDENCE_SUFFIX.len());
+    let truncated = excerpt.chars().take(keep_chars).collect::<String>();
+    if keep_chars == 0 {
+        TRUNCATED_EVIDENCE_SUFFIX.to_string()
+    } else {
+        format!("{truncated}{TRUNCATED_EVIDENCE_SUFFIX}")
+    }
 }
 
 fn source_counts(sources: &[Source]) -> BTreeMap<String, u32> {
@@ -1051,6 +1067,14 @@ mod tests {
 
         assert!(!redacted.contains("U1lOVEhFVElDX1BBWUxPQUQ"));
         assert!(redacted.contains("[encoded-blob]"));
+    }
+
+    #[test]
+    fn redact_sensitive_text_truncates_long_dense_evidence() {
+        let redacted = redact_sensitive_text(&"normal-text-".repeat(80));
+
+        assert_eq!(redacted.chars().count(), 512);
+        assert!(redacted.ends_with("[truncated]"));
     }
 
     #[test]
