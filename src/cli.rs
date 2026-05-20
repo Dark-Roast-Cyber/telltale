@@ -2025,8 +2025,29 @@ fn validate_export_config(config: &ExportConfig<'_>) -> Result<(), Box<dyn std::
         if config.since.is_some() || config.until.is_some() {
             return Err("--source-root does not support --since/--until filters".into());
         }
+        if let Some(unsupported_client) = config
+            .clients
+            .iter()
+            .find(|client| !is_supported_client_filter(client))
+        {
+            let expected = supported_clients()
+                .iter()
+                .map(|client| client.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "--source-root does not support unknown client '{unsupported_client}'; expected one of: {expected}"
+            )
+            .into());
+        }
     }
     Ok(())
+}
+
+fn is_supported_client_filter(value: &str) -> bool {
+    supported_clients()
+        .iter()
+        .any(|client| client.id.as_str() == value)
 }
 
 fn parse_export_range(

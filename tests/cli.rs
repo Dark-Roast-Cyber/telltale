@@ -3762,6 +3762,32 @@ fn export_source_root_rejects_jsonl_only_filters() {
 }
 
 #[test]
+fn export_source_root_rejects_unknown_client_filter() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-session"])
+        .args(["--client", "unknown-agent"])
+        .output()
+        .expect("run adr export source-root with unknown client");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--source-root does not support unknown client 'unknown-agent'"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("codex"), "{stderr}");
+}
+
+#[test]
 fn export_timeline_text_produces_human_readable_session_timeline() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");
