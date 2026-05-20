@@ -111,6 +111,26 @@ pub struct ActivityEventInput {
 }
 
 #[derive(Debug)]
+pub struct SessionRiskSummaryEventInput {
+    pub client: String,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub session_id: String,
+    pub source_path_hash: Option<String>,
+    pub rule_ids: Vec<String>,
+    pub categories: Vec<String>,
+    pub detection_classes: Vec<String>,
+    pub signal_types: Vec<String>,
+    pub analytic_intents: Vec<String>,
+    pub atlas_tags: Vec<String>,
+    pub tags: Vec<String>,
+    pub evidence: Vec<Evidence>,
+    pub risk_score: u32,
+    pub event_time: Option<String>,
+}
+
+#[derive(Debug)]
 pub struct OperationalAlertInput {
     pub alert_type: String,
     pub threshold: String,
@@ -395,6 +415,42 @@ pub fn activity_event(input: ActivityEventInput) -> Event {
         signal_types: Vec::new(),
         analytic_intents: Vec::new(),
         atlas_tags: Vec::new(),
+        tags: input.tags,
+        evidence: input.evidence,
+        triage: None,
+        response: None,
+        source_counts: None,
+        adr_version: None,
+        scan_duration_ms: None,
+        rule_count: None,
+        threshold_config: None,
+        active_policy_name: None,
+    }
+    .build()
+}
+
+pub fn session_risk_summary_event(input: SessionRiskSummaryEventInput) -> Event {
+    let thresholds = load_thresholds();
+    let assessment = assess_risk_with_thresholds(input.risk_score, thresholds);
+    EventBuilder {
+        event_time: input.event_time,
+        event_type: "session_risk_summary",
+        severity: assessment.severity.as_str(),
+        risk_score: input.risk_score,
+        client: input.client,
+        agent: input.agent,
+        model: input.model,
+        provider: input.provider,
+        session_id: input.session_id,
+        workspace: None,
+        source_path_hash: input.source_path_hash,
+        tool_name: None,
+        rule_ids: input.rule_ids,
+        categories: input.categories,
+        detection_classes: input.detection_classes,
+        signal_types: input.signal_types,
+        analytic_intents: input.analytic_intents,
+        atlas_tags: input.atlas_tags,
         tags: input.tags,
         evidence: input.evidence,
         triage: None,

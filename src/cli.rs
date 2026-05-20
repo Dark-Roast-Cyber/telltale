@@ -24,8 +24,9 @@ use crate::detection::{
 };
 use crate::discovery::{Source, discover_sources, discover_watch_roots, is_fixture_root};
 use crate::event::{
-    Event, HealthEventInput, OperationalAlertInput, evidence_hash, health_event_with_metadata,
-    load_operational_alert_config, operational_alert_event, parse_event_timestamp,
+    Event, Evidence, HealthEventInput, OperationalAlertInput, SessionRiskSummaryEventInput,
+    evidence_hash, health_event_with_metadata, load_operational_alert_config,
+    operational_alert_event, parse_event_timestamp, session_risk_summary_event,
 };
 use crate::parser::parse_source_records;
 use crate::rules::{
@@ -94,6 +95,10 @@ enum Command {
         #[arg(long)]
         emit_activity: bool,
 
+        /// Emit per-session risk summary events derived from activity and detection events.
+        #[arg(long)]
+        emit_session_risk_summary: bool,
+
         /// Allow scanning fixture/demo roots and writing events to log paths.
         /// Without this flag, non-dry-run scans refuse fixture roots to prevent
         /// synthetic data from mixing into production telemetry.
@@ -157,6 +162,10 @@ enum Command {
         /// Emit per-session activity summary events in addition to detections.
         #[arg(long)]
         emit_activity: bool,
+
+        /// Emit per-session risk summary events derived from activity and detection events.
+        #[arg(long)]
+        emit_session_risk_summary: bool,
 
         /// Allow scanning fixture/demo roots and writing events to log paths.
         #[arg(long)]
@@ -376,6 +385,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             state_path,
             dry_run,
             emit_activity,
+            emit_session_risk_summary,
             allow_fixtures,
             backfill,
             rebuild_baselines,
@@ -394,6 +404,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 state_path: &state_path,
                 dry_run,
                 emit_activity,
+                emit_session_risk_summary,
                 allow_fixtures,
                 backfill,
                 rebuild_baselines,
@@ -489,6 +500,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             state_path,
             dry_run,
             emit_activity,
+            emit_session_risk_summary,
             allow_fixtures,
             iterations,
             debounce_ms,
@@ -503,6 +515,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 state_path: &state_path,
                 dry_run,
                 emit_activity,
+                emit_session_risk_summary,
                 allow_fixtures,
                 iterations,
                 debounce: Duration::from_millis(debounce_ms),
@@ -1226,6 +1239,7 @@ struct ScanSummaryInput<'a> {
     emitted_events: &'a [Event],
     activity_count: usize,
     detection_count: usize,
+    session_risk_summary_count: usize,
     suppressed_count: usize,
     rule_count: usize,
     active_policy_name: Option<&'a str>,
@@ -1239,6 +1253,7 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         "event_type": summary.emitted_events[0].event_type,
         "activity_count": summary.activity_count,
         "detection_count": summary.detection_count,
+        "session_risk_summary_count": summary.session_risk_summary_count,
         "suppressed_count": summary.suppressed_count,
         "emitted_count": summary.emitted_events.len().saturating_sub(1),
         "rule_count": summary.rule_count,
@@ -1275,6 +1290,7 @@ struct ScanConfig<'a> {
     state_path: &'a std::path::Path,
     dry_run: bool,
     emit_activity: bool,
+    emit_session_risk_summary: bool,
     allow_fixtures: bool,
     backfill: bool,
     rebuild_baselines: bool,
@@ -1294,6 +1310,7 @@ struct ScanCommandArgs<'a> {
     state_path: &'a std::path::Path,
     dry_run: bool,
     emit_activity: bool,
+    emit_session_risk_summary: bool,
     allow_fixtures: bool,
     backfill: bool,
     rebuild_baselines: bool,
@@ -1311,6 +1328,7 @@ struct WatchConfig<'a> {
     state_path: &'a std::path::Path,
     dry_run: bool,
     emit_activity: bool,
+    emit_session_risk_summary: bool,
     allow_fixtures: bool,
     iterations: Option<u32>,
     debounce: Duration,
@@ -1326,6 +1344,7 @@ struct WatchCommandArgs<'a> {
     state_path: &'a std::path::Path,
     dry_run: bool,
     emit_activity: bool,
+    emit_session_risk_summary: bool,
     allow_fixtures: bool,
     iterations: Option<u32>,
     debounce: Duration,
@@ -1344,6 +1363,7 @@ fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
         state_path: args.state_path,
         dry_run: args.dry_run,
         emit_activity: args.emit_activity,
+        emit_session_risk_summary: args.emit_session_risk_summary,
         allow_fixtures: args.allow_fixtures,
         backfill: args.backfill,
         rebuild_baselines: args.rebuild_baselines,
@@ -1363,6 +1383,7 @@ fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a> {
         state_path: args.state_path,
         dry_run: args.dry_run,
         emit_activity: args.emit_activity,
+        emit_session_risk_summary: args.emit_session_risk_summary,
         allow_fixtures: args.allow_fixtures,
         iterations: args.iterations,
         debounce: args.debounce,
@@ -1382,6 +1403,7 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
         state_path: config.state_path,
         dry_run: config.dry_run,
         emit_activity: config.emit_activity,
+        emit_session_risk_summary: config.emit_session_risk_summary,
         allow_fixtures: config.allow_fixtures,
         backfill: false,
         rebuild_baselines: false,
@@ -1553,6 +1575,12 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     }
     let activity_count = activities.len();
     let detection_count = detections.len();
+    let session_risk_summaries = if config.emit_session_risk_summary {
+        summarize_session_risk_events(&activities, &detections)
+    } else {
+        Vec::new()
+    };
+    let session_risk_summary_count = session_risk_summaries.len();
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let observed_at_unix_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
@@ -1615,8 +1643,13 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     }
     state.observe_sources(&sources, observed_at_unix_ms);
 
-    let mut emitted_events =
-        Vec::with_capacity(activities.len() + detections.len() + operational_alerts.len() + 1);
+    let mut emitted_events = Vec::with_capacity(
+        activities.len()
+            + detections.len()
+            + session_risk_summaries.len()
+            + operational_alerts.len()
+            + 1,
+    );
     emitted_events.push(health);
     for alert in operational_alerts {
         emitted_events.push(alert);
@@ -1629,6 +1662,11 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     for (source, detection) in detections {
         if config.backfill || state.should_emit(&source, &detection) {
             emitted_events.push(detection);
+        }
+    }
+    for (source, summary) in session_risk_summaries {
+        if config.backfill || state.should_emit(&source, &summary) {
+            emitted_events.push(summary);
         }
     }
 
@@ -1645,6 +1683,7 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
         emitted_events: &emitted_events,
         activity_count,
         detection_count,
+        session_risk_summary_count,
         suppressed_count,
         rule_count,
         active_policy_name: active_policy_name.as_deref(),
@@ -1653,6 +1692,195 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
+}
+
+#[derive(Debug)]
+struct SessionRiskSummaryAccumulator {
+    source: Source,
+    client: String,
+    agent: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    session_id: String,
+    source_path_hash: Option<String>,
+    risk_score: u32,
+    event_time: Option<String>,
+    event_counts: BTreeMap<String, u32>,
+    tool_call_count: Option<u64>,
+    detection_count: u32,
+    triage_ran: bool,
+    rule_ids: BTreeSet<String>,
+    categories: BTreeSet<String>,
+    detection_classes: BTreeSet<String>,
+    signal_types: BTreeSet<String>,
+    analytic_intents: BTreeSet<String>,
+    atlas_tags: BTreeSet<String>,
+}
+
+fn summarize_session_risk_events(
+    activities: &[(Source, Event)],
+    detections: &[(Source, Event)],
+) -> Vec<(Source, Event)> {
+    let mut summaries: BTreeMap<(String, String, Option<String>), SessionRiskSummaryAccumulator> =
+        BTreeMap::new();
+
+    for (source, event) in activities.iter().chain(detections.iter()) {
+        if !matches!(event.event_type.as_str(), "activity" | "detection")
+            || event.session_id == "scanner"
+        {
+            continue;
+        }
+        let key = (
+            event.client.clone(),
+            event.session_id.clone(),
+            event.source_path_hash.clone(),
+        );
+        let summary = summaries
+            .entry(key)
+            .or_insert_with(|| SessionRiskSummaryAccumulator {
+                source: source.clone(),
+                client: event.client.clone(),
+                agent: event.agent.clone(),
+                model: event.model.clone(),
+                provider: event.provider.clone(),
+                session_id: event.session_id.clone(),
+                source_path_hash: event.source_path_hash.clone(),
+                risk_score: 0,
+                event_time: None,
+                event_counts: BTreeMap::new(),
+                tool_call_count: None,
+                detection_count: 0,
+                triage_ran: false,
+                rule_ids: BTreeSet::new(),
+                categories: BTreeSet::new(),
+                detection_classes: BTreeSet::new(),
+                signal_types: BTreeSet::new(),
+                analytic_intents: BTreeSet::new(),
+                atlas_tags: BTreeSet::new(),
+            });
+
+        summary.risk_score = summary.risk_score.max(event.risk_score);
+        if summary
+            .event_time
+            .as_deref()
+            .is_none_or(|current| event.timestamp.as_str() > current)
+        {
+            summary.event_time = Some(event.timestamp.clone());
+        }
+        *summary
+            .event_counts
+            .entry(event.event_type.clone())
+            .or_insert(0) += 1;
+        if event.event_type == "activity" && summary.tool_call_count.is_none() {
+            summary.tool_call_count = extract_tool_call_count_from_evidence(&event.evidence);
+        }
+        if event.event_type == "detection" {
+            summary.detection_count += 1;
+            summary.triage_ran |= triage_ran_from_typed_event(event);
+            extend_set(&mut summary.rule_ids, &event.rule_ids);
+            extend_set(&mut summary.categories, &event.categories);
+            extend_set(&mut summary.detection_classes, &event.detection_classes);
+            extend_set(&mut summary.signal_types, &event.signal_types);
+            extend_set(&mut summary.analytic_intents, &event.analytic_intents);
+            extend_set(&mut summary.atlas_tags, &event.atlas_tags);
+        }
+    }
+
+    summaries
+        .into_values()
+        .map(|summary| {
+            let source = summary.source.clone();
+            let tags = session_risk_summary_tags(&summary);
+            let evidence = session_risk_summary_evidence(&summary);
+            let event = session_risk_summary_event(SessionRiskSummaryEventInput {
+                client: summary.client,
+                agent: summary.agent,
+                model: summary.model,
+                provider: summary.provider,
+                session_id: summary.session_id,
+                source_path_hash: summary.source_path_hash,
+                rule_ids: summary.rule_ids.into_iter().collect(),
+                categories: summary.categories.into_iter().collect(),
+                detection_classes: summary.detection_classes.into_iter().collect(),
+                signal_types: summary.signal_types.into_iter().collect(),
+                analytic_intents: summary.analytic_intents.into_iter().collect(),
+                atlas_tags: summary.atlas_tags.into_iter().collect(),
+                tags,
+                evidence,
+                risk_score: summary.risk_score,
+                event_time: summary.event_time,
+            });
+            (source, event)
+        })
+        .collect()
+}
+
+fn extend_set(target: &mut BTreeSet<String>, values: &[String]) {
+    target.extend(values.iter().cloned());
+}
+
+fn extract_tool_call_count_from_evidence(evidence: &[Evidence]) -> Option<u64> {
+    let record_counts = evidence
+        .iter()
+        .find(|item| item.field == "record_counts")?
+        .redacted_value
+        .as_str();
+    let counts = serde_json::from_str::<serde_json::Value>(record_counts).ok()?;
+    counts.get("tool_call").and_then(|value| value.as_u64())
+}
+
+fn triage_ran_from_typed_event(event: &Event) -> bool {
+    event
+        .triage
+        .as_ref()
+        .and_then(|value| value.get("verdict"))
+        .and_then(|value| value.as_str())
+        .is_some_and(|verdict| !matches!(verdict, "pending" | "not_required" | "config_missing"))
+}
+
+fn session_risk_summary_tags(summary: &SessionRiskSummaryAccumulator) -> Vec<String> {
+    let mut tags = vec!["risk_summary".to_string(), "session".to_string()];
+    if summary.detection_count > 0 {
+        tags.push("risky_action".to_string());
+    }
+    if summary.event_counts.contains_key("activity") {
+        tags.push("activity".to_string());
+    }
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+fn session_risk_summary_evidence(summary: &SessionRiskSummaryAccumulator) -> Vec<Evidence> {
+    let mut evidence = Vec::new();
+    let event_counts = serde_json::to_string(&summary.event_counts).unwrap_or_default();
+    evidence.push(Evidence {
+        field: "event_counts".to_string(),
+        redacted_value: event_counts.clone(),
+        hash: Some(evidence_hash(&event_counts)),
+        rule_id: None,
+    });
+    evidence.push(Evidence {
+        field: "risky_action_count".to_string(),
+        redacted_value: summary.detection_count.to_string(),
+        hash: None,
+        rule_id: None,
+    });
+    if let Some(count) = summary.tool_call_count {
+        evidence.push(Evidence {
+            field: "tool_call_count".to_string(),
+            redacted_value: count.to_string(),
+            hash: None,
+            rule_id: None,
+        });
+    }
+    evidence.push(Evidence {
+        field: "triage_ran".to_string(),
+        redacted_value: summary.triage_ran.to_string(),
+        hash: None,
+        rule_id: None,
+    });
+    evidence
 }
 
 fn splunk_hec_sink(

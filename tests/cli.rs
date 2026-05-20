@@ -2052,6 +2052,76 @@ fn scan_once_can_emit_activity_events() {
 }
 
 #[test]
+fn scan_once_can_emit_session_risk_summary_events() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--emit-activity",
+            "--emit-session-risk-summary",
+            "--root",
+            "tests/fixtures/session_stores",
+            "--log-path",
+        ])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert!(
+        summary["session_risk_summary_count"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+
+    let lines = fs::read_to_string(log_path).expect("log file");
+    let events = lines
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect::<Vec<_>>();
+    let summary_event = events
+        .iter()
+        .find(|event| event["event_type"] == "session_risk_summary")
+        .expect("session risk summary event");
+    assert!(summary_event["risk_score"].as_u64().unwrap_or_default() > 0);
+    assert!(
+        summary_event["tags"]
+            .as_array()
+            .expect("tags")
+            .iter()
+            .any(|tag| tag == "risk_summary")
+    );
+    assert!(
+        summary_event["evidence"]
+            .as_array()
+            .expect("evidence")
+            .iter()
+            .any(|item| item["field"] == "event_counts")
+    );
+    assert!(
+        summary_event["evidence"]
+            .as_array()
+            .expect("evidence")
+            .iter()
+            .any(|item| item["field"] == "risky_action_count")
+    );
+}
+
+#[test]
 fn shipper_examples_target_default_jsonl_path() {
     let filebeat = include_str!("../config/examples/filebeat-filestream.yml");
     assert!(filebeat.contains("/srv/telltale/logs/adr-events.jsonl"));
