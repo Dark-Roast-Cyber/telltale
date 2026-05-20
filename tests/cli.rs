@@ -3634,6 +3634,26 @@ fn export_timeline_rejects_summary_format() {
 }
 
 #[test]
+fn export_timeline_rejects_elastic_bulk_format() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--timeline")
+        .args(["--session-id", "timeline-elastic-session"])
+        .args(["--format", "elastic-bulk"])
+        .output()
+        .expect("run adr export timeline elastic bulk");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--format elastic-bulk does not support --timeline"));
+}
+
+#[test]
 fn export_timeline_rejects_correlate() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");
