@@ -10,7 +10,6 @@ state/
 runtime/*
 !runtime/ralph/
 runtime/ralph/*
-!runtime/ralph/ralph-diary.md
 tmp/
 !tests/fixtures/session_stores/gemini/tmp/
 !tests/fixtures/session_stores/gemini/tmp/**
