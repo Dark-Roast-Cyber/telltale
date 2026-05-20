@@ -3518,6 +3518,24 @@ fn export_timeline_requires_session_id() {
 }
 
 #[test]
+fn export_timeline_text_requires_timeline() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(&log_path, "").expect("write empty log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .args(["--format", "timeline-text"])
+        .output()
+        .expect("run adr export timeline text without timeline");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--format timeline-text requires --timeline"));
+}
+
+#[test]
 fn export_timeline_rejects_multiple_session_ids() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");
