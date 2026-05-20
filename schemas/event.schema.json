@@ -18,7 +18,7 @@
     "event_id": { "type": "string" },
     "event_type": {
       "type": "string",
-      "enum": ["activity", "detection", "triage", "scanner_error", "health", "correlation", "operational_alert"]
+      "enum": ["activity", "detection", "triage", "scanner_error", "health", "correlation", "operational_alert", "session_risk_summary"]
     },
     "timestamp": { "type": "string", "format": "date-time" },
     "severity": {

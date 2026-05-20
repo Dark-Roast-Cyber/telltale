@@ -2097,6 +2097,13 @@ fn scan_once_can_emit_session_risk_summary_events() {
         .iter()
         .find(|event| event["event_type"] == "session_risk_summary")
         .expect("session risk summary event");
+    let schema: Value =
+        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("schema json");
+    let validator = validator_for(&schema).expect("schema validator");
+    assert!(
+        validator.is_valid(summary_event),
+        "session_risk_summary event should match schema: {summary_event}"
+    );
     assert!(summary_event["risk_score"].as_u64().unwrap_or_default() > 0);
     assert!(
         summary_event["tags"]
