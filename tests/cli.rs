@@ -2052,6 +2052,75 @@ fn scan_once_can_emit_activity_events() {
 }
 
 #[test]
+fn scan_once_activity_includes_static_mcp_inventory_events() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("home");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    fs::create_dir_all(&root).expect("root dir");
+    fs::write(
+        root.join(".mcp.json"),
+        r#"{
+            "mcpServers": {
+                "github": {
+                    "command": "npx",
+                    "args": ["-y", "@modelcontextprotocol/server-github"],
+                    "env": {"GITHUB_TOKEN": "synthetic-secret"},
+                    "tools": [{"name": "list_issues"}, {"name": "create_issue"}]
+                }
+            }
+        }"#,
+    )
+    .expect("mcp config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--emit-activity", "--root"])
+        .arg(&root)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["activity_count"], 1);
+
+    let lines = fs::read_to_string(log_path).expect("log file");
+    let events = lines
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect::<Vec<_>>();
+    let inventory = events
+        .iter()
+        .find(|event| {
+            event["event_type"] == "activity"
+                && event["session_id"] == "mcp_inventory"
+                && event["tool_name"] == "mcp::github"
+        })
+        .expect("mcp inventory event");
+    assert!(
+        inventory["tags"]
+            .as_array()
+            .expect("tags")
+            .iter()
+            .any(|tag| tag == "mcp_inventory")
+    );
+    let evidence = inventory["evidence"][0]["redacted_value"]
+        .as_str()
+        .expect("evidence");
+    assert!(evidence.contains("list_issues"));
+    assert!(evidence.contains("GITHUB_TOKEN"));
+    assert!(!evidence.contains("synthetic-secret"));
+}
+
+#[test]
 fn scan_once_can_emit_session_risk_summary_events() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");

@@ -28,6 +28,7 @@ use crate::event::{
     evidence_hash, health_event_with_metadata, load_operational_alert_config,
     operational_alert_event, parse_event_timestamp, session_risk_summary_event,
 };
+use crate::mcp::discover_mcp_inventory;
 use crate::parser::parse_source_records;
 use crate::rules::{
     CompiledRuleSet, RuleSet, load_default_rule_set, load_rule_set_from_documents,
@@ -1529,14 +1530,16 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     let baseline_snapshots = state.baseline_snapshots.clone();
     update_baseline_snapshots(&mut state, &sources, config.rebuild_baselines);
     let activities = if config.emit_activity {
-        summarize_source_activities_with_baselines(
+        let mut activities = summarize_source_activities_with_baselines(
             &sources,
             &baseline_snapshots,
             BaselineDeviationConfig {
                 enabled: config.baseline_deviation_scoring,
                 ..BaselineDeviationConfig::default()
             },
-        )
+        );
+        activities.extend(discover_mcp_inventory(config.root));
+        activities
     } else {
         Vec::new()
     };

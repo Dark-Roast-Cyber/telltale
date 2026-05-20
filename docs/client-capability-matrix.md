@@ -11,17 +11,17 @@ Legend:
 
 ## Cross-Client Coverage
 
-| Client | Fixture source ids | Conversation records | Tool calls | Tool results | Session metadata | Model/provider | Provenance | Known gaps |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex | `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions` | required | optional | optional | optional | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| Claude Code | `claude.projects` | required | optional | optional | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| Gemini CLI | `gemini.tmp` | required | optional | optional | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| OpenClaw | `openclaw.agents` | required | optional | optional | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| Qwen CLI | `qwen.projects` | required | optional | optional | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| RooCode | `roocode.tasks` | required | optional | optional | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| KiloCode | `kilocode.tasks` | required | optional | optional | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| OpenCode | `opencode.sqlite`, `opencode.legacy_json` | required | optional | optional | unavailable | optional | derived | `call_id`, `is_error`, workspace, and `content_parts` are unavailable through the legacy flat record. |
-| GitHub Copilot | `copilot.process_log` | optional | optional | optional | unavailable | optional | derived | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, and `content_parts` are unavailable through the legacy flat record. |
+| Client | Fixture source ids | Conversation records | Tool calls | Tool results | MCP static inventory | Session metadata | Model/provider | Provenance | Known gaps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Codex | `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions` | required | optional | optional | supported | optional | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
+| Claude Code | `claude.projects` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
+| Gemini CLI | `gemini.tmp` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
+| OpenClaw | `openclaw.agents` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
+| Qwen CLI | `qwen.projects` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
+| RooCode | `roocode.tasks` | required | optional | optional | unsupported | unavailable | optional | derived | `call_id`, `is_error`, `content_parts`, and static MCP config inventory are unavailable through current support. |
+| KiloCode | `kilocode.tasks` | required | optional | optional | unsupported | unavailable | optional | derived | `call_id`, `is_error`, `content_parts`, and static MCP config inventory are unavailable through current support. |
+| OpenCode | `opencode.sqlite`, `opencode.legacy_json` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, workspace, and `content_parts` are unavailable through the legacy flat record. |
+| GitHub Copilot | `copilot.process_log` | optional | optional | optional | unsupported | unavailable | optional | derived | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, static MCP config inventory, and `content_parts` are unavailable through the legacy flat record. |
 
 ## Normalized Field Expectations
 
@@ -51,5 +51,6 @@ The fixture-backed conformance test in `src/schema.rs` verifies that every sourc
 ## Related Documents
 
 - [Agent Capability Profiles](agent-capability-profiles.md) — per-source raw log field availability and known gaps
+- [MCP Tool Inventory](mcp-tool-inventory.md) — static MCP configuration inventory support and gaps
 - [Source Validation Matrix](source-validation-matrix.md) — fixture and detection coverage status
 - [Normalization Schema](normalization-schema.md) — `NormalizedRecordV1` contract
