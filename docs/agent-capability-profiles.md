@@ -257,7 +257,7 @@ These profiles document the gap between what ADR would ideally see and what each
 | Provider | Partial | `provider` or `providerID` on function call entries; defaults to `github`. |
 | Agent | Full | Hardcoded `copilot` in parser. |
 | Workspace | Partial | Workspace UUID extracted from "Workspace initialized:" lines. |
-| Timestamps | Partial | Extracted from the first 30 characters of each log line when the format matches ISO 8601 ending in `Z`. |
+| Timestamps | Partial | Extracted from a leading RFC3339 timestamp token when present. |
 | Session ID | Full | Extracted from "Workspace initialized: <uuid>" lines. |
 | Process ID | Partial | The log filename may contain a PID (e.g., `process-12345.log`), but ADR does not currently extract it. |
 | Exit code | Absent | Not recorded in process logs. |
@@ -265,7 +265,7 @@ These profiles document the gap between what ADR would ideally see and what each
 | Is error | Absent | Not recorded. |
 | Content parts | Absent | Process logs do not contain structured content arrays. |
 
-**Known gaps**: Copilot process logs are the most limited source. User intent is invisible — ADR cannot tell what the user asked for. Only tool calls and workspace initialization events are logged. Model and provider fields are not always populated on every function call entry. Timestamp extraction relies on a brittle prefix check (first 30 chars ending in `Z`).
+**Known gaps**: Copilot process logs are the most limited source. User intent is invisible — ADR cannot tell what the user asked for. Only tool calls and workspace initialization events are logged. Model and provider fields are not always populated on every function call entry. Log lines without a leading RFC3339 timestamp token remain untimestamped.
 
 ---
 
