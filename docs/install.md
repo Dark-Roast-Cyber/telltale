@@ -51,6 +51,20 @@ cargo run -- scan --once --emit-activity --root "$HOME" --log-path logs/adr-even
 Telltale writes append-only JSONL by default so the output can be reviewed
 locally or shipped to a SIEM.
 
+## Check Scanner Status
+
+After a scan writes JSONL telemetry, use `adr status` to review the latest local
+scanner summary:
+
+```sh
+cargo run -- status --log-path logs/adr-events.jsonl
+```
+
+The command keeps its top-level `status` field for the status lookup result. The
+latest scanner health check is reported separately as `health_component`,
+`health_check_name`, and `health_check_status`, matching the health event fields
+that SIEM dashboards can group by as `component`, `check_name`, and `status`.
+
 ## Optional Service Setup
 
 The repository includes Linux-oriented systemd examples in
