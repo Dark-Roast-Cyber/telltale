@@ -93,6 +93,8 @@ Common use cases include:
 - tracking agent activity volume across hosts, clients, and sessions;
 - highlighting high and critical detections for analyst review;
 - breaking down detection categories and evidence rule IDs for triage;
+- emitting optional per-session risk summaries for dashboards that need one
+  compact row per agent session;
 - spotting spikes, outliers, and session drift over time;
 - feeding dashboards, alerts, and investigations in Splunk or another SIEM.
 
