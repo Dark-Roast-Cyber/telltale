@@ -3026,6 +3026,9 @@ fn status_reports_latest_health_event() {
     assert_eq!(summary["log_path"], log_path.display().to_string());
     assert_eq!(summary["state_path"], state_path.display().to_string());
     assert!(summary["last_scan_time"].as_str().is_some());
+    assert_eq!(summary["health_component"], "scanner");
+    assert_eq!(summary["health_check_name"], "source_discovery");
+    assert_eq!(summary["health_check_status"], "ok");
     assert_eq!(summary["active_policy_name"], Value::Null);
     assert_eq!(summary["rule_count"], 18);
     assert!(
