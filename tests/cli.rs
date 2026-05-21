@@ -2152,6 +2152,9 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
                     "args": ["-y", "@modelcontextprotocol/server-github"],
                     "env": {"GITHUB_TOKEN": "synthetic-secret"},
                     "tools": [{"name": "list_issues"}, {"name": "create_issue"}]
+                },
+                "placeholder": {
+                    "args": ["--flag-only"]
                 }
             }
         }"#,
@@ -2175,7 +2178,7 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
     );
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
-    assert_eq!(summary["activity_count"], 1);
+    assert_eq!(summary["activity_count"], 2);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -2197,6 +2200,18 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
         validator.is_valid(inventory),
         "mcp inventory activity event should match schema: {inventory}"
     );
+    let unsupported_inventory = events
+        .iter()
+        .find(|event| {
+            event["event_type"] == "activity"
+                && event["session_id"] == "mcp_inventory"
+                && event["tool_name"] == "mcp::placeholder"
+        })
+        .expect("unsupported mcp inventory event");
+    assert!(
+        validator.is_valid(unsupported_inventory),
+        "unsupported mcp inventory activity event should match schema: {unsupported_inventory}"
+    );
     assert!(
         inventory["tags"]
             .as_array()
@@ -2210,6 +2225,24 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
     assert!(evidence.contains("list_issues"));
     assert!(evidence.contains("GITHUB_TOKEN"));
     assert!(!evidence.contains("synthetic-secret"));
+    assert!(
+        unsupported_inventory["tags"]
+            .as_array()
+            .expect("unsupported tags")
+            .iter()
+            .any(|tag| tag == "mcp_inventory_unsupported")
+    );
+    let unsupported_evidence: Value = serde_json::from_str(
+        unsupported_inventory["evidence"][0]["redacted_value"]
+            .as_str()
+            .expect("unsupported evidence"),
+    )
+    .expect("unsupported evidence json");
+    assert_eq!(unsupported_evidence["supported"], false);
+    assert_eq!(
+        unsupported_evidence["unsupported_reason"],
+        "missing_command_or_url"
+    );
 }
 
 #[test]
