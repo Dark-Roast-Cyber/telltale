@@ -124,6 +124,7 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
   - [Privacy model](docs/privacy-model.md)
 - Additional references:
   - [Session sources](docs/session-sources.md)
+  - [MCP tool inventory](docs/mcp-tool-inventory.md)
   - [Use cases](docs/use-cases.md)
   - [Normalization schema](docs/normalization-schema.md)
   - [Trust boundaries](docs/trust-boundaries.md)
