@@ -2190,6 +2190,13 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
                 && event["tool_name"] == "mcp::github"
         })
         .expect("mcp inventory event");
+    let schema: Value =
+        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("schema json");
+    let validator = validator_for(&schema).expect("schema validator");
+    assert!(
+        validator.is_valid(inventory),
+        "mcp inventory activity event should match schema: {inventory}"
+    );
     assert!(
         inventory["tags"]
             .as_array()
