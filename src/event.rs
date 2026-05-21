@@ -288,20 +288,7 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         .iter()
         .map(|source| source.client.as_str())
         .collect();
-    let evidence = sources
-        .iter()
-        .map(|source| Evidence {
-            field: "source_path".to_string(),
-            redacted_value: format!(
-                "{}:{}:{}",
-                source.client.as_str(),
-                source.kind.as_str(),
-                display_name(source)
-            ),
-            hash: Some(path_hash(&source.path)),
-            rule_id: None,
-        })
-        .collect();
+    let evidence = vec![source_inventory_evidence(sources)];
 
     EventBuilder {
         event_time: None,
@@ -926,6 +913,39 @@ fn source_counts(sources: &[Source]) -> BTreeMap<String, u32> {
         *counts.entry(key).or_insert(0) += 1;
     }
     counts
+}
+
+fn source_inventory_evidence(sources: &[Source]) -> Evidence {
+    let counts = source_counts(sources);
+    let mut inventory = sources
+        .iter()
+        .map(|source| {
+            format!(
+                "{}:{}:{}",
+                source.client.as_str(),
+                source.kind.as_str(),
+                path_hash(&source.path)
+            )
+        })
+        .collect::<Vec<_>>();
+    inventory.sort();
+
+    let mut hasher = Sha256::new();
+    for item in &inventory {
+        hasher.update(item.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    Evidence {
+        field: "source_inventory".to_string(),
+        redacted_value: format!(
+            "sources={}; client_source_kinds={}",
+            sources.len(),
+            counts.len()
+        ),
+        hash: Some(format!("{:x}", hasher.finalize())),
+        rule_id: None,
+    }
 }
 
 fn display_name(source: &Source) -> String {

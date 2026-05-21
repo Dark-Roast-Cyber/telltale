@@ -310,9 +310,25 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             .as_array()
             .is_some_and(|items| !items.is_empty())
     );
+    assert_eq!(
+        event["evidence"].as_array().expect("health evidence").len(),
+        1
+    );
+    assert_eq!(event["evidence"][0]["field"], "source_inventory");
+    assert_eq!(
+        event["evidence"][0]["redacted_value"],
+        "sources=68; client_source_kinds=12"
+    );
+    assert!(
+        event["evidence"][0]["hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    );
     for item in event["evidence"].as_array().expect("evidence array") {
         let redacted = item["redacted_value"].as_str().expect("redacted value");
         assert!(!redacted.contains("tests/fixtures"));
+        assert!(!redacted.contains(".jsonl"));
+        assert!(!redacted.contains(".sqlite"));
     }
 
     let detection = events
