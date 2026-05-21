@@ -212,6 +212,7 @@ mod tests {
         let sink = LocalJsonlSink::new(&log_path);
         let event = health_event_with_metadata(crate::event::HealthEventInput {
             sources: &[],
+            source_inventory_change: None,
             scan_duration_ms: 7,
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
@@ -229,6 +230,7 @@ mod tests {
     fn splunk_hec_envelope_wraps_canonical_event_with_transport_metadata() {
         let mut event = health_event_with_metadata(crate::event::HealthEventInput {
             sources: &[],
+            source_inventory_change: None,
             scan_duration_ms: 7,
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
@@ -312,6 +314,7 @@ mod tests {
 
         let mut event = health_event_with_metadata(crate::event::HealthEventInput {
             sources: &[],
+            source_inventory_change: None,
             scan_duration_ms: 7,
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),

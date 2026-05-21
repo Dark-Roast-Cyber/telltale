@@ -13,6 +13,7 @@ use crate::clients::ClientId;
 use crate::discovery::Source;
 use crate::parser::ParseError;
 use crate::scoring::{RiskThresholds, assess_risk_with_thresholds, load_thresholds};
+use crate::state::SourceInventoryChangeSummary;
 
 const SCHEMA_VERSION: &str = "1.0";
 const MAX_REDACTED_EVIDENCE_CHARS: usize = 512;
@@ -201,6 +202,7 @@ pub struct CorrelationSessionInput {
 #[derive(Debug, Clone, Copy)]
 pub struct HealthEventInput<'a> {
     pub sources: &'a [Source],
+    pub source_inventory_change: Option<&'a SourceInventoryChangeSummary>,
     pub scan_duration_ms: u64,
     pub rule_count: usize,
     pub threshold_config: RiskThresholds,
@@ -297,7 +299,10 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         .iter()
         .map(|source| source.client.as_str())
         .collect();
-    let evidence = vec![source_inventory_evidence(sources)];
+    let mut evidence = vec![source_inventory_evidence(sources)];
+    if let Some(change) = input.source_inventory_change {
+        evidence.push(source_inventory_change_evidence(change));
+    }
 
     EventBuilder {
         event_time: None,
@@ -987,6 +992,18 @@ fn source_inventory_evidence(sources: &[Source]) -> Evidence {
     }
 }
 
+fn source_inventory_change_evidence(change: &SourceInventoryChangeSummary) -> Evidence {
+    Evidence {
+        field: "source_inventory_change".to_string(),
+        redacted_value: format!(
+            "baseline={}; added={}; removed={}; unchanged={}",
+            change.baseline, change.added, change.removed, change.unchanged
+        ),
+        hash: Some(change.hash.clone()),
+        rule_id: None,
+    }
+}
+
 fn display_name(source: &Source) -> String {
     source
         .path
@@ -1053,6 +1070,7 @@ mod tests {
     fn health_event_has_steady_state_check_dimensions() {
         let event = health_event_with_metadata(HealthEventInput {
             sources: &[],
+            source_inventory_change: None,
             scan_duration_ms: 7,
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
@@ -1063,6 +1081,39 @@ mod tests {
         assert_eq!(event.component.as_deref(), Some("scanner"));
         assert_eq!(event.check_name.as_deref(), Some("source_discovery"));
         assert_eq!(event.status.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn health_event_can_include_source_inventory_change_marker() {
+        let change = crate::state::SourceInventoryChangeSummary {
+            baseline: false,
+            added: 0,
+            removed: 0,
+            unchanged: 2,
+            hash: "0".repeat(64),
+        };
+        let event = health_event_with_metadata(HealthEventInput {
+            sources: &[],
+            source_inventory_change: Some(&change),
+            scan_duration_ms: 7,
+            rule_count: 3,
+            threshold_config: crate::scoring::load_thresholds(),
+            active_policy_name: None,
+        });
+
+        let evidence = event
+            .evidence
+            .iter()
+            .find(|item| item.field == "source_inventory_change")
+            .expect("source inventory change evidence");
+        assert_eq!(
+            evidence.redacted_value,
+            "baseline=false; added=0; removed=0; unchanged=2"
+        );
+        assert_eq!(
+            evidence.hash.as_deref(),
+            Some("0000000000000000000000000000000000000000000000000000000000000000")
+        );
     }
 
     #[test]

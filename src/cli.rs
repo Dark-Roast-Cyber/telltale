@@ -1587,8 +1587,10 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let observed_at_unix_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
+    let source_inventory_change = state.source_inventory_change_summary(&sources);
     let health = health_event_with_metadata(HealthEventInput {
         sources: &sources,
+        source_inventory_change: Some(&source_inventory_change),
         scan_duration_ms,
         rule_count,
         threshold_config: load_thresholds(),

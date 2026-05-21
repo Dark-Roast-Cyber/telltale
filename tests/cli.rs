@@ -10,6 +10,17 @@ use jsonschema::validator_for;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn source_inventory_change_value(event: &Value) -> &str {
+    event["evidence"]
+        .as_array()
+        .expect("evidence array")
+        .iter()
+        .find(|item| item["field"] == "source_inventory_change")
+        .expect("source inventory change evidence")["redacted_value"]
+        .as_str()
+        .expect("source inventory change value")
+}
+
 fn start_mock_llm_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     start_mock_llm_server_with_content(
         "{\"verdict\":\"malicious\",\"severity\":\"critical\",\"confidence\":0.97,\"reason\":\"mock triage confirmed MCP injection\"}",
@@ -315,7 +326,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     );
     assert_eq!(
         event["evidence"].as_array().expect("health evidence").len(),
-        1
+        2
     );
     assert_eq!(event["evidence"][0]["field"], "source_inventory");
     assert_eq!(
@@ -324,6 +335,16 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     );
     assert!(
         event["evidence"][0]["hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    );
+    assert_eq!(event["evidence"][1]["field"], "source_inventory_change");
+    assert_eq!(
+        event["evidence"][1]["redacted_value"],
+        "baseline=true; added=68; removed=0; unchanged=0"
+    );
+    assert!(
+        event["evidence"][1]["hash"]
             .as_str()
             .is_some_and(|hash| hash.len() == 64)
     );
@@ -1615,6 +1636,55 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .find(|event| event["event_type"] == "health")
         .expect("health event");
     assert_eq!(health["source_counts"]["gemini.json"], 1);
+}
+
+#[test]
+fn scan_once_health_reports_unchanged_source_inventory() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+
+    for _ in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--root",
+                "tests/fixtures/session_stores",
+                "--client",
+                "gemini",
+                "--log-path",
+            ])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run adr");
+
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let lines = fs::read_to_string(log_path).expect("log file");
+    let health_events = lines
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .filter(|event| event["event_type"] == "health")
+        .collect::<Vec<_>>();
+    assert_eq!(health_events.len(), 2);
+
+    assert_eq!(
+        source_inventory_change_value(&health_events[0]),
+        "baseline=true; added=2; removed=0; unchanged=0"
+    );
+    assert_eq!(
+        source_inventory_change_value(&health_events[1]),
+        "baseline=false; added=0; removed=0; unchanged=2"
+    );
 }
 
 #[test]

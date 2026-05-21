@@ -33,6 +33,15 @@ pub struct SourceObservation {
     pub last_seen_unix_ms: u64,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SourceInventoryChangeSummary {
+    pub baseline: bool,
+    pub added: u32,
+    pub removed: u32,
+    pub unchanged: u32,
+    pub hash: String,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BaselineSourceContribution {
     pub client: String,
@@ -189,6 +198,49 @@ impl ScanState {
             })
             .map(|(_, observation)| observation.clone())
             .collect()
+    }
+
+    pub fn source_inventory_change_summary(
+        &self,
+        current_sources: &[Source],
+    ) -> SourceInventoryChangeSummary {
+        let previous_keys = self
+            .source_observations
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let current_keys = current_sources
+            .iter()
+            .map(source_observation_key)
+            .collect::<BTreeSet<_>>();
+        let added = current_keys
+            .difference(&previous_keys)
+            .cloned()
+            .collect::<Vec<_>>();
+        let removed = previous_keys
+            .difference(&current_keys)
+            .cloned()
+            .collect::<Vec<_>>();
+        let unchanged = current_keys.intersection(&previous_keys).count();
+        let mut hasher = Sha256::new();
+        for key in &added {
+            hasher.update(b"added:");
+            hasher.update(key.as_bytes());
+            hasher.update(b"\n");
+        }
+        for key in &removed {
+            hasher.update(b"removed:");
+            hasher.update(key.as_bytes());
+            hasher.update(b"\n");
+        }
+
+        SourceInventoryChangeSummary {
+            baseline: previous_keys.is_empty(),
+            added: added.len() as u32,
+            removed: removed.len() as u32,
+            unchanged: unchanged as u32,
+            hash: format!("{:x}", hasher.finalize()),
+        }
     }
 
     pub fn observe_sources(&mut self, sources: &[Source], observed_at_unix_ms: u64) {
@@ -701,5 +753,39 @@ mod tests {
             vec![summary],
         );
         assert_eq!(state.baseline_source_contributions.len(), 2);
+    }
+
+    #[test]
+    fn summarizes_source_inventory_changes_without_paths() {
+        let mut state = ScanState::default();
+        let source_a = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path: Path::new("tests/fixtures/session_stores/codex/sessions/source-a.jsonl")
+                .to_path_buf(),
+        };
+        let source_b = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path: Path::new("tests/fixtures/session_stores/codex/sessions/source-b.jsonl")
+                .to_path_buf(),
+        };
+
+        let first = state.source_inventory_change_summary(&[source_a.clone(), source_b.clone()]);
+        assert!(first.baseline);
+        assert_eq!(first.added, 2);
+        assert_eq!(first.removed, 0);
+        assert_eq!(first.unchanged, 0);
+        assert_eq!(first.hash.len(), 64);
+
+        state.observe_sources(&[source_a.clone(), source_b], 1_000);
+        let second = state.source_inventory_change_summary(std::slice::from_ref(&source_a));
+        assert!(!second.baseline);
+        assert_eq!(second.added, 0);
+        assert_eq!(second.removed, 1);
+        assert_eq!(second.unchanged, 1);
+        assert_eq!(second.hash.len(), 64);
     }
 }
