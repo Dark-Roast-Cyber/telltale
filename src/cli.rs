@@ -1237,7 +1237,9 @@ fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_jso
 }
 
 struct ScanSummaryInput<'a> {
+    health_event: &'a Event,
     emitted_events: &'a [Event],
+    health_emitted: bool,
     activity_count: usize,
     detection_count: usize,
     session_risk_summary_count: usize,
@@ -1250,17 +1252,17 @@ struct ScanSummaryInput<'a> {
 
 fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
     serde_json::json!({
-        "client": summary.emitted_events[0].client,
-        "event_type": summary.emitted_events[0].event_type,
+        "client": summary.health_event.client,
+        "event_type": summary.health_event.event_type,
         "activity_count": summary.activity_count,
         "detection_count": summary.detection_count,
         "session_risk_summary_count": summary.session_risk_summary_count,
         "suppressed_count": summary.suppressed_count,
-        "emitted_count": summary.emitted_events.len().saturating_sub(1),
+        "emitted_count": summary.emitted_events.len().saturating_sub(usize::from(summary.health_emitted)),
         "rule_count": summary.rule_count,
         "policy": summary.active_policy_name,
         "log_path": if summary.dry_run { None } else { Some(summary.log_path.display().to_string()) },
-        "source_counts": summary.emitted_events[0].source_counts.clone().unwrap_or_default(),
+        "source_counts": summary.health_event.source_counts.clone().unwrap_or_default(),
     })
 }
 
@@ -1648,14 +1650,23 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     }
     state.observe_sources(&sources, observed_at_unix_ms);
 
+    let health_emitted = config.dry_run
+        || config.backfill
+        || source_inventory_change.baseline
+        || source_inventory_change.added > 0
+        || source_inventory_change.removed > 0
+        || scanner_error_count > 0
+        || !operational_alerts.is_empty();
     let mut emitted_events = Vec::with_capacity(
         activities.len()
             + detections.len()
             + session_risk_summaries.len()
             + operational_alerts.len()
-            + 1,
+            + usize::from(health_emitted),
     );
-    emitted_events.push(health);
+    if health_emitted {
+        emitted_events.push(health.clone());
+    }
     for alert in operational_alerts {
         emitted_events.push(alert);
     }
@@ -1685,7 +1696,9 @@ fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error
     }
 
     let summary = scan_summary_json(ScanSummaryInput {
+        health_event: &health,
         emitted_events: &emitted_events,
+        health_emitted,
         activity_count,
         detection_count,
         session_risk_summary_count,

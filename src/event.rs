@@ -19,7 +19,7 @@ const SCHEMA_VERSION: &str = "1.0";
 const MAX_REDACTED_EVIDENCE_CHARS: usize = 512;
 const TRUNCATED_EVIDENCE_SUFFIX: &str = "[truncated]";
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Event {
     pub timestamp: String,
     pub event_time: Option<String>,

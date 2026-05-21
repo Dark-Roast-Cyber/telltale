@@ -1675,15 +1675,11 @@ fn scan_once_health_reports_unchanged_source_inventory() {
         .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
         .filter(|event| event["event_type"] == "health")
         .collect::<Vec<_>>();
-    assert_eq!(health_events.len(), 2);
+    assert_eq!(health_events.len(), 1);
 
     assert_eq!(
         source_inventory_change_value(&health_events[0]),
         "baseline=true; added=2; removed=0; unchanged=0"
-    );
-    assert_eq!(
-        source_inventory_change_value(&health_events[1]),
-        "baseline=false; added=0; removed=0; unchanged=2"
     );
 }
 
@@ -1809,7 +1805,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_eq!(second_summary["emitted_count"], 0);
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 38);
+    assert_eq!(lines.lines().count(), 37);
 }
 
 #[test]
