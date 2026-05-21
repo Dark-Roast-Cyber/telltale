@@ -151,6 +151,12 @@
       "type": ["object", "null"],
       "additionalProperties": { "type": "integer", "minimum": 0 }
     },
+    "component": { "type": ["string", "null"] },
+    "check_name": { "type": ["string", "null"] },
+    "status": {
+      "type": ["string", "null"],
+      "enum": ["ok", "degraded", "error", "unknown", null]
+    },
     "adr_version": { "type": ["string", "null"] },
     "scan_duration_ms": { "type": ["integer", "null"], "minimum": 0 },
     "rule_count": { "type": ["integer", "null"], "minimum": 0 },

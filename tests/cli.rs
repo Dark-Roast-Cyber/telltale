@@ -297,6 +297,9 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["severity"], "informational");
     assert_eq!(event["risk_score"], 0);
     assert_eq!(event["session_id"], "scanner");
+    assert_eq!(event["component"], "scanner");
+    assert_eq!(event["check_name"], "source_discovery");
+    assert_eq!(event["status"], "ok");
     assert_eq!(event["adr_version"], env!("CARGO_PKG_VERSION"));
     assert!(event["scan_duration_ms"].as_u64().is_some());
     assert_eq!(event["rule_count"], 18);

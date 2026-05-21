@@ -51,6 +51,9 @@ pub struct Event {
     pub triage: Option<serde_json::Value>,
     pub response: Option<ResponseMetadata>,
     pub source_counts: Option<BTreeMap<String, u32>>,
+    pub component: Option<String>,
+    pub check_name: Option<String>,
+    pub status: Option<String>,
     pub adr_version: Option<String>,
     pub scan_duration_ms: Option<u64>,
     pub rule_count: Option<usize>,
@@ -229,6 +232,9 @@ struct EventBuilder {
     triage: Option<serde_json::Value>,
     response: Option<ResponseMetadata>,
     source_counts: Option<BTreeMap<String, u32>>,
+    component: Option<String>,
+    check_name: Option<String>,
+    status: Option<String>,
     adr_version: Option<String>,
     scan_duration_ms: Option<u64>,
     rule_count: Option<usize>,
@@ -273,6 +279,9 @@ impl EventBuilder {
             triage: self.triage,
             response: self.response,
             source_counts: self.source_counts,
+            component: self.component,
+            check_name: self.check_name,
+            status: self.status,
             adr_version: self.adr_version,
             scan_duration_ms: self.scan_duration_ms,
             rule_count: self.rule_count,
@@ -318,6 +327,9 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         triage: None,
         response: None,
         source_counts: Some(source_counts(sources)),
+        component: Some("scanner".to_string()),
+        check_name: Some("source_discovery".to_string()),
+        status: Some("ok".to_string()),
         adr_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         scan_duration_ms: Some(input.scan_duration_ms),
         rule_count: Some(input.rule_count),
@@ -371,6 +383,9 @@ pub fn detection_event(input: DetectionEventInput) -> Event {
         triage: Some(triage),
         response: Some(response),
         source_counts: None,
+        component: None,
+        check_name: None,
+        status: None,
         adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
@@ -407,6 +422,9 @@ pub fn activity_event(input: ActivityEventInput) -> Event {
         triage: None,
         response: None,
         source_counts: None,
+        component: None,
+        check_name: None,
+        status: None,
         adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
@@ -443,6 +461,9 @@ pub fn session_risk_summary_event(input: SessionRiskSummaryEventInput) -> Event 
         triage: None,
         response: None,
         source_counts: None,
+        component: None,
+        check_name: None,
+        status: None,
         adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
@@ -507,6 +528,9 @@ pub fn correlation_event(input: CorrelationEventInput) -> Event {
         triage: None,
         response: None,
         source_counts: None,
+        component: None,
+        check_name: None,
+        status: None,
         adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
@@ -561,6 +585,9 @@ pub fn scanner_error_event(source: &Source, error: &ParseError) -> Event {
         triage: None,
         response: None,
         source_counts: None,
+        component: Some("scanner".to_string()),
+        check_name: Some("source_parse".to_string()),
+        status: Some("degraded".to_string()),
         adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
@@ -632,6 +659,9 @@ pub fn operational_alert_event(input: OperationalAlertInput) -> Event {
         triage: None,
         response: None,
         source_counts: None,
+        component: Some("scanner".to_string()),
+        check_name: Some(operational_alert_check_name(&input.alert_type).to_string()),
+        status: Some("degraded".to_string()),
         adr_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         scan_duration_ms: input.scan_duration_ms,
         rule_count: None,
@@ -639,6 +669,15 @@ pub fn operational_alert_event(input: OperationalAlertInput) -> Event {
         active_policy_name: None,
     }
     .build()
+}
+
+fn operational_alert_check_name(alert_type: &str) -> &str {
+    match alert_type {
+        "scanner_error_threshold_exceeded" => "scanner_error_threshold",
+        "scan_duration_threshold_exceeded" => "scan_duration_threshold",
+        "source_silence_threshold_exceeded" => "source_silence_threshold",
+        _ => "operational_alert",
+    }
 }
 
 fn response_metadata(
@@ -960,9 +999,9 @@ fn display_name(source: &Source) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DetectionEventInput, OperationalAlertInput, detection_event, format_timestamp,
-        operational_alert_event, parse_event_timestamp, redact_error_message,
-        redact_sensitive_text, scanner_error_event,
+        DetectionEventInput, HealthEventInput, OperationalAlertInput, detection_event,
+        format_timestamp, health_event_with_metadata, operational_alert_event,
+        parse_event_timestamp, redact_error_message, redact_sensitive_text, scanner_error_event,
     };
     use crate::clients::ClientId;
     use crate::scoring::{RiskSeverity, RiskThresholds, assess_risk_with_thresholds};
@@ -1008,6 +1047,22 @@ mod tests {
             .severity,
             RiskSeverity::Critical
         );
+    }
+
+    #[test]
+    fn health_event_has_steady_state_check_dimensions() {
+        let event = health_event_with_metadata(HealthEventInput {
+            sources: &[],
+            scan_duration_ms: 7,
+            rule_count: 3,
+            threshold_config: crate::scoring::load_thresholds(),
+            active_policy_name: None,
+        });
+
+        assert_eq!(event.event_type, "health");
+        assert_eq!(event.component.as_deref(), Some("scanner"));
+        assert_eq!(event.check_name.as_deref(), Some("source_discovery"));
+        assert_eq!(event.status.as_deref(), Some("ok"));
     }
 
     #[test]
@@ -1348,6 +1403,9 @@ mod tests {
         assert_eq!(event.triage, None);
         assert_eq!(event.response, None);
         assert_eq!(event.source_counts, None);
+        assert_eq!(event.component.as_deref(), Some("scanner"));
+        assert_eq!(event.check_name.as_deref(), Some("source_parse"));
+        assert_eq!(event.status.as_deref(), Some("degraded"));
     }
 
     #[test]
@@ -1398,6 +1456,9 @@ mod tests {
         assert_eq!(event.risk_score, 0);
         assert_eq!(event.client, "scanner");
         assert_eq!(event.session_id, "scanner");
+        assert_eq!(event.component.as_deref(), Some("scanner"));
+        assert_eq!(event.check_name.as_deref(), Some("scanner_error_threshold"));
+        assert_eq!(event.status.as_deref(), Some("degraded"));
         assert_eq!(event.categories, vec!["operational"]);
         assert!(event.tags.contains(&"operational".to_string()));
         assert!(event.tags.contains(&"scanner_health".to_string()));
@@ -1458,6 +1519,8 @@ mod tests {
 
         assert_eq!(event.event_type, "operational_alert");
         assert_eq!(event.severity, "warning");
+        assert_eq!(event.check_name.as_deref(), Some("scan_duration_threshold"));
+        assert_eq!(event.status.as_deref(), Some("degraded"));
         assert!(event.evidence.iter().any(|e| e.field == "scan_duration_ms"));
         assert!(
             event

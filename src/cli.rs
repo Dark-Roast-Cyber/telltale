@@ -2853,6 +2853,9 @@ fn event_from_json_value(event: &serde_json::Value) -> Option<Event> {
         triage: event.get("triage").cloned(),
         response: None,
         source_counts: None,
+        component: optional_string(event, "component"),
+        check_name: optional_string(event, "check_name"),
+        status: optional_string(event, "status"),
         adr_version: optional_string(event, "adr_version"),
         scan_duration_ms: event
             .get("scan_duration_ms")
