@@ -11,9 +11,9 @@ ADR runs a repeatable batch pipeline:
 5. **Detect**: run static regex filters over tool names, command strings, arguments, paths, URLs, and adjacent messages.
 6. **Score**: aggregate rule scores and modifiers into a risk result.
 7. **Triage**: call Llama Guard and a small triage model only above configured thresholds.
-8. **Emit**: send canonical events through an event sink. The current sink appends
-   local JSONL for SIEM shippers; future sinks should wrap the same event payload
-   for Splunk HEC or Elastic-compatible delivery.
+8. **Emit**: send canonical events through an event sink. The default sink appends
+   local JSONL for SIEM shippers; optional delivery paths wrap the same event
+   payload for Splunk HEC or Elastic-compatible export.
 
 ## Module Boundaries
 
