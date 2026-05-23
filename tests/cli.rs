@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -19,6 +20,54 @@ fn source_inventory_change_value(event: &Value) -> &str {
         .expect("source inventory change evidence")["redacted_value"]
         .as_str()
         .expect("source inventory change value")
+}
+
+#[test]
+fn readme_local_markdown_links_resolve() {
+    let readme = fs::read_to_string("README.md").expect("README.md");
+    let local_links = extract_markdown_links(&readme)
+        .into_iter()
+        .filter(|link| is_repo_local_link(link))
+        .collect::<Vec<_>>();
+
+    assert!(!local_links.is_empty(), "expected README local links");
+
+    let missing = local_links
+        .iter()
+        .filter_map(|link| {
+            let target = link.split_once('#').map_or(*link, |(path, _)| path);
+            (!Path::new(target).exists()).then_some(*link)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "README local links must point at tracked files or directories: {missing:?}"
+    );
+}
+
+fn extract_markdown_links(markdown: &str) -> Vec<&str> {
+    let mut links = Vec::new();
+    let mut rest = markdown;
+
+    while let Some(start) = rest.find("](") {
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find(')') else {
+            break;
+        };
+        links.push(&rest[..end]);
+        rest = &rest[end + 1..];
+    }
+
+    links
+}
+
+fn is_repo_local_link(link: &str) -> bool {
+    !link.is_empty()
+        && !link.starts_with('#')
+        && !link.starts_with("http://")
+        && !link.starts_with("https://")
+        && !link.starts_with("mailto:")
 }
 
 fn start_mock_llm_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
