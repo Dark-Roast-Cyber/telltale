@@ -24,26 +24,64 @@ fn source_inventory_change_value(event: &Value) -> &str {
 
 #[test]
 fn readme_local_markdown_links_resolve() {
-    let readme = fs::read_to_string("README.md").expect("README.md");
-    let local_links = extract_markdown_links(&readme)
-        .into_iter()
-        .filter(|link| is_repo_local_link(link))
-        .collect::<Vec<_>>();
+    let local_links = repo_local_markdown_links(Path::new("README.md"));
 
     assert!(!local_links.is_empty(), "expected README local links");
 
     let missing = local_links
         .iter()
-        .filter_map(|link| {
-            let target = link.split_once('#').map_or(*link, |(path, _)| path);
-            (!Path::new(target).exists()).then_some(*link)
-        })
+        .filter(|(_, target)| !target.exists())
+        .map(|(link, _)| link.clone())
         .collect::<Vec<_>>();
 
     assert!(
         missing.is_empty(),
         "README local links must point at tracked files or directories: {missing:?}"
     );
+}
+
+#[test]
+fn public_docs_local_markdown_links_resolve() {
+    let docs = fs::read_dir("docs")
+        .expect("docs directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .collect::<Vec<_>>();
+
+    assert!(!docs.is_empty(), "expected public docs");
+
+    let missing = docs
+        .iter()
+        .flat_map(|path| {
+            repo_local_markdown_links(path)
+                .into_iter()
+                .filter(|(_, target)| !target.exists())
+                .map(|(link, target)| {
+                    format!("{} -> {} ({})", path.display(), link, target.display())
+                })
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "public docs local links must point at existing files or directories: {missing:?}"
+    );
+}
+
+fn repo_local_markdown_links(markdown_path: &Path) -> Vec<(String, std::path::PathBuf)> {
+    let markdown = fs::read_to_string(markdown_path)
+        .unwrap_or_else(|error| panic!("{}: {error}", markdown_path.display()));
+    let base = markdown_path.parent().unwrap_or_else(|| Path::new(""));
+
+    extract_markdown_links(&markdown)
+        .into_iter()
+        .filter(|link| is_repo_local_link(link))
+        .map(|link| {
+            let target = link.split_once('#').map_or(link, |(path, _)| path);
+            (link.to_string(), base.join(target))
+        })
+        .collect()
 }
 
 fn extract_markdown_links(markdown: &str) -> Vec<&str> {
