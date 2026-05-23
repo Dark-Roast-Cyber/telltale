@@ -10,7 +10,7 @@ Environment=ADR_LOG_PATH=%h/github/adr/logs/adr-events.jsonl
 Environment=ADR_STATE_PATH=%h/github/adr/state/adr-state.json
 Environment=ADR_SCAN_ROOT=%h
 EnvironmentFile=-%h/github/adr/.env
-ExecStart=%h/.local/bin/adr scan --once --emit-activity --root %h --log-path %h/github/adr/logs/adr-events.jsonl --state-path %h/github/adr/state/adr-state.json
+ExecStart=%h/github/adr/target/release/adr scan --once --emit-activity --root %h --log-path %h/github/adr/logs/adr-events.jsonl --state-path %h/github/adr/state/adr-state.json
 NoNewPrivileges=true
 PrivateTmp=true
 

@@ -2417,13 +2417,13 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
                 .find("EnvironmentFile=-%h/github/adr/.env")
                 .expect("env file")
     );
-    assert!(service.contains("%h/.local/bin/adr scan --once"));
+    assert!(service.contains("%h/github/adr/target/release/adr scan --once"));
     assert!(service.contains("--emit-activity"));
     assert!(service.contains("--log-path %h/github/adr/logs/adr-events.jsonl"));
     assert!(service.contains("--state-path %h/github/adr/state/adr-state.json"));
 
     let timer = include_str!("../config/examples/adr-scan.timer");
-    assert!(timer.contains("OnUnitActiveSec=1day"));
+    assert!(timer.contains("OnUnitActiveSec=5min"));
     assert!(timer.contains("Unit=adr-scan.service"));
     assert!(timer.contains("WantedBy=timers.target"));
 }

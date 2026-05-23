@@ -71,6 +71,9 @@ The repository includes Linux-oriented systemd examples in
 `config/examples/adr-scan.service` and `config/examples/adr-scan.timer` for
 periodic scans.
 
+The example service runs the repository build artifact directly from
+`target/release/adr`, so build the release binary before enabling the timer.
+
 ## Optional SIEM Setup
 
 Telltale writes append-only JSONL. Review the generated event schema and your
