@@ -79,6 +79,10 @@ When you are ready to scan real session stores, point `adr scan --root` at the
 directory that contains your actual supported session-store roots, such as `$HOME`
 on a typical single-user workstation, instead of `tests/fixtures/`.
 
+For continuous local monitoring, `adr watch` accepts the same repeated
+`--client <id>` filters as `adr scan`, so watched runs can stay scoped to one
+or more supported client IDs such as `codex` or `opencode`.
+
 - Install and setup guide: [docs/install.md](docs/install.md)
 
 ## Telemetry Output

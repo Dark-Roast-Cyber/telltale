@@ -51,6 +51,17 @@ cargo run -- scan --once --emit-activity --root "$HOME" --log-path logs/adr-even
 Telltale writes append-only JSONL by default so the output can be reviewed
 locally or shipped to a SIEM.
 
+## Optional Watch Mode
+
+Use `adr watch` when you want repeated scans after local session-store changes.
+The watch command accepts the same repeated `--client <id>` filters as
+`adr scan`, which keeps filesystem watches and triggered scans scoped to the
+selected supported clients:
+
+```sh
+cargo run -- watch --client codex --client opencode --root "$HOME" --log-path logs/adr-events.jsonl
+```
+
 ## Check Scanner Status
 
 After a scan writes JSONL telemetry, use `adr status` to review the latest local
