@@ -335,17 +335,36 @@ pub fn source_fingerprint(source: &Source) -> String {
 
 pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(source_fingerprint.as_bytes());
     hasher.update(event.client.as_bytes());
+    if let Some(source_path_hash) = &event.source_path_hash {
+        hasher.update(source_path_hash.as_bytes());
+    } else {
+        hasher.update(source_fingerprint.as_bytes());
+    }
     hasher.update(event.session_id.as_bytes());
     hasher.update(event.event_type.as_bytes());
     hasher.update(event.severity.as_bytes());
     hasher.update(event.risk_score.to_le_bytes());
+    if let Some(agent) = &event.agent {
+        hasher.update(agent.as_bytes());
+    }
+    if let Some(model) = &event.model {
+        hasher.update(model.as_bytes());
+    }
+    if let Some(provider) = &event.provider {
+        hasher.update(provider.as_bytes());
+    }
+    if let Some(tool_name) = &event.tool_name {
+        hasher.update(tool_name.as_bytes());
+    }
     for rule_id in &event.rule_ids {
         hasher.update(rule_id.as_bytes());
     }
     for category in &event.categories {
         hasher.update(category.as_bytes());
+    }
+    for tag in &event.tags {
+        hasher.update(tag.as_bytes());
     }
     for evidence in &event.evidence {
         hasher.update(evidence.field.as_bytes());
@@ -418,6 +437,39 @@ mod tests {
         assert_eq!(
             detection_fingerprint(&event, &source_fingerprint(&source)),
             detection_fingerprint(&event, &source_fingerprint(&source))
+        );
+    }
+
+    #[test]
+    fn stable_event_source_hash_dedup_ignores_container_fingerprint_churn() {
+        let event = detection_event(DetectionEventInput {
+            client: ClientId::OpenCode,
+            agent: Some("build".to_string()),
+            model: Some("gpt-5.4".to_string()),
+            provider: Some("github-copilot".to_string()),
+            session_id: "ses_stable".to_string(),
+            source_path_hash: "stable-source-hash".to_string(),
+            tool_name: None,
+            rule_ids: vec!["rule".to_string()],
+            categories: vec!["category".to_string()],
+            detection_classes: Vec::new(),
+            signal_types: Vec::new(),
+            analytic_intents: Vec::new(),
+            atlas_tags: Vec::new(),
+            tags: vec!["activity".to_string(), "session".to_string()],
+            evidence: vec![Evidence {
+                field: "record_counts".to_string(),
+                redacted_value: r#"{"assistant_message":2,"user_message":1}"#.to_string(),
+                hash: Some("abc".to_string()),
+                rule_id: None,
+            }],
+            risk_score: 10,
+            event_time: Some("2026-05-01T00:00:00.000Z".to_string()),
+        });
+
+        assert_eq!(
+            detection_fingerprint(&event, "container-fingerprint-a"),
+            detection_fingerprint(&event, "container-fingerprint-b")
         );
     }
 
