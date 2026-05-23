@@ -124,9 +124,15 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
   - [Privacy model](docs/privacy-model.md)
 - Additional references:
   - [Session sources](docs/session-sources.md)
+  - [Agent capability profiles](docs/agent-capability-profiles.md)
+  - [Client capability matrix](docs/client-capability-matrix.md)
   - [MCP tool inventory](docs/mcp-tool-inventory.md)
+  - [Policy modes](docs/policy-modes.md)
+  - [Policy authoring](docs/agent-policy-authoring.md)
   - [Use cases](docs/use-cases.md)
   - [Normalization schema](docs/normalization-schema.md)
+  - [Source validation matrix](docs/source-validation-matrix.md)
+  - [Requirements](docs/requirements.md)
   - [Trust boundaries](docs/trust-boundaries.md)
   - [License and packaging](docs/license-and-packaging.md)
 - Advanced and workflow-specific docs remain under [`docs/`](docs/).
