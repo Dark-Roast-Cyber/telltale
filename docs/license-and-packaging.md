@@ -47,8 +47,9 @@ these separate-license areas.
 
 ## Public Release Boundary
 
-The public repository should contain the open-source core, public technical
+The public repository is the release and packaging boundary for Telltale Core.
+Public commits should contain the open-source core, public technical
 documentation, synthetic fixtures, and reviewed examples. Host-specific
 operations, private planning notes, local credentials, raw agent transcripts,
-and environment-specific deployment assumptions are outside this public core
-boundary.
+and environment-specific deployment assumptions must stay out of public commits
+instead of being managed through a separate exported tree.
