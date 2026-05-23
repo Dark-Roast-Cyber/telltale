@@ -3079,6 +3079,46 @@ fn status_reports_latest_health_event() {
 }
 
 #[test]
+fn status_rejects_invalid_jsonl() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    fs::write(
+        &log_path,
+        [
+            serde_json::json!({
+                "timestamp": "2026-05-01T00:00:00Z",
+                "event_type": "health",
+                "severity": "informational",
+                "client": "scanner",
+                "session_id": "scanner",
+                "rule_ids": [],
+            })
+            .to_string(),
+            "{not-json".to_string(),
+        ]
+        .join("\n"),
+    )
+    .expect("write log");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("status")
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--state-path")
+        .arg(&state_path)
+        .output()
+        .expect("run adr status");
+
+    assert!(!status.status.success());
+    assert!(
+        String::from_utf8_lossy(&status.stderr).contains("invalid JSONL"),
+        "stderr: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+#[test]
 fn export_filters_jsonl_by_event_fields() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");

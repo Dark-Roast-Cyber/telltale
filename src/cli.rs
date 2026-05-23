@@ -1940,12 +1940,7 @@ fn update_baseline_snapshots(state: &mut ScanState, sources: &[Source], force_re
 }
 
 fn run_status(log_path: &Path, state_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let contents = fs::read_to_string(log_path)?;
-    let events = contents
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .collect::<Vec<_>>();
+    let events = read_jsonl_events(log_path)?;
     let health_index = events
         .iter()
         .rposition(|event| {
