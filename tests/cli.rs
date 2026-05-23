@@ -2973,6 +2973,28 @@ fn watch_command_is_available_for_realtime_scans() {
     assert!(stdout.contains("Watch local session stores"));
     assert!(stdout.contains("--debounce-ms"));
     assert!(stdout.contains("--iterations"));
+    assert!(stdout.contains("--client"));
+}
+
+#[test]
+fn watch_rejects_unknown_client_filter() {
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "watch",
+            "--dry-run",
+            "--root",
+            "tests/fixtures/session_stores",
+            "--client",
+            "unknown-agent",
+        ])
+        .output()
+        .expect("run adr watch");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unsupported client 'unknown-agent'"));
+    assert!(stderr.contains("codex"));
+    assert!(stderr.contains("gemini"));
 }
 
 #[test]

@@ -53,8 +53,13 @@ pub fn discover_sources(root: &Path) -> Vec<Source> {
 }
 
 pub fn discover_watch_roots(root: &Path) -> Vec<PathBuf> {
+    discover_watch_roots_for_clients(root, &[])
+}
+
+pub fn discover_watch_roots_for_clients(root: &Path, clients: &[ClientId]) -> Vec<PathBuf> {
     let mut roots = supported_clients()
         .iter()
+        .filter(|client| clients.is_empty() || clients.contains(&client.id))
         .flat_map(|client| client.sources.iter())
         .filter_map(|source_def| source_watch_root(root, *source_def))
         .collect::<Vec<_>>();
@@ -343,7 +348,8 @@ mod tests {
     use super::{
         HostPlatform, RootResolutionContext, current_host_platform, default_config_home,
         default_data_home, discover_source_from_context, discover_sources, discover_watch_roots,
-        resolve_path_root_from_context, source_search_root_from_context,
+        discover_watch_roots_for_clients, resolve_path_root_from_context,
+        source_search_root_from_context,
     };
     use crate::clients::supported_clients;
 
@@ -469,6 +475,22 @@ mod tests {
             roots
                 .iter()
                 .any(|path| path.ends_with(fixture_root.join("opencode")))
+        );
+    }
+
+    #[test]
+    fn filters_fixture_watch_roots_by_client() {
+        let roots = discover_watch_roots_for_clients(
+            std::path::Path::new("tests/fixtures/session_stores"),
+            &[ClientId::Gemini],
+        );
+        let fixture_root = Path::new("tests").join("fixtures").join("session_stores");
+
+        assert!(!roots.is_empty());
+        assert!(
+            roots
+                .iter()
+                .all(|path| path.ends_with(fixture_root.join("gemini").join("tmp")))
         );
     }
 

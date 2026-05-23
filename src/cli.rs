@@ -22,7 +22,9 @@ use crate::correlation::{CorrelationConfig, correlation_events_from_detections};
 use crate::detection::{
     detect_sources_with_rules, evaluate_session_matches, summarize_source_activities_with_baselines,
 };
-use crate::discovery::{Source, discover_sources, discover_watch_roots, is_fixture_root};
+use crate::discovery::{
+    Source, discover_sources, discover_watch_roots_for_clients, is_fixture_root,
+};
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertInput, SessionRiskSummaryEventInput,
     evidence_hash, health_event_with_metadata, load_operational_alert_config,
@@ -196,6 +198,10 @@ enum Command {
         /// Has effect only when --emit-activity is also set.
         #[arg(long)]
         baseline_deviation_scoring: bool,
+
+        /// Limit watched scan discovery to one supported client. Repeat to include multiple clients.
+        #[arg(long = "client", value_parser = parse_client_id)]
+        clients: Vec<ClientId>,
     },
 
     /// Inspect and validate Telltale detection rules.
@@ -509,6 +515,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             policy,
             allowlist,
             baseline_deviation_scoring,
+            clients,
         } => {
             let watch_args = WatchCommandArgs {
                 root: &root,
@@ -524,6 +531,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 policy_path: policy.as_deref(),
                 allowlist_path: allowlist.as_deref(),
                 baseline_deviation_scoring,
+                clients: &clients,
             };
             run_watch(watch_config(&watch_args))?;
         }
@@ -1342,6 +1350,7 @@ struct WatchConfig<'a> {
     policy_path: Option<&'a std::path::Path>,
     allowlist_path: Option<&'a std::path::Path>,
     baseline_deviation_scoring: bool,
+    clients: &'a [ClientId],
 }
 
 struct WatchCommandArgs<'a> {
@@ -1358,6 +1367,7 @@ struct WatchCommandArgs<'a> {
     policy_path: Option<&'a std::path::Path>,
     allowlist_path: Option<&'a std::path::Path>,
     baseline_deviation_scoring: bool,
+    clients: &'a [ClientId],
 }
 
 fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
@@ -1397,6 +1407,7 @@ fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a> {
         policy_path: args.policy_path,
         allowlist_path: args.allowlist_path,
         baseline_deviation_scoring: args.baseline_deviation_scoring,
+        clients: args.clients,
     }
 }
 
@@ -1417,7 +1428,7 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
         policy_path: config.policy_path,
         allowlist_path: config.allowlist_path,
         baseline_deviation_scoring: config.baseline_deviation_scoring,
-        clients: &[],
+        clients: config.clients,
         max_sources: None,
     }
 }
@@ -1449,7 +1460,7 @@ fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::error::Error>> 
         );
     }
 
-    let watch_roots = discover_watch_roots(config.root);
+    let watch_roots = discover_watch_roots_for_clients(config.root, config.clients);
     if watch_roots.is_empty() {
         return Err(format!(
             "no existing Telltale session-store roots found under {}",
