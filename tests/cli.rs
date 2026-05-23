@@ -3190,6 +3190,43 @@ fn status_rejects_invalid_jsonl() {
 }
 
 #[test]
+fn export_rejects_invalid_jsonl() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        [
+            serde_json::json!({
+                "timestamp": "2026-05-01T00:00:00Z",
+                "event_type": "detection",
+                "severity": "critical",
+                "client": "codex",
+                "session_id": "session-a",
+                "rule_ids": ["mcp.test"],
+            })
+            .to_string(),
+            "{not-json".to_string(),
+        ]
+        .join("\n"),
+    )
+    .expect("write log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .arg("export")
+        .arg("--log-path")
+        .arg(&log_path)
+        .output()
+        .expect("run adr export");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid JSONL"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn export_filters_jsonl_by_event_fields() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");
