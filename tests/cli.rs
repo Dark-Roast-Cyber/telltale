@@ -261,6 +261,24 @@ fn public_docs_inventory_public_safe_paths_exist() {
 }
 
 #[test]
+fn public_docs_inventory_public_safe_paths_are_tracked() {
+    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
+        return;
+    };
+
+    let untracked = public_safe_paths
+        .iter()
+        .filter(|path| !git_tracks_repo_path(path))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        untracked.is_empty(),
+        "public-safe inventory paths must be tracked for publication: {untracked:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_public_safe_paths_are_not_ignored() {
     let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
         return;
@@ -445,6 +463,21 @@ fn gitignore_covers_repo_path(path: &str, patterns: &[String]) -> bool {
     let path = path.trim_end_matches('/');
 
     repo_path_list_covers(path, patterns)
+}
+
+fn git_tracks_repo_path(path: &str) -> bool {
+    let output = Command::new("git")
+        .args(["ls-files", "--", path])
+        .output()
+        .expect("git ls-files");
+
+    assert!(
+        output.status.success(),
+        "git ls-files failed for {path}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    !output.stdout.is_empty()
 }
 
 fn repo_path_list_covers(path: &str, patterns: &[String]) -> bool {
