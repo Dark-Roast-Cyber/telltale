@@ -352,6 +352,27 @@ fn release_workflow_internal_only_paths_are_not_tracked() {
 }
 
 #[test]
+fn release_workflow_internal_only_paths_are_unique() {
+    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
+    if !workflow_path.exists() {
+        return;
+    }
+
+    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
+    let mut seen = BTreeSet::new();
+    let duplicates = internal_only_paths
+        .iter()
+        .filter(|path| !seen.insert(path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        duplicates.is_empty(),
+        "release workflow internal-only paths must be listed once: {duplicates:?}"
+    );
+}
+
+#[test]
 fn release_workflow_internal_only_paths_cover_host_only_boundary() {
     let workflow_path = Path::new("docs/internal/public-release-workflow.md");
     if !workflow_path.exists() {
