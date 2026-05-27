@@ -97,6 +97,47 @@ fn public_docs_do_not_reintroduce_split_checkout_guidance() {
     );
 }
 
+#[test]
+fn host_only_release_paths_remain_ignored() {
+    let required_patterns = [
+        "AGENTS.md",
+        "PLAN.md",
+        "VISION.md",
+        "IDEAS.md",
+        "docs/internal/",
+        "docs/CHANGELOG.md",
+        "docs/siem-logging.md",
+        "docs/splunk-content.md",
+        "skills/",
+        "scripts/ralph*",
+        "scripts/inspiration/",
+        ".opencode/",
+        "logs/",
+        "state/",
+        "runtime/ralph/",
+        "config/examples/splunk-*.conf",
+        "config/examples/splunk-*.xml",
+    ];
+
+    let gitignore = fs::read_to_string(".gitignore").expect(".gitignore");
+    let patterns = gitignore
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect::<Vec<_>>();
+
+    let missing = required_patterns
+        .iter()
+        .filter(|pattern| !patterns.contains(pattern))
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "host-only release paths must stay ignored: {missing:?}"
+    );
+}
+
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
     fs::read_dir("docs")
         .expect("docs directory")
