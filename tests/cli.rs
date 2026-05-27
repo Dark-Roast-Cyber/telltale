@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -538,6 +538,35 @@ fn public_docs_inventory_paths_have_single_classification() {
 }
 
 #[test]
+fn public_docs_inventory_classifies_top_level_markdown_docs() {
+    let Some(paths_by_section) = public_docs_inventory_paths_by_section() else {
+        return;
+    };
+
+    let classified_paths = paths_by_section
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect::<Vec<_>>();
+    let mut required_paths = BTreeSet::from(["README.md".to_string()]);
+    required_paths.extend(top_level_markdown_docs().into_iter().map(|path| {
+        path.to_str()
+            .unwrap_or_else(|| panic!("non-UTF-8 path: {}", path.display()))
+            .to_string()
+    }));
+
+    let missing = required_paths
+        .iter()
+        .filter(|path| !repo_path_list_covers(path, &classified_paths))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "public docs inventory must classify README and every top-level docs/*.md file: {missing:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
     let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
         return;
@@ -676,12 +705,18 @@ fn public_docs_inventory_paths_between(
 }
 
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
+    top_level_markdown_docs()
+        .into_iter()
+        .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
+        .collect()
+}
+
+fn top_level_markdown_docs() -> Vec<std::path::PathBuf> {
     fs::read_dir("docs")
         .expect("docs directory")
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
-        .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
         .collect()
 }
 
