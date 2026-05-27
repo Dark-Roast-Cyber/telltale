@@ -277,31 +277,103 @@ fn public_docs_inventory_public_safe_paths_are_not_ignored() {
     );
 }
 
-fn public_docs_inventory_public_safe_paths() -> Option<Vec<String>> {
-    let inventory_path = Path::new("docs/internal/public-docs-inventory.md");
-    if !inventory_path.exists() {
-        return None;
-    }
+#[test]
+fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
+    let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
+        return;
+    };
 
-    let inventory = fs::read_to_string(inventory_path).expect("public docs inventory");
-    let public_safe_section = inventory
-        .split_once("## Public-Safe")
-        .and_then(|(_, rest)| rest.split_once("## Mixed / Sanitize Before Publication"))
-        .map(|(section, _)| section)
-        .expect("public-safe inventory section")
-        .to_string();
+    let required_paths = [
+        "AGENTS.md",
+        "PLAN.md",
+        "VISION.md",
+        "IDEAS.md",
+        "docs/internal/",
+        "docs/CHANGELOG.md",
+        "docs/siem-logging.md",
+        "docs/splunk-content.md",
+        "skills/",
+        "scripts/ralph-loop.sh",
+        "scripts/ralph-loop.md",
+        "scripts/inspiration/",
+        ".opencode/",
+        "logs/",
+        "state/",
+        "runtime/ralph/",
+        "config/examples/splunk-*.conf",
+        "config/examples/splunk-*.xml",
+    ];
 
-    let public_safe_paths = public_safe_section
-        .lines()
-        .filter_map(markdown_table_path)
-        .map(str::to_string)
+    let missing = required_paths
+        .iter()
+        .filter(|path| !repo_path_list_covers(path, &non_public_paths))
+        .copied()
         .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "public docs inventory non-public paths must cover host-only boundary paths: {missing:?}"
+    );
+}
+
+fn public_docs_inventory_public_safe_paths() -> Option<Vec<String>> {
+    let public_safe_paths = public_docs_inventory_paths_between(
+        "## Public-Safe",
+        "## Mixed / Sanitize Before Publication",
+        "public-safe inventory section",
+    )?;
     assert!(
         !public_safe_paths.is_empty(),
         "expected public-safe inventory paths"
     );
 
     Some(public_safe_paths)
+}
+
+fn public_docs_inventory_non_public_paths() -> Option<Vec<String>> {
+    let mut non_public_paths = public_docs_inventory_paths_between(
+        "## Mixed / Sanitize Before Publication",
+        "## Internal-Only",
+        "mixed inventory section",
+    )?;
+    let internal_only_paths = public_docs_inventory_paths_between(
+        "## Internal-Only",
+        "## License And Packaging Boundary",
+        "internal-only inventory section",
+    )?;
+    non_public_paths.extend(internal_only_paths);
+    assert!(
+        !non_public_paths.is_empty(),
+        "expected non-public inventory paths"
+    );
+
+    Some(non_public_paths)
+}
+
+fn public_docs_inventory_paths_between(
+    start_heading: &str,
+    end_heading: &str,
+    section_name: &str,
+) -> Option<Vec<String>> {
+    let inventory_path = Path::new("docs/internal/public-docs-inventory.md");
+    if !inventory_path.exists() {
+        return None;
+    }
+
+    let inventory = fs::read_to_string(inventory_path).expect("public docs inventory");
+    let section = inventory
+        .split_once(start_heading)
+        .and_then(|(_, rest)| rest.split_once(end_heading))
+        .map(|(section, _)| section)
+        .unwrap_or_else(|| panic!("{section_name}"));
+
+    Some(
+        section
+            .lines()
+            .filter_map(markdown_table_path)
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
