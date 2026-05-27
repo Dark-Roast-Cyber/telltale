@@ -184,37 +184,59 @@ fn release_workflow_internal_only_paths_remain_ignored() {
         return;
     }
 
-    let workflow = fs::read_to_string(workflow_path).expect("public release workflow");
-    let internal_only_section = workflow
-        .split_once("## Internal-Only Material")
-        .and_then(|(_, rest)| rest.split_once("## Public Publication Process"))
-        .map(|(section, _)| section)
-        .expect("internal-only material section");
-
-    let internal_only_paths = internal_only_section
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("- `")
-                .and_then(|rest| rest.split_once('`'))
-                .map(|(path, _)| path)
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        !internal_only_paths.is_empty(),
-        "expected internal-only release paths"
-    );
+    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
 
     let patterns = gitignore_patterns();
     let unignored = internal_only_paths
         .iter()
         .filter(|path| !gitignore_covers_repo_path(path, &patterns))
-        .copied()
+        .cloned()
         .collect::<Vec<_>>();
 
     assert!(
         unignored.is_empty(),
         "release workflow internal-only paths must stay ignored: {unignored:?}"
+    );
+}
+
+#[test]
+fn release_workflow_internal_only_paths_cover_host_only_boundary() {
+    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
+    if !workflow_path.exists() {
+        return;
+    }
+
+    let required_paths = [
+        "AGENTS.md",
+        "PLAN.md",
+        "VISION.md",
+        "IDEAS.md",
+        "docs/internal/",
+        "docs/CHANGELOG.md",
+        "docs/siem-logging.md",
+        "docs/splunk-content.md",
+        "skills/",
+        "scripts/ralph-loop.sh",
+        "scripts/ralph-loop.md",
+        "scripts/inspiration/",
+        ".opencode/",
+        "logs/",
+        "state/",
+        "runtime/ralph/",
+        "config/examples/splunk-*.conf",
+        "config/examples/splunk-*.xml",
+    ];
+
+    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
+    let missing = required_paths
+        .iter()
+        .filter(|path| !repo_path_list_covers(path, &internal_only_paths))
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "release workflow internal-only paths must cover host-only boundary paths: {missing:?}"
     );
 }
 
@@ -318,6 +340,12 @@ fn gitignore_patterns() -> Vec<String> {
 fn gitignore_covers_repo_path(path: &str, patterns: &[String]) -> bool {
     let path = path.trim_end_matches('/');
 
+    repo_path_list_covers(path, patterns)
+}
+
+fn repo_path_list_covers(path: &str, patterns: &[String]) -> bool {
+    let path = path.trim_end_matches('/');
+
     patterns.iter().any(|pattern| {
         if let Some(prefix) = pattern.strip_suffix('*') {
             return path.starts_with(prefix);
@@ -330,6 +358,31 @@ fn gitignore_covers_repo_path(path: &str, patterns: &[String]) -> bool {
 
         path == pattern
     })
+}
+
+fn release_workflow_internal_only_paths(workflow_path: &Path) -> Vec<String> {
+    let workflow = fs::read_to_string(workflow_path).expect("public release workflow");
+    let internal_only_section = workflow
+        .split_once("## Internal-Only Material")
+        .and_then(|(_, rest)| rest.split_once("## Public Publication Process"))
+        .map(|(section, _)| section)
+        .expect("internal-only material section");
+
+    let internal_only_paths = internal_only_section
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("- `")
+                .and_then(|rest| rest.split_once('`'))
+                .map(|(path, _)| path.to_string())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !internal_only_paths.is_empty(),
+        "expected internal-only release paths"
+    );
+
+    internal_only_paths
 }
 
 fn stale_split_checkout_terms() -> [&'static str; 9] {
