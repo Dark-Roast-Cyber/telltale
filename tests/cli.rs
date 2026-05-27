@@ -69,6 +69,55 @@ fn public_docs_local_markdown_links_resolve() {
     );
 }
 
+#[test]
+fn public_docs_do_not_reintroduce_split_checkout_guidance() {
+    let stale_terms = [
+        "runewatch-public",
+        "split-checkout",
+        "split checkout",
+        "second local checkout",
+        "separate checkout",
+        "export tree",
+        "export-tree",
+        "paired private/public",
+    ];
+
+    let docs = public_markdown_docs();
+    assert!(!docs.is_empty(), "expected public docs");
+
+    let mut matches = stale_public_guidance_matches(Path::new("README.md"), &stale_terms);
+    for doc in docs {
+        matches.extend(stale_public_guidance_matches(&doc, &stale_terms));
+    }
+
+    assert!(
+        matches.is_empty(),
+        "public docs must not reintroduce retired split-checkout guidance: {matches:?}"
+    );
+}
+
+fn public_markdown_docs() -> Vec<std::path::PathBuf> {
+    fs::read_dir("docs")
+        .expect("docs directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
+        .collect()
+}
+
+fn stale_public_guidance_matches(path: &Path, stale_terms: &[&str]) -> Vec<String> {
+    let markdown =
+        fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let lowercase = markdown.to_lowercase();
+
+    stale_terms
+        .iter()
+        .filter(|term| lowercase.contains(**term))
+        .map(|term| format!("{} contains {term:?}", path.display()))
+        .collect()
+}
+
 fn repo_local_markdown_links(markdown_path: &Path) -> Vec<(String, std::path::PathBuf)> {
     let markdown = fs::read_to_string(markdown_path)
         .unwrap_or_else(|error| panic!("{}: {error}", markdown_path.display()));
