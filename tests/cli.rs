@@ -515,6 +515,24 @@ fn public_docs_inventory_internal_only_paths_remain_ignored() {
 }
 
 #[test]
+fn public_docs_inventory_internal_only_paths_exist() {
+    let Some(internal_only_paths) = public_docs_inventory_internal_only_paths() else {
+        return;
+    };
+
+    let missing = internal_only_paths
+        .iter()
+        .filter(|path| !repo_path_or_glob_exists(path))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "public docs inventory internal-only paths must resolve to existing local paths or wildcard matches: {missing:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_mixed_sanitize_paths_exist() {
     let Some(mixed_paths) = public_docs_inventory_mixed_sanitize_paths() else {
         return;
