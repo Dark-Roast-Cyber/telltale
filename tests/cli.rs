@@ -71,17 +71,7 @@ fn public_docs_local_markdown_links_resolve() {
 
 #[test]
 fn public_docs_do_not_reintroduce_split_checkout_guidance() {
-    let stale_terms = [
-        "runewatch-public",
-        "split-checkout",
-        "split checkout",
-        "second local checkout",
-        "separate checkout",
-        "export tree",
-        "exported tree",
-        "export-tree",
-        "paired private/public",
-    ];
+    let stale_terms = stale_split_checkout_terms();
 
     let docs = public_markdown_docs();
     assert!(!docs.is_empty(), "expected public docs");
@@ -94,6 +84,28 @@ fn public_docs_do_not_reintroduce_split_checkout_guidance() {
     assert!(
         matches.is_empty(),
         "public docs must not reintroduce retired split-checkout guidance: {matches:?}"
+    );
+}
+
+#[test]
+fn public_release_surfaces_do_not_reintroduce_split_checkout_guidance() {
+    let stale_terms = stale_split_checkout_terms();
+    let release_surfaces = [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "README.md",
+        "docs/install.md",
+        "docs/license-and-packaging.md",
+    ];
+
+    let matches = release_surfaces
+        .iter()
+        .flat_map(|path| stale_public_guidance_matches(Path::new(path), &stale_terms))
+        .collect::<Vec<_>>();
+
+    assert!(
+        matches.is_empty(),
+        "public release surfaces must not reintroduce retired split-checkout guidance: {matches:?}"
     );
 }
 
@@ -173,6 +185,20 @@ fn public_markdown_docs() -> Vec<std::path::PathBuf> {
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
         .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
         .collect()
+}
+
+fn stale_split_checkout_terms() -> [&'static str; 9] {
+    [
+        "runewatch-public",
+        "split-checkout",
+        "split checkout",
+        "second local checkout",
+        "separate checkout",
+        "export tree",
+        "exported tree",
+        "export-tree",
+        "paired private/public",
+    ]
 }
 
 fn is_host_only_repo_path(path: &Path) -> bool {
