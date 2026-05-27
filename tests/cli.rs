@@ -98,6 +98,33 @@ fn public_docs_do_not_reintroduce_split_checkout_guidance() {
 }
 
 #[test]
+fn public_docs_do_not_link_to_host_only_paths() {
+    let mut docs = vec![Path::new("README.md").to_path_buf()];
+    docs.extend(
+        public_markdown_docs()
+            .into_iter()
+            .filter(|path| !is_host_only_repo_path(path)),
+    );
+
+    let host_only_links = docs
+        .iter()
+        .flat_map(|path| {
+            repo_local_markdown_links(path)
+                .into_iter()
+                .filter(|(_, target)| is_host_only_repo_path(target))
+                .map(|(link, target)| {
+                    format!("{} -> {} ({})", path.display(), link, target.display())
+                })
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        host_only_links.is_empty(),
+        "public docs must not link to ignored host-only release paths: {host_only_links:?}"
+    );
+}
+
+#[test]
 fn host_only_release_paths_remain_ignored() {
     let required_patterns = [
         "AGENTS.md",
@@ -146,6 +173,55 @@ fn public_markdown_docs() -> Vec<std::path::PathBuf> {
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
         .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
         .collect()
+}
+
+fn is_host_only_repo_path(path: &Path) -> bool {
+    let path = normalize_repo_path(path);
+    let host_only_paths = [
+        "AGENTS.md",
+        "PLAN.md",
+        "VISION.md",
+        "IDEAS.md",
+        "docs/internal/",
+        "docs/CHANGELOG.md",
+        "docs/siem-logging.md",
+        "docs/splunk-content.md",
+        "skills/",
+        "scripts/ralph",
+        "scripts/inspiration/",
+        ".opencode/",
+        "logs/",
+        "state/",
+        "runtime/ralph/",
+        "config/examples/splunk-",
+    ];
+
+    host_only_paths.iter().any(|host_only_path| {
+        if host_only_path.ends_with('/') || host_only_path.ends_with('-') {
+            path.starts_with(host_only_path)
+        } else {
+            path == *host_only_path
+        }
+    })
+}
+
+fn normalize_repo_path(path: &Path) -> String {
+    let mut components = Vec::new();
+
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::Normal(value) => {
+                components.push(value.to_string_lossy().to_string());
+            }
+            _ => {}
+        }
+    }
+
+    components.join("/")
 }
 
 fn stale_public_guidance_matches(path: &Path, stale_terms: &[&str]) -> Vec<String> {
