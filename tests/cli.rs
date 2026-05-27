@@ -280,6 +280,25 @@ fn public_docs_inventory_public_safe_paths_are_not_ignored() {
 }
 
 #[test]
+fn public_docs_inventory_internal_only_paths_remain_ignored() {
+    let Some(internal_only_paths) = public_docs_inventory_internal_only_paths() else {
+        return;
+    };
+
+    let patterns = gitignore_patterns();
+    let unignored = internal_only_paths
+        .iter()
+        .filter(|path| !gitignore_covers_repo_path(path.as_str(), &patterns))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        unignored.is_empty(),
+        "public docs inventory internal-only paths must stay ignored: {unignored:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
     let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
         return;
@@ -339,11 +358,7 @@ fn public_docs_inventory_non_public_paths() -> Option<Vec<String>> {
         "## Internal-Only",
         "mixed inventory section",
     )?;
-    let internal_only_paths = public_docs_inventory_paths_between(
-        "## Internal-Only",
-        "## License And Packaging Boundary",
-        "internal-only inventory section",
-    )?;
+    let internal_only_paths = public_docs_inventory_internal_only_paths()?;
     non_public_paths.extend(internal_only_paths);
     assert!(
         !non_public_paths.is_empty(),
@@ -351,6 +366,20 @@ fn public_docs_inventory_non_public_paths() -> Option<Vec<String>> {
     );
 
     Some(non_public_paths)
+}
+
+fn public_docs_inventory_internal_only_paths() -> Option<Vec<String>> {
+    let internal_only_paths = public_docs_inventory_paths_between(
+        "## Internal-Only",
+        "## License And Packaging Boundary",
+        "internal-only inventory section",
+    )?;
+    assert!(
+        !internal_only_paths.is_empty(),
+        "expected internal-only inventory paths"
+    );
+
+    Some(internal_only_paths)
 }
 
 fn public_docs_inventory_paths_between(
