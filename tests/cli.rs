@@ -138,6 +138,27 @@ fn public_release_surfaces_do_not_reintroduce_split_checkout_guidance() {
 }
 
 #[test]
+fn agent_guidance_surfaces_do_not_reintroduce_split_checkout_guidance() {
+    let stale_terms = stale_split_checkout_terms();
+    let agent_guidance_surfaces = [
+        "AGENTS.md",
+        "scripts/ralph-loop.md",
+        "scripts/ralph-followup.md",
+        "scripts/ralph-loop.sh",
+    ];
+
+    let matches = agent_guidance_surfaces
+        .iter()
+        .flat_map(|path| stale_public_guidance_matches(Path::new(path), &stale_terms))
+        .collect::<Vec<_>>();
+
+    assert!(
+        matches.is_empty(),
+        "agent guidance surfaces must not reintroduce retired split-checkout guidance: {matches:?}"
+    );
+}
+
+#[test]
 fn public_release_workflows_do_not_reference_host_only_paths() {
     let release_workflows = [".github/workflows/ci.yml", ".github/workflows/release.yml"];
     let host_only_paths = [
