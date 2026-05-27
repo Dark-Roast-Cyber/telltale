@@ -138,6 +138,47 @@ fn public_release_surfaces_do_not_reintroduce_split_checkout_guidance() {
 }
 
 #[test]
+fn public_release_workflows_do_not_reference_host_only_paths() {
+    let release_workflows = [".github/workflows/ci.yml", ".github/workflows/release.yml"];
+    let host_only_paths = [
+        "AGENTS.md",
+        "PLAN.md",
+        "VISION.md",
+        "IDEAS.md",
+        "docs/internal/",
+        "docs/CHANGELOG.md",
+        "docs/research-urls.md",
+        "docs/siem-logging.md",
+        "docs/splunk-content.md",
+        "skills/",
+        "scripts/ralph",
+        "scripts/inspiration/",
+        ".opencode/",
+        "logs/",
+        "state/",
+        "runtime/ralph/",
+        "config/examples/splunk-",
+    ];
+
+    let matches = release_workflows
+        .iter()
+        .flat_map(|path| {
+            let workflow =
+                fs::read_to_string(path).unwrap_or_else(|error| panic!("{path}: {error}"));
+            host_only_paths
+                .iter()
+                .filter(move |host_only_path| workflow.contains(**host_only_path))
+                .map(move |host_only_path| format!("{path} references {host_only_path:?}"))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        matches.is_empty(),
+        "public release workflow YAML must not reference host-only paths: {matches:?}"
+    );
+}
+
+#[test]
 fn public_docs_do_not_contain_host_absolute_home_paths() {
     let mut docs = vec![Path::new("README.md").to_path_buf()];
     docs.extend(
