@@ -606,6 +606,29 @@ fn public_docs_inventory_classifies_top_level_markdown_docs() {
 }
 
 #[test]
+fn public_docs_inventory_public_safe_docs_are_linked_from_readme() {
+    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
+        return;
+    };
+
+    let readme_links = repo_local_markdown_links(Path::new("README.md"))
+        .into_iter()
+        .map(|(_, target)| normalize_repo_path(&target))
+        .collect::<BTreeSet<_>>();
+
+    let missing = public_safe_paths
+        .into_iter()
+        .filter(|path| path.starts_with("docs/") && path.ends_with(".md"))
+        .filter(|path| !readme_links.contains(path))
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "README documentation index must link every public-safe docs/*.md inventory path: {missing:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
     let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
         return;
