@@ -35,15 +35,8 @@ target/
 scripts/ralph-loop.local.zsh
 scripts/inspiration/ralph-loop.local.zsh
 
-# Share project OpenCode skills/agents when useful, but keep local runtime,
-# dependencies, and config files that may contain tokens or host-specific MCPs out.
-.opencode/opencode.json
-.opencode/opencode.jsonc
-.opencode/package.json
-.opencode/skills/
-.opencode/node_modules/
-.opencode/package-lock.json
-.opencode/bun.lock
+# Keep local OpenCode workflow, runtime, and config files out of public commits.
+.opencode/
 
 # Ralph TUI task working files (local only, not committed)
 tasks/
