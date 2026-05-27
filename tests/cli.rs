@@ -437,6 +437,29 @@ fn release_workflow_internal_only_paths_are_classified_non_public_in_inventory()
 }
 
 #[test]
+fn public_docs_inventory_internal_only_paths_are_listed_in_release_workflow() {
+    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
+    if !workflow_path.exists() {
+        return;
+    }
+    let Some(internal_only_paths) = public_docs_inventory_internal_only_paths() else {
+        return;
+    };
+
+    let release_paths = release_workflow_internal_only_paths(workflow_path);
+    let missing = internal_only_paths
+        .iter()
+        .filter(|path| !repo_path_list_covers(path, &release_paths))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "public docs inventory internal-only paths must be listed in the release workflow: {missing:?}"
+    );
+}
+
+#[test]
 fn release_workflow_public_push_checklist_mentions_required_git_checks() {
     let workflow_path = Path::new("docs/internal/public-release-workflow.md");
     if !workflow_path.exists() {
