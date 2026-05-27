@@ -391,6 +391,24 @@ fn public_docs_inventory_internal_only_paths_remain_ignored() {
 }
 
 #[test]
+fn public_docs_inventory_mixed_sanitize_paths_exist() {
+    let Some(mixed_paths) = public_docs_inventory_mixed_sanitize_paths() else {
+        return;
+    };
+
+    let missing = mixed_paths
+        .iter()
+        .filter(|path| !Path::new(path.as_str()).exists())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "mixed/sanitize inventory paths must exist in the repository before review: {missing:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
     let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
         return;
@@ -445,11 +463,7 @@ fn public_docs_inventory_public_safe_paths() -> Option<Vec<String>> {
 }
 
 fn public_docs_inventory_non_public_paths() -> Option<Vec<String>> {
-    let mut non_public_paths = public_docs_inventory_paths_between(
-        "## Mixed / Sanitize Before Publication",
-        "## Internal-Only",
-        "mixed inventory section",
-    )?;
+    let mut non_public_paths = public_docs_inventory_mixed_sanitize_paths()?;
     let internal_only_paths = public_docs_inventory_internal_only_paths()?;
     non_public_paths.extend(internal_only_paths);
     assert!(
@@ -458,6 +472,17 @@ fn public_docs_inventory_non_public_paths() -> Option<Vec<String>> {
     );
 
     Some(non_public_paths)
+}
+
+fn public_docs_inventory_mixed_sanitize_paths() -> Option<Vec<String>> {
+    let mixed_paths = public_docs_inventory_paths_between(
+        "## Mixed / Sanitize Before Publication",
+        "## Internal-Only",
+        "mixed inventory section",
+    )?;
+    assert!(!mixed_paths.is_empty(), "expected mixed inventory paths");
+
+    Some(mixed_paths)
 }
 
 fn public_docs_inventory_internal_only_paths() -> Option<Vec<String>> {
