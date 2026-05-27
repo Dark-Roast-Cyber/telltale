@@ -78,6 +78,7 @@ fn public_docs_do_not_reintroduce_split_checkout_guidance() {
         "second local checkout",
         "separate checkout",
         "export tree",
+        "exported tree",
         "export-tree",
         "paired private/public",
     ];

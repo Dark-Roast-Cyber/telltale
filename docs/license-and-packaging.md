@@ -52,4 +52,4 @@ Public commits should contain the open-source core, public technical
 documentation, synthetic fixtures, and reviewed examples. Host-specific
 operations, private planning notes, local credentials, raw agent transcripts,
 and environment-specific deployment assumptions must stay out of public commits
-instead of being managed through a separate exported tree.
+and remain local-only.
