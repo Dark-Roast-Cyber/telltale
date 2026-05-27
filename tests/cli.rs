@@ -218,6 +218,41 @@ fn release_workflow_internal_only_paths_remain_ignored() {
     );
 }
 
+#[test]
+fn public_docs_inventory_public_safe_paths_exist() {
+    let inventory_path = Path::new("docs/internal/public-docs-inventory.md");
+    if !inventory_path.exists() {
+        return;
+    }
+
+    let inventory = fs::read_to_string(inventory_path).expect("public docs inventory");
+    let public_safe_section = inventory
+        .split_once("## Public-Safe")
+        .and_then(|(_, rest)| rest.split_once("## Mixed / Sanitize Before Publication"))
+        .map(|(section, _)| section)
+        .expect("public-safe inventory section");
+
+    let public_safe_paths = public_safe_section
+        .lines()
+        .filter_map(markdown_table_path)
+        .collect::<Vec<_>>();
+    assert!(
+        !public_safe_paths.is_empty(),
+        "expected public-safe inventory paths"
+    );
+
+    let missing = public_safe_paths
+        .iter()
+        .filter(|path| !Path::new(path).exists())
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "public-safe inventory paths must exist in the repository: {missing:?}"
+    );
+}
+
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
     fs::read_dir("docs")
         .expect("docs directory")
@@ -226,6 +261,19 @@ fn public_markdown_docs() -> Vec<std::path::PathBuf> {
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
         .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
         .collect()
+}
+
+fn markdown_table_path(line: &str) -> Option<&str> {
+    let line = line.trim();
+    if !line.starts_with('|') || line.starts_with("| Path |") || line.starts_with("| --- |") {
+        return None;
+    }
+
+    line.split('|').nth(1).map(str::trim).and_then(|cell| {
+        cell.strip_prefix('`')?
+            .split_once('`')
+            .map(|(path, _)| path)
+    })
 }
 
 fn gitignore_patterns() -> Vec<String> {
