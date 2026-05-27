@@ -263,6 +263,32 @@ fn release_workflow_internal_only_paths_cover_host_only_boundary() {
 }
 
 #[test]
+fn release_workflow_public_push_checklist_mentions_required_git_checks() {
+    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
+    if !workflow_path.exists() {
+        return;
+    }
+
+    let workflow = fs::read_to_string(workflow_path).expect("public release workflow");
+    let required_checks = [
+        "git status --short",
+        "git diff --cached --name-only",
+        "public-release workflow",
+    ];
+
+    let missing = required_checks
+        .iter()
+        .filter(|check| !workflow.contains(*check))
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "release workflow must mention required public-push checks: {missing:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_public_safe_paths_exist() {
     let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
         return;
