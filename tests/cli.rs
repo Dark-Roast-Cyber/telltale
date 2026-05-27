@@ -652,6 +652,37 @@ fn public_docs_inventory_public_safe_docs_are_linked_from_readme() {
 }
 
 #[test]
+fn public_docs_linked_example_configs_are_public_safe() {
+    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
+        return;
+    };
+
+    let mut docs = vec![Path::new("README.md").to_path_buf()];
+    docs.extend(
+        public_markdown_docs()
+            .into_iter()
+            .filter(|path| !is_host_only_repo_path(path)),
+    );
+
+    let unclassified = docs
+        .iter()
+        .flat_map(|path| {
+            repo_local_markdown_links(path)
+                .into_iter()
+                .map(|(_, target)| normalize_repo_path(&target))
+                .filter(|target| target.starts_with("config/examples/"))
+                .filter(|target| !repo_path_list_covers(target, &public_safe_paths))
+                .map(|target| format!("{} -> {target}", path.display()))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        unclassified.is_empty(),
+        "public docs must link only to example configs classified as public-safe: {unclassified:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
     let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
         return;
