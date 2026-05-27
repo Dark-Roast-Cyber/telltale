@@ -249,6 +249,26 @@ fn release_workflow_internal_only_paths_remain_ignored() {
 }
 
 #[test]
+fn release_workflow_internal_only_paths_exist() {
+    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
+    if !workflow_path.exists() {
+        return;
+    }
+
+    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
+    let missing = internal_only_paths
+        .iter()
+        .filter(|path| !repo_path_or_glob_exists(path))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "release workflow internal-only paths must resolve to existing local paths or wildcard matches: {missing:?}"
+    );
+}
+
+#[test]
 fn release_workflow_internal_only_paths_cover_host_only_boundary() {
     let workflow_path = Path::new("docs/internal/public-release-workflow.md");
     if !workflow_path.exists() {
@@ -603,6 +623,31 @@ fn repo_path_list_covers(path: &str, patterns: &[String]) -> bool {
 
         path == pattern
     })
+}
+
+fn repo_path_or_glob_exists(path: &str) -> bool {
+    if !path.contains('*') {
+        return Path::new(path).exists();
+    }
+
+    let path = Path::new(path);
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some((prefix, suffix)) = file_name.split_once('*') else {
+        return false;
+    };
+
+    fs::read_dir(parent)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .any(|name| name.starts_with(prefix) && name.ends_with(suffix))
 }
 
 fn release_workflow_internal_only_paths(workflow_path: &Path) -> Vec<String> {
