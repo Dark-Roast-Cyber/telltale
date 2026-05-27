@@ -220,9 +220,45 @@ fn release_workflow_internal_only_paths_remain_ignored() {
 
 #[test]
 fn public_docs_inventory_public_safe_paths_exist() {
+    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
+        return;
+    };
+
+    let missing = public_safe_paths
+        .iter()
+        .filter(|path| !Path::new(path.as_str()).exists())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        missing.is_empty(),
+        "public-safe inventory paths must exist in the repository: {missing:?}"
+    );
+}
+
+#[test]
+fn public_docs_inventory_public_safe_paths_are_not_ignored() {
+    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
+        return;
+    };
+
+    let patterns = gitignore_patterns();
+    let ignored = public_safe_paths
+        .iter()
+        .filter(|path| gitignore_covers_repo_path(path.as_str(), &patterns))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        ignored.is_empty(),
+        "public-safe inventory paths must not be covered by .gitignore: {ignored:?}"
+    );
+}
+
+fn public_docs_inventory_public_safe_paths() -> Option<Vec<String>> {
     let inventory_path = Path::new("docs/internal/public-docs-inventory.md");
     if !inventory_path.exists() {
-        return;
+        return None;
     }
 
     let inventory = fs::read_to_string(inventory_path).expect("public docs inventory");
@@ -230,27 +266,20 @@ fn public_docs_inventory_public_safe_paths_exist() {
         .split_once("## Public-Safe")
         .and_then(|(_, rest)| rest.split_once("## Mixed / Sanitize Before Publication"))
         .map(|(section, _)| section)
-        .expect("public-safe inventory section");
+        .expect("public-safe inventory section")
+        .to_string();
 
     let public_safe_paths = public_safe_section
         .lines()
         .filter_map(markdown_table_path)
+        .map(str::to_string)
         .collect::<Vec<_>>();
     assert!(
         !public_safe_paths.is_empty(),
         "expected public-safe inventory paths"
     );
 
-    let missing = public_safe_paths
-        .iter()
-        .filter(|path| !Path::new(path).exists())
-        .copied()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "public-safe inventory paths must exist in the repository: {missing:?}"
-    );
+    Some(public_safe_paths)
 }
 
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
