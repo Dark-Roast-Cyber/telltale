@@ -70,6 +70,34 @@ fn public_docs_local_markdown_links_resolve() {
 }
 
 #[test]
+fn public_docs_local_markdown_links_target_tracked_content() {
+    let mut docs = vec![Path::new("README.md").to_path_buf()];
+    docs.extend(
+        public_markdown_docs()
+            .into_iter()
+            .filter(|path| !is_host_only_repo_path(path)),
+    );
+
+    let untracked = docs
+        .iter()
+        .flat_map(|path| {
+            repo_local_markdown_links(path)
+                .into_iter()
+                .filter(|(_, target)| !is_host_only_repo_path(target))
+                .filter(|(_, target)| !git_tracks_path(target))
+                .map(|(link, target)| {
+                    format!("{} -> {} ({})", path.display(), link, target.display())
+                })
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        untracked.is_empty(),
+        "public docs local links must target tracked repository content: {untracked:?}"
+    );
+}
+
+#[test]
 fn public_docs_do_not_reintroduce_split_checkout_guidance() {
     let stale_terms = stale_split_checkout_terms();
 
@@ -524,6 +552,15 @@ fn git_tracks_repo_path(path: &str) -> bool {
     );
 
     !output.stdout.is_empty()
+}
+
+fn git_tracks_path(path: &Path) -> bool {
+    let path = normalize_repo_path(path);
+    if path.is_empty() {
+        return false;
+    }
+
+    git_tracks_repo_path(&path)
 }
 
 fn repo_path_list_covers(path: &str, patterns: &[String]) -> bool {
