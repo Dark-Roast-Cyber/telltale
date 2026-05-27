@@ -110,6 +110,26 @@ fn public_release_surfaces_do_not_reintroduce_split_checkout_guidance() {
 }
 
 #[test]
+fn public_docs_do_not_contain_host_absolute_home_paths() {
+    let mut docs = vec![Path::new("README.md").to_path_buf()];
+    docs.extend(
+        public_markdown_docs()
+            .into_iter()
+            .filter(|path| !is_host_only_repo_path(path)),
+    );
+
+    let matches = docs
+        .iter()
+        .flat_map(|path| host_absolute_home_path_matches(path))
+        .collect::<Vec<_>>();
+
+    assert!(
+        matches.is_empty(),
+        "public docs must not contain host-absolute home paths: {matches:?}"
+    );
+}
+
+#[test]
 fn public_docs_do_not_link_to_host_only_paths() {
     let mut docs = vec![Path::new("README.md").to_path_buf()];
     docs.extend(
@@ -595,6 +615,28 @@ fn stale_public_guidance_matches(path: &Path, stale_terms: &[&str]) -> Vec<Strin
         .iter()
         .filter(|term| lowercase.contains(**term))
         .map(|term| format!("{} contains {term:?}", path.display()))
+        .collect()
+}
+
+fn host_absolute_home_path_matches(path: &Path) -> Vec<String> {
+    let markdown =
+        fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let host_home_path_markers = [
+        "/home/christian/",
+        "/Users/christian/",
+        "C:/Users/christian/",
+        "C:\\Users\\christian\\",
+    ];
+
+    markdown
+        .lines()
+        .enumerate()
+        .flat_map(|(index, line)| {
+            host_home_path_markers
+                .iter()
+                .filter(move |marker| line.contains(**marker))
+                .map(move |marker| format!("{}:{} contains {marker:?}", path.display(), index + 1))
+        })
         .collect()
 }
 
