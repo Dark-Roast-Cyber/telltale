@@ -331,6 +331,26 @@ fn release_workflow_internal_only_paths_exist() {
 }
 
 #[test]
+fn release_workflow_internal_only_paths_are_not_tracked() {
+    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
+    if !workflow_path.exists() {
+        return;
+    }
+
+    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
+    let tracked = internal_only_paths
+        .iter()
+        .filter(|path| git_tracks_repo_path(path))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        tracked.is_empty(),
+        "release workflow internal-only paths must not be tracked public content: {tracked:?}"
+    );
+}
+
+#[test]
 fn release_workflow_internal_only_paths_cover_host_only_boundary() {
     let workflow_path = Path::new("docs/internal/public-release-workflow.md");
     if !workflow_path.exists() {
