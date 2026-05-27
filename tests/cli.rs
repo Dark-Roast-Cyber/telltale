@@ -177,6 +177,47 @@ fn host_only_release_paths_remain_ignored() {
     );
 }
 
+#[test]
+fn release_workflow_internal_only_paths_remain_ignored() {
+    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
+    if !workflow_path.exists() {
+        return;
+    }
+
+    let workflow = fs::read_to_string(workflow_path).expect("public release workflow");
+    let internal_only_section = workflow
+        .split_once("## Internal-Only Material")
+        .and_then(|(_, rest)| rest.split_once("## Public Publication Process"))
+        .map(|(section, _)| section)
+        .expect("internal-only material section");
+
+    let internal_only_paths = internal_only_section
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("- `")
+                .and_then(|rest| rest.split_once('`'))
+                .map(|(path, _)| path)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !internal_only_paths.is_empty(),
+        "expected internal-only release paths"
+    );
+
+    let patterns = gitignore_patterns();
+    let unignored = internal_only_paths
+        .iter()
+        .filter(|path| !gitignore_covers_repo_path(path, &patterns))
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert!(
+        unignored.is_empty(),
+        "release workflow internal-only paths must stay ignored: {unignored:?}"
+    );
+}
+
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
     fs::read_dir("docs")
         .expect("docs directory")
@@ -185,6 +226,33 @@ fn public_markdown_docs() -> Vec<std::path::PathBuf> {
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
         .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
         .collect()
+}
+
+fn gitignore_patterns() -> Vec<String> {
+    fs::read_to_string(".gitignore")
+        .expect(".gitignore")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+fn gitignore_covers_repo_path(path: &str, patterns: &[String]) -> bool {
+    let path = path.trim_end_matches('/');
+
+    patterns.iter().any(|pattern| {
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            return path.starts_with(prefix);
+        }
+
+        if pattern.ends_with('/') {
+            let prefix = pattern.trim_end_matches('/');
+            return path == prefix || path.starts_with(&format!("{prefix}/"));
+        }
+
+        path == pattern
+    })
 }
 
 fn stale_split_checkout_terms() -> [&'static str; 9] {
