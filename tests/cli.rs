@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -511,6 +512,32 @@ fn public_docs_inventory_mixed_sanitize_paths_exist() {
 }
 
 #[test]
+fn public_docs_inventory_paths_have_single_classification() {
+    let Some(paths_by_section) = public_docs_inventory_paths_by_section() else {
+        return;
+    };
+
+    let mut sections_by_path = BTreeMap::<String, Vec<&'static str>>::new();
+    for (section, path) in &paths_by_section {
+        sections_by_path
+            .entry(path.clone())
+            .or_default()
+            .push(*section);
+    }
+
+    let duplicates = sections_by_path
+        .into_iter()
+        .filter(|(_, sections)| sections.len() > 1)
+        .map(|(path, sections)| format!("{path}: {}", sections.join(", ")))
+        .collect::<Vec<_>>();
+
+    assert!(
+        duplicates.is_empty(),
+        "public docs inventory paths must appear in exactly one classification section: {duplicates:?}"
+    );
+}
+
+#[test]
 fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
     let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
         return;
@@ -574,6 +601,27 @@ fn public_docs_inventory_non_public_paths() -> Option<Vec<String>> {
     );
 
     Some(non_public_paths)
+}
+
+fn public_docs_inventory_paths_by_section() -> Option<Vec<(&'static str, String)>> {
+    let mut paths = Vec::new();
+    paths.extend(
+        public_docs_inventory_public_safe_paths()?
+            .into_iter()
+            .map(|path| ("Public-Safe", path)),
+    );
+    paths.extend(
+        public_docs_inventory_mixed_sanitize_paths()?
+            .into_iter()
+            .map(|path| ("Mixed / Sanitize", path)),
+    );
+    paths.extend(
+        public_docs_inventory_internal_only_paths()?
+            .into_iter()
+            .map(|path| ("Internal-Only", path)),
+    );
+
+    Some(paths)
 }
 
 fn public_docs_inventory_mixed_sanitize_paths() -> Option<Vec<String>> {
