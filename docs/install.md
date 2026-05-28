@@ -100,4 +100,5 @@ The example service runs the repository build artifact directly from
 
 Telltale writes append-only JSONL. Review the generated event schema and your
 environment's data-handling requirements before forwarding events to a SIEM or
-central log platform.
+central log platform. See [telemetry-output.md](telemetry-output.md) for the
+vendor-neutral event-output model and forwarding boundary.

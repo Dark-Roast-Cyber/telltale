@@ -91,10 +91,12 @@ and the fixture-safe verification step.
 
 ## Telemetry Output
 
-Telltale is designed to produce structured telemetry that can be searched, charted, and alerted on in a SIEM.
-Write append-only JSONL locally, then connect the output to your preferred
-shipper or log pipeline after reviewing your environment's data-handling
-requirements.
+Telltale is designed to produce structured telemetry that can be searched,
+charted, and alerted on in a SIEM. Write append-only JSONL locally, then
+connect the output to your preferred shipper or log pipeline after reviewing
+your environment's data-handling requirements. See
+[Telemetry output](docs/telemetry-output.md) for the public event-output and
+forwarding model.
 
 Common use cases include:
 
@@ -130,6 +132,7 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
   - [Detection content standard](docs/detection-content-standard.md)
   - [Threat taxonomy](docs/threat-taxonomy.md)
   - [Privacy model](docs/privacy-model.md)
+  - [Telemetry output](docs/telemetry-output.md)
 - Additional references:
   - [Session sources](docs/session-sources.md)
   - [Agent capability profiles](docs/agent-capability-profiles.md)
