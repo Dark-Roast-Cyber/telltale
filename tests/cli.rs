@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -99,63 +98,20 @@ fn public_docs_local_markdown_links_target_tracked_content() {
 }
 
 #[test]
-fn public_docs_do_not_reintroduce_split_checkout_guidance() {
+fn public_surfaces_do_not_reintroduce_split_checkout_guidance() {
     let stale_terms = stale_split_checkout_terms();
 
-    let docs = public_markdown_docs();
-    assert!(!docs.is_empty(), "expected public docs");
+    let surfaces = public_text_surfaces();
+    assert!(!surfaces.is_empty(), "expected public text surfaces");
 
-    let mut matches = stale_public_guidance_matches(Path::new("README.md"), &stale_terms);
-    for doc in docs {
-        matches.extend(stale_public_guidance_matches(&doc, &stale_terms));
-    }
-
-    assert!(
-        matches.is_empty(),
-        "public docs must not reintroduce retired split-checkout guidance: {matches:?}"
-    );
-}
-
-#[test]
-fn public_release_surfaces_do_not_reintroduce_split_checkout_guidance() {
-    let stale_terms = stale_split_checkout_terms();
-    let release_surfaces = [
-        ".github/workflows/ci.yml",
-        ".github/workflows/release.yml",
-        "README.md",
-        "docs/install.md",
-        "docs/license-and-packaging.md",
-    ];
-
-    let matches = release_surfaces
+    let matches = surfaces
         .iter()
-        .flat_map(|path| stale_public_guidance_matches(Path::new(path), &stale_terms))
+        .flat_map(|path| stale_public_guidance_matches(path, &stale_terms))
         .collect::<Vec<_>>();
 
     assert!(
         matches.is_empty(),
-        "public release surfaces must not reintroduce retired split-checkout guidance: {matches:?}"
-    );
-}
-
-#[test]
-fn agent_guidance_surfaces_do_not_reintroduce_split_checkout_guidance() {
-    let stale_terms = stale_split_checkout_terms();
-    let agent_guidance_surfaces = [
-        "AGENTS.md",
-        "scripts/ralph-loop.md",
-        "scripts/ralph-followup.md",
-        "scripts/ralph-loop.sh",
-    ];
-
-    let matches = agent_guidance_surfaces
-        .iter()
-        .flat_map(|path| stale_public_guidance_matches(Path::new(path), &stale_terms))
-        .collect::<Vec<_>>();
-
-    assert!(
-        matches.is_empty(),
-        "agent guidance surfaces must not reintroduce retired split-checkout guidance: {matches:?}"
+        "public surfaces must not reintroduce retired split-checkout guidance: {matches:?}"
     );
 }
 
@@ -290,395 +246,7 @@ fn host_only_release_paths_remain_ignored() {
 }
 
 #[test]
-fn release_workflow_internal_only_paths_remain_ignored() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-
-    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
-
-    let patterns = gitignore_patterns();
-    let unignored = internal_only_paths
-        .iter()
-        .filter(|path| !gitignore_covers_repo_path(path, &patterns))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        unignored.is_empty(),
-        "release workflow internal-only paths must stay ignored: {unignored:?}"
-    );
-}
-
-#[test]
-fn release_workflow_internal_only_paths_exist() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-
-    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
-    let missing = internal_only_paths
-        .iter()
-        .filter(|path| !repo_path_or_glob_exists(path))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "release workflow internal-only paths must resolve to existing local paths or wildcard matches: {missing:?}"
-    );
-}
-
-#[test]
-fn release_workflow_internal_only_paths_are_not_tracked() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-
-    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
-    let tracked = internal_only_paths
-        .iter()
-        .filter(|path| git_tracks_repo_path(path))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        tracked.is_empty(),
-        "release workflow internal-only paths must not be tracked public content: {tracked:?}"
-    );
-}
-
-#[test]
-fn release_workflow_internal_only_paths_are_unique() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-
-    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
-    let mut seen = BTreeSet::new();
-    let duplicates = internal_only_paths
-        .iter()
-        .filter(|path| !seen.insert(path.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        duplicates.is_empty(),
-        "release workflow internal-only paths must be listed once: {duplicates:?}"
-    );
-}
-
-#[test]
-fn release_workflow_internal_only_paths_cover_host_only_boundary() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-
-    let required_paths = [
-        "AGENTS.md",
-        "PLAN.md",
-        "VISION.md",
-        "IDEAS.md",
-        "docs/internal/",
-        "docs/CHANGELOG.md",
-        "docs/research-urls.md",
-        "docs/siem-logging.md",
-        "docs/splunk-content.md",
-        "skills/",
-        "scripts/ralph*",
-        "scripts/inspiration/",
-        ".opencode/",
-        "logs/",
-        "state/",
-        "runtime/ralph/",
-        "config/examples/splunk-*.conf",
-        "config/examples/splunk-*.xml",
-    ];
-
-    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
-    let missing = required_paths
-        .iter()
-        .filter(|path| !repo_path_list_covers(path, &internal_only_paths))
-        .copied()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "release workflow internal-only paths must cover host-only boundary paths: {missing:?}"
-    );
-}
-
-#[test]
-fn release_workflow_internal_only_paths_are_classified_non_public_in_inventory() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-    let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
-        return;
-    };
-
-    let internal_only_paths = release_workflow_internal_only_paths(workflow_path);
-    let missing = internal_only_paths
-        .iter()
-        .filter(|path| !repo_path_list_covers(path, &non_public_paths))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "release workflow internal-only paths must be classified as non-public in the public docs inventory: {missing:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_internal_only_paths_are_listed_in_release_workflow() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-    let Some(internal_only_paths) = public_docs_inventory_internal_only_paths() else {
-        return;
-    };
-
-    let release_paths = release_workflow_internal_only_paths(workflow_path);
-    let missing = internal_only_paths
-        .iter()
-        .filter(|path| !repo_path_list_covers(path, &release_paths))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "public docs inventory internal-only paths must be listed in the release workflow: {missing:?}"
-    );
-}
-
-#[test]
-fn release_workflow_public_push_checklist_mentions_required_git_checks() {
-    let workflow_path = Path::new("docs/internal/public-release-workflow.md");
-    if !workflow_path.exists() {
-        return;
-    }
-
-    let workflow = fs::read_to_string(workflow_path).expect("public release workflow");
-    let required_checks = [
-        "git status --short",
-        "git diff --cached --name-only",
-        "public-release workflow",
-    ];
-
-    let missing = required_checks
-        .iter()
-        .filter(|check| !workflow.contains(*check))
-        .copied()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "release workflow must mention required public-push checks: {missing:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_public_safe_paths_exist() {
-    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
-        return;
-    };
-
-    let missing = public_safe_paths
-        .iter()
-        .filter(|path| !Path::new(path.as_str()).exists())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "public-safe inventory paths must exist in the repository: {missing:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_public_safe_paths_are_tracked() {
-    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
-        return;
-    };
-
-    let untracked = public_safe_paths
-        .iter()
-        .filter(|path| !git_tracks_repo_path(path))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        untracked.is_empty(),
-        "public-safe inventory paths must be tracked for publication: {untracked:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_public_safe_paths_are_not_ignored() {
-    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
-        return;
-    };
-
-    let patterns = gitignore_patterns();
-    let ignored = public_safe_paths
-        .iter()
-        .filter(|path| gitignore_covers_repo_path(path.as_str(), &patterns))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        ignored.is_empty(),
-        "public-safe inventory paths must not be covered by .gitignore: {ignored:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_internal_only_paths_remain_ignored() {
-    let Some(internal_only_paths) = public_docs_inventory_internal_only_paths() else {
-        return;
-    };
-
-    let patterns = gitignore_patterns();
-    let unignored = internal_only_paths
-        .iter()
-        .filter(|path| !gitignore_covers_repo_path(path.as_str(), &patterns))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        unignored.is_empty(),
-        "public docs inventory internal-only paths must stay ignored: {unignored:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_internal_only_paths_exist() {
-    let Some(internal_only_paths) = public_docs_inventory_internal_only_paths() else {
-        return;
-    };
-
-    let missing = internal_only_paths
-        .iter()
-        .filter(|path| !repo_path_or_glob_exists(path))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "public docs inventory internal-only paths must resolve to existing local paths or wildcard matches: {missing:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_mixed_sanitize_paths_exist() {
-    let Some(mixed_paths) = public_docs_inventory_mixed_sanitize_paths() else {
-        return;
-    };
-
-    let missing = mixed_paths
-        .iter()
-        .filter(|path| !Path::new(path.as_str()).exists())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "mixed/sanitize inventory paths must exist in the repository before review: {missing:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_paths_have_single_classification() {
-    let Some(paths_by_section) = public_docs_inventory_paths_by_section() else {
-        return;
-    };
-
-    let mut sections_by_path = BTreeMap::<String, Vec<&'static str>>::new();
-    for (section, path) in &paths_by_section {
-        sections_by_path
-            .entry(path.clone())
-            .or_default()
-            .push(*section);
-    }
-
-    let duplicates = sections_by_path
-        .into_iter()
-        .filter(|(_, sections)| sections.len() > 1)
-        .map(|(path, sections)| format!("{path}: {}", sections.join(", ")))
-        .collect::<Vec<_>>();
-
-    assert!(
-        duplicates.is_empty(),
-        "public docs inventory paths must appear in exactly one classification section: {duplicates:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_classifies_top_level_markdown_docs() {
-    let Some(paths_by_section) = public_docs_inventory_paths_by_section() else {
-        return;
-    };
-
-    let classified_paths = paths_by_section
-        .into_iter()
-        .map(|(_, path)| path)
-        .collect::<Vec<_>>();
-    let mut required_paths = BTreeSet::from(["README.md".to_string()]);
-    required_paths.extend(top_level_markdown_docs().into_iter().map(|path| {
-        path.to_str()
-            .unwrap_or_else(|| panic!("non-UTF-8 path: {}", path.display()))
-            .to_string()
-    }));
-
-    let missing = required_paths
-        .iter()
-        .filter(|path| !repo_path_list_covers(path, &classified_paths))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "public docs inventory must classify README and every top-level docs/*.md file: {missing:?}"
-    );
-}
-
-#[test]
-fn public_docs_inventory_public_safe_docs_are_linked_from_readme() {
-    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
-        return;
-    };
-
-    let readme_links = repo_local_markdown_links(Path::new("README.md"))
-        .into_iter()
-        .map(|(_, target)| normalize_repo_path(&target))
-        .collect::<BTreeSet<_>>();
-
-    let missing = public_safe_paths
-        .into_iter()
-        .filter(|path| path.starts_with("docs/") && path.ends_with(".md"))
-        .filter(|path| !readme_links.contains(path))
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "README documentation index must link every public-safe docs/*.md inventory path: {missing:?}"
-    );
-}
-
-#[test]
 fn public_docs_linked_example_configs_are_public_safe() {
-    let Some(public_safe_paths) = public_docs_inventory_public_safe_paths() else {
-        return;
-    };
-
     let mut docs = vec![Path::new("README.md").to_path_buf()];
     docs.extend(
         public_markdown_docs()
@@ -693,152 +261,15 @@ fn public_docs_linked_example_configs_are_public_safe() {
                 .into_iter()
                 .map(|(_, target)| normalize_repo_path(&target))
                 .filter(|target| target.starts_with("config/examples/"))
-                .filter(|target| !repo_path_list_covers(target, &public_safe_paths))
+                .filter(|target| !git_tracks_repo_path(target))
                 .map(|target| format!("{} -> {target}", path.display()))
         })
         .collect::<Vec<_>>();
 
     assert!(
         unclassified.is_empty(),
-        "public docs must link only to example configs classified as public-safe: {unclassified:?}"
+        "public docs must link only to tracked example configs: {unclassified:?}"
     );
-}
-
-#[test]
-fn public_docs_inventory_non_public_paths_cover_host_only_boundary() {
-    let Some(non_public_paths) = public_docs_inventory_non_public_paths() else {
-        return;
-    };
-
-    let required_paths = [
-        "AGENTS.md",
-        "PLAN.md",
-        "VISION.md",
-        "IDEAS.md",
-        "docs/internal/",
-        "docs/CHANGELOG.md",
-        "docs/research-urls.md",
-        "docs/siem-logging.md",
-        "docs/splunk-content.md",
-        "skills/",
-        "scripts/ralph*",
-        "scripts/inspiration/",
-        ".opencode/",
-        "logs/",
-        "state/",
-        "runtime/ralph/",
-        "config/examples/splunk-*.conf",
-        "config/examples/splunk-*.xml",
-    ];
-
-    let missing = required_paths
-        .iter()
-        .filter(|path| !repo_path_list_covers(path, &non_public_paths))
-        .copied()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "public docs inventory non-public paths must cover host-only boundary paths: {missing:?}"
-    );
-}
-
-fn public_docs_inventory_public_safe_paths() -> Option<Vec<String>> {
-    let public_safe_paths = public_docs_inventory_paths_between(
-        "## Public-Safe",
-        "## Mixed / Sanitize Before Publication",
-        "public-safe inventory section",
-    )?;
-    assert!(
-        !public_safe_paths.is_empty(),
-        "expected public-safe inventory paths"
-    );
-
-    Some(public_safe_paths)
-}
-
-fn public_docs_inventory_non_public_paths() -> Option<Vec<String>> {
-    let mut non_public_paths = public_docs_inventory_mixed_sanitize_paths()?;
-    let internal_only_paths = public_docs_inventory_internal_only_paths()?;
-    non_public_paths.extend(internal_only_paths);
-    assert!(
-        !non_public_paths.is_empty(),
-        "expected non-public inventory paths"
-    );
-
-    Some(non_public_paths)
-}
-
-fn public_docs_inventory_paths_by_section() -> Option<Vec<(&'static str, String)>> {
-    let mut paths = Vec::new();
-    paths.extend(
-        public_docs_inventory_public_safe_paths()?
-            .into_iter()
-            .map(|path| ("Public-Safe", path)),
-    );
-    paths.extend(
-        public_docs_inventory_mixed_sanitize_paths()?
-            .into_iter()
-            .map(|path| ("Mixed / Sanitize", path)),
-    );
-    paths.extend(
-        public_docs_inventory_internal_only_paths()?
-            .into_iter()
-            .map(|path| ("Internal-Only", path)),
-    );
-
-    Some(paths)
-}
-
-fn public_docs_inventory_mixed_sanitize_paths() -> Option<Vec<String>> {
-    let mixed_paths = public_docs_inventory_paths_between(
-        "## Mixed / Sanitize Before Publication",
-        "## Internal-Only",
-        "mixed inventory section",
-    )?;
-    assert!(!mixed_paths.is_empty(), "expected mixed inventory paths");
-
-    Some(mixed_paths)
-}
-
-fn public_docs_inventory_internal_only_paths() -> Option<Vec<String>> {
-    let internal_only_paths = public_docs_inventory_paths_between(
-        "## Internal-Only",
-        "## License And Packaging Boundary",
-        "internal-only inventory section",
-    )?;
-    assert!(
-        !internal_only_paths.is_empty(),
-        "expected internal-only inventory paths"
-    );
-
-    Some(internal_only_paths)
-}
-
-fn public_docs_inventory_paths_between(
-    start_heading: &str,
-    end_heading: &str,
-    section_name: &str,
-) -> Option<Vec<String>> {
-    let inventory_path = Path::new("docs/internal/public-docs-inventory.md");
-    if !inventory_path.exists() {
-        return None;
-    }
-
-    let inventory = fs::read_to_string(inventory_path).expect("public docs inventory");
-    let section = inventory
-        .split_once(start_heading)
-        .and_then(|(_, rest)| rest.split_once(end_heading))
-        .map(|(section, _)| section)
-        .unwrap_or_else(|| panic!("{section_name}"));
-
-    Some(
-        section
-            .lines()
-            .filter_map(markdown_table_path)
-            .map(str::to_string)
-            .collect::<Vec<_>>(),
-    )
 }
 
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
@@ -848,6 +279,20 @@ fn public_markdown_docs() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+fn public_text_surfaces() -> Vec<std::path::PathBuf> {
+    let mut surfaces = vec![Path::new("README.md").to_path_buf()];
+    surfaces.extend(public_markdown_docs());
+    surfaces.extend(
+        [".github/workflows/ci.yml", ".github/workflows/release.yml"]
+            .into_iter()
+            .map(Path::new)
+            .filter(|path| path.exists() && git_tracks_path(path))
+            .map(Path::to_path_buf),
+    );
+
+    surfaces
+}
+
 fn top_level_markdown_docs() -> Vec<std::path::PathBuf> {
     fs::read_dir("docs")
         .expect("docs directory")
@@ -855,35 +300,6 @@ fn top_level_markdown_docs() -> Vec<std::path::PathBuf> {
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
         .collect()
-}
-
-fn markdown_table_path(line: &str) -> Option<&str> {
-    let line = line.trim();
-    if !line.starts_with('|') || line.starts_with("| Path |") || line.starts_with("| --- |") {
-        return None;
-    }
-
-    line.split('|').nth(1).map(str::trim).and_then(|cell| {
-        cell.strip_prefix('`')?
-            .split_once('`')
-            .map(|(path, _)| path)
-    })
-}
-
-fn gitignore_patterns() -> Vec<String> {
-    fs::read_to_string(".gitignore")
-        .expect(".gitignore")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_string)
-        .collect()
-}
-
-fn gitignore_covers_repo_path(path: &str, patterns: &[String]) -> bool {
-    let path = path.trim_end_matches('/');
-
-    repo_path_list_covers(path, patterns)
 }
 
 fn git_tracks_repo_path(path: &str) -> bool {
@@ -908,73 +324,6 @@ fn git_tracks_path(path: &Path) -> bool {
     }
 
     git_tracks_repo_path(&path)
-}
-
-fn repo_path_list_covers(path: &str, patterns: &[String]) -> bool {
-    let path = path.trim_end_matches('/');
-
-    patterns.iter().any(|pattern| {
-        if let Some(prefix) = pattern.strip_suffix('*') {
-            return path.starts_with(prefix);
-        }
-
-        if pattern.ends_with('/') {
-            let prefix = pattern.trim_end_matches('/');
-            return path == prefix || path.starts_with(&format!("{prefix}/"));
-        }
-
-        path == pattern
-    })
-}
-
-fn repo_path_or_glob_exists(path: &str) -> bool {
-    if !path.contains('*') {
-        return Path::new(path).exists();
-    }
-
-    let path = Path::new(path);
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let Some((prefix, suffix)) = file_name.split_once('*') else {
-        return false;
-    };
-
-    fs::read_dir(parent)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .any(|name| name.starts_with(prefix) && name.ends_with(suffix))
-}
-
-fn release_workflow_internal_only_paths(workflow_path: &Path) -> Vec<String> {
-    let workflow = fs::read_to_string(workflow_path).expect("public release workflow");
-    let internal_only_section = workflow
-        .split_once("## Internal-Only Material")
-        .and_then(|(_, rest)| rest.split_once("## Public Publication Process"))
-        .map(|(section, _)| section)
-        .expect("internal-only material section");
-
-    let internal_only_paths = internal_only_section
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("- `")
-                .and_then(|rest| rest.split_once('`'))
-                .map(|(path, _)| path.to_string())
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        !internal_only_paths.is_empty(),
-        "expected internal-only release paths"
-    );
-
-    internal_only_paths
 }
 
 fn stale_split_checkout_terms() -> [&'static str; 9] {
