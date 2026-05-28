@@ -20,6 +20,7 @@ Run these checks from a clean working tree before tagging a release:
 
 ```sh
 git status --short
+git diff --cached --name-only
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -29,6 +30,11 @@ cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
 The fixture scan must use `--dry-run` unless you are intentionally writing
 synthetic fixture output in CI or local development.
+
+`git status --short` should be empty before tagging. If you are reviewing a
+release-preparation commit before it is created, inspect
+`git diff --cached --name-only` and confirm each staged path belongs in the
+public repository boundary described below.
 
 ## Artifact Boundary
 

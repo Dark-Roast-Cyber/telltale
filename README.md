@@ -149,6 +149,10 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
   - [License and packaging](docs/license-and-packaging.md)
 - Advanced and workflow-specific docs remain under [`docs/`](docs/).
 
+Use the release readiness checklist before tagging or publishing release
+artifacts; it includes the public repository boundary review for staged or
+tagged content.
+
 ## License
 
 Telltale Core is licensed under Apache-2.0. See [LICENSE](LICENSE) and
