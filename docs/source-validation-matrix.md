@@ -42,6 +42,19 @@ Live host validation is an additional operational confidence signal, not a
 support gate. Record it when safe and available, but do not scan large or
 sensitive real session stores just to satisfy fixture coverage.
 
+## Public Validation Boundary
+
+Public support claims should be backed by synthetic fixtures and deterministic
+tests that can run from a clean checkout. Fixture scans may use
+`tests/fixtures/session_stores` with `--dry-run` for read-only verification or
+`--allow-fixtures` only when the output path is an explicit development sink.
+
+Live host validation belongs in local operational notes. When it is useful to
+record that a client has been checked on a real workstation, summarize the
+client, source kind, bounded command shape, and pass/fail result without
+publishing raw transcript excerpts, session-store paths, credentials, telemetry
+logs, or machine-specific SIEM configuration.
+
 ## New Source Checklist
 
 When adding a source adapter, include these artifacts in the same change or keep the source marked experimental until they exist:
