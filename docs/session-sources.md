@@ -12,6 +12,14 @@ tree. Windows locations are experimental until live validation exists, and only
 Codex plus VS Code `globalStorage`-backed clients are currently in scope for
 native Windows discovery.
 
+These candidates document expected product behavior and the scanner paths ADR
+can resolve. They are not instructions to publish local session stores,
+workstation-specific transcript paths, raw agent logs, credentials, or
+deployment-specific SIEM paths. Public source-support claims should be backed
+by synthetic fixtures and deterministic tests; live host validation records
+should stay local-only, redacted, and summarized by client/source kind rather
+than by exact private path or transcript content.
+
 | Client | Source Kind | Linux candidate | macOS candidate | Windows candidate | Confidence | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed, Windows experimental | Codex CLI docs confirm `~/.codex/sessions`; ADR also supports `archived_sessions` and `headless` under the same root. |
@@ -32,6 +40,7 @@ native Windows discovery.
 - When `adr scan --root` points at a checked-in fixture tree such as `tests/fixtures/session_stores`, Telltale does not use host-path resolution.
 - Fixture discovery still uses each source's `fixture_relative_path` directly.
 - The OS-aware host-path work in P50 and P51 does not change fixture layout or fixture-path expectations.
+- Public verification should prefer checked-in synthetic fixtures and commands that do not touch real agent stores, such as a dry-run fixture scan or focused parser/discovery tests.
 
 ## Host Root Rules
 
