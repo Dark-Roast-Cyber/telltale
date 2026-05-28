@@ -2868,6 +2868,11 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
     assert!(timer.contains("OnUnitActiveSec=5min"));
     assert!(timer.contains("Unit=adr-scan.service"));
     assert!(timer.contains("WantedBy=timers.target"));
+
+    let timer_template = include_str!("../config/examples/adr-scan.timer.in");
+    assert!(timer_template.contains("OnUnitActiveSec=5min"));
+    assert!(timer_template.contains("Unit=adr-scan.service"));
+    assert!(timer_template.contains("WantedBy=timers.target"));
 }
 
 #[test]
