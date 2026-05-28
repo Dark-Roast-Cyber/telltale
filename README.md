@@ -145,6 +145,7 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
   - [Source validation matrix](docs/source-validation-matrix.md)
   - [Requirements](docs/requirements.md)
   - [Trust boundaries](docs/trust-boundaries.md)
+  - [Release readiness](docs/release-readiness.md)
   - [License and packaging](docs/license-and-packaging.md)
 - Advanced and workflow-specific docs remain under [`docs/`](docs/).
 
