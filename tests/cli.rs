@@ -109,6 +109,73 @@ fn release_context_rejects_empty_public_config() {
 }
 
 #[test]
+fn release_staged_review_reports_empty_and_staged_paths() {
+    let temp = tempdir().expect("tempdir");
+    let repo = temp.path();
+
+    let init = Command::new("git")
+        .args(["init", "--quiet", "--initial-branch=public-main"])
+        .current_dir(repo)
+        .output()
+        .expect("git init");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-staged-review")
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-staged-review");
+
+    assert!(
+        output.status.success(),
+        "release-staged-review failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "Staged paths: none"
+    );
+
+    fs::write(repo.join("public.txt"), "public release note\n").expect("write staged fixture");
+    let add = Command::new("git")
+        .args(["add", "public.txt"])
+        .current_dir(repo)
+        .output()
+        .expect("git add");
+    assert!(
+        add.status.success(),
+        "git add failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-staged-review")
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-staged-review");
+
+    assert!(
+        output.status.success(),
+        "release-staged-review failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "public.txt");
+}
+
+#[test]
 fn readme_local_markdown_links_resolve() {
     let local_links = repo_local_markdown_links(Path::new("README.md"));
 

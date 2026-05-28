@@ -13,7 +13,7 @@ SCAN_ROOT = $(HOME)
 PUBLIC_RELEASE_BRANCH ?= public-main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-staged-review release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -102,9 +102,17 @@ release-context:
 	fi
 	@echo "Release context: branch $(PUBLIC_RELEASE_BRANCH), origin $(PUBLIC_RELEASE_REMOTE)"
 
+## Show staged paths reviewed for public release
+release-staged-review:
+	@staged="$$(git diff --cached --name-only)"; \
+	if [ -n "$$staged" ]; then \
+		echo "$$staged"; \
+	else \
+		echo "Staged paths: none"; \
+	fi
+
 ## Public release preflight
-release-preflight: release-tree-clean release-context check
-	@git diff --cached --name-only
+release-preflight: release-tree-clean release-context release-staged-review check
 	cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
