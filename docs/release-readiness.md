@@ -55,6 +55,23 @@ does not contain:
 Keep environment-specific service files and SIEM shipper configuration outside
 the archive unless they are reviewed public examples with placeholder values.
 
+For generated binary archives, inspect the archive listing before upload. The
+archive should contain the `adr` binary, release metadata, and public license or
+readme material only. It should not contain checked-out working-tree residue,
+scanner state, telemetry output, session stores, local planning notes, or
+deployment-specific configuration.
+
+Use the archive format's listing command, such as:
+
+```sh
+tar -tzf telltale-<target>.tar.gz
+unzip -l telltale-<target>.zip
+shasum -a 256 telltale-<target>.tar.gz telltale-<target>.zip
+```
+
+Publish checksums with the release so operators can verify downloaded artifacts
+before running the binary.
+
 ## Post-Release Smoke Test
 
 After downloading a release archive, run a fixture-safe smoke test before
