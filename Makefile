@@ -10,8 +10,10 @@ STATE_DIR = $(PROJECT_DIR)/state
 LOG_PATH = $(LOG_DIR)/adr-events.jsonl
 STATE_PATH = $(STATE_DIR)/adr-state.json
 SCAN_ROOT = $(HOME)
+PUBLIC_RELEASE_BRANCH ?= public-main
+PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -82,10 +84,24 @@ check: fmt clippy test
 release-tree-clean:
 	@test -z "$$(git status --short)" || { git status --short; echo "Working tree must be clean before release preflight."; exit 1; }
 
+## Verify the public release branch and remote
+release-context:
+	@branch="$$(git branch --show-current)"; \
+	if [ "$$branch" != "$(PUBLIC_RELEASE_BRANCH)" ]; then \
+		echo "Expected release branch $(PUBLIC_RELEASE_BRANCH), got $$branch."; \
+		exit 1; \
+	fi
+	@fetch_url="$$(git remote get-url origin 2>/dev/null || true)"; \
+	push_url="$$(git remote get-url --push origin 2>/dev/null || true)"; \
+	if [ "$$fetch_url" != "$(PUBLIC_RELEASE_REMOTE)" ] || [ "$$push_url" != "$(PUBLIC_RELEASE_REMOTE)" ]; then \
+		echo "Expected origin fetch/push URL $(PUBLIC_RELEASE_REMOTE)."; \
+		git remote -v; \
+		exit 1; \
+	fi
+	@echo "Release context: branch $(PUBLIC_RELEASE_BRANCH), origin $(PUBLIC_RELEASE_REMOTE)"
+
 ## Public release preflight
-release-preflight: release-tree-clean check
-	@git branch --show-current
-	@git remote -v
+release-preflight: release-tree-clean release-context check
 	@git diff --cached --name-only
 	cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml

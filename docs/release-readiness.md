@@ -26,8 +26,7 @@ The preflight target wraps the same public release checks shown below:
 
 ```sh
 git status --short
-git branch --show-current
-git remote -v
+make release-context
 git diff --cached --name-only
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -39,12 +38,14 @@ cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 The fixture scan must use `--dry-run` unless you are intentionally writing
 synthetic fixture output in CI or local development.
 
-`git status --short` should be empty before tagging. Confirm that the current
-branch is the intended public release branch and that the configured remote
-points at the public Telltale repository before any tag or push. If you are
-reviewing a release-preparation commit before it is created, inspect
-`git diff --cached --name-only` and confirm each staged path belongs in the
-public repository boundary described below.
+`git status --short` should be empty before tagging. By default,
+`make release-context` fails unless the current branch is `public-main` and
+the `origin` fetch and push URLs point at the public Telltale repository. For
+an intentional alternate public release branch or remote, override
+`PUBLIC_RELEASE_BRANCH` or `PUBLIC_RELEASE_REMOTE` when running the target.
+If you are reviewing a release-preparation commit before it is created,
+inspect `git diff --cached --name-only` and confirm each staged path belongs
+in the public repository boundary described below.
 
 ## Artifact Boundary
 
