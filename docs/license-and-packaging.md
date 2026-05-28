@@ -53,3 +53,16 @@ documentation, synthetic fixtures, and reviewed examples. Host-specific
 operations, private planning notes, local credentials, raw agent transcripts,
 and environment-specific deployment assumptions must stay out of public commits
 and remain local-only.
+
+## Release Artifacts
+
+Tagged GitHub releases build the checked-in Rust crate from the public
+repository and publish platform-specific `adr` binary archives. Those archives
+should contain only the compiled command-line binary and release metadata
+generated from the public repository contents.
+
+Release artifacts must not bundle local scanner state, telemetry logs, session
+stores, private planning notes, machine-specific configuration, or credentials.
+Operational examples can ship as reviewed repository files, but environment
+values such as SIEM endpoints, tokens, host paths, and live transcript material
+belong in deployment-specific configuration outside the release package.
