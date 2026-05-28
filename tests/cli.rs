@@ -23,6 +23,92 @@ fn source_inventory_change_value(event: &Value) -> &str {
 }
 
 #[test]
+fn release_context_rejects_empty_public_config() {
+    let temp = tempdir().expect("tempdir");
+    let repo = temp.path();
+
+    let init = Command::new("git")
+        .args(["init", "--quiet", "--initial-branch=public-main"])
+        .current_dir(repo)
+        .output()
+        .expect("git init");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let remote = "git@github.com:Dark-Roast-Cyber/telltale.git";
+    let remote_add = Command::new("git")
+        .args(["remote", "add", "origin", remote])
+        .current_dir(repo)
+        .output()
+        .expect("git remote add");
+    assert!(
+        remote_add.status.success(),
+        "git remote add failed: {}",
+        String::from_utf8_lossy(&remote_add.stderr)
+    );
+
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(makefile)
+        .args([
+            "release-context",
+            "PUBLIC_RELEASE_BRANCH=",
+            "PUBLIC_RELEASE_REMOTE=git@github.com:Dark-Roast-Cyber/telltale.git",
+        ])
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-context");
+
+    assert!(
+        !output.status.success(),
+        "release-context should fail when PUBLIC_RELEASE_BRANCH is empty"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("PUBLIC_RELEASE_BRANCH must be set."),
+        "unexpected output: {combined}"
+    );
+
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile"))
+        .args([
+            "release-context",
+            "PUBLIC_RELEASE_BRANCH=public-main",
+            "PUBLIC_RELEASE_REMOTE=",
+        ])
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-context");
+
+    assert!(
+        !output.status.success(),
+        "release-context should fail when PUBLIC_RELEASE_REMOTE is empty"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("PUBLIC_RELEASE_REMOTE must be set."),
+        "unexpected output: {combined}"
+    );
+}
+
+#[test]
 fn readme_local_markdown_links_resolve() {
     let local_links = repo_local_markdown_links(Path::new("README.md"));
 

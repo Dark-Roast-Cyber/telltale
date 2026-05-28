@@ -86,6 +86,8 @@ release-tree-clean:
 
 ## Verify the public release branch and remote
 release-context:
+	@test -n "$(strip $(PUBLIC_RELEASE_BRANCH))" || { echo "PUBLIC_RELEASE_BRANCH must be set."; exit 1; }
+	@test -n "$(strip $(PUBLIC_RELEASE_REMOTE))" || { echo "PUBLIC_RELEASE_REMOTE must be set."; exit 1; }
 	@branch="$$(git branch --show-current)"; \
 	if [ "$$branch" != "$(PUBLIC_RELEASE_BRANCH)" ]; then \
 		echo "Expected release branch $(PUBLIC_RELEASE_BRANCH), got $$branch."; \
