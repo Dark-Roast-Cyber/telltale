@@ -2,7 +2,9 @@
 
 ## Functional Requirements
 
-- Discover local sessions for Codex, OpenCode, and later Copilot/other agents.
+- Discover local sessions for supported coding-agent sources such as Codex,
+  OpenCode, Copilot, Claude Code, Gemini CLI, Qwen CLI, RooCode, KiloCode, and
+  OpenClaw as adapters mature.
 - Parse transcripts into ordered user, assistant, tool-call, and tool-result records.
 - Detect tool calls and suspicious context with static regex rules.
 - Support multiple simultaneous rule matches and cumulative scoring.
@@ -26,6 +28,21 @@
 - Continue processing if one parser or source fails.
 - Include source file/db path metadata but avoid raw absolute paths when privacy mode is enabled.
 - Use configurable thresholds for informational, low, medium, high, and critical severity.
+
+## Publication Requirements
+
+- Treat the public repository as the release and packaging boundary for the
+  open-source core.
+- Keep host-only planning notes, local automation state, scanner state,
+  telemetry output, raw agent session stores, credentials, and
+  deployment-specific SIEM settings out of public commits and release
+  artifacts.
+- Back public examples, validation claims, and support evidence with synthetic
+  fixtures, deterministic tests, or already-redacted output.
+- Review staged paths, branch, remote, generated archive listings, and checksums
+  before publishing tagged release artifacts.
+- Keep public install, release, and packaging guidance focused on a single
+  public repository workflow, without requiring a second local checkout.
 
 ## Detection Requirements
 
