@@ -1,14 +1,25 @@
 # Install
 
-Telltale Core is currently source-first. The simplest setup is to build the
-Rust binary locally, run a fixture-safe scan, then point the scanner at your
-real agent session stores.
+Telltale Core can be installed from a tagged GitHub release archive when one
+is available, or built from source with Cargo. In both cases, start with a
+fixture-safe scan before pointing the scanner at real agent session stores.
 
 ## Prerequisites
 
-- Rust toolchain with `cargo`
+- Rust toolchain with `cargo` when building from source
 - Local access to the agent session stores you want to scan
 - Optional: a SIEM or log shipper for the generated JSONL event stream
+
+## Install From A Release Archive
+
+Tagged GitHub releases publish platform-specific `adr` binary archives for
+Linux, macOS, and Windows. Download the archive that matches your platform,
+extract the `adr` binary, and place it on your `PATH` or run it from the
+extracted directory.
+
+Release archives contain the command-line binary and release metadata generated
+from the public repository. They do not include local scanner state, telemetry
+logs, session stores, credentials, or deployment-specific SIEM configuration.
 
 ## Build From Source
 

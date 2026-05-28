@@ -85,6 +85,10 @@ or more supported client IDs such as `codex` or `opencode`.
 
 - Install and setup guide: [docs/install.md](docs/install.md)
 
+Tagged GitHub releases publish platform-specific `adr` binary archives when
+available. Source builds remain supported; the install guide covers both paths
+and the fixture-safe verification step.
+
 ## Telemetry Output
 
 Telltale is designed to produce structured telemetry that can be searched, charted, and alerted on in a SIEM.
