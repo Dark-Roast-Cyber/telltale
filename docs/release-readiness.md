@@ -8,8 +8,8 @@ release artifacts from the public repository.
 A public release should include the open-source core, public technical
 documentation, synthetic fixtures, schemas, bundled rules, and reviewed example
 configuration. It should not include local scanner state, telemetry logs, raw
-agent transcripts, credentials, private planning notes, or deployment-specific
-SIEM settings.
+agent transcripts, credentials, private planning notes, local agent workflow
+state, or deployment-specific SIEM settings.
 
 Release archives should contain the compiled `adr` command-line binary and
 release metadata generated from checked-in public repository contents.
@@ -57,7 +57,7 @@ does not contain:
 - raw agent session stores or copied transcripts;
 - credentials, API keys, tokens, or `.env` values;
 - host-specific filesystem paths, IP addresses, or SIEM endpoints;
-- private planning, workflow, or internal release notes.
+- private planning, local agent workflow state, or internal release notes.
 
 Keep environment-specific service files and SIEM shipper configuration outside
 the archive unless they are reviewed public examples with placeholder values.
@@ -66,7 +66,7 @@ For generated binary archives, inspect the archive listing before upload. The
 archive should contain the `adr` binary, release metadata, and public license or
 readme material only. It should not contain checked-out working-tree residue,
 scanner state, telemetry output, session stores, local planning notes, or
-deployment-specific configuration.
+local agent workflow state, or deployment-specific configuration.
 
 Use the archive format's listing command, such as:
 

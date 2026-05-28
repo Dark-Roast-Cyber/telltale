@@ -50,9 +50,9 @@ these separate-license areas.
 The public repository is the release and packaging boundary for Telltale Core.
 Public commits should contain the open-source core, public technical
 documentation, synthetic fixtures, and reviewed examples. Host-specific
-operations, private planning notes, local credentials, raw agent transcripts,
-and environment-specific deployment assumptions must stay out of public commits
-and remain local-only.
+operations, private planning notes, local agent workflow state, local
+credentials, raw agent transcripts, and environment-specific deployment
+assumptions must stay out of public commits and remain local-only.
 
 ## Release Artifacts
 
@@ -62,7 +62,8 @@ should contain only the compiled command-line binary and release metadata
 generated from the public repository contents.
 
 Release artifacts must not bundle local scanner state, telemetry logs, session
-stores, private planning notes, machine-specific configuration, or credentials.
-Operational examples can ship as reviewed repository files, but environment
-values such as SIEM endpoints, tokens, host paths, and live transcript material
-belong in deployment-specific configuration outside the release package.
+stores, private planning notes, local agent workflow state, machine-specific
+configuration, or credentials. Operational examples can ship as reviewed
+repository files, but environment values such as SIEM endpoints, tokens, host
+paths, and live transcript material belong in deployment-specific
+configuration outside the release package.
