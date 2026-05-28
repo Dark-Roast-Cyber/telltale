@@ -161,6 +161,21 @@ Fixture files under `tests/fixtures/` contain:
 
 Detection tests verify that these synthetic values do not appear in redacted output.
 
+## Public Documentation and Release Boundary
+
+Public examples, screenshots, release notes, and support claims should use
+synthetic fixtures or already-redacted event output. Do not copy live session
+stores, raw transcripts, local telemetry logs, scanner state, workstation paths,
+hostnames, SIEM endpoint details, or credential-like values into public
+documentation or release artifacts.
+
+When live host validation is needed, keep the exact source paths and raw
+observations in local-only notes. Public validation summaries should describe
+the supported client, fixture coverage, deterministic test command, and any
+known lossy fields without exposing host-specific evidence. If a public issue
+or release note needs an example, recreate the behavior with a synthetic fixture
+and cite the fixture-safe command that reproduces it.
+
 ## Future Privacy Work
 
 ### Dedicated Redaction Stage
