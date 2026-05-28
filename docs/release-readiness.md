@@ -19,6 +19,12 @@ release metadata generated from checked-in public repository contents.
 Run these checks from a clean working tree before tagging a release:
 
 ```sh
+make release-preflight
+```
+
+The preflight target wraps the same public release checks shown below:
+
+```sh
 git status --short
 git branch --show-current
 git remote -v

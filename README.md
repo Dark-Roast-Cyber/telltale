@@ -89,6 +89,11 @@ Tagged GitHub releases publish platform-specific `adr` binary archives when
 available. Source builds remain supported; the install guide covers both paths
 and the fixture-safe verification step.
 
+Before tagging a public release, run `make release-preflight` from a clean
+working tree. The target runs formatting, linting, tests, fixture-safe scanning,
+rule validation, and the branch/remote/staged-content checks covered by the
+release readiness checklist.
+
 ## Telemetry Output
 
 Telltale is designed to produce structured telemetry that can be searched,
@@ -133,6 +138,7 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
   - [Threat taxonomy](docs/threat-taxonomy.md)
   - [Privacy model](docs/privacy-model.md)
   - [Telemetry output](docs/telemetry-output.md)
+  - [Release readiness](docs/release-readiness.md)
 - Additional references:
   - [Session sources](docs/session-sources.md)
   - [Agent capability profiles](docs/agent-capability-profiles.md)

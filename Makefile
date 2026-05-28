@@ -11,7 +11,7 @@ LOG_PATH = $(LOG_DIR)/adr-events.jsonl
 STATE_PATH = $(STATE_DIR)/adr-state.json
 SCAN_ROOT = $(HOME)
 
-.PHONY: build install uninstall clean test fmt clippy status logs help
+.PHONY: build install uninstall clean test fmt clippy check release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -77,6 +77,15 @@ clippy:
 ## Full verification
 check: fmt clippy test
 	@echo "All checks passed."
+
+## Public release preflight
+release-preflight: check
+	@test -z "$$(git status --short)" || { git status --short; echo "Working tree must be clean before release preflight."; exit 1; }
+	@git branch --show-current
+	@git remote -v
+	@git diff --cached --name-only
+	cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
+	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
 ## Show timer status
 status:
