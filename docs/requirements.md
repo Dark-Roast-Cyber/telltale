@@ -41,8 +41,8 @@
   fixtures, deterministic tests, or already-redacted output.
 - Review staged paths, branch, remote, generated archive listings, and checksums
   before publishing tagged release artifacts.
-- Keep public install, release, and packaging guidance focused on a single
-  public repository workflow, without requiring a second local checkout.
+- Keep public install, release, and packaging guidance focused on the single
+  public repository workflow used for public commits, tags, and artifacts.
 
 ## Detection Requirements
 
