@@ -96,7 +96,9 @@ public repository boundary described below.
 
 Before any public push, stage only reviewed public-safe files from this
 checkout, keep ignored host-only material local, and review
-`git diff --cached --name-only`.
+`git diff --cached --name-only`. `make public-push-review` prints the current
+branch, public remote URLs, short working-tree status, staged path list, and the
+release-readiness reminder in one reviewable summary.
 
 `make release-crate-manifest` lists the Cargo source package contents with
 `cargo package --list` and fails if the package would include host-only planning,

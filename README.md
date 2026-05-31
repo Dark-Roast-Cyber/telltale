@@ -89,6 +89,8 @@ Tagged GitHub releases publish platform-specific `adr` binary archives when
 available. Source builds remain supported; the install guide covers both paths
 and the fixture-safe verification step.
 
+Before pushing public history, run `make public-push-review` to review the
+current branch, public remote URLs, working-tree status, and staged path list.
 Before tagging a public release, run `make release-preflight` from a clean
 working tree. The target runs formatting, linting, tests, fixture-safe scanning,
 rule validation, and the branch/remote/staged-content checks covered by the

@@ -15,7 +15,7 @@ PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= release-downloads
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-tag-review release-staged-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check public-push-review release-tree-clean release-context release-public-alignment release-tag-review release-staged-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -81,6 +81,22 @@ clippy:
 ## Full verification
 check: fmt clippy test
 	@echo "All checks passed."
+
+## Show public push review context
+public-push-review:
+	@echo "Public branch: $$(git branch --show-current)"
+	@echo "Origin fetch: $$(git remote get-url origin 2>/dev/null || echo '(none)')"
+	@echo "Origin push: $$(git remote get-url --push origin 2>/dev/null || echo '(none)')"
+	@echo ""
+	@echo "Working tree status:"
+	@status="$$(git status --short)"; \
+	if [ -n "$$status" ]; then printf '%s\n' "$$status" | sed 's/^/  /'; else echo "  clean"; fi
+	@echo ""
+	@echo "Staged paths:"
+	@staged="$$(git diff --cached --name-only)"; \
+	if [ -n "$$staged" ]; then printf '%s\n' "$$staged" | sed 's/^/  /'; else echo "  none"; fi
+	@echo ""
+	@echo "Before pushing public history, review docs/release-readiness.md and run make release-preflight."
 
 ## Verify the release working tree is clean
 release-tree-clean:

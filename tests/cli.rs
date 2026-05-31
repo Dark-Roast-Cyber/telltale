@@ -176,6 +176,85 @@ fn release_context_rejects_empty_public_config() {
 }
 
 #[test]
+fn public_push_review_summarizes_repo_and_staged_context() {
+    let temp = tempdir().expect("tempdir");
+    let repo = temp.path();
+
+    let init = Command::new("git")
+        .args(["init", "--quiet", "--initial-branch=public-main"])
+        .current_dir(repo)
+        .output()
+        .expect("git init");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    configure_git_user(repo);
+    git_expect(
+        repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:Dark-Roast-Cyber/telltale.git",
+        ],
+    );
+
+    fs::write(repo.join("tracked.txt"), "initial\n").expect("write tracked file");
+    git_expect(repo, &["add", "tracked.txt"]);
+    git_expect(repo, &["commit", "--quiet", "-m", "Initial commit"]);
+
+    fs::write(repo.join("tracked.txt"), "modified\n").expect("modify tracked file");
+    fs::write(repo.join("staged.txt"), "public\n").expect("write staged file");
+    git_expect(repo, &["add", "staged.txt"]);
+
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(makefile)
+        .arg("public-push-review")
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make public-push-review");
+
+    assert!(
+        output.status.success(),
+        "public-push-review failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout must be UTF-8");
+    assert!(
+        stdout.contains("Public branch: public-main"),
+        "missing branch summary: {stdout}"
+    );
+    assert!(
+        stdout.contains("Origin fetch: git@github.com:Dark-Roast-Cyber/telltale.git"),
+        "missing fetch remote: {stdout}"
+    );
+    assert!(
+        stdout.contains("Origin push: git@github.com:Dark-Roast-Cyber/telltale.git"),
+        "missing push remote: {stdout}"
+    );
+    assert!(
+        stdout.contains("Working tree status:") && stdout.contains(" M tracked.txt"),
+        "missing dirty status: {stdout}"
+    );
+    assert!(
+        stdout.contains("Staged paths:") && stdout.contains("staged.txt"),
+        "missing staged path summary: {stdout}"
+    );
+    assert!(
+        stdout.contains("docs/release-readiness.md") && stdout.contains("make release-preflight"),
+        "missing public push reminder: {stdout}"
+    );
+}
+
+#[test]
 fn release_public_alignment_reports_sync_and_rejects_behind_head() {
     let temp = tempdir().expect("tempdir");
     let bare = temp.path().join("origin.git");
