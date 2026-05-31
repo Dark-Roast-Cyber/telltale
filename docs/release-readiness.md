@@ -44,9 +44,10 @@ make release-fixture-smoke
 ```
 
 `make release-fixture-smoke` runs the fixture scan with
-`--root tests/fixtures/session_stores` and `--dry-run`, then validates the
-bundled rules. The fixture scan must use `--dry-run` unless you are
-intentionally writing synthetic fixture output in CI or local development.
+`--root tests/fixtures/session_stores`, `--dry-run`, `--emit-activity`, and
+`--emit-session-risk-summary`, then validates the bundled rules. The fixture
+scan must use `--dry-run` unless you are intentionally writing synthetic fixture
+output in CI or local development.
 
 When only public documentation or release guidance changed, run the focused
 boundary check before the full release preflight:

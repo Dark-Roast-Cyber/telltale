@@ -188,7 +188,7 @@ release-public-docs-check:
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:
-	cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
+	cargo run -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
 ## Public release preflight

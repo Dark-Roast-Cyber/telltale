@@ -576,8 +576,10 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("cargo run -- scan --once --dry-run --root tests/fixtures/session_stores"),
-        "fixture scan must stay dry-run and fixture-rooted: {stdout}"
+        stdout.contains(
+            "cargo run -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores"
+        ),
+        "fixture scan must stay dry-run, fixture-rooted, and summary-enabled: {stdout}"
     );
     assert!(
         stdout.contains("cargo run -- rules validate --rules config/rules/tool-call-regex.yaml"),
