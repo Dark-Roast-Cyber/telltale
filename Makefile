@@ -15,7 +15,7 @@ PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= artifacts
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-artifact-manifest release-fixture-smoke release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -158,6 +158,16 @@ release-artifact-manifest:
 			exit 1; \
 		fi; \
 	done
+
+## Run focused public documentation boundary checks
+release-public-docs-check:
+	cargo test --quiet readme_local_markdown_links_resolve
+	cargo test --quiet public_docs_local_markdown_links_resolve
+	cargo test --quiet public_docs_local_markdown_links_target_tracked_content
+	cargo test --quiet public_surfaces_do_not_reintroduce_split_checkout_guidance
+	cargo test --quiet public_docs_do_not_contain_host_absolute_home_paths
+	cargo test --quiet public_docs_do_not_link_to_host_only_paths
+	cargo test --quiet public_docs_linked_example_configs_are_public_safe
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:

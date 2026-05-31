@@ -516,6 +516,41 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
 }
 
 #[test]
+fn release_public_docs_check_runs_focused_boundary_tests() {
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--dry-run")
+        .arg("--no-print-directory")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-public-docs-check")
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-public-docs-check dry run");
+
+    assert!(
+        output.status.success(),
+        "release-public-docs-check dry run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for test_name in [
+        "readme_local_markdown_links_resolve",
+        "public_docs_local_markdown_links_resolve",
+        "public_docs_local_markdown_links_target_tracked_content",
+        "public_surfaces_do_not_reintroduce_split_checkout_guidance",
+        "public_docs_do_not_contain_host_absolute_home_paths",
+        "public_docs_do_not_link_to_host_only_paths",
+        "public_docs_linked_example_configs_are_public_safe",
+    ] {
+        assert!(
+            stdout.contains(&format!("cargo test --quiet {test_name}")),
+            "release-public-docs-check must run {test_name}: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn readme_local_markdown_links_resolve() {
     let local_links = repo_local_markdown_links(Path::new("README.md"));
 

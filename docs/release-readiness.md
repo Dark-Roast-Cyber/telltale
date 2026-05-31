@@ -46,6 +46,18 @@ make release-fixture-smoke
 bundled rules. The fixture scan must use `--dry-run` unless you are
 intentionally writing synthetic fixture output in CI or local development.
 
+When only public documentation or release guidance changed, run the focused
+boundary check before the full release preflight:
+
+```sh
+make release-public-docs-check
+```
+
+The target runs the existing public Markdown link, tracked-target,
+host-absolute-path, host-only-link, example-config, and retired repository
+workflow wording regressions without scanning fixtures or building release
+artifacts.
+
 `git status --short` should be empty before tagging. By default,
 `make release-context` fails unless the current branch is `public-main` and
 the `origin` fetch and push URLs point at the public Telltale repository. For
