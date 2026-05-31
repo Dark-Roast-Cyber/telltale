@@ -8,7 +8,7 @@ use crate::event::{
     ActivityEventInput, DetectionEventInput, Event, Evidence, activity_event, evidence_hash,
     parse_event_timestamp, path_hash, scanner_error_event,
 };
-use crate::parser::{NormalizedRecord, RecordKind, parse_source_records};
+use crate::parser::{NormalizedRecord, ParseError, RecordKind, parse_source_records};
 use crate::rules::{CompiledRuleSet, MatchResult, load_default_rule_set};
 use crate::schema::{NormalizedRecordV1, Provenance};
 use crate::scoring::load_thresholds;
@@ -63,6 +63,7 @@ pub fn summarize_source_activities_with_baselines(
 fn detect_source(source: &Source, rule_set: &crate::rules::CompiledRuleSet) -> Vec<Event> {
     let parsed = match parse_source_records(source) {
         Ok(records) => records,
+        Err(ParseError::Empty) => return vec![],
         Err(e) => return vec![scanner_error_event(source, &e)],
     };
     let sessions = group_records_by_session(parsed);
@@ -80,6 +81,7 @@ fn summarize_source_activity(
 ) -> Vec<Event> {
     let parsed = match parse_source_records(source) {
         Ok(records) => records,
+        Err(ParseError::Empty) => return vec![],
         Err(e) => return vec![scanner_error_event(source, &e)],
     };
 
@@ -3447,6 +3449,23 @@ mod tests {
         let detections = detect_sources(&[source]);
 
         assert!(detections.is_empty());
+    }
+
+    #[test]
+    fn empty_gemini_source_produces_no_events() {
+        let source = Source {
+            client: ClientId::Gemini,
+            kind: SourceKind::Json,
+            source_id: "gemini-empty".to_string(),
+            path: PathBuf::from("tests/fixtures/session_stores/gemini/tmp/empty-session.json"),
+        };
+
+        let detections = detect_sources(&[source]);
+
+        assert!(
+            detections.is_empty(),
+            "empty Gemini source should produce no events, not scanner_error events"
+        );
     }
 
     #[test]

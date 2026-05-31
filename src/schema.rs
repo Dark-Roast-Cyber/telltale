@@ -338,7 +338,7 @@ mod tests {
 
     use crate::clients::{ClientId, supported_clients};
     use crate::discovery::discover_sources;
-    use crate::parser::parse_source_records;
+    use crate::parser::{ParseError, parse_source_records};
 
     use super::*;
 
@@ -638,8 +638,11 @@ mod tests {
 
         let mut covered_clients = BTreeSet::new();
         for source in &sources {
-            let records = parse_source_records(source)
-                .unwrap_or_else(|err| panic!("failed to parse {}: {err}", source.source_id));
+            let records = match parse_source_records(source) {
+                Ok(records) => records,
+                Err(ParseError::Empty) => continue,
+                Err(err) => panic!("failed to parse {}: {err}", source.source_id),
+            };
             assert!(
                 !records.is_empty(),
                 "fixture source {} produced no records",

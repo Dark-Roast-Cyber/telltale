@@ -780,7 +780,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
     assert_eq!(summary["source_counts"]["codex.headless_jsonl"], 2);
-    assert_eq!(summary["source_counts"]["gemini.json"], 2);
+    assert_eq!(summary["source_counts"]["gemini.json"], 3);
     assert_eq!(summary["source_counts"]["openclaw.jsonl"], 2);
     assert_eq!(summary["source_counts"]["qwen.jsonl"], 2);
     assert_eq!(summary["source_counts"]["roocode.ui_messages_json"], 2);
@@ -931,7 +931,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][0]["field"], "source_inventory");
     assert_eq!(
         event["evidence"][0]["redacted_value"],
-        "sources=68; client_source_kinds=12"
+        "sources=69; client_source_kinds=12"
     );
     assert!(
         event["evidence"][0]["hash"]
@@ -941,7 +941,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][1]["field"], "source_inventory_change");
     assert_eq!(
         event["evidence"][1]["redacted_value"],
-        "baseline=true; added=68; removed=0; unchanged=0"
+        "baseline=true; added=69; removed=0; unchanged=0"
     );
     assert!(
         event["evidence"][1]["hash"]
@@ -2116,7 +2116,7 @@ fn scan_once_client_filter_limits_discovered_sources() {
         .as_object()
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
-    assert_eq!(source_counts["gemini.json"], 2);
+    assert_eq!(source_counts["gemini.json"], 3);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -2162,7 +2162,7 @@ fn scan_once_accepts_repeated_client_filters() {
     assert_eq!(source_counts["codex.jsonl"], 40);
     assert_eq!(source_counts["codex.archived_jsonl"], 2);
     assert_eq!(source_counts["codex.headless_jsonl"], 2);
-    assert_eq!(source_counts["gemini.json"], 2);
+    assert_eq!(source_counts["gemini.json"], 3);
 }
 
 #[test]
@@ -2279,7 +2279,7 @@ fn scan_once_health_reports_unchanged_source_inventory() {
 
     assert_eq!(
         source_inventory_change_value(&health_events[0]),
-        "baseline=true; added=2; removed=0; unchanged=0"
+        "baseline=true; added=3; removed=0; unchanged=0"
     );
 }
 
