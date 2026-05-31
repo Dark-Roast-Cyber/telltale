@@ -167,6 +167,20 @@ When emitting events to SIEM:
 3. **Hashed values are trusted.** SHA-256 hashes are deterministic ADR-generated values safe for correlation.
 4. **Never emit raw untrusted content.** Full session transcripts, raw tool arguments, raw tool results, and raw MCP metadata must never appear in events. See [privacy-model.md](privacy-model.md) for the full evidence class contract.
 
+## Publication Boundary
+
+Public documentation, release notes, and examples inherit the same evidence
+boundary as SIEM events. Use synthetic fixtures or already-redacted output when
+demonstrating detections, parser behavior, or release readiness. Do not publish
+raw transcripts, live host telemetry, scanner state, local planning notes,
+deployment-specific SIEM configuration, workstation paths, or credential-like
+values as public examples or release evidence.
+
+Live validation notes can reference the trusted metadata ADR generated, such as
+client IDs, rule IDs, event families, and aggregate counts, but any operational
+detail that would identify a host, private repository workflow, endpoint, or
+user session belongs in local-only notes rather than public repository content.
+
 ## References
 
 - [privacy-model.md](privacy-model.md) — Evidence classes and redaction rules
