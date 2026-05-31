@@ -64,6 +64,20 @@ host-absolute-path, host-only-link, host-only-ignore-pattern, example-config,
 release-workflow path, and retired repository workflow wording regressions
 without scanning fixtures or building release artifacts.
 
+It is intentionally limited to these focused commands:
+
+```sh
+cargo test --quiet readme_local_markdown_links_resolve
+cargo test --quiet public_docs_local_markdown_links_resolve
+cargo test --quiet public_docs_local_markdown_links_target_tracked_content
+cargo test --quiet public_surfaces_do_not_reintroduce_split_checkout_guidance
+cargo test --quiet public_release_workflows_do_not_reference_host_only_paths
+cargo test --quiet public_docs_do_not_contain_host_absolute_home_paths
+cargo test --quiet public_docs_do_not_link_to_host_only_paths
+cargo test --quiet host_only_release_paths_remain_ignored
+cargo test --quiet public_docs_linked_example_configs_are_public_safe
+```
+
 `git status --short` should be empty before tagging. By default,
 `make release-context` fails unless the current branch is `public-main` and
 the `origin` fetch and push URLs point at the public Telltale repository. For

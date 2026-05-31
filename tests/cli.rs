@@ -643,6 +643,49 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
 
 #[test]
 fn release_public_docs_check_runs_focused_boundary_tests() {
+    let stdout = release_public_docs_check_dry_run_stdout();
+    for test_name in release_public_docs_check_test_names() {
+        assert!(
+            stdout.contains(&format!("cargo test --quiet {test_name}")),
+            "release-public-docs-check must run {test_name}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn release_readiness_documents_public_docs_check_commands() {
+    let docs =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/release-readiness.md"))
+            .expect("read release readiness docs");
+
+    assert!(
+        docs.contains("make release-public-docs-check"),
+        "release readiness guidance must name the focused public docs target"
+    );
+    for test_name in release_public_docs_check_test_names() {
+        let command = format!("cargo test --quiet {test_name}");
+        assert!(
+            docs.contains(&command),
+            "release readiness guidance must document {command}"
+        );
+    }
+}
+
+fn release_public_docs_check_test_names() -> &'static [&'static str] {
+    &[
+        "readme_local_markdown_links_resolve",
+        "public_docs_local_markdown_links_resolve",
+        "public_docs_local_markdown_links_target_tracked_content",
+        "public_surfaces_do_not_reintroduce_split_checkout_guidance",
+        "public_release_workflows_do_not_reference_host_only_paths",
+        "public_docs_do_not_contain_host_absolute_home_paths",
+        "public_docs_do_not_link_to_host_only_paths",
+        "host_only_release_paths_remain_ignored",
+        "public_docs_linked_example_configs_are_public_safe",
+    ]
+}
+
+fn release_public_docs_check_dry_run_stdout() -> String {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = Command::new("make")
         .arg("--dry-run")
@@ -659,23 +702,8 @@ fn release_public_docs_check_runs_focused_boundary_tests() {
         "release-public-docs-check dry run failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for test_name in [
-        "readme_local_markdown_links_resolve",
-        "public_docs_local_markdown_links_resolve",
-        "public_docs_local_markdown_links_target_tracked_content",
-        "public_surfaces_do_not_reintroduce_split_checkout_guidance",
-        "public_release_workflows_do_not_reference_host_only_paths",
-        "public_docs_do_not_contain_host_absolute_home_paths",
-        "public_docs_do_not_link_to_host_only_paths",
-        "host_only_release_paths_remain_ignored",
-        "public_docs_linked_example_configs_are_public_safe",
-    ] {
-        assert!(
-            stdout.contains(&format!("cargo test --quiet {test_name}")),
-            "release-public-docs-check must run {test_name}: {stdout}"
-        );
-    }
+
+    String::from_utf8(output.stdout).expect("release-public-docs-check stdout must be UTF-8")
 }
 
 #[test]
