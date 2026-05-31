@@ -15,7 +15,7 @@ PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= release-downloads
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-tag-review release-staged-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -124,6 +124,23 @@ release-public-alignment:
 		echo "Public branch alignment: $(PUBLIC_RELEASE_UPSTREAM) matches HEAD."; \
 	fi
 
+## Verify the public release tag matches the Cargo package version
+release-tag-review:
+	@package_version="$$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"; \
+	test -n "$$package_version" || { echo "Could not determine Cargo package version."; exit 1; }; \
+	expected_tag="v$$package_version"; \
+	release_tag="$(PUBLIC_RELEASE_TAG)"; \
+	if [ -z "$$release_tag" ]; then release_tag="$$expected_tag"; fi; \
+	if [ "$$release_tag" != "$$expected_tag" ]; then \
+		echo "Expected public release tag $$expected_tag for package version $$package_version, got $$release_tag."; \
+		exit 1; \
+	fi; \
+	if git rev-parse --verify --quiet "refs/tags/$$release_tag" >/dev/null; then \
+		echo "Public release tag $$release_tag already exists locally."; \
+		exit 1; \
+	fi; \
+	echo "Public release tag: $$release_tag (package $$package_version)"
+
 ## Show staged paths reviewed for public release
 release-staged-review:
 	@staged="$$(git diff --cached --name-only)"; \
@@ -205,7 +222,7 @@ release-fixture-smoke:
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
 ## Public release preflight
-release-preflight: release-tree-clean release-context release-public-alignment release-staged-review release-crate-manifest release-public-docs-check check release-fixture-smoke
+release-preflight: release-tree-clean release-context release-public-alignment release-tag-review release-staged-review release-crate-manifest release-public-docs-check check release-fixture-smoke
 
 ## Show timer status
 status:

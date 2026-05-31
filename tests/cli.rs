@@ -276,6 +276,107 @@ fn release_public_alignment_reports_sync_and_rejects_behind_head() {
 }
 
 #[test]
+fn release_tag_review_matches_package_version_and_rejects_mismatch() {
+    let temp = tempdir().expect("tempdir");
+    let repo = temp.path();
+    fs::create_dir(repo.join("src")).expect("create src");
+    fs::write(
+        repo.join("Cargo.toml"),
+        r#"[package]
+name = "tag-review-fixture"
+version = "1.2.3"
+edition = "2021"
+"#,
+    )
+    .expect("write Cargo.toml");
+    fs::write(repo.join("src").join("lib.rs"), "pub fn fixture() {}\n").expect("write lib.rs");
+
+    let init = Command::new("git")
+        .args(["init", "--quiet", "--initial-branch=public-main"])
+        .current_dir(repo)
+        .output()
+        .expect("git init");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    configure_git_user(repo);
+    git_expect(repo, &["add", "Cargo.toml", "src/lib.rs"]);
+    git_expect(repo, &["commit", "--quiet", "-m", "Initial fixture"]);
+
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-tag-review")
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-tag-review");
+    assert!(
+        output.status.success(),
+        "release-tag-review failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Public release tag: v1.2.3"),
+        "unexpected output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-tag-review")
+        .arg("PUBLIC_RELEASE_TAG=v1.2.4")
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-tag-review mismatch");
+    assert!(
+        !output.status.success(),
+        "release-tag-review should fail when PUBLIC_RELEASE_TAG mismatches package version"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Expected public release tag v1.2.3"),
+        "unexpected output: {combined}"
+    );
+
+    git_expect(repo, &["tag", "-m", "v1.2.3", "v1.2.3"]);
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-tag-review")
+        .current_dir(repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-tag-review existing tag");
+    assert!(
+        !output.status.success(),
+        "release-tag-review should fail when the release tag already exists"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Public release tag v1.2.3 already exists locally."),
+        "unexpected output: {combined}"
+    );
+}
+
+#[test]
 fn release_staged_review_reports_empty_and_staged_paths() {
     let temp = tempdir().expect("tempdir");
     let repo = temp.path();
@@ -394,12 +495,19 @@ fn release_crate_manifest_excludes_host_only_release_material() {
     let manifest_pos = preflight_stdout
         .find("cargo package --list --allow-dirty")
         .expect("release-preflight should review Cargo package contents");
+    let tag_pos = preflight_stdout
+        .find("cargo metadata --no-deps --format-version 1")
+        .expect("release-preflight should review the public release tag");
     let fmt_pos = preflight_stdout
         .find("cargo fmt --check")
         .expect("release-preflight should still run format checks");
     let public_docs_pos = preflight_stdout
         .find("cargo test --quiet public_docs_local_markdown_links_resolve")
         .expect("release-preflight should run focused public boundary checks");
+    assert!(
+        tag_pos < manifest_pos,
+        "release-preflight should review the public release tag before package contents: {preflight_stdout}"
+    );
     assert!(
         manifest_pos < fmt_pos,
         "release-preflight should review Cargo package contents before expensive checks: {preflight_stdout}"

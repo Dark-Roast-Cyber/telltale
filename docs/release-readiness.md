@@ -37,6 +37,7 @@ The preflight target wraps the same public release checks shown below:
 git status --short
 make release-context
 make release-public-alignment
+make release-tag-review
 git diff --cached --name-only
 make release-crate-manifest
 make release-public-docs-check
@@ -86,9 +87,12 @@ an intentional alternate public release branch or remote, override
 `make release-public-alignment` then compares `HEAD` with
 `origin/${PUBLIC_RELEASE_BRANCH}` by default, fails if the local branch is
 behind the public upstream, and reports any local commits that still need
-pre-push review. If you are reviewing a release-preparation commit before it is
-created, inspect `git diff --cached --name-only` and confirm each staged path
-belongs in the public repository boundary described below.
+pre-push review. `make release-tag-review` derives the Cargo package version,
+expects the public tag to be `v<version>` unless `PUBLIC_RELEASE_TAG` is
+overridden, and fails if that tag already exists locally. If you are reviewing a
+release-preparation commit before it is created, inspect
+`git diff --cached --name-only` and confirm each staged path belongs in the
+public repository boundary described below.
 
 Before any public push, stage only reviewed public-safe files from this
 checkout, keep ignored host-only material local, and review
