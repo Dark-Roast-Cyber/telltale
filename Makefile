@@ -196,6 +196,7 @@ release-public-docs-check:
 	cargo test --quiet public_release_workflows_do_not_reference_host_only_paths
 	cargo test --quiet public_docs_do_not_contain_host_absolute_home_paths
 	cargo test --quiet public_docs_do_not_link_to_host_only_paths
+	cargo test --quiet host_only_release_paths_remain_ignored
 	cargo test --quiet public_docs_linked_example_configs_are_public_safe
 
 ## Run fixture-safe release smoke checks

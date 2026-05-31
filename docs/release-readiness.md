@@ -60,9 +60,9 @@ make release-public-docs-check
 ```
 
 The target runs the existing public Markdown link, tracked-target,
-host-absolute-path, host-only-link, example-config, release-workflow path, and
-retired repository workflow wording regressions without scanning fixtures or
-building release artifacts.
+host-absolute-path, host-only-link, host-only-ignore-pattern, example-config,
+release-workflow path, and retired repository workflow wording regressions
+without scanning fixtures or building release artifacts.
 
 `git status --short` should be empty before tagging. By default,
 `make release-context` fails unless the current branch is `public-main` and

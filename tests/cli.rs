@@ -668,6 +668,7 @@ fn release_public_docs_check_runs_focused_boundary_tests() {
         "public_release_workflows_do_not_reference_host_only_paths",
         "public_docs_do_not_contain_host_absolute_home_paths",
         "public_docs_do_not_link_to_host_only_paths",
+        "host_only_release_paths_remain_ignored",
         "public_docs_linked_example_configs_are_public_safe",
     ] {
         assert!(
