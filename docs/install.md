@@ -59,6 +59,15 @@ directory. Keep `tests/fixtures/` for dry-run verification only:
 cargo run -- scan --once --emit-activity --root "$HOME" --log-path logs/adr-events.jsonl
 ```
 
+For a first real-store check, keep the scan read-only and bounded before
+opening it up to every discovered source. `--client` scopes discovery to one or
+more supported clients, and `--max-sources` deterministically caps the number of
+sources scanned after that filtering:
+
+```sh
+cargo run -- scan --once --dry-run --root "$HOME" --client codex --max-sources 5
+```
+
 Telltale writes append-only JSONL by default so the output can be reviewed
 locally or shipped to a SIEM.
 

@@ -55,6 +55,12 @@ client, source kind, bounded command shape, and pass/fail result without
 publishing raw transcript excerpts, session-store paths, credentials, telemetry
 logs, or machine-specific SIEM configuration.
 
+Use `--client <id>` and `--max-sources <n>` when checking real stores for
+parser health so validation remains deterministic and small enough to summarize
+without exposing host-specific details. Keep exploratory live checks read-only
+with `--dry-run`; reserve JSONL writes for intentional monitoring runs after the
+bounded command shape is understood.
+
 ## New Source Checklist
 
 When adding a source adapter, include these artifacts in the same change or keep the source marked experimental until they exist:
@@ -82,6 +88,10 @@ Codex, OpenCode, and Copilot have received bounded live validation:
 - **Codex** (R01): `~/.codex/sessions/`, `archived_sessions/`, `headless/` (complete)
 - **OpenCode** (R02): Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db`, plus `storage/message/` below the same root (complete)
 - **Copilot** (R03): `logs/copilot/process-*.log` (complete)
+
+Future live-validation notes should record the client filter and source cap
+used, for example `--client codex --max-sources 5 --dry-run`, rather than exact
+local source paths or transcript identifiers.
 
 ## Related Documents
 
