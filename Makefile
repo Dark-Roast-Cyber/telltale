@@ -154,6 +154,18 @@ release-artifact-manifest:
 	@test -d "$(RELEASE_ARTIFACT_DIR)" || { echo "Release artifact directory not found: $(RELEASE_ARTIFACT_DIR)"; exit 1; }
 	@archives="$$(find "$(RELEASE_ARTIFACT_DIR)" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | sort)"; \
 	test -n "$$archives" || { echo "No release archives found in $(RELEASE_ARTIFACT_DIR)."; exit 1; }; \
+	checksum_file="$(RELEASE_ARTIFACT_DIR)/SHA256SUMS"; \
+	if [ -f "$$checksum_file" ]; then \
+		expected="$$(for archive in $$archives; do basename "$$archive"; done | sort)"; \
+		listed="$$(awk '{ print $$2 }' "$$checksum_file" | sed 's/^\*//' | sort)"; \
+		if [ "$$expected" != "$$listed" ]; then \
+			echo "SHA256SUMS entries must match release archives in $(RELEASE_ARTIFACT_DIR)."; \
+			echo "Expected archives:"; printf '%s\n' "$$expected"; \
+			echo "Checksum entries:"; printf '%s\n' "$$listed"; \
+			exit 1; \
+		fi; \
+		(cd "$(RELEASE_ARTIFACT_DIR)" && sha256sum --check SHA256SUMS); \
+	fi; \
 	for archive in $$archives; do \
 		echo "Archive: $$archive"; \
 		case "$$archive" in \

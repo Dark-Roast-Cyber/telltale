@@ -124,9 +124,11 @@ make release-artifact-manifest
 
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
 current binary archive contains only the expected `adr` or `adr.exe` binary
-entry. The default `release-downloads/` directory is local review residue and is
-ignored and excluded from source packages; legacy local `artifacts/` review
-directories remain ignored and excluded as well. Use
+entry. When `SHA256SUMS` is present in the same directory, the target also
+verifies that its entries match the reviewed archives exactly and that each
+checksum validates. The default `release-downloads/` directory is local review
+residue and is ignored and excluded from source packages; legacy local
+`artifacts/` review directories remain ignored and excluded as well. Use
 `RELEASE_ARTIFACT_DIR=<path>` when reviewing artifacts from another directory.
 
 The tagged release workflow generates `SHA256SUMS` in its temporary

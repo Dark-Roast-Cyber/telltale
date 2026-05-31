@@ -482,6 +482,19 @@ fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries()
         String::from_utf8_lossy(&zip.stderr)
     );
 
+    let checksums = Command::new("sha256sum")
+        .arg(good_archive.file_name().expect("tar archive file name"))
+        .arg(good_zip.file_name().expect("zip archive file name"))
+        .current_dir(&artifacts)
+        .output()
+        .expect("sha256sum release archives");
+    assert!(
+        checksums.status.success(),
+        "sha256sum failed: {}",
+        String::from_utf8_lossy(&checksums.stderr)
+    );
+    fs::write(artifacts.join("SHA256SUMS"), &checksums.stdout).expect("write SHA256SUMS");
+
     let output = Command::new("make")
         .arg("--silent")
         .arg("-f")
@@ -512,9 +525,49 @@ fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries()
         stdout.contains("  adr.exe"),
         "missing Windows binary entry: {stdout}"
     );
+    assert!(
+        stdout.contains("adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz: OK"),
+        "missing tar checksum verification: {stdout}"
+    );
+    assert!(
+        stdout.contains("adr-v0.1.0-x86_64-pc-windows-msvc.zip: OK"),
+        "missing zip checksum verification: {stdout}"
+    );
+
+    fs::write(
+        artifacts.join("SHA256SUMS"),
+        "0000000000000000000000000000000000000000000000000000000000000000  stale.zip\n",
+    )
+    .expect("write stale SHA256SUMS");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!(
+            "RELEASE_ARTIFACT_DIR={}",
+            artifacts.to_string_lossy()
+        ))
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-artifact-manifest");
+    assert!(
+        !output.status.success(),
+        "release-artifact-manifest should reject stale checksum manifests"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("SHA256SUMS entries must match release archives"),
+        "unexpected output: {combined}"
+    );
 
     fs::remove_file(&good_archive).expect("remove good archive");
     fs::remove_file(&good_zip).expect("remove good zip");
+    fs::remove_file(artifacts.join("SHA256SUMS")).expect("remove stale SHA256SUMS");
     let bad_archive = artifacts.join("adr-v0.1.0-with-log.zip");
     let zip = Command::new("zip")
         .arg("-q")
