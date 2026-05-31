@@ -27,6 +27,7 @@ The preflight target wraps the same public release checks shown below:
 ```sh
 git status --short
 make release-context
+make release-public-alignment
 git diff --cached --name-only
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -43,9 +44,12 @@ synthetic fixture output in CI or local development.
 the `origin` fetch and push URLs point at the public Telltale repository. For
 an intentional alternate public release branch or remote, override
 `PUBLIC_RELEASE_BRANCH` or `PUBLIC_RELEASE_REMOTE` when running the target.
-If you are reviewing a release-preparation commit before it is created,
-inspect `git diff --cached --name-only` and confirm each staged path belongs
-in the public repository boundary described below.
+`make release-public-alignment` then compares `HEAD` with
+`origin/${PUBLIC_RELEASE_BRANCH}` by default, fails if the local branch is
+behind the public upstream, and reports any local commits that still need
+pre-push review. If you are reviewing a release-preparation commit before it is
+created, inspect `git diff --cached --name-only` and confirm each staged path
+belongs in the public repository boundary described below.
 
 ## Artifact Boundary
 

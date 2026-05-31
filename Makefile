@@ -12,8 +12,9 @@ STATE_PATH = $(STATE_DIR)/adr-state.json
 SCAN_ROOT = $(HOME)
 PUBLIC_RELEASE_BRANCH ?= public-main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
+PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-staged-review release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -102,6 +103,26 @@ release-context:
 	fi
 	@echo "Release context: branch $(PUBLIC_RELEASE_BRANCH), origin $(PUBLIC_RELEASE_REMOTE)"
 
+## Review public branch alignment before release
+release-public-alignment:
+	@test -n "$(strip $(PUBLIC_RELEASE_BRANCH))" || { echo "PUBLIC_RELEASE_BRANCH must be set."; exit 1; }
+	@test -n "$(strip $(PUBLIC_RELEASE_UPSTREAM))" || { echo "PUBLIC_RELEASE_UPSTREAM must be set."; exit 1; }
+	@git rev-parse --verify --quiet "$(PUBLIC_RELEASE_UPSTREAM)^{commit}" >/dev/null || { \
+		echo "Missing public upstream $(PUBLIC_RELEASE_UPSTREAM). Run git fetch before release preflight."; \
+		exit 1; \
+	}
+	@set -- $$(git rev-list --left-right --count "$(PUBLIC_RELEASE_UPSTREAM)...HEAD"); \
+	behind="$$1"; ahead="$$2"; \
+	if [ "$$behind" -gt 0 ]; then \
+		echo "Public branch alignment: HEAD is behind $(PUBLIC_RELEASE_UPSTREAM) by $$behind commit(s). Fetch and reconcile before release."; \
+		exit 1; \
+	fi; \
+	if [ "$$ahead" -gt 0 ]; then \
+		echo "Public branch alignment: HEAD is ahead of $(PUBLIC_RELEASE_UPSTREAM) by $$ahead commit(s); review before pushing."; \
+	else \
+		echo "Public branch alignment: $(PUBLIC_RELEASE_UPSTREAM) matches HEAD."; \
+	fi
+
 ## Show staged paths reviewed for public release
 release-staged-review:
 	@staged="$$(git diff --cached --name-only)"; \
@@ -112,7 +133,7 @@ release-staged-review:
 	fi
 
 ## Public release preflight
-release-preflight: release-tree-clean release-context release-staged-review check
+release-preflight: release-tree-clean release-context release-public-alignment release-staged-review check
 	cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 

@@ -22,6 +22,25 @@ fn source_inventory_change_value(event: &Value) -> &str {
         .expect("source inventory change value")
 }
 
+fn configure_git_user(repo: &Path) {
+    git_expect(repo, &["config", "user.email", "adr-test@example.invalid"]);
+    git_expect(repo, &["config", "user.name", "ADR Test"]);
+}
+
+fn git_expect(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("git command");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn release_context_rejects_empty_public_config() {
     let temp = tempdir().expect("tempdir");
@@ -104,6 +123,106 @@ fn release_context_rejects_empty_public_config() {
     );
     assert!(
         combined.contains("PUBLIC_RELEASE_REMOTE must be set."),
+        "unexpected output: {combined}"
+    );
+}
+
+#[test]
+fn release_public_alignment_reports_sync_and_rejects_behind_head() {
+    let temp = tempdir().expect("tempdir");
+    let bare = temp.path().join("origin.git");
+    let repo = temp.path().join("work");
+    let peer = temp.path().join("peer");
+
+    let init_bare = Command::new("git")
+        .args(["init", "--bare", "--quiet", "--initial-branch=public-main"])
+        .arg(&bare)
+        .output()
+        .expect("git init bare");
+    assert!(
+        init_bare.status.success(),
+        "git init bare failed: {}",
+        String::from_utf8_lossy(&init_bare.stderr)
+    );
+
+    let clone = Command::new("git")
+        .args(["clone", "--quiet"])
+        .arg(&bare)
+        .arg(&repo)
+        .output()
+        .expect("git clone");
+    assert!(
+        clone.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+    configure_git_user(&repo);
+    fs::write(repo.join("public.txt"), "initial public content\n").expect("write initial");
+    git_expect(&repo, &["add", "public.txt"]);
+    git_expect(
+        &repo,
+        &["commit", "--quiet", "-m", "Initial public content"],
+    );
+    git_expect(&repo, &["push", "--quiet", "-u", "origin", "public-main"]);
+
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-public-alignment")
+        .current_dir(&repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-public-alignment");
+    assert!(
+        output.status.success(),
+        "release-public-alignment failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("origin/public-main matches HEAD"),
+        "unexpected output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let clone_peer = Command::new("git")
+        .args(["clone", "--quiet"])
+        .arg(&bare)
+        .arg(&peer)
+        .output()
+        .expect("git clone peer");
+    assert!(
+        clone_peer.status.success(),
+        "git clone peer failed: {}",
+        String::from_utf8_lossy(&clone_peer.stderr)
+    );
+    configure_git_user(&peer);
+    fs::write(peer.join("public.txt"), "remote public content\n").expect("write peer");
+    git_expect(&peer, &["commit", "--quiet", "-am", "Remote public update"]);
+    git_expect(&peer, &["push", "--quiet"]);
+    git_expect(&repo, &["fetch", "--quiet", "origin", "public-main"]);
+
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-public-alignment")
+        .current_dir(&repo)
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-public-alignment");
+    assert!(
+        !output.status.success(),
+        "release-public-alignment should fail when HEAD is behind"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("HEAD is behind origin/public-main by 1 commit(s)"),
         "unexpected output: {combined}"
     );
 }
