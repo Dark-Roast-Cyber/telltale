@@ -760,8 +760,10 @@ fn release_workflow_publishes_archive_checksums() {
         "checksum input must be limited to release archive files"
     );
     assert!(
-        workflow.contains("files: artifacts/*"),
-        "GitHub release upload must include generated checksums with artifacts"
+        workflow.contains("path: release-downloads")
+            && workflow.contains("cd release-downloads")
+            && workflow.contains("files: release-downloads/*"),
+        "GitHub release upload must include generated checksums from a public-safe workflow artifact directory"
     );
 }
 

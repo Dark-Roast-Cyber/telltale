@@ -1,7 +1,9 @@
 # Release Readiness
 
 Use this checklist before preparing a tagged Telltale Core release or publishing
-release artifacts from the public repository.
+release artifacts from the public repository. Public release curation happens
+from the single local ADR checkout to the public remote; do not use a second
+local mirror as the source of truth.
 
 ## Scope
 
@@ -22,7 +24,8 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 ## Pre-Release Checks
 
-Run these checks from a clean working tree before tagging a release:
+Run these checks from a clean working tree in the local ADR checkout before
+tagging a release:
 
 ```sh
 make release-preflight
@@ -73,6 +76,10 @@ pre-push review. If you are reviewing a release-preparation commit before it is
 created, inspect `git diff --cached --name-only` and confirm each staged path
 belongs in the public repository boundary described below.
 
+Before any public push, stage only reviewed public-safe files from this
+checkout, keep ignored host-only material local, and review
+`git diff --cached --name-only`.
+
 `make release-crate-manifest` lists the Cargo source package contents with
 `cargo package --list` and fails if the package would include host-only planning,
 local automation, telemetry, scanner state, or deployment-specific Splunk
@@ -121,10 +128,11 @@ entry. The default `artifacts/` directory is local review residue and is ignored
 and excluded from source packages; use `RELEASE_ARTIFACT_DIR=<path>` when
 reviewing artifacts from another directory.
 
-The tagged release workflow generates `artifacts/SHA256SUMS` from the downloaded
-`.tar.gz` and `.zip` archives and uploads it with the GitHub release. Publish
-equivalent checksums for any manually produced archives so operators can verify
-downloads before running the binary.
+The tagged release workflow generates `SHA256SUMS` in its temporary
+`release-downloads` artifact directory from the downloaded `.tar.gz` and `.zip`
+archives and uploads it with the GitHub release. Publish equivalent checksums
+for any manually produced archives so operators can verify downloads before
+running the binary.
 
 ## Post-Release Smoke Test
 
