@@ -394,9 +394,16 @@ fn release_crate_manifest_excludes_host_only_release_material() {
     let fmt_pos = preflight_stdout
         .find("cargo fmt --check")
         .expect("release-preflight should still run format checks");
+    let public_docs_pos = preflight_stdout
+        .find("cargo test --quiet public_docs_local_markdown_links_resolve")
+        .expect("release-preflight should run focused public boundary checks");
     assert!(
         manifest_pos < fmt_pos,
         "release-preflight should review Cargo package contents before expensive checks: {preflight_stdout}"
+    );
+    assert!(
+        public_docs_pos < fmt_pos,
+        "release-preflight should run focused public boundary checks before expensive checks: {preflight_stdout}"
     );
 }
 
@@ -600,6 +607,7 @@ fn release_public_docs_check_runs_focused_boundary_tests() {
         "public_docs_local_markdown_links_resolve",
         "public_docs_local_markdown_links_target_tracked_content",
         "public_surfaces_do_not_reintroduce_split_checkout_guidance",
+        "public_release_workflows_do_not_reference_host_only_paths",
         "public_docs_do_not_contain_host_absolute_home_paths",
         "public_docs_do_not_link_to_host_only_paths",
         "public_docs_linked_example_configs_are_public_safe",

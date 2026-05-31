@@ -36,6 +36,7 @@ make release-context
 make release-public-alignment
 git diff --cached --name-only
 make release-crate-manifest
+make release-public-docs-check
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -55,9 +56,9 @@ make release-public-docs-check
 ```
 
 The target runs the existing public Markdown link, tracked-target,
-host-absolute-path, host-only-link, example-config, and retired repository
-workflow wording regressions without scanning fixtures or building release
-artifacts.
+host-absolute-path, host-only-link, example-config, release-workflow path, and
+retired repository workflow wording regressions without scanning fixtures or
+building release artifacts.
 
 `git status --short` should be empty before tagging. By default,
 `make release-context` fails unless the current branch is `public-main` and

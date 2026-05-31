@@ -181,6 +181,7 @@ release-public-docs-check:
 	cargo test --quiet public_docs_local_markdown_links_resolve
 	cargo test --quiet public_docs_local_markdown_links_target_tracked_content
 	cargo test --quiet public_surfaces_do_not_reintroduce_split_checkout_guidance
+	cargo test --quiet public_release_workflows_do_not_reference_host_only_paths
 	cargo test --quiet public_docs_do_not_contain_host_absolute_home_paths
 	cargo test --quiet public_docs_do_not_link_to_host_only_paths
 	cargo test --quiet public_docs_linked_example_configs_are_public_safe
@@ -191,7 +192,7 @@ release-fixture-smoke:
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
 ## Public release preflight
-release-preflight: release-tree-clean release-context release-public-alignment release-staged-review release-crate-manifest check release-fixture-smoke
+release-preflight: release-tree-clean release-context release-public-alignment release-staged-review release-crate-manifest release-public-docs-check check release-fixture-smoke
 
 ## Show timer status
 status:
