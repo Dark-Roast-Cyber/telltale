@@ -29,6 +29,7 @@ const HOST_ONLY_REPO_PATHS: &[&str] = &[
     ".opencode/",
     "logs/",
     "state/",
+    "artifacts/",
     "runtime/ralph/",
     "config/examples/splunk-",
 ];
@@ -51,6 +52,7 @@ const HOST_ONLY_GITIGNORE_PATTERNS: &[&str] = &[
     ".opencode/",
     "logs/",
     "state/",
+    "artifacts/",
     "runtime/ralph/",
     "config/examples/splunk-*.conf",
     "config/examples/splunk-*.xml",

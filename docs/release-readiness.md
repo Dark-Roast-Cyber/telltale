@@ -116,8 +116,9 @@ make release-artifact-manifest
 
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
 current binary archive contains only the expected `adr` or `adr.exe` binary
-entry. Use `RELEASE_ARTIFACT_DIR=<path>` when reviewing artifacts from another
-directory.
+entry. The default `artifacts/` directory is local review residue and is ignored
+and excluded from source packages; use `RELEASE_ARTIFACT_DIR=<path>` when
+reviewing artifacts from another directory.
 
 The tagged release workflow generates `artifacts/SHA256SUMS` from the downloaded
 `.tar.gz` and `.zip` archives and uploads it with the GitHub release. Publish

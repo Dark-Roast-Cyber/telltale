@@ -139,7 +139,7 @@ release-crate-manifest:
 	printf '%s\n' "$$manifest"; \
 	unexpected="$$(printf '%s\n' "$$manifest" | while IFS= read -r path; do \
 		case "$$path" in \
-			AGENTS.md|PLAN.md|VISION.md|IDEAS.md|docs/internal/*|docs/CHANGELOG.md|docs/research-urls.md|docs/siem-logging.md|docs/splunk-content.md|skills/*|.ai/*|scripts/ralph*|scripts/inspiration/*|tasks/*|.opencode/*|logs/*|state/*|runtime/ralph/*|config/examples/splunk-*.conf|config/examples/splunk-*.xml) \
+			AGENTS.md|PLAN.md|VISION.md|IDEAS.md|docs/internal/*|docs/CHANGELOG.md|docs/research-urls.md|docs/siem-logging.md|docs/splunk-content.md|skills/*|.ai/*|scripts/ralph*|scripts/inspiration/*|tasks/*|.opencode/*|logs/*|state/*|artifacts/*|runtime/ralph/*|config/examples/splunk-*.conf|config/examples/splunk-*.xml) \
 				printf '%s\n' "$$path" ;; \
 		esac; \
 	done)"; \

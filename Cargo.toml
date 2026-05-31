@@ -25,6 +25,7 @@ exclude = [
     ".opencode/**",
     "logs/**",
     "state/**",
+    "artifacts/**",
     "runtime/ralph/**",
     "config/examples/splunk-*.conf",
     "config/examples/splunk-*.xml",
