@@ -14,6 +14,12 @@ state, or deployment-specific SIEM settings.
 Release archives should contain the compiled `adr` command-line binary and
 release metadata generated from checked-in public repository contents.
 
+Public release evidence should be reproducible from synthetic fixtures or
+already-redacted telemetry output. Keep live host validation notes local-only;
+public summaries should cite deterministic fixture commands, supported client
+families, schema checks, or aggregate results without exposing workstation
+paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
+
 ## Pre-Release Checks
 
 Run these checks from a clean working tree before tagging a release:
@@ -96,3 +102,12 @@ adr rules validate --rules config/rules/tool-call-regex.yaml
 
 Only point Telltale at real session-store roots after the fixture scan and rule
 validation complete successfully.
+
+## Related Boundaries
+
+- [privacy-model.md](privacy-model.md) defines evidence classes, redaction, and
+  public-example privacy expectations.
+- [telemetry-output.md](telemetry-output.md) describes the JSONL sink, SIEM
+  forwarding model, and public evidence boundary.
+- [trust-boundaries.md](trust-boundaries.md) explains how untrusted session
+  content handling carries into publication guidance.

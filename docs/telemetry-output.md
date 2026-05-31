@@ -52,6 +52,19 @@ private keys, complete `.env` values, or full session bodies.
 See [privacy-model.md](privacy-model.md) for the evidence classes and redaction
 rules that govern emitted event content.
 
+## Public Examples And Release Evidence
+
+Public documentation, release notes, and support evidence should follow the same
+privacy boundary as emitted telemetry: use synthetic fixtures or already-redacted
+event output, not live session stores, raw transcripts, local telemetry logs,
+scanner state, workstation paths, SIEM endpoint details, or credential-like
+values. Keep host-specific validation observations in local-only notes and
+recreate public examples with fixture-backed commands when evidence is needed.
+
+See [trust-boundaries.md](trust-boundaries.md) and
+[release-readiness.md](release-readiness.md) for the publication and artifact
+boundary checks.
+
 ## Forwarding To SIEMs
 
 Forward the JSONL file with the shipper or collector your environment already

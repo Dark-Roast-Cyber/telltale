@@ -205,3 +205,6 @@ Future CLI flags:
 
 - [detection-content-standard.md](detection-content-standard.md) — Rule metadata and fixture expectations
 - [normalization-schema.md](normalization-schema.md) — Canonical transcript schema
+- [telemetry-output.md](telemetry-output.md) — Public JSONL telemetry and fixture-backed release evidence guidance
+- [trust-boundaries.md](trust-boundaries.md) — Untrusted session content and publication boundary guidance
+- [release-readiness.md](release-readiness.md) — Release artifact and public evidence checklist
