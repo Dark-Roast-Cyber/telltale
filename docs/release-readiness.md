@@ -1,9 +1,9 @@
 # Release Readiness
 
 Use this checklist before preparing a tagged Telltale Core release or publishing
-release artifacts from the public repository. Public release curation happens
-from the single local ADR checkout to the public remote; do not use a second
-local mirror as the source of truth.
+release artifacts from the public repository. The single local ADR checkout is
+the release source of truth; public release curation stages reviewed public-safe
+material from this checkout to the public remote.
 
 ## Scope
 
