@@ -111,8 +111,10 @@ current binary archive contains only the expected `adr` or `adr.exe` binary
 entry. Use `RELEASE_ARTIFACT_DIR=<path>` when reviewing artifacts from another
 directory.
 
-Publish checksums with the release so operators can verify downloaded artifacts
-before running the binary.
+The tagged release workflow generates `artifacts/SHA256SUMS` from the downloaded
+`.tar.gz` and `.zip` archives and uploads it with the GitHub release. Publish
+equivalent checksums for any manually produced archives so operators can verify
+downloads before running the binary.
 
 ## Post-Release Smoke Test
 

@@ -666,6 +666,33 @@ fn public_release_workflows_do_not_reference_host_only_paths() {
 }
 
 #[test]
+fn release_workflow_publishes_archive_checksums() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let download_step = workflow
+        .find("actions/download-artifact@v4")
+        .expect("release workflow must download built archives before checksumming");
+    let checksum_step = workflow
+        .find("sha256sum > SHA256SUMS")
+        .expect("release workflow must generate a SHA256SUMS file from release archives");
+    let release_step = workflow
+        .find("softprops/action-gh-release@v2")
+        .expect("release workflow must create a GitHub release");
+
+    assert!(
+        download_step < checksum_step && checksum_step < release_step,
+        "release workflow must checksum downloaded archives before creating the GitHub release"
+    );
+    assert!(
+        workflow.contains("archives=(*.tar.gz *.zip)"),
+        "checksum input must be limited to release archive files"
+    );
+    assert!(
+        workflow.contains("files: artifacts/*"),
+        "GitHub release upload must include generated checksums with artifacts"
+    );
+}
+
+#[test]
 fn public_docs_do_not_contain_host_absolute_home_paths() {
     let mut docs = vec![Path::new("README.md").to_path_buf()];
     docs.extend(

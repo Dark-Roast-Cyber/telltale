@@ -79,6 +79,15 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd artifacts
+          shopt -s nullglob
+          archives=(*.tar.gz *.zip)
+          test "${#archives[@]}" -gt 0
+          printf '%s\0' "${archives[@]}" | sort -z | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
