@@ -13,8 +13,9 @@ SCAN_ROOT = $(HOME)
 PUBLIC_RELEASE_BRANCH ?= public-main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
+RELEASE_ARTIFACT_DIR ?= artifacts
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-fixture-smoke release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-artifact-manifest release-fixture-smoke release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -131,6 +132,32 @@ release-staged-review:
 	else \
 		echo "Staged paths: none"; \
 	fi
+
+## List and validate downloaded public release archives
+release-artifact-manifest:
+	@test -d "$(RELEASE_ARTIFACT_DIR)" || { echo "Release artifact directory not found: $(RELEASE_ARTIFACT_DIR)"; exit 1; }
+	@archives="$$(find "$(RELEASE_ARTIFACT_DIR)" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | sort)"; \
+	test -n "$$archives" || { echo "No release archives found in $(RELEASE_ARTIFACT_DIR)."; exit 1; }; \
+	for archive in $$archives; do \
+		echo "Archive: $$archive"; \
+		case "$$archive" in \
+			*.tar.gz) entries="$$(tar -tzf "$$archive")" ;; \
+			*.zip) command -v unzip >/dev/null || { echo "unzip is required to inspect $$archive."; exit 1; }; entries="$$(unzip -Z1 "$$archive")" ;; \
+			*) echo "Unsupported release archive: $$archive"; exit 1 ;; \
+		esac; \
+		printf '%s\n' "$$entries" | sed 's/^/  /'; \
+		entry_count="$$(printf '%s\n' "$$entries" | sed '/^$$/d' | wc -l | tr -d ' ')"; \
+		if [ "$$entry_count" -ne 1 ]; then \
+			echo "Release archive $$archive must contain exactly one binary entry."; \
+			exit 1; \
+		fi; \
+		unexpected="$$(printf '%s\n' "$$entries" | awk '$$0 != "adr" && $$0 != "adr.exe" { print }')"; \
+		if [ -n "$$unexpected" ]; then \
+			echo "Unexpected release archive entries in $$archive:"; \
+			printf '%s\n' "$$unexpected"; \
+			exit 1; \
+		fi; \
+	done
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:

@@ -295,6 +295,107 @@ fn release_staged_review_reports_empty_and_staged_paths() {
 }
 
 #[test]
+fn release_artifact_manifest_accepts_binary_archive_and_rejects_extra_entries() {
+    let temp = tempdir().expect("tempdir");
+    let artifacts = temp.path().join("artifacts");
+    let good_payload = temp.path().join("good-payload");
+    let bad_payload = temp.path().join("bad-payload");
+    fs::create_dir_all(&artifacts).expect("create artifacts");
+    fs::create_dir_all(&good_payload).expect("create good payload");
+    fs::create_dir_all(bad_payload.join("logs")).expect("create bad payload logs");
+    fs::write(good_payload.join("adr"), "binary\n").expect("write adr");
+    fs::write(bad_payload.join("adr"), "binary\n").expect("write bad adr");
+    fs::write(
+        bad_payload.join("logs").join("adr-events.jsonl"),
+        "{\"event_type\":\"activity\"}\n",
+    )
+    .expect("write bad log");
+
+    let good_archive = artifacts.join("adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+    let tar = Command::new("tar")
+        .arg("-czf")
+        .arg(&good_archive)
+        .arg("-C")
+        .arg(&good_payload)
+        .arg("adr")
+        .output()
+        .expect("tar good archive");
+    assert!(
+        tar.status.success(),
+        "tar good archive failed: {}",
+        String::from_utf8_lossy(&tar.stderr)
+    );
+
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!(
+            "RELEASE_ARTIFACT_DIR={}",
+            artifacts.to_string_lossy()
+        ))
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-artifact-manifest");
+    assert!(
+        output.status.success(),
+        "release-artifact-manifest failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Archive:"),
+        "missing archive header: {stdout}"
+    );
+    assert!(stdout.contains("  adr"), "missing binary entry: {stdout}");
+
+    fs::remove_file(&good_archive).expect("remove good archive");
+    let bad_archive = artifacts.join("adr-v0.1.0-with-log.tar.gz");
+    let tar = Command::new("tar")
+        .arg("-czf")
+        .arg(&bad_archive)
+        .arg("-C")
+        .arg(&bad_payload)
+        .arg("adr")
+        .arg("logs/adr-events.jsonl")
+        .output()
+        .expect("tar bad archive");
+    assert!(
+        tar.status.success(),
+        "tar bad archive failed: {}",
+        String::from_utf8_lossy(&tar.stderr)
+    );
+
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!(
+            "RELEASE_ARTIFACT_DIR={}",
+            artifacts.to_string_lossy()
+        ))
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-artifact-manifest");
+    assert!(
+        !output.status.success(),
+        "release-artifact-manifest should reject archives with extra entries"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("must contain exactly one binary entry"),
+        "unexpected output: {combined}"
+    );
+}
+
+#[test]
 fn release_fixture_smoke_uses_fixture_safe_commands() {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = Command::new("make")

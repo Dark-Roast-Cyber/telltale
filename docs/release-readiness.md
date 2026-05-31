@@ -87,6 +87,18 @@ unzip -l telltale-<target>.zip
 shasum -a 256 telltale-<target>.tar.gz telltale-<target>.zip
 ```
 
+After downloading workflow artifacts into the default `artifacts/` directory,
+run the reusable manifest check:
+
+```sh
+make release-artifact-manifest
+```
+
+The target lists every `.tar.gz` and `.zip` archive and verifies that each
+current binary archive contains only the expected `adr` or `adr.exe` binary
+entry. Use `RELEASE_ARTIFACT_DIR=<path>` when reviewing artifacts from another
+directory.
+
 Publish checksums with the release so operators can verify downloaded artifacts
 before running the binary.
 
