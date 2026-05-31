@@ -11,6 +11,51 @@ use jsonschema::validator_for;
 use serde_json::Value;
 use tempfile::tempdir;
 
+const HOST_ONLY_REPO_PATHS: &[&str] = &[
+    "AGENTS.md",
+    "PLAN.md",
+    "VISION.md",
+    "IDEAS.md",
+    "docs/internal/",
+    "docs/CHANGELOG.md",
+    "docs/research-urls.md",
+    "docs/siem-logging.md",
+    "docs/splunk-content.md",
+    "skills/",
+    ".ai/",
+    "scripts/ralph",
+    "scripts/inspiration/",
+    "tasks/",
+    ".opencode/",
+    "logs/",
+    "state/",
+    "runtime/ralph/",
+    "config/examples/splunk-",
+];
+
+const HOST_ONLY_GITIGNORE_PATTERNS: &[&str] = &[
+    "AGENTS.md",
+    "PLAN.md",
+    "VISION.md",
+    "IDEAS.md",
+    "docs/internal/",
+    "docs/CHANGELOG.md",
+    "docs/research-urls.md",
+    "docs/siem-logging.md",
+    "docs/splunk-content.md",
+    "skills/",
+    ".ai/",
+    "scripts/ralph*",
+    "scripts/inspiration/",
+    "tasks/",
+    ".opencode/",
+    "logs/",
+    "state/",
+    "runtime/ralph/",
+    "config/examples/splunk-*.conf",
+    "config/examples/splunk-*.xml",
+];
+
 fn source_inventory_change_value(event: &Value) -> &str {
     event["evidence"]
         .as_array()
@@ -566,34 +611,13 @@ fn public_surfaces_do_not_reintroduce_split_checkout_guidance() {
 #[test]
 fn public_release_workflows_do_not_reference_host_only_paths() {
     let release_workflows = [".github/workflows/ci.yml", ".github/workflows/release.yml"];
-    let host_only_paths = [
-        "AGENTS.md",
-        "PLAN.md",
-        "VISION.md",
-        "IDEAS.md",
-        "docs/internal/",
-        "docs/CHANGELOG.md",
-        "docs/research-urls.md",
-        "docs/siem-logging.md",
-        "docs/splunk-content.md",
-        "skills/",
-        ".ai/",
-        "scripts/ralph",
-        "scripts/inspiration/",
-        "tasks/",
-        ".opencode/",
-        "logs/",
-        "state/",
-        "runtime/ralph/",
-        "config/examples/splunk-",
-    ];
 
     let matches = release_workflows
         .iter()
         .flat_map(|path| {
             let workflow =
                 fs::read_to_string(path).unwrap_or_else(|error| panic!("{path}: {error}"));
-            host_only_paths
+            HOST_ONLY_REPO_PATHS
                 .iter()
                 .filter(move |host_only_path| workflow.contains(**host_only_path))
                 .map(move |host_only_path| format!("{path} references {host_only_path:?}"))
@@ -655,29 +679,6 @@ fn public_docs_do_not_link_to_host_only_paths() {
 
 #[test]
 fn host_only_release_paths_remain_ignored() {
-    let required_patterns = [
-        "AGENTS.md",
-        "PLAN.md",
-        "VISION.md",
-        "IDEAS.md",
-        "docs/internal/",
-        "docs/CHANGELOG.md",
-        "docs/research-urls.md",
-        "docs/siem-logging.md",
-        "docs/splunk-content.md",
-        "skills/",
-        ".ai/",
-        "scripts/ralph*",
-        "scripts/inspiration/",
-        "tasks/",
-        ".opencode/",
-        "logs/",
-        "state/",
-        "runtime/ralph/",
-        "config/examples/splunk-*.conf",
-        "config/examples/splunk-*.xml",
-    ];
-
     let gitignore = fs::read_to_string(".gitignore").expect(".gitignore");
     let patterns = gitignore
         .lines()
@@ -685,7 +686,7 @@ fn host_only_release_paths_remain_ignored() {
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect::<Vec<_>>();
 
-    let missing = required_patterns
+    let missing = HOST_ONLY_GITIGNORE_PATTERNS
         .iter()
         .filter(|pattern| !patterns.contains(pattern))
         .copied()
@@ -794,28 +795,8 @@ fn stale_split_checkout_terms() -> [&'static str; 9] {
 
 fn is_host_only_repo_path(path: &Path) -> bool {
     let path = normalize_repo_path(path);
-    let host_only_paths = [
-        "AGENTS.md",
-        "PLAN.md",
-        "VISION.md",
-        "IDEAS.md",
-        "docs/internal/",
-        "docs/CHANGELOG.md",
-        "docs/research-urls.md",
-        "docs/siem-logging.md",
-        "docs/splunk-content.md",
-        "skills/",
-        "scripts/ralph",
-        "scripts/inspiration/",
-        "tasks/",
-        ".opencode/",
-        "logs/",
-        "state/",
-        "runtime/ralph/",
-        "config/examples/splunk-",
-    ];
 
-    host_only_paths.iter().any(|host_only_path| {
+    HOST_ONLY_REPO_PATHS.iter().any(|host_only_path| {
         if host_only_path.ends_with('/') || host_only_path.ends_with('-') {
             path.starts_with(host_only_path)
         } else {
