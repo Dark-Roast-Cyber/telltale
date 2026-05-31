@@ -115,8 +115,8 @@ unzip -l telltale-<target>.zip
 shasum -a 256 telltale-<target>.tar.gz telltale-<target>.zip
 ```
 
-After downloading workflow artifacts into the default `artifacts/` directory,
-run the reusable manifest check:
+After downloading workflow artifacts into the default `release-downloads/`
+directory, run the reusable manifest check:
 
 ```sh
 make release-artifact-manifest
@@ -124,9 +124,10 @@ make release-artifact-manifest
 
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
 current binary archive contains only the expected `adr` or `adr.exe` binary
-entry. The default `artifacts/` directory is local review residue and is ignored
-and excluded from source packages; use `RELEASE_ARTIFACT_DIR=<path>` when
-reviewing artifacts from another directory.
+entry. The default `release-downloads/` directory is local review residue and is
+ignored and excluded from source packages; legacy local `artifacts/` review
+directories remain ignored and excluded as well. Use
+`RELEASE_ARTIFACT_DIR=<path>` when reviewing artifacts from another directory.
 
 The tagged release workflow generates `SHA256SUMS` in its temporary
 `release-downloads` artifact directory from the downloaded `.tar.gz` and `.zip`

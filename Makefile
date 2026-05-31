@@ -13,7 +13,7 @@ SCAN_ROOT = $(HOME)
 PUBLIC_RELEASE_BRANCH ?= public-main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
-RELEASE_ARTIFACT_DIR ?= artifacts
+RELEASE_ARTIFACT_DIR ?= release-downloads
 
 .PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
 
@@ -139,7 +139,7 @@ release-crate-manifest:
 	printf '%s\n' "$$manifest"; \
 	unexpected="$$(printf '%s\n' "$$manifest" | while IFS= read -r path; do \
 		case "$$path" in \
-			AGENTS.md|PLAN.md|VISION.md|IDEAS.md|docs/internal/*|docs/CHANGELOG.md|docs/research-urls.md|docs/siem-logging.md|docs/splunk-content.md|skills/*|.ai/*|scripts/ralph*|scripts/inspiration/*|tasks/*|.opencode/*|logs/*|state/*|artifacts/*|runtime/ralph/*|config/examples/splunk-*.conf|config/examples/splunk-*.xml) \
+			AGENTS.md|PLAN.md|VISION.md|IDEAS.md|docs/internal/*|docs/CHANGELOG.md|docs/research-urls.md|docs/siem-logging.md|docs/splunk-content.md|skills/*|.ai/*|scripts/ralph*|scripts/inspiration/*|tasks/*|.opencode/*|logs/*|state/*|artifacts/*|release-downloads/*|runtime/ralph/*|config/examples/splunk-*.conf|config/examples/splunk-*.xml) \
 				printf '%s\n' "$$path" ;; \
 		esac; \
 	done)"; \

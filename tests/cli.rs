@@ -53,6 +53,7 @@ const HOST_ONLY_GITIGNORE_PATTERNS: &[&str] = &[
     "logs/",
     "state/",
     "artifacts/",
+    "release-downloads/",
     "runtime/ralph/",
     "config/examples/splunk-*.conf",
     "config/examples/splunk-*.xml",
@@ -764,6 +765,22 @@ fn release_workflow_publishes_archive_checksums() {
             && workflow.contains("cd release-downloads")
             && workflow.contains("files: release-downloads/*"),
         "GitHub release upload must include generated checksums from a public-safe workflow artifact directory"
+    );
+
+    let makefile = fs::read_to_string("Makefile").expect("Makefile");
+    assert!(
+        makefile.contains("RELEASE_ARTIFACT_DIR ?= release-downloads"),
+        "local release artifact manifest review should default to the same directory used by the release workflow"
+    );
+    assert!(
+        makefile.contains("artifacts/*|release-downloads/*"),
+        "Cargo package review should continue excluding legacy and current release review residue"
+    );
+
+    let manifest = fs::read_to_string("Cargo.toml").expect("Cargo.toml");
+    assert!(
+        manifest.contains("\"release-downloads/**\""),
+        "Cargo source packages should exclude generated release download residue"
     );
 }
 
