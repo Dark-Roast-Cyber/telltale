@@ -14,7 +14,7 @@ PUBLIC_RELEASE_BRANCH ?= public-main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-fixture-smoke release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -132,10 +132,13 @@ release-staged-review:
 		echo "Staged paths: none"; \
 	fi
 
-## Public release preflight
-release-preflight: release-tree-clean release-context release-public-alignment release-staged-review check
+## Run fixture-safe release smoke checks
+release-fixture-smoke:
 	cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
+
+## Public release preflight
+release-preflight: release-tree-clean release-context release-public-alignment release-staged-review check release-fixture-smoke
 
 ## Show timer status
 status:

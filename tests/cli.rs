@@ -295,6 +295,35 @@ fn release_staged_review_reports_empty_and_staged_paths() {
 }
 
 #[test]
+fn release_fixture_smoke_uses_fixture_safe_commands() {
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--dry-run")
+        .arg("--no-print-directory")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-fixture-smoke")
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-fixture-smoke dry run");
+
+    assert!(
+        output.status.success(),
+        "release-fixture-smoke dry run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cargo run -- scan --once --dry-run --root tests/fixtures/session_stores"),
+        "fixture scan must stay dry-run and fixture-rooted: {stdout}"
+    );
+    assert!(
+        stdout.contains("cargo run -- rules validate --rules config/rules/tool-call-regex.yaml"),
+        "bundled rule validation missing from fixture smoke target: {stdout}"
+    );
+}
+
+#[test]
 fn readme_local_markdown_links_resolve() {
     let local_links = repo_local_markdown_links(Path::new("README.md"));
 

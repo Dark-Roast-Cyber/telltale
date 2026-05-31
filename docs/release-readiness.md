@@ -32,12 +32,13 @@ git diff --cached --name-only
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
-cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
+make release-fixture-smoke
 ```
 
-The fixture scan must use `--dry-run` unless you are intentionally writing
-synthetic fixture output in CI or local development.
+`make release-fixture-smoke` runs the fixture scan with
+`--root tests/fixtures/session_stores` and `--dry-run`, then validates the
+bundled rules. The fixture scan must use `--dry-run` unless you are
+intentionally writing synthetic fixture output in CI or local development.
 
 `git status --short` should be empty before tagging. By default,
 `make release-context` fails unless the current branch is `public-main` and
