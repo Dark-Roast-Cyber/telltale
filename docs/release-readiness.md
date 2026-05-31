@@ -35,6 +35,7 @@ git status --short
 make release-context
 make release-public-alignment
 git diff --cached --name-only
+make release-crate-manifest
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
@@ -69,6 +70,12 @@ behind the public upstream, and reports any local commits that still need
 pre-push review. If you are reviewing a release-preparation commit before it is
 created, inspect `git diff --cached --name-only` and confirm each staged path
 belongs in the public repository boundary described below.
+
+`make release-crate-manifest` lists the Cargo source package contents with
+`cargo package --list` and fails if the package would include host-only planning,
+local automation, telemetry, scanner state, or deployment-specific Splunk
+material. Use it to review source package contents before publishing a crate or
+tagged source release.
 
 ## Artifact Boundary
 

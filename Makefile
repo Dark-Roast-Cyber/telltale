@@ -15,7 +15,7 @@ PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= artifacts
 
-.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check release-tree-clean release-context release-public-alignment release-staged-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -133,6 +133,22 @@ release-staged-review:
 		echo "Staged paths: none"; \
 	fi
 
+## List and validate Cargo source package contents
+release-crate-manifest:
+	@manifest="$$(cargo package --list --allow-dirty)"; \
+	printf '%s\n' "$$manifest"; \
+	unexpected="$$(printf '%s\n' "$$manifest" | while IFS= read -r path; do \
+		case "$$path" in \
+			AGENTS.md|PLAN.md|VISION.md|IDEAS.md|docs/internal/*|docs/CHANGELOG.md|docs/research-urls.md|docs/siem-logging.md|docs/splunk-content.md|skills/*|.ai/*|scripts/ralph*|scripts/inspiration/*|tasks/*|.opencode/*|logs/*|state/*|runtime/ralph/*|config/examples/splunk-*.conf|config/examples/splunk-*.xml) \
+				printf '%s\n' "$$path" ;; \
+		esac; \
+	done)"; \
+	if [ -n "$$unexpected" ]; then \
+		echo "Cargo package includes host-only release material:"; \
+		printf '%s\n' "$$unexpected"; \
+		exit 1; \
+	fi
+
 ## List and validate downloaded public release archives
 release-artifact-manifest:
 	@test -d "$(RELEASE_ARTIFACT_DIR)" || { echo "Release artifact directory not found: $(RELEASE_ARTIFACT_DIR)"; exit 1; }
@@ -175,7 +191,7 @@ release-fixture-smoke:
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
 ## Public release preflight
-release-preflight: release-tree-clean release-context release-public-alignment release-staged-review check release-fixture-smoke
+release-preflight: release-tree-clean release-context release-public-alignment release-staged-review release-crate-manifest check release-fixture-smoke
 
 ## Show timer status
 status:

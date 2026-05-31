@@ -4,6 +4,31 @@ version = "0.1.0"
 edition = "2024"
 description = "Telltale detection layer for AI coding agent sessions"
 license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/Dark-Roast-Cyber/telltale"
+homepage = "https://github.com/Dark-Roast-Cyber/telltale"
+exclude = [
+    "AGENTS.md",
+    "PLAN.md",
+    "VISION.md",
+    "IDEAS.md",
+    "docs/internal/**",
+    "docs/CHANGELOG.md",
+    "docs/research-urls.md",
+    "docs/siem-logging.md",
+    "docs/splunk-content.md",
+    "skills/**",
+    ".ai/**",
+    "scripts/ralph*",
+    "scripts/inspiration/**",
+    "tasks/**",
+    ".opencode/**",
+    "logs/**",
+    "state/**",
+    "runtime/ralph/**",
+    "config/examples/splunk-*.conf",
+    "config/examples/splunk-*.xml",
+]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

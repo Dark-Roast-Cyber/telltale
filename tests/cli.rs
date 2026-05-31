@@ -340,6 +340,67 @@ fn release_staged_review_reports_empty_and_staged_paths() {
 }
 
 #[test]
+fn release_crate_manifest_excludes_host_only_release_material() {
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-crate-manifest")
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-crate-manifest");
+
+    assert!(
+        output.status.success(),
+        "release-crate-manifest failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let package_paths = stdout.lines().collect::<Vec<_>>();
+    assert!(
+        package_paths.contains(&"README.md"),
+        "package manifest should list public source content"
+    );
+
+    let host_only = package_paths
+        .iter()
+        .filter(|path| is_host_only_repo_path(Path::new(path)))
+        .collect::<Vec<_>>();
+    assert!(
+        host_only.is_empty(),
+        "Cargo package must not include host-only release material: {host_only:?}"
+    );
+
+    let preflight = Command::new("make")
+        .arg("--dry-run")
+        .arg("--no-print-directory")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-preflight")
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-preflight dry run");
+    assert!(
+        preflight.status.success(),
+        "release-preflight dry run failed: {}",
+        String::from_utf8_lossy(&preflight.stderr)
+    );
+    let preflight_stdout = String::from_utf8_lossy(&preflight.stdout);
+    let manifest_pos = preflight_stdout
+        .find("cargo package --list --allow-dirty")
+        .expect("release-preflight should review Cargo package contents");
+    let fmt_pos = preflight_stdout
+        .find("cargo fmt --check")
+        .expect("release-preflight should still run format checks");
+    assert!(
+        manifest_pos < fmt_pos,
+        "release-preflight should review Cargo package contents before expensive checks: {preflight_stdout}"
+    );
+}
+
+#[test]
 fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries() {
     let temp = tempdir().expect("tempdir");
     let artifacts = temp.path().join("artifacts");
