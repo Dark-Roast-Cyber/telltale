@@ -295,7 +295,7 @@ fn release_staged_review_reports_empty_and_staged_paths() {
 }
 
 #[test]
-fn release_artifact_manifest_accepts_binary_archive_and_rejects_extra_entries() {
+fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries() {
     let temp = tempdir().expect("tempdir");
     let artifacts = temp.path().join("artifacts");
     let good_payload = temp.path().join("good-payload");
@@ -351,21 +351,67 @@ fn release_artifact_manifest_accepts_binary_archive_and_rejects_extra_entries() 
     );
     assert!(stdout.contains("  adr"), "missing binary entry: {stdout}");
 
+    let good_zip = artifacts.join("adr-v0.1.0-x86_64-pc-windows-msvc.zip");
+    fs::write(good_payload.join("adr.exe"), "binary\n").expect("write adr.exe");
+    let zip = Command::new("zip")
+        .arg("-q")
+        .arg(&good_zip)
+        .arg("adr.exe")
+        .current_dir(&good_payload)
+        .output()
+        .expect("zip good archive");
+    assert!(
+        zip.status.success(),
+        "zip good archive failed: {}",
+        String::from_utf8_lossy(&zip.stderr)
+    );
+
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!(
+            "RELEASE_ARTIFACT_DIR={}",
+            artifacts.to_string_lossy()
+        ))
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-artifact-manifest");
+    assert!(
+        output.status.success(),
+        "release-artifact-manifest failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(good_archive.to_string_lossy().as_ref()),
+        "missing tar archive header: {stdout}"
+    );
+    assert!(
+        stdout.contains(good_zip.to_string_lossy().as_ref()),
+        "missing zip archive header: {stdout}"
+    );
+    assert!(
+        stdout.contains("  adr.exe"),
+        "missing Windows binary entry: {stdout}"
+    );
+
     fs::remove_file(&good_archive).expect("remove good archive");
-    let bad_archive = artifacts.join("adr-v0.1.0-with-log.tar.gz");
-    let tar = Command::new("tar")
-        .arg("-czf")
+    fs::remove_file(&good_zip).expect("remove good zip");
+    let bad_archive = artifacts.join("adr-v0.1.0-with-log.zip");
+    let zip = Command::new("zip")
+        .arg("-q")
         .arg(&bad_archive)
-        .arg("-C")
-        .arg(&bad_payload)
         .arg("adr")
         .arg("logs/adr-events.jsonl")
+        .current_dir(&bad_payload)
         .output()
-        .expect("tar bad archive");
+        .expect("zip bad archive");
     assert!(
-        tar.status.success(),
-        "tar bad archive failed: {}",
-        String::from_utf8_lossy(&tar.stderr)
+        zip.status.success(),
+        "zip bad archive failed: {}",
+        String::from_utf8_lossy(&zip.stderr)
     );
 
     let output = Command::new("make")
