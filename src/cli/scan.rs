@@ -372,30 +372,6 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
             scanner_error_count: Some(scanner_error_count),
         }));
     }
-    for observation in state.silent_source_observations(
-        &sources,
-        observed_at_unix_ms,
-        op_config.max_source_silence_ms,
-    ) {
-        let source_label = if observation.source_instance_id.is_empty() {
-            observation.source_id.clone()
-        } else {
-            format!(
-                "{}/{}",
-                observation.source_id, observation.source_instance_id
-            )
-        };
-        operational_alerts.push(operational_alert_event(OperationalAlertInput {
-            alert_type: "source_silence_threshold_exceeded".to_string(),
-            threshold: format!("max_source_silence_ms={}", op_config.max_source_silence_ms),
-            actual_value: format!(
-                "missing_source={}/{};last_seen_unix_ms={}",
-                observation.client, source_label, observation.last_seen_unix_ms
-            ),
-            scan_duration_ms: Some(scan_duration_ms),
-            scanner_error_count: Some(scanner_error_count),
-        }));
-    }
     state.observe_sources(&sources, observed_at_unix_ms);
 
     let health_emitted = config.dry_run

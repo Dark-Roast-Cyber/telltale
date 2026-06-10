@@ -178,28 +178,6 @@ impl ScanState {
             .filter(|snapshot| &snapshot.key == key)
     }
 
-    pub fn silent_source_observations(
-        &self,
-        current_sources: &[Source],
-        observed_at_unix_ms: u64,
-        silence_window_ms: u64,
-    ) -> Vec<SourceObservation> {
-        let current_keys = current_sources
-            .iter()
-            .map(source_observation_key)
-            .collect::<BTreeSet<_>>();
-
-        self.source_observations
-            .iter()
-            .filter(|(key, observation)| {
-                !current_keys.contains(*key)
-                    && observed_at_unix_ms.saturating_sub(observation.last_seen_unix_ms)
-                        > silence_window_ms
-            })
-            .map(|(_, observation)| observation.clone())
-            .collect()
-    }
-
     pub fn source_inventory_change_summary(
         &self,
         current_sources: &[Source],
@@ -471,34 +449,6 @@ mod tests {
             detection_fingerprint(&event, "container-fingerprint-a"),
             detection_fingerprint(&event, "container-fingerprint-b")
         );
-    }
-
-    #[test]
-    fn tracks_silent_sources_after_prior_observation() {
-        let source = Source {
-            client: ClientId::Codex,
-            kind: SourceKind::Jsonl,
-            source_id: "sessions".to_string(),
-            path: Path::new("tests/fixtures/session_stores/codex/sessions/session.jsonl")
-                .to_path_buf(),
-        };
-
-        let mut state = ScanState::default();
-        state.observe_sources(std::slice::from_ref(&source), 1_000);
-
-        assert!(
-            state
-                .silent_source_observations(std::slice::from_ref(&source), 2_000, 0)
-                .is_empty(),
-            "present sources are not silent"
-        );
-
-        let silent = state.silent_source_observations(&[], 2_001, 1_000);
-        assert_eq!(silent.len(), 1);
-        assert_eq!(silent[0].client, "codex");
-        assert_eq!(silent[0].source_id, "sessions");
-        assert!(!silent[0].source_instance_id.is_empty());
-        assert_eq!(silent[0].last_seen_unix_ms, 1_000);
     }
 
     #[test]

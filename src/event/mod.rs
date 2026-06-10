@@ -147,15 +147,13 @@ pub struct OperationalAlertInput {
 pub struct OperationalAlertConfig {
     pub max_scanner_errors: u32,
     pub max_scan_duration_ms: u64,
-    pub max_source_silence_ms: u64,
 }
 
 impl Default for OperationalAlertConfig {
     fn default() -> Self {
         Self {
             max_scanner_errors: 3,
-            max_scan_duration_ms: 300_000,     // 5 minutes
-            max_source_silence_ms: 86_400_000, // 24 hours
+            max_scan_duration_ms: 300_000, // 5 minutes
         }
     }
 }
@@ -170,10 +168,6 @@ pub fn load_operational_alert_config() -> OperationalAlertConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(300_000),
-        max_source_silence_ms: std::env::var("ADR_OP_ALERT_MAX_SOURCE_SILENCE_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(86_400_000),
     }
 }
 
@@ -680,7 +674,6 @@ fn operational_alert_check_name(alert_type: &str) -> &str {
     match alert_type {
         "scanner_error_threshold_exceeded" => "scanner_error_threshold",
         "scan_duration_threshold_exceeded" => "scan_duration_threshold",
-        "source_silence_threshold_exceeded" => "source_silence_threshold",
         _ => "operational_alert",
     }
 }
