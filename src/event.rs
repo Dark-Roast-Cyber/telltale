@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::Serialize;
@@ -817,14 +818,19 @@ fn investigation_summary(severity: &str, rule_ids: &[String], categories: &[Stri
     )
 }
 
-fn redact_error_message(msg: &str) -> String {
-    let redacted =
-        Regex::new(r"(?i)([A-Z]:\\[^\s]+|\\\\[^\s]+|/home/\S+|/Users/\S+|/tmp/\S+|/var/\S+)")
-            .expect("path redaction regex")
-            .replace_all(msg, "<path>")
-            .into_owned();
-    let redacted = Regex::new(r"(?i)\b(token|key|secret|password|credential)\s*[:=]\s*\S+")
+static PATH_REDACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)([A-Z]:\\[^\s]+|\\\\[^\s]+|/home/\S+|/Users/\S+|/tmp/\S+|/var/\S+)")
+        .expect("path redaction regex")
+});
+
+static SECRET_REDACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(token|key|secret|password|credential)\s*[:=]\s*\S+")
         .expect("secret redaction regex")
+});
+
+fn redact_error_message(msg: &str) -> String {
+    let redacted = PATH_REDACTION_RE.replace_all(msg, "<path>").into_owned();
+    let redacted = SECRET_REDACTION_RE
         .replace_all(&redacted, "[redacted-secret]")
         .into_owned();
     if redacted.len() > 200 {
@@ -862,6 +868,55 @@ pub fn evidence_hash(value: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+static PRIVATE_KEY_BOUNDARY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)-{5}\s*(BEGIN|END)\s+((RSA|OPENSSH|EC|DSA)\s+)?PRIVATE\s+KEY\s*-{5}")
+        .expect("private key boundary regex")
+});
+
+static PRIVATE_KEY_PHRASE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b((RSA|OPENSSH|EC|DSA)\s+)?PRIVATE\s+KEY\b")
+        .expect("private key phrase regex")
+});
+
+static PACKAGE_MANAGER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(npm|pnpm|yarn|bun|pip|pipx|uv|cargo|go|brew|apt|apt-get|dnf|yum)\b\s+(install|add|i|get|run|create|x)(\s+\S+)?",
+    )
+    .expect("package manager regex")
+});
+
+static STARTUP_TARGET_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(~/)?\.(bashrc|zshrc|profile|bash_profile)\b|config/fish/config\.fish|crontab")
+        .expect("startup target regex")
+});
+
+static ENCODED_DECODER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bbase64\s+(-d|--decode)\b").expect("encoded decoder regex"));
+
+static CREDENTIAL_GH_TOKEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh[pousr]_[A-Za-z0-9_-]{16,}\b").expect("credential regex"));
+
+static CREDENTIAL_SK_KEY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bsk-[A-Za-z0-9_-]{16,}\b").expect("credential regex"));
+
+static CREDENTIAL_AKIA_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("credential regex"));
+
+static CREDENTIAL_XOX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b").expect("credential regex"));
+
+static CREDENTIAL_JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+        .expect("credential regex")
+});
+
+static CREDENTIAL_BEARER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=_-]{20,}\b").expect("credential regex")
+});
+
+static ENCODED_BLOB_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b").expect("encoded blob regex"));
+
 pub fn redact_sensitive_text(text: &str) -> String {
     let mut excerpt = text
         .split_whitespace()
@@ -880,57 +935,40 @@ pub fn redact_sensitive_text(text: &str) -> String {
     excerpt = excerpt.replace("api key", "[redacted-secret]");
     excerpt = excerpt.replace("api token", "[redacted-secret]");
     excerpt = excerpt.replace("credential", "[redacted-secret]");
-    excerpt =
-        Regex::new(r"(?i)-{5}\s*(BEGIN|END)\s+((RSA|OPENSSH|EC|DSA)\s+)?PRIVATE\s+KEY\s*-{5}")
-            .expect("private key boundary regex")
-            .replace_all(&excerpt, "[redacted-secret]")
-            .into_owned();
-    excerpt = Regex::new(r"(?i)\b((RSA|OPENSSH|EC|DSA)\s+)?PRIVATE\s+KEY\b")
-        .expect("private key phrase regex")
+    excerpt = PRIVATE_KEY_BOUNDARY_RE
         .replace_all(&excerpt, "[redacted-secret]")
         .into_owned();
-    excerpt = Regex::new(
-        r"(?i)\b(npm|pnpm|yarn|bun|pip|pipx|uv|cargo|go|brew|apt|apt-get|dnf|yum)\b\s+(install|add|i|get|run|create|x)(\s+\S+)?",
-    )
-    .expect("package manager regex")
-    .replace_all(&excerpt, "[package-manager-command]")
-    .into_owned();
-    excerpt = Regex::new(
-        r"(?i)(~/)?\.(bashrc|zshrc|profile|bash_profile)\b|config/fish/config\.fish|crontab",
-    )
-    .expect("startup target regex")
-    .replace_all(&excerpt, "[startup-target]")
-    .into_owned();
-    excerpt = Regex::new(r"(?i)\bbase64\s+(-d|--decode)\b")
-        .expect("encoded decoder regex")
+    excerpt = PRIVATE_KEY_PHRASE_RE
+        .replace_all(&excerpt, "[redacted-secret]")
+        .into_owned();
+    excerpt = PACKAGE_MANAGER_RE
+        .replace_all(&excerpt, "[package-manager-command]")
+        .into_owned();
+    excerpt = STARTUP_TARGET_RE
+        .replace_all(&excerpt, "[startup-target]")
+        .into_owned();
+    excerpt = ENCODED_DECODER_RE
         .replace_all(&excerpt, "[encoded-decoder]")
         .into_owned();
-    excerpt = Regex::new(r"\bgh[pousr]_[A-Za-z0-9_-]{16,}\b")
-        .expect("credential regex")
+    excerpt = CREDENTIAL_GH_TOKEN_RE
         .replace_all(&excerpt, "[redacted-secret]")
         .into_owned();
-    excerpt = Regex::new(r"\bsk-[A-Za-z0-9_-]{16,}\b")
-        .expect("credential regex")
+    excerpt = CREDENTIAL_SK_KEY_RE
         .replace_all(&excerpt, "[redacted-secret]")
         .into_owned();
-    excerpt = Regex::new(r"\bAKIA[0-9A-Z]{16}\b")
-        .expect("credential regex")
+    excerpt = CREDENTIAL_AKIA_RE
         .replace_all(&excerpt, "[redacted-secret]")
         .into_owned();
-    excerpt = Regex::new(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b")
-        .expect("credential regex")
+    excerpt = CREDENTIAL_XOX_RE
         .replace_all(&excerpt, "[redacted-secret]")
         .into_owned();
-    excerpt = Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
-        .expect("credential regex")
+    excerpt = CREDENTIAL_JWT_RE
         .replace_all(&excerpt, "[redacted-secret]")
         .into_owned();
-    excerpt = Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=_-]{20,}\b")
-        .expect("credential regex")
+    excerpt = CREDENTIAL_BEARER_RE
         .replace_all(&excerpt, "[redacted-secret]")
         .into_owned();
-    excerpt = Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b")
-        .expect("encoded blob regex")
+    excerpt = ENCODED_BLOB_RE
         .replace_all(&excerpt, "[encoded-blob]")
         .into_owned();
     truncate_redacted_evidence(&excerpt)
