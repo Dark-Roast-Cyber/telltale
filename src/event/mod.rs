@@ -1,13 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::Path;
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::clients::ClientId;
@@ -16,9 +9,15 @@ use crate::parser::ParseError;
 use crate::scoring::{RiskThresholds, assess_risk_with_thresholds, load_thresholds};
 use crate::state::SourceInventoryChangeSummary;
 
+mod inventory;
+mod redaction;
+mod time;
+
+pub use inventory::{append_jsonl_events, evidence_hash, path_hash};
+pub use redaction::redact_sensitive_text;
+pub use time::{format_timestamp, parse_event_timestamp};
+
 const SCHEMA_VERSION: &str = "1.0";
-const MAX_REDACTED_EVIDENCE_CHARS: usize = 512;
-const TRUNCATED_EVIDENCE_SUFFIX: &str = "[truncated]";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
@@ -247,9 +246,9 @@ struct EventBuilder {
 
 impl EventBuilder {
     fn build(self) -> Event {
-        let observed_at_dt = OffsetDateTime::now_utc();
-        let observed_at = format_timestamp(observed_at_dt);
-        let resolved_time = resolve_event_time(self.event_time.as_deref(), observed_at_dt);
+        let observed_at_dt = ::time::OffsetDateTime::now_utc();
+        let observed_at = time::format_timestamp(observed_at_dt);
+        let resolved_time = time::resolve_event_time(self.event_time.as_deref(), observed_at_dt);
         Event {
             timestamp: resolved_time.timestamp,
             event_time: resolved_time.event_time,
@@ -300,9 +299,9 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         .iter()
         .map(|source| source.client.as_str())
         .collect();
-    let mut evidence = vec![source_inventory_evidence(sources)];
+    let mut evidence = vec![inventory::source_inventory_evidence(sources)];
     if let Some(change) = input.source_inventory_change {
-        evidence.push(source_inventory_change_evidence(change));
+        evidence.push(inventory::source_inventory_change_evidence(change));
     }
 
     EventBuilder {
@@ -332,7 +331,7 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         evidence,
         triage: None,
         response: None,
-        source_counts: Some(source_counts(sources)),
+        source_counts: Some(inventory::source_counts(sources)),
         component: Some("scanner".to_string()),
         check_name: Some("source_discovery".to_string()),
         status: Some("ok".to_string()),
@@ -348,7 +347,7 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
 pub fn detection_event(input: DetectionEventInput) -> Event {
     let thresholds = load_thresholds();
     let assessment = assess_risk_with_thresholds(input.risk_score, thresholds);
-    let response = response_metadata(
+    let response = time::response_metadata(
         assessment.severity.as_str(),
         &input.rule_ids,
         &input.categories,
@@ -506,7 +505,7 @@ pub fn correlation_event(input: CorrelationEventInput) -> Event {
             session.severity,
             session.risk_score
         ),
-        hash: Some(evidence_hash(&session.event_id)),
+        hash: Some(inventory::evidence_hash(&session.event_id)),
         rule_id: None,
     }));
 
@@ -547,12 +546,12 @@ pub fn correlation_event(input: CorrelationEventInput) -> Event {
 }
 
 pub fn scanner_error_event(source: &Source, error: &ParseError) -> Event {
-    let error_msg = redact_error_message(&error.to_string());
+    let error_msg = redaction::redact_error_message(&error.to_string());
     let source_label = format!(
         "{}:{}:{}",
         source.client.as_str(),
         source.kind.as_str(),
-        display_name(source)
+        inventory::display_name(source)
     );
     EventBuilder {
         event_time: None,
@@ -565,7 +564,7 @@ pub fn scanner_error_event(source: &Source, error: &ParseError) -> Event {
         provider: None,
         session_id: "scanner".to_string(),
         workspace: None,
-        source_path_hash: Some(path_hash(&source.path)),
+        source_path_hash: Some(inventory::path_hash(&source.path)),
         tool_name: None,
         rule_ids: Vec::new(),
         categories: Vec::new(),
@@ -584,7 +583,7 @@ pub fn scanner_error_event(source: &Source, error: &ParseError) -> Event {
             Evidence {
                 field: "source_path".to_string(),
                 redacted_value: source_label,
-                hash: Some(path_hash(&source.path)),
+                hash: Some(inventory::path_hash(&source.path)),
                 rule_id: None,
             },
         ],
@@ -686,377 +685,11 @@ fn operational_alert_check_name(alert_type: &str) -> &str {
     }
 }
 
-fn response_metadata(
-    severity: &str,
-    rule_ids: &[String],
-    categories: &[String],
-    triage_required: bool,
-) -> ResponseMetadata {
-    ResponseMetadata {
-        recommended_action: recommended_action(severity).to_string(),
-        response_playbook: response_playbook(rule_ids, categories).to_string(),
-        investigation_summary: investigation_summary(severity, rule_ids, categories),
-        escalation: if triage_required {
-            "security_review_required".to_string()
-        } else {
-            "routine_review".to_string()
-        },
-    }
-}
-
-fn recommended_action(severity: &str) -> &'static str {
-    match severity {
-        "critical" => "investigate_immediately",
-        "high" => "investigate",
-        "medium" => "review",
-        _ => "monitor",
-    }
-}
-
-struct ResolvedEventTime {
-    timestamp: String,
-    event_time: Option<String>,
-    time_source: String,
-    time_confidence: String,
-    time_override_reason: Option<String>,
-}
-
-fn resolve_event_time(
-    source_event_time: Option<&str>,
-    observed_at: OffsetDateTime,
-) -> ResolvedEventTime {
-    let observed_timestamp = format_timestamp(observed_at);
-    let Some(raw_event_time) = source_event_time else {
-        return ResolvedEventTime {
-            timestamp: observed_timestamp.clone(),
-            event_time: None,
-            time_source: "observed".to_string(),
-            time_confidence: "low".to_string(),
-            time_override_reason: Some("missing_source_timestamp".to_string()),
-        };
-    };
-
-    let Some(parsed_event_time) = parse_event_timestamp(raw_event_time) else {
-        return ResolvedEventTime {
-            timestamp: observed_timestamp.clone(),
-            event_time: Some(raw_event_time.to_string()),
-            time_source: "override".to_string(),
-            time_confidence: "low".to_string(),
-            time_override_reason: Some("unparseable_source_timestamp".to_string()),
-        };
-    };
-
-    let normalized_event_time = format_timestamp(parsed_event_time);
-    let future_skew_limit = time::Duration::minutes(5);
-    if parsed_event_time > observed_at + future_skew_limit {
-        return ResolvedEventTime {
-            timestamp: observed_timestamp,
-            event_time: Some(normalized_event_time),
-            time_source: "override".to_string(),
-            time_confidence: "low".to_string(),
-            time_override_reason: Some("source_timestamp_future_skew".to_string()),
-        };
-    }
-
-    ResolvedEventTime {
-        timestamp: normalized_event_time.clone(),
-        event_time: Some(normalized_event_time),
-        time_source: "source".to_string(),
-        time_confidence: "high".to_string(),
-        time_override_reason: None,
-    }
-}
-
-pub fn parse_event_timestamp(value: &str) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
-}
-
-pub fn format_timestamp(timestamp: OffsetDateTime) -> String {
-    let timestamp = timestamp
-        .to_offset(time::UtcOffset::UTC)
-        .replace_microsecond(0)
-        .expect("valid microsecond replacement")
-        .replace_nanosecond(0)
-        .expect("valid nanosecond replacement");
-    timestamp
-        .format(&time::macros::format_description!(
-            "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-        ))
-        .expect("fixed RFC3339 millisecond timestamp")
-}
-
-fn response_playbook(rule_ids: &[String], categories: &[String]) -> &'static str {
-    let has_rule = |needle: &str| rule_ids.iter().any(|rule_id| rule_id.contains(needle));
-    let has_category = |needle: &str| categories.iter().any(|category| category.contains(needle));
-
-    if has_rule("mcp") || has_category("mcp") {
-        "adr-playbook-mcp-prompt-injection"
-    } else if has_rule("credential") || has_rule("secret") || has_category("credential") {
-        "adr-playbook-credential-access"
-    } else if has_rule("exfil") || has_category("network") || has_category("exfil") {
-        "adr-playbook-network-egress"
-    } else if has_rule("persistence") || has_category("persistence") {
-        "adr-playbook-persistence"
-    } else {
-        "adr-playbook-general-investigation"
-    }
-}
-
-fn investigation_summary(severity: &str, rule_ids: &[String], categories: &[String]) -> String {
-    let rule_summary = if rule_ids.is_empty() {
-        "no rule id".to_string()
-    } else {
-        rule_ids.join(",")
-    };
-    let category_summary = if categories.is_empty() {
-        "uncategorized".to_string()
-    } else {
-        categories.join(",")
-    };
-    format!(
-        "{severity} ADR detection matched {rule_summary} in {category_summary}; review redacted evidence, timeline anchors when present, and the local source session before containment."
-    )
-}
-
-static PATH_REDACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)([A-Z]:\\[^\s]+|\\\\[^\s]+|/home/\S+|/Users/\S+|/tmp/\S+|/var/\S+)")
-        .expect("path redaction regex")
-});
-
-static SECRET_REDACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(token|key|secret|password|credential)\s*[:=]\s*\S+")
-        .expect("secret redaction regex")
-});
-
-fn redact_error_message(msg: &str) -> String {
-    let redacted = PATH_REDACTION_RE.replace_all(msg, "<path>").into_owned();
-    let redacted = SECRET_REDACTION_RE
-        .replace_all(&redacted, "[redacted-secret]")
-        .into_owned();
-    if redacted.len() > 200 {
-        format!("{}...", &redacted[..197])
-    } else {
-        redacted
-    }
-}
-
-pub fn append_jsonl_events(
-    path: &Path,
-    events: &[Event],
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    for event in events {
-        serde_json::to_writer(&mut file, event)?;
-        file.write_all(b"\n")?;
-    }
-    Ok(())
-}
-
-pub fn path_hash(path: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(path.to_string_lossy().as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-pub fn evidence_hash(value: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-static PRIVATE_KEY_BOUNDARY_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)-{5}\s*(BEGIN|END)\s+((RSA|OPENSSH|EC|DSA)\s+)?PRIVATE\s+KEY\s*-{5}")
-        .expect("private key boundary regex")
-});
-
-static PRIVATE_KEY_PHRASE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((RSA|OPENSSH|EC|DSA)\s+)?PRIVATE\s+KEY\b")
-        .expect("private key phrase regex")
-});
-
-static PACKAGE_MANAGER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\b(npm|pnpm|yarn|bun|pip|pipx|uv|cargo|go|brew|apt|apt-get|dnf|yum)\b\s+(install|add|i|get|run|create|x)(\s+\S+)?",
-    )
-    .expect("package manager regex")
-});
-
-static STARTUP_TARGET_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(~/)?\.(bashrc|zshrc|profile|bash_profile)\b|config/fish/config\.fish|crontab")
-        .expect("startup target regex")
-});
-
-static ENCODED_DECODER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\bbase64\s+(-d|--decode)\b").expect("encoded decoder regex"));
-
-static CREDENTIAL_GH_TOKEN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bgh[pousr]_[A-Za-z0-9_-]{16,}\b").expect("credential regex"));
-
-static CREDENTIAL_SK_KEY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bsk-[A-Za-z0-9_-]{16,}\b").expect("credential regex"));
-
-static CREDENTIAL_AKIA_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("credential regex"));
-
-static CREDENTIAL_XOX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b").expect("credential regex"));
-
-static CREDENTIAL_JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
-        .expect("credential regex")
-});
-
-static CREDENTIAL_BEARER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=_-]{20,}\b").expect("credential regex")
-});
-
-static ENCODED_BLOB_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b[A-Za-z0-9+/]{20,}={0,2}\b").expect("encoded blob regex"));
-
-pub fn redact_sensitive_text(text: &str) -> String {
-    let mut excerpt = text
-        .split_whitespace()
-        .take(80)
-        .collect::<Vec<_>>()
-        .join(" ");
-    excerpt = excerpt.replace(
-        "https://darkroastcyber.io/mcp-lab",
-        "https://darkroastcyber.io/[redacted]",
-    );
-    excerpt = excerpt.replace("darkroastcyber.io", "[controlled-domain]");
-    excerpt = excerpt.replace(".env", "[sensitive-path]");
-    excerpt = excerpt.replace("id_rsa", "[redacted-secret]");
-    excerpt = excerpt.replace("id_ed25519", "[redacted-secret]");
-    excerpt = excerpt.replace(".pem", "[redacted-secret]");
-    excerpt = excerpt.replace("api key", "[redacted-secret]");
-    excerpt = excerpt.replace("api token", "[redacted-secret]");
-    excerpt = excerpt.replace("credential", "[redacted-secret]");
-    excerpt = PRIVATE_KEY_BOUNDARY_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = PRIVATE_KEY_PHRASE_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = PACKAGE_MANAGER_RE
-        .replace_all(&excerpt, "[package-manager-command]")
-        .into_owned();
-    excerpt = STARTUP_TARGET_RE
-        .replace_all(&excerpt, "[startup-target]")
-        .into_owned();
-    excerpt = ENCODED_DECODER_RE
-        .replace_all(&excerpt, "[encoded-decoder]")
-        .into_owned();
-    excerpt = CREDENTIAL_GH_TOKEN_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = CREDENTIAL_SK_KEY_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = CREDENTIAL_AKIA_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = CREDENTIAL_XOX_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = CREDENTIAL_JWT_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = CREDENTIAL_BEARER_RE
-        .replace_all(&excerpt, "[redacted-secret]")
-        .into_owned();
-    excerpt = ENCODED_BLOB_RE
-        .replace_all(&excerpt, "[encoded-blob]")
-        .into_owned();
-    truncate_redacted_evidence(&excerpt)
-}
-
-fn truncate_redacted_evidence(excerpt: &str) -> String {
-    if excerpt.chars().count() <= MAX_REDACTED_EVIDENCE_CHARS {
-        return excerpt.to_string();
-    }
-
-    let keep_chars = MAX_REDACTED_EVIDENCE_CHARS.saturating_sub(TRUNCATED_EVIDENCE_SUFFIX.len());
-    let truncated = excerpt.chars().take(keep_chars).collect::<String>();
-    if keep_chars == 0 {
-        TRUNCATED_EVIDENCE_SUFFIX.to_string()
-    } else {
-        format!("{truncated}{TRUNCATED_EVIDENCE_SUFFIX}")
-    }
-}
-
-fn source_counts(sources: &[Source]) -> BTreeMap<String, u32> {
-    let mut counts = BTreeMap::new();
-    for source in sources {
-        let key = format!("{}.{}", source.client.as_str(), source.kind.as_str());
-        *counts.entry(key).or_insert(0) += 1;
-    }
-    counts
-}
-
-fn source_inventory_evidence(sources: &[Source]) -> Evidence {
-    let counts = source_counts(sources);
-    let mut inventory = sources
-        .iter()
-        .map(|source| {
-            format!(
-                "{}:{}:{}",
-                source.client.as_str(),
-                source.kind.as_str(),
-                path_hash(&source.path)
-            )
-        })
-        .collect::<Vec<_>>();
-    inventory.sort();
-
-    let mut hasher = Sha256::new();
-    for item in &inventory {
-        hasher.update(item.as_bytes());
-        hasher.update(b"\n");
-    }
-
-    Evidence {
-        field: "source_inventory".to_string(),
-        redacted_value: format!(
-            "sources={}; client_source_kinds={}",
-            sources.len(),
-            counts.len()
-        ),
-        hash: Some(format!("{:x}", hasher.finalize())),
-        rule_id: None,
-    }
-}
-
-fn source_inventory_change_evidence(change: &SourceInventoryChangeSummary) -> Evidence {
-    Evidence {
-        field: "source_inventory_change".to_string(),
-        redacted_value: format!(
-            "baseline={}; added={}; removed={}; unchanged={}",
-            change.baseline, change.added, change.removed, change.unchanged
-        ),
-        hash: Some(change.hash.clone()),
-        rule_id: None,
-    }
-}
-
-fn display_name(source: &Source) -> String {
-    source
-        .path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         DetectionEventInput, HealthEventInput, OperationalAlertInput, detection_event,
-        format_timestamp, health_event_with_metadata, operational_alert_event,
-        parse_event_timestamp, redact_error_message, redact_sensitive_text, scanner_error_event,
+        health_event_with_metadata, operational_alert_event, scanner_error_event,
     };
     use crate::clients::ClientId;
     use crate::scoring::{RiskSeverity, RiskThresholds, assess_risk_with_thresholds};
@@ -1259,58 +892,6 @@ mod tests {
     }
 
     #[test]
-    fn redact_sensitive_text_masks_controlled_domain_and_secret_markers() {
-        let redacted = redact_sensitive_text(
-            "POST https://darkroastcyber.io/mcp-lab with .env and id_rsa and sk-1234567890abcdef1234; pip install fixture && echo SGVsbG8= | base64 --decode >> ~/.bashrc",
-        );
-
-        assert!(!redacted.contains("darkroastcyber.io"));
-        assert!(!redacted.contains(".env"));
-        assert!(!redacted.contains("id_rsa"));
-        assert!(!redacted.contains("sk-1234567890abcdef1234"));
-        assert!(!redacted.contains("pip install"));
-        assert!(!redacted.contains("base64 --decode"));
-        assert!(!redacted.contains("~/.bashrc"));
-        assert!(redacted.contains("[controlled-domain]"));
-        assert!(redacted.contains("[sensitive-path]"));
-        assert!(redacted.contains("[redacted-secret]"));
-        assert!(redacted.contains("[package-manager-command]"));
-        assert!(redacted.contains("[encoded-decoder]"));
-        assert!(redacted.contains("[startup-target]"));
-    }
-
-    #[test]
-    fn redact_sensitive_text_masks_encoded_blobs() {
-        let redacted = redact_sensitive_text(
-            "nslookup U1lOVEhFVElDX1BBWUxPQUQ=.example.invalid after encoding data",
-        );
-
-        assert!(!redacted.contains("U1lOVEhFVElDX1BBWUxPQUQ"));
-        assert!(redacted.contains("[encoded-blob]"));
-    }
-
-    #[test]
-    fn redact_sensitive_text_truncates_long_dense_evidence() {
-        let redacted = redact_sensitive_text(&"normal-text-".repeat(80));
-
-        assert_eq!(redacted.chars().count(), 512);
-        assert!(redacted.ends_with("[truncated]"));
-    }
-
-    #[test]
-    fn redact_sensitive_text_masks_rule_seeded_credential_patterns() {
-        let redacted = redact_sensitive_text(
-            "Seen AKIA1234567890ABCDEF, xoxb-1234567890abcdefABCDE, eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ.eyJzdWIiOiJhZHItZml4dHVyZSIsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c, and Bearer fixture_oauth_token_1234567890abcdef while checking fixture output.",
-        );
-
-        assert!(!redacted.contains("AKIA1234567890ABCDEF"));
-        assert!(!redacted.contains("xoxb-1234567890abcdefABCDE"));
-        assert!(!redacted.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ"));
-        assert!(!redacted.contains("fixture_oauth_token_1234567890abcdef"));
-        assert!(redacted.contains("[redacted-secret]"));
-    }
-
-    #[test]
     fn event_builder_sanitizes_null_string_tool_name() {
         let event = detection_event(DetectionEventInput {
             client: ClientId::Codex,
@@ -1405,14 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn format_timestamp_normalizes_non_utc_offsets() {
-        let timestamp =
-            parse_event_timestamp("2026-05-01T12:00:00+02:00").expect("parse timestamp");
-
-        assert_eq!(format_timestamp(timestamp), "2026-05-01T10:00:00.000Z");
-    }
-
-    #[test]
     fn detection_event_normalizes_non_utc_source_timestamp() {
         let event = detection_event(DetectionEventInput {
             client: ClientId::Codex,
@@ -1442,19 +1015,6 @@ mod tests {
             Some("2026-05-01T10:00:00.000Z")
         );
         assert_eq!(event.timestamp, "2026-05-01T10:00:00.000Z");
-    }
-
-    #[test]
-    fn redact_sensitive_text_masks_private_key_headers_case_insensitively() {
-        let redacted = redact_sensitive_text(
-            "Command output: -----BEGIN OpenSSH PRIVATE KEY----- synthetic-fixture-body -----END OpenSSH PRIVATE KEY-----",
-        );
-
-        assert!(!redacted.contains("BEGIN"));
-        assert!(!redacted.contains("END"));
-        assert!(!redacted.contains("PRIVATE KEY"));
-        assert!(!redacted.contains("OpenSSH"));
-        assert!(redacted.contains("[redacted-secret]"));
     }
 
     #[test]
@@ -1495,39 +1055,6 @@ mod tests {
         assert_eq!(event.component.as_deref(), Some("scanner"));
         assert_eq!(event.check_name.as_deref(), Some("source_parse"));
         assert_eq!(event.status.as_deref(), Some("degraded"));
-    }
-
-    #[test]
-    fn redact_error_message_strips_absolute_paths() {
-        let redacted = redact_error_message(
-            "io error: No such file or directory (os error 2) at /home/user/.local/share/opencode/opencode.db",
-        );
-        assert!(!redacted.contains("/home/user"));
-        assert!(redacted.contains("<path>"));
-    }
-
-    #[test]
-    fn redact_error_message_truncates_long_messages() {
-        let long_msg = "x".repeat(300);
-        let redacted = redact_error_message(&long_msg);
-        assert!(redacted.len() <= 200);
-        assert!(redacted.ends_with("..."));
-    }
-
-    #[test]
-    fn redact_error_message_masks_secrets() {
-        let redacted = redact_error_message("connection failed: token: abc123secret");
-        assert!(!redacted.contains("abc123secret"));
-        assert!(redacted.contains("[redacted-secret]"));
-    }
-
-    #[test]
-    fn redact_error_message_strips_windows_paths() {
-        let redacted = redact_error_message(
-            r#"sqlite open failed at C:\Users\tester\AppData\Local\opencode\opencode.db"#,
-        );
-        assert!(!redacted.contains(r#"C:\Users\tester"#));
-        assert!(redacted.contains("<path>"));
     }
 
     #[test]
