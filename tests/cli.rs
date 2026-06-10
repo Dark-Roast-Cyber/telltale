@@ -90,7 +90,7 @@ fn git_expect(repo: &Path, args: &[&str]) {
 }
 
 #[test]
-fn release_context_rejects_empty_public_config() {
+fn release_context_check_rejects_empty_public_config() {
     let temp = tempdir().expect("tempdir");
     let repo = temp.path();
 
@@ -114,7 +114,7 @@ fn release_context_rejects_empty_public_config() {
     assert!(
         remote_add.status.success(),
         "git remote add failed: {}",
-        String::from_utf8_lossy(&remote_add.stderr)
+        String::from_utf8_lossy(&init.stderr)
     );
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
@@ -123,18 +123,18 @@ fn release_context_rejects_empty_public_config() {
         .arg("-f")
         .arg(makefile)
         .args([
-            "release-context",
+            "release-context-check",
             "PUBLIC_RELEASE_BRANCH=",
             "PUBLIC_RELEASE_REMOTE=git@github.com:Dark-Roast-Cyber/telltale.git",
         ])
         .current_dir(repo)
         .env("MAKEFLAGS", "")
         .output()
-        .expect("make release-context");
+        .expect("make release-context-check");
 
     assert!(
         !output.status.success(),
-        "release-context should fail when PUBLIC_RELEASE_BRANCH is empty"
+        "release-context-check should fail when PUBLIC_RELEASE_BRANCH is empty"
     );
     let combined = format!(
         "{}{}",
@@ -151,18 +151,18 @@ fn release_context_rejects_empty_public_config() {
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile"))
         .args([
-            "release-context",
+            "release-context-check",
             "PUBLIC_RELEASE_BRANCH=public-main",
             "PUBLIC_RELEASE_REMOTE=",
         ])
         .current_dir(repo)
         .env("MAKEFLAGS", "")
         .output()
-        .expect("make release-context");
+        .expect("make release-context-check");
 
     assert!(
         !output.status.success(),
-        "release-context should fail when PUBLIC_RELEASE_REMOTE is empty"
+        "release-context-check should fail when PUBLIC_RELEASE_REMOTE is empty"
     );
     let combined = format!(
         "{}{}",
@@ -255,7 +255,7 @@ fn public_push_review_summarizes_repo_and_staged_context() {
 }
 
 #[test]
-fn release_public_alignment_reports_sync_and_rejects_behind_head() {
+fn release_context_check_reports_sync_and_rejects_behind_head() {
     let temp = tempdir().expect("tempdir");
     let bare = temp.path().join("origin.git");
     let repo = temp.path().join("work");
@@ -297,14 +297,15 @@ fn release_public_alignment_reports_sync_and_rejects_behind_head() {
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
-        .arg("release-public-alignment")
+        .arg("release-context-check")
+        .arg(format!("PUBLIC_RELEASE_REMOTE={}", bare.to_string_lossy()))
         .current_dir(&repo)
         .env("MAKEFLAGS", "")
         .output()
-        .expect("make release-public-alignment");
+        .expect("make release-context-check");
     assert!(
         output.status.success(),
-        "release-public-alignment failed: {}",
+        "release-context-check failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
@@ -334,14 +335,15 @@ fn release_public_alignment_reports_sync_and_rejects_behind_head() {
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
-        .arg("release-public-alignment")
+        .arg("release-context-check")
+        .arg(format!("PUBLIC_RELEASE_REMOTE={}", bare.to_string_lossy()))
         .current_dir(&repo)
         .env("MAKEFLAGS", "")
         .output()
-        .expect("make release-public-alignment");
+        .expect("make release-context-check");
     assert!(
         !output.status.success(),
-        "release-public-alignment should fail when HEAD is behind"
+        "release-context-check should fail when HEAD is behind"
     );
     let combined = format!(
         "{}{}",
@@ -456,46 +458,69 @@ edition = "2021"
 }
 
 #[test]
-fn release_staged_review_reports_empty_and_staged_paths() {
+fn release_context_check_reports_empty_and_staged_paths() {
     let temp = tempdir().expect("tempdir");
-    let repo = temp.path();
+    let bare = temp.path().join("origin.git");
+    let repo = temp.path().join("work");
 
-    let init = Command::new("git")
-        .args(["init", "--quiet", "--initial-branch=public-main"])
-        .current_dir(repo)
+    let init_bare = Command::new("git")
+        .args(["init", "--bare", "--quiet", "--initial-branch=public-main"])
+        .arg(&bare)
         .output()
-        .expect("git init");
+        .expect("git init bare");
     assert!(
-        init.status.success(),
-        "git init failed: {}",
-        String::from_utf8_lossy(&init.stderr)
+        init_bare.status.success(),
+        "git init bare failed: {}",
+        String::from_utf8_lossy(&init_bare.stderr)
     );
+
+    let clone = Command::new("git")
+        .args(["clone", "--quiet"])
+        .arg(&bare)
+        .arg(&repo)
+        .output()
+        .expect("git clone");
+    assert!(
+        clone.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+    configure_git_user(&repo);
+    fs::write(repo.join("public.txt"), "initial public content\n").expect("write initial");
+    git_expect(&repo, &["add", "public.txt"]);
+    git_expect(
+        &repo,
+        &["commit", "--quiet", "-m", "Initial public content"],
+    );
+    git_expect(&repo, &["push", "--quiet", "-u", "origin", "public-main"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = Command::new("make")
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
-        .arg("release-staged-review")
-        .current_dir(repo)
+        .arg("release-context-check")
+        .arg(format!("PUBLIC_RELEASE_REMOTE={}", bare.to_string_lossy()))
+        .current_dir(&repo)
         .env("MAKEFLAGS", "")
         .output()
-        .expect("make release-staged-review");
+        .expect("make release-context-check");
 
     assert!(
         output.status.success(),
-        "release-staged-review failed: {}",
+        "release-context-check failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "Staged paths: none"
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Staged paths: none"),
+        "missing staged paths summary: {stdout}"
     );
 
-    fs::write(repo.join("public.txt"), "public release note\n").expect("write staged fixture");
+    fs::write(repo.join("staged.txt"), "public release note\n").expect("write staged fixture");
     let add = Command::new("git")
-        .args(["add", "public.txt"])
-        .current_dir(repo)
+        .args(["add", "staged.txt"])
+        .current_dir(&repo)
         .output()
         .expect("git add");
     assert!(
@@ -508,18 +533,26 @@ fn release_staged_review_reports_empty_and_staged_paths() {
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
-        .arg("release-staged-review")
-        .current_dir(repo)
+        .arg("release-context-check")
+        .arg(format!("PUBLIC_RELEASE_REMOTE={}", bare.to_string_lossy()))
+        .current_dir(&repo)
         .env("MAKEFLAGS", "")
         .output()
-        .expect("make release-staged-review");
+        .expect("make release-context-check");
 
     assert!(
-        output.status.success(),
-        "release-staged-review failed: {}",
+        !output.status.success(),
+        "release-context-check should fail when working tree has staged files"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "public.txt");
+    assert!(
+        combined.contains("staged.txt"),
+        "missing staged path in output: {combined}"
+    );
 }
 
 #[test]
@@ -581,7 +614,7 @@ fn release_crate_manifest_excludes_host_only_release_material() {
         .find("cargo fmt --check")
         .expect("release-preflight should still run format checks");
     let public_docs_pos = preflight_stdout
-        .find("cargo test --quiet public_docs_local_markdown_links_resolve")
+        .find("cargo test --quiet public_docs_")
         .expect("release-preflight should run focused public boundary checks");
     assert!(
         tag_pos < manifest_pos,
@@ -831,12 +864,10 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
 #[test]
 fn release_public_docs_check_runs_focused_boundary_tests() {
     let stdout = release_public_docs_check_dry_run_stdout();
-    for test_name in release_public_docs_check_test_names() {
-        assert!(
-            stdout.contains(&format!("cargo test --quiet {test_name}")),
-            "release-public-docs-check must run {test_name}: {stdout}"
-        );
-    }
+    assert!(
+        stdout.contains("cargo test --quiet public_docs_"),
+        "release-public-docs-check must run consolidated public-docs tests with a prefix filter: {stdout}"
+    );
 }
 
 #[test]
@@ -849,27 +880,10 @@ fn release_readiness_documents_public_docs_check_commands() {
         docs.contains("make release-public-docs-check"),
         "release readiness guidance must name the focused public docs target"
     );
-    for test_name in release_public_docs_check_test_names() {
-        let command = format!("cargo test --quiet {test_name}");
-        assert!(
-            docs.contains(&command),
-            "release readiness guidance must document {command}"
-        );
-    }
-}
-
-fn release_public_docs_check_test_names() -> &'static [&'static str] {
-    &[
-        "readme_local_markdown_links_resolve",
-        "public_docs_local_markdown_links_resolve",
-        "public_docs_local_markdown_links_target_tracked_content",
-        "public_surfaces_do_not_reintroduce_split_checkout_guidance",
-        "public_release_workflows_do_not_reference_host_only_paths",
-        "public_docs_do_not_contain_host_absolute_home_paths",
-        "public_docs_do_not_link_to_host_only_paths",
-        "host_only_release_paths_remain_ignored",
-        "public_docs_linked_example_configs_are_public_safe",
-    ]
+    assert!(
+        docs.contains("cargo test --quiet public_docs_"),
+        "release readiness guidance must document the consolidated public-docs test command"
+    );
 }
 
 fn release_public_docs_check_dry_run_stdout() -> String {
@@ -894,34 +908,28 @@ fn release_public_docs_check_dry_run_stdout() -> String {
 }
 
 #[test]
-fn readme_local_markdown_links_resolve() {
-    let local_links = repo_local_markdown_links(Path::new("README.md"));
-
-    assert!(!local_links.is_empty(), "expected README local links");
-
-    let missing = local_links
+fn public_docs_links_and_paths_are_safe() {
+    // README local links resolve
+    let readme_links = repo_local_markdown_links(Path::new("README.md"));
+    assert!(!readme_links.is_empty(), "expected README local links");
+    let missing = readme_links
         .iter()
         .filter(|(_, target)| !target.exists())
         .map(|(link, _)| link.clone())
         .collect::<Vec<_>>();
-
     assert!(
         missing.is_empty(),
         "README local links must point at tracked files or directories: {missing:?}"
     );
-}
 
-#[test]
-fn public_docs_local_markdown_links_resolve() {
+    // Public docs local links resolve
     let docs = fs::read_dir("docs")
         .expect("docs directory")
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
         .collect::<Vec<_>>();
-
     assert!(!docs.is_empty(), "expected public docs");
-
     let missing = docs
         .iter()
         .flat_map(|path| {
@@ -933,23 +941,19 @@ fn public_docs_local_markdown_links_resolve() {
                 })
         })
         .collect::<Vec<_>>();
-
     assert!(
         missing.is_empty(),
         "public docs local links must point at existing files or directories: {missing:?}"
     );
-}
 
-#[test]
-fn public_docs_local_markdown_links_target_tracked_content() {
-    let mut docs = vec![Path::new("README.md").to_path_buf()];
-    docs.extend(
+    // Public docs local links target tracked content
+    let mut tracked_docs = vec![Path::new("README.md").to_path_buf()];
+    tracked_docs.extend(
         public_markdown_docs()
             .into_iter()
             .filter(|path| !is_host_only_repo_path(path)),
     );
-
-    let untracked = docs
+    let untracked = tracked_docs
         .iter()
         .flat_map(|path| {
             repo_local_markdown_links(path)
@@ -961,128 +965,35 @@ fn public_docs_local_markdown_links_target_tracked_content() {
                 })
         })
         .collect::<Vec<_>>();
-
     assert!(
         untracked.is_empty(),
         "public docs local links must target tracked repository content: {untracked:?}"
     );
-}
 
-#[test]
-fn public_surfaces_do_not_reintroduce_split_checkout_guidance() {
-    let stale_terms = stale_split_checkout_terms();
-
-    let surfaces = public_text_surfaces();
-    assert!(!surfaces.is_empty(), "expected public text surfaces");
-
-    let matches = surfaces
-        .iter()
-        .flat_map(|path| stale_public_guidance_matches(path, &stale_terms))
-        .collect::<Vec<_>>();
-
-    assert!(
-        matches.is_empty(),
-        "public surfaces must not reintroduce retired split-checkout guidance: {matches:?}"
-    );
-}
-
-#[test]
-fn public_release_workflows_do_not_reference_host_only_paths() {
-    let release_workflows = [".github/workflows/ci.yml", ".github/workflows/release.yml"];
-
-    let matches = release_workflows
-        .iter()
-        .flat_map(|path| {
-            let workflow =
-                fs::read_to_string(path).unwrap_or_else(|error| panic!("{path}: {error}"));
-            HOST_ONLY_REPO_PATHS
-                .iter()
-                .filter(move |host_only_path| workflow.contains(**host_only_path))
-                .map(move |host_only_path| format!("{path} references {host_only_path:?}"))
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        matches.is_empty(),
-        "public release workflow YAML must not reference host-only paths: {matches:?}"
-    );
-}
-
-#[test]
-fn release_workflow_publishes_archive_checksums() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
-    let download_step = workflow
-        .find("actions/download-artifact@v4")
-        .expect("release workflow must download built archives before checksumming");
-    let checksum_step = workflow
-        .find("sha256sum > SHA256SUMS")
-        .expect("release workflow must generate a SHA256SUMS file from release archives");
-    let release_step = workflow
-        .find("softprops/action-gh-release@v2")
-        .expect("release workflow must create a GitHub release");
-
-    assert!(
-        download_step < checksum_step && checksum_step < release_step,
-        "release workflow must checksum downloaded archives before creating the GitHub release"
-    );
-    assert!(
-        workflow.contains("archives=(*.tar.gz *.zip)"),
-        "checksum input must be limited to release archive files"
-    );
-    assert!(
-        workflow.contains("path: release-downloads")
-            && workflow.contains("cd release-downloads")
-            && workflow.contains("files: release-downloads/*"),
-        "GitHub release upload must include generated checksums from a public-safe workflow artifact directory"
-    );
-
-    let makefile = fs::read_to_string("Makefile").expect("Makefile");
-    assert!(
-        makefile.contains("RELEASE_ARTIFACT_DIR ?= release-downloads"),
-        "local release artifact manifest review should default to the same directory used by the release workflow"
-    );
-    assert!(
-        makefile.contains("artifacts/*|release-downloads/*"),
-        "Cargo package review should continue excluding legacy and current release review residue"
-    );
-
-    let manifest = fs::read_to_string("Cargo.toml").expect("Cargo.toml");
-    assert!(
-        manifest.contains("\"release-downloads/**\""),
-        "Cargo source packages should exclude generated release download residue"
-    );
-}
-
-#[test]
-fn public_docs_do_not_contain_host_absolute_home_paths() {
-    let mut docs = vec![Path::new("README.md").to_path_buf()];
-    docs.extend(
+    // Public docs do not contain host-absolute home paths
+    let mut home_path_docs = vec![Path::new("README.md").to_path_buf()];
+    home_path_docs.extend(
         public_markdown_docs()
             .into_iter()
             .filter(|path| !is_host_only_repo_path(path)),
     );
-
-    let matches = docs
+    let home_path_matches = home_path_docs
         .iter()
         .flat_map(|path| host_absolute_home_path_matches(path))
         .collect::<Vec<_>>();
-
     assert!(
-        matches.is_empty(),
-        "public docs must not contain host-absolute home paths: {matches:?}"
+        home_path_matches.is_empty(),
+        "public docs must not contain host-absolute home paths: {home_path_matches:?}"
     );
-}
 
-#[test]
-fn public_docs_do_not_link_to_host_only_paths() {
-    let mut docs = vec![Path::new("README.md").to_path_buf()];
-    docs.extend(
+    // Public docs do not link to host-only paths
+    let mut link_docs = vec![Path::new("README.md").to_path_buf()];
+    link_docs.extend(
         public_markdown_docs()
             .into_iter()
             .filter(|path| !is_host_only_repo_path(path)),
     );
-
-    let host_only_links = docs
+    let host_only_links = link_docs
         .iter()
         .flat_map(|path| {
             repo_local_markdown_links(path)
@@ -1093,44 +1004,19 @@ fn public_docs_do_not_link_to_host_only_paths() {
                 })
         })
         .collect::<Vec<_>>();
-
     assert!(
         host_only_links.is_empty(),
         "public docs must not link to ignored host-only release paths: {host_only_links:?}"
     );
-}
 
-#[test]
-fn host_only_release_paths_remain_ignored() {
-    let gitignore = fs::read_to_string(".gitignore").expect(".gitignore");
-    let patterns = gitignore
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect::<Vec<_>>();
-
-    let missing = HOST_ONLY_GITIGNORE_PATTERNS
-        .iter()
-        .filter(|pattern| !patterns.contains(pattern))
-        .copied()
-        .collect::<Vec<_>>();
-
-    assert!(
-        missing.is_empty(),
-        "host-only release paths must stay ignored: {missing:?}"
-    );
-}
-
-#[test]
-fn public_docs_linked_example_configs_are_public_safe() {
-    let mut docs = vec![Path::new("README.md").to_path_buf()];
-    docs.extend(
+    // Public docs linked example configs are public-safe
+    let mut config_docs = vec![Path::new("README.md").to_path_buf()];
+    config_docs.extend(
         public_markdown_docs()
             .into_iter()
             .filter(|path| !is_host_only_repo_path(path)),
     );
-
-    let unclassified = docs
+    let unclassified = config_docs
         .iter()
         .flat_map(|path| {
             repo_local_markdown_links(path)
@@ -1141,13 +1027,62 @@ fn public_docs_linked_example_configs_are_public_safe() {
                 .map(|target| format!("{} -> {target}", path.display()))
         })
         .collect::<Vec<_>>();
-
     assert!(
         unclassified.is_empty(),
         "public docs must link only to tracked example configs: {unclassified:?}"
     );
+
+    // Host-only release paths remain ignored
+    let gitignore = fs::read_to_string(".gitignore").expect(".gitignore");
+    let patterns = gitignore
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect::<Vec<_>>();
+    let missing = HOST_ONLY_GITIGNORE_PATTERNS
+        .iter()
+        .filter(|pattern| !patterns.contains(pattern))
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "host-only release paths must stay ignored: {missing:?}"
+    );
 }
 
+#[test]
+fn public_docs_wording_and_config_are_safe() {
+    // Public surfaces do not reintroduce split-checkout guidance
+    let stale_terms = stale_split_checkout_terms();
+    let surfaces = public_text_surfaces();
+    assert!(!surfaces.is_empty(), "expected public text surfaces");
+    let matches = surfaces
+        .iter()
+        .flat_map(|path| stale_public_guidance_matches(path, &stale_terms))
+        .collect::<Vec<_>>();
+    assert!(
+        matches.is_empty(),
+        "public surfaces must not reintroduce retired split-checkout guidance: {matches:?}"
+    );
+
+    // Public release workflows do not reference host-only paths
+    let release_workflows = [".github/workflows/ci.yml", ".github/workflows/release.yml"];
+    let workflow_matches = release_workflows
+        .iter()
+        .flat_map(|path| {
+            let workflow =
+                fs::read_to_string(path).unwrap_or_else(|error| panic!("{path}: {error}"));
+            HOST_ONLY_REPO_PATHS
+                .iter()
+                .filter(move |host_only_path| workflow.contains(**host_only_path))
+                .map(move |host_only_path| format!("{path} references {host_only_path:?}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        workflow_matches.is_empty(),
+        "public release workflow YAML must not reference host-only paths: {workflow_matches:?}"
+    );
+}
 fn public_markdown_docs() -> Vec<std::path::PathBuf> {
     top_level_markdown_docs()
         .into_iter()

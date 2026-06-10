@@ -15,7 +15,7 @@ PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= release-downloads
 
-.PHONY: build install uninstall clean test fmt clippy check public-push-review release-tree-clean release-context release-public-alignment release-tag-review release-staged-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -98,12 +98,14 @@ public-push-review:
 	@echo ""
 	@echo "Before pushing public history, review docs/release-readiness.md and run make release-preflight."
 
-## Verify the release working tree is clean
-release-tree-clean:
+## Verify release context: clean tree, correct branch/remote, upstream alignment, staged paths
+release-context-check:
+	@echo "=== Release context check ==="
+	@echo ""
+	@echo "-- 1. Working tree clean --"
 	@test -z "$$(git status --short)" || { git status --short; echo "Working tree must be clean before release preflight."; exit 1; }
-
-## Verify the public release branch and remote
-release-context:
+	@echo ""
+	@echo "-- 2. Release branch and remote --"
 	@test -n "$(strip $(PUBLIC_RELEASE_BRANCH))" || { echo "PUBLIC_RELEASE_BRANCH must be set."; exit 1; }
 	@test -n "$(strip $(PUBLIC_RELEASE_REMOTE))" || { echo "PUBLIC_RELEASE_REMOTE must be set."; exit 1; }
 	@branch="$$(git branch --show-current)"; \
@@ -119,9 +121,8 @@ release-context:
 		exit 1; \
 	fi
 	@echo "Release context: branch $(PUBLIC_RELEASE_BRANCH), origin $(PUBLIC_RELEASE_REMOTE)"
-
-## Review public branch alignment before release
-release-public-alignment:
+	@echo ""
+	@echo "-- 3. Public branch alignment --"
 	@test -n "$(strip $(PUBLIC_RELEASE_BRANCH))" || { echo "PUBLIC_RELEASE_BRANCH must be set."; exit 1; }
 	@test -n "$(strip $(PUBLIC_RELEASE_UPSTREAM))" || { echo "PUBLIC_RELEASE_UPSTREAM must be set."; exit 1; }
 	@git rev-parse --verify --quiet "$(PUBLIC_RELEASE_UPSTREAM)^{commit}" >/dev/null || { \
@@ -138,6 +139,14 @@ release-public-alignment:
 		echo "Public branch alignment: HEAD is ahead of $(PUBLIC_RELEASE_UPSTREAM) by $$ahead commit(s); review before pushing."; \
 	else \
 		echo "Public branch alignment: $(PUBLIC_RELEASE_UPSTREAM) matches HEAD."; \
+	fi
+	@echo ""
+	@echo "-- 4. Staged paths --"
+	@staged="$$(git diff --cached --name-only)"; \
+	if [ -n "$$staged" ]; then \
+		echo "$$staged"; \
+	else \
+		echo "Staged paths: none"; \
 	fi
 
 ## Verify the public release tag matches the Cargo package version
@@ -156,15 +165,6 @@ release-tag-review:
 		exit 1; \
 	fi; \
 	echo "Public release tag: $$release_tag (package $$package_version)"
-
-## Show staged paths reviewed for public release
-release-staged-review:
-	@staged="$$(git diff --cached --name-only)"; \
-	if [ -n "$$staged" ]; then \
-		echo "$$staged"; \
-	else \
-		echo "Staged paths: none"; \
-	fi
 
 ## List and validate Cargo source package contents
 release-crate-manifest:
@@ -222,15 +222,7 @@ release-artifact-manifest:
 
 ## Run focused public documentation boundary checks
 release-public-docs-check:
-	cargo test --quiet readme_local_markdown_links_resolve
-	cargo test --quiet public_docs_local_markdown_links_resolve
-	cargo test --quiet public_docs_local_markdown_links_target_tracked_content
-	cargo test --quiet public_surfaces_do_not_reintroduce_split_checkout_guidance
-	cargo test --quiet public_release_workflows_do_not_reference_host_only_paths
-	cargo test --quiet public_docs_do_not_contain_host_absolute_home_paths
-	cargo test --quiet public_docs_do_not_link_to_host_only_paths
-	cargo test --quiet host_only_release_paths_remain_ignored
-	cargo test --quiet public_docs_linked_example_configs_are_public_safe
+	cargo test --quiet public_docs_
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:
@@ -238,7 +230,7 @@ release-fixture-smoke:
 	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
 
 ## Public release preflight
-release-preflight: release-tree-clean release-context release-public-alignment release-tag-review release-staged-review release-crate-manifest release-public-docs-check check release-fixture-smoke
+release-preflight: release-context-check release-tag-review release-crate-manifest release-public-docs-check check release-fixture-smoke
 
 ## Show timer status
 status:

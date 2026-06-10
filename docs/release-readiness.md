@@ -34,11 +34,8 @@ make release-preflight
 The preflight target wraps the same public release checks shown below:
 
 ```sh
-git status --short
-make release-context
-make release-public-alignment
+make release-context-check
 make release-tag-review
-git diff --cached --name-only
 make release-crate-manifest
 make release-public-docs-check
 cargo fmt --check
@@ -68,31 +65,20 @@ without scanning fixtures or building release artifacts.
 It is intentionally limited to these focused commands:
 
 ```sh
-cargo test --quiet readme_local_markdown_links_resolve
-cargo test --quiet public_docs_local_markdown_links_resolve
-cargo test --quiet public_docs_local_markdown_links_target_tracked_content
-cargo test --quiet public_surfaces_do_not_reintroduce_split_checkout_guidance
-cargo test --quiet public_release_workflows_do_not_reference_host_only_paths
-cargo test --quiet public_docs_do_not_contain_host_absolute_home_paths
-cargo test --quiet public_docs_do_not_link_to_host_only_paths
-cargo test --quiet host_only_release_paths_remain_ignored
-cargo test --quiet public_docs_linked_example_configs_are_public_safe
+cargo test --quiet public_docs_
 ```
 
-`git status --short` should be empty before tagging. By default,
-`make release-context` fails unless the current branch is `public-main` and
-the `origin` fetch and push URLs point at the public Telltale repository. For
-an intentional alternate public release branch or remote, override
+`make release-context-check` verifies the working tree is clean, the current
+branch is `public-main`, the `origin` fetch and push URLs point at the public
+Telltale repository, and `HEAD` is not behind the public upstream. For an
+intentional alternate public release branch or remote, override
 `PUBLIC_RELEASE_BRANCH` or `PUBLIC_RELEASE_REMOTE` when running the target.
-`make release-public-alignment` then compares `HEAD` with
-`origin/${PUBLIC_RELEASE_BRANCH}` by default, fails if the local branch is
-behind the public upstream, and reports any local commits that still need
-pre-push review. `make release-tag-review` derives the Cargo package version,
-expects the public tag to be `v<version>` unless `PUBLIC_RELEASE_TAG` is
-overridden, and fails if that tag already exists locally. If you are reviewing a
-release-preparation commit before it is created, inspect
-`git diff --cached --name-only` and confirm each staged path belongs in the
-public repository boundary described below.
+It also prints staged paths for review. `make release-tag-review` derives the
+Cargo package version, expects the public tag to be `v<version>` unless
+`PUBLIC_RELEASE_TAG` is overridden, and fails if that tag already exists
+locally. If you are reviewing a release-preparation commit before it is created,
+inspect `git diff --cached --name-only` and confirm each staged path belongs in
+the public repository boundary described below.
 
 Before any public push, stage only reviewed public-safe files from this
 checkout, keep ignored host-only material local, and review
