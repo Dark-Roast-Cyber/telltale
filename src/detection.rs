@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::baseline::{
     BaselineDeviationConfig, assess_baseline_deviation, build_baseline_summaries,
@@ -99,18 +99,22 @@ fn summarize_source_activity(
 }
 
 fn group_records_by_session(parsed: Vec<NormalizedRecord>) -> Vec<(String, Vec<NormalizedRecord>)> {
-    let mut sessions: Vec<(String, Vec<NormalizedRecord>)> = Vec::new();
+    let mut map: HashMap<String, Vec<NormalizedRecord>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
     for record in parsed {
-        if let Some((_, records)) = sessions
-            .iter_mut()
-            .find(|(session_id, _)| session_id == &record.session_id)
-        {
-            records.push(record);
-        } else {
-            sessions.push((record.session_id.clone(), vec![record]));
+        let sid = record.session_id.clone();
+        if !map.contains_key(&sid) {
+            order.push(sid.clone());
         }
+        map.entry(sid).or_default().push(record);
     }
-    sessions
+    order
+        .into_iter()
+        .map(|sid| {
+            let records = map.remove(&sid).unwrap_or_default();
+            (sid, records)
+        })
+        .collect()
 }
 
 fn detect_records(
