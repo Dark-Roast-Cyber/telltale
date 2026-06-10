@@ -1,5 +1,7 @@
 # Threat Taxonomy
 
+> **Website:** For an approachable overview of detection categories and threat taxonomy, see [AgentArchaeology.ai/telltale/detection-model](https://agentarchaeology.ai/telltale/detection-model/).
+
 ## Purpose
 
 ADR uses its own operational categories for deterministic detection, scoring, policy filters, and SIEM output. MITRE ATLAS is an offline reference for naming, tagging, and documentation only.

@@ -6,6 +6,8 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
+> **Website:** [AgentArchaeology.ai](https://agentarchaeology.ai/) — field guide, concepts, glossary, and approachable documentation for agentic forensics and Telltale.
+
 > Compatibility note: Telltale currently keeps the existing Rust crate
 > name, binary name, environment variable prefixes, and a few schema fields
 > under `adr` for build and data-format compatibility. The project name is
@@ -132,29 +134,35 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 
 ## Documentation
 
-- Start here:
-  - [Install](docs/install.md)
-  - [Architecture](docs/architecture.md)
-  - [Detection model](docs/detection-model.md)
-  - [Detection content standard](docs/detection-content-standard.md)
-  - [Threat taxonomy](docs/threat-taxonomy.md)
-  - [Privacy model](docs/privacy-model.md)
-  - [Telemetry output](docs/telemetry-output.md)
-  - [Release readiness](docs/release-readiness.md)
-- Additional references:
-  - [Session sources](docs/session-sources.md)
-  - [Agent capability profiles](docs/agent-capability-profiles.md)
-  - [Client capability matrix](docs/client-capability-matrix.md)
-  - [MCP tool inventory](docs/mcp-tool-inventory.md)
-  - [Policy modes](docs/policy-modes.md)
-  - [Policy authoring](docs/agent-policy-authoring.md)
-  - [Use cases](docs/use-cases.md)
-  - [Normalization schema](docs/normalization-schema.md)
-  - [Source validation matrix](docs/source-validation-matrix.md)
-  - [Requirements](docs/requirements.md)
-  - [Trust boundaries](docs/trust-boundaries.md)
-  - [License and packaging](docs/license-and-packaging.md)
-- Advanced and workflow-specific docs remain under [`docs/`](docs/).
+For approachable guides on agentic forensics, Telltale, and the broader Agent Archaeology practice, see [AgentArchaeology.ai](https://agentarchaeology.ai/).
+
+### Upstream technical docs
+
+These files are the source-of-truth for Telltale's implementation, rules, and schemas:
+
+- [Install](docs/install.md) — build, verify, and deploy
+- [Architecture](docs/architecture.md) — pipeline stages and module boundaries
+- [Detection model](docs/detection-model.md) — risk scoring, rule categories, thresholds
+- [Telemetry output](docs/telemetry-output.md) — JSONL event schema and forwarding
+- [Detection content standard](docs/detection-content-standard.md) — quality bar for bundled rules
+- [Threat taxonomy](docs/threat-taxonomy.md) — operational threat categories
+- [Privacy model](docs/privacy-model.md) — redaction policy and evidence boundaries
+- [Release readiness](docs/release-readiness.md) — preflight checklist for public releases
+
+### Additional references
+
+- [Session sources](docs/session-sources.md) — discovery paths and parser notes per client
+- [Agent capability profiles](docs/agent-capability-profiles.md) — per-client field availability
+- [Client capability matrix](docs/client-capability-matrix.md) — normalization-level field matrix
+- [MCP tool inventory](docs/mcp-tool-inventory.md) — MCP configuration inventory emission
+- [Policy modes](docs/policy-modes.md) — observe, alert, simulate-block modes
+- [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content
+- [Use cases](docs/use-cases.md) — concrete detection use cases with fixture guidance
+- [Normalization schema](docs/normalization-schema.md) — canonical `NormalizedRecordV1` schema
+- [Source validation matrix](docs/source-validation-matrix.md) — coverage and validation gates
+- [Requirements](docs/requirements.md) — functional, security, and operational requirements
+- [Trust boundaries](docs/trust-boundaries.md) — trust model for untrusted agent content
+- [License and packaging](docs/license-and-packaging.md) — Apache-2.0 core and separate-license boundary
 
 Use the release readiness checklist before tagging or publishing release
 artifacts; it includes the public repository boundary review for staged or

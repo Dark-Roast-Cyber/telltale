@@ -1,5 +1,7 @@
 # Detection Model
 
+> **Website:** For an approachable overview of the detection model and threat taxonomy, see [AgentArchaeology.ai/telltale/detection-model](https://agentarchaeology.ai/telltale/detection-model/).
+
 ## Risk Flow
 
 Each tool call starts at score `0`. Rules add points. Context modifiers add or subtract points. Severity is derived from the final score unless triage overrides it.

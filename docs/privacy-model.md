@@ -1,5 +1,7 @@
 # Privacy and Evidence Model
 
+> **Website:** For an approachable guide to provenance and evidence handling, see [AgentArchaeology.ai/field-guide/provenance](https://agentarchaeology.ai/field-guide/provenance/).
+
 ADR monitors agent session stores that contain sensitive material: API keys, credentials, private keys, file paths, conversation bodies, and tool-call arguments. The privacy model defines how ADR classifies, transforms, and emits evidence so SIEM events remain useful without becoming a new secret-leak surface.
 
 ## Evidence Classes

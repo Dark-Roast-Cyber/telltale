@@ -1,5 +1,7 @@
 # Session Sources
 
+> **Website:** For approachable guides to session stores and agent traces, see [AgentArchaeology.ai/field-guide/session-stores](https://agentarchaeology.ai/field-guide/session-stores/) and [AgentArchaeology.ai/field-guide/agent-traces](https://agentarchaeology.ai/field-guide/agent-traces/).
+
 Telltale owns its discovery registry in `src/clients.rs` and
 `src/discovery.rs`. This document records the current source-of-truth host path
 candidates used by the scanner.

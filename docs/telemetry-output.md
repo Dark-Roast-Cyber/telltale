@@ -1,5 +1,7 @@
 # Telemetry Output
 
+> **Website:** For an approachable overview of telemetry output and SIEM integration, see [AgentArchaeology.ai/telltale/telemetry-output](https://agentarchaeology.ai/telltale/telemetry-output/).
+
 Telltale emits compact JSONL events for local review, forwarding, dashboards,
 and alerting. The default scan path writes one canonical JSON object per line
 to a local file; optional delivery paths can wrap the same event body for a

@@ -1,5 +1,7 @@
 # Install
 
+> **Website:** For an approachable install guide, see [AgentArchaeology.ai/telltale/install](https://agentarchaeology.ai/telltale/install/).
+
 Telltale Core can be installed from a tagged GitHub release archive when one
 is available, or built from source with Cargo. In both cases, start with a
 fixture-safe scan before pointing the scanner at real agent session stores.

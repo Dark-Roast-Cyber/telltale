@@ -1,5 +1,7 @@
 # Trust Boundaries
 
+> **Website:** For an approachable guide to trust boundaries, see [AgentArchaeology.ai/field-guide/trust-boundaries](https://agentarchaeology.ai/field-guide/trust-boundaries/).
+
 ## Purpose
 
 ADR monitors agent session stores that contain a mix of trusted metadata and untrusted content. Agent logs record everything the agent saw: user prompts, model responses, tool calls, tool results, MCP server instructions, remote documentation, and generated code. Much of this content is attacker-controlled or attacker-influenced.

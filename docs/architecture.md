@@ -1,5 +1,7 @@
 # Architecture
 
+> **Website:** For an approachable architecture overview, see [AgentArchaeology.ai/telltale/architecture](https://agentarchaeology.ai/telltale/architecture/).
+
 ## Pipeline
 
 ADR runs a repeatable batch pipeline:
