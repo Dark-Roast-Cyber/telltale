@@ -4,9 +4,19 @@
   <img src="telltail.png" alt="Telltale logo" width="240" />
 </p>
 
-Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
+<p align="center">
+  <a href="https://agentarchaeology.ai/">
+    <img src="https://img.shields.io/badge/AgentArchaeology.ai-Visit_Site-0066cc?style=flat-square" alt="AgentArchaeology.ai" />
+  </a>
+  <a href="https://darkroastcyber.io/">
+    <img src="https://img.shields.io/badge/Dark_Roast_Cyber-Visit_Site-8b4513?style=flat-square" alt="Dark Roast Cyber" />
+  </a>
+  <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/badge/Supported_Agents-9-green?style=flat-square" alt="Supported Agents" />
+  <img src="https://img.shields.io/badge/Detection_Categories-10-orange?style=flat-square" alt="Detection Categories" />
+</p>
 
-> **Website:** [AgentArchaeology.ai](https://agentarchaeology.ai/) — field guide, concepts, glossary, and approachable documentation for agentic forensics and Telltale.
+Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
 > Compatibility note: Telltale currently keeps the existing Rust crate
 > name, binary name, environment variable prefixes, and a few schema fields
@@ -132,7 +142,7 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 - `config/allowlists.yaml` — suppression examples
 - `docs/` — public technical documentation
 
-## Documentation
+## Related resources
 
 For approachable guides on agentic forensics, Telltale, and the broader Agent Archaeology practice, see [AgentArchaeology.ai](https://agentarchaeology.ai/).
 
