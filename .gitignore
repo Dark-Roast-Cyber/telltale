@@ -70,3 +70,7 @@ runtime/ralph/
 config/examples/splunk-*.conf
 config/examples/splunk-*.xml
 telltale-siem-dashboard.png
+
+# Website planning artifacts (belong in agentarchaeology repo, not here).
+ASTRO_WEBSITE_PLAN.md
+public-website/
