@@ -664,15 +664,17 @@ fn approval_bypass_match_should_skip(matched: MatchedField<'_>) -> bool {
         || text.contains("should not be treated as an instruction")
         || text.contains("documentation review")
         || text.contains("review notes");
-    let is_copied_transcript_boilerplate = text.contains("cost data")
+    let is_system_prompt_or_boilerplate = text.contains("cost data")
         || text.contains("messageabortederror")
         || text.contains("apierror")
         || text.contains("unauthorized")
         || text.contains("not authenticated")
         || text.contains("you are opencode")
-        || text.contains("refuse to write code");
+        || text.contains("refuse to write code")
+        || text.contains("important: refuse")
+        || text.contains("may be used maliciously");
 
-    text.contains("bypass approval") && (is_quoted_example || is_copied_transcript_boilerplate)
+    is_system_prompt_or_boilerplate || (text.contains("bypass approval") && is_quoted_example)
 }
 
 fn secret_env_read_match_should_skip(matched: MatchedField<'_>) -> bool {
