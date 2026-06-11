@@ -111,6 +111,10 @@ enum Command {
         /// Deterministically cap discovered sources after client filtering.
         #[arg(long, value_parser = parse_nonzero_usize)]
         max_sources: Option<usize>,
+
+        /// Project config YAML file listing project roots. Repeat for multiple files.
+        #[arg(long = "project-config")]
+        project_config_paths: Vec<PathBuf>,
     },
 
     /// Watch local session stores and scan when files change.
@@ -171,6 +175,10 @@ enum Command {
         /// Limit watched scan discovery to one supported client. Repeat to include multiple clients.
         #[arg(long = "client", value_parser = parse_client_id)]
         clients: Vec<ClientId>,
+
+        /// Project config YAML file listing project roots. Repeat for multiple files.
+        #[arg(long = "project-config")]
+        project_config_paths: Vec<PathBuf>,
     },
 
     /// Inspect and validate Telltale detection rules.
@@ -392,7 +400,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             baseline_deviation_scoring,
             clients,
             max_sources,
+            project_config_paths,
         } => {
+            let mut project_paths = project_config_paths.clone();
+            if project_paths.is_empty() {
+                project_paths = crate::projects::project_config_paths_from_env();
+            }
             let scan_args = scan::ScanCommandArgs {
                 root: &root,
                 log_path: &log_path,
@@ -411,6 +424,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 baseline_deviation_scoring,
                 clients: &clients,
                 max_sources,
+                project_config_paths: &project_paths,
             };
             if once {
                 scan::run_scan_once(scan::scan_config(&scan_args))?;
@@ -510,7 +524,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             allowlist,
             baseline_deviation_scoring,
             clients,
+            project_config_paths,
         } => {
+            let mut project_paths = project_config_paths.clone();
+            if project_paths.is_empty() {
+                project_paths = crate::projects::project_config_paths_from_env();
+            }
             let watch_args = scan::WatchCommandArgs {
                 root: &root,
                 log_path: &log_path,
@@ -526,6 +545,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 allowlist_path: allowlist.as_deref(),
                 baseline_deviation_scoring,
                 clients: &clients,
+                project_config_paths: &project_paths,
             };
             scan::run_watch(scan::watch_config(&watch_args))?;
         }

@@ -95,6 +95,23 @@ For continuous local monitoring, `adr watch` accepts the same repeated
 `--client <id>` filters as `adr scan`, so watched runs can stay scoped to one
 or more supported client IDs such as `codex` or `opencode`.
 
+### Project-local session stores
+
+Some clients (Copilot, OpenCode-in-project, Codex per-project) store data inside
+project directories. By default, Telltale scans `~/github` and `~/projects` if
+they exist. To customize, declare project roots in a YAML file and pass it with
+`--project-config`:
+
+```yaml
+projects:
+  - name: my-project
+    path: ~/github/my-project
+```
+
+Project-local discovery is additive — home-relative sources are still discovered
+from `--root`. The registry in `src/clients.rs` defines the per-client subpath
+for each project.
+
 - Install and setup guide: [docs/install.md](docs/install.md)
 
 Tagged GitHub releases publish platform-specific `adr` binary archives when

@@ -1,0 +1,13 @@
+# Telltale project roots configuration
+#
+# Declare project directories where Telltale should look for project-local
+# session stores. The registry in src/clients.rs defines the per-client subpath
+# for each project (e.g., logs/copilot for Copilot, .opencode for OpenCode,
+# .codex-worktree for Codex).
+#
+# If a project has a non-standard subpath, rename the directory to match the
+# registry subpath rather than overriding per-project paths in this file.
+#
+projects:
+  - name: example-project
+    path: ~/github/example-project

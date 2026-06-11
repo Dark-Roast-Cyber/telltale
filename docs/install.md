@@ -73,6 +73,30 @@ cargo run -- scan --once --dry-run --root "$HOME" --client codex --max-sources 5
 Telltale writes append-only JSONL by default so the output can be reviewed
 locally or shipped to a SIEM.
 
+## Project-Local Session Stores
+
+Some clients store session data inside project directories rather than under
+`$HOME`. By default, Telltale scans `~/github` and `~/projects` if they exist.
+Copilot, OpenCode-in-project, and Codex per-project CLI logs are discovered
+from these default paths. To customize, declare project roots in a YAML config
+file:
+
+```yaml
+projects:
+  - name: my-project
+    path: ~/github/my-project
+```
+
+Pass the config to scans or watch mode:
+
+```sh
+cargo run -- scan --once --root "$HOME" --project-config projects.yaml --log-path logs/adr-events.jsonl
+```
+
+You can also set the colon-separated `ADR_PROJECT_CONFIG` environment variable
+instead of repeating the flag. When neither is provided, Telltale uses the
+default paths (`~/github` and `~/projects`).
+
 ## Optional Watch Mode
 
 Use `adr watch` when you want repeated scans after local session-store changes.

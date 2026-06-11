@@ -35,6 +35,7 @@ pub enum PathRoot {
     Home,
     ConfigHome,
     DataHome,
+    ProjectLocal,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -80,6 +81,7 @@ pub struct ClientSourceDef {
     pub fixture_relative_path: &'static str,
     pub pattern: SourcePattern,
     pub recursive: bool,
+    pub project_relative_path: Option<&'static str>,
 }
 
 impl ClientSourceDef {
@@ -104,6 +106,7 @@ const CODEX_SOURCES: &[ClientSourceDef] = &[
         fixture_relative_path: "codex/sessions",
         pattern: SourcePattern::Extension("jsonl"),
         recursive: true,
+        project_relative_path: None,
     },
     ClientSourceDef {
         id: "codex.archived_sessions",
@@ -113,6 +116,7 @@ const CODEX_SOURCES: &[ClientSourceDef] = &[
         fixture_relative_path: "codex/archived_sessions",
         pattern: SourcePattern::Extension("jsonl"),
         recursive: true,
+        project_relative_path: None,
     },
     ClientSourceDef {
         id: "codex.headless_sessions",
@@ -122,6 +126,17 @@ const CODEX_SOURCES: &[ClientSourceDef] = &[
         fixture_relative_path: "codex/headless",
         pattern: SourcePattern::Extension("jsonl"),
         recursive: true,
+        project_relative_path: None,
+    },
+    ClientSourceDef {
+        id: "codex.project_sessions",
+        kind: SourceKind::Jsonl,
+        root: PathRoot::ProjectLocal,
+        relative_path: ".codex-worktree",
+        fixture_relative_path: "codex/project_sessions",
+        pattern: SourcePattern::Extension("jsonl"),
+        recursive: true,
+        project_relative_path: Some(".codex-worktree"),
     },
 ];
 
@@ -133,6 +148,7 @@ const CLAUDE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     fixture_relative_path: "claude/projects",
     pattern: SourcePattern::Extension("jsonl"),
     recursive: true,
+    project_relative_path: None,
 }];
 
 const GEMINI_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
@@ -143,6 +159,7 @@ const GEMINI_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     fixture_relative_path: "gemini/tmp",
     pattern: SourcePattern::Extension("json"),
     recursive: true,
+    project_relative_path: None,
 }];
 
 const OPENCLAW_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
@@ -153,6 +170,7 @@ const OPENCLAW_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     fixture_relative_path: "openclaw/agents",
     pattern: SourcePattern::FileNameContains(".jsonl"),
     recursive: true,
+    project_relative_path: None,
 }];
 
 const QWEN_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
@@ -163,6 +181,7 @@ const QWEN_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     fixture_relative_path: "qwen/projects",
     pattern: SourcePattern::Extension("jsonl"),
     recursive: true,
+    project_relative_path: None,
 }];
 
 const ROOCODE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
@@ -173,6 +192,7 @@ const ROOCODE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     fixture_relative_path: "roocode/tasks",
     pattern: SourcePattern::ExactFile("ui_messages.json"),
     recursive: true,
+    project_relative_path: None,
 }];
 
 const KILOCODE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
@@ -183,6 +203,7 @@ const KILOCODE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     fixture_relative_path: "kilocode/tasks",
     pattern: SourcePattern::ExactFile("ui_messages.json"),
     recursive: true,
+    project_relative_path: None,
 }];
 
 const OPENCODE_SOURCES: &[ClientSourceDef] = &[
@@ -194,6 +215,7 @@ const OPENCODE_SOURCES: &[ClientSourceDef] = &[
         fixture_relative_path: "opencode/opencode.db",
         pattern: SourcePattern::ExactFile("opencode.db"),
         recursive: false,
+        project_relative_path: None,
     },
     ClientSourceDef {
         id: "opencode.legacy_json",
@@ -203,17 +225,29 @@ const OPENCODE_SOURCES: &[ClientSourceDef] = &[
         fixture_relative_path: "opencode/storage/message",
         pattern: SourcePattern::Extension("json"),
         recursive: true,
+        project_relative_path: None,
+    },
+    ClientSourceDef {
+        id: "opencode.project_json",
+        kind: SourceKind::LegacyJson,
+        root: PathRoot::ProjectLocal,
+        relative_path: ".opencode",
+        fixture_relative_path: "opencode/project",
+        pattern: SourcePattern::Extension("json"),
+        recursive: true,
+        project_relative_path: Some(".opencode"),
     },
 ];
 
 const COPILOT_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "copilot.process_log",
     kind: SourceKind::CopilotProcessLog,
-    root: PathRoot::Home,
-    relative_path: "github/adr/logs/copilot",
+    root: PathRoot::ProjectLocal,
+    relative_path: "logs/copilot",
     fixture_relative_path: "copilot",
     pattern: SourcePattern::Extension("log"),
     recursive: false,
+    project_relative_path: Some("logs/copilot"),
 }];
 
 const CLIENTS: &[ClientDef] = &[

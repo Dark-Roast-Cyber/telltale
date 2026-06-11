@@ -15,7 +15,7 @@ use crate::baseline::{BaselineDeviationConfig, build_baseline_summaries};
 use crate::clients::ClientId;
 use crate::detection::{detect_sources_with_rules, summarize_source_activities_with_baselines};
 use crate::discovery::{
-    Source, discover_sources, discover_watch_roots_for_clients, is_fixture_root,
+    Source, discover_sources_with_projects, discover_watch_roots_with_projects, is_fixture_root,
 };
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertInput, SessionRiskSummaryEventInput,
@@ -48,6 +48,7 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) clients: &'a [ClientId],
     pub(crate) max_sources: Option<usize>,
+    pub(crate) project_config_paths: &'a [PathBuf],
 }
 
 pub(crate) struct ScanCommandArgs<'a> {
@@ -68,6 +69,7 @@ pub(crate) struct ScanCommandArgs<'a> {
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) clients: &'a [ClientId],
     pub(crate) max_sources: Option<usize>,
+    pub(crate) project_config_paths: &'a [PathBuf],
 }
 
 pub(crate) struct WatchConfig<'a> {
@@ -85,6 +87,7 @@ pub(crate) struct WatchConfig<'a> {
     pub(crate) allowlist_path: Option<&'a Path>,
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) clients: &'a [ClientId],
+    pub(crate) project_config_paths: &'a [PathBuf],
 }
 
 pub(crate) struct WatchCommandArgs<'a> {
@@ -102,6 +105,7 @@ pub(crate) struct WatchCommandArgs<'a> {
     pub(crate) allowlist_path: Option<&'a Path>,
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) clients: &'a [ClientId],
+    pub(crate) project_config_paths: &'a [PathBuf],
 }
 
 pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
@@ -123,6 +127,7 @@ pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
         baseline_deviation_scoring: args.baseline_deviation_scoring,
         clients: args.clients,
         max_sources: args.max_sources,
+        project_config_paths: args.project_config_paths,
     }
 }
 
@@ -142,6 +147,7 @@ pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a
         allowlist_path: args.allowlist_path,
         baseline_deviation_scoring: args.baseline_deviation_scoring,
         clients: args.clients,
+        project_config_paths: args.project_config_paths,
     }
 }
 
@@ -164,6 +170,7 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
         baseline_deviation_scoring: config.baseline_deviation_scoring,
         clients: config.clients,
         max_sources: None,
+        project_config_paths: config.project_config_paths,
     }
 }
 
@@ -194,7 +201,17 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
         );
     }
 
-    let watch_roots = discover_watch_roots_for_clients(config.root, config.clients);
+    // Note: structural changes to project YAML (new projects, new roots) require a process
+    // restart; the notify watcher is not rebuilt at runtime.
+    let project_configs = if config.project_config_paths.is_empty() && config.root == Path::new(".")
+    {
+        // Use default project paths only when root is the sentinel for home-relative discovery
+        crate::projects::load_default_projects()
+    } else {
+        crate::projects::load_project_configs(config.project_config_paths)
+    };
+    let watch_roots =
+        discover_watch_roots_with_projects(config.root, config.clients, &project_configs);
     if watch_roots.is_empty() {
         return Err(format!(
             "no existing Telltale session-store roots found under {}",
@@ -264,7 +281,14 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         );
     }
     let splunk_hec_sink = splunk_hec_sink(config.splunk_hec_endpoint, config.splunk_hec_token)?;
-    let mut sources = discover_sources(config.root);
+    let project_configs = if config.project_config_paths.is_empty() && config.root == Path::new(".")
+    {
+        // Use default project paths only when root is the sentinel for home-relative discovery
+        crate::projects::load_default_projects()
+    } else {
+        crate::projects::load_project_configs(config.project_config_paths)
+    };
+    let mut sources = discover_sources_with_projects(config.root, &project_configs);
     if !config.clients.is_empty() {
         let allowed_clients = config.clients.iter().copied().collect::<BTreeSet<_>>();
         sources.retain(|source| allowed_clients.contains(&source.client));

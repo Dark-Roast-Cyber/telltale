@@ -35,7 +35,29 @@ than by exact private path or transcript content.
 | KiloCode | `kilocode.tasks` | `~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks` | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/tasks` | `%APPDATA%\Code\User\globalStorage\kilocode.kilo-code\tasks` | Confirmed root, Windows experimental | VS Code `globalStorage` path plus confirmed extension identifier `kilocode.kilo-code`. |
 | OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | Not enabled | Confirmed Linux/macOS, Windows held | ADR resolves Linux through `XDG_DATA_HOME` and macOS through the platform data root. Native Windows OpenCode layout still needs reconciliation with ADR parser expectations. |
 | OpenCode | `opencode.legacy_json` | `$XDG_DATA_HOME/opencode/storage/message` or `~/.local/share/opencode/storage/message` | `~/Library/Application Support/opencode/storage/message` | Not enabled | Confirmed Linux/macOS, Windows held | Same root model as `opencode.sqlite`; native Windows project/global storage paths need separate validation. |
-| Copilot | `copilot.process_log` | repo-local `logs/copilot` | repo-local `logs/copilot` | Operator-provided repo-local path only | Telltale-local operational model | This is Telltale's current local operational ingest path, not a generalized host discovery location. |
+| Codex | `codex.project_sessions` | project-local `.codex-worktree` | project-local `.codex-worktree` | project-local `.codex-worktree` | Candidate | Per-project Codex CLI logs; discovered only when the project root is declared in `projects.yaml`. |
+| OpenCode | `opencode.project_json` | project-local `.opencode` | project-local `.opencode` | project-local `.opencode` | Candidate | Per-project OpenCode JSON messages; discovered only when the project root is declared in `projects.yaml`. |
+| Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Telltale-local operational model | **Project-local only** — operators must declare project roots in `projects.yaml`. No home-relative auto-discovery. |
+
+## Project Roots
+
+Telltale can scan session stores inside project directories in addition to home-relative discovery. By default, Telltale scans `~/github` and `~/projects` if they exist. To customize, operators can declare project roots in a YAML config file:
+
+```yaml
+projects:
+  - name: my-project
+    path: ~/github/my-project
+```
+
+Pass the config to scans:
+
+```sh
+adr scan --once --root "$HOME" --project-config projects.yaml
+```
+
+Project-local discovery is additive: home-relative sources are still discovered from `--root`. The registry in `src/clients.rs` defines the per-client subpath for each project (for example, `logs/copilot` for Copilot, `.opencode` for OpenCode, and `.codex-worktree` for Codex). If a project has a non-standard subpath, rename the directory to match the registry subpath rather than overriding per-project paths in the YAML.
+
+The `ADR_PROJECT_CONFIG` environment variable accepts a colon-separated list of config paths when no `--project-config` flag is given. When neither is provided, Telltale uses the default paths (`~/github` and `~/projects`).
 
 ## Fixture Behavior
 
