@@ -22,7 +22,7 @@ use crate::event::{
     evidence_hash, health_event_with_metadata, load_operational_alert_config,
     operational_alert_event, session_risk_summary_event,
 };
-use crate::mcp::discover_mcp_inventory;
+use crate::mcp::{discover_mcp_inventory, discover_mcp_usage};
 use crate::parser::parse_source_records;
 use crate::rules::load_rule_set_from_paths;
 use crate::scoring::load_thresholds;
@@ -289,6 +289,7 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
             },
         );
         activities.extend(discover_mcp_inventory(config.root));
+        activities.extend(discover_mcp_usage(config.root, &sources));
         activities
     } else {
         Vec::new()

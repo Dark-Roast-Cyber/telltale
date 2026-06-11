@@ -8,6 +8,7 @@ use walkdir::WalkDir;
 use crate::clients::ClientId;
 use crate::discovery::Source;
 use crate::event::{ActivityEventInput, Event, Evidence, activity_event, evidence_hash, path_hash};
+use crate::parser::{RecordKind, parse_source_records};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ConfigFormat {
@@ -106,6 +107,185 @@ pub fn discover_mcp_inventory(root: &Path) -> Vec<(Source, Event)> {
         }
     }
     events
+}
+
+pub fn discover_mcp_inventory_servers(root: &Path) -> Vec<McpServerInventory> {
+    discover_mcp_configs(root)
+        .into_iter()
+        .flat_map(|config| parse_mcp_config(&config).unwrap_or_default())
+        .collect()
+}
+
+pub fn discover_mcp_usage(root: &Path, sources: &[Source]) -> Vec<(Source, Event)> {
+    let servers = discover_mcp_inventory_servers(root);
+    let tool_index = McpToolIndex::from_servers(&servers);
+    if tool_index.is_empty() {
+        return Vec::new();
+    }
+
+    let mut events = Vec::new();
+    for source in sources {
+        let Ok(records) = parse_source_records(source) else {
+            continue;
+        };
+        let mut sessions: BTreeMap<String, McpSessionUsage> = BTreeMap::new();
+
+        for record in records
+            .into_iter()
+            .filter(|record| record.kind == RecordKind::ToolCall)
+        {
+            let session = sessions
+                .entry(record.session_id.clone())
+                .or_insert_with(|| {
+                    McpSessionUsage::new(
+                        record.session_id.clone(),
+                        record.agent.clone(),
+                        record.model.clone(),
+                        record.provider.clone(),
+                    )
+                });
+            session.fill_metadata(&record.agent, &record.model, &record.provider);
+
+            let Some(tool_name) = record.tool_name.as_deref() else {
+                session.unattributed_tool_calls += 1;
+                continue;
+            };
+            let Some(matching_servers) = tool_index.lookup(source.client, tool_name) else {
+                session.unattributed_tool_calls += 1;
+                continue;
+            };
+
+            for server in matching_servers {
+                session.add_tool_call(server, tool_name, record.timestamp.as_deref());
+            }
+        }
+
+        for usage in sessions.into_values() {
+            for server_usage in usage.servers.values() {
+                events.push((
+                    source.clone(),
+                    mcp_usage_event(source, &usage, server_usage),
+                ));
+            }
+        }
+    }
+
+    events
+}
+
+#[derive(Debug, Default)]
+struct McpToolIndex {
+    tools: BTreeMap<(ClientId, String), Vec<McpServerInventory>>,
+}
+
+impl McpToolIndex {
+    fn from_servers(servers: &[McpServerInventory]) -> Self {
+        let mut index = Self::default();
+        for server in servers.iter().filter(|server| server.supported) {
+            for tool_name in &server.declared_tools {
+                index
+                    .tools
+                    .entry((server.client, normalize_tool_name(tool_name)))
+                    .or_default()
+                    .push(server.clone());
+            }
+        }
+        index
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
+
+    fn lookup(&self, client: ClientId, tool_name: &str) -> Option<&[McpServerInventory]> {
+        self.tools
+            .get(&(client, normalize_tool_name(tool_name)))
+            .map(Vec::as_slice)
+    }
+}
+
+#[derive(Debug)]
+struct McpSessionUsage {
+    session_id: String,
+    agent: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    unattributed_tool_calls: u32,
+    servers: BTreeMap<String, McpServerUsage>,
+}
+
+impl McpSessionUsage {
+    fn new(
+        session_id: String,
+        agent: Option<String>,
+        model: Option<String>,
+        provider: Option<String>,
+    ) -> Self {
+        Self {
+            session_id,
+            agent,
+            model,
+            provider,
+            unattributed_tool_calls: 0,
+            servers: BTreeMap::new(),
+        }
+    }
+
+    fn fill_metadata(
+        &mut self,
+        agent: &Option<String>,
+        model: &Option<String>,
+        provider: &Option<String>,
+    ) {
+        if self.agent.is_none() {
+            self.agent = agent.clone();
+        }
+        if self.model.is_none() {
+            self.model = model.clone();
+        }
+        if self.provider.is_none() {
+            self.provider = provider.clone();
+        }
+    }
+
+    fn add_tool_call(
+        &mut self,
+        server: &McpServerInventory,
+        tool_name: &str,
+        timestamp: Option<&str>,
+    ) {
+        self.servers
+            .entry(server.server_name.clone())
+            .or_insert_with(|| McpServerUsage::new(server.clone()))
+            .add_tool_call(tool_name, timestamp);
+    }
+}
+
+#[derive(Debug)]
+struct McpServerUsage {
+    server: McpServerInventory,
+    tools_used: BTreeMap<String, u32>,
+    tool_call_count: u32,
+    event_time: Option<String>,
+}
+
+impl McpServerUsage {
+    fn new(server: McpServerInventory) -> Self {
+        Self {
+            server,
+            tools_used: BTreeMap::new(),
+            tool_call_count: 0,
+            event_time: None,
+        }
+    }
+
+    fn add_tool_call(&mut self, tool_name: &str, timestamp: Option<&str>) {
+        *self.tools_used.entry(tool_name.to_string()).or_default() += 1;
+        self.tool_call_count += 1;
+        if self.event_time.is_none() {
+            self.event_time = timestamp.map(str::to_string);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -363,6 +543,79 @@ fn mcp_inventory_event(server: &McpServerInventory) -> Event {
     })
 }
 
+fn mcp_usage_event(source: &Source, session: &McpSessionUsage, usage: &McpServerUsage) -> Event {
+    activity_event(ActivityEventInput {
+        client: source.client,
+        agent: session.agent.clone(),
+        model: session.model.clone(),
+        provider: session.provider.clone(),
+        session_id: session.session_id.clone(),
+        source_path_hash: path_hash(&source.path),
+        tool_name: Some(format!("mcp::{}", usage.server.server_name)),
+        tags: vec![
+            "activity".to_string(),
+            "mcp".to_string(),
+            "mcp_usage".to_string(),
+            "tool_usage".to_string(),
+        ],
+        evidence: mcp_usage_evidence(session, usage),
+        risk_score: 0,
+        event_time: usage.event_time.clone(),
+    })
+}
+
+fn mcp_usage_evidence(session: &McpSessionUsage, usage: &McpServerUsage) -> Vec<Evidence> {
+    let tools_used = usage
+        .tools_used
+        .iter()
+        .map(|(tool_name, call_count)| {
+            serde_json::json!({
+                "tool_name": tool_name,
+                "call_count": call_count,
+            })
+        })
+        .collect::<Vec<_>>();
+    let server_type = if usage.server.url_host.is_some() {
+        Some("remote")
+    } else if usage.server.command.is_some() {
+        Some("local")
+    } else {
+        None
+    };
+    let summary = serde_json::json!({
+        "tool_usage_type": "mcp",
+        "server_name": usage.server.server_name,
+        "server_type": server_type,
+        "transport": usage.server.transport,
+        "configured_host": usage.server.url_host,
+        "server_command": usage.server.command.as_deref().map(redact_command_value),
+        "package": usage.server.package,
+        "source_id": usage.server.source_id,
+        "declared_tools": usage.server.declared_tools,
+        "declared_tool_count": usage.server.declared_tools.len(),
+        "tools_used": tools_used,
+        "tool_call_count": usage.tool_call_count,
+        "unattributed_tool_calls": session.unattributed_tool_calls,
+        "attribution_method": "declared_tools",
+    })
+    .to_string();
+
+    vec![
+        Evidence {
+            field: "tool_usage_summary".to_string(),
+            redacted_value: summary.clone(),
+            hash: Some(evidence_hash(&summary)),
+            rule_id: None,
+        },
+        Evidence {
+            field: "mcp_config_path".to_string(),
+            redacted_value: usage.server.source_id.clone(),
+            hash: Some(path_hash(&usage.server.path)),
+            rule_id: None,
+        },
+    ]
+}
+
 fn mcp_inventory_error_event(client: ClientId, error: std::io::Error) -> Event {
     activity_event(ActivityEventInput {
         client,
@@ -506,6 +759,10 @@ fn redact_command_value(command: &str) -> String {
     }
 }
 
+fn normalize_tool_name(tool_name: &str) -> String {
+    tool_name.trim().to_ascii_lowercase()
+}
+
 fn host_from_url(url: &str) -> Option<String> {
     let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     after_scheme
@@ -529,8 +786,12 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{ConfigFormat, DiscoveredMcpConfig, discover_mcp_inventory, parse_toml_mcp_config};
-    use crate::clients::ClientId;
+    use super::{
+        ConfigFormat, DiscoveredMcpConfig, McpToolIndex, discover_mcp_inventory,
+        discover_mcp_inventory_servers, discover_mcp_usage, parse_toml_mcp_config,
+    };
+    use crate::clients::{ClientId, SourceKind};
+    use crate::discovery::Source;
 
     #[test]
     fn emits_static_mcp_inventory_for_json_configs() {
@@ -600,5 +861,124 @@ mod tests {
             inventory[1].url_host.as_deref(),
             Some("mcp.example.invalid")
         );
+    }
+
+    #[test]
+    fn builds_mcp_tool_index_from_declared_tools() {
+        let temp = tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join(".mcp.json"),
+            r#"{
+                "mcpServers": {
+                    "github": {
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-github"],
+                        "tools": [{"name": "list_issues"}, {"name": "create_issue"}]
+                    },
+                    "empty": {"command": "npx"}
+                }
+            }"#,
+        )
+        .expect("write config");
+
+        let servers = discover_mcp_inventory_servers(temp.path());
+        let index = McpToolIndex::from_servers(&servers);
+
+        let matches = index
+            .lookup(ClientId::Claude, "LIST_ISSUES")
+            .expect("tool match");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].server_name, "github");
+        assert!(index.lookup(ClientId::Claude, "not_declared").is_none());
+    }
+
+    #[test]
+    fn emits_mcp_usage_event_for_attributed_tool_calls() {
+        let temp = tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join(".mcp.json"),
+            r#"{
+                "mcpServers": {
+                    "github": {
+                        "type": "streamable-http",
+                        "url": "https://api.githubcopilot.com/mcp/",
+                        "tools": [{"name": "list_issues"}, {"name": "create_issue"}]
+                    }
+                }
+            }"#,
+        )
+        .expect("write config");
+        let session_path = temp.path().join("session-a.jsonl");
+        fs::write(
+            &session_path,
+            concat!(
+                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:00Z","tool_name":"list_issues","agent":"claude","model":"fixture-model","provider":"anthropic"}"#,
+                "\n",
+                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:01Z","tool_name":"create_issue"}"#,
+                "\n",
+                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:02Z","tool_name":"view"}"#,
+                "\n",
+            ),
+        )
+        .expect("write session");
+        let sources = vec![Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.fixture".to_string(),
+            path: session_path,
+        }];
+
+        let events = discover_mcp_usage(temp.path(), &sources);
+        assert_eq!(events.len(), 1);
+        let event = &events[0].1;
+        assert_eq!(event.event_type, "activity");
+        assert_eq!(event.session_id, "session-a");
+        assert_eq!(event.tool_name.as_deref(), Some("mcp::github"));
+        assert!(event.tags.iter().any(|tag| tag == "mcp_usage"));
+        assert_eq!(event.risk_score, 0);
+        let summary = event
+            .evidence
+            .iter()
+            .find(|evidence| evidence.field == "tool_usage_summary")
+            .expect("summary evidence");
+        assert!(summary.redacted_value.contains("list_issues"));
+        assert!(summary.redacted_value.contains("create_issue"));
+        assert!(summary.redacted_value.contains("api.githubcopilot.com"));
+        assert!(
+            summary
+                .redacted_value
+                .contains(r#""unattributed_tool_calls":1"#)
+        );
+    }
+
+    #[test]
+    fn skips_mcp_usage_when_no_declared_tools_match() {
+        let temp = tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join(".mcp.json"),
+            r#"{
+                "mcpServers": {
+                    "github": {
+                        "command": "npx",
+                        "tools": [{"name": "list_issues"}]
+                    }
+                }
+            }"#,
+        )
+        .expect("write config");
+        let session_path = temp.path().join("session-a.jsonl");
+        fs::write(
+            &session_path,
+            r#"{"type":"tool_call","session_id":"session-a","tool_name":"view"}"#,
+        )
+        .expect("write session");
+        let sources = vec![Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.fixture".to_string(),
+            path: session_path,
+        }];
+
+        assert!(discover_mcp_usage(temp.path(), &sources).is_empty());
     }
 }
