@@ -22,6 +22,8 @@ pub struct ScanState {
     pub baseline_source_contributions: BTreeMap<String, BaselineSourceContribution>,
     #[serde(default)]
     pub source_observations: BTreeMap<String, SourceObservation>,
+    #[serde(default)]
+    pub sqlite_ingestion_cursors: BTreeMap<String, SqliteIngestionCursor>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -31,6 +33,17 @@ pub struct SourceObservation {
     #[serde(default)]
     pub source_instance_id: String,
     pub last_seen_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SqliteIngestionCursor {
+    pub client: String,
+    pub source_id: String,
+    #[serde(default)]
+    pub source_instance_id: String,
+    pub table: String,
+    pub last_time_updated: i64,
+    pub observed_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -235,6 +248,36 @@ impl ScanState {
         }
     }
 
+    pub fn sqlite_ingestion_cursor_time_updated(
+        &self,
+        source: &Source,
+        table: &str,
+    ) -> Option<i64> {
+        self.sqlite_ingestion_cursors
+            .get(&sqlite_ingestion_cursor_key(source, table))
+            .map(|cursor| cursor.last_time_updated)
+    }
+
+    pub fn observe_sqlite_ingestion_cursor(
+        &mut self,
+        source: &Source,
+        table: &str,
+        last_time_updated: i64,
+        observed_at_unix_ms: u64,
+    ) {
+        self.sqlite_ingestion_cursors.insert(
+            sqlite_ingestion_cursor_key(source, table),
+            SqliteIngestionCursor {
+                client: source.client.as_str().to_string(),
+                source_id: source.source_id.clone(),
+                source_instance_id: source_instance_id(source),
+                table: table.to_string(),
+                last_time_updated,
+                observed_at_unix_ms,
+            },
+        );
+    }
+
     pub fn has_legacy_source_identity_state(&self) -> bool {
         self.baseline_source_contributions
             .values()
@@ -271,6 +314,16 @@ fn source_observation_key(source: &Source) -> String {
         source.client.as_str(),
         source.source_id,
         source_instance_id(source)
+    )
+}
+
+fn sqlite_ingestion_cursor_key(source: &Source, table: &str) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        source.client.as_str(),
+        source.source_id,
+        source_instance_id(source),
+        table
     )
 }
 
@@ -491,6 +544,32 @@ mod tests {
         );
         assert!(state.baseline_snapshots.snapshots.is_empty());
         assert!(state.baseline_source_contributions.is_empty());
+    }
+
+    #[test]
+    fn persists_sqlite_ingestion_cursors_by_source_and_table() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("sqlite-cursor-state.json");
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: Path::new("/home/user/.local/share/opencode/opencode.db").to_path_buf(),
+        };
+
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, "part", 1_775_000_001_000, 1234);
+        state.save(&path).expect("save");
+
+        let reloaded = ScanState::load(&path).expect("reload");
+        assert_eq!(
+            reloaded.sqlite_ingestion_cursor_time_updated(&source, "part"),
+            Some(1_775_000_001_000)
+        );
+        assert_eq!(
+            reloaded.sqlite_ingestion_cursor_time_updated(&source, "message"),
+            None
+        );
     }
 
     #[test]

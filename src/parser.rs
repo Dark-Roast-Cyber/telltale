@@ -10,6 +10,21 @@ use crate::discovery::Source;
 
 const OPENCODE_SQLITE_PART_LIMIT: i64 = 5_000;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ParseOptions {
+    pub sqlite_part_min_time_updated: Option<i64>,
+    pub sqlite_part_limit: i64,
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        Self {
+            sqlite_part_min_time_updated: None,
+            sqlite_part_limit: OPENCODE_SQLITE_PART_LIMIT,
+        }
+    }
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum ParseError {
@@ -88,20 +103,60 @@ pub struct NormalizedRecord {
     pub content: String,
 }
 
-pub fn parse_source_records(source: &Source) -> Result<Vec<NormalizedRecord>, ParseError> {
-    let parsed_records = extract_source_records(source)?;
-    Ok(normalize_source_records(source, parsed_records))
+#[derive(Debug, Clone)]
+pub struct ParsedSourceRecords {
+    pub records: Vec<NormalizedRecord>,
+    pub sqlite_part_max_time_updated: Option<i64>,
 }
 
-fn extract_source_records(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
-    match source.kind {
-        SourceKind::Json => extract_gemini_json_source(source),
-        SourceKind::Jsonl | SourceKind::ArchivedJsonl | SourceKind::HeadlessJsonl => {
-            extract_jsonl_source(source)
+pub fn parse_source_records(source: &Source) -> Result<Vec<NormalizedRecord>, ParseError> {
+    Ok(parse_source_records_with_options(source, ParseOptions::default())?.records)
+}
+
+pub fn parse_source_records_with_options(
+    source: &Source,
+    options: ParseOptions,
+) -> Result<ParsedSourceRecords, ParseError> {
+    let extracted = extract_source_records(source, options)?;
+    Ok(ParsedSourceRecords {
+        records: normalize_source_records(source, extracted.records),
+        sqlite_part_max_time_updated: extracted.sqlite_part_max_time_updated,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct ExtractedSourceRecords {
+    records: Vec<ParsedRecord>,
+    sqlite_part_max_time_updated: Option<i64>,
+}
+
+impl ExtractedSourceRecords {
+    fn records(records: Vec<ParsedRecord>) -> Self {
+        Self {
+            records,
+            sqlite_part_max_time_updated: None,
         }
-        SourceKind::LegacyJson | SourceKind::UiMessagesJson => extract_json_source(source),
-        SourceKind::Sqlite => extract_sqlite_source(source),
-        SourceKind::CopilotProcessLog => extract_copilot_process_log(source),
+    }
+}
+
+fn extract_source_records(
+    source: &Source,
+    options: ParseOptions,
+) -> Result<ExtractedSourceRecords, ParseError> {
+    match source.kind {
+        SourceKind::Json => Ok(ExtractedSourceRecords::records(extract_gemini_json_source(
+            source,
+        )?)),
+        SourceKind::Jsonl | SourceKind::ArchivedJsonl | SourceKind::HeadlessJsonl => Ok(
+            ExtractedSourceRecords::records(extract_jsonl_source(source)?),
+        ),
+        SourceKind::LegacyJson | SourceKind::UiMessagesJson => Ok(ExtractedSourceRecords::records(
+            extract_json_source(source)?,
+        )),
+        SourceKind::Sqlite => extract_sqlite_source(source, options),
+        SourceKind::CopilotProcessLog => Ok(ExtractedSourceRecords::records(
+            extract_copilot_process_log(source)?,
+        )),
     }
 }
 
@@ -237,18 +292,29 @@ fn extract_gemini_json_source(source: &Source) -> Result<Vec<ParsedRecord>, Pars
     Ok(records)
 }
 
-fn extract_sqlite_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
+fn extract_sqlite_source(
+    source: &Source,
+    options: ParseOptions,
+) -> Result<ExtractedSourceRecords, ParseError> {
     let conn = Connection::open(&source.path)?;
     let mut records = Vec::new();
+    let mut sqlite_part_max_time_updated = None;
 
-    if sqlite_table_exists(&conn, "message")? {
+    let has_message_table = sqlite_table_exists(&conn, "message")?;
+    if has_message_table {
         records.extend(extract_sqlite_message_records(&conn)?);
     }
     if sqlite_table_exists(&conn, "part")? {
-        records.extend(extract_sqlite_part_records(&conn)?);
+        let (part_records, max_time_updated) =
+            extract_sqlite_part_records(&conn, options, has_message_table)?;
+        records.extend(part_records);
+        sqlite_part_max_time_updated = max_time_updated;
     }
 
-    Ok(records)
+    Ok(ExtractedSourceRecords {
+        records,
+        sqlite_part_max_time_updated,
+    })
 }
 
 fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool, rusqlite::Error> {
@@ -270,22 +336,65 @@ fn extract_sqlite_message_records(conn: &Connection) -> Result<Vec<ParsedRecord>
         .collect())
 }
 
-fn extract_sqlite_part_records(conn: &Connection) -> Result<Vec<ParsedRecord>, ParseError> {
-    let mut stmt = conn.prepare(
-        "select * from (
-            select part.*, rowid as __telltale_rowid from part
-            where json_extract(data, '$.type') in ('tool', 'text')
-            order by time_created desc, rowid desc
-            limit ?1
-         ) order by time_created, __telltale_rowid",
-    )?;
-    let rows = sqlite_rows_as_values_with_params(&mut stmt, [OPENCODE_SQLITE_PART_LIMIT])?;
+fn extract_sqlite_part_records(
+    conn: &Connection,
+    options: ParseOptions,
+    include_message_context: bool,
+) -> Result<(Vec<ParsedRecord>, Option<i64>), ParseError> {
+    let limit = options.sqlite_part_limit.max(1);
+    let rows = if let Some(min_time_updated) = options.sqlite_part_min_time_updated {
+        let query = sqlite_part_query(true, include_message_context);
+        let mut stmt = conn.prepare(&query)?;
+        sqlite_rows_as_values_with_params(&mut stmt, rusqlite::params![min_time_updated, limit])?
+    } else {
+        let query = sqlite_part_query(false, include_message_context);
+        let mut stmt = conn.prepare(&query)?;
+        sqlite_rows_as_values_with_params(&mut stmt, rusqlite::params![limit])?
+    };
 
-    Ok(rows
+    let max_time_updated = rows.iter().filter_map(sqlite_time_updated).max();
+
+    let records = rows
         .into_iter()
         .map(normalize_sqlite_part_value)
         .map(|value| sqlite_value_record(&value, "unknown"))
-        .collect())
+        .collect();
+
+    Ok((records, max_time_updated))
+}
+
+fn sqlite_part_query(has_min_time_updated: bool, include_message_context: bool) -> String {
+    let select = if include_message_context {
+        "select part.*, part.rowid as __telltale_rowid, message.data as __telltale_message_data \
+         from part left join message on message.id = part.message_id"
+    } else {
+        "select part.*, part.rowid as __telltale_rowid from part"
+    };
+    let min_filter = if has_min_time_updated {
+        " and time_updated >= ?1"
+    } else {
+        ""
+    };
+    let limit_param = if has_min_time_updated { "?2" } else { "?1" };
+    let order = if has_min_time_updated {
+        "time_updated, part.rowid"
+    } else {
+        "time_updated desc, part.rowid desc"
+    };
+
+    format!(
+        "select * from (
+            {select}
+            where json_extract(part.data, '$.type') in ('tool', 'text')
+              {min_filter}
+            order by {order}
+            limit {limit_param}
+         ) order by time_updated, __telltale_rowid"
+    )
+}
+
+fn sqlite_time_updated(value: &Value) -> Option<i64> {
+    value.get("time_updated").and_then(Value::as_i64)
 }
 
 fn sqlite_rows_as_values(
@@ -462,6 +571,17 @@ fn record_kind(value: &Value) -> RecordKind {
         Some("assistant_message" | "assistant" | "gemini" | "model") => {
             RecordKind::AssistantMessage
         }
+        Some("text") if value.get("role").and_then(Value::as_str) == Some("user") => {
+            RecordKind::UserMessage
+        }
+        Some("text")
+            if matches!(
+                value.get("role").and_then(Value::as_str),
+                Some("assistant" | "model")
+            ) =>
+        {
+            RecordKind::AssistantMessage
+        }
         Some("tool_call") => RecordKind::ToolCall,
         Some("tool_result") => RecordKind::ToolResult,
         Some("tool") if opencode_tool_part_is_result(value) => RecordKind::ToolResult,
@@ -620,6 +740,25 @@ fn normalize_sqlite_part_value(value: Value) -> Value {
         return Value::Object(object);
     };
 
+    if let Some(message_data) = object
+        .get("__telltale_message_data")
+        .and_then(Value::as_str)
+        && let Ok(Value::Object(message_object)) = serde_json::from_str::<Value>(message_data)
+    {
+        for key in [
+            "role",
+            "agent",
+            "modelID",
+            "model",
+            "providerID",
+            "provider",
+        ] {
+            if let Some(value) = message_object.get(key) {
+                data_object.entry(key.to_string()).or_insert(value.clone());
+            }
+        }
+    }
+
     if let Some(Value::Object(state)) = data_object.get("state") {
         let input = state.get("input").cloned();
         let output = state.get("output").or_else(|| state.get("error")).cloned();
@@ -632,6 +771,9 @@ fn normalize_sqlite_part_value(value: Value) -> Value {
     }
 
     for (key, value) in object {
+        if key.starts_with("__telltale_") {
+            continue;
+        }
         data_object.entry(key).or_insert(value);
     }
 
@@ -706,7 +848,8 @@ mod tests {
     use crate::discovery::discover_sources;
 
     use super::{
-        ParseError, ParsedRecord, RecordKind, normalize_source_record, parse_source_records,
+        ParseError, ParseOptions, ParsedRecord, RecordKind, normalize_source_record,
+        parse_source_records, parse_source_records_with_options,
     };
 
     #[test]
@@ -1741,6 +1884,133 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
             Some("{\"command\":\"cat .env\"}")
         );
         assert!(records[0].content.contains("hidden instruction"));
+    }
+
+    #[test]
+    fn opencode_sqlite_part_options_apply_cursor_and_limit() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open db");
+        conn.execute_batch(
+            "create table part (
+                id text primary key,
+                message_id text not null,
+                session_id text not null,
+                time_created integer not null,
+                time_updated integer not null,
+                data text not null
+            );",
+        )
+        .expect("schema");
+        for (id, updated, text) in [
+            ("part-a", 1_000_i64, "first"),
+            ("part-b", 2_000_i64, "second"),
+            ("part-c", 3_000_i64, "third"),
+        ] {
+            conn.execute(
+                "insert into part (id, message_id, session_id, time_created, time_updated, data)
+                 values (?1, ?2, ?3, ?4, ?5, ?6)",
+                (
+                    id,
+                    "message-part",
+                    "session-part-cursor",
+                    updated,
+                    updated,
+                    serde_json::json!({
+                        "type": "text",
+                        "text": text,
+                        "time": "2026-05-01T16:00:00Z"
+                    })
+                    .to_string(),
+                ),
+            )
+            .expect("insert row");
+        }
+
+        let source = crate::discovery::Source {
+            client: crate::clients::ClientId::OpenCode,
+            kind: crate::clients::SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: db_path,
+        };
+
+        let parsed = parse_source_records_with_options(
+            &source,
+            ParseOptions {
+                sqlite_part_min_time_updated: Some(2_000),
+                sqlite_part_limit: 1,
+            },
+        )
+        .expect("records");
+
+        assert_eq!(parsed.records.len(), 1);
+        assert!(parsed.records[0].content.contains("second"));
+        assert_eq!(parsed.sqlite_part_max_time_updated, Some(2_000));
+    }
+
+    #[test]
+    fn opencode_sqlite_part_text_inherits_message_role() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open db");
+        conn.execute_batch(
+            "create table message (
+                id text primary key,
+                session_id text not null,
+                time_created integer not null,
+                time_updated integer not null,
+                data text not null
+            );
+            create table part (
+                id text primary key,
+                message_id text not null,
+                session_id text not null,
+                time_created integer not null,
+                time_updated integer not null,
+                data text not null
+            );",
+        )
+        .expect("schema");
+        conn.execute(
+            "insert into message (id, session_id, time_created, time_updated, data)
+             values (?1, ?2, ?3, ?4, ?5)",
+            (
+                "message-part",
+                "session-part-role",
+                1_000_i64,
+                1_000_i64,
+                serde_json::json!({"role": "assistant", "modelID": "fixture-model"}).to_string(),
+            ),
+        )
+        .expect("insert message");
+        conn.execute(
+            "insert into part (id, message_id, session_id, time_created, time_updated, data)
+             values (?1, ?2, ?3, ?4, ?5, ?6)",
+            (
+                "part-text",
+                "message-part",
+                "session-part-role",
+                2_000_i64,
+                2_000_i64,
+                serde_json::json!({"type": "text", "text": "joined text content"}).to_string(),
+            ),
+        )
+        .expect("insert part");
+
+        let source = crate::discovery::Source {
+            client: crate::clients::ClientId::OpenCode,
+            kind: crate::clients::SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: db_path,
+        };
+
+        let records = parse_source_records(&source).expect("records");
+        let part_record = records
+            .iter()
+            .find(|record| record.content.contains("joined text content"))
+            .expect("part text record");
+        assert_eq!(part_record.kind, RecordKind::AssistantMessage);
+        assert_eq!(part_record.model.as_deref(), Some("fixture-model"));
     }
 
     #[test]

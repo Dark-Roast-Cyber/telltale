@@ -12,23 +12,28 @@ use time::OffsetDateTime;
 
 use crate::allowlist::{load_allowlist, suppress_detection};
 use crate::baseline::{BaselineDeviationConfig, build_baseline_summaries};
-use crate::clients::ClientId;
-use crate::detection::{detect_sources_with_rules, summarize_source_activities_with_baselines};
+use crate::clients::{ClientId, SourceKind};
+use crate::detection::{detect_parsed_source_records, summarize_parsed_source_activity};
 use crate::discovery::{
     Source, discover_sources_with_projects, discover_watch_roots_with_projects, is_fixture_root,
 };
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertInput, SessionRiskSummaryEventInput,
     evidence_hash, health_event_with_metadata, load_operational_alert_config,
-    operational_alert_event, session_risk_summary_event,
+    operational_alert_event, scanner_error_event, session_risk_summary_event,
 };
 use crate::mcp::{discover_mcp_inventory, discover_mcp_usage};
-use crate::parser::parse_source_records;
+use crate::parser::{
+    NormalizedRecord, ParseError, ParseOptions, parse_source_records_with_options,
+};
 use crate::rules::load_rule_set_from_paths;
 use crate::scoring::load_thresholds;
 use crate::sink::{LocalJsonlSink, SplunkHecConfig, SplunkHecHttpSink, emit_events};
 use crate::state::{ScanState, source_fingerprint};
 use crate::triage::maybe_triage;
+
+const OPENCODE_SQLITE_PART_TABLE: &str = "part";
+const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
 
 pub(crate) struct ScanConfig<'a> {
     pub(crate) root: &'a Path,
@@ -274,7 +279,8 @@ fn watch_event_should_scan(event: &NotifyEvent) -> bool {
 
 pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     let scan_started = Instant::now();
-    if !config.dry_run && !config.allow_fixtures && is_fixture_root(config.root) {
+    let fixture_root = is_fixture_root(config.root);
+    if !config.dry_run && !config.allow_fixtures && fixture_root {
         return Err(
             "refusing to write fixture/demo data to log path; use --dry-run or --allow-fixtures"
                 .into(),
@@ -293,6 +299,9 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         let allowed_clients = config.clients.iter().copied().collect::<BTreeSet<_>>();
         sources.retain(|source| allowed_clients.contains(&source.client));
     }
+    if !fixture_root {
+        prefer_opencode_sqlite_over_legacy_json(&mut sources);
+    }
     if let Some(max_sources) = config.max_sources {
         sources.truncate(max_sources);
     }
@@ -302,23 +311,53 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     let allowlist = load_allowlist(config.allowlist_path)?;
     let mut state = ScanState::load(config.state_path)?;
     let baseline_snapshots = state.baseline_snapshots.clone();
-    update_baseline_snapshots(&mut state, &sources, config.rebuild_baselines);
+    let parsed_sources = parse_scan_sources(&sources, &state, config.backfill, config.dry_run);
+    update_baseline_snapshots(&mut state, &parsed_sources, config.rebuild_baselines);
     let activities = if config.emit_activity {
-        let mut activities = summarize_source_activities_with_baselines(
-            &sources,
-            &baseline_snapshots,
-            BaselineDeviationConfig {
-                enabled: config.baseline_deviation_scoring,
-                ..BaselineDeviationConfig::default()
-            },
-        );
+        let baseline_deviation_config = BaselineDeviationConfig {
+            enabled: config.baseline_deviation_scoring,
+            ..BaselineDeviationConfig::default()
+        };
+        let mut activities = parsed_sources
+            .iter()
+            .filter_map(|parsed_source| {
+                parsed_source
+                    .records
+                    .as_ref()
+                    .ok()
+                    .map(|records| (parsed_source, records))
+            })
+            .flat_map(|(parsed_source, records)| {
+                summarize_parsed_source_activity(
+                    &parsed_source.source,
+                    records,
+                    &baseline_snapshots,
+                    baseline_deviation_config,
+                )
+                .into_iter()
+                .map(|event| (parsed_source.source.clone(), event))
+            })
+            .collect::<Vec<_>>();
         activities.extend(discover_mcp_inventory(config.root));
         activities.extend(discover_mcp_usage(config.root, &sources));
         activities
     } else {
         Vec::new()
     };
-    let mut detections = detect_sources_with_rules(&sources, &rule_set);
+    let mut detections = parsed_sources
+        .iter()
+        .flat_map(|parsed_source| match &parsed_source.records {
+            Ok(records) => detect_parsed_source_records(&parsed_source.source, &rule_set, records)
+                .into_iter()
+                .map(|event| (parsed_source.source.clone(), event))
+                .collect::<Vec<_>>(),
+            Err(ParseError::Empty) => Vec::new(),
+            Err(error) => vec![(
+                parsed_source.source.clone(),
+                scanner_error_event(&parsed_source.source, error),
+            )],
+        })
+        .collect::<Vec<_>>();
     let mut suppressed_count = 0_usize;
     for (source, detection) in &mut detections {
         if let Some(suppression_match) = allowlist.suppression_for(source, detection) {
@@ -398,6 +437,9 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         }));
     }
     state.observe_sources(&sources, observed_at_unix_ms);
+    if !config.dry_run && !config.backfill {
+        observe_sqlite_ingestion_cursors(&mut state, &parsed_sources, observed_at_unix_ms);
+    }
 
     let health_emitted = config.dry_run
         || config.backfill
@@ -459,6 +501,91 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
+}
+
+struct ParsedScanSource {
+    source: Source,
+    records: Result<Vec<NormalizedRecord>, ParseError>,
+    sqlite_part_max_time_updated: Option<i64>,
+}
+
+fn parse_scan_sources(
+    sources: &[Source],
+    state: &ScanState,
+    backfill: bool,
+    dry_run: bool,
+) -> Vec<ParsedScanSource> {
+    sources
+        .iter()
+        .map(|source| {
+            let options = parse_options_for_scan_source(source, state, backfill, dry_run);
+            match parse_source_records_with_options(source, options) {
+                Ok(parsed) => ParsedScanSource {
+                    source: source.clone(),
+                    records: Ok(parsed.records),
+                    sqlite_part_max_time_updated: parsed.sqlite_part_max_time_updated,
+                },
+                Err(error) => ParsedScanSource {
+                    source: source.clone(),
+                    records: Err(error),
+                    sqlite_part_max_time_updated: None,
+                },
+            }
+        })
+        .collect()
+}
+
+fn parse_options_for_scan_source(
+    source: &Source,
+    state: &ScanState,
+    backfill: bool,
+    dry_run: bool,
+) -> ParseOptions {
+    let mut options = ParseOptions::default();
+    if backfill || dry_run || !is_opencode_sqlite_source(source) {
+        return options;
+    }
+
+    options.sqlite_part_min_time_updated = state
+        .sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_PART_TABLE)
+        .map(|last_seen| last_seen.saturating_sub(OPENCODE_SQLITE_CURSOR_OVERLAP_MS));
+    options
+}
+
+fn observe_sqlite_ingestion_cursors(
+    state: &mut ScanState,
+    parsed_sources: &[ParsedScanSource],
+    observed_at_unix_ms: u64,
+) {
+    for parsed_source in parsed_sources {
+        if !is_opencode_sqlite_source(&parsed_source.source) || parsed_source.records.is_err() {
+            continue;
+        }
+        if let Some(last_time_updated) = parsed_source.sqlite_part_max_time_updated {
+            state.observe_sqlite_ingestion_cursor(
+                &parsed_source.source,
+                OPENCODE_SQLITE_PART_TABLE,
+                last_time_updated,
+                observed_at_unix_ms,
+            );
+        }
+    }
+}
+
+fn is_opencode_sqlite_source(source: &Source) -> bool {
+    source.client == ClientId::OpenCode && source.kind == SourceKind::Sqlite
+}
+
+fn prefer_opencode_sqlite_over_legacy_json(sources: &mut Vec<Source>) {
+    let has_opencode_sqlite = sources.iter().any(is_opencode_sqlite_source);
+    if !has_opencode_sqlite {
+        return;
+    }
+    sources.retain(|source| {
+        !(source.client == ClientId::OpenCode
+            && source.kind == SourceKind::LegacyJson
+            && source.source_id == "opencode.legacy_json")
+    });
 }
 
 #[derive(Debug)]
@@ -665,20 +792,25 @@ fn splunk_hec_sink(
     }
 }
 
-fn update_baseline_snapshots(state: &mut ScanState, sources: &[Source], force_rebuild: bool) {
+fn update_baseline_snapshots(
+    state: &mut ScanState,
+    parsed_sources: &[ParsedScanSource],
+    force_rebuild: bool,
+) {
     if state.has_legacy_source_identity_state() {
         state.drop_legacy_source_identity_state();
         state.rebuild_baseline_snapshots_from_source_contributions();
     }
-    for source in sources {
+    for parsed_source in parsed_sources {
+        let source = &parsed_source.source;
         let fingerprint = source_fingerprint(source);
         if !force_rebuild && state.seen_source_fingerprints.contains(&fingerprint) {
             continue;
         }
-        let Ok(records) = parse_source_records(source) else {
+        let Ok(records) = &parsed_source.records else {
             continue;
         };
-        let summaries = build_baseline_summaries(&records);
+        let summaries = build_baseline_summaries(records);
         state.record_baseline_source_contribution(source, fingerprint.clone(), summaries);
         state.rebuild_baseline_snapshots_from_source_contributions();
         state.seen_source_fingerprints.insert(fingerprint);
@@ -770,4 +902,62 @@ fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_jso
         .get(key)
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opencode_sqlite_scan_options_use_cursor_overlap_for_live_scans() {
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: PathBuf::from("/home/user/.local/share/opencode/opencode.db"),
+        };
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 1_000_000, 42);
+
+        let live_options = parse_options_for_scan_source(&source, &state, false, false);
+        assert_eq!(
+            live_options.sqlite_part_min_time_updated,
+            Some(1_000_000 - OPENCODE_SQLITE_CURSOR_OVERLAP_MS)
+        );
+
+        let dry_run_options = parse_options_for_scan_source(&source, &state, false, true);
+        assert_eq!(dry_run_options.sqlite_part_min_time_updated, None);
+
+        let backfill_options = parse_options_for_scan_source(&source, &state, true, false);
+        assert_eq!(backfill_options.sqlite_part_min_time_updated, None);
+    }
+
+    #[test]
+    fn prefers_opencode_sqlite_over_host_legacy_json() {
+        let sqlite = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: PathBuf::from("/home/user/.local/share/opencode/opencode.db"),
+        };
+        let legacy = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::LegacyJson,
+            source_id: "opencode.legacy_json".to_string(),
+            path: PathBuf::from(
+                "/home/user/.local/share/opencode/storage/message/session/message.json",
+            ),
+        };
+        let codex = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path: PathBuf::from("/home/user/.codex/sessions/session.jsonl"),
+        };
+        let mut sources = vec![legacy.clone(), sqlite.clone(), codex.clone()];
+
+        prefer_opencode_sqlite_over_legacy_json(&mut sources);
+
+        assert_eq!(sources, vec![sqlite, codex]);
+    }
 }

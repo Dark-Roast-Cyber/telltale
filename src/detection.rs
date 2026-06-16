@@ -66,7 +66,16 @@ fn detect_source(source: &Source, rule_set: &crate::rules::CompiledRuleSet) -> V
         Err(ParseError::Empty) => return vec![],
         Err(e) => return vec![scanner_error_event(source, &e)],
     };
-    let sessions = group_records_by_session(parsed);
+
+    detect_parsed_source_records(source, rule_set, &parsed)
+}
+
+pub(crate) fn detect_parsed_source_records(
+    source: &Source,
+    rule_set: &crate::rules::CompiledRuleSet,
+    parsed: &[NormalizedRecord],
+) -> Vec<Event> {
+    let sessions = group_records_by_session(parsed.to_vec());
 
     sessions
         .iter()
@@ -85,7 +94,21 @@ fn summarize_source_activity(
         Err(e) => return vec![scanner_error_event(source, &e)],
     };
 
-    group_records_by_session(parsed)
+    summarize_parsed_source_activity(
+        source,
+        &parsed,
+        baseline_snapshots,
+        baseline_deviation_config,
+    )
+}
+
+pub(crate) fn summarize_parsed_source_activity(
+    source: &Source,
+    parsed: &[NormalizedRecord],
+    baseline_snapshots: &BaselineSnapshotStore,
+    baseline_deviation_config: BaselineDeviationConfig,
+) -> Vec<Event> {
+    group_records_by_session(parsed.to_vec())
         .iter()
         .filter_map(|(_, records)| {
             activity_records(

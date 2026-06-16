@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use jsonschema::validator_for;
+use rusqlite::Connection;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -3368,6 +3369,96 @@ fn scan_once_can_emit_activity_events() {
             && event["client"] == "opencode"
             && (event["severity"] == "informational" || event["severity"] == "low")
     }));
+}
+
+#[test]
+fn scan_once_persists_opencode_sqlite_part_cursor() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("home");
+    let opencode_dir = root.join(".local/share/opencode");
+    fs::create_dir_all(&opencode_dir).expect("opencode dir");
+    let db_path = opencode_dir.join("opencode.db");
+    let conn = Connection::open(&db_path).expect("open db");
+    conn.execute_batch(
+        "create table message (
+            id text primary key,
+            session_id text not null,
+            time_created integer not null,
+            time_updated integer not null,
+            data text not null
+        );
+        create table part (
+            id text primary key,
+            message_id text not null,
+            session_id text not null,
+            time_created integer not null,
+            time_updated integer not null,
+            data text not null
+        );",
+    )
+    .expect("schema");
+    conn.execute(
+        "insert into message (id, session_id, time_created, time_updated, data)
+         values (?1, ?2, ?3, ?4, ?5)",
+        (
+            "message-a",
+            "session-a",
+            1_775_000_000_000_i64,
+            1_775_000_000_000_i64,
+            serde_json::json!({"role": "assistant"}).to_string(),
+        ),
+    )
+    .expect("insert message");
+    conn.execute(
+        "insert into part (id, message_id, session_id, time_created, time_updated, data)
+         values (?1, ?2, ?3, ?4, ?5, ?6)",
+        (
+            "part-a",
+            "message-a",
+            "session-a",
+            1_775_000_001_000_i64,
+            1_775_000_001_000_i64,
+            serde_json::json!({"type": "text", "text": "benign assistant response"}).to_string(),
+        ),
+    )
+    .expect("insert part");
+
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--emit-activity",
+            "--client",
+            "opencode",
+            "--root",
+        ])
+        .arg(&root)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["source_counts"]["opencode.sqlite"], 1);
+
+    let state: Value = serde_json::from_str(&fs::read_to_string(state_path).expect("state file"))
+        .expect("state json");
+    let cursors = state["sqlite_ingestion_cursors"]
+        .as_object()
+        .expect("sqlite cursors");
+    assert_eq!(cursors.len(), 1);
+    let cursor = cursors.values().next().expect("cursor");
+    assert_eq!(cursor["table"], "part");
+    assert_eq!(cursor["last_time_updated"], 1_775_000_001_000_i64);
 }
 
 #[test]
