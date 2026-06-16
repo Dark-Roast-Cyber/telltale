@@ -8,6 +8,8 @@ use time::format_description::well_known::Rfc3339;
 use crate::clients::{ClientId, SourceKind};
 use crate::discovery::Source;
 
+const OPENCODE_SQLITE_PART_LIMIT: i64 = 5_000;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum ParseError {
@@ -237,13 +239,71 @@ fn extract_gemini_json_source(source: &Source) -> Result<Vec<ParsedRecord>, Pars
 
 fn extract_sqlite_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
     let conn = Connection::open(&source.path)?;
+    let mut records = Vec::new();
+
+    if sqlite_table_exists(&conn, "message")? {
+        records.extend(extract_sqlite_message_records(&conn)?);
+    }
+    if sqlite_table_exists(&conn, "part")? {
+        records.extend(extract_sqlite_part_records(&conn)?);
+    }
+
+    Ok(records)
+}
+
+fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "select exists(select 1 from sqlite_master where type = 'table' and name = ?1)",
+        [table_name],
+        |row| row.get::<_, bool>(0),
+    )
+}
+
+fn extract_sqlite_message_records(conn: &Connection) -> Result<Vec<ParsedRecord>, ParseError> {
     let mut stmt = conn.prepare("select * from message order by rowid")?;
+    let rows = sqlite_rows_as_values(&mut stmt)?;
+
+    Ok(rows
+        .into_iter()
+        .map(normalize_sqlite_message_value)
+        .map(|value| sqlite_value_record(&value, "unknown"))
+        .collect())
+}
+
+fn extract_sqlite_part_records(conn: &Connection) -> Result<Vec<ParsedRecord>, ParseError> {
+    let mut stmt = conn.prepare(
+        "select * from (
+            select part.*, rowid as __telltale_rowid from part
+            where json_extract(data, '$.type') in ('tool', 'text')
+            order by time_created desc, rowid desc
+            limit ?1
+         ) order by time_created, __telltale_rowid",
+    )?;
+    let rows = sqlite_rows_as_values_with_params(&mut stmt, [OPENCODE_SQLITE_PART_LIMIT])?;
+
+    Ok(rows
+        .into_iter()
+        .map(normalize_sqlite_part_value)
+        .map(|value| sqlite_value_record(&value, "unknown"))
+        .collect())
+}
+
+fn sqlite_rows_as_values(
+    stmt: &mut rusqlite::Statement<'_>,
+) -> Result<Vec<Value>, rusqlite::Error> {
+    sqlite_rows_as_values_with_params(stmt, [])
+}
+
+fn sqlite_rows_as_values_with_params<P: rusqlite::Params>(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: P,
+) -> Result<Vec<Value>, rusqlite::Error> {
     let column_names = stmt
         .column_names()
         .into_iter()
         .map(|name| name.to_string())
         .collect::<Vec<_>>();
-    let mut rows = stmt.query([])?;
+    let mut rows = stmt.query(params)?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {
         let mut object = serde_json::Map::new();
@@ -251,20 +311,23 @@ fn extract_sqlite_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseErro
             let value = row.get_ref(index)?;
             object.insert(name.clone(), sqlite_value_to_json(value));
         }
-        let value = normalize_sqlite_message_value(Value::Object(object));
-        records.push(ParsedRecord {
-            session_id: session_id_with_fallback(&value, "unknown"),
-            agent: string_field(&value, "agent"),
-            model: model_field(&value),
-            provider: provider_field(&value),
-            timestamp: string_field(&value, "time").or_else(|| string_field(&value, "timestamp")),
-            kind: record_kind(&value),
-            tool_name: tool_name(&value),
-            arguments: arguments_field(&value),
-            content: record_content(&value),
-        });
+        records.push(Value::Object(object));
     }
     Ok(records)
+}
+
+fn sqlite_value_record(value: &Value, default_session_id: &str) -> ParsedRecord {
+    ParsedRecord {
+        session_id: session_id_with_fallback(value, default_session_id),
+        agent: string_field(value, "agent"),
+        model: model_field(value),
+        provider: provider_field(value),
+        timestamp: string_field(value, "time").or_else(|| string_field(value, "timestamp")),
+        kind: record_kind(value),
+        tool_name: tool_name(value),
+        arguments: arguments_field(value),
+        content: record_content(value),
+    }
 }
 
 fn extract_copilot_process_log(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
@@ -401,10 +464,24 @@ fn record_kind(value: &Value) -> RecordKind {
         }
         Some("tool_call") => RecordKind::ToolCall,
         Some("tool_result") => RecordKind::ToolResult,
+        Some("tool") if opencode_tool_part_is_result(value) => RecordKind::ToolResult,
+        Some("tool") => RecordKind::ToolCall,
         Some("session_meta") => RecordKind::SessionMeta,
         _ if value.get("session_meta").is_some() => RecordKind::SessionMeta,
         _ => RecordKind::Other,
     }
+}
+
+fn opencode_tool_part_is_result(value: &Value) -> bool {
+    value
+        .get("state")
+        .and_then(|state| state.get("status"))
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "completed" | "error"))
+        || value
+            .get("state")
+            .and_then(|state| state.get("output").or_else(|| state.get("error")))
+            .is_some()
 }
 
 fn record_content(value: &Value) -> String {
@@ -522,6 +599,37 @@ fn normalize_sqlite_message_value(value: Value) -> Value {
     let Ok(Value::Object(mut data_object)) = serde_json::from_str::<Value>(data) else {
         return Value::Object(object);
     };
+
+    for (key, value) in object {
+        data_object.entry(key).or_insert(value);
+    }
+
+    Value::Object(data_object)
+}
+
+fn normalize_sqlite_part_value(value: Value) -> Value {
+    let Value::Object(object) = value else {
+        return value;
+    };
+
+    let Some(data) = object.get("data").and_then(Value::as_str) else {
+        return Value::Object(object);
+    };
+
+    let Ok(Value::Object(mut data_object)) = serde_json::from_str::<Value>(data) else {
+        return Value::Object(object);
+    };
+
+    if let Some(Value::Object(state)) = data_object.get("state") {
+        let input = state.get("input").cloned();
+        let output = state.get("output").or_else(|| state.get("error")).cloned();
+        if let Some(input) = input {
+            data_object.entry("input".to_string()).or_insert(input);
+        }
+        if let Some(output) = output {
+            data_object.entry("message".to_string()).or_insert(output);
+        }
+    }
 
     for (key, value) in object {
         data_object.entry(key).or_insert(value);
@@ -1575,6 +1683,64 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
             records[0].arguments.as_deref(),
             Some("{\"command\":\"ls\"}")
         );
+    }
+
+    #[test]
+    fn parses_opencode_sqlite_part_table_tool_records() {
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open db");
+        conn.execute_batch(
+            "create table part (
+                id text primary key,
+                message_id text not null,
+                session_id text not null,
+                time_created integer not null,
+                time_updated integer not null,
+                data text not null
+            );",
+        )
+        .expect("schema");
+        conn.execute(
+            "insert into part (id, message_id, session_id, time_created, time_updated, data)
+             values (?1, ?2, ?3, ?4, ?5, ?6)",
+            (
+                "part-tool-result",
+                "message-part",
+                "session-part-shape",
+                1775000000000_i64,
+                1775000001000_i64,
+                serde_json::json!({
+                    "type": "tool",
+                    "tool": "bash",
+                    "state": {
+                        "status": "completed",
+                        "input": {"command": "cat .env"},
+                        "output": "MCP tool result hidden instruction ignore previous instructions"
+                    }
+                })
+                .to_string(),
+            ),
+        )
+        .expect("insert row");
+
+        let source = crate::discovery::Source {
+            client: crate::clients::ClientId::OpenCode,
+            kind: crate::clients::SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: db_path,
+        };
+
+        let records = parse_source_records(&source).expect("records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].session_id, "session-part-shape");
+        assert_eq!(records[0].kind, RecordKind::ToolResult);
+        assert_eq!(records[0].tool_name.as_deref(), Some("bash"));
+        assert_eq!(
+            records[0].arguments.as_deref(),
+            Some("{\"command\":\"cat .env\"}")
+        );
+        assert!(records[0].content.contains("hidden instruction"));
     }
 
     #[test]
