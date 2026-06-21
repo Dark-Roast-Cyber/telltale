@@ -3705,6 +3705,67 @@ fn shipper_examples_target_default_jsonl_path() {
 }
 
 #[test]
+fn install_telltale_script_is_user_first_and_sudo_free() {
+    let script = include_str!("../scripts/install-telltale");
+
+    // No sudo or root in the default path.
+    assert!(
+        !script.contains("sudo "),
+        "installer must not use sudo in the user-first path"
+    );
+    assert!(
+        !script.contains("useradd"),
+        "installer must not create system users"
+    );
+    assert!(
+        !script.contains("groupadd"),
+        "installer must not create system groups"
+    );
+
+    // No SIEM/shipper configuration (product names in comments are fine;
+    // we're checking that the script doesn't actually configure them).
+    assert!(
+        !script.contains("outputs.conf"),
+        "installer must not configure Splunk UF outputs"
+    );
+    assert!(
+        !script.contains("inputs.conf"),
+        "installer must not configure Splunk UF inputs"
+    );
+    assert!(
+        !script.contains("filebeat.yml"),
+        "installer must not configure Filebeat"
+    );
+
+    // User-first defaults.
+    assert!(
+        script.contains("~/.local/bin"),
+        "default install dir should be user-writable"
+    );
+    assert!(
+        !script.contains("--path-profile system"),
+        "user-first installer must not default to system profile"
+    );
+
+    // Runs as the invoking user with user-level scheduling.
+    assert!(
+        script.contains("systemctl --user"),
+        "timer should be user-level, not system"
+    );
+    assert!(
+        script.contains("timers.target"),
+        "timer target should be user timers.target"
+    );
+
+    // Architecture detection for Linux release assets.
+    assert!(script.contains("x86_64-unknown-linux-gnu"));
+    assert!(script.contains("aarch64-unknown-linux-gnu"));
+
+    // Curl|bash ready.
+    assert!(script.contains("agentarchaeology.ai/telltale_install.sh"));
+}
+
+#[test]
 fn scan_project_path_profile_separates_jsonl_telemetry_from_state() {
     let temp = tempdir().expect("tempdir");
     let fixture_root = std::env::current_dir()

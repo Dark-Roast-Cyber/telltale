@@ -23,6 +23,27 @@ Release archives contain the command-line binary and release metadata generated
 from the public repository. They do not include local scanner state, telemetry
 logs, session stores, credentials, or deployment-specific SIEM configuration.
 
+### Quick install (Linux)
+
+A user-first installer is available for Linux. It downloads the latest release
+binary, installs it to `~/.local/bin/adr` (no sudo), and optionally sets up a
+user-level systemd timer for periodic scans:
+
+```sh
+curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
+```
+
+To build from source instead of downloading a prebuilt binary, or to skip the
+systemd timer, pass flags:
+
+```sh
+curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash -s -- --from-source --no-timer
+```
+
+The installer does not create system users, configure SIEM shippers, or require
+root. For managed Linux deployments with the `system` path profile, use the
+examples in `config/examples/` and the manual systemd setup below.
+
 ## Build From Source
 
 ```sh
@@ -133,11 +154,14 @@ latest scanner health check is reported separately as `health_component`,
 `health_check_name`, and `health_check_status`, matching the health event fields
 that SIEM dashboards can group by as `component`, `check_name`, and `status`.
 
-## Optional Service Setup
+## Optional Service Setup (Advanced)
 
 The repository includes Linux-oriented systemd examples in
 `config/examples/adr-scan.service` and `config/examples/adr-scan.timer` for
-periodic scans.
+managed deployments that use the `system` path profile with a dedicated service
+account. This is an advanced path for shared scan servers or fleet-managed
+hosts where the scanned session stores are explicitly made readable by the scan
+account.
 
 The example service assumes a managed Linux deployment with `/usr/local/bin/adr`,
 `/var/log/telltale/adr-events.jsonl`, and `/var/lib/telltale/adr-state.json`.
@@ -145,6 +169,9 @@ Create the service account and directories with permissions that let Telltale
 append telemetry while granting your shipper read-only access to the log file.
 Use `config/examples/telltale-logrotate` as a starter Linux rotation policy so
 the active shipper target remains `/var/log/telltale/adr-events.jsonl`.
+
+For the common workstation case, the quick installer above sets up a user-level
+timer that runs as your user with no sudo and no service account.
 
 ## Optional SIEM Setup
 
