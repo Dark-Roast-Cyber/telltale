@@ -9,11 +9,24 @@ specific sink without changing the event schema.
 
 ## Default JSONL Sink
 
-By default, `adr scan` appends telemetry to `logs/adr-events.jsonl`:
+By default, `adr scan` uses the `user` path profile and appends telemetry to
+an operating-system-standard per-user JSONL path:
+
+| OS | Default user telemetry path |
+| --- | --- |
+| Linux | `$XDG_STATE_HOME/telltale/logs/adr-events.jsonl` or `~/.local/state/telltale/logs/adr-events.jsonl` |
+| macOS | `~/Library/Logs/Telltale/adr-events.jsonl` |
+| Windows | `%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` |
 
 ```sh
-cargo run -- scan --once --emit-activity --log-path logs/adr-events.jsonl
+cargo run -- scan --once --emit-activity
 ```
+
+Use `--path-profile system` for managed service deployments, or
+`--path-profile project` when you intentionally want repo-relative development
+paths such as `logs/adr-events.jsonl` and `state/adr-state.json`. Explicit
+`--log-path` and `--state-path` flags still override profile defaults. Service
+managers can set `ADR_LOG_PATH` and `ADR_STATE_PATH` instead of repeating flags.
 
 Use `--dry-run` when validating fixtures or command behavior without writing
 events:
@@ -41,7 +54,7 @@ Enable optional activity and session summary events when dashboards need more
 than detection-only output:
 
 ```sh
-cargo run -- scan --once --emit-activity --emit-session-risk-summary --log-path logs/adr-events.jsonl
+cargo run -- scan --once --emit-activity --emit-session-risk-summary
 ```
 
 ## Privacy Boundary
@@ -72,7 +85,8 @@ boundary checks.
 Forward the JSONL file with the shipper or collector your environment already
 uses. A safe starter pattern is:
 
-1. Write events locally with `--log-path`.
+1. Write events locally with the default path profile, `ADR_LOG_PATH`, or an
+   explicit `--log-path`.
 2. Validate the event shape against the schema.
 3. Configure the shipper to read only the JSONL event path.
 4. Keep human-readable diagnostics, scanner state, credentials, and raw agent

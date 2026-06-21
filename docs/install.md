@@ -58,7 +58,7 @@ scan; for a typical single-user workstation, that is usually your home
 directory. Keep `tests/fixtures/` for dry-run verification only:
 
 ```sh
-cargo run -- scan --once --emit-activity --root "$HOME" --log-path logs/adr-events.jsonl
+cargo run -- scan --once --emit-activity --root "$HOME"
 ```
 
 For a first real-store check, keep the scan read-only and bounded before
@@ -71,7 +71,18 @@ cargo run -- scan --once --dry-run --root "$HOME" --client codex --max-sources 5
 ```
 
 Telltale writes append-only JSONL by default so the output can be reviewed
-locally or shipped to a SIEM.
+locally or shipped to a SIEM. The default `user` path profile writes telemetry
+under the operating-system-standard per-user location, such as
+`$XDG_STATE_HOME/telltale/logs/adr-events.jsonl` or
+`~/.local/state/telltale/logs/adr-events.jsonl` on Linux,
+`~/Library/Logs/Telltale/adr-events.jsonl` on macOS, and
+`%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` on Windows. Use
+`--path-profile system` for managed service deployments and
+`--path-profile project` when you intentionally want repo-relative development
+paths.
+
+Explicit `--log-path` and `--state-path` flags override profile defaults. Service
+managers can also set `ADR_LOG_PATH` and `ADR_STATE_PATH`.
 
 ## Project-Local Session Stores
 
@@ -90,7 +101,7 @@ projects:
 Pass the config to scans or watch mode:
 
 ```sh
-cargo run -- scan --once --root "$HOME" --project-config projects.yaml --log-path logs/adr-events.jsonl
+cargo run -- scan --once --root "$HOME" --project-config projects.yaml
 ```
 
 You can also set the colon-separated `ADR_PROJECT_CONFIG` environment variable
@@ -105,7 +116,7 @@ The watch command accepts the same repeated `--client <id>` filters as
 selected supported clients:
 
 ```sh
-cargo run -- watch --client codex --client opencode --root "$HOME" --log-path logs/adr-events.jsonl
+cargo run -- watch --client codex --client opencode --root "$HOME"
 ```
 
 ## Check Scanner Status
@@ -114,7 +125,7 @@ After a scan writes JSONL telemetry, use `adr status` to review the latest local
 scanner summary:
 
 ```sh
-cargo run -- status --log-path logs/adr-events.jsonl
+cargo run -- status
 ```
 
 The command keeps its top-level `status` field for the status lookup result. The
@@ -128,8 +139,10 @@ The repository includes Linux-oriented systemd examples in
 `config/examples/adr-scan.service` and `config/examples/adr-scan.timer` for
 periodic scans.
 
-The example service runs the repository build artifact directly from
-`target/release/adr`, so build the release binary before enabling the timer.
+The example service assumes a managed Linux deployment with `/usr/local/bin/adr`,
+`/var/log/telltale/adr-events.jsonl`, and `/var/lib/telltale/adr-state.json`.
+Create the service account and directories with permissions that let Telltale
+append telemetry while granting your shipper read-only access to the log file.
 
 ## Optional SIEM Setup
 

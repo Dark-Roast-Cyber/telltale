@@ -2,7 +2,7 @@ filebeat.inputs:
   - type: filestream
     id: adr-jsonl
     paths:
-      - /srv/telltale/logs/adr-events.jsonl
+      - /var/log/telltale/adr-events.jsonl
     parsers:
       - ndjson:
           target: ""

@@ -5,14 +5,17 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/github/adr
-Environment=ADR_LOG_PATH=%h/github/adr/logs/adr-events.jsonl
-Environment=ADR_STATE_PATH=%h/github/adr/state/adr-state.json
-Environment=ADR_SCAN_ROOT=%h
-EnvironmentFile=-%h/github/adr/.env
-ExecStart=%h/github/adr/target/release/adr scan --once --emit-activity --root %h --log-path %h/github/adr/logs/adr-events.jsonl --state-path %h/github/adr/state/adr-state.json
+User=telltale
+Group=telltale
+WorkingDirectory=/var/lib/telltale
+Environment=ADR_LOG_PATH=/var/log/telltale/adr-events.jsonl
+Environment=ADR_STATE_PATH=/var/lib/telltale/adr-state.json
+Environment=ADR_SCAN_ROOT=/home/telltale
+EnvironmentFile=-/etc/telltale/adr.env
+ExecStart=/usr/local/bin/adr scan --once --emit-activity --root ${ADR_SCAN_ROOT} --path-profile system
 NoNewPrivileges=true
 PrivateTmp=true
+ReadWritePaths=/var/log/telltale /var/lib/telltale
 
 [Install]
 WantedBy=default.target

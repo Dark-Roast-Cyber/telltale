@@ -3687,7 +3687,7 @@ fn scan_dry_run_session_risk_summary_does_not_write_log() {
 #[test]
 fn shipper_examples_target_default_jsonl_path() {
     let filebeat = include_str!("../config/examples/filebeat-filestream.yml");
-    assert!(filebeat.contains("/srv/telltale/logs/adr-events.jsonl"));
+    assert!(filebeat.contains("/var/log/telltale/adr-events.jsonl"));
     assert!(filebeat.contains("filestream"));
     assert!(filebeat.contains("ndjson"));
 }
@@ -3770,23 +3770,25 @@ fn scan_uses_env_log_and_state_defaults() {
 #[test]
 fn systemd_examples_run_periodic_scan_with_env_defaults() {
     let service = include_str!("../config/examples/adr-scan.service");
-    assert!(service.contains("WorkingDirectory=%h/github/adr"));
-    assert!(service.contains("Environment=ADR_LOG_PATH=%h/github/adr/logs/adr-events.jsonl"));
-    assert!(service.contains("Environment=ADR_STATE_PATH=%h/github/adr/state/adr-state.json"));
-    assert!(service.contains("Environment=ADR_SCAN_ROOT=%h"));
-    assert!(service.contains("EnvironmentFile=-%h/github/adr/.env"));
+    assert!(service.contains("User=telltale"));
+    assert!(service.contains("Group=telltale"));
+    assert!(service.contains("WorkingDirectory=/var/lib/telltale"));
+    assert!(service.contains("Environment=ADR_LOG_PATH=/var/log/telltale/adr-events.jsonl"));
+    assert!(service.contains("Environment=ADR_STATE_PATH=/var/lib/telltale/adr-state.json"));
+    assert!(service.contains("Environment=ADR_SCAN_ROOT=/home/telltale"));
+    assert!(service.contains("EnvironmentFile=-/etc/telltale/adr.env"));
     assert!(
         service
-            .find("Environment=ADR_SCAN_ROOT=%h")
+            .find("Environment=ADR_SCAN_ROOT=/home/telltale")
             .expect("scan root default")
             < service
-                .find("EnvironmentFile=-%h/github/adr/.env")
+                .find("EnvironmentFile=-/etc/telltale/adr.env")
                 .expect("env file")
     );
-    assert!(service.contains("%h/github/adr/target/release/adr scan --once"));
+    assert!(service.contains("/usr/local/bin/adr scan --once"));
     assert!(service.contains("--emit-activity"));
-    assert!(service.contains("--log-path %h/github/adr/logs/adr-events.jsonl"));
-    assert!(service.contains("--state-path %h/github/adr/state/adr-state.json"));
+    assert!(service.contains("--path-profile system"));
+    assert!(service.contains("ReadWritePaths=/var/log/telltale /var/lib/telltale"));
 
     let timer = include_str!("../config/examples/adr-scan.timer");
     assert!(timer.contains("OnUnitActiveSec=5min"));
