@@ -1,0 +1,13 @@
+/var/log/telltale/adr-events.jsonl {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    dateext
+    dateformat -%Y%m%d
+    extension .jsonl
+    create 0640 telltale adrlogs
+    su telltale adrlogs
+}

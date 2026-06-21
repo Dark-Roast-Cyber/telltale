@@ -3690,6 +3690,18 @@ fn shipper_examples_target_default_jsonl_path() {
     assert!(filebeat.contains("/var/log/telltale/adr-events.jsonl"));
     assert!(filebeat.contains("filestream"));
     assert!(filebeat.contains("ndjson"));
+
+    let logrotate = include_str!("../config/examples/telltale-logrotate");
+    assert!(logrotate.contains("/var/log/telltale/adr-events.jsonl"));
+    assert!(logrotate.contains("daily"));
+    assert!(logrotate.contains("rotate 14"));
+    assert!(logrotate.contains("extension .jsonl"));
+    assert!(logrotate.contains("create 0640 telltale adrlogs"));
+    assert!(logrotate.contains("su telltale adrlogs"));
+    assert!(
+        !logrotate.contains("copytruncate"),
+        "JSONL rotation should avoid copytruncate by default"
+    );
 }
 
 #[test]

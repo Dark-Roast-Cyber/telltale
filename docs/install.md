@@ -143,6 +143,8 @@ The example service assumes a managed Linux deployment with `/usr/local/bin/adr`
 `/var/log/telltale/adr-events.jsonl`, and `/var/lib/telltale/adr-state.json`.
 Create the service account and directories with permissions that let Telltale
 append telemetry while granting your shipper read-only access to the log file.
+Use `config/examples/telltale-logrotate` as a starter Linux rotation policy so
+the active shipper target remains `/var/log/telltale/adr-events.jsonl`.
 
 ## Optional SIEM Setup
 

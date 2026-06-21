@@ -95,6 +95,12 @@ uses. A safe starter pattern is:
 Use explicit file paths instead of broad log directory monitors so diagnostic
 logs or source logs do not get indexed as Telltale events.
 
+For managed deployments, prefer OS-native rotation first. Keep the active file
+name stable, such as `/var/log/telltale/adr-events.jsonl` on Linux, and configure
+`logrotate`, `newsyslog`, a Windows scheduled task, or your endpoint collector to
+rotate completed files without changing the active shipper target. The Linux
+starter example is `config/examples/telltale-logrotate`.
+
 ## Optional Export And Sink Paths
 
 The canonical event payload remains the same across delivery paths:
