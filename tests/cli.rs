@@ -3693,7 +3693,7 @@ fn shipper_examples_target_default_jsonl_path() {
 }
 
 #[test]
-fn scan_defaults_separate_jsonl_telemetry_from_state() {
+fn scan_project_path_profile_separates_jsonl_telemetry_from_state() {
     let temp = tempdir().expect("tempdir");
     let fixture_root = std::env::current_dir()
         .expect("current dir")
@@ -3701,6 +3701,46 @@ fn scan_defaults_separate_jsonl_telemetry_from_state() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--root",
+            fixture_root.to_str().expect("fixture path"),
+            "--path-profile",
+            "project",
+            "--max-sources",
+            "1",
+        ])
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["log_path"], "logs/adr-events.jsonl");
+    assert!(temp.path().join("logs/adr-events.jsonl").is_file());
+    assert!(temp.path().join("state/adr-state.json").is_file());
+    assert!(!temp.path().join("logs/adr-state.json").exists());
+}
+
+#[test]
+fn scan_uses_env_log_and_state_defaults() {
+    let temp = tempdir().expect("tempdir");
+    let fixture_root = std::env::current_dir()
+        .expect("current dir")
+        .join("tests/fixtures/session_stores");
+    let log_path = temp.path().join("env-logs/adr-events.jsonl");
+    let state_path = temp.path().join("env-state/adr-state.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .current_dir(temp.path())
+        .env("ADR_LOG_PATH", &log_path)
+        .env("ADR_STATE_PATH", &state_path)
         .args([
             "scan",
             "--once",
@@ -3720,10 +3760,11 @@ fn scan_defaults_separate_jsonl_telemetry_from_state() {
     );
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
-    assert_eq!(summary["log_path"], "logs/adr-events.jsonl");
-    assert!(temp.path().join("logs/adr-events.jsonl").is_file());
-    assert!(temp.path().join("state/adr-state.json").is_file());
-    assert!(!temp.path().join("logs/adr-state.json").exists());
+    assert_eq!(summary["log_path"], log_path.display().to_string());
+    assert!(log_path.is_file());
+    assert!(state_path.is_file());
+    assert!(!temp.path().join("logs/adr-events.jsonl").exists());
+    assert!(!temp.path().join("state/adr-state.json").exists());
 }
 
 #[test]

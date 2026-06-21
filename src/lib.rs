@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod event;
 pub mod mcp;
 pub mod parser;
+pub mod paths;
 pub mod projects;
 pub mod rules;
 pub mod schema;

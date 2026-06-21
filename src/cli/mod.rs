@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::clients::{ClientId, SourceKind, supported_clients};
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
+use crate::paths::{self, PathProfile};
 use crate::rules::load_rule_set_from_paths;
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -43,9 +44,13 @@ enum Command {
         #[arg(long, default_value = ".")]
         root: PathBuf,
 
-        /// Append-only JSONL event path.
-        #[arg(long, default_value = "logs/adr-events.jsonl")]
-        log_path: PathBuf,
+        /// Default path profile used when --log-path or --state-path is not set.
+        #[arg(long, value_enum, default_value = "user")]
+        path_profile: CliPathProfile,
+
+        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        #[arg(long)]
+        log_path: Option<PathBuf>,
 
         /// Optional Splunk HEC collector URL. Requires --splunk-hec-token.
         #[arg(long)]
@@ -55,9 +60,9 @@ enum Command {
         #[arg(long)]
         splunk_hec_token: Option<String>,
 
-        /// JSON state path for duplicate suppression.
-        #[arg(long, default_value = "state/adr-state.json")]
-        state_path: PathBuf,
+        /// JSON state path for duplicate suppression. Defaults to ADR_STATE_PATH or the selected path profile.
+        #[arg(long)]
+        state_path: Option<PathBuf>,
 
         /// Print the event summary without writing JSONL.
         #[arg(long)]
@@ -123,13 +128,17 @@ enum Command {
         #[arg(long, default_value = ".")]
         root: PathBuf,
 
-        /// Append-only JSONL event path.
-        #[arg(long, default_value = "logs/adr-events.jsonl")]
-        log_path: PathBuf,
+        /// Default path profile used when --log-path or --state-path is not set.
+        #[arg(long, value_enum, default_value = "user")]
+        path_profile: CliPathProfile,
 
-        /// JSON state path for duplicate suppression.
-        #[arg(long, default_value = "state/adr-state.json")]
-        state_path: PathBuf,
+        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        #[arg(long)]
+        log_path: Option<PathBuf>,
+
+        /// JSON state path for duplicate suppression. Defaults to ADR_STATE_PATH or the selected path profile.
+        #[arg(long)]
+        state_path: Option<PathBuf>,
 
         /// Print event summaries without writing JSONL.
         #[arg(long)]
@@ -189,20 +198,28 @@ enum Command {
 
     /// Show scanner status from the most recent health event.
     Status {
-        /// Append-only JSONL event path.
-        #[arg(long, default_value = "logs/adr-events.jsonl")]
-        log_path: PathBuf,
+        /// Default path profile used when --log-path or --state-path is not set.
+        #[arg(long, value_enum, default_value = "user")]
+        path_profile: CliPathProfile,
 
-        /// JSON state path for duplicate suppression.
-        #[arg(long, default_value = "state/adr-state.json")]
-        state_path: PathBuf,
+        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        #[arg(long)]
+        log_path: Option<PathBuf>,
+
+        /// JSON state path for duplicate suppression. Defaults to ADR_STATE_PATH or the selected path profile.
+        #[arg(long)]
+        state_path: Option<PathBuf>,
     },
 
     /// Export filtered events from a Telltale JSONL log.
     Export {
-        /// Append-only JSONL event path.
-        #[arg(long, default_value = "logs/adr-events.jsonl")]
-        log_path: PathBuf,
+        /// Default path profile used when --log-path is not set.
+        #[arg(long, value_enum, default_value = "user")]
+        path_profile: CliPathProfile,
+
+        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        #[arg(long)]
+        log_path: Option<PathBuf>,
 
         /// Include only events with this severity. Repeat for multiple severities.
         #[arg(long = "severity")]
@@ -246,6 +263,23 @@ enum Command {
         #[arg(long)]
         source_root: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum CliPathProfile {
+    User,
+    System,
+    Project,
+}
+
+impl From<CliPathProfile> for PathProfile {
+    fn from(value: CliPathProfile) -> Self {
+        match value {
+            CliPathProfile::User => PathProfile::User,
+            CliPathProfile::System => PathProfile::System,
+            CliPathProfile::Project => PathProfile::Project,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -384,6 +418,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             interval_seconds,
             iterations,
             root,
+            path_profile,
             log_path,
             splunk_hec_endpoint,
             splunk_hec_token,
@@ -402,6 +437,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             max_sources,
             project_config_paths,
         } => {
+            let path_profile = path_profile.into();
+            let log_path = paths::resolve_log_path(path_profile, log_path);
+            let state_path = paths::resolve_state_path(path_profile, state_path);
             let mut project_paths = project_config_paths.clone();
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
@@ -511,6 +549,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
         Command::Watch {
             root,
+            path_profile,
             log_path,
             state_path,
             dry_run,
@@ -526,6 +565,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             clients,
             project_config_paths,
         } => {
+            let path_profile = path_profile.into();
+            let log_path = paths::resolve_log_path(path_profile, log_path);
+            let state_path = paths::resolve_state_path(path_profile, state_path);
             let mut project_paths = project_config_paths.clone();
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
@@ -550,12 +592,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             scan::run_watch(scan::watch_config(&watch_args))?;
         }
         Command::Status {
+            path_profile,
             log_path,
             state_path,
         } => {
+            let path_profile = path_profile.into();
+            let log_path = paths::resolve_log_path(path_profile, log_path);
+            let state_path = paths::resolve_state_path(path_profile, state_path);
             scan::run_status(&log_path, &state_path)?;
         }
         Command::Export {
+            path_profile,
             log_path,
             severities,
             clients,
@@ -568,6 +615,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             timeline,
             source_root,
         } => {
+            let log_path = paths::resolve_log_path(path_profile.into(), log_path);
             export::run_export(export::ExportConfig {
                 log_path: &log_path,
                 severities: &severities,
