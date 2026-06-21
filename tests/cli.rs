@@ -3702,6 +3702,26 @@ fn shipper_examples_target_default_jsonl_path() {
         !logrotate.contains("copytruncate"),
         "JSONL rotation should avoid copytruncate by default"
     );
+
+    // The Splunk UF helper ships as a tracked, portable example. Its defaults
+    // must target the Linux `system` path profile used by managed/Splunk-forwarded
+    // deployments, not stale repo-local or host-absolute paths. The matching
+    // `config/examples/splunk-*.conf` and `splunk-*.xml` examples are host-only and
+    // intentionally not tracked, so they are verified on disk instead of via
+    // include_str!.
+    let splunk_uf_setup = include_str!("../scripts/slunk_uf_set_up");
+    assert!(
+        splunk_uf_setup.contains("ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl"),
+        "splunk UF helper must default ADR_LOG_PATH to the system-profile JSONL path"
+    );
+    assert!(
+        splunk_uf_setup.contains("COPILOT_LOG_DIR:-/var/log/telltale/copilot"),
+        "splunk UF helper must default COPILOT_LOG_DIR to the system-profile copilot path"
+    );
+    assert!(
+        !splunk_uf_setup.contains("/home/christian/github/adr/logs"),
+        "splunk UF helper must not default to stale repo-local log paths"
+    );
 }
 
 #[test]

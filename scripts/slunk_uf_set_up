@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Edit these defaults here, or leave INDEXER_IPS empty to be prompted.
+UF_HOME="${UF_HOME:-/opt/splunkforwarder}"
+UF_LOCAL_DIR="${UF_LOCAL_DIR:-$UF_HOME/etc/system/local}"
+UF_BIN="${UF_BIN:-$UF_HOME/bin/splunk}"
+
+# Defaults target the Linux `system` path profile used by managed/Splunk-forwarded
+# deployments. Override ADR_LOG_PATH/COPILOT_LOG_DIR for non-default profiles.
+ADR_LOG_PATH="${ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl}"
+ADR_INDEX="${ADR_INDEX:-adr}"
+ADR_SOURCETYPE="${ADR_SOURCETYPE:-adr:json}"
+
+ENABLE_COPILOT_MONITOR="${ENABLE_COPILOT_MONITOR:-1}"
+COPILOT_LOG_DIR="${COPILOT_LOG_DIR:-/var/log/telltale/copilot}"
+COPILOT_INDEX="${COPILOT_INDEX:-main}"
+COPILOT_SOURCETYPE="${COPILOT_SOURCETYPE:-copilot:json}"
+
+INDEXER_IPS="${INDEXER_IPS:-}"
+SPLUNK_TCP_PORT="${SPLUNK_TCP_PORT:-9997}"
+TCPOUT_GROUP="${TCPOUT_GROUP:-adr_indexers}"
+RESTART_FORWARDER="${RESTART_FORWARDER:-1}"
+
+run_as_root() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+prompt_for_indexers() {
+    if [[ -n "${INDEXER_IPS//[[:space:]]/}" ]]; then
+        return 0
+    fi
+
+    read -r -p "Indexer IPs or hosts (comma or space separated): " INDEXER_IPS
+    if [[ -z "${INDEXER_IPS//[[:space:]]/}" ]]; then
+        printf 'No indexer IPs provided. Aborting.\n' >&2
+        exit 1
+    fi
+}
+
+build_server_list() {
+    local raw="$1"
+    local token=""
+    local -a servers=()
+
+    raw="${raw//,/ }"
+    for token in $raw; do
+        if [[ -z "$token" ]]; then
+            continue
+        fi
+
+        if [[ "$token" == *:* ]]; then
+            servers+=("$token")
+        else
+            servers+=("$token:$SPLUNK_TCP_PORT")
+        fi
+    done
+
+    if (( ${#servers[@]} == 0 )); then
+        printf 'Unable to build Splunk indexer list from INDEXER_IPS=%q\n' "$raw" >&2
+        exit 1
+    fi
+
+    local joined=""
+    local server=""
+    for server in "${servers[@]}"; do
+        joined="${joined:+$joined,}$server"
+    done
+
+    printf '%s\n' "$joined"
+}
+
+backup_if_present() {
+    local target="$1"
+    local stamp="$2"
+
+    if run_as_root test -f "$target"; then
+        run_as_root cp "$target" "${target}.bak.${stamp}"
+    fi
+}
+
+restart_forwarder() {
+    if [[ "$RESTART_FORWARDER" != "1" ]]; then
+        printf 'Installed configuration. Skipped restart because RESTART_FORWARDER=%s.\n' "$RESTART_FORWARDER"
+        return 0
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        if run_as_root systemctl restart SplunkForwarder >/dev/null 2>&1; then
+            printf 'Restarted SplunkForwarder with systemctl.\n'
+            return 0
+        fi
+
+        if systemctl --user restart SplunkForwarder >/dev/null 2>&1; then
+            printf 'Restarted SplunkForwarder with systemctl --user.\n'
+            return 0
+        fi
+    fi
+
+    if [[ -x "$UF_BIN" ]] && run_as_root "$UF_BIN" restart >/dev/null 2>&1; then
+        printf 'Restarted Splunk forwarder with %s.\n' "$UF_BIN"
+        return 0
+    fi
+
+    printf 'Installed configuration, but could not restart Splunk Forwarder automatically.\n' >&2
+    printf 'Restart it manually before expecting new events in Splunk.\n' >&2
+}
+
+main() {
+    local server_list=""
+    local temp_dir=""
+    local stamp=""
+    local inputs_path="$UF_LOCAL_DIR/inputs.conf"
+    local props_path="$UF_LOCAL_DIR/props.conf"
+    local outputs_path="$UF_LOCAL_DIR/outputs.conf"
+
+    if [[ ! -d "$UF_HOME" ]]; then
+        printf 'Expected Splunk Universal Forwarder at %s\n' "$UF_HOME" >&2
+        exit 1
+    fi
+
+    prompt_for_indexers
+    server_list="$(build_server_list "$INDEXER_IPS")"
+    temp_dir="$(mktemp -d)"
+    stamp="$(date +%Y%m%d%H%M%S)"
+
+    trap 'rm -rf "$temp_dir"' EXIT
+
+    cat > "$temp_dir/inputs.conf" <<EOF
+[monitor://$ADR_LOG_PATH]
+disabled = false
+sourcetype = $ADR_SOURCETYPE
+index = $ADR_INDEX
+crcSalt = <SOURCE>
+EOF
+
+    if [[ "$ENABLE_COPILOT_MONITOR" == "1" ]]; then
+        cat >> "$temp_dir/inputs.conf" <<EOF
+
+[monitor://$COPILOT_LOG_DIR]
+disabled = false
+sourcetype = $COPILOT_SOURCETYPE
+index = $COPILOT_INDEX
+whitelist = \.log$
+crcSalt = <SOURCE>
+EOF
+    fi
+
+    cat > "$temp_dir/props.conf" <<EOF
+[adr:json]
+SHOULD_LINEMERGE = false
+LINE_BREAKER = ([\r\n]+)
+TIME_PREFIX = ^\{"timestamp":"
+TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3NZ
+MAX_TIMESTAMP_LOOKAHEAD = 30
+TZ = UTC
+INDEXED_EXTRACTIONS = json
+KV_MODE = none
+TRUNCATE = 0
+
+[copilot:json]
+SHOULD_LINEMERGE = false
+LINE_BREAKER = ([\r\n]+)
+TIME_PREFIX = "timestamp":"
+TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3NZ
+MAX_TIMESTAMP_LOOKAHEAD = 30
+KV_MODE = json
+TRUNCATE = 0
+EOF
+
+    cat > "$temp_dir/outputs.conf" <<EOF
+[tcpout]
+defaultGroup = $TCPOUT_GROUP
+
+[tcpout:$TCPOUT_GROUP]
+server = $server_list
+forceTimebasedAutoLB = true
+autoLBFrequency = 30
+EOF
+
+    run_as_root mkdir -p "$UF_LOCAL_DIR"
+    backup_if_present "$inputs_path" "$stamp"
+    backup_if_present "$props_path" "$stamp"
+    backup_if_present "$outputs_path" "$stamp"
+
+    run_as_root install -m 0644 "$temp_dir/inputs.conf" "$inputs_path"
+    run_as_root install -m 0644 "$temp_dir/props.conf" "$props_path"
+    run_as_root install -m 0644 "$temp_dir/outputs.conf" "$outputs_path"
+
+    printf 'Installed Splunk UF configuration in %s\n' "$UF_LOCAL_DIR"
+    printf 'ADR monitor: %s\n' "$ADR_LOG_PATH"
+    if [[ "$ENABLE_COPILOT_MONITOR" == "1" ]]; then
+        printf 'Copilot monitor: %s\n' "$COPILOT_LOG_DIR"
+    fi
+    printf 'Indexer targets: %s\n' "$server_list"
+
+    restart_forwarder
+}
+
+main "$@"
