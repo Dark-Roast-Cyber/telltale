@@ -66,11 +66,29 @@ mkdir -p "$INSTALL_DIR"
 
 # --- get the binary ----------------------------------------------------------
 
+# cargo install --root <dir> places the binary at <dir>/bin/adr.
+# Compute the cargo root so the binary lands at ${INSTALL_DIR}/adr.
+if [[ "${INSTALL_DIR##*/}" == "bin" ]]; then
+    cargo_root="${INSTALL_DIR%/bin}"
+else
+    cargo_root="$INSTALL_DIR"
+fi
+
+installed_bin=""
+
 if [[ "$FROM_SOURCE" -eq 1 ]]; then
     info "Building from source with cargo (requires Rust toolchain)..."
     command -v cargo >/dev/null 2>&1 || die "cargo not found. Install Rust from https://rustup.rs"
-    cargo install --git "https://github.com/${REPO}" --root "${INSTALL_DIR%/bin}"
-    info "Installed adr to ${INSTALL_DIR}/adr via cargo"
+    # cargo install --root <dir> places the binary at <dir>/bin/adr.
+    cargo install --git "https://github.com/${REPO}" --root "${cargo_root}" --force
+    installed_bin="${cargo_root}/bin/adr"
+    # If the cargo bin dir isn't the requested install dir, move the binary.
+    if [[ "$(dirname "${installed_bin}")" != "$INSTALL_DIR" ]]; then
+        mkdir -p "$INSTALL_DIR"
+        install -m 0755 "${installed_bin}" "${INSTALL_DIR}/adr"
+        installed_bin="${INSTALL_DIR}/adr"
+    fi
+    info "Installed adr to ${installed_bin} via cargo"
 else
     info "Fetching latest release from GitHub..."
     download_url=""
@@ -98,8 +116,14 @@ else
         warn "No prebuilt binary found for ${target}."
         warn "Falling back to building from source (requires Rust toolchain)."
         command -v cargo >/dev/null 2>&1 || die "cargo not found. Install Rust from https://rustup.rs"
-        cargo install --git "https://github.com/${REPO}" --root "${INSTALL_DIR%/bin}"
-        info "Installed adr to ${INSTALL_DIR}/adr via cargo"
+        cargo install --git "https://github.com/${REPO}" --root "${cargo_root}" --force
+        installed_bin="${cargo_root}/bin/adr"
+        if [[ "$(dirname "${installed_bin}")" != "$INSTALL_DIR" ]]; then
+            mkdir -p "$INSTALL_DIR"
+            install -m 0755 "${installed_bin}" "${INSTALL_DIR}/adr"
+            installed_bin="${INSTALL_DIR}/adr"
+        fi
+        info "Installed adr to ${installed_bin} via cargo"
     else
         info "Downloading Telltale ${version_tag} for ${target}..."
         tmpdir="$(mktemp -d)"
@@ -114,13 +138,14 @@ else
 
         tar xzf "$archive" -C "$tmpdir"
         install -m 0755 "${tmpdir}/adr" "${INSTALL_DIR}/adr"
-        info "Installed adr ${version_tag} to ${INSTALL_DIR}/adr"
+        installed_bin="${INSTALL_DIR}/adr"
+        info "Installed adr ${version_tag} to ${installed_bin}"
     fi
 fi
 
 # --- verify the binary runs --------------------------------------------------
 
-adr_bin="${INSTALL_DIR}/adr"
+adr_bin="$installed_bin"
 if ! "$adr_bin" --version >/dev/null 2>&1; then
     die "adr binary at ${adr_bin} did not run. Check your platform and try --from-source."
 fi

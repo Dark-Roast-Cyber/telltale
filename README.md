@@ -118,6 +118,115 @@ Tagged GitHub releases publish platform-specific `adr` binary archives when
 available. Source builds remain supported; the install guide covers both paths
 and the fixture-safe verification step.
 
+### Linux
+
+A user-first installer downloads the latest release binary, installs it to
+`~/.local/bin/adr` (no sudo), and optionally sets up a user-level systemd
+timer for periodic scans:
+
+```sh
+curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
+```
+
+Add `--from-source` to build with cargo instead of downloading a prebuilt
+binary, or `--no-timer` to skip the systemd timer. The installer does not
+create system accounts or configure SIEM shippers.
+
+### macOS
+
+Download the release archive for your architecture and extract the binary:
+
+```sh
+# Apple Silicon (aarch64)
+curl -fsSLO https://github.com/Dark-Roast-Cyber/telltale/releases/latest/download/adr-$(curl -fsSL https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')-aarch64-apple-darwin.tar.gz
+tar xzf adr-*-aarch64-apple-darwin.tar.gz
+sudo mv adr /usr/local/bin/adr
+```
+
+Or build from source:
+
+```sh
+git clone https://github.com/Dark-Roast-Cyber/telltale.git
+cd telltale
+cargo build --release
+sudo cp target/release/adr /usr/local/bin/adr
+```
+
+The default `user` path profile writes telemetry to
+`~/Library/Logs/Telltale/adr-events.jsonl` and state to
+`~/Library/Application Support/Telltale/adr-state.json`. No sudo is needed
+for scans — run as your user.
+
+For periodic scans, create a user LaunchAgent at
+`~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.agentarchaeology.telltale</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/adr</string>
+        <string>scan</string>
+        <string>--once</string>
+        <string>--emit-activity</string>
+        <string>--root</string>
+        <string>/Users/YOUR_USERNAME</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+```
+
+Load it with:
+
+```sh
+launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
+```
+
+### Windows
+
+Download the release archive and extract `adr.exe`:
+
+```powershell
+# PowerShell
+$release = Invoke-RestMethod "https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest"
+$tag = $release.tag_name
+$asset = $release.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.zip" }
+Invoke-WebRequest $asset.browser_download_url -OutFile "adr-$tag.zip"
+Expand-Archive "adr-$tag.zip" -DestinationPath "$env:LOCALAPPDATA\Telltale"
+```
+
+Or build from source:
+
+```powershell
+git clone https://github.com/Dark-Roast-Cyber/telltale.git
+cd telltale
+cargo build --release
+Copy-Item target\release\adr.exe $env:LOCALAPPDATA\Telltale\adr.exe
+```
+
+Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `adr` from any
+terminal. The default `user` path profile writes telemetry to
+`%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` and state to
+`%LOCALAPPDATA%\Telltale\State\adr-state.json`. No elevation is needed for
+scans — run as your user.
+
+For periodic scans, create a Scheduled Task at user logon:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\Telltale\adr.exe" -Argument "scan --once --emit-activity --root $env:USERPROFILE"
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RepeatInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 365)
+Register-ScheduledTask -TaskName "TelltaleScan" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited
+```
+
 Before pushing public history, run `make public-push-review` to review the
 current branch, public remote URLs, working-tree status, and staged path list.
 Before tagging a public release, run `make release-preflight` from a clean
