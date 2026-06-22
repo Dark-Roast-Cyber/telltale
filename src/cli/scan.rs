@@ -28,7 +28,9 @@ use crate::parser::{
 };
 use crate::rules::load_rule_set_from_paths;
 use crate::scoring::load_thresholds;
-use crate::sink::{LocalJsonlSink, SplunkHecConfig, SplunkHecHttpSink, emit_events};
+use crate::sink::{
+    LocalJsonlSink, RotationConfig, SplunkHecConfig, SplunkHecHttpSink, emit_events,
+};
 use crate::state::{ScanState, source_fingerprint};
 use crate::triage::maybe_triage;
 
@@ -41,6 +43,7 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) splunk_hec_endpoint: Option<&'a str>,
     pub(crate) splunk_hec_token: Option<&'a str>,
     pub(crate) state_path: &'a Path,
+    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -62,6 +65,7 @@ pub(crate) struct ScanCommandArgs<'a> {
     pub(crate) splunk_hec_endpoint: Option<&'a str>,
     pub(crate) splunk_hec_token: Option<&'a str>,
     pub(crate) state_path: &'a Path,
+    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -81,6 +85,7 @@ pub(crate) struct WatchConfig<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
     pub(crate) state_path: &'a Path,
+    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -99,6 +104,7 @@ pub(crate) struct WatchCommandArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
     pub(crate) state_path: &'a Path,
+    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -120,6 +126,7 @@ pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
         splunk_hec_endpoint: args.splunk_hec_endpoint,
         splunk_hec_token: args.splunk_hec_token,
         state_path: args.state_path,
+        rotation: args.rotation.clone(),
         dry_run: args.dry_run,
         emit_activity: args.emit_activity,
         emit_session_risk_summary: args.emit_session_risk_summary,
@@ -141,6 +148,7 @@ pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a
         root: args.root,
         log_path: args.log_path,
         state_path: args.state_path,
+        rotation: args.rotation.clone(),
         dry_run: args.dry_run,
         emit_activity: args.emit_activity,
         emit_session_risk_summary: args.emit_session_risk_summary,
@@ -163,6 +171,7 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
         splunk_hec_endpoint: None,
         splunk_hec_token: None,
         state_path: config.state_path,
+        rotation: config.rotation.clone(),
         dry_run: config.dry_run,
         emit_activity: config.emit_activity,
         emit_session_risk_summary: config.emit_session_risk_summary,
@@ -478,7 +487,7 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     }
 
     if !config.dry_run {
-        let sink = LocalJsonlSink::new(config.log_path);
+        let sink = LocalJsonlSink::with_rotation(config.log_path, config.rotation.clone());
         emit_events(&sink, &emitted_events)?;
         if let Some(sink) = splunk_hec_sink {
             emit_events(&sink, &emitted_events)?;

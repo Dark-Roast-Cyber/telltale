@@ -44,6 +44,11 @@ The installer does not create system users, configure SIEM shippers, or require
 root. For managed Linux deployments with the `system` path profile, use the
 examples in `config/examples/` and the manual systemd setup below.
 
+Built-in size-based log rotation is enabled by default (100 MB max, keep 5
+rotated files). No OS-specific rotation tooling is required for user-profile
+installs. See [telemetry-output.md](telemetry-output.md#built-in-rotation) for
+configuration details.
+
 ## Build From Source
 
 ```sh

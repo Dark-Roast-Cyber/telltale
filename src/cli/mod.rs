@@ -120,6 +120,19 @@ enum Command {
         /// Project config YAML file listing project roots. Repeat for multiple files.
         #[arg(long = "project-config")]
         project_config_paths: Vec<PathBuf>,
+
+        /// Maximum size in bytes before the active JSONL file is rotated.
+        /// Defaults to ADR_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
+        #[arg(long)]
+        log_rotate_max_size: Option<u64>,
+
+        /// Number of rotated files to keep. Defaults to ADR_LOG_ROTATE_KEEP or 5.
+        #[arg(long)]
+        log_rotate_keep: Option<usize>,
+
+        /// Disable built-in rotation. Use when an external rotator (logrotate, newsyslog) manages the file.
+        #[arg(long)]
+        log_rotate_disabled: bool,
     },
 
     /// Watch local session stores and scan when files change.
@@ -188,6 +201,19 @@ enum Command {
         /// Project config YAML file listing project roots. Repeat for multiple files.
         #[arg(long = "project-config")]
         project_config_paths: Vec<PathBuf>,
+
+        /// Maximum size in bytes before the active JSONL file is rotated.
+        /// Defaults to ADR_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
+        #[arg(long)]
+        log_rotate_max_size: Option<u64>,
+
+        /// Number of rotated files to keep. Defaults to ADR_LOG_ROTATE_KEEP or 5.
+        #[arg(long)]
+        log_rotate_keep: Option<usize>,
+
+        /// Disable built-in rotation. Use when an external rotator (logrotate, newsyslog) manages the file.
+        #[arg(long)]
+        log_rotate_disabled: bool,
     },
 
     /// Inspect and validate Telltale detection rules.
@@ -409,6 +435,39 @@ pub(crate) fn read_jsonl_events(
     Ok(events)
 }
 
+/// Resolve rotation config from CLI flags and environment variables.
+///
+/// Precedence: `--log-rotate-disabled` > `--log-rotate-max-size`/`ADR_LOG_ROTATE_MAX_SIZE` >
+/// `--log-rotate-keep`/`ADR_LOG_ROTATE_KEEP` > defaults (100 MB, keep 5).
+fn resolve_rotation_config(
+    max_size: Option<u64>,
+    keep: Option<usize>,
+    disabled: bool,
+) -> crate::sink::RotationConfig {
+    if disabled {
+        return crate::sink::RotationConfig::disabled();
+    }
+
+    let max_size_bytes = max_size.unwrap_or_else(|| {
+        std::env::var("ADR_LOG_ROTATE_MAX_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(100 * 1024 * 1024)
+    });
+
+    let keep_count = keep.unwrap_or_else(|| {
+        std::env::var("ADR_LOG_ROTATE_KEEP")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(5)
+    });
+
+    crate::sink::RotationConfig {
+        max_size_bytes,
+        keep: keep_count,
+    }
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -436,10 +495,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             clients,
             max_sources,
             project_config_paths,
+            log_rotate_max_size,
+            log_rotate_keep,
+            log_rotate_disabled,
         } => {
             let path_profile = path_profile.into();
             let log_path = paths::resolve_log_path(path_profile, log_path);
             let state_path = paths::resolve_state_path(path_profile, state_path);
+            let rotation =
+                resolve_rotation_config(log_rotate_max_size, log_rotate_keep, log_rotate_disabled);
             let mut project_paths = project_config_paths.clone();
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
@@ -450,6 +514,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
                 splunk_hec_token: splunk_hec_token.as_deref(),
                 state_path: &state_path,
+                rotation,
                 dry_run,
                 emit_activity,
                 emit_session_risk_summary,
@@ -564,10 +629,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             baseline_deviation_scoring,
             clients,
             project_config_paths,
+            log_rotate_max_size,
+            log_rotate_keep,
+            log_rotate_disabled,
         } => {
             let path_profile = path_profile.into();
             let log_path = paths::resolve_log_path(path_profile, log_path);
             let state_path = paths::resolve_state_path(path_profile, state_path);
+            let rotation =
+                resolve_rotation_config(log_rotate_max_size, log_rotate_keep, log_rotate_disabled);
             let mut project_paths = project_config_paths.clone();
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
@@ -576,6 +646,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 root: &root,
                 log_path: &log_path,
                 state_path: &state_path,
+                rotation,
                 dry_run,
                 emit_activity,
                 emit_session_risk_summary,

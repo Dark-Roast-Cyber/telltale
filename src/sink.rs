@@ -1,7 +1,9 @@
+use std::ffi::OsStr;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -11,20 +13,201 @@ pub trait EventSink {
     fn emit(&self, events: &[Event]) -> Result<(), Box<dyn std::error::Error>>;
 }
 
+/// Built-in size-based log rotation configuration.
+///
+/// When the active JSONL file exceeds `max_size_bytes`, it is renamed to a
+/// date-stamped rotated file and a fresh active file is started. Rotated files
+/// beyond `keep` are deleted oldest-first. This provides cross-platform
+/// rotation without OS-specific tooling (logrotate, newsyslog, Scheduled Tasks).
+#[derive(Debug, Clone)]
+pub struct RotationConfig {
+    /// Maximum size in bytes before the active file is rotated. 0 disables rotation.
+    pub max_size_bytes: u64,
+    /// Number of rotated files to keep. 0 keeps none (rotated files are deleted immediately).
+    pub keep: usize,
+}
+
+impl Default for RotationConfig {
+    fn default() -> Self {
+        Self {
+            max_size_bytes: 100 * 1024 * 1024, // 100 MB
+            keep: 5,
+        }
+    }
+}
+
+impl RotationConfig {
+    pub fn disabled() -> Self {
+        Self {
+            max_size_bytes: 0,
+            keep: 0,
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.max_size_bytes > 0
+    }
+}
+
 pub struct LocalJsonlSink<'a> {
     path: &'a Path,
+    rotation: RotationConfig,
 }
 
 impl<'a> LocalJsonlSink<'a> {
     pub fn new(path: &'a Path) -> Self {
-        Self { path }
+        Self {
+            path,
+            rotation: RotationConfig::default(),
+        }
+    }
+
+    pub fn with_rotation(path: &'a Path, rotation: RotationConfig) -> Self {
+        Self { path, rotation }
     }
 }
 
 impl EventSink for LocalJsonlSink<'_> {
     fn emit(&self, events: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
+        if self.rotation.is_enabled() {
+            maybe_rotate(self.path, &self.rotation)?;
+        }
         append_jsonl_events(self.path, events)
     }
+}
+
+/// Check if the active file exceeds the rotation threshold and rotate if so.
+fn maybe_rotate(path: &Path, config: &RotationConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let size = match fs::metadata(path) {
+        Ok(meta) => meta.len(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+
+    if size < config.max_size_bytes {
+        return Ok(());
+    }
+
+    rotate_file(path, config)
+}
+
+/// Rename the active file to a date-stamped rotated file and clean up old rotations.
+fn rotate_file(path: &Path, config: &RotationConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let date = current_date_utc();
+    let rotated = rotated_path(path, &date);
+
+    // If the date-stamped file already exists (same-day rotation), append a counter.
+    let mut final_path = rotated.clone();
+    let mut counter = 1;
+    while final_path.exists() {
+        final_path = rotated_with_counter(path, &date, counter);
+        counter += 1;
+    }
+
+    fs::rename(path, &final_path)?;
+
+    cleanup_rotated_files(path, config.keep)?;
+
+    Ok(())
+}
+
+/// Generate the rotated file path: `adr-events-2026-06-21.jsonl`
+fn rotated_path(active: &Path, date: &str) -> PathBuf {
+    let stem = active
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("adr-events");
+    let ext = active
+        .extension()
+        .and_then(OsStr::to_str)
+        .unwrap_or("jsonl");
+    let parent = active.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{stem}-{date}.{ext}"))
+}
+
+/// Generate a counter-suffixed rotated path: `adr-events-2026-06-21.1.jsonl`
+fn rotated_with_counter(active: &Path, date: &str, counter: usize) -> PathBuf {
+    let stem = active
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("adr-events");
+    let ext = active
+        .extension()
+        .and_then(OsStr::to_str)
+        .unwrap_or("jsonl");
+    let parent = active.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{stem}-{date}.{counter}.{ext}"))
+}
+
+/// Delete rotated files beyond `keep`, oldest-first (sorted by name).
+fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::error::Error>> {
+    if keep == 0 {
+        // keep=0 means delete all rotated files immediately.
+    }
+
+    let parent = active.parent().unwrap_or_else(|| Path::new("."));
+    let stem = active
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("adr-events");
+    let ext = active
+        .extension()
+        .and_then(OsStr::to_str)
+        .unwrap_or("jsonl");
+    let prefix = format!("{stem}-");
+
+    let mut rotated: Vec<PathBuf> = fs::read_dir(parent)?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(&format!(".{ext}"))
+        })
+        .map(|entry| entry.path())
+        .collect();
+
+    rotated.sort();
+
+    let to_delete = if keep == 0 {
+        &rotated[..]
+    } else if rotated.len() > keep {
+        &rotated[..rotated.len() - keep]
+    } else {
+        &[][..]
+    };
+
+    for file in to_delete {
+        fs::remove_file(file)?;
+    }
+
+    Ok(())
+}
+
+/// Current UTC date as `YYYY-MM-DD`.
+fn current_date_utc() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = secs / 86_400;
+    // Days since 1970-01-01 → convert to Y-M-D using a simple algorithm.
+    date_from_days_since_epoch(days as i64)
+}
+
+/// Convert days since Unix epoch (1970-01-01) to `YYYY-MM-DD`.
+fn date_from_days_since_epoch(days: i64) -> String {
+    // Civil date algorithm from Howard Hinnant (https://howardhinnant.github.io/date_algorithms.html)
+    let z = days + 719_468; // days since 0000-03-01
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 pub struct SplunkHecHttpSink {
@@ -193,6 +376,7 @@ fn parse_http_endpoint(
 mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::path::Path;
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -201,29 +385,197 @@ mod tests {
 
     use crate::event::health_event_with_metadata;
     use crate::sink::{
-        LocalJsonlSink, SplunkHecConfig, SplunkHecHttpSink, emit_events, parse_http_endpoint,
+        LocalJsonlSink, RotationConfig, SplunkHecConfig, SplunkHecHttpSink, cleanup_rotated_files,
+        date_from_days_since_epoch, emit_events, maybe_rotate, parse_http_endpoint, rotated_path,
         splunk_hec_envelopes,
     };
 
-    #[test]
-    fn local_jsonl_sink_appends_canonical_events() {
-        let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("logs/adr-events.jsonl");
-        let sink = LocalJsonlSink::new(&log_path);
-        let event = health_event_with_metadata(crate::event::HealthEventInput {
+    fn make_health_event() -> crate::event::Event {
+        health_event_with_metadata(crate::event::HealthEventInput {
             sources: &[],
             source_inventory_change: None,
             scan_duration_ms: 7,
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
             active_policy_name: None,
-        });
+        })
+    }
+
+    #[test]
+    fn local_jsonl_sink_appends_canonical_events() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("logs/adr-events.jsonl");
+        let sink = LocalJsonlSink::new(&log_path);
+        let event = make_health_event();
 
         emit_events(&sink, &[event]).expect("emit events");
 
         let output = std::fs::read_to_string(log_path).expect("jsonl output");
         assert_eq!(output.lines().count(), 1);
         assert!(output.contains("\"event_type\":\"health\""));
+    }
+
+    #[test]
+    fn rotation_rotates_when_file_exceeds_max_size() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("logs/adr-events.jsonl");
+
+        // Write enough data to exceed 100 bytes.
+        let big_event = make_health_event();
+        let sink = LocalJsonlSink::with_rotation(
+            &log_path,
+            RotationConfig {
+                max_size_bytes: 100,
+                keep: 5,
+            },
+        );
+        emit_events(&sink, std::slice::from_ref(&big_event)).expect("first emit");
+        // First emit should not rotate (file is new, under threshold).
+        assert!(log_path.exists());
+        assert!(!log_path.with_file_name("adr-events-").exists());
+
+        // Write more events to exceed 100 bytes.
+        emit_events(&sink, std::slice::from_ref(&big_event)).expect("second emit");
+        emit_events(&sink, std::slice::from_ref(&big_event)).expect("third emit");
+
+        // By now the file should have been rotated at least once.
+        // The active file should still exist with fresh content.
+        assert!(log_path.exists());
+
+        // At least one rotated file should exist.
+        let parent = log_path.parent().expect("parent");
+        let rotated: Vec<_> = std::fs::read_dir(parent)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+            })
+            .collect();
+        assert!(
+            !rotated.is_empty(),
+            "expected at least one rotated file after exceeding max size"
+        );
+    }
+
+    #[test]
+    fn rotation_disabled_does_not_rotate() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("logs/adr-events.jsonl");
+        let sink = LocalJsonlSink::with_rotation(&log_path, RotationConfig::disabled());
+
+        let event = make_health_event();
+        for _ in 0..10 {
+            emit_events(&sink, std::slice::from_ref(&event)).expect("emit");
+        }
+
+        // Active file should exist and be large (no rotation).
+        let size = std::fs::metadata(&log_path).expect("metadata").len();
+        assert!(size > 1000, "file should be large without rotation");
+
+        // No rotated files should exist.
+        let parent = log_path.parent().expect("parent");
+        let rotated: Vec<_> = std::fs::read_dir(parent)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+            })
+            .collect();
+        assert!(rotated.is_empty(), "no rotated files when disabled");
+    }
+
+    #[test]
+    fn rotated_path_uses_date_and_extension() {
+        let active = Path::new("/tmp/logs/adr-events.jsonl");
+        let rotated = rotated_path(active, "2026-06-21");
+        assert_eq!(rotated, Path::new("/tmp/logs/adr-events-2026-06-21.jsonl"));
+    }
+
+    #[test]
+    fn cleanup_deletes_oldest_beyond_keep() {
+        let temp = tempdir().expect("tempdir");
+        let active = temp.path().join("adr-events.jsonl");
+        // Create 5 rotated files with different dates.
+        for date in [
+            "2026-06-17",
+            "2026-06-18",
+            "2026-06-19",
+            "2026-06-20",
+            "2026-06-21",
+        ] {
+            let path = temp.path().join(format!("adr-events-{date}.jsonl"));
+            std::fs::write(&path, b"old").expect("write");
+        }
+
+        cleanup_rotated_files(&active, 3).expect("cleanup");
+
+        // Should keep the 3 newest (by name sort): 19, 20, 21.
+        let remaining: Vec<String> = std::fs::read_dir(temp.path())
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+            })
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(remaining.len(), 3);
+        assert!(remaining.iter().any(|n| n.contains("2026-06-19")));
+        assert!(remaining.iter().any(|n| n.contains("2026-06-20")));
+        assert!(remaining.iter().any(|n| n.contains("2026-06-21")));
+        assert!(!remaining.iter().any(|n| n.contains("2026-06-17")));
+        assert!(!remaining.iter().any(|n| n.contains("2026-06-18")));
+    }
+
+    #[test]
+    fn maybe_rotate_does_nothing_when_file_under_threshold() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("adr-events.jsonl");
+        std::fs::write(&log_path, b"small").expect("write");
+
+        let config = RotationConfig {
+            max_size_bytes: 10_000,
+            keep: 5,
+        };
+        maybe_rotate(&log_path, &config).expect("rotate check");
+
+        // File should still be the active file, unchanged.
+        let content = std::fs::read_to_string(&log_path).expect("read");
+        assert_eq!(content, "small");
+    }
+
+    #[test]
+    fn maybe_rotate_does_nothing_when_file_missing() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("nonexistent.jsonl");
+
+        let config = RotationConfig {
+            max_size_bytes: 100,
+            keep: 5,
+        };
+        maybe_rotate(&log_path, &config).expect("rotate check on missing file");
+    }
+
+    #[test]
+    fn date_from_days_since_epoch_matches_known_dates() {
+        // 1970-01-01 = day 0
+        assert_eq!(date_from_days_since_epoch(0), "1970-01-01");
+        // 2026-06-21: days from 1970-01-01
+        // 56 years * ~365.25 ≈ 20454 days. Let's verify with a known value.
+        // 2026-01-01 = 20454 days since epoch (verified externally).
+        // 2026-06-21 = 20454 + 31(jan) + 28(feb) + 31(mar) + 30(apr) + 31(may) + 21(jun) - 1
+        //            = 20454 + 171 = 20625
+        assert_eq!(date_from_days_since_epoch(20_625), "2026-06-21");
+        // 2000-02-29 (leap day)
+        // 2000-01-01 = 10957 days since epoch
+        // 2000-02-29 = 10957 + 31 + 29 - 1 = 11016
+        assert_eq!(date_from_days_since_epoch(11_016), "2000-02-29");
     }
 
     #[test]

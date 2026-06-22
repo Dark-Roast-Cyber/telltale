@@ -115,6 +115,43 @@ name stable, such as `/var/log/telltale/adr-events.jsonl` on Linux, and configur
 rotate completed files without changing the active shipper target. The Linux
 starter example is `config/examples/telltale-logrotate`.
 
+## Built-In Rotation
+
+For user-profile installs and cross-platform consistency, Telltale includes
+built-in size-based rotation. No OS-specific tooling (`logrotate`, `newsyslog`,
+Scheduled Tasks) is required.
+
+When the active JSONL file exceeds the configured max size, Telltale renames it
+to a date-stamped rotated file and starts a fresh active file. The active file
+name is always stable (`adr-events.jsonl`) so shippers can monitor a single
+path. Rotated files are named `adr-events-YYYY-MM-DD.jsonl`, with a counter
+suffix (`.1`, `.2`) for same-day rotations. Files beyond the keep count are
+deleted oldest-first.
+
+Defaults:
+
+| Setting | Default | Env var |
+| --- | --- | --- |
+| Max size | 100 MB (104_857_600 bytes) | `ADR_LOG_ROTATE_MAX_SIZE` |
+| Keep count | 5 | `ADR_LOG_ROTATE_KEEP` |
+
+CLI flags override env vars:
+
+```sh
+adr scan --once --emit-activity --log-rotate-max-size 52428800 --log-rotate-keep 10
+```
+
+To disable built-in rotation (for system-profile deployments that use OS-native
+`logrotate` instead):
+
+```sh
+adr scan --once --emit-activity --log-rotate-disabled
+```
+
+The local JSONL file is a **transient spool**, not the canonical store. Once
+events are shipped to a SIEM or central log platform, that platform is
+canonical. Rotation keeps the local spool bounded without external tooling.
+
 ## Optional Export And Sink Paths
 
 The canonical event payload remains the same across delivery paths:

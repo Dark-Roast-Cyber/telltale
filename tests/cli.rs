@@ -3786,6 +3786,152 @@ fn install_telltale_script_is_user_first_and_sudo_free() {
 }
 
 #[test]
+fn scan_rotates_jsonl_when_max_size_exceeded() {
+    let temp = tempdir().expect("tempdir");
+    let fixture_root = std::env::current_dir()
+        .expect("current dir")
+        .join("tests/fixtures/session_stores");
+    let log_path = temp.path().join("logs/adr-events.jsonl");
+
+    // First scan creates the file (no rotation since file doesn't exist yet).
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--root",
+            fixture_root.to_str().expect("fixture path"),
+            "--path-profile",
+            "project",
+            "--log-rotate-max-size",
+            "1",
+            "--log-rotate-keep",
+            "3",
+            "--max-sources",
+            "1",
+        ])
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "first scan stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        log_path.exists(),
+        "active log file should exist after first scan"
+    );
+
+    // Second scan should trigger rotation (file exists and exceeds 1 byte).
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--root",
+            fixture_root.to_str().expect("fixture path"),
+            "--path-profile",
+            "project",
+            "--log-rotate-max-size",
+            "1",
+            "--log-rotate-keep",
+            "3",
+            "--max-sources",
+            "1",
+        ])
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "second scan stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The active file should still exist with fresh content.
+    assert!(
+        log_path.exists(),
+        "active log file should exist after rotation"
+    );
+
+    // At least one rotated file should exist.
+    let parent = log_path.parent().expect("parent");
+    let rotated: Vec<_> = std::fs::read_dir(parent)
+        .expect("read dir")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("adr-events-") && name.ends_with(".jsonl")
+        })
+        .collect();
+    assert!(
+        !rotated.is_empty(),
+        "expected at least one rotated file after exceeding max size"
+    );
+
+    // Rotated file should have a date in the name.
+    let rotated_name = rotated[0].file_name().to_string_lossy().to_string();
+    assert!(
+        rotated_name.contains("adr-events-2"),
+        "rotated file should be date-stamped: {rotated_name}"
+    );
+}
+
+#[test]
+fn scan_with_log_rotate_disabled_does_not_rotate() {
+    let temp = tempdir().expect("tempdir");
+    let fixture_root = std::env::current_dir()
+        .expect("current dir")
+        .join("tests/fixtures/session_stores");
+    let log_path = temp.path().join("logs/adr-events.jsonl");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--root",
+            fixture_root.to_str().expect("fixture path"),
+            "--path-profile",
+            "project",
+            "--log-rotate-disabled",
+            "--max-sources",
+            "1",
+        ])
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(log_path.exists(), "active log file should exist");
+
+    // No rotated files should exist.
+    let parent = log_path.parent().expect("parent");
+    let rotated: Vec<_> = std::fs::read_dir(parent)
+        .expect("read dir")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("adr-events-") && name.ends_with(".jsonl")
+        })
+        .collect();
+    assert!(
+        rotated.is_empty(),
+        "no rotated files when --log-rotate-disabled is set"
+    );
+}
+
+#[test]
 fn scan_project_path_profile_separates_jsonl_telemetry_from_state() {
     let temp = tempdir().expect("tempdir");
     let fixture_root = std::env::current_dir()
