@@ -133,6 +133,15 @@ enum Command {
         /// Disable built-in rotation. Use when an external rotator (logrotate, newsyslog) manages the file.
         #[arg(long)]
         log_rotate_disabled: bool,
+
+        /// Seconds between metadata-only installed-agent inventory observations.
+        /// Defaults to ADR_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
+        #[arg(long)]
+        install_inventory_interval_seconds: Option<u64>,
+
+        /// Disable installed-agent inventory observations for this scan.
+        #[arg(long)]
+        install_inventory_disabled: bool,
     },
 
     /// Watch local session stores and scan when files change.
@@ -214,6 +223,15 @@ enum Command {
         /// Disable built-in rotation. Use when an external rotator (logrotate, newsyslog) manages the file.
         #[arg(long)]
         log_rotate_disabled: bool,
+
+        /// Seconds between metadata-only installed-agent inventory observations.
+        /// Defaults to ADR_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
+        #[arg(long)]
+        install_inventory_interval_seconds: Option<u64>,
+
+        /// Disable installed-agent inventory observations for watched scans.
+        #[arg(long)]
+        install_inventory_disabled: bool,
     },
 
     /// Inspect and validate Telltale detection rules.
@@ -468,6 +486,21 @@ fn resolve_rotation_config(
     }
 }
 
+fn resolve_install_inventory_interval_seconds(
+    interval_seconds: Option<u64>,
+    disabled: bool,
+) -> Option<u64> {
+    if disabled {
+        return None;
+    }
+    Some(interval_seconds.unwrap_or_else(|| {
+        std::env::var("ADR_INSTALL_INVENTORY_INTERVAL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(scan::DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS)
+    }))
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -498,12 +531,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_rotate_max_size,
             log_rotate_keep,
             log_rotate_disabled,
+            install_inventory_interval_seconds,
+            install_inventory_disabled,
         } => {
             let path_profile = path_profile.into();
             let log_path = paths::resolve_log_path(path_profile, log_path);
             let state_path = paths::resolve_state_path(path_profile, state_path);
             let rotation =
                 resolve_rotation_config(log_rotate_max_size, log_rotate_keep, log_rotate_disabled);
+            let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
+                install_inventory_interval_seconds,
+                install_inventory_disabled,
+            );
             let mut project_paths = project_config_paths.clone();
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
@@ -528,6 +567,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 clients: &clients,
                 max_sources,
                 project_config_paths: &project_paths,
+                install_inventory_interval_seconds,
             };
             if once {
                 scan::run_scan_once(scan::scan_config(&scan_args))?;
@@ -632,12 +672,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             log_rotate_max_size,
             log_rotate_keep,
             log_rotate_disabled,
+            install_inventory_interval_seconds,
+            install_inventory_disabled,
         } => {
             let path_profile = path_profile.into();
             let log_path = paths::resolve_log_path(path_profile, log_path);
             let state_path = paths::resolve_state_path(path_profile, state_path);
             let rotation =
                 resolve_rotation_config(log_rotate_max_size, log_rotate_keep, log_rotate_disabled);
+            let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
+                install_inventory_interval_seconds,
+                install_inventory_disabled,
+            );
             let mut project_paths = project_config_paths.clone();
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
@@ -659,6 +705,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 baseline_deviation_scoring,
                 clients: &clients,
                 project_config_paths: &project_paths,
+                install_inventory_interval_seconds,
             };
             scan::run_watch(scan::watch_config(&watch_args))?;
         }

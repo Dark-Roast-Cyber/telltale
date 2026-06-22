@@ -433,6 +433,47 @@ pub fn activity_event(input: ActivityEventInput) -> Event {
     .build()
 }
 
+pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
+    EventBuilder {
+        event_time: None,
+        event_type: "activity",
+        severity: "informational",
+        risk_score: 0,
+        client: "install_inventory".to_string(),
+        agent: None,
+        model: None,
+        provider: None,
+        session_id: "scanner".to_string(),
+        workspace: None,
+        source_path_hash: None,
+        tool_name: None,
+        rule_ids: Vec::new(),
+        categories: Vec::new(),
+        detection_classes: Vec::new(),
+        signal_types: Vec::new(),
+        analytic_intents: Vec::new(),
+        atlas_tags: Vec::new(),
+        tags: vec![
+            "scanner".to_string(),
+            "install_inventory".to_string(),
+            "metadata_only".to_string(),
+        ],
+        evidence,
+        triage: None,
+        response: None,
+        source_counts: None,
+        component: Some("scanner".to_string()),
+        check_name: Some("install_inventory".to_string()),
+        status: Some("ok".to_string()),
+        adr_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        scan_duration_ms: None,
+        rule_count: None,
+        threshold_config: None,
+        active_policy_name: None,
+    }
+    .build()
+}
+
 pub fn session_risk_summary_event(input: SessionRiskSummaryEventInput) -> Event {
     let thresholds = load_thresholds();
     let assessment = assess_risk_with_thresholds(input.risk_score, thresholds);

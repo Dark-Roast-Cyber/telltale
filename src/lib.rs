@@ -6,6 +6,7 @@ pub mod correlation;
 pub mod detection;
 pub mod discovery;
 pub mod event;
+pub mod install_inventory;
 pub mod mcp;
 pub mod parser;
 pub mod paths;

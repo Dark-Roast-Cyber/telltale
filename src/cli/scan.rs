@@ -22,6 +22,9 @@ use crate::event::{
     evidence_hash, health_event_with_metadata, load_operational_alert_config,
     operational_alert_event, scanner_error_event, session_risk_summary_event,
 };
+use crate::install_inventory::{
+    collect_install_inventory, install_inventory_due, snapshot_to_event,
+};
 use crate::mcp::{discover_mcp_inventory, discover_mcp_usage};
 use crate::parser::{
     NormalizedRecord, ParseError, ParseOptions, parse_source_records_with_options,
@@ -36,6 +39,7 @@ use crate::triage::maybe_triage;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
+pub(crate) const DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
 pub(crate) struct ScanConfig<'a> {
     pub(crate) root: &'a Path,
@@ -57,6 +61,7 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) clients: &'a [ClientId],
     pub(crate) max_sources: Option<usize>,
     pub(crate) project_config_paths: &'a [PathBuf],
+    pub(crate) install_inventory_interval_seconds: Option<u64>,
 }
 
 pub(crate) struct ScanCommandArgs<'a> {
@@ -79,6 +84,7 @@ pub(crate) struct ScanCommandArgs<'a> {
     pub(crate) clients: &'a [ClientId],
     pub(crate) max_sources: Option<usize>,
     pub(crate) project_config_paths: &'a [PathBuf],
+    pub(crate) install_inventory_interval_seconds: Option<u64>,
 }
 
 pub(crate) struct WatchConfig<'a> {
@@ -98,6 +104,7 @@ pub(crate) struct WatchConfig<'a> {
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) clients: &'a [ClientId],
     pub(crate) project_config_paths: &'a [PathBuf],
+    pub(crate) install_inventory_interval_seconds: Option<u64>,
 }
 
 pub(crate) struct WatchCommandArgs<'a> {
@@ -117,6 +124,7 @@ pub(crate) struct WatchCommandArgs<'a> {
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) clients: &'a [ClientId],
     pub(crate) project_config_paths: &'a [PathBuf],
+    pub(crate) install_inventory_interval_seconds: Option<u64>,
 }
 
 pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
@@ -140,6 +148,7 @@ pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
         clients: args.clients,
         max_sources: args.max_sources,
         project_config_paths: args.project_config_paths,
+        install_inventory_interval_seconds: args.install_inventory_interval_seconds,
     }
 }
 
@@ -161,6 +170,7 @@ pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a
         baseline_deviation_scoring: args.baseline_deviation_scoring,
         clients: args.clients,
         project_config_paths: args.project_config_paths,
+        install_inventory_interval_seconds: args.install_inventory_interval_seconds,
     }
 }
 
@@ -185,6 +195,7 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
         clients: config.clients,
         max_sources: None,
         project_config_paths: config.project_config_paths,
+        install_inventory_interval_seconds: config.install_inventory_interval_seconds,
     }
 }
 
@@ -320,8 +331,23 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     let allowlist = load_allowlist(config.allowlist_path)?;
     let mut state = ScanState::load(config.state_path)?;
     let baseline_snapshots = state.baseline_snapshots.clone();
+    let install_inventory_interval_seconds = config.install_inventory_interval_seconds;
+    let observed_at_unix_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+    let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
     let parsed_sources = parse_scan_sources(&sources, &state, config.backfill, config.dry_run);
     update_baseline_snapshots(&mut state, &parsed_sources, config.rebuild_baselines);
+    let mut install_inventory_event = None;
+    if config.clients.is_empty()
+        && let Some(interval_seconds) = install_inventory_interval_seconds
+        && install_inventory_due(
+            state.install_inventory.as_ref(),
+            observed_at_unix_ms,
+            interval_seconds,
+        )
+    {
+        let snapshot = collect_install_inventory(observed_at_unix_ms);
+        install_inventory_event = Some((snapshot_to_event(&snapshot), snapshot));
+    }
     let activities = if config.emit_activity {
         let baseline_deviation_config = BaselineDeviationConfig {
             enabled: config.baseline_deviation_scoring,
@@ -408,8 +434,6 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     };
     let session_risk_summary_count = session_risk_summaries.len();
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-    let observed_at_unix_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
-    let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
     let source_inventory_change = state.source_inventory_change_summary(&sources);
     let health = health_event_with_metadata(HealthEventInput {
         sources: &sources,
@@ -462,6 +486,7 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
             + detections.len()
             + session_risk_summaries.len()
             + operational_alerts.len()
+            + usize::from(install_inventory_event.is_some())
             + usize::from(health_emitted),
     );
     if health_emitted {
@@ -469,6 +494,12 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     }
     for alert in operational_alerts {
         emitted_events.push(alert);
+    }
+    if let Some((event, snapshot)) = install_inventory_event {
+        emitted_events.push(event);
+        if !config.dry_run {
+            state.install_inventory = Some(snapshot);
+        }
     }
     for (source, activity) in activities {
         if config.backfill || state.should_emit(&source, &activity) {

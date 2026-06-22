@@ -6,6 +6,13 @@ Telltale owns its discovery registry in `src/clients.rs` and
 `src/discovery.rs`. This document records the current source-of-truth host path
 candidates used by the scanner.
 
+Session-store discovery answers “where can Telltale parse activity from?” It is
+intentionally separate from installed-agent inventory, which answers “which
+agent tools appear installed?” using metadata-only checks in
+`src/install_inventory.rs` such as executables on `PATH`, package roots, VS
+Code-style extension IDs, and globalStorage presence. Install inventory runs on
+a configurable cadence and never reads transcript/session contents.
+
 ## Host Discovery Candidates
 
 These are the host-side locations Telltale currently resolves when

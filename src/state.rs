@@ -9,6 +9,7 @@ use crate::baseline::{BaselineKey, BaselineSummary};
 use crate::clients::SourceKind;
 use crate::discovery::Source;
 use crate::event::Event;
+use crate::install_inventory::InstallInventorySnapshot;
 
 pub const BASELINE_STATE_VERSION: u16 = 2;
 
@@ -24,6 +25,8 @@ pub struct ScanState {
     pub source_observations: BTreeMap<String, SourceObservation>,
     #[serde(default)]
     pub sqlite_ingestion_cursors: BTreeMap<String, SqliteIngestionCursor>,
+    #[serde(default)]
+    pub install_inventory: Option<InstallInventorySnapshot>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]

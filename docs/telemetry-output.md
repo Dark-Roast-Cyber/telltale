@@ -43,6 +43,9 @@ that follows [schemas/event.schema.json](../schemas/event.schema.json).
 Common event types include:
 
 - `activity`: redacted per-session activity summaries.
+- `activity` with `check_name=install_inventory`: metadata-only installed-agent
+  inventory collected on a cadence. Evidence records agent names, confidence,
+  signal types, and path hashes rather than raw transcript or session contents.
 - `detection`: rule matches, risk scores, categories, and response guidance.
 - `session_risk_summary`: optional per-session rollups from already-redacted
   activity and detection events.
@@ -56,6 +59,15 @@ than detection-only output:
 ```sh
 cargo run -- scan --once --emit-activity --emit-session-risk-summary
 ```
+
+Installed-agent inventory is separate from session-store discovery. It checks
+metadata such as executable names, package roots, VS Code-style extension IDs,
+and globalStorage presence to identify installed tooling even when no sessions
+exist. By default, scans collect and emit this inventory at most once every 24
+hours according to the state file. Tune the cadence with
+`--install-inventory-interval-seconds` or
+`ADR_INSTALL_INVENTORY_INTERVAL_SECONDS`; use `0` to collect every scan, or
+`--install-inventory-disabled` to suppress inventory for a run.
 
 ## Privacy Boundary
 

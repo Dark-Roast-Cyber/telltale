@@ -1429,7 +1429,17 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
         .collect::<Vec<_>>();
-    assert_eq!(events.len(), 37);
+    assert_eq!(events.len(), 38);
+    assert!(events.iter().any(|event| {
+        event["event_type"] == "activity"
+            && event["check_name"] == "install_inventory"
+            && event["client"] == "install_inventory"
+            && event["tags"]
+                .as_array()
+                .expect("tags")
+                .iter()
+                .any(|tag| tag == "install_inventory")
+    }));
     assert!(
         !events
             .iter()
@@ -2655,6 +2665,7 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         .arg(&state_path)
         .args(["--splunk-hec-endpoint", &hec_endpoint])
         .args(["--splunk-hec-token", "test-token"])
+        .arg("--install-inventory-disabled")
         .output()
         .expect("run adr");
 
@@ -3014,7 +3025,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     );
     let first_summary: Value = serde_json::from_slice(&first.stdout).expect("summary json");
     assert_eq!(first_summary["detection_count"], 36);
-    assert_eq!(first_summary["emitted_count"], 36);
+    assert_eq!(first_summary["emitted_count"], 37);
 
     let second = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
@@ -3040,7 +3051,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_eq!(second_summary["emitted_count"], 0);
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 37);
+    assert_eq!(lines.lines().count(), 38);
 }
 
 #[test]
@@ -3262,7 +3273,13 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
         command
             .args(["scan", "--once", "--allow-fixtures", "--root"])
             .arg(&root)
-            .args(["--client", "codex", "--emit-activity", "--log-path"])
+            .args([
+                "--client",
+                "codex",
+                "--emit-activity",
+                "--install-inventory-disabled",
+                "--log-path",
+            ])
             .arg(&log_path)
             .args(["--state-path"])
             .arg(&state_path);
@@ -4068,7 +4085,7 @@ fn scan_once_continues_after_malformed_source() {
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["scan", "--once", "--allow-fixtures", "--root"])
         .arg(&root)
-        .args(["--log-path"])
+        .args(["--install-inventory-disabled", "--log-path"])
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
