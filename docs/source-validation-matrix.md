@@ -95,6 +95,8 @@ local source paths or transcript identifiers.
 
 ## Related Documents
 
+- [Adding an Agent Source](adding-agent-source.md) — implementation checklist and adapter/plugin direction
+- [Source Adapter Refactor Plan](source-adapter-refactor-plan.md) — phased plan for moving built-in agents to `src/sources/<agent>/`
 - [Agent Capability Profiles](agent-capability-profiles.md) — per-source field availability and known gaps
 - [Client Capability Matrix](client-capability-matrix.md) — field-level availability per client
 - [Normalization Schema](normalization-schema.md) — `NormalizedRecordV1` contract

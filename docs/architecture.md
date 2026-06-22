@@ -20,7 +20,10 @@ ADR runs a repeatable batch pipeline:
 ## Module Boundaries
 
 - `discovery`: knows where each agent stores sessions.
-- `parsers`: client-specific transcript/database parsing.
+- `parser`: client-specific transcript/database parsing. See
+  [Adding an Agent Source](adding-agent-source.md) for the current checklist and
+  [Source Adapter Refactor Plan](source-adapter-refactor-plan.md) for the
+  recommended adapter-module refactor path.
 - `normalizer`: creates common records with stable field names.
 - `rules`: loads and evaluates regex rules.
 - `scoring`: combines matches, context, and thresholds.
