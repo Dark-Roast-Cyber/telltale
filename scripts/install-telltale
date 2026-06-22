@@ -104,9 +104,9 @@ else
     fi
 
     if [[ -n "$release_json" ]]; then
-        version_tag="$(printf '%s' "$release_json" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')"
+        version_tag="$(printf '%s' "$release_json" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//' || true)"
         # Look for an asset matching our target.
-        asset_url="$(printf '%s' "$release_json" | grep -o '"browser_download_url": *"[^"]*"' | grep "${target}" | head -1 | sed 's/.*"browser_download_url": *"//;s/"$//')"
+        asset_url="$(printf '%s' "$release_json" | grep -o '"browser_download_url": *"[^"]*"' | grep "${target}" | head -1 | sed 's/.*"browser_download_url": *"//;s/"$//' || true)"
         if [[ -n "$asset_url" ]]; then
             download_url="$asset_url"
         fi
@@ -185,10 +185,14 @@ WantedBy=timers.target
 EOF
 
     systemctl --user daemon-reload
-    systemctl --user enable --now adr-scan.timer 2>/dev/null || true
-    info "Installed user systemd timer (runs every 30 min as your user)"
-    info "  Manage with: systemctl --user status adr-scan.timer"
-    info "  Disable with: systemctl --user disable --now adr-scan.timer"
+    if systemctl --user enable --now adr-scan.timer 2>/dev/null; then
+        info "Installed user systemd timer (runs every 30 min as your user)"
+        info "  Manage with: systemctl --user status adr-scan.timer"
+        info "  Disable with: systemctl --user disable --now adr-scan.timer"
+    else
+        warn "Could not enable adr-scan.timer. The service files are installed at ~/.config/systemd/user/."
+        warn "Enable manually with: systemctl --user enable --now adr-scan.timer"
+    fi
 }
 
 if [[ "$NO_TIMER" -eq 0 ]]; then

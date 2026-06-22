@@ -139,12 +139,68 @@ fn rotated_with_counter(active: &Path, date: &str, counter: usize) -> PathBuf {
     parent.join(format!("{stem}-{date}.{counter}.{ext}"))
 }
 
-/// Delete rotated files beyond `keep`, oldest-first (sorted by name).
-fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::error::Error>> {
-    if keep == 0 {
-        // keep=0 means delete all rotated files immediately.
-    }
+/// A parsed rotated file name, e.g. `adr-events-2026-06-21.3.jsonl` → (date, counter).
+/// The base date-stamped file (`adr-events-2026-06-21.jsonl`) has counter 0.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+struct RotatedFileEntry {
+    date: String,
+    counter: usize,
+    path: PathBuf,
+}
 
+/// Parse a rotated file name into its date and counter components.
+/// Returns None if the name does not match the exact built-in rotation pattern:
+/// `<stem>-YYYY-MM-DD.<ext>` or `<stem>-YYYY-MM-DD.<counter>.<ext>`
+fn parse_rotated_name(name: &str, stem: &str, ext: &str) -> Option<(String, usize)> {
+    let suffix = format!(".{ext}");
+    let prefix = format!("{stem}-");
+    let name = name.strip_prefix(&prefix)?;
+    let name = name.strip_suffix(&suffix)?;
+    // name is now "YYYY-MM-DD" or "YYYY-MM-DD.N"
+    if let Some((date, counter_str)) = name.rsplit_once('.') {
+        if is_valid_date(date) {
+            let counter = counter_str.parse::<usize>().ok()?;
+            return Some((date.to_string(), counter));
+        }
+        None
+    } else if is_valid_date(name) {
+        // Base date-stamped file, no counter → counter 0.
+        Some((name.to_string(), 0))
+    } else {
+        None
+    }
+}
+
+/// Check if a string is a valid `YYYY-MM-DD` date with plausible month/day values.
+fn is_valid_date(s: &str) -> bool {
+    if s.len() != 10 {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let year = &s[..4];
+    let month = &s[5..7];
+    let day = &s[8..10];
+    if !year.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    if !month.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    if !day.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let month: u32 = month.parse().unwrap_or(0);
+    let day: u32 = day.parse().unwrap_or(0);
+    (1..=12).contains(&month) && (1..=31).contains(&day)
+}
+
+/// Delete rotated files beyond `keep`, oldest-first.
+/// Only matches the exact built-in rotation pattern to avoid deleting
+/// externally-managed files (e.g., logrotate's `adr-events-20260621.jsonl`).
+fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::error::Error>> {
     let parent = active.parent().unwrap_or_else(|| Path::new("."));
     let stem = active
         .file_stem()
@@ -154,18 +210,27 @@ fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::
         .extension()
         .and_then(OsStr::to_str)
         .unwrap_or("jsonl");
-    let prefix = format!("{stem}-");
 
-    let mut rotated: Vec<PathBuf> = fs::read_dir(parent)?
+    let mut rotated: Vec<RotatedFileEntry> = fs::read_dir(parent)?
         .filter_map(Result::ok)
-        .filter(|entry| {
+        .filter_map(|entry| {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            name.starts_with(&prefix) && name.ends_with(&format!(".{ext}"))
+            // Skip directories and symlinks — only manage regular files.
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_file() {
+                return None;
+            }
+            let (date, counter) = parse_rotated_name(&name, stem, ext)?;
+            Some(RotatedFileEntry {
+                date,
+                counter,
+                path: entry.path(),
+            })
         })
-        .map(|entry| entry.path())
         .collect();
 
+    // Sort by (date, counter) so same-day files order correctly numerically.
     rotated.sort();
 
     let to_delete = if keep == 0 {
@@ -177,7 +242,13 @@ fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::
     };
 
     for file in to_delete {
-        fs::remove_file(file)?;
+        // Best-effort cleanup: don't abort the scan if one file can't be deleted.
+        if let Err(err) = fs::remove_file(&file.path) {
+            eprintln!(
+                "warning: could not delete rotated log {}: {err}",
+                file.path.display()
+            );
+        }
     }
 
     Ok(())
@@ -386,8 +457,8 @@ mod tests {
     use crate::event::health_event_with_metadata;
     use crate::sink::{
         LocalJsonlSink, RotationConfig, SplunkHecConfig, SplunkHecHttpSink, cleanup_rotated_files,
-        date_from_days_since_epoch, emit_events, maybe_rotate, parse_http_endpoint, rotated_path,
-        splunk_hec_envelopes,
+        date_from_days_since_epoch, emit_events, maybe_rotate, parse_http_endpoint,
+        parse_rotated_name, rotated_path, splunk_hec_envelopes,
     };
 
     fn make_health_event() -> crate::event::Event {
@@ -531,6 +602,118 @@ mod tests {
         assert!(remaining.iter().any(|n| n.contains("2026-06-21")));
         assert!(!remaining.iter().any(|n| n.contains("2026-06-17")));
         assert!(!remaining.iter().any(|n| n.contains("2026-06-18")));
+    }
+
+    #[test]
+    fn cleanup_ignores_externally_managed_files() {
+        let temp = tempdir().expect("tempdir");
+        let active = temp.path().join("adr-events.jsonl");
+
+        // Built-in rotated file (should be managed).
+        std::fs::write(temp.path().join("adr-events-2026-06-21.jsonl"), b"builtin").expect("write");
+
+        // External logrotate file with different date format (should be ignored).
+        std::fs::write(temp.path().join("adr-events-20260621.jsonl"), b"external").expect("write");
+
+        // Manual backup file (should be ignored).
+        std::fs::write(
+            temp.path().join("adr-events-manual-backup.jsonl"),
+            b"manual",
+        )
+        .expect("write");
+
+        // Non-matching extension (should be ignored).
+        std::fs::write(temp.path().join("adr-events-2026-06-21.log"), b"log").expect("write");
+
+        cleanup_rotated_files(&active, 0).expect("cleanup with keep=0");
+
+        // Built-in file should be deleted.
+        assert!(!temp.path().join("adr-events-2026-06-21.jsonl").exists());
+
+        // External/manual files should be untouched.
+        assert!(temp.path().join("adr-events-20260621.jsonl").exists());
+        assert!(temp.path().join("adr-events-manual-backup.jsonl").exists());
+        assert!(temp.path().join("adr-events-2026-06-21.log").exists());
+    }
+
+    #[test]
+    fn cleanup_orders_same_day_rotations_numerically() {
+        let temp = tempdir().expect("tempdir");
+        let active = temp.path().join("adr-events.jsonl");
+
+        // Create same-day files with counters that would sort wrong lexicographically.
+        for counter in [1, 2, 10, 3] {
+            let path = temp
+                .path()
+                .join(format!("adr-events-2026-06-21.{counter}.jsonl"));
+            std::fs::write(&path, b"old").expect("write");
+        }
+        // Also the base file (counter 0).
+        std::fs::write(temp.path().join("adr-events-2026-06-21.jsonl"), b"base").expect("write");
+
+        // Keep 3: should keep the 3 newest by (date, counter).
+        // Order: (2026-06-21, 0), (2026-06-21, 1), (2026-06-21, 2), (2026-06-21, 3), (2026-06-21, 10)
+        // Keep: counter 2, 3, 10. Delete: 0, 1.
+        cleanup_rotated_files(&active, 3).expect("cleanup");
+
+        let remaining: Vec<String> = std::fs::read_dir(temp.path())
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+            })
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(remaining.len(), 3);
+        // Should keep .2, .3, .10 (the 3 highest counters).
+        assert!(remaining.iter().any(|n| n.contains(".2.")));
+        assert!(remaining.iter().any(|n| n.contains(".3.")));
+        assert!(remaining.iter().any(|n| n.contains(".10.")));
+        // Should delete base (counter 0) and .1.
+        assert!(!remaining.iter().any(|n| n == "adr-events-2026-06-21.jsonl"));
+        assert!(!remaining.iter().any(|n| n.contains(".1.")));
+    }
+
+    #[test]
+    fn parse_rotated_name_matches_builtin_patterns() {
+        // Base date-stamped file.
+        assert_eq!(
+            parse_rotated_name("adr-events-2026-06-21.jsonl", "adr-events", "jsonl"),
+            Some(("2026-06-21".to_string(), 0))
+        );
+
+        // Counter file.
+        assert_eq!(
+            parse_rotated_name("adr-events-2026-06-21.3.jsonl", "adr-events", "jsonl"),
+            Some(("2026-06-21".to_string(), 3))
+        );
+
+        // External logrotate format (YYYYMMDD, no hyphens) should NOT match.
+        assert_eq!(
+            parse_rotated_name("adr-events-20260621.jsonl", "adr-events", "jsonl"),
+            None
+        );
+
+        // Manual backup should NOT match.
+        assert_eq!(
+            parse_rotated_name("adr-events-manual.jsonl", "adr-events", "jsonl"),
+            None
+        );
+
+        // Non-matching extension should NOT match.
+        assert_eq!(
+            parse_rotated_name("adr-events-2026-06-21.log", "adr-events", "jsonl"),
+            None
+        );
+
+        // Invalid date should NOT match.
+        assert_eq!(
+            parse_rotated_name("adr-events-2026-13-45.jsonl", "adr-events", "jsonl"),
+            None
+        );
     }
 
     #[test]

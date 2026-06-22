@@ -12,7 +12,7 @@ Environment=ADR_LOG_PATH=/var/log/telltale/adr-events.jsonl
 Environment=ADR_STATE_PATH=/var/lib/telltale/adr-state.json
 Environment=ADR_SCAN_ROOT=/home/telltale
 EnvironmentFile=-/etc/telltale/adr.env
-ExecStart=/usr/local/bin/adr scan --once --emit-activity --root ${ADR_SCAN_ROOT} --path-profile system
+ExecStart=/usr/local/bin/adr scan --once --emit-activity --root ${ADR_SCAN_ROOT} --path-profile system --log-rotate-disabled
 NoNewPrivileges=true
 PrivateTmp=true
 ReadWritePaths=/var/log/telltale /var/lib/telltale

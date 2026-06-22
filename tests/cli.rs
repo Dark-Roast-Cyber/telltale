@@ -4027,6 +4027,10 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
     assert!(service.contains("/usr/local/bin/adr scan --once"));
     assert!(service.contains("--emit-activity"));
     assert!(service.contains("--path-profile system"));
+    assert!(
+        service.contains("--log-rotate-disabled"),
+        "system profile service must disable built-in rotation when OS-native logrotate is used"
+    );
     assert!(service.contains("ReadWritePaths=/var/log/telltale /var/lib/telltale"));
 
     let timer = include_str!("../config/examples/adr-scan.timer");
