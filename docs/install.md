@@ -179,3 +179,11 @@ Telltale writes append-only JSONL. Review the generated event schema and your
 environment's data-handling requirements before forwarding events to a SIEM or
 central log platform. See [telemetry-output.md](telemetry-output.md) for the
 vendor-neutral event-output model and forwarding boundary.
+
+Configure file monitors for the active path profile. Workstation installs write
+to the `user` profile path by default, such as
+`~/.local/state/telltale/logs/adr-events.jsonl` on Linux. Managed Splunk/Filebeat
+deployments should run scans with `--path-profile system` or explicit
+`ADR_LOG_PATH`/`ADR_STATE_PATH` values and monitor
+`/var/log/telltale/adr-events.jsonl`. Do not monitor legacy repo-local
+`logs/adr-events.jsonl` unless scans intentionally use `--path-profile project`.

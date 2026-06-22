@@ -82,18 +82,32 @@ boundary checks.
 
 ## Forwarding To SIEMs
 
-Forward the JSONL file with the shipper or collector your environment already
+Forward the active JSONL file for the path profile your deployment actually
 uses. A safe starter pattern is:
 
 1. Write events locally with the default path profile, `ADR_LOG_PATH`, or an
    explicit `--log-path`.
 2. Validate the event shape against the schema.
-3. Configure the shipper to read only the JSONL event path.
+3. Configure the shipper to read only that active JSONL event path.
 4. Keep human-readable diagnostics, scanner state, credentials, and raw agent
    session stores outside the forwarded telemetry path.
 
+For default workstation installs, that active file is the `user` profile path,
+such as `~/.local/state/telltale/logs/adr-events.jsonl` on Linux. For managed
+service deployments, run scans with `--path-profile system` or explicit
+`ADR_LOG_PATH`/`ADR_STATE_PATH` values and point shippers at the system path,
+such as `/var/log/telltale/adr-events.jsonl` on Linux. Do not keep monitoring
+legacy repo-local `logs/adr-events.jsonl` unless the scanner is intentionally
+running with `--path-profile project` or an explicit `ADR_LOG_PATH` that writes
+there.
+
 Use explicit file paths instead of broad log directory monitors so diagnostic
-logs or source logs do not get indexed as Telltale events.
+logs or source logs do not get indexed as Telltale events. For Splunk Universal
+Forwarder deployments, install timestamp and JSON parsing props on the tier that
+performs parsing (the indexer or a heavy forwarder; a UF with indexed JSON
+extractions may also apply them before forwarding). The `adr:json` timestamp
+parser expects Telltale's canonical `timestamp` field to remain the first JSON
+field.
 
 For managed deployments, prefer OS-native rotation first. Keep the active file
 name stable, such as `/var/log/telltale/adr-events.jsonl` on Linux, and configure
