@@ -293,6 +293,8 @@ These files are the source-of-truth for Telltale's implementation, rules, and sc
 - [MCP tool inventory](docs/mcp-tool-inventory.md) — MCP configuration inventory emission
 - [Policy modes](docs/policy-modes.md) — observe, alert, simulate-block modes
 - [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content
+- [Adding an agent source](docs/adding-agent-source.md) — contributor checklist for new agent/session-source support
+- [Source adapter refactor plan](docs/source-adapter-refactor-plan.md) — planned move toward per-agent source modules
 - [Use cases](docs/use-cases.md) — concrete detection use cases with fixture guidance
 - [Normalization schema](docs/normalization-schema.md) — canonical `NormalizedRecordV1` schema
 - [Source validation matrix](docs/source-validation-matrix.md) — coverage and validation gates
