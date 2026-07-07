@@ -16,6 +16,7 @@ pub mod rules;
 pub mod schema;
 pub mod scoring;
 pub mod sink;
+pub mod sources;
 pub mod state;
 pub mod timeline;
 pub mod triage;
