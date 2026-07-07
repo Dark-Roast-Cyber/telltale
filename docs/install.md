@@ -64,8 +64,9 @@ The release binary will be available at `target/release/adr`.
 Run a fixture-safe dry run before scanning real local session stores:
 
 ```sh
-cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
-cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
+cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+cargo run -- config validate --no-local-config
+cargo run -- rules validate --no-local-config
 cargo test
 ```
 
@@ -109,6 +110,41 @@ paths.
 
 Explicit `--log-path` and `--state-path` flags override profile defaults. Service
 managers can also set `ADR_LOG_PATH` and `ADR_STATE_PATH`.
+
+## Local Rule, Policy, And Allowlist Config
+
+Telltale loads bundled detection rules by default. Operators can add local YAML
+without repeating every path by creating a local config root. Existing default
+roots are checked in deterministic order:
+
+- `/etc/telltale`
+- `$XDG_CONFIG_HOME/telltale`, or `$HOME/.config/telltale` when
+  `XDG_CONFIG_HOME` is not set
+
+Supported directories for this phase are:
+
+```text
+/etc/telltale/
+  rules.d/*.yaml|*.yml
+  policies.d/*.yaml|*.yml
+  allowlists.d/*.yaml|*.yml
+```
+
+`rules.d` files are sorted within each root and loaded before explicit
+`--rules` paths. If no explicit `--policy` is provided, exactly one discovered
+`policies.d` file may be used; multiple discovered policies require passing
+`--policy` explicitly or removing extras. `scan` and `watch` apply the same
+single-file rule for discovered `allowlists.d` files when `--allowlist` is not
+provided.
+
+Use `--config-dir <path>` to use explicit config roots instead of the default
+roots, and `--no-local-config` when a command should ignore local config.
+Explicit config roots must exist so path typos fail closed.
+
+Use `adr config validate` as the local config preflight before running scans with
+custom content. It resolves config the same way as `scan` and `watch`, validates
+the effective rule and policy set, validates the selected allowlist YAML, and
+prints a JSON status summary without reading session stores.
 
 ## Project-Local Session Stores
 

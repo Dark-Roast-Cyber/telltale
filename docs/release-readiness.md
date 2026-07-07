@@ -149,8 +149,8 @@ After downloading a release archive, run a fixture-safe smoke test before
 scanning real session stores:
 
 ```sh
-adr scan --once --dry-run --root tests/fixtures/session_stores
-adr rules validate --rules config/rules/tool-call-regex.yaml
+adr scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+adr rules validate --no-local-config
 ```
 
 Only point Telltale at real session-store roots after the fixture scan and rule

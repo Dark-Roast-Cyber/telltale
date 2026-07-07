@@ -56,7 +56,11 @@ Detection bundles remain ADR rule YAML. Bundles can be organized by purpose:
 - `config/rules/tool-call-regex.yaml` for bundled security and threat-hunting detections.
 - `config/rules/ad-hoc/*.yaml` for temporary or bleeding-edge rules that should be validated before promotion.
 - `config/rules/policy-violations/*.yaml` for detections whose primary purpose is policy enforcement or audit.
-- Deployment-specific custom bundles passed with repeated `--rules` flags.
+- Deployment-specific custom bundles passed with repeated `--rules` flags. These
+  bundles are additive to bundled defaults unless `--no-default-rules` is set.
+- Small deployments can place deployment-specific bundles under local
+  `rules.d/*.yaml|*.yml` config directories and reserve `--rules` for explicit
+  one-off additions.
 
 Policy-violation bundles use exactly the same engine and syntax as other detection bundles.
 
@@ -116,7 +120,7 @@ Validate existing and policy-violation bundles together:
 
 ```sh
 cargo run -- rules validate \
-  --rules config/rules/tool-call-regex.yaml \
+  --no-local-config \
   --rules config/rules/policy-violations/example-policy-violations.yaml
 ```
 
@@ -124,7 +128,7 @@ Preview a fixture:
 
 ```sh
 cargo run -- rules test \
-  --rules config/rules/tool-call-regex.yaml \
+  --no-local-config \
   --rules config/rules/policy-violations/example-policy-violations.yaml \
   tests/fixtures/rule_samples/policy-agent-guardrail-modification.jsonl
 ```
@@ -133,10 +137,14 @@ Scan synthetic fixtures without writing:
 
 ```sh
 cargo run -- scan --once --dry-run \
+  --no-local-config \
   --root tests/fixtures/session_stores \
-  --rules config/rules/tool-call-regex.yaml \
   --rules config/rules/policy-violations/example-policy-violations.yaml
 ```
+
+For local policy deployments, place exactly one active policy selector in a
+local `policies.d` directory, or pass `--policy` explicitly when comparing
+multiple policy files. This avoids implicit hidden policy merges.
 
 ## Guardrails
 

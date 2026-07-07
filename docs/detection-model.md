@@ -34,15 +34,49 @@ See [threat-taxonomy.md](threat-taxonomy.md) for the ADR category contract, curr
 
 ## Configurable Rules And Policies
 
-ADR loads the bundled rules by default from `config/rules/tool-call-regex.yaml`. You can replace that set at scan time with one or more custom YAML files:
+ADR loads bundled default rules from the binary by default. Repeated `--rules`
+flags add custom YAML files on top of those defaults:
 
 ```sh
-adr scan --once --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
+adr scan --once --no-local-config --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
 ```
+
+Use `--no-default-rules` only when you intentionally want a custom-only rule set:
+
+```sh
+adr scan --once --no-local-config --no-default-rules --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
+```
+
+Custom rule files can also live under local config roots. Telltale checks
+existing `/etc/telltale` and per-user config roots by default; pass
+`--config-dir <path>` to use an explicit root for a command, or
+`--no-local-config` to disable discovery. Explicit config roots must exist:
+
+```text
+~/.config/telltale/
+  rules.d/*.yaml|*.yml
+  policies.d/*.yaml|*.yml
+  allowlists.d/*.yaml|*.yml
+```
+
+Discovered `rules.d` files are loaded before explicit `--rules` paths. A single
+discovered policy is used only when `--policy` is absent; multiple discovered
+policies produce an error so hidden policy merges do not occur. `scan` and
+`watch` use the same single-file behavior for discovered allowlists when
+`--allowlist` is absent.
+
+Use `adr config validate` as a preflight for local rule, policy, and allowlist
+configuration. It resolves the same effective config as scans, validates the
+compiled rule set plus allowlist YAML, and emits a small JSON health summary.
 
 The simplest valid custom rule uses `targets` plus `regex`:
 
 ```yaml
+version: 1
+description: Local custom rules.
+defaults:
+  case_insensitive: true
+  enabled: true
 rules:
   - id: example.download.curl
     title: Example curl download
@@ -55,6 +89,7 @@ rules:
     explanation: Example rule that matches curl-based HTTP downloads.
     falsepositives:
       - Setup docs or normal dependency fetches may legitimately use curl.
+modifiers: []
 ```
 
 ADR also supports a Sigma-inspired `detection.selection` map with `condition: selection`:
@@ -83,7 +118,9 @@ enabled_categories: [secret_access, credential_pattern, exfiltration, mcp_prompt
 disabled_rules: [network.controlled_test_domain.darkroast]
 ```
 
-Use `adr rules list`, `adr rules validate`, and `adr rules test` to inspect, compile, and preview configured rules before writing scan output.
+Use `adr rules list`, `adr rules validate`, and `adr rules test` to inspect,
+compile, and preview configured rules before writing scan output. These commands
+also load bundled defaults unless `--no-default-rules` is set.
 
 Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to ADR categories, rule IDs, fixtures, and validation commands.
 
@@ -117,7 +154,7 @@ Scenario:
 
 - A fake MCP server or fake `tools/list` response presents a harmless-looking tool, such as `repo_status`, `get_compliance_status`, or `summarize_project`.
 - The tool description, parameter description, server instructions, tool result, or adjacent assistant context includes hidden or explicit instructions like ignoring previous instructions, silently reading secrets, bypassing approval, or calling another tool.
-- The injected instruction attempts to read a sensitive local file or credential-looking value and send it to the controlled tester domain `darkroastcyber.io`.
+- The injected instruction attempts to read a sensitive local file or credential-looking value and send it to a reserved controlled test-domain destination.
 - ADR must emit a high or critical detection event without logging raw secret values or full transcript bodies.
 
 Synthetic evidence examples may mention:
@@ -125,7 +162,7 @@ Synthetic evidence examples may mention:
 - `mcp.tools_list`, `mcp.tool.description`, `mcp.tool.parameters`, or `mcp.tool.result`;
 - `ignore previous instructions`, `without asking`, `do not tell the user`, or `silently run`;
 - `.env`, SSH keys, API tokens, or credential-shaped text;
-- `https://darkroastcyber.io/...` as the controlled destination.
+- `https://exfil.example.invalid/...` as the reserved controlled destination.
 
 Expected rule chain:
 

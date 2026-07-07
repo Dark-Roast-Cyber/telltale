@@ -7,18 +7,29 @@ use serde::Deserialize;
 use crate::clients::{ClientId, SourceKind};
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
-use crate::rules::{CompiledRuleSet, load_rule_set_from_documents, load_rule_set_from_paths};
+use crate::rules::{
+    CompiledRuleSet, RuleLoadMode, load_rule_set_from_documents,
+    load_rule_set_from_paths_with_mode, load_rule_set_from_paths_with_mode_and_overrides,
+};
 
 pub(crate) fn run_rules_server(
     addr: SocketAddr,
     rule_paths: &[PathBuf],
+    editable_rule_paths: &[PathBuf],
     policy_path: Option<&Path>,
+    rule_load_mode: RuleLoadMode,
     once: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !addr.ip().is_loopback() {
         return Err("rules serve only binds to loopback addresses".into());
     }
-    let rule_set = load_rule_set_from_paths(rule_paths, policy_path)?;
+    let config = RuleServerConfig {
+        rule_paths,
+        editable_rule_paths,
+        policy_path,
+        rule_load_mode,
+    };
+    let rule_set = load_rule_set_from_paths_with_mode(rule_paths, policy_path, rule_load_mode)?;
     let mut state = RuleServerState::new(rule_set);
     let listener = TcpListener::bind(addr)?;
     println!(
@@ -38,13 +49,20 @@ pub(crate) fn run_rules_server(
     std::io::stdout().flush()?;
     if once {
         let (stream, _) = listener.accept()?;
-        handle_rules_request(stream, &mut state, rule_paths, policy_path)?;
+        handle_rules_request(stream, &mut state, &config)?;
         return Ok(());
     }
     for stream in listener.incoming() {
-        handle_rules_request(stream?, &mut state, rule_paths, policy_path)?;
+        handle_rules_request(stream?, &mut state, &config)?;
     }
     Ok(())
+}
+
+struct RuleServerConfig<'a> {
+    rule_paths: &'a [PathBuf],
+    editable_rule_paths: &'a [PathBuf],
+    policy_path: Option<&'a Path>,
+    rule_load_mode: RuleLoadMode,
 }
 
 struct RuleServerState {
@@ -94,8 +112,7 @@ struct HttpRequest {
 fn handle_rules_request(
     mut stream: TcpStream,
     state: &mut RuleServerState,
-    rule_paths: &[PathBuf],
-    policy_path: Option<&Path>,
+    config: &RuleServerConfig<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let peer_ip = stream.peer_addr()?.ip();
     if !peer_ip.is_loopback() {
@@ -114,8 +131,7 @@ fn handle_rules_request(
         rule_server_route(&request),
         &request.body,
         state,
-        rule_paths,
-        policy_path,
+        config,
     )?;
     Ok(())
 }
@@ -167,8 +183,7 @@ fn write_rules_route_response(
     route: RuleServerRoute,
     body: &[u8],
     state: &mut RuleServerState,
-    rule_paths: &[PathBuf],
-    policy_path: Option<&Path>,
+    config: &RuleServerConfig<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match route {
         RuleServerRoute::Editor => write_http_response(
@@ -184,9 +199,19 @@ fn write_rules_route_response(
             write_json_api_response(stream, preview_rules_request(body, &state.rule_set)?)
         }
         RuleServerRoute::Save => {
-            let response = save_rules_request(body, rule_paths)?;
+            let response = save_rules_request(
+                body,
+                config.rule_paths,
+                config.editable_rule_paths,
+                config.policy_path,
+                config.rule_load_mode,
+            )?;
             if response.status_code == 200 {
-                state.reload(load_rule_set_from_paths(rule_paths, policy_path)?);
+                state.reload(load_rule_set_from_paths_with_mode(
+                    config.rule_paths,
+                    config.policy_path,
+                    config.rule_load_mode,
+                )?);
             }
             write_json_api_response(stream, response)
         }
@@ -311,8 +336,8 @@ struct RuleSaveRequest {
     rules_yaml: String,
     #[serde(default)]
     policy_yaml: Option<String>,
-    /// Target rule file path. Must be one of the loaded rule_paths.
-    /// Defaults to the first rule_path if omitted.
+    /// Target rule file path. Must be one of the explicit editable --rules files.
+    /// Defaults to the first editable --rules file if omitted.
     #[serde(default)]
     path: Option<PathBuf>,
 }
@@ -320,40 +345,33 @@ struct RuleSaveRequest {
 fn save_rules_request(
     body: &[u8],
     rule_paths: &[PathBuf],
+    editable_rule_paths: &[PathBuf],
+    policy_path: Option<&Path>,
+    rule_load_mode: RuleLoadMode,
 ) -> Result<ApiResponse, Box<dyn std::error::Error>> {
     let request: RuleSaveRequest = serde_json::from_slice(body)?;
+
+    let target = match resolve_save_target(request.path.as_deref(), editable_rule_paths) {
+        Ok(target) => target,
+        Err(error) => return Ok(ApiResponse::bad_request(error)),
+    };
 
     // Validate rules compile before writing.
     if let Err(error) = compile_rule_yaml(&request.rules_yaml, request.policy_yaml.as_deref()) {
         return Ok(ApiResponse::bad_request(error.to_string()));
     }
 
-    // Resolve target path: must be one of the loaded rule_paths.
-    let target = if let Some(ref requested) = request.path {
-        let canonical_requested = requested.canonicalize().map_err(|e| {
-            format!(
-                "cannot resolve requested path '{}': {e}",
-                requested.display()
-            )
-        })?;
-        let allowed = rule_paths.iter().any(|rp| {
-            rp.canonicalize()
-                .map(|c| c == canonical_requested)
-                .unwrap_or(false)
-        });
-        if !allowed {
-            return Ok(ApiResponse::bad_request(format!(
-                "requested path '{}' is not one of the loaded rule files",
-                requested.display()
-            )));
-        }
-        canonical_requested
-    } else {
-        rule_paths
-            .first()
-            .ok_or("no rule paths configured")?
-            .canonicalize()?
-    };
+    // Validate the effective rule set that would be active after this save. This
+    // catches conflicts with bundled defaults or other configured rule files
+    // before any on-disk content is changed.
+    if let Err(error) = load_rule_set_from_paths_with_mode_and_overrides(
+        rule_paths,
+        policy_path,
+        rule_load_mode,
+        &[(target.clone(), request.rules_yaml.as_str())],
+    ) {
+        return Ok(ApiResponse::bad_request(error.to_string()));
+    }
 
     // Backup existing file.
     let backup = target.with_extension("yaml.bak");
@@ -373,6 +391,48 @@ fn save_rules_request(
         "backup": backup.display().to_string(),
         "rule_count": request.rules_yaml.lines().filter(|l| l.contains("id:")).count(),
     })))
+}
+
+fn resolve_save_target(
+    requested: Option<&Path>,
+    rule_paths: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let editable_paths = rule_paths
+        .iter()
+        .map(|path| {
+            path.canonicalize()
+                .map_err(|error| format!("cannot resolve rule path '{}': {error}", path.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if editable_paths.is_empty() {
+        return Err(
+            "no editable --rules path configured; start rules serve with --rules <path> to enable saving"
+                .to_string(),
+        );
+    }
+
+    let Some(requested) = requested else {
+        return Ok(editable_paths[0].clone());
+    };
+
+    let canonical_requested = requested.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve requested path '{}': {error}",
+            requested.display()
+        )
+    })?;
+    if editable_paths
+        .iter()
+        .any(|path| path == &canonical_requested)
+    {
+        Ok(canonical_requested)
+    } else {
+        Err(format!(
+            "requested path '{}' is not one of the loaded rule files editable via --rules",
+            requested.display()
+        ))
+    }
 }
 
 fn compile_rule_yaml(

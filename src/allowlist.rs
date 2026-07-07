@@ -7,12 +7,18 @@ use crate::discovery::Source;
 use crate::event::{Event, Evidence};
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Allowlist {
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub description: Option<String>,
     #[serde(default)]
     suppressions: Vec<Suppression>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Suppression {
     #[serde(default)]
     name: Option<String>,
@@ -179,6 +185,7 @@ mod tests {
                 rule_ids: vec!["secret.env.read".to_string()],
                 ..Suppression::default()
             }],
+            ..Allowlist::default()
         };
 
         assert_eq!(

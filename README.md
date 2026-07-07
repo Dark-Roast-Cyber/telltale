@@ -78,8 +78,9 @@ Telltale can parse multiple source shapes, but real-world validation depth is no
 ## Quick start
 
 ```sh
-cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
-cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
+cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+cargo run -- config validate --no-local-config
+cargo run -- rules validate --no-local-config
 cargo test
 ```
 
@@ -94,6 +95,30 @@ on a typical single-user workstation, instead of `tests/fixtures/`.
 For continuous local monitoring, `adr watch` accepts the same repeated
 `--client <id>` filters as `adr scan`, so watched runs can stay scoped to one
 or more supported client IDs such as `codex` or `opencode`.
+
+### Local rule configuration
+
+For small deployments, Telltale also discovers local YAML config files without
+requiring every path on the command line. Existing config roots are checked in
+this order: `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or
+`$HOME/.config/telltale`.
+
+```text
+~/.config/telltale/
+  rules.d/*.yaml|*.yml
+  policies.d/*.yaml|*.yml
+  allowlists.d/*.yaml|*.yml
+```
+
+Discovered `rules.d` files are loaded before explicit `--rules` files, so CLI
+paths remain the most visible operator intent. Use `--config-dir <path>` to use
+one or more explicit local config roots, or `--no-local-config` to disable this
+discovery for a command. Explicit config roots must exist so typos fail closed
+instead of silently falling back to bundled rules.
+
+Run `adr config validate` before enabling local config in scans. It uses the same
+rule, policy, and allowlist discovery semantics as `scan`/`watch`, validates the
+effective rule set and allowlist YAML, and prints a compact JSON health summary.
 
 ### Project-local session stores
 

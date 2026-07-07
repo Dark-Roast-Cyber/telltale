@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::{Evidence, evidence_hash, redact_sensitive_text};
 
+const DEFAULT_RULE_YAML: &str = include_str!("../config/rules/tool-call-regex.yaml");
+
 const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "arguments",
     "assistant_context",
@@ -159,7 +161,12 @@ pub struct RuleSummary {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RulePolicy {
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub description: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -172,8 +179,18 @@ pub struct RulePolicy {
     pub disabled_rules: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleLoadMode {
+    IncludeDefault,
+    CustomOnly,
+}
+
 pub fn default_rule_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("config/rules/tool-call-regex.yaml")
+}
+
+pub(crate) fn bundled_default_rule_set() -> Result<RuleSet, Box<dyn std::error::Error>> {
+    Ok(serde_yaml::from_str::<RuleSet>(DEFAULT_RULE_YAML)?)
 }
 
 #[allow(dead_code)]
@@ -185,16 +202,48 @@ pub fn load_rule_set_from_paths(
     rule_paths: &[PathBuf],
     policy_path: Option<&Path>,
 ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    let paths = if rule_paths.is_empty() {
-        vec![default_rule_path()]
-    } else {
-        rule_paths.to_vec()
-    };
+    load_rule_set_from_paths_with_mode(rule_paths, policy_path, RuleLoadMode::IncludeDefault)
+}
 
+pub fn load_rule_set_from_paths_with_mode(
+    rule_paths: &[PathBuf],
+    policy_path: Option<&Path>,
+    mode: RuleLoadMode,
+) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
+    load_rule_set_from_paths_with_mode_and_overrides(rule_paths, policy_path, mode, &[])
+}
+
+pub(crate) fn load_rule_set_from_paths_with_mode_and_overrides(
+    rule_paths: &[PathBuf],
+    policy_path: Option<&Path>,
+    mode: RuleLoadMode,
+    replacements: &[(PathBuf, &str)],
+) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
+    let replacements = replacements
+        .iter()
+        .map(|(path, raw)| (canonical_or_original(path), *raw))
+        .collect::<BTreeMap<_, _>>();
     let mut loaded = Vec::new();
-    for path in paths {
-        let raw = fs::read_to_string(&path)?;
+    if matches!(mode, RuleLoadMode::IncludeDefault) {
+        loaded.push(bundled_default_rule_set()?);
+    }
+
+    for path in rule_paths
+        .iter()
+        .filter(|path| should_load_rule_path(path, mode))
+    {
+        let raw = match replacements.get(&canonical_or_original(path)) {
+            Some(raw) => raw.to_string(),
+            None => fs::read_to_string(path)?,
+        };
         loaded.push(serde_yaml::from_str::<RuleSet>(&raw)?);
+    }
+
+    if loaded.is_empty() {
+        return Err(
+            "no rule documents loaded; remove --no-default-rules or pass at least one --rules file"
+                .into(),
+        );
     }
 
     let policy = match policy_path {
@@ -206,6 +255,22 @@ pub fn load_rule_set_from_paths(
     };
 
     merge_rule_sets(loaded)?.compile(policy.as_ref())
+}
+
+fn canonical_or_original(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+pub(crate) fn should_load_rule_path(path: &Path, mode: RuleLoadMode) -> bool {
+    if matches!(mode, RuleLoadMode::CustomOnly) {
+        return true;
+    }
+
+    let default_path = default_rule_path();
+    match (path.canonicalize(), default_path.canonicalize()) {
+        (Ok(path), Ok(default_path)) => path != default_path,
+        _ => path != default_path,
+    }
 }
 
 pub fn load_rule_set_from_documents(
@@ -229,25 +294,26 @@ fn merge_rule_sets(rule_sets: Vec<RuleSet>) -> Result<RuleSet, Box<dyn std::erro
     let mut descriptions = Vec::new();
     let mut rules = Vec::new();
     let mut modifiers = Vec::new();
-    let mut defaults = RuleDefaults {
-        case_insensitive: true,
+    let defaults = RuleDefaults {
+        case_insensitive: false,
         enabled: true,
     };
 
     for rule_set in rule_sets {
-        defaults.case_insensitive &= rule_set.defaults.case_insensitive;
-        defaults.enabled &= rule_set.defaults.enabled;
+        let document_defaults = rule_set.defaults.clone();
         descriptions.push(rule_set.description);
-        for rule in rule_set.rules {
+        for mut rule in rule_set.rules {
             if !ids.insert(rule.id.clone()) {
                 return Err(format!("duplicate rule id: {}", rule.id).into());
             }
+            apply_rule_defaults(&mut rule, &document_defaults);
             rules.push(rule);
         }
-        for modifier in rule_set.modifiers {
+        for mut modifier in rule_set.modifiers {
             if !ids.insert(modifier.id.clone()) {
                 return Err(format!("duplicate rule id: {}", modifier.id).into());
             }
+            apply_modifier_defaults(&mut modifier, &document_defaults);
             modifiers.push(modifier);
         }
     }
@@ -259,6 +325,32 @@ fn merge_rule_sets(rule_sets: Vec<RuleSet>) -> Result<RuleSet, Box<dyn std::erro
         rules,
         modifiers,
     })
+}
+
+fn apply_rule_defaults(rule: &mut RuleDefinition, defaults: &RuleDefaults) {
+    if !defaults.enabled {
+        rule.enabled = false;
+    }
+    if defaults.case_insensitive {
+        if let Some(regex) = rule.regex.as_mut() {
+            *regex = case_insensitive_pattern(regex);
+        }
+        if let Some(detection) = rule.detection.as_mut() {
+            for regex in detection.selection.values_mut() {
+                *regex = case_insensitive_pattern(regex);
+            }
+        }
+    }
+}
+
+fn apply_modifier_defaults(modifier: &mut ModifierDefinition, defaults: &RuleDefaults) {
+    if !defaults.enabled {
+        modifier.enabled = false;
+    }
+}
+
+fn case_insensitive_pattern(pattern: &str) -> String {
+    format!("(?i:{pattern})")
 }
 
 impl RuleSet {

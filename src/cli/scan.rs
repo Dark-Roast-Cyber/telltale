@@ -29,7 +29,7 @@ use crate::mcp::{discover_mcp_inventory, discover_mcp_usage};
 use crate::parser::{
     NormalizedRecord, ParseError, ParseOptions, parse_source_records_with_options,
 };
-use crate::rules::load_rule_set_from_paths;
+use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode};
 use crate::scoring::load_thresholds;
 use crate::sink::{
     LocalJsonlSink, RotationConfig, SplunkHecConfig, SplunkHecHttpSink, emit_events,
@@ -55,6 +55,7 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) backfill: bool,
     pub(crate) rebuild_baselines: bool,
     pub(crate) rule_paths: &'a [PathBuf],
+    pub(crate) rule_load_mode: RuleLoadMode,
     pub(crate) policy_path: Option<&'a Path>,
     pub(crate) allowlist_path: Option<&'a Path>,
     pub(crate) baseline_deviation_scoring: bool,
@@ -78,6 +79,7 @@ pub(crate) struct ScanCommandArgs<'a> {
     pub(crate) backfill: bool,
     pub(crate) rebuild_baselines: bool,
     pub(crate) rule_paths: &'a [PathBuf],
+    pub(crate) rule_load_mode: RuleLoadMode,
     pub(crate) policy_path: Option<&'a Path>,
     pub(crate) allowlist_path: Option<&'a Path>,
     pub(crate) baseline_deviation_scoring: bool,
@@ -99,6 +101,7 @@ pub(crate) struct WatchConfig<'a> {
     pub(crate) iterations: Option<u32>,
     pub(crate) debounce: Duration,
     pub(crate) rule_paths: &'a [PathBuf],
+    pub(crate) rule_load_mode: RuleLoadMode,
     pub(crate) policy_path: Option<&'a Path>,
     pub(crate) allowlist_path: Option<&'a Path>,
     pub(crate) baseline_deviation_scoring: bool,
@@ -119,6 +122,7 @@ pub(crate) struct WatchCommandArgs<'a> {
     pub(crate) iterations: Option<u32>,
     pub(crate) debounce: Duration,
     pub(crate) rule_paths: &'a [PathBuf],
+    pub(crate) rule_load_mode: RuleLoadMode,
     pub(crate) policy_path: Option<&'a Path>,
     pub(crate) allowlist_path: Option<&'a Path>,
     pub(crate) baseline_deviation_scoring: bool,
@@ -142,6 +146,7 @@ pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
         backfill: args.backfill,
         rebuild_baselines: args.rebuild_baselines,
         rule_paths: args.rule_paths,
+        rule_load_mode: args.rule_load_mode,
         policy_path: args.policy_path,
         allowlist_path: args.allowlist_path,
         baseline_deviation_scoring: args.baseline_deviation_scoring,
@@ -165,6 +170,7 @@ pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a
         iterations: args.iterations,
         debounce: args.debounce,
         rule_paths: args.rule_paths,
+        rule_load_mode: args.rule_load_mode,
         policy_path: args.policy_path,
         allowlist_path: args.allowlist_path,
         baseline_deviation_scoring: args.baseline_deviation_scoring,
@@ -189,6 +195,7 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
         backfill: false,
         rebuild_baselines: false,
         rule_paths: config.rule_paths,
+        rule_load_mode: config.rule_load_mode,
         policy_path: config.policy_path,
         allowlist_path: config.allowlist_path,
         baseline_deviation_scoring: config.baseline_deviation_scoring,
@@ -225,6 +232,11 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
                 .into(),
         );
     }
+    let _rule_set = load_rule_set_from_paths_with_mode(
+        config.rule_paths,
+        config.policy_path,
+        config.rule_load_mode,
+    )?;
 
     // Note: structural changes to project YAML (new projects, new roots) require a process
     // restart; the notify watcher is not rebuilt at runtime.
@@ -325,7 +337,11 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     if let Some(max_sources) = config.max_sources {
         sources.truncate(max_sources);
     }
-    let rule_set = load_rule_set_from_paths(config.rule_paths, config.policy_path)?;
+    let rule_set = load_rule_set_from_paths_with_mode(
+        config.rule_paths,
+        config.policy_path,
+        config.rule_load_mode,
+    )?;
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let allowlist = load_allowlist(config.allowlist_path)?;

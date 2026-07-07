@@ -5,8 +5,8 @@ use crate::clients::{ClientId, SourceKind, supported_clients};
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
 use crate::paths::{self, PathProfile};
-use crate::rules::load_rule_set_from_paths;
-use clap::{Parser, Subcommand, ValueEnum};
+use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 
 mod coverage;
 mod export;
@@ -92,9 +92,16 @@ enum Command {
         #[arg(long)]
         rebuild_baselines: bool,
 
-        /// YAML rule file to load. Repeat to load multiple files. Defaults to bundled rules.
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
 
         /// YAML policy file that selects active rule categories and rule ids.
         #[arg(long)]
@@ -186,9 +193,16 @@ enum Command {
         #[arg(long, default_value_t = 500)]
         debounce_ms: u64,
 
-        /// YAML rule file to load. Repeat to load multiple files. Defaults to bundled rules.
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
 
         /// YAML policy file that selects active rule categories and rule ids.
         #[arg(long)]
@@ -238,6 +252,12 @@ enum Command {
     Rules {
         #[command(subcommand)]
         command: RulesCommand,
+    },
+
+    /// Validate local Telltale configuration.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
 
     /// Show scanner status from the most recent health event.
@@ -335,12 +355,44 @@ pub(crate) enum ExportFormat {
 }
 
 #[derive(Debug, Subcommand)]
+enum ConfigCommand {
+    /// Validate effective rules, policy, and allowlist configuration.
+    Validate {
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
+        #[arg(long = "rules")]
+        rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
+
+        /// YAML policy file that selects active rule categories and rule ids.
+        #[arg(long)]
+        policy: Option<PathBuf>,
+
+        /// YAML allowlist file that marks matching detections as suppressed.
+        #[arg(long)]
+        allowlist: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum RulesCommand {
     /// List loaded rules.
     List {
-        /// YAML rule file to load. Repeat to load multiple files. Defaults to bundled rules.
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
 
         /// YAML policy file that selects active rule categories and rule ids.
         #[arg(long)]
@@ -349,9 +401,16 @@ enum RulesCommand {
 
     /// Validate rule and policy YAML.
     Validate {
-        /// YAML rule file to load. Repeat to load multiple files. Defaults to bundled rules.
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
 
         /// YAML policy file that selects active rule categories and rule ids.
         #[arg(long)]
@@ -363,9 +422,16 @@ enum RulesCommand {
         /// Fixture file to evaluate.
         fixture: PathBuf,
 
-        /// YAML rule file to load. Repeat to load multiple files. Defaults to bundled rules.
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
 
         /// YAML policy file that selects active rule categories and rule ids.
         #[arg(long)]
@@ -378,9 +444,16 @@ enum RulesCommand {
         #[arg(long, default_value = "127.0.0.1:8787")]
         addr: std::net::SocketAddr,
 
-        /// YAML rule file to load. Repeat to load multiple files. Defaults to bundled rules.
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
 
         /// YAML policy file that selects active rule categories and rule ids.
         #[arg(long)]
@@ -397,14 +470,45 @@ enum RulesCommand {
         #[arg(long, default_value = "tests/fixtures/session_stores")]
         root: PathBuf,
 
-        /// YAML rule file to load. Repeat to load multiple files. Defaults to bundled rules.
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled default rules. Use only rules passed with --rules.
+        #[arg(long)]
+        no_default_rules: bool,
 
         /// YAML policy file that selects active rule categories and rule ids.
         #[arg(long)]
         policy: Option<PathBuf>,
     },
+}
+
+#[derive(Debug, Clone, Default, ClapArgs)]
+struct LocalConfigCliArgs {
+    /// Local Telltale config root. Repeat to load multiple roots instead of default local roots.
+    #[arg(long = "config-dir")]
+    config_dirs: Vec<PathBuf>,
+
+    /// Disable local config discovery from rules.d, policies.d, and allowlists.d.
+    #[arg(long)]
+    no_local_config: bool,
+}
+
+struct ResolvedRuleConfig {
+    rule_paths: Vec<PathBuf>,
+    editable_rule_paths: Vec<PathBuf>,
+    policy_path: Option<PathBuf>,
+}
+
+struct ResolvedScanConfig {
+    rule_paths: Vec<PathBuf>,
+    policy_path: Option<PathBuf>,
+    allowlist_path: Option<PathBuf>,
+    discovered: crate::config::LocalConfigFiles,
 }
 
 fn parse_client_id(value: &str) -> Result<ClientId, String> {
@@ -420,6 +524,113 @@ fn parse_client_id(value: &str) -> Result<ClientId, String> {
                 .join(", ");
             format!("unsupported client '{value}'; expected one of: {expected}")
         })
+}
+
+fn rule_load_mode(no_default_rules: bool) -> RuleLoadMode {
+    if no_default_rules {
+        RuleLoadMode::CustomOnly
+    } else {
+        RuleLoadMode::IncludeDefault
+    }
+}
+
+fn resolve_rule_config(
+    local_config: &LocalConfigCliArgs,
+    rule_paths: &[PathBuf],
+    policy: Option<&Path>,
+) -> Result<ResolvedRuleConfig, Box<dyn std::error::Error>> {
+    let discovered = crate::config::discover_local_config_files(
+        &local_config.config_dirs,
+        local_config.no_local_config,
+        crate::config::LocalConfigDiscoveryKind::Rules,
+    )?;
+    Ok(ResolvedRuleConfig {
+        rule_paths: crate::config::effective_rule_paths(&discovered.rule_paths, rule_paths),
+        editable_rule_paths: rule_paths.to_vec(),
+        policy_path: crate::config::resolve_policy_path(policy, &discovered.policy_paths)?,
+    })
+}
+
+fn resolve_scan_config(
+    local_config: &LocalConfigCliArgs,
+    rule_paths: &[PathBuf],
+    policy: Option<&Path>,
+    allowlist: Option<&Path>,
+) -> Result<ResolvedScanConfig, Box<dyn std::error::Error>> {
+    let discovered = crate::config::discover_local_config_files(
+        &local_config.config_dirs,
+        local_config.no_local_config,
+        crate::config::LocalConfigDiscoveryKind::Scan,
+    )?;
+    let effective_rule_paths =
+        crate::config::effective_rule_paths(&discovered.rule_paths, rule_paths);
+    let policy_path = crate::config::resolve_policy_path(policy, &discovered.policy_paths)?;
+    let allowlist_path =
+        crate::config::resolve_allowlist_path(allowlist, &discovered.allowlist_paths)?;
+
+    Ok(ResolvedScanConfig {
+        rule_paths: effective_rule_paths,
+        policy_path,
+        allowlist_path,
+        discovered,
+    })
+}
+
+fn display_paths(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect()
+}
+
+fn display_path(path: Option<&Path>) -> Option<String> {
+    path.map(|path| path.display().to_string())
+}
+
+fn run_config_validate(
+    local_config: &LocalConfigCliArgs,
+    rule_paths: &[PathBuf],
+    no_default_rules: bool,
+    policy: Option<&Path>,
+    allowlist: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let resolved_config = resolve_scan_config(local_config, rule_paths, policy, allowlist)?;
+    let rule_set = load_rule_set_from_paths_with_mode(
+        &resolved_config.rule_paths,
+        resolved_config.policy_path.as_deref(),
+        rule_load_mode(no_default_rules),
+    )?;
+    crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
+
+    println!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+            "status": "ok",
+            "rule_count": rule_set.rule_count(),
+            "default_rules": !no_default_rules,
+            "policy_name": rule_set.policy_name(),
+            "local_config": {
+                "enabled": !local_config.no_local_config,
+                "explicit_config_dirs": if local_config.no_local_config {
+                    Vec::<String>::new()
+                } else {
+                    display_paths(&local_config.config_dirs)
+                },
+                "discovered_rule_count": resolved_config.discovered.rule_paths.len(),
+                "discovered_policy_count": resolved_config.discovered.policy_paths.len(),
+                "discovered_allowlist_count": resolved_config.discovered.allowlist_paths.len(),
+            },
+            "rules": {
+                "paths": display_paths(&resolved_config.rule_paths),
+                "explicit_count": rule_paths.len(),
+                "discovered_count": resolved_config.discovered.rule_paths.len(),
+            },
+            "policy_path": display_path(resolved_config.policy_path.as_deref()),
+            "allowlist_path": display_path(resolved_config.allowlist_path.as_deref()),
+        }))?
+    );
+
+    Ok(())
 }
 
 fn parse_nonzero_usize(value: &str) -> Result<usize, String> {
@@ -522,6 +733,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             backfill,
             rebuild_baselines,
             rule_paths,
+            local_config,
+            no_default_rules,
             policy,
             allowlist,
             baseline_deviation_scoring,
@@ -547,6 +760,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
             }
+            let resolved_config = resolve_scan_config(
+                &local_config,
+                &rule_paths,
+                policy.as_deref(),
+                allowlist.as_deref(),
+            )?;
             let scan_args = scan::ScanCommandArgs {
                 root: &root,
                 log_path: &log_path,
@@ -560,9 +779,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 allow_fixtures,
                 backfill,
                 rebuild_baselines,
-                rule_paths: &rule_paths,
-                policy_path: policy.as_deref(),
-                allowlist_path: allowlist.as_deref(),
+                rule_paths: &resolved_config.rule_paths,
+                rule_load_mode: rule_load_mode(no_default_rules),
+                policy_path: resolved_config.policy_path.as_deref(),
+                allowlist_path: resolved_config.allowlist_path.as_deref(),
                 baseline_deviation_scoring,
                 clients: &clients,
                 max_sources,
@@ -582,8 +802,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Command::Rules { command } => match command {
-            RulesCommand::List { rule_paths, policy } => {
-                let rule_set = load_rule_set_from_paths(&rule_paths, policy.as_deref())?;
+            RulesCommand::List {
+                rule_paths,
+                local_config,
+                no_default_rules,
+                policy,
+            } => {
+                let resolved_config =
+                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
+                let rule_set = load_rule_set_from_paths_with_mode(
+                    &resolved_config.rule_paths,
+                    resolved_config.policy_path.as_deref(),
+                    rule_load_mode(no_default_rules),
+                )?;
                 for rule in rule_set.summaries() {
                     println!(
                         "{}\t{}\t{}\t{}\t{}",
@@ -591,8 +822,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             }
-            RulesCommand::Validate { rule_paths, policy } => {
-                let rule_set = load_rule_set_from_paths(&rule_paths, policy.as_deref())?;
+            RulesCommand::Validate {
+                rule_paths,
+                local_config,
+                no_default_rules,
+                policy,
+            } => {
+                let resolved_config =
+                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
+                let rule_set = load_rule_set_from_paths_with_mode(
+                    &resolved_config.rule_paths,
+                    resolved_config.policy_path.as_deref(),
+                    rule_load_mode(no_default_rules),
+                )?;
                 println!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
@@ -605,9 +847,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             RulesCommand::Test {
                 fixture,
                 rule_paths,
+                local_config,
+                no_default_rules,
                 policy,
             } => {
-                let rule_set = load_rule_set_from_paths(&rule_paths, policy.as_deref())?;
+                let resolved_config =
+                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
+                let rule_set = load_rule_set_from_paths_with_mode(
+                    &resolved_config.rule_paths,
+                    resolved_config.policy_path.as_deref(),
+                    rule_load_mode(no_default_rules),
+                )?;
                 let source = Source {
                     client: ClientId::Codex,
                     kind: SourceKind::Jsonl,
@@ -639,18 +889,53 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             RulesCommand::Serve {
                 addr,
                 rule_paths,
+                local_config,
+                no_default_rules,
                 policy,
                 once,
             } => {
-                rules_server::run_rules_server(addr, &rule_paths, policy.as_deref(), once)?;
+                let resolved_config =
+                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
+                rules_server::run_rules_server(
+                    addr,
+                    &resolved_config.rule_paths,
+                    &resolved_config.editable_rule_paths,
+                    resolved_config.policy_path.as_deref(),
+                    rule_load_mode(no_default_rules),
+                    once,
+                )?;
             }
             RulesCommand::Coverage {
                 root,
                 rule_paths,
+                local_config,
+                no_default_rules,
                 policy,
             } => {
-                coverage::run_rules_coverage(&root, &rule_paths, policy.as_deref())?;
+                let resolved_config =
+                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
+                coverage::run_rules_coverage(
+                    &root,
+                    &resolved_config.rule_paths,
+                    resolved_config.policy_path.as_deref(),
+                    rule_load_mode(no_default_rules),
+                )?;
             }
+        },
+        Command::Config { command } => match command {
+            ConfigCommand::Validate {
+                rule_paths,
+                local_config,
+                no_default_rules,
+                policy,
+                allowlist,
+            } => run_config_validate(
+                &local_config,
+                &rule_paths,
+                no_default_rules,
+                policy.as_deref(),
+                allowlist.as_deref(),
+            )?,
         },
         Command::Watch {
             root,
@@ -664,6 +949,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             iterations,
             debounce_ms,
             rule_paths,
+            local_config,
+            no_default_rules,
             policy,
             allowlist,
             baseline_deviation_scoring,
@@ -688,6 +975,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if project_paths.is_empty() {
                 project_paths = crate::projects::project_config_paths_from_env();
             }
+            let resolved_config = resolve_scan_config(
+                &local_config,
+                &rule_paths,
+                policy.as_deref(),
+                allowlist.as_deref(),
+            )?;
             let watch_args = scan::WatchCommandArgs {
                 root: &root,
                 log_path: &log_path,
@@ -699,9 +992,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 allow_fixtures,
                 iterations,
                 debounce: std::time::Duration::from_millis(debounce_ms),
-                rule_paths: &rule_paths,
-                policy_path: policy.as_deref(),
-                allowlist_path: allowlist.as_deref(),
+                rule_paths: &resolved_config.rule_paths,
+                rule_load_mode: rule_load_mode(no_default_rules),
+                policy_path: resolved_config.policy_path.as_deref(),
+                allowlist_path: resolved_config.allowlist_path.as_deref(),
                 baseline_deviation_scoring,
                 clients: &clients,
                 project_config_paths: &project_paths,

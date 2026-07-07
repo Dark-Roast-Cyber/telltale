@@ -2,6 +2,7 @@ pub mod allowlist;
 pub mod baseline;
 pub mod cli;
 pub mod clients;
+pub mod config;
 pub mod correlation;
 pub mod detection;
 pub mod discovery;

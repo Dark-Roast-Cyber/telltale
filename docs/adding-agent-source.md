@@ -190,7 +190,7 @@ cargo test clients::tests
 cargo test discovery::tests
 cargo test parser::tests
 cargo test schema::tests::converts_all_fixture_sources_to_v1_contract
-cargo run -- scan --once --dry-run --root tests/fixtures/session_stores --client <client-id>
+cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores --client <client-id>
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test

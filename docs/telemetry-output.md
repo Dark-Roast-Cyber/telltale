@@ -32,7 +32,7 @@ Use `--dry-run` when validating fixtures or command behavior without writing
 events:
 
 ```sh
-cargo run -- scan --once --dry-run --root tests/fixtures/session_stores
+cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
 ```
 
 The JSONL sink is the stable interchange point. Each line is a complete event

@@ -227,7 +227,7 @@ release-public-docs-check:
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:
 	cargo run -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
-	cargo run -- rules validate --rules config/rules/tool-call-regex.yaml
+	cargo run -- rules validate
 
 ## Public release preflight
 release-preflight: release-context-check release-tag-review release-crate-manifest release-public-docs-check check release-fixture-smoke
