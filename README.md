@@ -107,6 +107,7 @@ this order: `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or
 ```text
 ~/.config/telltale/
   rules.d/*.yaml|*.yml
+  overrides.d/*.yaml|*.yml
   policies.d/*.yaml|*.yml
   allowlists.d/*.yaml|*.yml
 ```
@@ -118,10 +119,27 @@ discovery for a command. Explicit config roots must exist so typos fail closed
 instead of silently falling back to bundled rules.
 
 Run `adr config validate` before enabling local config in scans. It uses the same
-rule, policy, and allowlist discovery semantics as `scan`/`watch`, validates the
-effective rule set and allowlist YAML, and prints a compact JSON health summary.
+rule, override, policy, and allowlist discovery semantics as `scan`/`watch`,
+validates the effective rule set and allowlist YAML, and prints a compact JSON
+health summary.
 Use `adr rules export-default` to inspect or fork the bundled default rule pack
 from an installed binary without needing a source checkout.
+
+Local `overrides.d` files are applied after bundled and custom rule files are
+merged, before policy filtering. They can disable or retune rules without editing
+the source rule YAML:
+
+```yaml
+version: 1
+description: Local workstation tuning.
+overrides:
+  - rule_id: network.download
+    enabled: false
+    reason: Too noisy on this workstation.
+  - rule_id: secret.env.read
+    score: 20
+    reason: Lab environment tuning.
+```
 
 ### Project-local session stores
 

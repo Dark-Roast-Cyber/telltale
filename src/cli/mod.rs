@@ -5,7 +5,7 @@ use crate::clients::{ClientId, SourceKind, supported_clients};
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
 use crate::paths::{self, PathProfile};
-use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode};
+use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode_and_override_paths};
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 
 mod coverage;
@@ -504,7 +504,7 @@ struct LocalConfigCliArgs {
     #[arg(long = "config-dir")]
     config_dirs: Vec<PathBuf>,
 
-    /// Disable local config discovery from rules.d, policies.d, and allowlists.d.
+    /// Disable local config discovery from rules.d, overrides.d, policies.d, and allowlists.d.
     #[arg(long)]
     no_local_config: bool,
 }
@@ -512,11 +512,13 @@ struct LocalConfigCliArgs {
 struct ResolvedRuleConfig {
     rule_paths: Vec<PathBuf>,
     editable_rule_paths: Vec<PathBuf>,
+    override_paths: Vec<PathBuf>,
     policy_path: Option<PathBuf>,
 }
 
 struct ResolvedScanConfig {
     rule_paths: Vec<PathBuf>,
+    override_paths: Vec<PathBuf>,
     policy_path: Option<PathBuf>,
     allowlist_path: Option<PathBuf>,
     discovered: crate::config::LocalConfigFiles,
@@ -558,6 +560,7 @@ fn resolve_rule_config(
     Ok(ResolvedRuleConfig {
         rule_paths: crate::config::effective_rule_paths(&discovered.rule_paths, rule_paths),
         editable_rule_paths: rule_paths.to_vec(),
+        override_paths: discovered.override_paths.clone(),
         policy_path: crate::config::resolve_policy_path(policy, &discovered.policy_paths)?,
     })
 }
@@ -581,6 +584,7 @@ fn resolve_scan_config(
 
     Ok(ResolvedScanConfig {
         rule_paths: effective_rule_paths,
+        override_paths: discovered.override_paths.clone(),
         policy_path,
         allowlist_path,
         discovered,
@@ -606,10 +610,11 @@ fn run_config_validate(
     allowlist: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let resolved_config = resolve_scan_config(local_config, rule_paths, policy, allowlist)?;
-    let rule_set = load_rule_set_from_paths_with_mode(
+    let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
         &resolved_config.rule_paths,
         resolved_config.policy_path.as_deref(),
         rule_load_mode(no_default_rules),
+        &resolved_config.override_paths,
     )?;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
 
@@ -628,6 +633,7 @@ fn run_config_validate(
                     display_paths(&local_config.config_dirs)
                 },
                 "discovered_rule_count": resolved_config.discovered.rule_paths.len(),
+                "discovered_override_count": resolved_config.discovered.override_paths.len(),
                 "discovered_policy_count": resolved_config.discovered.policy_paths.len(),
                 "discovered_allowlist_count": resolved_config.discovered.allowlist_paths.len(),
             },
@@ -635,6 +641,10 @@ fn run_config_validate(
                 "paths": display_paths(&resolved_config.rule_paths),
                 "explicit_count": rule_paths.len(),
                 "discovered_count": resolved_config.discovered.rule_paths.len(),
+            },
+            "overrides": {
+                "paths": display_paths(&resolved_config.override_paths),
+                "discovered_count": resolved_config.discovered.override_paths.len(),
             },
             "policy_path": display_path(resolved_config.policy_path.as_deref()),
             "allowlist_path": display_path(resolved_config.allowlist_path.as_deref()),
@@ -811,6 +821,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 backfill,
                 rebuild_baselines,
                 rule_paths: &resolved_config.rule_paths,
+                override_paths: &resolved_config.override_paths,
                 rule_load_mode: rule_load_mode(no_default_rules),
                 policy_path: resolved_config.policy_path.as_deref(),
                 allowlist_path: resolved_config.allowlist_path.as_deref(),
@@ -841,10 +852,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let resolved_config =
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let rule_set = load_rule_set_from_paths_with_mode(
+                let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
                     &resolved_config.rule_paths,
                     resolved_config.policy_path.as_deref(),
                     rule_load_mode(no_default_rules),
+                    &resolved_config.override_paths,
                 )?;
                 for rule in rule_set.summaries() {
                     println!(
@@ -861,10 +873,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let resolved_config =
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let rule_set = load_rule_set_from_paths_with_mode(
+                let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
                     &resolved_config.rule_paths,
                     resolved_config.policy_path.as_deref(),
                     rule_load_mode(no_default_rules),
+                    &resolved_config.override_paths,
                 )?;
                 println!(
                     "{}",
@@ -884,10 +897,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let resolved_config =
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let rule_set = load_rule_set_from_paths_with_mode(
+                let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
                     &resolved_config.rule_paths,
                     resolved_config.policy_path.as_deref(),
                     rule_load_mode(no_default_rules),
+                    &resolved_config.override_paths,
                 )?;
                 let source = Source {
                     client: ClientId::Codex,
@@ -931,6 +945,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     addr,
                     &resolved_config.rule_paths,
                     &resolved_config.editable_rule_paths,
+                    &resolved_config.override_paths,
                     resolved_config.policy_path.as_deref(),
                     rule_load_mode(no_default_rules),
                     once,
@@ -948,6 +963,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 coverage::run_rules_coverage(
                     &root,
                     &resolved_config.rule_paths,
+                    &resolved_config.override_paths,
                     resolved_config.policy_path.as_deref(),
                     rule_load_mode(no_default_rules),
                 )?;
@@ -1027,6 +1043,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 iterations,
                 debounce: std::time::Duration::from_millis(debounce_ms),
                 rule_paths: &resolved_config.rule_paths,
+                override_paths: &resolved_config.override_paths,
                 rule_load_mode: rule_load_mode(no_default_rules),
                 policy_path: resolved_config.policy_path.as_deref(),
                 allowlist_path: resolved_config.allowlist_path.as_deref(),

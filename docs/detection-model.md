@@ -55,19 +55,37 @@ existing `/etc/telltale` and per-user config roots by default; pass
 ```text
 ~/.config/telltale/
   rules.d/*.yaml|*.yml
+  overrides.d/*.yaml|*.yml
   policies.d/*.yaml|*.yml
   allowlists.d/*.yaml|*.yml
 ```
 
-Discovered `rules.d` files are loaded before explicit `--rules` paths. A single
-discovered policy is used only when `--policy` is absent; multiple discovered
-policies produce an error so hidden policy merges do not occur. `scan` and
-`watch` use the same single-file behavior for discovered allowlists when
-`--allowlist` is absent.
+Discovered `rules.d` files are loaded before explicit `--rules` paths.
+Discovered `overrides.d` files are applied after bundled/custom rules are merged
+and before policy filtering, so disabled rules are absent from the effective rule
+set and score changes affect detection risk. A single discovered policy is used
+only when `--policy` is absent; multiple discovered policies produce an error so
+hidden policy merges do not occur. `scan` and `watch` use the same single-file
+behavior for discovered allowlists when `--allowlist` is absent.
+
+Override files are strict YAML with a required reason for every entry:
+
+```yaml
+version: 1
+description: Local workstation tuning.
+overrides:
+  - rule_id: network.download
+    enabled: false
+    reason: Too noisy on this workstation.
+  - rule_id: secret.env.read
+    score: 20
+    reason: Lab environment tuning.
+```
 
 Use `adr config validate` as a preflight for local rule, policy, and allowlist
 configuration. It resolves the same effective config as scans, validates the
-compiled rule set plus allowlist YAML, and emits a small JSON health summary.
+compiled rule set after overrides plus allowlist YAML, and emits a small JSON
+health summary.
 Use `adr rules export-default` to print or write the embedded bundled default
 rule YAML for inspection or local forking from a standalone binary.
 

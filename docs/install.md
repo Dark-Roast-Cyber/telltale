@@ -127,16 +127,33 @@ Supported directories for this phase are:
 ```text
 /etc/telltale/
   rules.d/*.yaml|*.yml
+  overrides.d/*.yaml|*.yml
   policies.d/*.yaml|*.yml
   allowlists.d/*.yaml|*.yml
 ```
 
 `rules.d` files are sorted within each root and loaded before explicit
-`--rules` paths. If no explicit `--policy` is provided, exactly one discovered
-`policies.d` file may be used; multiple discovered policies require passing
-`--policy` explicitly or removing extras. `scan` and `watch` apply the same
-single-file rule for discovered `allowlists.d` files when `--allowlist` is not
-provided.
+`--rules` paths. `overrides.d` files are sorted the same way and applied after
+rules are merged, before policy filtering. If no explicit `--policy` is provided,
+exactly one discovered `policies.d` file may be used; multiple discovered
+policies require passing `--policy` explicitly or removing extras. `scan` and
+`watch` apply the same single-file rule for discovered `allowlists.d` files when
+`--allowlist` is not provided.
+
+Use overrides for local rule disablement or score tuning without editing bundled
+or custom rule files:
+
+```yaml
+version: 1
+description: Local workstation tuning.
+overrides:
+  - rule_id: network.download
+    enabled: false
+    reason: Too noisy on this workstation.
+  - rule_id: secret.env.read
+    score: 20
+    reason: Lab environment tuning.
+```
 
 Use `--config-dir <path>` to use explicit config roots instead of the default
 roots, and `--no-local-config` when a command should ignore local config.
@@ -144,8 +161,8 @@ Explicit config roots must exist so path typos fail closed.
 
 Use `adr config validate` as the local config preflight before running scans with
 custom content. It resolves config the same way as `scan` and `watch`, validates
-the effective rule and policy set, validates the selected allowlist YAML, and
-prints a JSON status summary without reading session stores.
+the effective rule, override, and policy set, validates the selected allowlist
+YAML, and prints a JSON status summary without reading session stores.
 
 Use `adr rules export-default` when you want to inspect or fork the bundled
 default rules from an installed binary. Write the output into a local `rules.d`

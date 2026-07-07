@@ -9,13 +9,15 @@ use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
 use crate::rules::{
     CompiledRuleSet, RuleLoadMode, load_rule_set_from_documents,
-    load_rule_set_from_paths_with_mode, load_rule_set_from_paths_with_mode_and_overrides,
+    load_rule_set_from_paths_with_mode_and_override_paths,
+    load_rule_set_from_paths_with_mode_override_paths_and_replacements,
 };
 
 pub(crate) fn run_rules_server(
     addr: SocketAddr,
     rule_paths: &[PathBuf],
     editable_rule_paths: &[PathBuf],
+    override_paths: &[PathBuf],
     policy_path: Option<&Path>,
     rule_load_mode: RuleLoadMode,
     once: bool,
@@ -26,10 +28,16 @@ pub(crate) fn run_rules_server(
     let config = RuleServerConfig {
         rule_paths,
         editable_rule_paths,
+        override_paths,
         policy_path,
         rule_load_mode,
     };
-    let rule_set = load_rule_set_from_paths_with_mode(rule_paths, policy_path, rule_load_mode)?;
+    let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
+        rule_paths,
+        policy_path,
+        rule_load_mode,
+        override_paths,
+    )?;
     let mut state = RuleServerState::new(rule_set);
     let listener = TcpListener::bind(addr)?;
     println!(
@@ -61,6 +69,7 @@ pub(crate) fn run_rules_server(
 struct RuleServerConfig<'a> {
     rule_paths: &'a [PathBuf],
     editable_rule_paths: &'a [PathBuf],
+    override_paths: &'a [PathBuf],
     policy_path: Option<&'a Path>,
     rule_load_mode: RuleLoadMode,
 }
@@ -203,14 +212,16 @@ fn write_rules_route_response(
                 body,
                 config.rule_paths,
                 config.editable_rule_paths,
+                config.override_paths,
                 config.policy_path,
                 config.rule_load_mode,
             )?;
             if response.status_code == 200 {
-                state.reload(load_rule_set_from_paths_with_mode(
+                state.reload(load_rule_set_from_paths_with_mode_and_override_paths(
                     config.rule_paths,
                     config.policy_path,
                     config.rule_load_mode,
+                    config.override_paths,
                 )?);
             }
             write_json_api_response(stream, response)
@@ -346,6 +357,7 @@ fn save_rules_request(
     body: &[u8],
     rule_paths: &[PathBuf],
     editable_rule_paths: &[PathBuf],
+    override_paths: &[PathBuf],
     policy_path: Option<&Path>,
     rule_load_mode: RuleLoadMode,
 ) -> Result<ApiResponse, Box<dyn std::error::Error>> {
@@ -364,10 +376,11 @@ fn save_rules_request(
     // Validate the effective rule set that would be active after this save. This
     // catches conflicts with bundled defaults or other configured rule files
     // before any on-disk content is changed.
-    if let Err(error) = load_rule_set_from_paths_with_mode_and_overrides(
+    if let Err(error) = load_rule_set_from_paths_with_mode_override_paths_and_replacements(
         rule_paths,
         policy_path,
         rule_load_mode,
+        override_paths,
         &[(target.clone(), request.rules_yaml.as_str())],
     ) {
         return Ok(ApiResponse::bad_request(error.to_string()));

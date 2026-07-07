@@ -4,15 +4,21 @@ use std::path::{Path, PathBuf};
 
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::discover_sources;
-use crate::rules::{RuleLoadMode, RuleSet, load_rule_set_from_paths_with_mode};
+use crate::rules::{RuleLoadMode, RuleSet, load_rule_set_from_paths_with_mode_and_override_paths};
 
 pub(crate) fn run_rules_coverage(
     root: &Path,
     rule_paths: &[PathBuf],
+    override_paths: &[PathBuf],
     policy_path: Option<&Path>,
     rule_load_mode: RuleLoadMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rule_set = load_rule_set_from_paths_with_mode(rule_paths, policy_path, rule_load_mode)?;
+    let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
+        rule_paths,
+        policy_path,
+        rule_load_mode,
+        override_paths,
+    )?;
     let (all_falsepositives, all_rule_categories) = load_rule_metadata(rule_paths, rule_load_mode)?;
 
     let sources = discover_sources(root);

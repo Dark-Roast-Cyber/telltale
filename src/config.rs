@@ -6,6 +6,7 @@ const SYSTEM_CONFIG_ROOT: &str = "/etc/telltale";
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalConfigFiles {
     pub rule_paths: Vec<PathBuf>,
+    pub override_paths: Vec<PathBuf>,
     pub policy_paths: Vec<PathBuf>,
     pub allowlist_paths: Vec<PathBuf>,
 }
@@ -33,6 +34,7 @@ pub fn discover_local_config_files(
     };
     Ok(LocalConfigFiles {
         rule_paths: discover_yaml_files(&roots, "rules.d")?,
+        override_paths: discover_yaml_files(&roots, "overrides.d")?,
         policy_paths: discover_yaml_files(&roots, "policies.d")?,
         allowlist_paths,
     })
@@ -175,7 +177,10 @@ mod tests {
         write(&root_a.join("rules.d/z.yml"));
         write(&root_a.join("rules.d/a.yaml"));
         write(&root_a.join("rules.d/ignored.txt"));
+        write(&root_a.join("overrides.d/z.yml"));
+        write(&root_a.join("overrides.d/a.yaml"));
         write(&root_b.join("rules.d/b.yaml"));
+        write(&root_b.join("overrides.d/b.yaml"));
 
         let discovered = discover_local_config_files(
             &[root_a.clone(), root_b.clone()],
@@ -192,6 +197,14 @@ mod tests {
                 root_b.join("rules.d/b.yaml"),
             ]
         );
+        assert_eq!(
+            discovered.override_paths,
+            vec![
+                root_a.join("overrides.d/a.yaml"),
+                root_a.join("overrides.d/z.yml"),
+                root_b.join("overrides.d/b.yaml"),
+            ]
+        );
     }
 
     #[test]
@@ -205,6 +218,7 @@ mod tests {
                 .expect("discover config");
 
         assert!(discovered.rule_paths.is_empty());
+        assert!(discovered.override_paths.is_empty());
         assert!(discovered.policy_paths.is_empty());
         assert!(discovered.allowlist_paths.is_empty());
     }
@@ -231,18 +245,21 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("config");
         write(&root.join("rules.d/local.yaml"));
+        write(&root.join("overrides.d/local.yaml"));
 
         let discovered = discover_local_config_files(&[root], true, LocalConfigDiscoveryKind::Scan)
             .expect("discover config");
 
         assert!(discovered.rule_paths.is_empty());
+        assert!(discovered.override_paths.is_empty());
     }
 
     #[test]
-    fn rule_discovery_does_not_scan_allowlists() {
+    fn rule_discovery_scans_overrides_but_not_allowlists() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("config");
         write(&root.join("rules.d/local.yaml"));
+        write(&root.join("overrides.d/local.yaml"));
         write(&root.join("policies.d/local.yaml"));
         write(&root.join("allowlists.d/one.yaml"));
         write(&root.join("allowlists.d/two.yml"));
@@ -255,6 +272,10 @@ mod tests {
         .expect("discover config");
 
         assert_eq!(discovered.rule_paths, vec![root.join("rules.d/local.yaml")]);
+        assert_eq!(
+            discovered.override_paths,
+            vec![root.join("overrides.d/local.yaml")]
+        );
         assert_eq!(
             discovered.policy_paths,
             vec![root.join("policies.d/local.yaml")]

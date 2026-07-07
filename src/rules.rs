@@ -179,6 +179,26 @@ pub struct RulePolicy {
     pub disabled_rules: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleOverrideDocument {
+    version: u32,
+    #[serde(default)]
+    description: Option<String>,
+    overrides: Vec<RuleOverrideEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleOverrideEntry {
+    rule_id: String,
+    reason: String,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    score: Option<u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleLoadMode {
     IncludeDefault,
@@ -214,13 +234,29 @@ pub fn load_rule_set_from_paths_with_mode(
     policy_path: Option<&Path>,
     mode: RuleLoadMode,
 ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    load_rule_set_from_paths_with_mode_and_overrides(rule_paths, policy_path, mode, &[])
+    load_rule_set_from_paths_with_mode_and_override_paths(rule_paths, policy_path, mode, &[])
 }
 
-pub(crate) fn load_rule_set_from_paths_with_mode_and_overrides(
+pub(crate) fn load_rule_set_from_paths_with_mode_and_override_paths(
     rule_paths: &[PathBuf],
     policy_path: Option<&Path>,
     mode: RuleLoadMode,
+    override_paths: &[PathBuf],
+) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
+    load_rule_set_from_paths_with_mode_override_paths_and_replacements(
+        rule_paths,
+        policy_path,
+        mode,
+        override_paths,
+        &[],
+    )
+}
+
+pub(crate) fn load_rule_set_from_paths_with_mode_override_paths_and_replacements(
+    rule_paths: &[PathBuf],
+    policy_path: Option<&Path>,
+    mode: RuleLoadMode,
+    override_paths: &[PathBuf],
     replacements: &[(PathBuf, &str)],
 ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
     let replacements = replacements
@@ -258,7 +294,9 @@ pub(crate) fn load_rule_set_from_paths_with_mode_and_overrides(
         None => None,
     };
 
-    merge_rule_sets(loaded)?.compile(policy.as_ref())
+    let mut rule_set = merge_rule_sets(loaded)?;
+    apply_rule_overrides_from_paths(&mut rule_set, override_paths)?;
+    rule_set.compile(policy.as_ref())
 }
 
 fn canonical_or_original(path: &Path) -> PathBuf {
@@ -351,6 +389,87 @@ fn apply_modifier_defaults(modifier: &mut ModifierDefinition, defaults: &RuleDef
     if !defaults.enabled {
         modifier.enabled = false;
     }
+}
+
+fn apply_rule_overrides_from_paths(
+    rule_set: &mut RuleSet,
+    override_paths: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for path in override_paths {
+        let raw = fs::read_to_string(path)?;
+        let document = serde_yaml::from_str::<RuleOverrideDocument>(&raw)
+            .map_err(|error| format!("invalid rule override file '{}': {error}", path.display()))?;
+        apply_rule_override_document(rule_set, &document, path)?;
+    }
+    Ok(())
+}
+
+fn apply_rule_override_document(
+    rule_set: &mut RuleSet,
+    document: &RuleOverrideDocument,
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if document.version != 1 {
+        return Err(format!(
+            "unsupported rule override version {} in {}; only version 1 is supported",
+            document.version,
+            path.display()
+        )
+        .into());
+    }
+    let _ = &document.description;
+
+    let rule_indexes = rule_set
+        .rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| (rule.id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    for entry in &document.overrides {
+        validate_rule_override_entry(entry, path)?;
+        let Some(index) = rule_indexes.get(&entry.rule_id).copied() else {
+            return Err(format!(
+                "unknown rule_id '{}' in rule override file {}",
+                entry.rule_id,
+                path.display()
+            )
+            .into());
+        };
+        let rule = &mut rule_set.rules[index];
+        if let Some(enabled) = entry.enabled {
+            rule.enabled = enabled;
+        }
+        if let Some(score) = entry.score {
+            rule.score = score;
+        }
+    }
+    Ok(())
+}
+
+fn validate_rule_override_entry(
+    entry: &RuleOverrideEntry,
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if entry.rule_id.trim().is_empty() {
+        return Err(format!("rule override in {} has empty rule_id", path.display()).into());
+    }
+    if entry.reason.trim().is_empty() {
+        return Err(format!(
+            "rule override for '{}' in {} requires a non-empty reason",
+            entry.rule_id,
+            path.display()
+        )
+        .into());
+    }
+    if entry.enabled.is_none() && entry.score.is_none() {
+        return Err(format!(
+            "rule override for '{}' in {} must set enabled or score",
+            entry.rule_id,
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn case_insensitive_pattern(pattern: &str) -> String {
@@ -817,6 +936,9 @@ fn secret_env_read_match_should_skip(matched: MatchedField<'_>) -> bool {
 mod tests {
     use super::{DetectionDefinition, RuleDefaults, RuleDefinition, RulePolicy, RuleSet};
     use std::collections::BTreeMap;
+    use std::fs;
+
+    use tempfile::tempdir;
 
     fn single_rule_set(rule: RuleDefinition) -> super::CompiledRuleSet {
         RuleSet {
@@ -966,5 +1088,146 @@ mod tests {
         .expect("compile rules");
 
         assert_eq!(rule_set.rule_count(), 0);
+    }
+
+    #[test]
+    fn rule_overrides_disable_rules_and_change_scores() {
+        let temp = tempdir().expect("tempdir");
+        let override_path = temp.path().join("override.yaml");
+        fs::write(
+            &override_path,
+            r#"version: 1
+overrides:
+  - rule_id: network.download
+    enabled: false
+    reason: Too noisy for this fixture.
+  - rule_id: secret.env.read
+    score: 7
+    reason: Lab tuning.
+"#,
+        )
+        .expect("write override");
+
+        let rule_set = super::load_rule_set_from_paths_with_mode_and_override_paths(
+            &[],
+            None,
+            super::RuleLoadMode::IncludeDefault,
+            &[override_path],
+        )
+        .expect("load overridden rules");
+
+        assert!(
+            !rule_set
+                .summaries()
+                .iter()
+                .any(|rule| rule.id == "network.download")
+        );
+        assert_eq!(
+            rule_set
+                .summaries()
+                .iter()
+                .find(|rule| rule.id == "secret.env.read")
+                .expect("secret rule")
+                .score,
+            7
+        );
+    }
+
+    #[test]
+    fn rule_overrides_reject_unknown_rule_ids() {
+        let temp = tempdir().expect("tempdir");
+        let override_path = temp.path().join("override.yaml");
+        fs::write(
+            &override_path,
+            r#"version: 1
+overrides:
+  - rule_id: chain.download_then_execute
+    enabled: false
+    reason: Modifier override is not supported yet.
+"#,
+        )
+        .expect("write override");
+
+        let error = super::load_rule_set_from_paths_with_mode_and_override_paths(
+            &[],
+            None,
+            super::RuleLoadMode::IncludeDefault,
+            &[override_path],
+        )
+        .expect_err("modifier override should fail")
+        .to_string();
+
+        assert!(error.contains("unknown rule_id 'chain.download_then_execute'"));
+    }
+
+    #[test]
+    fn rule_overrides_require_reason_and_effect() {
+        let temp = tempdir().expect("tempdir");
+        let override_path = temp.path().join("override.yaml");
+        fs::write(
+            &override_path,
+            r#"version: 1
+overrides:
+  - rule_id: network.download
+    reason: "   "
+"#,
+        )
+        .expect("write override");
+
+        let error = super::load_rule_set_from_paths_with_mode_and_override_paths(
+            &[],
+            None,
+            super::RuleLoadMode::IncludeDefault,
+            &[override_path],
+        )
+        .expect_err("invalid override should fail")
+        .to_string();
+
+        assert!(error.contains("requires a non-empty reason"));
+    }
+
+    #[test]
+    fn rule_overrides_apply_later_paths_deterministically() {
+        let temp = tempdir().expect("tempdir");
+        let first_override = temp.path().join("a.yaml");
+        let second_override = temp.path().join("b.yaml");
+        fs::write(
+            &first_override,
+            r#"version: 1
+overrides:
+  - rule_id: network.download
+    score: 5
+    reason: First local tuning.
+"#,
+        )
+        .expect("write first override");
+        fs::write(
+            &second_override,
+            r#"version: 1
+overrides:
+  - rule_id: network.download
+    score: 12
+    reason: Later local tuning wins.
+"#,
+        )
+        .expect("write second override");
+
+        let rule_set = super::load_rule_set_from_paths_with_mode_and_override_paths(
+            &[],
+            None,
+            super::RuleLoadMode::IncludeDefault,
+            &[first_override, second_override],
+        )
+        .expect("load overridden rules");
+
+        assert_eq!(
+            rule_set
+                .summaries()
+                .iter()
+                .find(|rule| rule.id == "network.download")
+                .expect("download rule")
+                .score,
+            12
+        );
     }
 }
