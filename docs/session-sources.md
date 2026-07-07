@@ -97,6 +97,9 @@ Codex parser notes:
 OpenCode parser notes:
 
 - Newer data lives in `opencode.db`, table `message`, with JSON in `data`.
+- SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a `Locked` parse error instead of hanging indefinitely.
+- Per-source parse operations are sequential; a single slow or contended source blocks the current scan (known limitation).
+- OpenCode per-message model attribution reflects the model that generated each message, which may differ from the session's primary model when sub-agents are used.
 - Live OpenCode SQLite stores also carry a top-level `message.session_id` column even when the JSON payload does not.
 - Legacy JSON messages include `role`, `sessionID`, `modelID`, `providerID`, `tokens`, `time`, `agent`, and `mode`.
 - Telltale needs all roles and tool records, not only assistant token-usage rows.

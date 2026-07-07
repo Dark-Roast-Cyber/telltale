@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, ErrorCode};
 use serde_json::Value;
 use std::fmt;
 use std::fs;
@@ -61,7 +61,12 @@ impl From<serde_json::Error> for ParseError {
 
 impl From<rusqlite::Error> for ParseError {
     fn from(e: rusqlite::Error) -> Self {
-        ParseError::Sqlite(e)
+        match e.sqlite_error_code() {
+            Some(ErrorCode::DatabaseBusy) | Some(ErrorCode::DatabaseLocked) => {
+                ParseError::Locked(e.to_string())
+            }
+            _ => ParseError::Sqlite(e),
+        }
     }
 }
 
@@ -262,6 +267,7 @@ fn extract_sqlite_source(
     options: ParseOptions,
 ) -> Result<ExtractedSourceRecords, ParseError> {
     let conn = Connection::open(&source.path)?;
+    conn.busy_timeout(std::time::Duration::from_millis(5000))?;
     let mut records = Vec::new();
     let mut sqlite_part_max_time_updated = None;
 
@@ -1976,6 +1982,40 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
             .expect("part text record");
         assert_eq!(part_record.kind, RecordKind::AssistantMessage);
         assert_eq!(part_record.model.as_deref(), Some("fixture-model"));
+    }
+
+    #[test]
+    fn sqlite_busy_error_maps_to_locked_parse_error() {
+        use rusqlite::Connection as TestConn;
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("busy.db");
+
+        // Hold a write lock with one connection.
+        let writer = TestConn::open(&db_path).expect("open writer");
+        writer
+            .execute("create table t (x integer)", [])
+            .expect("create table");
+        writer
+            .execute("BEGIN IMMEDIATE", [])
+            .expect("begin immediate");
+        writer
+            .execute("insert into t values (1)", [])
+            .expect("insert");
+
+        // A second connection with zero busy timeout should get SQLITE_BUSY.
+        let reader = TestConn::open(&db_path).expect("open reader");
+        reader
+            .busy_timeout(std::time::Duration::from_millis(0))
+            .expect("set busy_timeout 0");
+        let err = reader
+            .execute("insert into t values (2)", [])
+            .expect_err("should be busy");
+
+        let parse_err: ParseError = err.into();
+        assert!(
+            matches!(parse_err, ParseError::Locked(_)),
+            "expected ParseError::Locked, got {parse_err:?}"
+        );
     }
 
     #[test]
