@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -34,7 +36,7 @@ use crate::scoring::load_thresholds;
 use crate::sink::{
     LocalJsonlSink, RotationConfig, SplunkHecConfig, SplunkHecHttpSink, emit_events,
 };
-use crate::state::{ScanState, source_fingerprint};
+use crate::state::{ScanState, SqliteIngestionCursor, source_fingerprint};
 use crate::triage::maybe_triage;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
@@ -102,6 +104,7 @@ pub(crate) struct WatchConfig<'a> {
     pub(crate) allow_fixtures: bool,
     pub(crate) iterations: Option<u32>,
     pub(crate) debounce: Duration,
+    pub(crate) min_scan_interval: Duration,
     pub(crate) rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
     pub(crate) rule_load_mode: RuleLoadMode,
@@ -124,6 +127,7 @@ pub(crate) struct WatchCommandArgs<'a> {
     pub(crate) allow_fixtures: bool,
     pub(crate) iterations: Option<u32>,
     pub(crate) debounce: Duration,
+    pub(crate) min_scan_interval: Duration,
     pub(crate) rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
     pub(crate) rule_load_mode: RuleLoadMode,
@@ -174,6 +178,7 @@ pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a
         allow_fixtures: args.allow_fixtures,
         iterations: args.iterations,
         debounce: args.debounce,
+        min_scan_interval: args.min_scan_interval,
         rule_paths: args.rule_paths,
         override_paths: args.override_paths,
         rule_load_mode: args.rule_load_mode,
@@ -232,6 +237,8 @@ pub(crate) fn run_scan_loop(
     Ok(())
 }
 
+const WATCH_SHUTDOWN_POLL: Duration = Duration::from_millis(200);
+
 pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     if !config.dry_run && !config.allow_fixtures && is_fixture_root(config.root) {
         return Err(
@@ -265,6 +272,10 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
         .into());
     }
 
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_handler = Arc::clone(&shutdown);
+    ctrlc::set_handler(move || shutdown_handler.store(true, Ordering::SeqCst))?;
+
     let (tx, rx) = mpsc::channel();
     let mut watcher = RecommendedWatcher::new(
         move |result| {
@@ -276,16 +287,62 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
         watcher.watch(root, RecursiveMode::Recursive)?;
     }
 
+    let mut source_index = build_watch_source_index(&config, &project_configs);
     let mut remaining = config.iterations;
-    loop {
-        let event = receive_watch_event(&rx)?;
-        if !watch_event_should_scan(&event) {
-            continue;
-        }
-        thread::sleep(config.debounce);
-        drain_watch_events(&rx);
+    let mut last_scan_completed: Option<Instant> = None;
 
-        run_scan_once(watch_scan_config(&config))?;
+    'watch: loop {
+        // Block until the first relevant change, waking periodically to honor shutdown.
+        let mut pending = PendingWatchChanges::default();
+        while pending.is_empty() {
+            if shutdown.load(Ordering::SeqCst) {
+                break 'watch;
+            }
+            match rx.recv_timeout(WATCH_SHUTDOWN_POLL) {
+                Ok(Ok(event)) => pending.absorb(&event),
+                Ok(Err(error)) => return Err(Box::new(error)),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break 'watch,
+            }
+        }
+
+        // Debounce window: coalesce rapid writes into one scan.
+        collect_watch_events_for(&rx, &mut pending, config.debounce, &shutdown)?;
+        // Rate limit: keep coalescing until the minimum scan interval has passed.
+        if let Some(completed) = last_scan_completed {
+            let elapsed = completed.elapsed();
+            if elapsed < config.min_scan_interval {
+                collect_watch_events_for(
+                    &rx,
+                    &mut pending,
+                    config.min_scan_interval - elapsed,
+                    &shutdown,
+                )?;
+            }
+        }
+        if shutdown.load(Ordering::SeqCst) {
+            break;
+        }
+
+        match pending.scan_action(&source_index) {
+            WatchScanAction::Skip => continue,
+            WatchScanAction::Targeted(targets) => {
+                run_scan(
+                    watch_scan_config(&config),
+                    ScanTargets::Targeted(targets),
+                    StateSavePolicy::OnChange,
+                )?;
+            }
+            WatchScanAction::Full => {
+                run_scan(
+                    watch_scan_config(&config),
+                    ScanTargets::Full,
+                    StateSavePolicy::OnChange,
+                )?;
+                source_index = build_watch_source_index(&config, &project_configs);
+            }
+        }
+        last_scan_completed = Some(Instant::now());
 
         if let Some(value) = remaining.as_mut() {
             if *value == 1 {
@@ -297,17 +354,135 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn receive_watch_event(
+fn collect_watch_events_for(
     rx: &Receiver<notify::Result<NotifyEvent>>,
-) -> Result<NotifyEvent, Box<dyn std::error::Error>> {
-    match rx.recv()? {
-        Ok(event) => Ok(event),
-        Err(e) => Err(Box::new(e)),
+    pending: &mut PendingWatchChanges,
+    window: Duration,
+    shutdown: &AtomicBool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + window;
+    loop {
+        if shutdown.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(());
+        }
+        let timeout = (deadline - now).min(WATCH_SHUTDOWN_POLL);
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(event)) => pending.absorb(&event),
+            Ok(Err(error)) => return Err(Box::new(error)),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+        }
     }
 }
 
-fn drain_watch_events(rx: &Receiver<notify::Result<NotifyEvent>>) {
-    while rx.try_recv().is_ok() {}
+enum WatchScanAction {
+    /// No watched source is affected; do not scan.
+    Skip,
+    /// Every changed path maps to a known source; scan only those sources.
+    Targeted(Vec<Source>),
+    /// A path was removed or does not map to a known source; rediscover and scan everything.
+    Full,
+}
+
+#[derive(Default)]
+struct PendingWatchChanges {
+    paths: BTreeSet<PathBuf>,
+    saw_remove: bool,
+}
+
+impl PendingWatchChanges {
+    fn absorb(&mut self, event: &NotifyEvent) {
+        if !watch_event_should_scan(event) {
+            return;
+        }
+        if matches!(event.kind, EventKind::Remove(_)) {
+            self.saw_remove = true;
+        }
+        for path in &event.paths {
+            if let Some(path) = normalize_watch_event_path(path) {
+                self.paths.insert(path);
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.paths.is_empty() && !self.saw_remove
+    }
+
+    fn scan_action(&self, source_index: &BTreeMap<PathBuf, Source>) -> WatchScanAction {
+        if self.saw_remove {
+            return WatchScanAction::Full;
+        }
+        let mut targets = Vec::new();
+        let mut seen_paths = BTreeSet::new();
+        for path in &self.paths {
+            let lookup = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let Some(source) = source_index.get(&lookup) else {
+                return WatchScanAction::Full;
+            };
+            if seen_paths.insert(source.path.clone()) {
+                targets.push(source.clone());
+            }
+        }
+        if targets.is_empty() {
+            WatchScanAction::Skip
+        } else {
+            WatchScanAction::Targeted(targets)
+        }
+    }
+}
+
+/// Map SQLite WAL sidecar events onto the main database file and drop `-shm` /
+/// `-journal` sidecar events, which fire on reader activity without new
+/// persisted data.
+fn normalize_watch_event_path(path: &Path) -> Option<PathBuf> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Some(path.to_path_buf());
+    };
+    if let Some(base) = name.strip_suffix("-wal")
+        && base.ends_with(".db")
+    {
+        return Some(path.with_file_name(base));
+    }
+    for suffix in ["-shm", "-journal"] {
+        if let Some(base) = name.strip_suffix(suffix)
+            && base.ends_with(".db")
+        {
+            return None;
+        }
+    }
+    Some(path.to_path_buf())
+}
+
+/// Index discovered sources by canonical path so notify event paths can be
+/// mapped back to the source that changed. Mirrors the discovery filtering
+/// applied by full scans.
+fn build_watch_source_index(
+    config: &WatchConfig<'_>,
+    project_configs: &[crate::projects::ProjectDef],
+) -> BTreeMap<PathBuf, Source> {
+    let mut sources = discover_sources_with_projects(config.root, project_configs);
+    if !config.clients.is_empty() {
+        let allowed_clients = config.clients.iter().copied().collect::<BTreeSet<_>>();
+        sources.retain(|source| allowed_clients.contains(&source.client));
+    }
+    if !is_fixture_root(config.root) {
+        prefer_opencode_sqlite_over_legacy_json(&mut sources);
+    }
+    sources
+        .into_iter()
+        .map(|source| {
+            let key = source
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| source.path.clone());
+            (key, source)
+        })
+        .collect()
 }
 
 fn watch_event_should_scan(event: &NotifyEvent) -> bool {
@@ -317,7 +492,34 @@ fn watch_event_should_scan(event: &NotifyEvent) -> bool {
     )
 }
 
+/// Which sources a scan should parse and detect against.
+pub(crate) enum ScanTargets {
+    /// Discover and scan every source under the configured root.
+    Full,
+    /// Scan only the given pre-discovered sources (watch-mode targeted scan).
+    Targeted(Vec<Source>),
+}
+
+/// When to persist scanner state after a scan.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum StateSavePolicy {
+    /// Save on every scan (batch mode behavior).
+    Always,
+    /// Save only when the scan emitted events or advanced durable state
+    /// (fingerprints, SQLite cursors, source inventory). Watch mode uses this
+    /// to avoid rewriting the state file on every no-op scan.
+    OnChange,
+}
+
 pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    run_scan(config, ScanTargets::Full, StateSavePolicy::Always)
+}
+
+fn run_scan(
+    config: ScanConfig<'_>,
+    targets: ScanTargets,
+    save_policy: StateSavePolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
     let scan_started = Instant::now();
     let fixture_root = is_fixture_root(config.root);
     if !config.dry_run && !config.allow_fixtures && fixture_root {
@@ -327,21 +529,27 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         );
     }
     let splunk_hec_sink = splunk_hec_sink(config.splunk_hec_endpoint, config.splunk_hec_token)?;
-    let project_configs = if config.project_config_paths.is_empty() && config.root == Path::new(".")
-    {
-        // Use default project paths only when root is the sentinel for home-relative discovery
-        crate::projects::load_default_projects()
-    } else {
-        crate::projects::load_project_configs(config.project_config_paths)
+    let (mut sources, targeted) = match targets {
+        ScanTargets::Targeted(sources) => (sources, true),
+        ScanTargets::Full => {
+            let project_configs =
+                if config.project_config_paths.is_empty() && config.root == Path::new(".") {
+                    // Use default project paths only when root is the sentinel for home-relative discovery
+                    crate::projects::load_default_projects()
+                } else {
+                    crate::projects::load_project_configs(config.project_config_paths)
+                };
+            let mut sources = discover_sources_with_projects(config.root, &project_configs);
+            if !config.clients.is_empty() {
+                let allowed_clients = config.clients.iter().copied().collect::<BTreeSet<_>>();
+                sources.retain(|source| allowed_clients.contains(&source.client));
+            }
+            if !fixture_root {
+                prefer_opencode_sqlite_over_legacy_json(&mut sources);
+            }
+            (sources, false)
+        }
     };
-    let mut sources = discover_sources_with_projects(config.root, &project_configs);
-    if !config.clients.is_empty() {
-        let allowed_clients = config.clients.iter().copied().collect::<BTreeSet<_>>();
-        sources.retain(|source| allowed_clients.contains(&source.client));
-    }
-    if !fixture_root {
-        prefer_opencode_sqlite_over_legacy_json(&mut sources);
-    }
     if let Some(max_sources) = config.max_sources {
         sources.truncate(max_sources);
     }
@@ -355,6 +563,10 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let allowlist = load_allowlist(config.allowlist_path)?;
     let mut state = ScanState::load(config.state_path)?;
+    let state_probe = match save_policy {
+        StateSavePolicy::Always => None,
+        StateSavePolicy::OnChange => Some(StateChangeProbe::capture(&state)),
+    };
     let baseline_snapshots = state.baseline_snapshots.clone();
     let install_inventory_interval_seconds = config.install_inventory_interval_seconds;
     let observed_at_unix_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
@@ -398,8 +610,12 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
                 .map(|event| (parsed_source.source.clone(), event))
             })
             .collect::<Vec<_>>();
-        activities.extend(discover_mcp_inventory(config.root));
-        activities.extend(discover_mcp_usage(config.root, &sources));
+        // MCP discovery walks host-wide config directories; targeted scans only
+        // re-examine changed session sources, so leave it to full scans.
+        if !targeted {
+            activities.extend(discover_mcp_inventory(config.root));
+            activities.extend(discover_mcp_usage(config.root, &sources));
+        }
         activities
     } else {
         Vec::new()
@@ -459,7 +675,14 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     };
     let session_risk_summary_count = session_risk_summaries.len();
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-    let source_inventory_change = state.source_inventory_change_summary(&sources);
+    // Targeted scans see only a slice of the source inventory; comparing that
+    // slice against prior observations would misreport every unscanned source
+    // as removed, so inventory-change tracking is left to full scans.
+    let source_inventory_change = if targeted {
+        None
+    } else {
+        Some(state.source_inventory_change_summary(&sources))
+    };
 
     // Operational alerting: emit alerts when scanner health thresholds are exceeded.
     let op_config = load_operational_alert_config();
@@ -487,11 +710,12 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         }));
     }
 
+    let inventory_health_change = source_inventory_change
+        .as_ref()
+        .is_some_and(|change| change.baseline || change.added > 0 || change.removed > 0);
     let health_emitted = config.dry_run
         || config.backfill
-        || source_inventory_change.baseline
-        || source_inventory_change.added > 0
-        || source_inventory_change.removed > 0
+        || inventory_health_change
         || scanner_error_count > 0
         || !operational_alerts.is_empty();
 
@@ -533,7 +757,7 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     let emitted_count = emitted_events.len() as u64;
     let health = health_event_with_metadata(HealthEventInput {
         sources: &sources,
-        source_inventory_change: Some(&source_inventory_change),
+        source_inventory_change: source_inventory_change.as_ref(),
         scan_duration_ms,
         rule_count,
         threshold_config: load_thresholds(),
@@ -557,7 +781,13 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         if let Some(sink) = splunk_hec_sink {
             emit_events(&sink, &emitted_events)?;
         }
-        state.save(config.state_path)?;
+        let should_save = match &state_probe {
+            None => true,
+            Some(probe) => !emitted_events.is_empty() || probe.changed(&state),
+        };
+        if should_save {
+            state.save(config.state_path)?;
+        }
     }
 
     let summary = scan_summary_json(ScanSummaryInput {
@@ -575,6 +805,39 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
+}
+
+/// Snapshot of the durable parts of scanner state, captured before a scan
+/// mutates it, so `StateSavePolicy::OnChange` can skip the state-file write
+/// when a scan changed nothing but observation timestamps.
+struct StateChangeProbe {
+    seen_source_fingerprints: usize,
+    seen_detection_fingerprints: usize,
+    sqlite_ingestion_cursors: BTreeMap<String, SqliteIngestionCursor>,
+    source_observation_keys: BTreeSet<String>,
+}
+
+impl StateChangeProbe {
+    fn capture(state: &ScanState) -> Self {
+        Self {
+            seen_source_fingerprints: state.seen_source_fingerprints.len(),
+            seen_detection_fingerprints: state.seen_detection_fingerprints.len(),
+            sqlite_ingestion_cursors: state.sqlite_ingestion_cursors.clone(),
+            source_observation_keys: state.source_observations.keys().cloned().collect(),
+        }
+    }
+
+    fn changed(&self, state: &ScanState) -> bool {
+        self.seen_source_fingerprints != state.seen_source_fingerprints.len()
+            || self.seen_detection_fingerprints != state.seen_detection_fingerprints.len()
+            || self.sqlite_ingestion_cursors != state.sqlite_ingestion_cursors
+            || self.source_observation_keys
+                != state
+                    .source_observations
+                    .keys()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+    }
 }
 
 struct ParsedScanSource {
@@ -1007,6 +1270,161 @@ mod tests {
 
         let backfill_options = parse_options_for_scan_source(&source, &state, true, false);
         assert_eq!(backfill_options.sqlite_part_min_time_updated, None);
+    }
+
+    #[test]
+    fn normalize_watch_event_path_handles_sqlite_sidecars() {
+        let wal = Path::new("/data/opencode/opencode.db-wal");
+        assert_eq!(
+            normalize_watch_event_path(wal),
+            Some(PathBuf::from("/data/opencode/opencode.db"))
+        );
+
+        assert_eq!(
+            normalize_watch_event_path(Path::new("/data/opencode/opencode.db-shm")),
+            None
+        );
+        assert_eq!(
+            normalize_watch_event_path(Path::new("/data/opencode/opencode.db-journal")),
+            None
+        );
+
+        let jsonl = Path::new("/home/user/.codex/sessions/session-a.jsonl");
+        assert_eq!(normalize_watch_event_path(jsonl), Some(jsonl.to_path_buf()));
+
+        // Non-SQLite names that merely end in a sidecar-like suffix are kept.
+        let lookalike = Path::new("/home/user/.codex/sessions/notes-wal");
+        assert_eq!(
+            normalize_watch_event_path(lookalike),
+            Some(lookalike.to_path_buf())
+        );
+    }
+
+    fn watch_test_source(path: &str) -> Source {
+        Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path: PathBuf::from(path),
+        }
+    }
+
+    #[test]
+    fn pending_changes_map_known_paths_to_targeted_scan() {
+        let source = watch_test_source("/watch-test/codex/sessions/session-a.jsonl");
+        let index = BTreeMap::from([(source.path.clone(), source.clone())]);
+
+        let mut pending = PendingWatchChanges::default();
+        pending
+            .paths
+            .insert(PathBuf::from("/watch-test/codex/sessions/session-a.jsonl"));
+
+        match pending.scan_action(&index) {
+            WatchScanAction::Targeted(targets) => assert_eq!(targets, vec![source]),
+            _ => panic!("expected targeted scan"),
+        }
+    }
+
+    #[test]
+    fn pending_changes_dedupe_sqlite_db_and_wal_to_one_target() {
+        let db_source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: PathBuf::from("/watch-test/opencode/opencode.db"),
+        };
+        let index = BTreeMap::from([(db_source.path.clone(), db_source.clone())]);
+
+        let mut pending = PendingWatchChanges::default();
+        let event = NotifyEvent {
+            kind: EventKind::Modify(notify::event::ModifyKind::Any),
+            paths: vec![
+                PathBuf::from("/watch-test/opencode/opencode.db"),
+                PathBuf::from("/watch-test/opencode/opencode.db-wal"),
+                PathBuf::from("/watch-test/opencode/opencode.db-shm"),
+            ],
+            attrs: Default::default(),
+        };
+        pending.absorb(&event);
+
+        match pending.scan_action(&index) {
+            WatchScanAction::Targeted(targets) => assert_eq!(targets, vec![db_source]),
+            _ => panic!("expected targeted scan"),
+        }
+    }
+
+    #[test]
+    fn pending_changes_fall_back_to_full_scan_for_unknown_paths_and_removes() {
+        let source = watch_test_source("/watch-test/codex/sessions/session-a.jsonl");
+        let index = BTreeMap::from([(source.path.clone(), source)]);
+
+        let mut unknown = PendingWatchChanges::default();
+        unknown
+            .paths
+            .insert(PathBuf::from("/watch-test/codex/sessions/new-file.jsonl"));
+        assert!(matches!(unknown.scan_action(&index), WatchScanAction::Full));
+
+        let removed = PendingWatchChanges {
+            saw_remove: true,
+            ..Default::default()
+        };
+        assert!(matches!(removed.scan_action(&index), WatchScanAction::Full));
+
+        let idle = PendingWatchChanges::default();
+        assert!(matches!(idle.scan_action(&index), WatchScanAction::Skip));
+    }
+
+    #[test]
+    fn pending_changes_ignore_access_events_and_sidecar_only_writes() {
+        let mut pending = PendingWatchChanges::default();
+        pending.absorb(&NotifyEvent {
+            kind: EventKind::Access(notify::event::AccessKind::Any),
+            paths: vec![PathBuf::from("/watch-test/codex/sessions/session-a.jsonl")],
+            attrs: Default::default(),
+        });
+        pending.absorb(&NotifyEvent {
+            kind: EventKind::Modify(notify::event::ModifyKind::Any),
+            paths: vec![PathBuf::from("/watch-test/opencode/opencode.db-shm")],
+            attrs: Default::default(),
+        });
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn state_change_probe_detects_durable_changes_only() {
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: PathBuf::from("/watch-test/opencode/opencode.db"),
+        };
+        let mut state = ScanState::default();
+        state.observe_sources(std::slice::from_ref(&source), 1_000);
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 5_000, 1_000);
+
+        let probe = StateChangeProbe::capture(&state);
+        assert!(!probe.changed(&state));
+
+        // Refreshing the observation timestamp for a known source is not durable.
+        state.observe_sources(std::slice::from_ref(&source), 2_000);
+        assert!(!probe.changed(&state));
+
+        // Advancing a SQLite ingestion cursor is durable.
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 6_000, 2_000);
+        assert!(probe.changed(&state));
+
+        // A newly observed source is durable.
+        let probe = StateChangeProbe::capture(&state);
+        let new_source = watch_test_source("/watch-test/codex/sessions/session-b.jsonl");
+        state.observe_sources(std::slice::from_ref(&new_source), 3_000);
+        assert!(probe.changed(&state));
+
+        // New fingerprints (emitted events / baseline contributions) are durable.
+        let probe = StateChangeProbe::capture(&state);
+        state
+            .seen_source_fingerprints
+            .insert("fingerprint".to_string());
+        assert!(probe.changed(&state));
     }
 
     #[test]

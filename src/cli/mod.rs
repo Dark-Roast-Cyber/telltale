@@ -193,6 +193,11 @@ enum Command {
         #[arg(long, default_value_t = 500)]
         debounce_ms: u64,
 
+        /// Minimum milliseconds between watch-triggered scans. Events arriving
+        /// sooner are coalesced into the next scan.
+        #[arg(long, default_value_t = 10_000)]
+        min_scan_interval_ms: u64,
+
         /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
@@ -998,6 +1003,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             allow_fixtures,
             iterations,
             debounce_ms,
+            min_scan_interval_ms,
             rule_paths,
             local_config,
             no_default_rules,
@@ -1042,6 +1048,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 allow_fixtures,
                 iterations,
                 debounce: std::time::Duration::from_millis(debounce_ms),
+                min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
                 rule_paths: &resolved_config.rule_paths,
                 override_paths: &resolved_config.override_paths,
                 rule_load_mode: rule_load_mode(no_default_rules),

@@ -44,6 +44,7 @@ time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 uuid = { version = "1.11", features = ["v4"] }
 walkdir = "2.5"
 rusqlite = { version = "0.32", features = ["bundled"] }
+ctrlc = { version = "3.5.2", features = ["termination"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

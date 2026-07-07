@@ -5004,8 +5004,141 @@ fn watch_command_is_available_for_realtime_scans() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Watch local session stores"));
     assert!(stdout.contains("--debounce-ms"));
+    assert!(stdout.contains("--min-scan-interval-ms"));
     assert!(stdout.contains("--iterations"));
     assert!(stdout.contains("--client"));
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).expect("create copy target dir");
+    for entry in fs::read_dir(src).expect("read copy source dir") {
+        let entry = entry.expect("copy dir entry");
+        let target = dst.join(entry.file_name());
+        if entry.file_type().expect("copy entry file type").is_dir() {
+            copy_dir_recursive(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("copy fixture file");
+        }
+    }
+}
+
+#[test]
+fn watch_scans_changed_source_and_exits_after_iterations() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    copy_dir_recursive(
+        Path::new("tests/fixtures/session_stores/codex"),
+        &root.join("codex"),
+    );
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let session_path = root.join("codex/sessions/2026/04/session-a.jsonl");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "watch",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--iterations",
+            "1",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--state-path")
+        .arg(&state_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn adr watch");
+
+    // Rewrite a watched fixture until the watcher notices; the watcher may
+    // still be initializing on the first writes.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if child.try_wait().expect("poll adr watch").is_some() {
+            break;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("adr watch did not exit within timeout");
+        }
+        let contents = fs::read(&session_path).expect("read watched fixture");
+        fs::write(&session_path, contents).expect("rewrite watched fixture");
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    let output = child.wait_with_output().expect("collect adr watch output");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let summary_line = stdout
+        .lines()
+        .find(|line| line.starts_with('{'))
+        .expect("watch scan summary line");
+    let summary: Value = serde_json::from_str(summary_line).expect("scan summary json");
+    assert_eq!(summary["event_type"], "health");
+    assert!(
+        log_path.exists(),
+        "watch scan should write events to the log path"
+    );
+    assert!(
+        state_path.exists(),
+        "watch scan should persist scanner state"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn watch_exits_cleanly_on_sigterm() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    copy_dir_recursive(
+        Path::new("tests/fixtures/session_stores/codex"),
+        &root.join("codex"),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["watch", "--dry-run", "--no-local-config", "--root"])
+        .arg(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn adr watch");
+
+    // Give the process time to install the signal handler and watcher.
+    thread::sleep(Duration::from_secs(2));
+    let kill = Command::new("kill")
+        .arg(child.id().to_string())
+        .status()
+        .expect("send SIGTERM");
+    assert!(kill.success());
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll adr watch") {
+            assert!(
+                status.success(),
+                "watch should exit cleanly on SIGTERM, got {status:?}"
+            );
+            break;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("adr watch did not exit after SIGTERM");
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
