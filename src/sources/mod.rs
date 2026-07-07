@@ -7,6 +7,7 @@
 //! unchanged in Phase 1.
 
 pub mod adapter;
+pub(crate) mod gemini;
 pub mod registry;
 
 pub use crate::clients::{

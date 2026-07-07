@@ -5,7 +5,7 @@ use std::fs;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::clients::{ClientId, SourceKind};
+use crate::clients::SourceKind;
 use crate::discovery::Source;
 
 const OPENCODE_SQLITE_PART_LIMIT: i64 = 5_000;
@@ -76,16 +76,16 @@ pub enum RecordKind {
 }
 
 #[derive(Debug, Clone)]
-struct ParsedRecord {
-    session_id: String,
-    agent: Option<String>,
-    model: Option<String>,
-    provider: Option<String>,
-    timestamp: Option<String>,
-    kind: RecordKind,
-    tool_name: Option<String>,
-    arguments: Option<String>,
-    content: String,
+pub(crate) struct ParsedRecord {
+    pub(crate) session_id: String,
+    pub(crate) agent: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) provider: Option<String>,
+    pub(crate) timestamp: Option<String>,
+    pub(crate) kind: RecordKind,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) arguments: Option<String>,
+    pub(crate) content: String,
 }
 
 #[derive(Debug, Clone)]
@@ -144,9 +144,9 @@ fn extract_source_records(
     options: ParseOptions,
 ) -> Result<ExtractedSourceRecords, ParseError> {
     match source.kind {
-        SourceKind::Json => Ok(ExtractedSourceRecords::records(extract_gemini_json_source(
-            source,
-        )?)),
+        SourceKind::Json => Ok(ExtractedSourceRecords::records(
+            crate::sources::gemini::parser::extract_gemini_json_source(source)?,
+        )),
         SourceKind::Jsonl | SourceKind::ArchivedJsonl | SourceKind::HeadlessJsonl => Ok(
             ExtractedSourceRecords::records(extract_jsonl_source(source)?),
         ),
@@ -228,7 +228,7 @@ fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError
     Ok(records)
 }
 
-fn extract_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
+pub(crate) fn extract_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
     let raw = fs::read_to_string(&source.path)?;
     let value = serde_json::from_str::<Value>(&raw)?;
     let default_session_id = default_source_parent_name(source);
@@ -255,41 +255,6 @@ fn json_record(value: &Value, default_session_id: &str) -> ParsedRecord {
         arguments: arguments_field(value),
         content: record_content(value),
     }
-}
-
-fn extract_gemini_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
-    if source.client != ClientId::Gemini {
-        return extract_json_source(source);
-    }
-
-    let raw = fs::read_to_string(&source.path)?;
-    let value = serde_json::from_str::<Value>(&raw)?;
-    let default_session_id = default_source_file_stem(source);
-    let session_id = string_field(&value, "sessionId").unwrap_or(default_session_id);
-    let model = string_field(&value, "model");
-
-    let messages = value
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or(ParseError::Empty)?;
-    let records = messages
-        .iter()
-        .map(|message| ParsedRecord {
-            session_id: session_id.clone(),
-            agent: Some("gemini".to_string()),
-            model: string_field(message, "model").or_else(|| model.clone()),
-            provider: Some("google".to_string()),
-            timestamp: string_field(message, "timestamp")
-                .or_else(|| string_field(&value, "lastUpdated"))
-                .or_else(|| string_field(&value, "startTime")),
-            kind: record_kind(message),
-            tool_name: tool_name(message),
-            arguments: arguments_field(message),
-            content: record_content(message),
-        })
-        .collect();
-
-    Ok(records)
 }
 
 fn extract_sqlite_source(
@@ -540,7 +505,7 @@ fn copilot_log_timestamp(line: &str) -> Option<String> {
         .map(|_| token.to_string())
 }
 
-fn record_kind(value: &Value) -> RecordKind {
+pub(crate) fn record_kind(value: &Value) -> RecordKind {
     if has_content_block_type(value, "tool_use") {
         return RecordKind::ToolCall;
     }
@@ -604,7 +569,7 @@ fn opencode_tool_part_is_result(value: &Value) -> bool {
             .is_some()
 }
 
-fn record_content(value: &Value) -> String {
+pub(crate) fn record_content(value: &Value) -> String {
     let mut parts = Vec::new();
     collect_strings(value, &mut parts);
     parts.join("\n")
@@ -628,7 +593,7 @@ fn collect_strings(value: &Value, output: &mut Vec<String>) {
     }
 }
 
-fn default_source_file_stem(source: &Source) -> String {
+pub(crate) fn default_source_file_stem(source: &Source) -> String {
     source
         .path
         .file_stem()
@@ -665,11 +630,11 @@ fn provider_field(value: &Value) -> Option<String> {
     string_field(value, "providerID").or_else(|| string_field(value, "provider"))
 }
 
-fn arguments_field(value: &Value) -> Option<String> {
+pub(crate) fn arguments_field(value: &Value) -> Option<String> {
     field_as_string(value, "arguments").or_else(|| field_as_string(value, "input"))
 }
 
-fn string_field(value: &Value, key: &str) -> Option<String> {
+pub(crate) fn string_field(value: &Value, key: &str) -> Option<String> {
     field_value(value, key)
         .and_then(Value::as_str)
         .map(ToString::to_string)
@@ -780,7 +745,7 @@ fn normalize_sqlite_part_value(value: Value) -> Value {
     Value::Object(data_object)
 }
 
-fn tool_name(value: &Value) -> Option<String> {
+pub(crate) fn tool_name(value: &Value) -> Option<String> {
     string_field(value, "tool_name")
         .or_else(|| string_field(value, "tool"))
         .or_else(|| string_field(value, "name"))

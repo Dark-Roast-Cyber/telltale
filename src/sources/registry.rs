@@ -6,6 +6,7 @@
 //! API during migration.
 
 use crate::clients::{ClientDef, ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern};
+use crate::sources::gemini;
 
 const CODEX_SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {
@@ -57,17 +58,6 @@ const CLAUDE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     relative_path: ".claude/projects",
     fixture_relative_path: "claude/projects",
     pattern: SourcePattern::Extension("jsonl"),
-    recursive: true,
-    project_relative_path: None,
-}];
-
-const GEMINI_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
-    id: "gemini.tmp",
-    kind: SourceKind::Json,
-    root: PathRoot::Home,
-    relative_path: ".gemini/tmp",
-    fixture_relative_path: "gemini/tmp",
-    pattern: SourcePattern::Extension("json"),
     recursive: true,
     project_relative_path: None,
 }];
@@ -174,7 +164,7 @@ const CLIENTS: &[ClientDef] = &[
     ClientDef {
         id: ClientId::Gemini,
         display_name: "Gemini CLI",
-        sources: GEMINI_SOURCES,
+        sources: gemini::SOURCES,
     },
     ClientDef {
         id: ClientId::OpenClaw,
