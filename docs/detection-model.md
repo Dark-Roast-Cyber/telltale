@@ -68,6 +68,8 @@ policies produce an error so hidden policy merges do not occur. `scan` and
 Use `adr config validate` as a preflight for local rule, policy, and allowlist
 configuration. It resolves the same effective config as scans, validates the
 compiled rule set plus allowlist YAML, and emits a small JSON health summary.
+Use `adr rules export-default` to print or write the embedded bundled default
+rule YAML for inspection or local forking from a standalone binary.
 
 The simplest valid custom rule uses `targets` plus `regex`:
 
@@ -120,7 +122,9 @@ disabled_rules: [network.controlled_test_domain.darkroast]
 
 Use `adr rules list`, `adr rules validate`, and `adr rules test` to inspect,
 compile, and preview configured rules before writing scan output. These commands
-also load bundled defaults unless `--no-default-rules` is set.
+also load bundled defaults unless `--no-default-rules` is set. Use
+`adr rules export-default --output <local-path>` when an operator wants a local
+copy of the embedded default pack to inspect or adapt.
 
 Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to ADR categories, rule IDs, fixtures, and validation commands.
 

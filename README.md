@@ -81,6 +81,7 @@ Telltale can parse multiple source shapes, but real-world validation depth is no
 cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
 cargo run -- config validate --no-local-config
 cargo run -- rules validate --no-local-config
+cargo run -- rules export-default > /tmp/telltale-default-rules.yaml
 cargo test
 ```
 
@@ -119,6 +120,8 @@ instead of silently falling back to bundled rules.
 Run `adr config validate` before enabling local config in scans. It uses the same
 rule, policy, and allowlist discovery semantics as `scan`/`watch`, validates the
 effective rule set and allowlist YAML, and prints a compact JSON health summary.
+Use `adr rules export-default` to inspect or fork the bundled default rule pack
+from an installed binary without needing a source checkout.
 
 ### Project-local session stores
 

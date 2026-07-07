@@ -67,6 +67,7 @@ Run a fixture-safe dry run before scanning real local session stores:
 cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
 cargo run -- config validate --no-local-config
 cargo run -- rules validate --no-local-config
+cargo run -- rules export-default > /tmp/telltale-default-rules.yaml
 cargo test
 ```
 
@@ -145,6 +146,11 @@ Use `adr config validate` as the local config preflight before running scans wit
 custom content. It resolves config the same way as `scan` and `watch`, validates
 the effective rule and policy set, validates the selected allowlist YAML, and
 prints a JSON status summary without reading session stores.
+
+Use `adr rules export-default` when you want to inspect or fork the bundled
+default rules from an installed binary. Write the output into a local `rules.d`
+file or pass the exported file explicitly with `--rules`; do not edit bundled
+defaults in place.
 
 ## Project-Local Session Stores
 

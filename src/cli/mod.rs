@@ -485,6 +485,17 @@ enum RulesCommand {
         #[arg(long)]
         policy: Option<PathBuf>,
     },
+
+    /// Export the bundled default rule YAML for inspection or local forking.
+    ExportDefault {
+        /// Write the bundled default rule YAML to this path instead of stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Overwrite --output if it already exists.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Clone, Default, ClapArgs)]
@@ -630,6 +641,26 @@ fn run_config_validate(
         }))?
     );
 
+    Ok(())
+}
+
+fn run_rules_export_default(
+    output: Option<&Path>,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let yaml = crate::rules::bundled_default_rule_yaml();
+    if let Some(path) = output {
+        if path.exists() && !force {
+            return Err(format!(
+                "{} already exists; pass --force to overwrite",
+                path.display()
+            )
+            .into());
+        }
+        fs::write(path, yaml)?;
+    } else {
+        print!("{yaml}");
+    }
     Ok(())
 }
 
@@ -920,6 +951,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     resolved_config.policy_path.as_deref(),
                     rule_load_mode(no_default_rules),
                 )?;
+            }
+            RulesCommand::ExportDefault { output, force } => {
+                run_rules_export_default(output.as_deref(), force)?;
             }
         },
         Command::Config { command } => match command {

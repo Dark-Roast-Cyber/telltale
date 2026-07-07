@@ -6641,6 +6641,89 @@ fn rules_validate_discovers_local_rules_d_and_can_disable_local_config() {
 }
 
 #[test]
+fn rules_export_default_writes_bundled_rules_to_stdout() {
+    let temp = tempdir().expect("tempdir");
+    let exported_path = temp.path().join("exported-default-rules.yaml");
+
+    let export = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "export-default"])
+        .output()
+        .expect("run adr rules export-default");
+    assert!(
+        export.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    let exported_yaml = String::from_utf8(export.stdout).expect("exported yaml utf8");
+    assert!(exported_yaml.contains("version:"));
+    assert!(exported_yaml.contains("secret.env.read"));
+    fs::write(&exported_path, exported_yaml).expect("write exported yaml");
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "rules",
+            "validate",
+            "--no-default-rules",
+            "--no-local-config",
+            "--rules",
+        ])
+        .arg(&exported_path)
+        .output()
+        .expect("validate exported default rules");
+    assert!(
+        validate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&validate.stdout).expect("summary json");
+    assert!(summary["rule_count"].as_u64().expect("rule count") > 0);
+}
+
+#[test]
+fn rules_export_default_writes_file_and_requires_force_to_overwrite() {
+    let temp = tempdir().expect("tempdir");
+    let output_path = temp.path().join("default-rules.yaml");
+
+    let first_export = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "export-default", "--output"])
+        .arg(&output_path)
+        .output()
+        .expect("run adr rules export-default --output");
+    assert!(
+        first_export.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&first_export.stderr)
+    );
+    let first_contents = fs::read_to_string(&output_path).expect("exported default rules");
+    assert!(first_contents.contains("network.download"));
+
+    let overwrite_without_force = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "export-default", "--output"])
+        .arg(&output_path)
+        .output()
+        .expect("run adr rules export-default overwrite");
+    assert!(!overwrite_without_force.status.success());
+    let stderr = String::from_utf8_lossy(&overwrite_without_force.stderr);
+    assert!(stderr.contains("already exists"));
+    assert!(stderr.contains("--force"));
+
+    fs::write(&output_path, "placeholder\n").expect("replace output with placeholder");
+    let overwrite_with_force = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "export-default", "--output"])
+        .arg(&output_path)
+        .arg("--force")
+        .output()
+        .expect("run adr rules export-default --force");
+    assert!(
+        overwrite_with_force.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&overwrite_with_force.stderr)
+    );
+    let forced_contents = fs::read_to_string(&output_path).expect("forced exported default rules");
+    assert_eq!(forced_contents, first_contents);
+}
+
+#[test]
 fn config_validate_default_rules_without_local_config() {
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["config", "validate", "--no-local-config"])

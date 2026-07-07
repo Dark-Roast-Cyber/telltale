@@ -189,8 +189,12 @@ pub fn default_rule_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("config/rules/tool-call-regex.yaml")
 }
 
+pub(crate) fn bundled_default_rule_yaml() -> &'static str {
+    DEFAULT_RULE_YAML
+}
+
 pub(crate) fn bundled_default_rule_set() -> Result<RuleSet, Box<dyn std::error::Error>> {
-    Ok(serde_yaml::from_str::<RuleSet>(DEFAULT_RULE_YAML)?)
+    Ok(serde_yaml::from_str::<RuleSet>(bundled_default_rule_yaml())?)
 }
 
 #[allow(dead_code)]
