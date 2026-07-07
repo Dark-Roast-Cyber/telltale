@@ -460,29 +460,21 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
     let session_risk_summary_count = session_risk_summaries.len();
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let source_inventory_change = state.source_inventory_change_summary(&sources);
-    let health = health_event_with_metadata(HealthEventInput {
-        sources: &sources,
-        source_inventory_change: Some(&source_inventory_change),
-        scan_duration_ms,
-        rule_count,
-        threshold_config: load_thresholds(),
-        active_policy_name: active_policy_name.as_deref(),
-    });
 
     // Operational alerting: emit alerts when scanner health thresholds are exceeded.
     let op_config = load_operational_alert_config();
     let scanner_error_count = detections
         .iter()
         .filter(|(_, event)| event.event_type == "scanner_error")
-        .count() as u32;
+        .count() as u64;
     let mut operational_alerts = Vec::new();
-    if scanner_error_count > op_config.max_scanner_errors {
+    if scanner_error_count > u64::from(op_config.max_scanner_errors) {
         operational_alerts.push(operational_alert_event(OperationalAlertInput {
             alert_type: "scanner_error_threshold_exceeded".to_string(),
             threshold: format!("max_scanner_errors={}", op_config.max_scanner_errors),
             actual_value: format!("scanner_error_count={scanner_error_count}"),
             scan_duration_ms: Some(scan_duration_ms),
-            scanner_error_count: Some(scanner_error_count),
+            scanner_error_count: Some(scanner_error_count as u32),
         }));
     }
     if scan_duration_ms > op_config.max_scan_duration_ms {
@@ -491,12 +483,8 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
             threshold: format!("max_scan_duration_ms={}", op_config.max_scan_duration_ms),
             actual_value: format!("scan_duration_ms={scan_duration_ms}"),
             scan_duration_ms: Some(scan_duration_ms),
-            scanner_error_count: Some(scanner_error_count),
+            scanner_error_count: Some(scanner_error_count as u32),
         }));
-    }
-    state.observe_sources(&sources, observed_at_unix_ms);
-    if !config.dry_run && !config.backfill {
-        observe_sqlite_ingestion_cursors(&mut state, &parsed_sources, observed_at_unix_ms);
     }
 
     let health_emitted = config.dry_run
@@ -506,17 +494,17 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         || source_inventory_change.removed > 0
         || scanner_error_count > 0
         || !operational_alerts.is_empty();
+
+    // Build the non-health emitted events first so the health event can report
+    // an accurate emitted_count. The health event itself is excluded from this
+    // count to match the scan summary's definition of emitted_count.
     let mut emitted_events = Vec::with_capacity(
         activities.len()
             + detections.len()
             + session_risk_summaries.len()
             + operational_alerts.len()
-            + usize::from(install_inventory_event.is_some())
-            + usize::from(health_emitted),
+            + usize::from(install_inventory_event.is_some()),
     );
-    if health_emitted {
-        emitted_events.push(health.clone());
-    }
     for alert in operational_alerts {
         emitted_events.push(alert);
     }
@@ -540,6 +528,27 @@ pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::e
         if config.backfill || state.should_emit(&source, &summary) {
             emitted_events.push(summary);
         }
+    }
+
+    let emitted_count = emitted_events.len() as u64;
+    let health = health_event_with_metadata(HealthEventInput {
+        sources: &sources,
+        source_inventory_change: Some(&source_inventory_change),
+        scan_duration_ms,
+        rule_count,
+        threshold_config: load_thresholds(),
+        active_policy_name: active_policy_name.as_deref(),
+        emitted_count,
+        suppressed_count: suppressed_count as u64,
+        scanner_error_count,
+    });
+    if health_emitted {
+        emitted_events.insert(0, health.clone());
+    }
+
+    state.observe_sources(&sources, observed_at_unix_ms);
+    if !config.dry_run && !config.backfill {
+        observe_sqlite_ingestion_cursors(&mut state, &parsed_sources, observed_at_unix_ms);
     }
 
     if !config.dry_run {
@@ -955,6 +964,9 @@ fn status_json(
         "detection_count": detection_count,
         "threshold_config": json_field_or_null(health, "threshold_config"),
         "source_counts": json_field_or_empty_object(health, "source_counts"),
+        "emitted_count": json_field_or_null(health, "emitted_count"),
+        "suppressed_count": json_field_or_null(health, "suppressed_count"),
+        "scanner_error_count": json_field_or_null(health, "scanner_error_count"),
     })
 }
 

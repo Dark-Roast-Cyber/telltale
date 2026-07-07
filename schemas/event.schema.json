@@ -171,7 +171,10 @@
       },
       "additionalProperties": false
     },
-    "active_policy_name": { "type": ["string", "null"] }
+    "active_policy_name": { "type": ["string", "null"] },
+    "emitted_count": { "type": ["integer", "null"], "minimum": 0 },
+    "suppressed_count": { "type": ["integer", "null"], "minimum": 0 },
+    "scanner_error_count": { "type": ["integer", "null"], "minimum": 0 }
   },
   "additionalProperties": true
 }

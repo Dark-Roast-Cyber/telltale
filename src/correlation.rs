@@ -310,6 +310,9 @@ mod tests {
             rule_count: None,
             threshold_config: None,
             active_policy_name: None,
+            emitted_count: None,
+            suppressed_count: None,
+            scanner_error_count: None,
         }
     }
 

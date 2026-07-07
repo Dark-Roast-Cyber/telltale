@@ -60,6 +60,9 @@ pub struct Event {
     pub rule_count: Option<usize>,
     pub threshold_config: Option<RiskThresholds>,
     pub active_policy_name: Option<String>,
+    pub emitted_count: Option<u64>,
+    pub suppressed_count: Option<u64>,
+    pub scanner_error_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -201,6 +204,9 @@ pub struct HealthEventInput<'a> {
     pub rule_count: usize,
     pub threshold_config: RiskThresholds,
     pub active_policy_name: Option<&'a str>,
+    pub emitted_count: u64,
+    pub suppressed_count: u64,
+    pub scanner_error_count: u64,
 }
 
 #[derive(Debug)]
@@ -236,6 +242,9 @@ struct EventBuilder {
     rule_count: Option<usize>,
     threshold_config: Option<RiskThresholds>,
     active_policy_name: Option<String>,
+    emitted_count: Option<u64>,
+    suppressed_count: Option<u64>,
+    scanner_error_count: Option<u64>,
 }
 
 impl EventBuilder {
@@ -283,6 +292,9 @@ impl EventBuilder {
             rule_count: self.rule_count,
             threshold_config: self.threshold_config,
             active_policy_name: self.active_policy_name,
+            emitted_count: self.emitted_count,
+            suppressed_count: self.suppressed_count,
+            scanner_error_count: self.scanner_error_count,
         }
     }
 }
@@ -329,11 +341,18 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         component: Some("scanner".to_string()),
         check_name: Some("source_discovery".to_string()),
         status: Some("ok".to_string()),
-        adr_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        adr_version: Some(format!(
+            "{} ({})",
+            env!("CARGO_PKG_VERSION"),
+            env!("ADR_GIT_HASH")
+        )),
         scan_duration_ms: Some(input.scan_duration_ms),
         rule_count: Some(input.rule_count),
         threshold_config: Some(input.threshold_config),
         active_policy_name: input.active_policy_name.map(str::to_string),
+        emitted_count: Some(input.emitted_count),
+        suppressed_count: Some(input.suppressed_count),
+        scanner_error_count: Some(input.scanner_error_count),
     }
     .build()
 }
@@ -390,6 +409,9 @@ pub fn detection_event(input: DetectionEventInput) -> Event {
         rule_count: None,
         threshold_config: None,
         active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
     }
     .build()
 }
@@ -429,6 +451,9 @@ pub fn activity_event(input: ActivityEventInput) -> Event {
         rule_count: None,
         threshold_config: None,
         active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
     }
     .build()
 }
@@ -470,6 +495,9 @@ pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
         rule_count: None,
         threshold_config: None,
         active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
     }
     .build()
 }
@@ -509,6 +537,9 @@ pub fn session_risk_summary_event(input: SessionRiskSummaryEventInput) -> Event 
         rule_count: None,
         threshold_config: None,
         active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
     }
     .build()
 }
@@ -576,6 +607,9 @@ pub fn correlation_event(input: CorrelationEventInput) -> Event {
         rule_count: None,
         threshold_config: None,
         active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
     }
     .build()
 }
@@ -633,6 +667,9 @@ pub fn scanner_error_event(source: &Source, error: &ParseError) -> Event {
         rule_count: None,
         threshold_config: None,
         active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
     }
     .build()
 }
@@ -707,6 +744,9 @@ pub fn operational_alert_event(input: OperationalAlertInput) -> Event {
         rule_count: None,
         threshold_config: None,
         active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
     }
     .build()
 }
@@ -780,6 +820,9 @@ mod tests {
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
             active_policy_name: None,
+            emitted_count: 0,
+            suppressed_count: 0,
+            scanner_error_count: 0,
         });
 
         assert_eq!(event.event_type, "health");
@@ -804,6 +847,9 @@ mod tests {
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
             active_policy_name: None,
+            emitted_count: 0,
+            suppressed_count: 0,
+            scanner_error_count: 0,
         });
 
         let evidence = event

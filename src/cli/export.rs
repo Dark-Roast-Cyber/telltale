@@ -933,6 +933,13 @@ fn event_from_json_value(event: &serde_json::Value) -> Option<Event> {
             .map(|value| value as usize),
         threshold_config: None,
         active_policy_name: optional_string(event, "active_policy_name"),
+        emitted_count: event.get("emitted_count").and_then(|value| value.as_u64()),
+        suppressed_count: event
+            .get("suppressed_count")
+            .and_then(|value| value.as_u64()),
+        scanner_error_count: event
+            .get("scanner_error_count")
+            .and_then(|value| value.as_u64()),
     })
 }
 

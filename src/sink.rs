@@ -469,6 +469,9 @@ mod tests {
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
             active_policy_name: None,
+            emitted_count: 0,
+            suppressed_count: 0,
+            scanner_error_count: 0,
         })
     }
 
@@ -770,6 +773,9 @@ mod tests {
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
             active_policy_name: None,
+            emitted_count: 0,
+            suppressed_count: 0,
+            scanner_error_count: 0,
         });
         event.timestamp = "2026-05-18T02:00:00.000Z".to_string();
         let config = SplunkHecConfig {
@@ -854,6 +860,9 @@ mod tests {
             rule_count: 3,
             threshold_config: crate::scoring::load_thresholds(),
             active_policy_name: None,
+            emitted_count: 0,
+            suppressed_count: 0,
+            scanner_error_count: 0,
         });
         event.timestamp = "2026-05-18T02:00:00.000Z".to_string();
         let sink = SplunkHecHttpSink::new(

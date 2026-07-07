@@ -73,4 +73,5 @@ telltale-siem-dashboard.png
 # Website planning artifacts (belong in agentarchaeology repo, not here).
 ASTRO_WEBSITE_PLAN.md
 OPENCODE-SQLITE-INGESTION-PLAN.md
+PLAN-monitor-mode.md
 public-website/
