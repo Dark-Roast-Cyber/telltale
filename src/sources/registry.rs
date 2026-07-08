@@ -6,7 +6,7 @@
 //! API during migration.
 
 use crate::clients::{ClientDef, ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern};
-use crate::sources::{claude, gemini};
+use crate::sources::{claude, gemini, openclaw, qwen};
 
 const CODEX_SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {
@@ -50,28 +50,6 @@ const CODEX_SOURCES: &[ClientSourceDef] = &[
         project_relative_path: Some(".codex-worktree"),
     },
 ];
-
-const OPENCLAW_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
-    id: "openclaw.agents",
-    kind: SourceKind::Jsonl,
-    root: PathRoot::Home,
-    relative_path: ".openclaw/agents",
-    fixture_relative_path: "openclaw/agents",
-    pattern: SourcePattern::FileNameContains(".jsonl"),
-    recursive: true,
-    project_relative_path: None,
-}];
-
-const QWEN_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
-    id: "qwen.projects",
-    kind: SourceKind::Jsonl,
-    root: PathRoot::Home,
-    relative_path: ".qwen/projects",
-    fixture_relative_path: "qwen/projects",
-    pattern: SourcePattern::Extension("jsonl"),
-    recursive: true,
-    project_relative_path: None,
-}];
 
 const ROOCODE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "roocode.tasks",
@@ -158,12 +136,12 @@ const CLIENTS: &[ClientDef] = &[
     ClientDef {
         id: ClientId::OpenClaw,
         display_name: "OpenClaw",
-        sources: OPENCLAW_SOURCES,
+        sources: openclaw::SOURCES,
     },
     ClientDef {
         id: ClientId::Qwen,
         display_name: "Qwen CLI",
-        sources: QWEN_SOURCES,
+        sources: qwen::SOURCES,
     },
     ClientDef {
         id: ClientId::RooCode,

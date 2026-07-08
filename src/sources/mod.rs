@@ -9,6 +9,8 @@
 pub mod adapter;
 pub(crate) mod claude;
 pub(crate) mod gemini;
+pub(crate) mod openclaw;
+pub(crate) mod qwen;
 pub mod registry;
 
 pub use crate::clients::{
