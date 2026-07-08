@@ -6,7 +6,7 @@
 //! API during migration.
 
 use crate::clients::{ClientDef, ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern};
-use crate::sources::{claude, gemini, openclaw, qwen};
+use crate::sources::{claude, gemini, kilocode, openclaw, qwen, roocode};
 
 const CODEX_SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {
@@ -50,28 +50,6 @@ const CODEX_SOURCES: &[ClientSourceDef] = &[
         project_relative_path: Some(".codex-worktree"),
     },
 ];
-
-const ROOCODE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
-    id: "roocode.tasks",
-    kind: SourceKind::UiMessagesJson,
-    root: PathRoot::ConfigHome,
-    relative_path: "Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks",
-    fixture_relative_path: "roocode/tasks",
-    pattern: SourcePattern::ExactFile("ui_messages.json"),
-    recursive: true,
-    project_relative_path: None,
-}];
-
-const KILOCODE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
-    id: "kilocode.tasks",
-    kind: SourceKind::UiMessagesJson,
-    root: PathRoot::ConfigHome,
-    relative_path: "Code/User/globalStorage/kilocode.kilo-code/tasks",
-    fixture_relative_path: "kilocode/tasks",
-    pattern: SourcePattern::ExactFile("ui_messages.json"),
-    recursive: true,
-    project_relative_path: None,
-}];
 
 const OPENCODE_SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {
@@ -146,12 +124,12 @@ const CLIENTS: &[ClientDef] = &[
     ClientDef {
         id: ClientId::RooCode,
         display_name: "RooCode",
-        sources: ROOCODE_SOURCES,
+        sources: roocode::SOURCES,
     },
     ClientDef {
         id: ClientId::KiloCode,
         display_name: "KiloCode",
-        sources: KILOCODE_SOURCES,
+        sources: kilocode::SOURCES,
     },
     ClientDef {
         id: ClientId::OpenCode,

@@ -9,9 +9,11 @@
 pub mod adapter;
 pub(crate) mod claude;
 pub(crate) mod gemini;
+pub(crate) mod kilocode;
 pub(crate) mod openclaw;
 pub(crate) mod qwen;
 pub mod registry;
+pub(crate) mod roocode;
 
 pub use crate::clients::{
     ClientDef, ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern, supported_clients,
