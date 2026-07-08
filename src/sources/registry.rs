@@ -6,7 +6,7 @@
 //! API during migration.
 
 use crate::clients::{ClientDef, ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern};
-use crate::sources::gemini;
+use crate::sources::{claude, gemini};
 
 const CODEX_SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {
@@ -50,17 +50,6 @@ const CODEX_SOURCES: &[ClientSourceDef] = &[
         project_relative_path: Some(".codex-worktree"),
     },
 ];
-
-const CLAUDE_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
-    id: "claude.projects",
-    kind: SourceKind::Jsonl,
-    root: PathRoot::Home,
-    relative_path: ".claude/projects",
-    fixture_relative_path: "claude/projects",
-    pattern: SourcePattern::Extension("jsonl"),
-    recursive: true,
-    project_relative_path: None,
-}];
 
 const OPENCLAW_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "openclaw.agents",
@@ -159,7 +148,7 @@ const CLIENTS: &[ClientDef] = &[
     ClientDef {
         id: ClientId::Claude,
         display_name: "Claude Code",
-        sources: CLAUDE_SOURCES,
+        sources: claude::SOURCES,
     },
     ClientDef {
         id: ClientId::Gemini,
