@@ -342,15 +342,15 @@ fn sqlite_part_query(has_min_time_updated: bool, include_message_context: bool) 
         "select part.*, part.rowid as __telltale_rowid from part"
     };
     let min_filter = if has_min_time_updated {
-        " and time_updated >= ?1"
+        " and part.time_updated >= ?1"
     } else {
         ""
     };
     let limit_param = if has_min_time_updated { "?2" } else { "?1" };
     let order = if has_min_time_updated {
-        "time_updated, part.rowid"
+        "part.time_updated, part.rowid"
     } else {
-        "time_updated desc, part.rowid desc"
+        "part.time_updated desc, part.rowid desc"
     };
 
     format!(
@@ -1982,6 +1982,103 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
             .expect("part text record");
         assert_eq!(part_record.kind, RecordKind::AssistantMessage);
         assert_eq!(part_record.model.as_deref(), Some("fixture-model"));
+    }
+
+    #[test]
+    fn opencode_sqlite_part_cursor_with_message_table_does_not_ambiguous_column() {
+        // Regression: when both `message` and `part` tables exist (the normal
+        // OpenCode DB shape) and a cursor is set, the inner query joins part
+        // to message and filters on `time_updated`. Without qualifying the
+        // column as `part.time_updated`, SQLite rejects the query with
+        // "ambiguous column name: time_updated" and the source produces zero
+        // records on every scan.
+        let temp = tempdir().expect("tempdir");
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).expect("open db");
+        conn.execute_batch(
+            "create table message (
+                id text primary key,
+                session_id text not null,
+                time_created integer not null,
+                time_updated integer not null,
+                data text not null
+            );
+            create table part (
+                id text primary key,
+                message_id text not null,
+                session_id text not null,
+                time_created integer not null,
+                time_updated integer not null,
+                data text not null
+            );",
+        )
+        .expect("schema");
+        conn.execute(
+            "insert into message (id, session_id, time_created, time_updated, data)
+             values (?1, ?2, ?3, ?4, ?5)",
+            (
+                "message-cursor",
+                "session-cursor-join",
+                1_000_i64,
+                1_000_i64,
+                serde_json::json!({"role": "assistant", "modelID": "fixture-model"}).to_string(),
+            ),
+        )
+        .expect("insert message");
+        for (id, updated, text) in [
+            ("part-old", 1_000_i64, "first"),
+            ("part-new", 2_000_i64, "second"),
+        ] {
+            conn.execute(
+                "insert into part (id, message_id, session_id, time_created, time_updated, data)
+                 values (?1, ?2, ?3, ?4, ?5, ?6)",
+                (
+                    id,
+                    "message-cursor",
+                    "session-cursor-join",
+                    updated,
+                    updated,
+                    serde_json::json!({
+                        "type": "text",
+                        "text": text,
+                        "time": "2026-05-01T16:00:00Z"
+                    })
+                    .to_string(),
+                ),
+            )
+            .expect("insert part");
+        }
+
+        let source = crate::discovery::Source {
+            client: crate::clients::ClientId::OpenCode,
+            kind: crate::clients::SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: db_path,
+        };
+
+        // Cursor at 1_000 should skip the first part and return only "second".
+        let parsed = parse_source_records_with_options(
+            &source,
+            ParseOptions {
+                sqlite_part_min_time_updated: Some(1_001),
+                sqlite_part_limit: 100,
+            },
+        )
+        .expect("records with cursor and message table");
+
+        // The message record is always extracted (no cursor on messages), so
+        // we expect 1 message + 1 part (the cursor-filtered "second" row).
+        let part_records: Vec<_> = parsed
+            .records
+            .iter()
+            .filter(|r| r.content.contains("second"))
+            .collect();
+        assert_eq!(
+            part_records.len(),
+            1,
+            "cursor should return only the part with time_updated >= 1_001"
+        );
+        assert_eq!(parsed.sqlite_part_max_time_updated, Some(2_000));
     }
 
     #[test]
