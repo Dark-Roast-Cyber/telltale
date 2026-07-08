@@ -5097,6 +5097,109 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
     );
 }
 
+#[test]
+fn watch_skips_no_op_state_save() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    copy_dir_recursive(
+        Path::new("tests/fixtures/session_stores/codex"),
+        &root.join("codex"),
+    );
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let session_path = root.join("codex/sessions/2026/04/session-a.jsonl");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "watch",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--iterations",
+            "2",
+            "--debounce-ms",
+            "100",
+            "--min-scan-interval-ms",
+            "0",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--state-path")
+        .arg(&state_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn adr watch");
+
+    // Trigger the first scan by rewriting the watched file. The watcher
+    // blocks until a filesystem event arrives, so we must poke the file
+    // to start the first iteration. Retry until the state file appears,
+    // which signals the first scan completed and persisted state.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if child.try_wait().expect("poll adr watch").is_some() {
+            panic!("adr watch exited before first scan completed");
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("adr watch did not persist state within timeout");
+        }
+        let contents = fs::read(&session_path).expect("read watched fixture");
+        fs::write(&session_path, contents).expect("rewrite watched fixture");
+        if state_path.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    // Give the first scan a moment to finish writing state and re-block on
+    // the next event before we snapshot mtime and trigger the second scan.
+    thread::sleep(Duration::from_millis(300));
+
+    let mtime_after_first_scan = fs::metadata(&state_path)
+        .expect("state metadata")
+        .modified()
+        .expect("state mtime");
+
+    // Trigger the second scan with identical content. No new records means
+    // no emitted events and no durable state changes, so the state-save
+    // should be skipped.
+    let contents = fs::read(&session_path).expect("read watched fixture");
+    fs::write(&session_path, contents).expect("rewrite watched fixture");
+
+    // Wait for the second iteration to finish and the process to exit.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if child.try_wait().expect("poll adr watch").is_some() {
+            break;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("adr watch did not exit after second scan within timeout");
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let output = child.wait_with_output().expect("collect adr watch output");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mtime_after_second_scan = fs::metadata(&state_path)
+        .expect("state metadata")
+        .modified()
+        .expect("state mtime");
+    assert_eq!(
+        mtime_after_first_scan, mtime_after_second_scan,
+        "no-op watch scan should not rewrite state file"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn watch_exits_cleanly_on_sigterm() {

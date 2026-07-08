@@ -815,6 +815,7 @@ struct StateChangeProbe {
     seen_detection_fingerprints: usize,
     sqlite_ingestion_cursors: BTreeMap<String, SqliteIngestionCursor>,
     source_observation_keys: BTreeSet<String>,
+    install_inventory: Option<(u64, String)>,
 }
 
 impl StateChangeProbe {
@@ -824,6 +825,10 @@ impl StateChangeProbe {
             seen_detection_fingerprints: state.seen_detection_fingerprints.len(),
             sqlite_ingestion_cursors: state.sqlite_ingestion_cursors.clone(),
             source_observation_keys: state.source_observations.keys().cloned().collect(),
+            install_inventory: state
+                .install_inventory
+                .as_ref()
+                .map(|snap| (snap.observed_at_unix_ms, snap.hash.clone())),
         }
     }
 
@@ -837,6 +842,11 @@ impl StateChangeProbe {
                     .keys()
                     .cloned()
                     .collect::<BTreeSet<_>>()
+            || self.install_inventory
+                != state
+                    .install_inventory
+                    .as_ref()
+                    .map(|snap| (snap.observed_at_unix_ms, snap.hash.clone()))
     }
 }
 
@@ -1247,6 +1257,7 @@ fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_jso
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::install_inventory::InstallInventorySnapshot;
 
     #[test]
     fn opencode_sqlite_scan_options_use_cursor_overlap_for_live_scans() {
@@ -1425,6 +1436,66 @@ mod tests {
             .seen_source_fingerprints
             .insert("fingerprint".to_string());
         assert!(probe.changed(&state));
+
+        // A new or changed install inventory snapshot is durable.
+        let probe = StateChangeProbe::capture(&state);
+        state.install_inventory = Some(InstallInventorySnapshot {
+            observed_at_unix_ms: 4_000,
+            hash: "hash-a".to_string(),
+            agents: vec![],
+        });
+        assert!(probe.changed(&state));
+
+        // An unchanged install inventory snapshot is not durable.
+        let probe = StateChangeProbe::capture(&state);
+        state.install_inventory = Some(InstallInventorySnapshot {
+            observed_at_unix_ms: 4_000,
+            hash: "hash-a".to_string(),
+            agents: vec![],
+        });
+        assert!(!probe.changed(&state));
+
+        // Changing the install inventory hash is durable.
+        let probe = StateChangeProbe::capture(&state);
+        state.install_inventory = Some(InstallInventorySnapshot {
+            observed_at_unix_ms: 6_000,
+            hash: "hash-b".to_string(),
+            agents: vec![],
+        });
+        assert!(probe.changed(&state));
+    }
+
+    #[test]
+    fn collect_watch_events_coalesces_within_min_interval() {
+        // Pre-queue two modify events for the same source path, then drop the
+        // sender so the channel disconnects. `collect_watch_events_for`
+        // absorbs both into `pending` and returns on disconnect. Because both
+        // events map to the same normalized path, `pending.paths` holds
+        // exactly one entry — proving rapid events within the coalescing
+        // window are merged into a single targeted scan rather than two.
+        let (tx, rx) = mpsc::channel();
+        let mut pending = PendingWatchChanges::default();
+        let shutdown = AtomicBool::new(false);
+
+        let event = NotifyEvent {
+            kind: EventKind::Modify(notify::event::ModifyKind::Any),
+            paths: vec![PathBuf::from("/watch-test/codex/sessions/session-a.jsonl")],
+            attrs: Default::default(),
+        };
+        tx.send(Ok(event.clone())).expect("send first event");
+        tx.send(Ok(event)).expect("send second event");
+        drop(tx);
+
+        collect_watch_events_for(&rx, &mut pending, Duration::from_secs(5), &shutdown)
+            .expect("collect should succeed");
+
+        assert_eq!(pending.paths.len(), 1);
+        assert!(
+            pending
+                .paths
+                .contains(Path::new("/watch-test/codex/sessions/session-a.jsonl"))
+        );
+        assert!(!pending.saw_remove);
     }
 
     #[test]
