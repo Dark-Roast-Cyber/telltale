@@ -6,7 +6,7 @@
 //! API during migration.
 
 use crate::clients::{ClientDef, ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern};
-use crate::sources::{claude, codex, gemini, kilocode, openclaw, qwen, roocode};
+use crate::sources::{claude, codex, copilot, gemini, kilocode, openclaw, qwen, roocode};
 
 const OPENCODE_SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {
@@ -40,17 +40,6 @@ const OPENCODE_SOURCES: &[ClientSourceDef] = &[
         project_relative_path: Some(".opencode"),
     },
 ];
-
-const COPILOT_SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
-    id: "copilot.process_log",
-    kind: SourceKind::CopilotProcessLog,
-    root: PathRoot::ProjectLocal,
-    relative_path: "logs/copilot",
-    fixture_relative_path: "copilot",
-    pattern: SourcePattern::Extension("log"),
-    recursive: false,
-    project_relative_path: Some("logs/copilot"),
-}];
 
 const CLIENTS: &[ClientDef] = &[
     ClientDef {
@@ -96,7 +85,7 @@ const CLIENTS: &[ClientDef] = &[
     ClientDef {
         id: ClientId::Copilot,
         display_name: "GitHub Copilot",
-        sources: COPILOT_SOURCES,
+        sources: copilot::SOURCES,
     },
 ];
 
