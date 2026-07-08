@@ -8463,6 +8463,94 @@ fn operational_alert_not_emitted_when_scanner_errors_below_threshold() {
 }
 
 #[test]
+fn scanner_error_events_bypass_dedup_and_reemit_on_subsequent_scans() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("malformed-source.jsonl"),
+        include_str!("../tests/fixtures/rule_samples/malformed-source.jsonl"),
+    )
+    .expect("malformed fixture");
+
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+
+    let run_scan = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--root",
+            ])
+            .arg(&root)
+            .args(["--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .env("ADR_OP_ALERT_MAX_SCANNER_ERRORS", "5")
+            .output()
+            .expect("run adr");
+
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run_scan();
+
+    let lines = fs::read_to_string(&log_path).expect("log file after first scan");
+    let first_events: Vec<Value> = lines
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect();
+
+    assert!(
+        first_events
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error"),
+        "first scan should emit a scanner_error event"
+    );
+
+    run_scan();
+
+    let lines = fs::read_to_string(&log_path).expect("log file after second scan");
+    let all_events: Vec<Value> = lines
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect();
+
+    let scanner_errors: Vec<_> = all_events
+        .iter()
+        .filter(|event| event["event_type"] == "scanner_error")
+        .collect();
+    assert_eq!(
+        scanner_errors.len(),
+        2,
+        "second scan should re-emit scanner_error instead of deduping"
+    );
+
+    let second_health = all_events
+        .iter()
+        .filter(|event| event["event_type"] == "health")
+        .nth(1)
+        .expect("second health event");
+    assert_eq!(
+        second_health["scanner_error_count"], 1,
+        "health should report exactly one scanner error in the second scan"
+    );
+    assert!(
+        second_health["emitted_count"].as_u64().unwrap() >= 1,
+        "emitted_count should include the re-emitted scanner_error"
+    );
+}
+
+#[test]
 fn rules_coverage_reports_fixture_and_client_coverage() {
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["rules", "coverage", "--no-local-config"])

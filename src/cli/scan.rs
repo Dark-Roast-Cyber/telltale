@@ -744,7 +744,11 @@ fn run_scan(
         }
     }
     for (source, detection) in detections {
-        if config.backfill || state.should_emit(&source, &detection) {
+        if detection.event_type == "scanner_error" {
+            // Scanner errors bypass dedup: recurring operational failures
+            // (locked SQLite, malformed sources) should be visible every scan.
+            emitted_events.push(detection);
+        } else if config.backfill || state.should_emit(&source, &detection) {
             emitted_events.push(detection);
         }
     }
