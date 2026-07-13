@@ -18,7 +18,7 @@ ADR uses five evidence classes, ordered from safest to most sensitive:
 - `rule_ids` (secret.env.read, mcp.tool_metadata.prompt_injection, ...)
 - `categories` (secret_access, mcp_prompt_injection, ...)
 - `severity` (informational, low, medium, high, critical)
-- `risk_score` (0–100)
+- `risk_score` (non-negative cumulative risk points; not capped at 100)
 - `event_type` (detection, activity, health, ...)
 - `session_id` (opaque identifier, not raw transcript path)
 - `tool_name` (bash, write, curl, ...)

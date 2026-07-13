@@ -22,11 +22,13 @@ const SCHEMA_VERSION: &str = "1.0";
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_time: Option<String>,
     pub observed_at: String,
     pub ingested_at: String,
     pub time_source: String,
     pub time_confidence: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub time_override_reason: Option<String>,
     pub schema_version: String,
     pub event_id: String,
@@ -34,34 +36,60 @@ pub struct Event {
     pub severity: String,
     pub risk_score: u32,
     pub client: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rule_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub detection_classes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub signal_types: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub analytic_intents: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub atlas_tags: Vec<String>,
     pub tags: Vec<String>,
     pub evidence: Vec<Evidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub triage: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response: Option<ResponseMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_counts: Option<BTreeMap<String, u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub component: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub check_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub adr_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scan_duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold_config: Option<RiskThresholds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub active_policy_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub emitted_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub suppressed_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scanner_error_count: Option<u64>,
 }
 
@@ -69,7 +97,9 @@ pub struct Event {
 pub struct Evidence {
     pub field: String,
     pub redacted_value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_id: Option<String>,
 }
 
@@ -762,11 +792,143 @@ fn operational_alert_check_name(alert_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        DetectionEventInput, HealthEventInput, OperationalAlertInput, detection_event,
-        health_event_with_metadata, operational_alert_event, scanner_error_event,
+        ActivityEventInput, DetectionEventInput, Evidence, HealthEventInput, OperationalAlertInput,
+        activity_event, detection_event, health_event_with_metadata, operational_alert_event,
+        scanner_error_event,
     };
     use crate::clients::ClientId;
     use crate::scoring::{RiskSeverity, RiskThresholds, assess_risk_with_thresholds};
+
+    fn assert_no_top_level_nulls(event: &serde_json::Value) {
+        let fields = event.as_object().expect("serialized event object");
+        assert!(
+            fields.values().all(|value| !value.is_null()),
+            "serialized event contains a top-level null: {event}"
+        );
+    }
+
+    #[test]
+    fn activity_event_serialization_omits_unset_optional_fields() {
+        let event = serde_json::to_value(activity_event(ActivityEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: "hash".to_string(),
+            tool_name: Some("shell".to_string()),
+            tags: vec!["tag".to_string()],
+            evidence: vec![Evidence {
+                field: "activity".to_string(),
+                redacted_value: "summary".to_string(),
+                hash: None,
+                rule_id: None,
+            }],
+            risk_score: 10,
+            event_time: None,
+        }))
+        .expect("serialize activity event");
+
+        assert_no_top_level_nulls(&event);
+        assert_eq!(event["event_type"], "activity");
+        assert_eq!(event["source_path_hash"], "hash");
+        assert_eq!(event["tool_name"], "shell");
+        assert!(event.get("agent").is_none());
+        assert!(event.get("component").is_none());
+        for field in [
+            "rule_ids",
+            "categories",
+            "detection_classes",
+            "signal_types",
+            "analytic_intents",
+            "atlas_tags",
+        ] {
+            assert!(event.get(field).is_none(), "{field} should be omitted");
+        }
+        assert!(event["evidence"][0].get("hash").is_none());
+        assert!(event["evidence"][0].get("rule_id").is_none());
+    }
+
+    #[test]
+    fn detection_event_serialization_omits_unset_optional_fields() {
+        let event = serde_json::to_value(detection_event(DetectionEventInput {
+            client: ClientId::Codex,
+            agent: Some("agent".to_string()),
+            model: Some("model".to_string()),
+            provider: Some("provider".to_string()),
+            session_id: "session".to_string(),
+            source_path_hash: "hash".to_string(),
+            tool_name: None,
+            rule_ids: vec!["rule".to_string()],
+            categories: vec!["category".to_string()],
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
+            atlas_tags: vec!["atlas:AML.T0051".to_string()],
+            tags: vec!["tag".to_string()],
+            evidence: vec![Evidence {
+                field: "matched_field".to_string(),
+                redacted_value: "redacted".to_string(),
+                hash: Some("evidence-hash".to_string()),
+                rule_id: Some("rule".to_string()),
+            }],
+            risk_score: 10,
+            event_time: Some("2026-05-01T00:00:00Z".to_string()),
+        }))
+        .expect("serialize detection event");
+
+        assert_no_top_level_nulls(&event);
+        assert_eq!(event["event_type"], "detection");
+        assert_eq!(event["agent"], "agent");
+        assert_eq!(event["event_time"], "2026-05-01T00:00:00.000Z");
+        assert_eq!(event["rule_ids"][0], "rule");
+        assert_eq!(event["categories"][0], "category");
+        assert_eq!(event["detection_classes"][0], "security_detection");
+        assert_eq!(event["signal_types"][0], "atomic");
+        assert_eq!(event["analytic_intents"][0], "alert");
+        assert_eq!(event["atlas_tags"][0], "atlas:AML.T0051");
+        assert_eq!(event["evidence"][0]["hash"], "evidence-hash");
+        assert_eq!(event["evidence"][0]["rule_id"], "rule");
+        assert!(event["triage"].is_object());
+        assert!(event.get("tool_name").is_none());
+        assert!(event.get("source_counts").is_none());
+    }
+
+    #[test]
+    fn health_event_serialization_omits_unset_optional_fields() {
+        let event = serde_json::to_value(health_event_with_metadata(HealthEventInput {
+            sources: &[],
+            source_inventory_change: None,
+            scan_duration_ms: 7,
+            rule_count: 3,
+            threshold_config: crate::scoring::load_thresholds(),
+            active_policy_name: None,
+            emitted_count: 0,
+            suppressed_count: 0,
+            scanner_error_count: 0,
+        }))
+        .expect("serialize health event");
+
+        assert_no_top_level_nulls(&event);
+        assert_eq!(event["event_type"], "health");
+        assert_eq!(event["component"], "scanner");
+        assert_eq!(event["scan_duration_ms"], 7);
+        assert!(event["source_counts"].is_object());
+        assert!(event.get("agent").is_none());
+        assert!(event.get("active_policy_name").is_none());
+        for field in [
+            "rule_ids",
+            "categories",
+            "detection_classes",
+            "signal_types",
+            "analytic_intents",
+            "atlas_tags",
+        ] {
+            assert!(event.get(field).is_none(), "{field} should be omitted");
+        }
+        assert!(event["evidence"][0]["hash"].is_string());
+        assert!(event["evidence"][0].get("rule_id").is_none());
+    }
 
     #[test]
     fn detection_event_uses_threshold_based_severity() {

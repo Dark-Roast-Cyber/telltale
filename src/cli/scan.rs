@@ -709,16 +709,11 @@ fn run_scan(
             scanner_error_count: Some(scanner_error_count as u32),
         }));
     }
+    let has_operational_alerts = !operational_alerts.is_empty();
 
     let inventory_health_change = source_inventory_change
         .as_ref()
         .is_some_and(|change| change.baseline || change.added > 0 || change.removed > 0);
-    let health_emitted = config.dry_run
-        || config.backfill
-        || inventory_health_change
-        || scanner_error_count > 0
-        || !operational_alerts.is_empty();
-
     // Build the non-health emitted events first so the health event can report
     // an accurate emitted_count. The health event itself is excluded from this
     // count to match the scan summary's definition of emitted_count.
@@ -743,12 +738,10 @@ fn run_scan(
             emitted_events.push(activity);
         }
     }
+    let mut scanner_error_emitted = false;
     for (source, detection) in detections {
-        if detection.event_type == "scanner_error" {
-            // Scanner errors bypass dedup: recurring operational failures
-            // (locked SQLite, malformed sources) should be visible every scan.
-            emitted_events.push(detection);
-        } else if config.backfill || state.should_emit(&source, &detection) {
+        if config.backfill || state.should_emit(&source, &detection) {
+            scanner_error_emitted |= detection.event_type == "scanner_error";
             emitted_events.push(detection);
         }
     }
@@ -758,6 +751,11 @@ fn run_scan(
         }
     }
 
+    let health_emitted = config.dry_run
+        || config.backfill
+        || inventory_health_change
+        || scanner_error_emitted
+        || has_operational_alerts;
     let emitted_count = emitted_events.len() as u64;
     let health = health_event_with_metadata(HealthEventInput {
         sources: &sources,

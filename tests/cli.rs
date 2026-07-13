@@ -1570,7 +1570,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["threshold_config"]["medium"], 50);
     assert_eq!(event["threshold_config"]["triage"], 70);
     assert_eq!(event["threshold_config"]["alert"], 90);
-    assert_eq!(event["active_policy_name"], Value::Null);
+    assert!(event.get("active_policy_name").is_none());
     assert!(
         event["evidence"]
             .as_array()
@@ -8463,7 +8463,7 @@ fn operational_alert_not_emitted_when_scanner_errors_below_threshold() {
 }
 
 #[test]
-fn scanner_error_events_bypass_dedup_and_reemit_on_subsequent_scans() {
+fn scanner_error_events_dedup_on_subsequent_scans() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions");
@@ -8516,6 +8516,12 @@ fn scanner_error_events_bypass_dedup_and_reemit_on_subsequent_scans() {
             .any(|event| event["event_type"] == "scanner_error"),
         "first scan should emit a scanner_error event"
     );
+    assert!(
+        first_events
+            .iter()
+            .any(|event| event["event_type"] == "health"),
+        "first scan should emit health for the new scanner error"
+    );
 
     run_scan();
 
@@ -8531,22 +8537,18 @@ fn scanner_error_events_bypass_dedup_and_reemit_on_subsequent_scans() {
         .collect();
     assert_eq!(
         scanner_errors.len(),
-        2,
-        "second scan should re-emit scanner_error instead of deduping"
+        1,
+        "second scan should suppress an unchanged scanner_error"
     );
 
-    let second_health = all_events
+    let health_events: Vec<_> = all_events
         .iter()
         .filter(|event| event["event_type"] == "health")
-        .nth(1)
-        .expect("second health event");
+        .collect();
     assert_eq!(
-        second_health["scanner_error_count"], 1,
-        "health should report exactly one scanner error in the second scan"
-    );
-    assert!(
-        second_health["emitted_count"].as_u64().unwrap() >= 1,
-        "emitted_count should include the re-emitted scanner_error"
+        health_events.len(),
+        1,
+        "second scan should not emit health for an unchanged scanner_error"
     );
 }
 

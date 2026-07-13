@@ -15,7 +15,7 @@ Every rule in `config/rules/tool-call-regex.yaml` must include:
 | `analytic_intent` | How analysts should use the event. Defaults to `alert`. | `hunt` |
 | `atlas_tags` | Optional MITRE ATLAS tags using `atlas:<id>` values. Runtime validation checks shape only. | `[atlas:AML.T0051]` |
 | `severity` | One of `informational`, `low`, `medium`, `high`, `critical`. | `high` |
-| `score` | Numeric risk contribution (0–100). See severity mapping in [detection-model.md](detection-model.md). | `60` |
+| `score` | Numeric risk contribution (0–100 per rule). Matching contributions accumulate into the emitted, uncapped `risk_score`. | `60` |
 | `targets` | Fields the regex evaluates. Must be valid ADR targets. | `[assistant_context, arguments, tool_result]` |
 | `regex` or `detection` | The matching pattern. `targets` + `regex` for simple signatures; `detection.selection` with `condition: selection` for Sigma-inspired rules. | See examples in detection-model.md |
 | `tags` | One or more descriptive tags for filtering, searching, and documentation. | `[mcp, prompt-injection, tool-poisoning]` |
@@ -80,7 +80,12 @@ ATLAS mappings live in rule `atlas_tags` and in [../MITRE_ATLAS_COVERAGE.md](../
 | `high` | 50–79 | Strong indicator of risk; triggers triage at threshold. |
 | `critical` | 80–100 | Near-certain malicious or extremely high-risk behavior. |
 
-Scores are additive across rules and chain modifiers. A session matching multiple rules may cross higher severity thresholds even if individual rules score lower.
+Scores are additive across rules and chain modifiers. The emitted `risk_score` is
+therefore non-negative and uncapped; it can exceed 100 when multiple rules or
+chain modifiers match. Event severity derives from the configured scanner
+thresholds (defaults: low 20, medium 50, high 70, critical 90), rather than
+from a 0–100 score cap. A session matching multiple rules may cross higher
+severity thresholds even if individual rules score lower.
 
 ### Severity Rationale
 
