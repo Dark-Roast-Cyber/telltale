@@ -774,7 +774,11 @@ fn run_scan(
         emitted_events.insert(0, health.clone());
     }
 
-    state.observe_sources(&sources, observed_at_unix_ms);
+    if targeted {
+        state.observe_sources(&sources, observed_at_unix_ms);
+    } else {
+        state.replace_source_observations(&sources, observed_at_unix_ms);
+    }
     if !config.dry_run && !config.backfill {
         observe_sqlite_ingestion_cursors(&mut state, &parsed_sources, observed_at_unix_ms);
     }

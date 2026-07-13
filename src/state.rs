@@ -251,6 +251,11 @@ impl ScanState {
         }
     }
 
+    pub fn replace_source_observations(&mut self, sources: &[Source], observed_at_unix_ms: u64) {
+        self.source_observations.clear();
+        self.observe_sources(sources, observed_at_unix_ms);
+    }
+
     pub fn sqlite_ingestion_cursor_time_updated(
         &self,
         source: &Source,
@@ -871,5 +876,12 @@ mod tests {
         assert_eq!(second.removed, 1);
         assert_eq!(second.unchanged, 1);
         assert_eq!(second.hash.len(), 64);
+
+        state.replace_source_observations(std::slice::from_ref(&source_a), 2_000);
+        let third = state.source_inventory_change_summary(std::slice::from_ref(&source_a));
+        assert!(!third.baseline);
+        assert_eq!(third.added, 0);
+        assert_eq!(third.removed, 0);
+        assert_eq!(third.unchanged, 1);
     }
 }
