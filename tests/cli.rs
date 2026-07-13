@@ -1329,16 +1329,25 @@ fn start_mock_llm_server_with_content(
     (format!("http://{}", addr), rx, handle)
 }
 
-fn start_mock_hec_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+fn start_mock_hec_server() -> (
+    String,
+    mpsc::Receiver<String>,
+    mpsc::Sender<()>,
+    thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock hec server");
     listener
         .set_nonblocking(true)
         .expect("nonblocking listener");
     let addr = listener.local_addr().expect("listener addr");
     let (tx, rx) = mpsc::channel();
+    let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline {
+        loop {
+            match shutdown_rx.try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream
@@ -1369,7 +1378,6 @@ fn start_mock_hec_server() -> (String, mpsc::Receiver<String>, thread::JoinHandl
                             b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"text\":\"ok\"}\n",
                         )
                         .expect("write mock hec response");
-                    return;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -1378,7 +1386,12 @@ fn start_mock_hec_server() -> (String, mpsc::Receiver<String>, thread::JoinHandl
             }
         }
     });
-    (format!("http://{addr}/services/collector"), rx, handle)
+    (
+        format!("http://{addr}/services/collector"),
+        rx,
+        shutdown_tx,
+        handle,
+    )
 }
 
 #[test]
@@ -2661,7 +2674,7 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
     fs::create_dir_all(&root).expect("empty root");
     let log_path = temp.path().join("adr-events.jsonl");
     let state_path = temp.path().join("adr-state.json");
-    let (hec_endpoint, requests, handle) = start_mock_hec_server();
+    let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["scan", "--once", "--no-local-config", "--root"])
@@ -2676,6 +2689,8 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         .output()
         .expect("run adr");
 
+    shutdown.send(()).expect("stop mock hec server");
+    handle.join().expect("mock hec thread");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2687,7 +2702,6 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
     let request = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("hec request");
-    handle.join().expect("mock hec thread");
     assert!(request.starts_with("POST /services/collector HTTP/1.1"));
     assert!(request.contains("Authorization: Splunk test-token"));
     let body = request.split_once("\r\n\r\n").expect("body split").1;
@@ -2703,6 +2717,76 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         0
     );
     assert!(envelope["event"].get("index").is_none());
+}
+
+#[test]
+fn scan_once_emits_identical_events_to_jsonl_and_splunk_hec() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--root",
+            "tests/fixtures/session_stores",
+            "--log-path",
+        ])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .args(["--splunk-hec-endpoint", &hec_endpoint])
+        .args(["--splunk-hec-token", "test-token"])
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    shutdown.send(()).expect("stop mock hec server");
+    handle.join().expect("mock hec thread");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let jsonl_events = fs::read_to_string(&log_path)
+        .expect("jsonl log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("jsonl event"))
+        .collect::<Vec<_>>();
+    let hec_events = requests
+        .iter()
+        .map(|request| {
+            assert!(request.starts_with("POST /services/collector HTTP/1.1"));
+            assert!(request.contains("Authorization: Splunk test-token"));
+            let body = request.split_once("\r\n\r\n").expect("body split").1;
+            let envelope: Value = serde_json::from_str(body).expect("hec envelope");
+            assert_eq!(envelope["index"], "adr");
+            assert_eq!(envelope["sourcetype"], "adr:json");
+            envelope["event"].clone()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(hec_events.len(), jsonl_events.len());
+    assert_eq!(hec_events, jsonl_events);
+
+    let detections = jsonl_events
+        .iter()
+        .filter(|event| event["event_type"] == "detection")
+        .collect::<Vec<_>>();
+    assert!(detections.len() >= 36, "expected fixture detections");
+    assert!(detections.iter().any(|event| {
+        event["session_id"] == "tool-injection-shape-session"
+            && event["rule_ids"].as_array().is_some_and(|rule_ids| {
+                rule_ids
+                    .iter()
+                    .any(|rule_id| rule_id == "tool.injection.shape")
+            })
+    }));
 }
 
 #[test]
