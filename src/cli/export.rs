@@ -255,7 +255,8 @@ fn ensure_single_timeline_match(
 fn print_elastic_bulk(events: &[&serde_json::Value]) -> Result<(), Box<dyn std::error::Error>> {
     for event in events {
         let event_id = event.get("event_id").and_then(|value| value.as_str());
-        let action = crate::sink::elastic_bulk_action_json(crate::sink::DEFAULT_ELASTIC_INDEX, event_id);
+        let action =
+            crate::sink::elastic_bulk_action_json(crate::sink::DEFAULT_ELASTIC_INDEX, event_id);
         println!("{}", serde_json::to_string(&action)?);
         println!("{}", serde_json::to_string(event)?);
     }

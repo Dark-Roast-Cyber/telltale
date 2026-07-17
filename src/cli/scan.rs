@@ -775,8 +775,7 @@ fn run_scan(
         sink_failures = config.sinks.deliver(&emitted_events)?;
         if !sink_failures.is_empty() {
             let alerts: Vec<Event> = sink_failures.iter().map(sink_failure_alert_event).collect();
-            let failed_names: Vec<&str> =
-                sink_failures.iter().map(|f| f.name.as_str()).collect();
+            let failed_names: Vec<&str> = sink_failures.iter().map(|f| f.name.as_str()).collect();
             config.sinks.deliver_alerts(&alerts, &failed_names);
         }
         let should_save = match &state_probe {

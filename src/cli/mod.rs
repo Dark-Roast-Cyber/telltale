@@ -623,8 +623,7 @@ fn run_config_validate(
         &resolved_config.override_paths,
     )?;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
-    let output_specs =
-        sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
+    let output_specs = sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
     let mut output_warnings: Vec<String> = output_specs
         .iter()
         .filter(|spec| spec.has_inline_secret())

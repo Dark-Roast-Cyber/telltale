@@ -150,7 +150,10 @@ fn tls_options_from_spec(spec: Option<&TlsSpec>) -> TlsOptions {
     }
 }
 
-fn validate_http_endpoint(sink_name: &str, endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_http_endpoint(
+    sink_name: &str,
+    endpoint: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
         Ok(())
     } else {
@@ -184,7 +187,10 @@ impl SecretValue {
             },
             SecretValue::File { file } => {
                 let value = fs::read_to_string(file).map_err(|err| {
-                    format!("{what}: could not read secret file {}: {err}", file.display())
+                    format!(
+                        "{what}: could not read secret file {}: {err}",
+                        file.display()
+                    )
                 })?;
                 let value = value.trim_end().to_string();
                 if value.is_empty() {
@@ -208,9 +214,7 @@ struct OutputsDocRaw {
 /// Merge rule: sinks are keyed by `name`; a later file's sink with the same
 /// name replaces the earlier definition entirely, new names append in
 /// first-seen order. Duplicate names within one file are an error.
-pub fn load_outputs_config(
-    paths: &[PathBuf],
-) -> Result<Vec<SinkSpec>, Box<dyn std::error::Error>> {
+pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn std::error::Error>> {
     let mut merged: Vec<SinkSpec> = Vec::new();
     for path in paths {
         let text = fs::read_to_string(path)
@@ -361,9 +365,7 @@ pub fn build_sink_set(
                 }
                 SinkKind::SplunkHec(hec) => {
                     validate_http_endpoint(&spec.name, &hec.endpoint)?;
-                    let token = hec
-                        .token
-                        .resolve(&format!("sink '{}' token", spec.name))?;
+                    let token = hec.token.resolve(&format!("sink '{}' token", spec.name))?;
                     let defaults = SplunkHecConfig::default();
                     let config = SplunkHecConfig {
                         index: hec.index.clone().or(defaults.index),
@@ -458,9 +460,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{
-        CliSinkOverrides, SecretValue, SinkKind, build_sink_set, load_outputs_config,
-    };
+    use super::{CliSinkOverrides, SecretValue, SinkKind, build_sink_set, load_outputs_config};
     use crate::sink::RotationConfig;
 
     fn write_outputs(dir: &std::path::Path, file_name: &str, contents: &str) -> PathBuf {

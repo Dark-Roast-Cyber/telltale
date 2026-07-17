@@ -2888,16 +2888,15 @@ fn scan_once_continues_and_alerts_when_splunk_hec_is_unreachable() {
     }));
     assert!(evidence.iter().any(|item| {
         item["field"] == "actual_value"
-            && item["redacted_value"]
-                .as_str()
-                .is_some_and(|value| value.contains("sink=cli-splunk-hec")
-                    && value.contains("type=splunk_hec"))
+            && item["redacted_value"].as_str().is_some_and(|value| {
+                value.contains("sink=cli-splunk-hec") && value.contains("type=splunk_hec")
+            })
     }));
 
     // The stdout summary reports the failed sink.
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let summary: Value = serde_json::from_str(stdout.lines().last().expect("summary line"))
-        .expect("summary json");
+    let summary: Value =
+        serde_json::from_str(stdout.lines().last().expect("summary line")).expect("summary json");
     let sink_failures = summary["sink_failures"].as_array().expect("sink_failures");
     assert_eq!(sink_failures.len(), 1);
     assert_eq!(sink_failures[0]["name"], "cli-splunk-hec");
@@ -3117,7 +3116,10 @@ sinks:
     assert!(lowercase.contains("authorization: apikey test-api-key"));
     assert!(lowercase.contains("content-type: application/x-ndjson"));
     let body = request.split_once("\r\n\r\n").expect("body split").1;
-    let lines: Vec<&str> = body.lines().filter(|line| !line.trim().is_empty()).collect();
+    let lines: Vec<&str> = body
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     assert_eq!(lines.len(), 2, "one action/source pair");
     let action: Value = serde_json::from_str(lines[0]).expect("action line");
     let source: Value = serde_json::from_str(lines[1]).expect("source line");

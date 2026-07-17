@@ -77,7 +77,12 @@ impl EventSink for SplunkHecHttpSink {
         for chunk in chunk_segments(&segments, self.max_batch_bytes) {
             let response = self
                 .client
-                .post(&self.url, &[("Authorization", &auth)], "application/json", &chunk)
+                .post(
+                    &self.url,
+                    &[("Authorization", &auth)],
+                    "application/json",
+                    &chunk,
+                )
                 .map_err(|err| SinkDeliveryError {
                     attempts: err.attempts,
                     message: format!("Splunk HEC request failed: {}", err.message),

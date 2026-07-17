@@ -90,8 +90,7 @@ impl HttpClient {
                     )
                     .into());
                 }
-                tls_builder =
-                    tls_builder.root_certs(ureq::tls::RootCerts::new_with_certs(&certs));
+                tls_builder = tls_builder.root_certs(ureq::tls::RootCerts::new_with_certs(&certs));
             }
             if tls.insecure_skip_verify {
                 eprintln!(
@@ -261,14 +260,23 @@ mod tests {
         .expect("client");
 
         let response = client
-            .post(&url, &[("Authorization", "Bearer x")], "application/json", b"{}")
+            .post(
+                &url,
+                &[("Authorization", "Bearer x")],
+                "application/json",
+                b"{}",
+            )
             .expect("response");
 
         assert_eq!(response.status, 200);
         assert_eq!(response.attempts, 3);
         let requests = handle.join().expect("mock join");
         assert_eq!(requests.len(), 3);
-        assert!(requests[0].to_lowercase().contains("authorization: bearer x"));
+        assert!(
+            requests[0]
+                .to_lowercase()
+                .contains("authorization: bearer x")
+        );
     }
 
     #[test]

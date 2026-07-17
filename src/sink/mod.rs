@@ -96,7 +96,10 @@ impl SinkSet {
     /// Deliver a batch to every sink. A durable sink failure is fatal (`Err`);
     /// remote failures are collected and returned while delivery to the
     /// remaining sinks continues.
-    pub fn deliver(&self, events: &[Event]) -> Result<Vec<SinkFailure>, Box<dyn std::error::Error>> {
+    pub fn deliver(
+        &self,
+        events: &[Event],
+    ) -> Result<Vec<SinkFailure>, Box<dyn std::error::Error>> {
         let mut failures = Vec::new();
         for entry in &self.entries {
             match entry.sink.emit(events) {

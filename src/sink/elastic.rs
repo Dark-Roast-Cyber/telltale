@@ -116,7 +116,9 @@ impl EventSink for ElasticBulkSink {
             if let Some(item_errors) = bulk_item_errors(&response.body) {
                 return Err(SinkDeliveryError {
                     attempts: response.attempts,
-                    message: format!("Elasticsearch bulk response reported item errors: {item_errors}"),
+                    message: format!(
+                        "Elasticsearch bulk response reported item errors: {item_errors}"
+                    ),
                 }
                 .into());
             }
@@ -276,7 +278,10 @@ mod tests {
 
         let body = request.split_once("\r\n\r\n").expect("body split").1;
         assert!(body.ends_with('\n'), "bulk body must end with a newline");
-        let lines: Vec<&str> = body.lines().filter(|line| !line.trim().is_empty()).collect();
+        let lines: Vec<&str> = body
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
         assert_eq!(lines.len(), 4, "two action/source pairs");
         for pair in lines.chunks(2) {
             let action: serde_json::Value = serde_json::from_str(pair[0]).expect("action line");
@@ -301,14 +306,17 @@ mod tests {
 
         let message = err.to_string();
         assert!(message.contains("1 item(s) failed"), "message: {message}");
-        assert!(message.contains("index write blocked"), "message: {message}");
+        assert!(
+            message.contains("index write blocked"),
+            "message: {message}"
+        );
     }
 
     #[test]
     fn basic_auth_sets_encoded_authorization_header() {
         let (endpoint, handle) = start_mock_elastic(r#"{"errors":false}"#);
-        let sink = ElasticBulkSink::new(&endpoint, "adr-events")
-            .with_basic_auth("telltale", "s3cret");
+        let sink =
+            ElasticBulkSink::new(&endpoint, "adr-events").with_basic_auth("telltale", "s3cret");
 
         emit_events(&sink, &[make_health_event()]).expect("emit");
         let request = handle.join().expect("mock join").to_lowercase();
