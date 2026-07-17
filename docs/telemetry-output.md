@@ -51,7 +51,26 @@ Common event types include:
   activity and detection events.
 - `scanner_health`: source-discovery and scanner health status.
 - `scanner_error`: parser or scan errors that should be visible to operators.
+- `operational_alert`: operator-facing threshold and delivery alerts, including
+  `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
+  Elastic bulk) could not be delivered to after retries.
 - `correlation`: cross-session patterns built from emitted telemetry.
+
+## Sinks and Delivery Failures
+
+Beyond the default local JSONL sink, scans can deliver the same events to
+Splunk HEC and the Elasticsearch Bulk API, configured centrally through
+`outputs.d` YAML files under the standard config roots (`/etc/telltale`, the
+user config dir, or `--config-dir`); an annotated example ships in
+[config/examples/telltale-outputs.yaml](../config/examples/telltale-outputs.yaml).
+Remote delivery is retried with backoff; on final failure the scan continues
+and emits an `operational_alert` event with `alert_type=sink_delivery_failure`
+(check name `sink_delivery`) to the remaining healthy sinks. The failed sink
+never receives its own failure alert, so delivery problems cannot cascade.
+These alerts bypass duplicate suppression and are not counted in the health
+event's `emitted_count`; the scan's stdout summary also lists failures under
+`sink_failures`. A failure writing the local JSONL sink itself still aborts
+the scan, because that file is the durable record.
 
 Enable optional activity and session summary events when dashboards need more
 than detection-only output:

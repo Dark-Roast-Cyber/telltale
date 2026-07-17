@@ -9,6 +9,7 @@ pub struct LocalConfigFiles {
     pub override_paths: Vec<PathBuf>,
     pub policy_paths: Vec<PathBuf>,
     pub allowlist_paths: Vec<PathBuf>,
+    pub output_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,16 +28,20 @@ pub fn discover_local_config_files(
     }
 
     let roots = active_config_roots(explicit_roots)?;
-    let allowlist_paths = if matches!(kind, LocalConfigDiscoveryKind::Scan) {
-        discover_yaml_files(&roots, "allowlists.d")?
+    let (allowlist_paths, output_paths) = if matches!(kind, LocalConfigDiscoveryKind::Scan) {
+        (
+            discover_yaml_files(&roots, "allowlists.d")?,
+            discover_yaml_files(&roots, "outputs.d")?,
+        )
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     Ok(LocalConfigFiles {
         rule_paths: discover_yaml_files(&roots, "rules.d")?,
         override_paths: discover_yaml_files(&roots, "overrides.d")?,
         policy_paths: discover_yaml_files(&roots, "policies.d")?,
         allowlist_paths,
+        output_paths,
     })
 }
 

@@ -1301,12 +1301,14 @@ fn start_mock_llm_server_with_content(
                             break;
                         }
                         request.extend_from_slice(&buf[..read]);
-                        let text = String::from_utf8_lossy(&request);
+                        // Header matching is case-insensitive: the ureq
+                        // transport sends lowercase header names.
+                        let text = String::from_utf8_lossy(&request).to_lowercase();
                         if let Some((headers, body)) = text.split_once("\r\n\r\n") {
                             let content_length = headers
                                 .lines()
-                                .find_map(|line| line.strip_prefix("Content-Length: "))
-                                .and_then(|value| value.parse::<usize>().ok())
+                                .find_map(|line| line.strip_prefix("content-length: "))
+                                .and_then(|value| value.trim().parse::<usize>().ok())
                                 .unwrap_or(0);
                             if body.len() >= content_length {
                                 break;
@@ -1360,12 +1362,14 @@ fn start_mock_hec_server() -> (
                             break;
                         }
                         request.extend_from_slice(&buf[..read]);
-                        let text = String::from_utf8_lossy(&request);
+                        // Header matching is case-insensitive: the ureq
+                        // transport sends lowercase header names.
+                        let text = String::from_utf8_lossy(&request).to_lowercase();
                         if let Some((headers, body)) = text.split_once("\r\n\r\n") {
                             let content_length = headers
                                 .lines()
-                                .find_map(|line| line.strip_prefix("Content-Length: "))
-                                .and_then(|value| value.parse::<usize>().ok())
+                                .find_map(|line| line.strip_prefix("content-length: "))
+                                .and_then(|value| value.trim().parse::<usize>().ok())
                                 .unwrap_or(0);
                             if body.len() >= content_length {
                                 break;
@@ -2703,9 +2707,13 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         .recv_timeout(Duration::from_secs(2))
         .expect("hec request");
     assert!(request.starts_with("POST /services/collector HTTP/1.1"));
-    assert!(request.contains("Authorization: Splunk test-token"));
+    assert!(
+        request
+            .to_lowercase()
+            .contains("authorization: splunk test-token")
+    );
     let body = request.split_once("\r\n\r\n").expect("body split").1;
-    let envelope: Value = serde_json::from_str(body).expect("hec envelope");
+    let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["index"], "adr");
     assert_eq!(envelope["sourcetype"], "adr:json");
     assert_eq!(envelope["event"]["event_type"], "health");
@@ -2760,14 +2768,25 @@ fn scan_once_emits_identical_events_to_jsonl_and_splunk_hec() {
         .collect::<Vec<_>>();
     let hec_events = requests
         .iter()
-        .map(|request| {
+        .flat_map(|request| {
             assert!(request.starts_with("POST /services/collector HTTP/1.1"));
-            assert!(request.contains("Authorization: Splunk test-token"));
+            assert!(
+                request
+                    .to_lowercase()
+                    .contains("authorization: splunk test-token")
+            );
+            // Envelopes are batched: one request body holds one envelope
+            // per line.
             let body = request.split_once("\r\n\r\n").expect("body split").1;
-            let envelope: Value = serde_json::from_str(body).expect("hec envelope");
-            assert_eq!(envelope["index"], "adr");
-            assert_eq!(envelope["sourcetype"], "adr:json");
-            envelope["event"].clone()
+            body.lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| {
+                    let envelope: Value = serde_json::from_str(line).expect("hec envelope");
+                    assert_eq!(envelope["index"], "adr");
+                    assert_eq!(envelope["sourcetype"], "adr:json");
+                    envelope["event"].clone()
+                })
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
 
@@ -2816,6 +2835,383 @@ fn scan_once_requires_splunk_hec_endpoint_and_token_together() {
     assert!(stderr.contains("--splunk-hec-endpoint and --splunk-hec-token must be set together"));
     assert!(!log_path.exists());
     assert!(!state_path.exists());
+}
+
+#[test]
+fn scan_once_continues_and_alerts_when_splunk_hec_is_unreachable() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    // Bind and immediately drop a listener so the port is closed: connection refused.
+    let unreachable_endpoint = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("probe listener");
+        let addr = listener.local_addr().expect("probe addr");
+        drop(listener);
+        format!("http://{addr}/services/collector")
+    };
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--no-local-config", "--root"])
+        .arg(&root)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .args(["--splunk-hec-endpoint", &unreachable_endpoint])
+        .args(["--splunk-hec-token", "test-token"])
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "remote sink failure must not abort the scan; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The local JSONL log has the health event plus the delivery-failure alert.
+    let jsonl_events = fs::read_to_string(&log_path)
+        .expect("jsonl log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("jsonl event"))
+        .collect::<Vec<_>>();
+    let alert = jsonl_events
+        .iter()
+        .find(|event| event["event_type"] == "operational_alert")
+        .expect("sink delivery failure alert in local jsonl");
+    assert_eq!(alert["check_name"], "sink_delivery");
+    let evidence = alert["evidence"].as_array().expect("alert evidence");
+    assert!(evidence.iter().any(|item| {
+        item["field"] == "alert_type" && item["redacted_value"] == "sink_delivery_failure"
+    }));
+    assert!(evidence.iter().any(|item| {
+        item["field"] == "actual_value"
+            && item["redacted_value"]
+                .as_str()
+                .is_some_and(|value| value.contains("sink=cli-splunk-hec")
+                    && value.contains("type=splunk_hec"))
+    }));
+
+    // The stdout summary reports the failed sink.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let summary: Value = serde_json::from_str(stdout.lines().last().expect("summary line"))
+        .expect("summary json");
+    let sink_failures = summary["sink_failures"].as_array().expect("sink_failures");
+    assert_eq!(sink_failures.len(), 1);
+    assert_eq!(sink_failures[0]["name"], "cli-splunk-hec");
+    assert_eq!(sink_failures[0]["type"], "splunk_hec");
+}
+
+#[test]
+fn scan_once_uses_outputs_config_sinks() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let cli_log_path = temp.path().join("cli-events.jsonl");
+    let config_log_path = temp.path().join("policy-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
+
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            r#"
+version: 1
+sinks:
+  - name: local
+    type: jsonl
+    path: {}
+  - name: corp-splunk
+    type: splunk_hec
+    endpoint: {}
+    token: {{ env: ADR_TEST_OUTPUTS_HEC_TOKEN }}
+    source: telltale:outputs-test
+"#,
+            config_log_path.display(),
+            hec_endpoint
+        ),
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&cli_log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .env("ADR_TEST_OUTPUTS_HEC_TOKEN", "env-secret-token")
+        .output()
+        .expect("run adr");
+
+    shutdown.send(()).expect("stop mock hec server");
+    handle.join().expect("mock hec thread");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The config-defined jsonl path wins over --log-path.
+    let lines = fs::read_to_string(&config_log_path).expect("policy jsonl log");
+    assert_eq!(lines.lines().count(), 1);
+    assert!(!cli_log_path.exists(), "config path replaces --log-path");
+
+    // The HEC sink resolved its token from the environment and applied
+    // the config's source override.
+    let request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("hec request");
+    assert!(
+        request
+            .to_lowercase()
+            .contains("authorization: splunk env-secret-token")
+    );
+    let body = request.split_once("\r\n\r\n").expect("body split").1;
+    let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
+    assert_eq!(envelope["source"], "telltale:outputs-test");
+    assert_eq!(envelope["event"]["event_type"], "health");
+}
+
+/// Mock Elasticsearch: accepts requests until shutdown, captures each raw
+/// request, and answers every one with a successful bulk response.
+fn start_mock_elastic_server() -> (
+    String,
+    mpsc::Receiver<String>,
+    mpsc::Sender<()>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock elastic server");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let (tx, rx) = mpsc::channel();
+    let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        loop {
+            match shutdown_rx.try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("read timeout");
+                    let mut request = Vec::new();
+                    let mut buf = [0_u8; 4096];
+                    while let Ok(read) = stream.read(&mut buf) {
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buf[..read]);
+                        let text = String::from_utf8_lossy(&request).to_lowercase();
+                        if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length: "))
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            if body.len() >= content_length {
+                                break;
+                            }
+                        }
+                    }
+                    let _ = tx.send(String::from_utf8_lossy(&request).to_string());
+                    let body = r#"{"took":1,"errors":false,"items":[]}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write mock elastic response");
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (format!("http://{addr}"), rx, shutdown_tx, handle)
+}
+
+#[test]
+fn scan_once_ships_events_to_elastic_bulk_sink() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let (elastic_endpoint, requests, shutdown, handle) = start_mock_elastic_server();
+
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            r#"
+version: 1
+sinks:
+  - name: local
+    type: jsonl
+  - name: corp-elastic
+    type: elastic_bulk
+    endpoint: {}
+    index: adr-events
+    api_key: {{ env: ADR_TEST_ELASTIC_API_KEY }}
+"#,
+            elastic_endpoint
+        ),
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .env("ADR_TEST_ELASTIC_API_KEY", "test-api-key")
+        .output()
+        .expect("run adr");
+
+    shutdown.send(()).expect("stop mock elastic server");
+    handle.join().expect("mock elastic thread");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Local JSONL still receives the events.
+    let jsonl_events = fs::read_to_string(&log_path)
+        .expect("jsonl log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("jsonl event"))
+        .collect::<Vec<_>>();
+    assert_eq!(jsonl_events.len(), 1);
+
+    // The bulk request pairs an action line with the identical canonical event.
+    let request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("bulk request");
+    assert!(request.starts_with("POST /_bulk HTTP/1.1"));
+    let lowercase = request.to_lowercase();
+    assert!(lowercase.contains("authorization: apikey test-api-key"));
+    assert!(lowercase.contains("content-type: application/x-ndjson"));
+    let body = request.split_once("\r\n\r\n").expect("body split").1;
+    let lines: Vec<&str> = body.lines().filter(|line| !line.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 2, "one action/source pair");
+    let action: Value = serde_json::from_str(lines[0]).expect("action line");
+    let source: Value = serde_json::from_str(lines[1]).expect("source line");
+    assert_eq!(action["index"]["_index"], "adr-events");
+    assert_eq!(action["index"]["_id"], jsonl_events[0]["event_id"]);
+    assert_eq!(source, jsonl_events[0]);
+}
+
+#[test]
+fn scan_once_fails_fast_on_invalid_outputs_config() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        "version: 1\nsinks:\n  - name: local\n    type: jsonl\n    pth: /tmp/typo.jsonl\n",
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    assert!(!output.status.success(), "typo config must fail fast");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("sink 'local'"), "stderr: {stderr}");
+    assert!(!log_path.exists(), "no events written on config error");
+}
+
+#[test]
+fn config_validate_reports_outputs_block() {
+    let temp = tempdir().expect("tempdir");
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        r#"
+version: 1
+sinks:
+  - name: local
+    type: jsonl
+  - name: corp-splunk
+    type: splunk_hec
+    enabled: false
+    endpoint: http://splunk.example.com:8088
+    token: inline-lab-token
+"#,
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_dir)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("config validate json output");
+    assert_eq!(report["local_config"]["discovered_output_count"], 1);
+    let sinks = report["outputs"]["sinks"].as_array().expect("sinks");
+    assert_eq!(sinks.len(), 2);
+    assert_eq!(sinks[0]["name"], "local");
+    assert_eq!(sinks[0]["type"], "jsonl");
+    assert_eq!(sinks[1]["name"], "corp-splunk");
+    assert_eq!(sinks[1]["enabled"], false);
+    let warnings = report["outputs"]["warnings"].as_array().expect("warnings");
+    assert_eq!(warnings.len(), 1);
+    assert!(
+        warnings[0]
+            .as_str()
+            .expect("warning text")
+            .contains("inline secret")
+    );
 }
 
 #[test]

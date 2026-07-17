@@ -785,6 +785,7 @@ fn operational_alert_check_name(alert_type: &str) -> &str {
     match alert_type {
         "scanner_error_threshold_exceeded" => "scanner_error_threshold",
         "scan_duration_threshold_exceeded" => "scan_duration_threshold",
+        "sink_delivery_failure" => "sink_delivery",
         _ => "operational_alert",
     }
 }

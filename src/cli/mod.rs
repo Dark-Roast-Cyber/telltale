@@ -6,6 +6,7 @@ use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
 use crate::paths::{self, PathProfile};
 use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode_and_override_paths};
+use crate::sink::config as sink_config;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 
 mod coverage;
@@ -509,7 +510,7 @@ struct LocalConfigCliArgs {
     #[arg(long = "config-dir")]
     config_dirs: Vec<PathBuf>,
 
-    /// Disable local config discovery from rules.d, overrides.d, policies.d, and allowlists.d.
+    /// Disable local config discovery from rules.d, overrides.d, policies.d, allowlists.d, and outputs.d.
     #[arg(long)]
     no_local_config: bool,
 }
@@ -622,6 +623,39 @@ fn run_config_validate(
         &resolved_config.override_paths,
     )?;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
+    let output_specs =
+        sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
+    let mut output_warnings: Vec<String> = output_specs
+        .iter()
+        .filter(|spec| spec.has_inline_secret())
+        .map(|spec| {
+            format!(
+                "sink '{}' has an inline secret; prefer {{env: NAME}} or {{file: PATH}} references",
+                spec.name
+            )
+        })
+        .collect();
+    output_warnings.extend(
+        output_specs
+            .iter()
+            .filter(|spec| spec.has_insecure_tls())
+            .map(|spec| {
+                format!(
+                    "sink '{}' disables TLS certificate verification (insecure_skip_verify)",
+                    spec.name
+                )
+            }),
+    );
+    let output_sinks: Vec<serde_json::Value> = output_specs
+        .iter()
+        .map(|spec| {
+            serde_json::json!({
+                "name": spec.name,
+                "type": spec.kind.type_name(),
+                "enabled": spec.enabled,
+            })
+        })
+        .collect();
 
     println!(
         "{}",
@@ -641,6 +675,12 @@ fn run_config_validate(
                 "discovered_override_count": resolved_config.discovered.override_paths.len(),
                 "discovered_policy_count": resolved_config.discovered.policy_paths.len(),
                 "discovered_allowlist_count": resolved_config.discovered.allowlist_paths.len(),
+                "discovered_output_count": resolved_config.discovered.output_paths.len(),
+            },
+            "outputs": {
+                "paths": display_paths(&resolved_config.discovered.output_paths),
+                "sinks": output_sinks,
+                "warnings": output_warnings,
             },
             "rules": {
                 "paths": display_paths(&resolved_config.rule_paths),
@@ -812,13 +852,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 policy.as_deref(),
                 allowlist.as_deref(),
             )?;
+            let output_specs =
+                sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
+            let sink_set = sink_config::build_sink_set(
+                &output_specs,
+                &sink_config::CliSinkOverrides {
+                    log_path: &log_path,
+                    rotation,
+                    splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
+                    splunk_hec_token: splunk_hec_token.as_deref(),
+                },
+            )?;
             let scan_args = scan::ScanCommandArgs {
                 root: &root,
                 log_path: &log_path,
-                splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
-                splunk_hec_token: splunk_hec_token.as_deref(),
+                sinks: &sink_set,
                 state_path: &state_path,
-                rotation,
                 dry_run,
                 emit_activity,
                 emit_session_risk_summary,
@@ -1037,11 +1086,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 policy.as_deref(),
                 allowlist.as_deref(),
             )?;
+            let output_specs =
+                sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
+            let sink_set = sink_config::build_sink_set(
+                &output_specs,
+                &sink_config::CliSinkOverrides {
+                    log_path: &log_path,
+                    rotation,
+                    splunk_hec_endpoint: None,
+                    splunk_hec_token: None,
+                },
+            )?;
             let watch_args = scan::WatchCommandArgs {
                 root: &root,
                 log_path: &log_path,
+                sinks: &sink_set,
                 state_path: &state_path,
-                rotation,
                 dry_run,
                 emit_activity,
                 emit_session_risk_summary,

@@ -33,9 +33,7 @@ use crate::parser::{
 };
 use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode_and_override_paths};
 use crate::scoring::load_thresholds;
-use crate::sink::{
-    LocalJsonlSink, RotationConfig, SplunkHecConfig, SplunkHecHttpSink, emit_events,
-};
+use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, source_fingerprint};
 use crate::triage::maybe_triage;
 
@@ -46,10 +44,8 @@ pub(crate) const DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 pub(crate) struct ScanConfig<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
-    pub(crate) splunk_hec_endpoint: Option<&'a str>,
-    pub(crate) splunk_hec_token: Option<&'a str>,
+    pub(crate) sinks: &'a SinkSet,
     pub(crate) state_path: &'a Path,
-    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -71,10 +67,8 @@ pub(crate) struct ScanConfig<'a> {
 pub(crate) struct ScanCommandArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
-    pub(crate) splunk_hec_endpoint: Option<&'a str>,
-    pub(crate) splunk_hec_token: Option<&'a str>,
+    pub(crate) sinks: &'a SinkSet,
     pub(crate) state_path: &'a Path,
-    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -96,8 +90,8 @@ pub(crate) struct ScanCommandArgs<'a> {
 pub(crate) struct WatchConfig<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
+    pub(crate) sinks: &'a SinkSet,
     pub(crate) state_path: &'a Path,
-    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -119,8 +113,8 @@ pub(crate) struct WatchConfig<'a> {
 pub(crate) struct WatchCommandArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
+    pub(crate) sinks: &'a SinkSet,
     pub(crate) state_path: &'a Path,
-    pub(crate) rotation: RotationConfig,
     pub(crate) dry_run: bool,
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
@@ -143,10 +137,8 @@ pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
     ScanConfig {
         root: args.root,
         log_path: args.log_path,
-        splunk_hec_endpoint: args.splunk_hec_endpoint,
-        splunk_hec_token: args.splunk_hec_token,
+        sinks: args.sinks,
         state_path: args.state_path,
-        rotation: args.rotation.clone(),
         dry_run: args.dry_run,
         emit_activity: args.emit_activity,
         emit_session_risk_summary: args.emit_session_risk_summary,
@@ -170,8 +162,8 @@ pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a
     WatchConfig {
         root: args.root,
         log_path: args.log_path,
+        sinks: args.sinks,
         state_path: args.state_path,
-        rotation: args.rotation.clone(),
         dry_run: args.dry_run,
         emit_activity: args.emit_activity,
         emit_session_risk_summary: args.emit_session_risk_summary,
@@ -195,10 +187,8 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
     ScanConfig {
         root: config.root,
         log_path: config.log_path,
-        splunk_hec_endpoint: None,
-        splunk_hec_token: None,
+        sinks: config.sinks,
         state_path: config.state_path,
-        rotation: config.rotation.clone(),
         dry_run: config.dry_run,
         emit_activity: config.emit_activity,
         emit_session_risk_summary: config.emit_session_risk_summary,
@@ -528,7 +518,6 @@ fn run_scan(
                 .into(),
         );
     }
-    let splunk_hec_sink = splunk_hec_sink(config.splunk_hec_endpoint, config.splunk_hec_token)?;
     let (mut sources, targeted) = match targets {
         ScanTargets::Targeted(sources) => (sources, true),
         ScanTargets::Full => {
@@ -781,11 +770,14 @@ fn run_scan(
         observe_sqlite_ingestion_cursors(&mut state, &parsed_sources, observed_at_unix_ms);
     }
 
+    let mut sink_failures: Vec<SinkFailure> = Vec::new();
     if !config.dry_run {
-        let sink = LocalJsonlSink::with_rotation(config.log_path, config.rotation.clone());
-        emit_events(&sink, &emitted_events)?;
-        if let Some(sink) = splunk_hec_sink {
-            emit_events(&sink, &emitted_events)?;
+        sink_failures = config.sinks.deliver(&emitted_events)?;
+        if !sink_failures.is_empty() {
+            let alerts: Vec<Event> = sink_failures.iter().map(sink_failure_alert_event).collect();
+            let failed_names: Vec<&str> =
+                sink_failures.iter().map(|f| f.name.as_str()).collect();
+            config.sinks.deliver_alerts(&alerts, &failed_names);
         }
         let should_save = match &state_probe {
             None => true,
@@ -808,9 +800,31 @@ fn run_scan(
         active_policy_name: active_policy_name.as_deref(),
         dry_run: config.dry_run,
         log_path: config.log_path,
+        sink_failures: &sink_failures,
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
+}
+
+/// Truncation cap for delivery error text embedded in alert evidence.
+const SINK_FAILURE_ERROR_MAX_CHARS: usize = 500;
+
+fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
+    let mut error = failure.error.clone();
+    if error.chars().count() > SINK_FAILURE_ERROR_MAX_CHARS {
+        error = error.chars().take(SINK_FAILURE_ERROR_MAX_CHARS).collect();
+        error.push('…');
+    }
+    operational_alert_event(OperationalAlertInput {
+        alert_type: "sink_delivery_failure".to_string(),
+        threshold: format!("max_attempts={}", failure.attempts),
+        actual_value: format!(
+            "sink={} type={} error={}",
+            failure.name, failure.kind, error
+        ),
+        scan_duration_ms: None,
+        scanner_error_count: None,
+    })
 }
 
 /// Snapshot of the durable parts of scanner state, captured before a scan
@@ -1130,21 +1144,6 @@ fn session_risk_summary_evidence(summary: &SessionRiskSummaryAccumulator) -> Vec
     evidence
 }
 
-fn splunk_hec_sink(
-    endpoint: Option<&str>,
-    token: Option<&str>,
-) -> Result<Option<SplunkHecHttpSink>, Box<dyn std::error::Error>> {
-    match (endpoint, token) {
-        (None, None) => Ok(None),
-        (Some(endpoint), Some(token)) => Ok(Some(SplunkHecHttpSink::new(
-            endpoint.to_string(),
-            token.to_string(),
-            SplunkHecConfig::default(),
-        ))),
-        _ => Err("--splunk-hec-endpoint and --splunk-hec-token must be set together".into()),
-    }
-}
-
 fn update_baseline_snapshots(
     state: &mut ScanState,
     parsed_sources: &[ParsedScanSource],
@@ -1206,9 +1205,22 @@ struct ScanSummaryInput<'a> {
     active_policy_name: Option<&'a str>,
     dry_run: bool,
     log_path: &'a Path,
+    sink_failures: &'a [SinkFailure],
 }
 
 fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
+    let sink_failures: Vec<serde_json::Value> = summary
+        .sink_failures
+        .iter()
+        .map(|failure| {
+            serde_json::json!({
+                "name": failure.name,
+                "type": failure.kind,
+                "attempts": failure.attempts,
+                "error": failure.error,
+            })
+        })
+        .collect();
     serde_json::json!({
         "client": summary.health_event.client,
         "event_type": summary.health_event.event_type,
@@ -1221,6 +1233,7 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         "policy": summary.active_policy_name,
         "log_path": if summary.dry_run { None } else { Some(summary.log_path.display().to_string()) },
         "source_counts": summary.health_event.source_counts.clone().unwrap_or_default(),
+        "sink_failures": sink_failures,
     })
 }
 

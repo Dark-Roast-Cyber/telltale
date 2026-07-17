@@ -1,0 +1,55 @@
+# Telltale outputs config example.
+#
+# Install as /etc/telltale/outputs.d/50-outputs.yaml (fleet/system root) or
+# ~/.config/telltale/outputs.d/50-outputs.yaml (user root). Files merge in
+# discovery order keyed by sink `name`: a later file's sink with the same name
+# replaces the earlier definition entirely. Validate with `adr config validate`.
+version: 1
+sinks:
+  # Durable local JSONL log — the system of record, and what a Splunk
+  # Universal Forwarder or Filebeat tails. Omit `path`/`rotation` to inherit
+  # the resolved --log-path / ADR_LOG_PATH / path-profile defaults.
+  - name: local
+    type: jsonl
+    # path: /var/log/telltale/adr-events.jsonl
+    # rotation:
+    #   max_size_bytes: 104857600   # 100 MB
+    #   keep: 5
+
+  # Splunk HTTP Event Collector delivery. Events are wrapped in HEC envelopes
+  # (time/index/sourcetype/source/host) and batched per request; the canonical
+  # Telltale event body is never modified.
+  - name: corp-splunk
+    type: splunk_hec
+    enabled: false
+    endpoint: https://splunk.example.com:8088/services/collector
+    # Secrets: prefer {env: NAME} or {file: PATH}; inline strings are for labs.
+    token: { env: SPLUNK_HEC_TOKEN }
+    index: adr
+    sourcetype: adr:json
+    source: telltale:adr
+    timeout_ms: 10000
+    max_batch_bytes: 1048576          # Splunk's conservative max_content_length
+    retry:
+      max_attempts: 3
+      base_delay_ms: 500
+    # tls:
+    #   ca_file: /etc/pki/tls/certs/corp-ca.pem
+    #   insecure_skip_verify: false   # lab-only escape hatch; loud warning
+
+  # Elasticsearch Bulk API delivery. Uses `index` actions with _id=event_id so
+  # retried batches overwrite instead of duplicating documents.
+  - name: corp-elastic
+    type: elastic_bulk
+    enabled: false
+    endpoint: https://elastic.example.com:9243
+    index: adr-events
+    api_key: { file: /etc/telltale/secrets/elastic-api-key }
+    # or basic auth instead of api_key:
+    # username: telltale
+    # password: { env: ELASTIC_PASSWORD }
+    timeout_ms: 10000
+    max_batch_bytes: 5242880
+    retry:
+      max_attempts: 3
+      base_delay_ms: 500

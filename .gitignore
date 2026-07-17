@@ -79,3 +79,7 @@ public-website/
 
 # Machine-local Claude Code settings.
 .claude/
+
+# Local live-test workspace: generated outputs.d configs with real endpoints,
+# live-test event logs, and scanner state (see scripts/dev/live-emitter-test.sh).
+local/
