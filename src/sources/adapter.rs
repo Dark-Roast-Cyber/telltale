@@ -10,9 +10,9 @@ use crate::parser::{ParseError, ParseOptions, ParsedSourceRecords};
 /// Per-agent source adapter contract.
 ///
 /// Reserved for future phases. No built-in adapter implements this trait yet.
-/// The `install_def` method is intentionally omitted because the current
-/// `AgentInstallDef` is crate-private; it will be surfaced once install inventory
-/// moves behind adapters in a later phase.
+/// Install inventory evidence is collected as per-agent constants through
+/// `crate::sources::registry::builtin_install_defs()` rather than a trait
+/// method, matching how source definitions are collected.
 #[allow(dead_code)]
 pub trait SourceAdapter {
     fn client(&self) -> ClientDef;

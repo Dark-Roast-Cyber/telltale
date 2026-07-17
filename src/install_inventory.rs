@@ -63,80 +63,17 @@ impl InstallInventoryContext {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct AgentInstallDef {
-    agent: &'static str,
-    executables: &'static [&'static str],
-    node_packages: &'static [&'static str],
-    extension_ids: &'static [&'static str],
-    global_storage_ids: &'static [&'static str],
+/// Metadata-only install evidence definition for one agent. Per-agent values
+/// live in `src/sources/<agent>/install.rs` and are collected in registry
+/// client order via `crate::sources::registry::builtin_install_defs()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AgentInstallDef {
+    pub(crate) agent: &'static str,
+    pub(crate) executables: &'static [&'static str],
+    pub(crate) node_packages: &'static [&'static str],
+    pub(crate) extension_ids: &'static [&'static str],
+    pub(crate) global_storage_ids: &'static [&'static str],
 }
-
-const INSTALL_DEFS: &[AgentInstallDef] = &[
-    AgentInstallDef {
-        agent: "codex",
-        executables: &["codex"],
-        node_packages: &["@openai/codex"],
-        extension_ids: &[],
-        global_storage_ids: &[],
-    },
-    AgentInstallDef {
-        agent: "claude",
-        executables: &["claude"],
-        node_packages: &["@anthropic-ai/claude-code"],
-        extension_ids: &[],
-        global_storage_ids: &[],
-    },
-    AgentInstallDef {
-        agent: "gemini",
-        executables: &["gemini"],
-        node_packages: &["@google/gemini-cli"],
-        extension_ids: &[],
-        global_storage_ids: &[],
-    },
-    AgentInstallDef {
-        agent: "openclaw",
-        executables: &["openclaw"],
-        node_packages: &["openclaw"],
-        extension_ids: &[],
-        global_storage_ids: &[],
-    },
-    AgentInstallDef {
-        agent: "qwen",
-        executables: &["qwen"],
-        node_packages: &["@qwen-code/qwen-code"],
-        extension_ids: &[],
-        global_storage_ids: &[],
-    },
-    AgentInstallDef {
-        agent: "roocode",
-        executables: &[],
-        node_packages: &[],
-        extension_ids: &["rooveterinaryinc.roo-cline"],
-        global_storage_ids: &["rooveterinaryinc.roo-cline"],
-    },
-    AgentInstallDef {
-        agent: "kilocode",
-        executables: &["kilo", "kilocode"],
-        node_packages: &["@kilocode/cli"],
-        extension_ids: &["kilocode.kilo-code"],
-        global_storage_ids: &["kilocode.kilo-code"],
-    },
-    AgentInstallDef {
-        agent: "opencode",
-        executables: &["opencode"],
-        node_packages: &["opencode-ai"],
-        extension_ids: &[],
-        global_storage_ids: &[],
-    },
-    AgentInstallDef {
-        agent: "copilot",
-        executables: &[],
-        node_packages: &[],
-        extension_ids: &["github.copilot", "github.copilot-chat"],
-        global_storage_ids: &["github.copilot", "github.copilot-chat"],
-    },
-];
 
 pub fn collect_install_inventory(observed_at_unix_ms: u64) -> InstallInventorySnapshot {
     collect_install_inventory_with_context(&InstallInventoryContext::current(), observed_at_unix_ms)
@@ -146,7 +83,7 @@ pub fn collect_install_inventory_with_context(
     context: &InstallInventoryContext,
     observed_at_unix_ms: u64,
 ) -> InstallInventorySnapshot {
-    let agents = INSTALL_DEFS
+    let agents = crate::sources::registry::builtin_install_defs()
         .iter()
         .map(|def| observe_agent(*def, context))
         .collect::<Vec<_>>();

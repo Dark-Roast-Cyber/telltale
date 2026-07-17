@@ -2,7 +2,10 @@
 
 use crate::clients::{ClientSourceDef, PathRoot, SourceKind, SourcePattern};
 
+mod install;
 pub(crate) mod parser;
+
+pub(crate) use install::INSTALL;
 
 pub(crate) const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "copilot.process_log",

@@ -2,6 +2,10 @@
 
 use crate::clients::{ClientSourceDef, PathRoot, SourceKind, SourcePattern};
 
+mod install;
+
+pub(crate) use install::INSTALL;
+
 pub(crate) const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "claude.projects",
     kind: SourceKind::Jsonl,

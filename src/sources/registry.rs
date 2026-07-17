@@ -6,6 +6,7 @@
 //! API during migration.
 
 use crate::clients::{ClientDef, ClientId};
+use crate::install_inventory::AgentInstallDef;
 use crate::sources::{claude, codex, copilot, gemini, kilocode, openclaw, opencode, qwen, roocode};
 
 const CLIENTS: &[ClientDef] = &[
@@ -60,10 +61,122 @@ pub(crate) fn builtin_client_defs() -> &'static [ClientDef] {
     CLIENTS
 }
 
+/// Install inventory evidence definitions, in the same order as `CLIENTS`.
+/// The order must stay aligned with the client registry so install inventory
+/// snapshot hashes remain stable across the adapter migration.
+const INSTALL_DEFS: &[AgentInstallDef] = &[
+    codex::INSTALL,
+    claude::INSTALL,
+    gemini::INSTALL,
+    openclaw::INSTALL,
+    qwen::INSTALL,
+    roocode::INSTALL,
+    kilocode::INSTALL,
+    opencode::INSTALL,
+    copilot::INSTALL,
+];
+
+pub(crate) fn builtin_install_defs() -> &'static [AgentInstallDef] {
+    INSTALL_DEFS
+}
+
 #[cfg(test)]
 mod tests {
     use crate::clients::{ClientId, PathRoot, SourceKind, SourcePattern};
-    use crate::sources::registry::builtin_client_defs;
+    use crate::install_inventory::AgentInstallDef;
+    use crate::sources::registry::{builtin_client_defs, builtin_install_defs};
+
+    /// Exhaustive regression snapshot of the per-agent install evidence
+    /// definitions collected through the registry. This test must fail if any
+    /// agent id, signal list, or ordering changes during the Phase 5 migration:
+    /// ordering feeds the install inventory snapshot hash, so a reorder would
+    /// re-emit inventory events on hosts with unchanged installs.
+    #[test]
+    fn install_defs_match_expected_phase5_snapshot() {
+        let expected: &[AgentInstallDef] = &[
+            AgentInstallDef {
+                agent: "codex",
+                executables: &["codex"],
+                node_packages: &["@openai/codex"],
+                extension_ids: &[],
+                global_storage_ids: &[],
+            },
+            AgentInstallDef {
+                agent: "claude",
+                executables: &["claude"],
+                node_packages: &["@anthropic-ai/claude-code"],
+                extension_ids: &[],
+                global_storage_ids: &[],
+            },
+            AgentInstallDef {
+                agent: "gemini",
+                executables: &["gemini"],
+                node_packages: &["@google/gemini-cli"],
+                extension_ids: &[],
+                global_storage_ids: &[],
+            },
+            AgentInstallDef {
+                agent: "openclaw",
+                executables: &["openclaw"],
+                node_packages: &["openclaw"],
+                extension_ids: &[],
+                global_storage_ids: &[],
+            },
+            AgentInstallDef {
+                agent: "qwen",
+                executables: &["qwen"],
+                node_packages: &["@qwen-code/qwen-code"],
+                extension_ids: &[],
+                global_storage_ids: &[],
+            },
+            AgentInstallDef {
+                agent: "roocode",
+                executables: &[],
+                node_packages: &[],
+                extension_ids: &["rooveterinaryinc.roo-cline"],
+                global_storage_ids: &["rooveterinaryinc.roo-cline"],
+            },
+            AgentInstallDef {
+                agent: "kilocode",
+                executables: &["kilo", "kilocode"],
+                node_packages: &["@kilocode/cli"],
+                extension_ids: &["kilocode.kilo-code"],
+                global_storage_ids: &["kilocode.kilo-code"],
+            },
+            AgentInstallDef {
+                agent: "opencode",
+                executables: &["opencode"],
+                node_packages: &["opencode-ai"],
+                extension_ids: &[],
+                global_storage_ids: &[],
+            },
+            AgentInstallDef {
+                agent: "copilot",
+                executables: &[],
+                node_packages: &[],
+                extension_ids: &["github.copilot", "github.copilot-chat"],
+                global_storage_ids: &["github.copilot", "github.copilot-chat"],
+            },
+        ];
+
+        assert_eq!(builtin_install_defs(), expected);
+    }
+
+    /// Install definitions must stay aligned with the client registry order so
+    /// the inventory snapshot hash is stable across the adapter migration.
+    #[test]
+    fn install_defs_follow_client_registry_order() {
+        let clients = builtin_client_defs();
+        let installs = builtin_install_defs();
+        assert_eq!(clients.len(), installs.len());
+        for (client, install) in clients.iter().zip(installs) {
+            assert_eq!(
+                client.id.as_str(),
+                install.agent,
+                "install def order diverges from client registry order"
+            );
+        }
+    }
 
     /// Exhaustive regression snapshot of the built-in source registry. This test
     /// must fail if any client id, display name, source count, or source metadata
