@@ -1,0 +1,13 @@
+[package]
+name = "telltale"
+version.workspace = true
+edition.workspace = true
+description = "Telltale embedding facade: discover, parse, and detect agentic coding activity in-process"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+telltale-schema.workspace = true
+telltale-rules.workspace = true
+telltale-sources.workspace = true
+telltale-detect.workspace = true

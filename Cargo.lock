@@ -1778,6 +1778,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "telltale"
+version = "0.1.0"
+dependencies = [
+ "telltale-detect",
+ "telltale-rules",
+ "telltale-schema",
+ "telltale-sources",
+]
+
+[[package]]
 name = "telltale-detect"
 version = "0.1.0"
 dependencies = [

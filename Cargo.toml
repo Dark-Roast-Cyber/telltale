@@ -4,6 +4,7 @@ members = [
     "crates/telltale-rules",
     "crates/telltale-sources",
     "crates/telltale-detect",
+    "crates/telltale",
 ]
 default-members = [
     ".",
@@ -11,6 +12,7 @@ default-members = [
     "crates/telltale-rules",
     "crates/telltale-sources",
     "crates/telltale-detect",
+    "crates/telltale",
 ]
 
 [workspace.package]
