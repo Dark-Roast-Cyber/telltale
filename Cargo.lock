@@ -20,6 +20,7 @@ dependencies = [
  "sha2",
  "telltale-rules",
  "telltale-schema",
+ "telltale-sources",
  "tempfile",
  "time",
  "ureq",
@@ -1795,6 +1796,21 @@ dependencies = [
  "sha2",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "telltale-sources"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "telltale-schema",
+ "tempfile",
+ "time",
+ "walkdir",
 ]
 
 [[package]]

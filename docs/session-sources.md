@@ -2,14 +2,14 @@
 
 > **Website:** For approachable guides to session stores and agent traces, see [AgentArchaeology.ai/field-guide/session-stores](https://agentarchaeology.ai/field-guide/session-stores/) and [AgentArchaeology.ai/field-guide/agent-traces](https://agentarchaeology.ai/field-guide/agent-traces/).
 
-Telltale owns its discovery registry in `src/clients.rs` and
-`src/discovery.rs`. This document records the current source-of-truth host path
+Telltale owns its discovery registry in `crates/telltale-sources/src/clients.rs` and
+`crates/telltale-sources/src/discovery.rs`. This document records the current source-of-truth host path
 candidates used by the scanner.
 
 Session-store discovery answers “where can Telltale parse activity from?” It is
 intentionally separate from installed-agent inventory, which answers “which
 agent tools appear installed?” using metadata-only checks in
-`src/install_inventory.rs` such as executables on `PATH`, package roots, VS
+`crates/telltale-sources/src/install_inventory.rs` such as executables on `PATH`, package roots, VS
 Code-style extension IDs, and globalStorage presence. Install inventory runs on
 a configurable cadence and never reads transcript/session contents.
 
@@ -62,7 +62,7 @@ Pass the config to scans:
 adr scan --once --root "$HOME" --project-config projects.yaml
 ```
 
-Project-local discovery is additive: home-relative sources are still discovered from `--root`. The registry in `src/clients.rs` defines the per-client subpath for each project (for example, `logs/copilot` for Copilot, `.opencode` for OpenCode, and `.codex-worktree` for Codex). If a project has a non-standard subpath, rename the directory to match the registry subpath rather than overriding per-project paths in the YAML.
+Project-local discovery is additive: home-relative sources are still discovered from `--root`. The registry in `crates/telltale-sources/src/clients.rs` defines the per-client subpath for each project (for example, `logs/copilot` for Copilot, `.opencode` for OpenCode, and `.codex-worktree` for Codex). If a project has a non-standard subpath, rename the directory to match the registry subpath rather than overriding per-project paths in the YAML.
 
 The `ADR_PROJECT_CONFIG` environment variable accepts a colon-separated list of config paths when no `--project-config` flag is given. When neither is provided, Telltale uses the default paths (`~/github` and `~/projects`).
 

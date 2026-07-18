@@ -76,7 +76,10 @@ mod tests {
             client: ClientId::Gemini,
             kind: SourceKind::Json,
             source_id: "gemini.tmp".to_string(),
-            path: PathBuf::from("tests/fixtures/session_stores/gemini/tmp/session-a.json"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/gemini/tmp/session-a.json"
+            )),
         };
 
         let records = extract_gemini_json_source(&source).expect("records");
@@ -96,9 +99,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::LegacyJson,
             source_id: "opencode.legacy_json".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/opencode/storage/message/session-a/message-a.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/storage/message/session-a/message-a.json"
+            )),
         };
 
         let fallback_records = extract_gemini_json_source(&source).expect("fallback records");

@@ -6,15 +6,17 @@ use crate::parser::{RecordKind, parse_source_records};
 
 #[test]
 fn parses_roocode_ui_messages_json_records() {
-    let source = discover_sources(Path::new("tests/fixtures/session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::RooCode
-                && source.kind == SourceKind::UiMessagesJson
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("ui_messages.json")
-        })
-        .expect("fixture source");
+    let source = discover_sources(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/session_stores"
+    )))
+    .into_iter()
+    .find(|source| {
+        source.client == ClientId::RooCode
+            && source.kind == SourceKind::UiMessagesJson
+            && source.path.file_name().and_then(|name| name.to_str()) == Some("ui_messages.json")
+    })
+    .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 
@@ -38,19 +40,22 @@ fn parses_roocode_ui_messages_json_records() {
 
 #[test]
 fn parses_roocode_ui_messages_tool_call_and_result_records() {
-    let source = discover_sources(Path::new("tests/fixtures/session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::RooCode
-                && source.kind == SourceKind::UiMessagesJson
-                && source
-                    .path
-                    .parent()
-                    .and_then(|path| path.file_name())
-                    .and_then(|name| name.to_str())
-                    == Some("task-b")
-        })
-        .expect("fixture source");
+    let source = discover_sources(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/session_stores"
+    )))
+    .into_iter()
+    .find(|source| {
+        source.client == ClientId::RooCode
+            && source.kind == SourceKind::UiMessagesJson
+            && source
+                .path
+                .parent()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+                == Some("task-b")
+    })
+    .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 

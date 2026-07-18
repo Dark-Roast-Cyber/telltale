@@ -46,7 +46,7 @@ Legend:
 | `ToolResult.is_error` | unavailable | Not exposed by the legacy flat record. |
 | `SessionMeta.workspace` | unavailable | Not exposed by the legacy flat record. |
 
-The fixture-backed conformance test in `src/schema.rs` verifies that every source id in `supported_clients()` is discovered from `tests/fixtures/session_stores`, parses at least one record, converts into `NormalizedRecordV1`, preserves required metadata, and records the legacy kind extension.
+The fixture-backed conformance test in `crates/telltale-schema/src/canonical.rs` (re-exported as `adr::schema`) verifies that every source id in `supported_clients()` is discovered from `tests/fixtures/session_stores`, parses at least one record, converts into `NormalizedRecordV1`, preserves required metadata, and records the legacy kind extension.
 
 ## Related Documents
 

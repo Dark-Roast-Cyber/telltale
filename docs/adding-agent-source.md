@@ -14,15 +14,15 @@ be expressed over normalized fields.
 
 The current implementation is intentionally simple, but it is centralized:
 
-- `src/clients.rs` owns path roots, source patterns, and the static
+- `crates/telltale-sources/src/clients.rs` owns path roots, source patterns, and the static
   `supported_clients()` registry; the `ClientId` and `SourceKind` enums live in
   `crates/telltale-schema/src/clients.rs` and are re-exported from
-  `src/clients.rs`.
-- `src/discovery.rs` resolves OS-specific roots, project-local roots, watch
+  `crates/telltale-sources/src/clients.rs`.
+- `crates/telltale-sources/src/discovery.rs` resolves OS-specific roots, project-local roots, watch
   roots, and fixture paths for every registered source.
-- `src/parser.rs` dispatches by `SourceKind` and converts raw records into
+- `crates/telltale-sources/src/parser.rs` dispatches by `SourceKind` and converts raw records into
   `NormalizedRecord`.
-- `src/install_inventory.rs` separately answers "does this agent appear
+- `crates/telltale-sources/src/install_inventory.rs` separately answers "does this agent appear
   installed?" using metadata-only executable, package, extension, and
   globalStorage checks.
 
@@ -81,10 +81,10 @@ summaries.
 
 Current files:
 
-- `src/clients.rs`
-- `src/discovery.rs` only if a new root or discovery behavior is needed
+- `crates/telltale-sources/src/clients.rs`
+- `crates/telltale-sources/src/discovery.rs` only if a new root or discovery behavior is needed
 
-Required `src/clients.rs` updates:
+Required `crates/telltale-sources/src/clients.rs` updates:
 
 - Add a `ClientId` variant.
 - Add the lowercase stable id in `ClientId::as_str()`.
@@ -101,7 +101,7 @@ Required `src/clients.rs` updates:
 - Add the client to the `CLIENTS` slice returned by `supported_clients()`.
 - Update registry tests in the same file.
 
-Only edit `src/discovery.rs` when the source needs a new cross-platform root,
+Only edit `crates/telltale-sources/src/discovery.rs` when the source needs a new cross-platform root,
 new bounded search behavior, or source matching that cannot be represented with
 `SourcePattern`.
 
@@ -109,7 +109,7 @@ new bounded search behavior, or source matching that cannot be represented with
 
 Current file:
 
-- `src/parser.rs`
+- `crates/telltale-sources/src/parser.rs`
 
 Parser requirements:
 
@@ -132,7 +132,7 @@ If it needs a new parser branch, add focused unit tests next to the parser code.
 
 Current file:
 
-- `src/install_inventory.rs`
+- `crates/telltale-sources/src/install_inventory.rs`
 
 Add an install definition when the agent should appear in the metadata-only
 installed-agent inventory:
@@ -174,9 +174,9 @@ Fixture rules:
 
 At minimum, add or update tests covering:
 
-- source registry entries in `src/clients.rs`;
+- source registry entries in `crates/telltale-sources/src/clients.rs`;
 - discovery for fixture paths and any new OS/path-root behavior in
-  `src/discovery.rs`;
+  `crates/telltale-sources/src/discovery.rs`;
 - parser extraction for benign records, tool calls, and tool results;
 - the schema conformance test that discovers every fixture source and converts
   records into `NormalizedRecordV1`;
@@ -281,8 +281,8 @@ The rest of the pipeline should continue to depend on stable interfaces:
 discover -> parse -> normalize -> detect -> score -> triage -> emit
 ```
 
-This keeps `codex` code in `src/sources/codex/`, future `antigravity` code in
-`src/sources/antigravity/`, and shared JSON/JSONL/SQLite helpers in common
+This keeps `codex` code in `crates/telltale-sources/src/sources/codex/`, future `antigravity` code in
+`crates/telltale-sources/src/sources/antigravity/`, and shared JSON/JSONL/SQLite helpers in common
 modules.
 
 ## Plugin Strategy

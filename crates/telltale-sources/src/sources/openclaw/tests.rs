@@ -6,15 +6,18 @@ use crate::parser::{RecordKind, parse_source_records};
 
 #[test]
 fn parses_openclaw_jsonl_suffix_records() {
-    let source = discover_sources(Path::new("tests/fixtures/session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::OpenClaw
-                && source.kind == SourceKind::Jsonl
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("session-a.jsonl.deleted")
-        })
-        .expect("fixture source");
+    let source = discover_sources(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/session_stores"
+    )))
+    .into_iter()
+    .find(|source| {
+        source.client == ClientId::OpenClaw
+            && source.kind == SourceKind::Jsonl
+            && source.path.file_name().and_then(|name| name.to_str())
+                == Some("session-a.jsonl.deleted")
+    })
+    .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 
@@ -36,15 +39,18 @@ fn parses_openclaw_jsonl_suffix_records() {
 
 #[test]
 fn parses_openclaw_jsonl_tool_call_and_result_records() {
-    let source = discover_sources(Path::new("tests/fixtures/session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::OpenClaw
-                && source.kind == SourceKind::Jsonl
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("uc001-openclaw-tool-result.jsonl")
-        })
-        .expect("fixture source");
+    let source = discover_sources(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/session_stores"
+    )))
+    .into_iter()
+    .find(|source| {
+        source.client == ClientId::OpenClaw
+            && source.kind == SourceKind::Jsonl
+            && source.path.file_name().and_then(|name| name.to_str())
+                == Some("uc001-openclaw-tool-result.jsonl")
+    })
+    .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 

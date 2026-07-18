@@ -1,0 +1,20 @@
+[package]
+name = "telltale-sources"
+version.workspace = true
+edition.workspace = true
+description = "Telltale session-store discovery, per-agent source adapters, parsers, and install inventory"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+telltale-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+time.workspace = true
+walkdir = "2.5"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3.14"

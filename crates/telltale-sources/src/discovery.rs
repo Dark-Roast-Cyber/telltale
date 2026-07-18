@@ -523,7 +523,10 @@ mod tests {
 
     #[test]
     fn discovers_codex_and_opencode_fixture_sources() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
 
         let keys: HashSet<_> = sources
             .iter()
@@ -690,7 +693,10 @@ mod tests {
 
     #[test]
     fn discovers_existing_fixture_watch_roots() {
-        let roots = discover_watch_roots(std::path::Path::new("tests/fixtures/session_stores"));
+        let roots = discover_watch_roots(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let fixture_root = Path::new("tests").join("fixtures").join("session_stores");
 
         assert!(
@@ -708,7 +714,10 @@ mod tests {
     #[test]
     fn filters_fixture_watch_roots_by_client() {
         let roots = discover_watch_roots_for_clients(
-            std::path::Path::new("tests/fixtures/session_stores"),
+            std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores"
+            )),
             &[ClientId::Gemini],
         );
         let fixture_root = Path::new("tests").join("fixtures").join("session_stores");

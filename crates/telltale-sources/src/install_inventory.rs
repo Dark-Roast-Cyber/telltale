@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::event::{Event, Evidence, evidence_hash, install_inventory_event};
+use telltale_schema::event::{Event, Evidence, evidence_hash, install_inventory_event};
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InstallInventorySnapshot {
