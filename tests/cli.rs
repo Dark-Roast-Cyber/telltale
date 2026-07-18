@@ -71,11 +71,13 @@ fn source_inventory_change_value(event: &Value) -> &str {
         .expect("source inventory change value")
 }
 
+#[cfg(unix)]
 fn configure_git_user(repo: &Path) {
     git_expect(repo, &["config", "user.email", "adr-test@example.invalid"]);
     git_expect(repo, &["config", "user.name", "ADR Test"]);
 }
 
+#[cfg(unix)]
 fn git_expect(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
@@ -90,6 +92,8 @@ fn git_expect(repo: &Path, args: &[&str]) {
     );
 }
 
+// These release-tooling tests invoke the Unix-only Makefile and shell tools.
+#[cfg(unix)]
 #[test]
 fn release_context_check_rejects_empty_public_config() {
     let temp = tempdir().expect("tempdir");
@@ -176,6 +180,7 @@ fn release_context_check_rejects_empty_public_config() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn public_push_review_summarizes_repo_and_staged_context() {
     let temp = tempdir().expect("tempdir");
@@ -255,6 +260,7 @@ fn public_push_review_summarizes_repo_and_staged_context() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn release_context_check_reports_sync_and_rejects_behind_head() {
     let temp = tempdir().expect("tempdir");
@@ -357,6 +363,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn release_tag_review_matches_package_version_and_rejects_mismatch() {
     let temp = tempdir().expect("tempdir");
@@ -458,6 +465,7 @@ edition = "2021"
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn release_context_check_reports_empty_and_staged_paths() {
     let temp = tempdir().expect("tempdir");
@@ -556,6 +564,7 @@ fn release_context_check_reports_empty_and_staged_paths() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn release_crate_manifest_excludes_host_only_release_material() {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
@@ -631,6 +640,7 @@ fn release_crate_manifest_excludes_host_only_release_material() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries() {
     let temp = tempdir().expect("tempdir");
@@ -865,6 +875,7 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn release_fixture_smoke_uses_fixture_safe_commands() {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
@@ -896,6 +907,7 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn release_public_docs_check_runs_focused_boundary_tests() {
     let stdout = release_public_docs_check_dry_run_stdout();
@@ -921,6 +933,7 @@ fn release_readiness_documents_public_docs_check_commands() {
     );
 }
 
+#[cfg(unix)]
 fn release_public_docs_check_dry_run_stdout() -> String {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = Command::new("make")
