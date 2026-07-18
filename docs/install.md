@@ -26,18 +26,19 @@ logs, session stores, credentials, or deployment-specific SIEM configuration.
 ### Quick install (Linux)
 
 A user-first installer is available for Linux. It downloads the latest release
-binary, installs it to `~/.local/bin/adr` (no sudo), and optionally sets up a
-user-level systemd timer for periodic scans:
+binary, verifies it against the release's published `SHA256SUMS`, and installs
+it to `~/.local/bin/adr` (no sudo). It does not enable anything beyond the
+binary install unless you opt in:
 
 ```sh
 curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
 ```
 
-To build from source instead of downloading a prebuilt binary, or to skip the
-systemd timer, pass flags:
+To build from source instead of downloading a prebuilt binary, or to also
+install a user-level systemd timer for periodic scans, pass flags:
 
 ```sh
-curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash -s -- --from-source --no-timer
+curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash -s -- --from-source --with-timer
 ```
 
 The installer does not create system users, configure SIEM shippers, or require
