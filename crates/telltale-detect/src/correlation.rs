@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use time::{Duration, OffsetDateTime};
 
-use crate::event::{CorrelationEventInput, CorrelationSessionInput, Event, correlation_event};
+use telltale_schema::event::{
+    CorrelationEventInput, CorrelationSessionInput, Event, correlation_event,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CorrelationConfig {
@@ -256,7 +258,7 @@ fn correlation_to_event(correlation: CrossSessionCorrelation) -> Event {
 
 #[cfg(test)]
 mod tests {
-    use crate::event::Event;
+    use telltale_schema::event::Event;
 
     use super::*;
 

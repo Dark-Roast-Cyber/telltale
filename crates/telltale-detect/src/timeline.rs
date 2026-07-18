@@ -8,9 +8,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::event::{Event, evidence_hash, redact_sensitive_text};
-use crate::schema::NormalizedRecordV1;
 use serde::Serialize;
+use telltale_schema::canonical::NormalizedRecordV1;
+use telltale_schema::event::{Event, evidence_hash, redact_sensitive_text};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TimelineEntryKind {
@@ -333,10 +333,10 @@ fn entry_kind_matches_evidence_field(kind: &TimelineEntryKind, field: &str) -> b
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::event::{Event, Evidence};
-    use crate::schema::{
+    use telltale_schema::canonical::{
         ConversationMessage, Provenance, RecordMeta, ToolCallRecord, ToolResultRecord,
     };
+    use telltale_schema::event::{Event, Evidence};
 
     use super::*;
 

@@ -18,6 +18,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "telltale-detect",
  "telltale-rules",
  "telltale-schema",
  "telltale-sources",
@@ -1774,6 +1775,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "telltale-detect"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "telltale-rules",
+ "telltale-schema",
+ "telltale-sources",
+ "tempfile",
+ "time",
+ "walkdir",
 ]
 
 [[package]]

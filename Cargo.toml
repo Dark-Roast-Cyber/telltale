@@ -1,10 +1,16 @@
 [workspace]
-members = ["crates/telltale-schema", "crates/telltale-rules", "crates/telltale-sources"]
+members = [
+    "crates/telltale-schema",
+    "crates/telltale-rules",
+    "crates/telltale-sources",
+    "crates/telltale-detect",
+]
 default-members = [
     ".",
     "crates/telltale-schema",
     "crates/telltale-rules",
     "crates/telltale-sources",
+    "crates/telltale-detect",
 ]
 
 [workspace.package]
@@ -24,6 +30,7 @@ uuid = { version = "1.11", features = ["v4"] }
 telltale-schema = { path = "crates/telltale-schema", version = "0.1.0" }
 telltale-rules = { path = "crates/telltale-rules", version = "0.1.0" }
 telltale-sources = { path = "crates/telltale-sources", version = "0.1.0" }
+telltale-detect = { path = "crates/telltale-detect", version = "0.1.0" }
 
 [package]
 name = "adr"
@@ -63,6 +70,7 @@ exclude = [
 telltale-schema.workspace = true
 telltale-rules.workspace = true
 telltale-sources.workspace = true
+telltale-detect.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 notify = "8.0"
 regex.workspace = true

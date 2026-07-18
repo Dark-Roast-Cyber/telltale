@@ -3,17 +3,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::baseline::{
     BaselineDeviationConfig, assess_baseline_deviation, build_baseline_summaries,
 };
-use crate::discovery::Source;
-use crate::event::{
+use crate::baseline::{BaselineSnapshotStore, baseline_snapshot_id};
+use crate::timeline::{TimelineRuleAnchor, build_session_timeline};
+use telltale_rules::{CompiledRuleSet, MatchResult, load_default_rule_set};
+use telltale_schema::canonical::{NormalizedRecordV1, Provenance};
+use telltale_schema::event::{
     ActivityEventInput, DetectionEventInput, Event, Evidence, activity_event, evidence_hash,
     parse_event_timestamp, path_hash, scanner_error_event,
 };
-use crate::parser::{NormalizedRecord, ParseError, RecordKind, parse_source_records};
-use crate::rules::{CompiledRuleSet, MatchResult, load_default_rule_set};
-use crate::schema::{NormalizedRecordV1, Provenance};
-use crate::scoring::load_thresholds;
-use crate::state::{BaselineSnapshotStore, baseline_snapshot_id};
-use crate::timeline::{TimelineRuleAnchor, build_session_timeline};
+use telltale_schema::scoring::load_thresholds;
+use telltale_sources::discovery::Source;
+use telltale_sources::parser::{NormalizedRecord, ParseError, RecordKind, parse_source_records};
 
 const CHAIN_RULE_ID: &str = "chain.mcp_injection_then_egress";
 
@@ -60,7 +60,7 @@ pub fn summarize_source_activities_with_baselines(
         .collect()
 }
 
-fn detect_source(source: &Source, rule_set: &crate::rules::CompiledRuleSet) -> Vec<Event> {
+fn detect_source(source: &Source, rule_set: &telltale_rules::CompiledRuleSet) -> Vec<Event> {
     let parsed = match parse_source_records(source) {
         Ok(records) => records,
         Err(ParseError::Empty) => return vec![],
@@ -70,9 +70,9 @@ fn detect_source(source: &Source, rule_set: &crate::rules::CompiledRuleSet) -> V
     detect_parsed_source_records(source, rule_set, &parsed)
 }
 
-pub(crate) fn detect_parsed_source_records(
+pub fn detect_parsed_source_records(
     source: &Source,
-    rule_set: &crate::rules::CompiledRuleSet,
+    rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Vec<Event> {
     let sessions = group_records_by_session(parsed.to_vec());
@@ -102,7 +102,7 @@ fn summarize_source_activity(
     )
 }
 
-pub(crate) fn summarize_parsed_source_activity(
+pub fn summarize_parsed_source_activity(
     source: &Source,
     parsed: &[NormalizedRecord],
     baseline_snapshots: &BaselineSnapshotStore,
@@ -142,13 +142,13 @@ fn group_records_by_session(parsed: Vec<NormalizedRecord>) -> Vec<(String, Vec<N
 
 fn detect_records(
     source: &Source,
-    rule_set: &crate::rules::CompiledRuleSet,
+    rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Option<Event> {
     detect_records_with_timeline(source, rule_set, parsed).map(DetectionAnalysis::into_event)
 }
 
-pub(crate) fn evaluate_session_matches(
+pub fn evaluate_session_matches(
     rule_set: &CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Option<MatchResult> {
@@ -204,7 +204,7 @@ fn attach_timeline_anchors(event: &mut Event, timeline_anchors: &[TimelineRuleAn
 
 fn detect_records_with_timeline(
     source: &Source,
-    rule_set: &crate::rules::CompiledRuleSet,
+    rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Option<DetectionAnalysis> {
     let matches = evaluate_session_matches(rule_set, parsed)?;
@@ -220,7 +220,7 @@ fn detect_records_with_timeline(
     }
     let tags = tags_for_matches(&rule_ids, matches.tags);
 
-    let event = crate::event::detection_event(DetectionEventInput {
+    let event = telltale_schema::event::detection_event(DetectionEventInput {
         client: source.client,
         agent: first_field(parsed, |record| record.agent.clone())
             .or_else(|| Some(source.client.as_str().to_string())),
@@ -443,7 +443,7 @@ fn canonical_session_event_time(parsed: &[NormalizedRecord]) -> Option<String> {
         .filter_map(|record| record.timestamp.as_deref())
         .filter_map(parse_event_timestamp)
         .max()
-        .map(crate::event::format_timestamp)
+        .map(telltale_schema::event::format_timestamp)
 }
 
 fn tags_for_matches(rule_ids: &[String], mut tags: Vec<String>) -> Vec<String> {
@@ -509,7 +509,7 @@ fn context_fields(record: &NormalizedRecord) -> ContextFields<'_> {
     }
 }
 
-fn tool_name(records: &[crate::parser::NormalizedRecord]) -> Option<String> {
+fn tool_name(records: &[telltale_sources::parser::NormalizedRecord]) -> Option<String> {
     records
         .iter()
         .filter_map(|record| record.tool_name.clone())
@@ -526,9 +526,12 @@ fn tool_name(records: &[crate::parser::NormalizedRecord]) -> Option<String> {
         })
 }
 
-fn first_field<T, F>(records: &[crate::parser::NormalizedRecord], extract: F) -> Option<T>
+fn first_field<T, F>(
+    records: &[telltale_sources::parser::NormalizedRecord],
+    extract: F,
+) -> Option<T>
 where
-    F: FnMut(&crate::parser::NormalizedRecord) -> Option<T>,
+    F: FnMut(&telltale_sources::parser::NormalizedRecord) -> Option<T>,
 {
     records.iter().find_map(extract)
 }
@@ -536,16 +539,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::{detect_records_with_timeline, detect_sources};
-    use crate::clients::{ClientId, SourceKind, supported_clients};
-    use crate::discovery::{Source, discover_sources};
-    use crate::parser::{NormalizedRecord, RecordKind};
-    use crate::rules::load_default_rule_set;
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
+    use telltale_rules::load_default_rule_set;
+    use telltale_sources::clients::{ClientId, SourceKind, supported_clients};
+    use telltale_sources::discovery::{Source, discover_sources};
+    use telltale_sources::parser::{NormalizedRecord, RecordKind};
 
     #[test]
     fn detects_uc001_mcp_injection_chain_only() {
-        let sources = discover_sources(Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert_eq!(detections.len(), 36);
@@ -592,9 +598,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "codex.jsonl".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+            )),
         };
         let records = vec![
             test_record(
@@ -647,7 +654,10 @@ mod tests {
             .iter()
             .map(|client| client.id.as_str())
             .collect::<BTreeSet<_>>();
-        let sources = discover_sources(Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         let covered_clients = detections
@@ -673,9 +683,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-positive".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -709,7 +720,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_controlled_domain_mentions_in_user_text() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -721,7 +735,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_mcp_user_text_fixture() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -737,9 +754,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-mcp-user-text".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-mcp-user-text.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-mcp-user-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -749,7 +767,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_normal_mcp_fixture() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -765,9 +786,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-normal-mcp".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-normal-mcp.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-normal-mcp.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -781,9 +803,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-tools-list".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-tools-list.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-tools-list.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -797,9 +820,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "mcp-server-enumeration".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/mcp-server-enumeration.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/mcp-server-enumeration.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -835,9 +859,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "normal-mcp-tool-result".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/normal-mcp-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/normal-mcp-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -847,7 +872,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_server_instructions_fixture() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -863,9 +891,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-server-instructions".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-server-instructions.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-server-instructions.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -879,9 +908,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-positive-server-instructions".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-server-instructions.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-server-instructions.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -917,9 +947,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-positive-tool-description".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-tool-description.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-tool-description.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -967,9 +998,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-positive-parameter-description".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-parameter-description.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-parameter-description.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1005,9 +1037,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-positive-reversed-injection".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-reversed-injection.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-reversed-injection.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1048,9 +1081,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "codex-payload-arguments-injection".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/rule_samples/codex-payload-arguments-injection.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/codex-payload-arguments-injection.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1094,9 +1128,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-positive-compliance-tool".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-compliance-tool.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-compliance-tool.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1139,7 +1174,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "controlled-domain-user-text".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/controlled-domain-user-text.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/controlled-domain-user-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1153,9 +1191,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "controlled-domain-user-text".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/controlled-domain-user-text.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/controlled-domain-user-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1169,9 +1208,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-domain-user-text".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-domain-user-text.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-domain-user-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1185,9 +1225,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "controlled-domain-assistant-text".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/controlled-domain-assistant-text.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/controlled-domain-assistant-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1197,7 +1238,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_controlled_domain_mentions_in_tool_results() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -1213,9 +1257,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-domain-tool-result".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-domain-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-domain-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1229,9 +1274,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "tool-result-injection".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/tool-result-injection.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/tool-result-injection.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1281,9 +1327,10 @@ mod tests {
             client: ClientId::Claude,
             kind: SourceKind::Jsonl,
             source_id: "claude.projects".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/claude/projects/project-c/uc001-claude-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/claude/projects/project-c/uc001-claude-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1336,9 +1383,10 @@ mod tests {
             client: ClientId::Gemini,
             kind: SourceKind::Json,
             source_id: "gemini.tmp".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/gemini/tmp/uc001-gemini-tool-result.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/gemini/tmp/uc001-gemini-tool-result.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1391,7 +1439,10 @@ mod tests {
             client: ClientId::Gemini,
             kind: SourceKind::Json,
             source_id: "gemini-secret-file-read".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/gemini-secret-file-read.json"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/gemini-secret-file-read.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1418,9 +1469,10 @@ mod tests {
             client: ClientId::Qwen,
             kind: SourceKind::Jsonl,
             source_id: "qwen.projects".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1473,9 +1525,10 @@ mod tests {
             client: ClientId::OpenClaw,
             kind: SourceKind::Jsonl,
             source_id: "openclaw.agents".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1528,9 +1581,10 @@ mod tests {
             client: ClientId::RooCode,
             kind: SourceKind::UiMessagesJson,
             source_id: "roocode.tasks".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/roocode/tasks/task-b/ui_messages.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/roocode/tasks/task-b/ui_messages.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1583,9 +1637,10 @@ mod tests {
             client: ClientId::KiloCode,
             kind: SourceKind::UiMessagesJson,
             source_id: "kilocode.tasks".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/kilocode/tasks/task-b/ui_messages.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/kilocode/tasks/task-b/ui_messages.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1638,9 +1693,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::LegacyJson,
             source_id: "opencode.legacy_json".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/opencode/storage/message/session-b/message-b.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/storage/message/session-b/message-b.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1693,7 +1749,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::Sqlite,
             source_id: "opencode.sqlite".to_string(),
-            path: PathBuf::from("tests/fixtures/session_stores/opencode/opencode.db"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/opencode.db"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1746,7 +1805,10 @@ mod tests {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
             source_id: "copilot.process_log".to_string(),
-            path: PathBuf::from("tests/fixtures/session_stores/copilot/process-uc001.log"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/copilot/process-uc001.log"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1799,9 +1861,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-tool-result".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1815,9 +1878,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-user-text".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1827,7 +1891,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_controlled_domain_mentions_in_user_text_session_fixture() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -1843,9 +1910,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-domain-only".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-domain-only.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-domain-only.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1859,7 +1927,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::HeadlessJsonl,
             source_id: "headless-a".to_string(),
-            path: PathBuf::from("tests/fixtures/session_stores/codex/headless/headless-a.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/headless/headless-a.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1873,9 +1944,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::HeadlessJsonl,
             source_id: "uc001-headless".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/headless/uc001-headless.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/headless/uc001-headless.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1912,9 +1984,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::ArchivedJsonl,
             source_id: "uc001-archived".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/archived_sessions/uc001-archived.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/archived_sessions/uc001-archived.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1951,9 +2024,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "session-a".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/session-a.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/session-a.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1967,9 +2041,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::LegacyJson,
             source_id: "session-a".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/opencode/storage/message/session-a/message-a.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/storage/message/session-a/message-a.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -1983,7 +2058,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::Sqlite,
             source_id: "opencode.sqlite".to_string(),
-            path: PathBuf::from("tests/fixtures/session_stores/opencode/opencode.db"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/opencode.db"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2001,7 +2079,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "normal-mcp-tool-result".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/normal-mcp-tool-result.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/normal-mcp-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2015,9 +2096,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "normal-mcp-tool-result".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/normal-mcp-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/normal-mcp-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2027,7 +2109,10 @@ mod tests {
 
     #[test]
     fn detects_api_key_pattern_in_assistant_context() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         let event = detections
@@ -2054,9 +2139,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "api-key-pattern".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/api-key-pattern.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/api-key-pattern.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2082,9 +2168,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "api-key-pattern".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/api-key-pattern.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/api-key-pattern.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2110,7 +2197,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "aws-slack-token-pattern".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/aws-slack-token-pattern.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/aws-slack-token-pattern.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2139,7 +2229,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "jwt-bearer-token-pattern".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/jwt-bearer-token-pattern.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/jwt-bearer-token-pattern.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2172,9 +2265,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "jwt-bearer-token-pattern".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/jwt-bearer-token-pattern.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/jwt-bearer-token-pattern.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2207,9 +2301,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "private-key-read".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/private-key-read.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/private-key-read.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2246,7 +2341,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "private-key-header-pattern".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/private-key-header-pattern.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/private-key-header-pattern.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2277,9 +2375,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "secret-network-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/secret-network-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/secret-network-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2312,9 +2411,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "download-execute-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/download-execute-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/download-execute-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2346,7 +2446,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-quoted-example".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/approval-bypass-quoted-example.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/approval-bypass-quoted-example.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2360,9 +2463,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-quoted-example".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-quoted-example.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-quoted-example.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2376,9 +2480,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-quoted-example".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-quoted-example.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-quoted-example.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2388,7 +2493,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_approval_bypass_user_text_fixture() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -2404,9 +2512,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-user-text".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2416,7 +2525,10 @@ mod tests {
 
     #[test]
     fn ignores_benign_approval_bypass_tool_result_fixture() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         assert!(
@@ -2428,7 +2540,10 @@ mod tests {
 
     #[test]
     fn detects_uc001_server_instructions_chain() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         let event = detections
@@ -2461,7 +2576,10 @@ mod tests {
 
     #[test]
     fn detects_uc001_tool_description_chain() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         let event = detections
@@ -2494,7 +2612,10 @@ mod tests {
 
     #[test]
     fn detects_uc001_tool_result_injection_chain() {
-        let sources = discover_sources(std::path::Path::new("tests/fixtures/session_stores"));
+        let sources = discover_sources(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/session_stores"
+        )));
         let detections = detect_sources(&sources);
 
         let event = detections
@@ -2531,7 +2652,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "tool-injection-shape".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/tool-injection-shape.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/tool-injection-shape.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2555,9 +2679,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "tool-injection-shape-session".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/tool-injection-shape-session.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/tool-injection-shape-session.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2581,7 +2706,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "tool-result-injection".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/tool-result-injection.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/tool-result-injection.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2621,9 +2749,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "tool-result-injection".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/tool-result-injection.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/tool-result-injection.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2668,9 +2797,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "download-execute-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/download-execute-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/download-execute-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2709,9 +2839,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "encoded-payload-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/encoded-payload-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/encoded-payload-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2753,9 +2884,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "install-persistence-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/install-persistence-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/install-persistence-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2802,7 +2934,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-context".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/approval-bypass-context.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/approval-bypass-context.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2830,9 +2965,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-context".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-context.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-context.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2872,7 +3008,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "secret-network-chain".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/secret-network-chain.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/secret-network-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2898,9 +3037,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "secret-network-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/secret-network-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/secret-network-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2926,9 +3066,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc002-positive-credential-publish".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc002-positive-credential-publish.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc002-positive-credential-publish.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -2968,9 +3109,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc002-negative-publish-only".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc002-negative-publish-only.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc002-negative-publish-only.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3003,9 +3145,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::LegacyJson,
             source_id: "opencode.legacy_json".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/opencode/storage/message/session-uc002/uc002-credential-publish.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/storage/message/session-uc002/uc002-credential-publish.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3045,7 +3188,10 @@ mod tests {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
             source_id: "copilot.process_log".to_string(),
-            path: PathBuf::from("tests/fixtures/session_stores/copilot/process-uc002.log"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/copilot/process-uc002.log"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3085,9 +3231,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc003-positive-dns-exfil".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc003-positive-dns-exfil.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc003-positive-dns-exfil.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3131,9 +3278,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc003-negative-dns-troubleshooting".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc003-negative-dns-troubleshooting.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc003-negative-dns-troubleshooting.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3147,9 +3295,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "encoded-http-exfil".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/encoded-http-exfil.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/encoded-http-exfil.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3182,9 +3331,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "outbound-upload-exfil".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/outbound-upload-exfil.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/outbound-upload-exfil.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3222,9 +3372,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-user-text".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3238,9 +3389,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-tool-result".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-tool-result.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3254,9 +3406,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "approval-bypass-cost-data".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-cost-data.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-cost-data.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3270,9 +3423,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "secret-access-auth-log".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/secret-access-auth-log.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/secret-access-auth-log.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3286,9 +3440,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::LegacyJson,
             source_id: "opencode.legacy_json".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/opencode/storage/message/session-noise/approval-bypass-cost-data.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/storage/message/session-noise/approval-bypass-cost-data.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3302,9 +3457,10 @@ mod tests {
             client: ClientId::OpenCode,
             kind: SourceKind::LegacyJson,
             source_id: "opencode.legacy_json".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/opencode/storage/message/session-noise/secret-access-auth-log.json",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/opencode/storage/message/session-noise/secret-access-auth-log.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3322,7 +3478,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "download-execute-chain".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/download-execute-chain.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/download-execute-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3347,9 +3506,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "encoded-payload-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/encoded-payload-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/encoded-payload-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3378,9 +3538,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "install-persistence-chain".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/install-persistence-chain.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/install-persistence-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3413,7 +3574,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "secret-network-chain".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/secret-network-chain.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/secret-network-chain.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3438,7 +3602,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "normal-mcp-tool-result".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/normal-mcp-tool-result.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/normal-mcp-tool-result.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3452,9 +3619,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-server-instructions".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-server-instructions.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-server-instructions.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3468,9 +3636,10 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-negative-normal-mcp".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-normal-mcp.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-negative-normal-mcp.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3484,7 +3653,10 @@ mod tests {
             client: ClientId::Gemini,
             kind: SourceKind::Json,
             source_id: "gemini-empty".to_string(),
-            path: PathBuf::from("tests/fixtures/session_stores/gemini/tmp/empty-session.json"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/gemini/tmp/empty-session.json"
+            )),
         };
 
         let detections = detect_sources(&[source]);
@@ -3501,15 +3673,19 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "malformed-source".to_string(),
-            path: PathBuf::from("tests/fixtures/rule_samples/malformed-source.jsonl"),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/rule_samples/malformed-source.jsonl"
+            )),
         };
         let valid_source = Source {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "uc001-positive".to_string(),
-            path: PathBuf::from(
-                "tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl",
-            ),
+            path: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+            )),
         };
 
         let detections = detect_sources(&[malformed_source, valid_source]);
@@ -3524,7 +3700,10 @@ mod tests {
 
     #[test]
     fn benign_baseline_corpus_produces_zero_detections() {
-        let sources = discover_sources(Path::new("tests/fixtures/benign_baselines"));
+        let sources = discover_sources(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/benign_baselines"
+        )));
         assert!(
             !sources.is_empty(),
             "benign baselines directory should contain discoverable sources"

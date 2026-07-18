@@ -3,8 +3,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::discovery::Source;
-use crate::event::{Event, Evidence};
+use telltale_schema::event::{Event, Evidence};
+use telltale_sources::discovery::Source;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -138,9 +138,9 @@ fn optional_slice(value: Option<&str>) -> Vec<&str> {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::clients::{ClientId, SourceKind};
-    use crate::discovery::Source;
-    use crate::event::{DetectionEventInput, detection_event};
+    use telltale_schema::event::{DetectionEventInput, detection_event};
+    use telltale_sources::clients::{ClientId, SourceKind};
+    use telltale_sources::discovery::Source;
 
     use super::{Allowlist, Suppression, suppress_detection};
 
@@ -153,7 +153,7 @@ mod tests {
         }
     }
 
-    fn event() -> crate::event::Event {
+    fn event() -> telltale_schema::event::Event {
         detection_event(DetectionEventInput {
             client: ClientId::Codex,
             agent: None,

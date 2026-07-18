@@ -5,13 +5,14 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::baseline::{BaselineKey, BaselineSummary};
+use crate::baseline::{
+    BASELINE_STATE_VERSION, BaselineKey, BaselineSnapshotStore, BaselineSummary,
+    baseline_snapshot_id,
+};
 use crate::clients::SourceKind;
 use crate::discovery::Source;
 use crate::event::Event;
 use crate::install_inventory::InstallInventorySnapshot;
-
-pub const BASELINE_STATE_VERSION: u16 = 2;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ScanState {
@@ -59,21 +60,6 @@ pub struct BaselineSourceContribution {
     pub source_instance_id: String,
     pub source_fingerprint: String,
     pub snapshots: BTreeMap<String, BaselineSummary>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct BaselineSnapshotStore {
-    pub schema_version: u16,
-    pub snapshots: BTreeMap<String, BaselineSummary>,
-}
-
-impl Default for BaselineSnapshotStore {
-    fn default() -> Self {
-        Self {
-            schema_version: BASELINE_STATE_VERSION,
-            snapshots: BTreeMap::new(),
-        }
-    }
 }
 
 impl ScanState {
@@ -332,16 +318,6 @@ fn source_instance_id(source: &Source) -> String {
     let mut hasher = Sha256::new();
     hasher.update(source.path.to_string_lossy().as_bytes());
     format!("{:x}", hasher.finalize())
-}
-
-pub fn baseline_snapshot_id(key: &BaselineKey) -> String {
-    [
-        key.client.as_str(),
-        key.agent.as_deref().unwrap_or(""),
-        key.model.as_deref().unwrap_or(""),
-        key.provider.as_deref().unwrap_or(""),
-    ]
-    .join("\u{1f}")
 }
 
 pub fn source_fingerprint(source: &Source) -> String {

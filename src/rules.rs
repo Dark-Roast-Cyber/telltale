@@ -11,11 +11,6 @@ pub fn default_rule_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("config/rules/tool-call-regex.yaml")
 }
 
-#[allow(dead_code)]
-pub fn load_default_rule_set() -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    load_rule_set_from_paths(&[], None)
-}
-
 pub fn load_rule_set_from_paths(
     rule_paths: &[PathBuf],
     policy_path: Option<&Path>,

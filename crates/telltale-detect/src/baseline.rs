@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::parser::{NormalizedRecord, RecordKind};
+use telltale_sources::parser::{NormalizedRecord, RecordKind};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct BaselineDeviationConfig {
@@ -450,12 +450,40 @@ fn tokenize(input: &str) -> Vec<String> {
         .collect()
 }
 
+/// Version stamp for persisted baseline snapshot stores.
+pub const BASELINE_STATE_VERSION: u16 = 2;
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BaselineSnapshotStore {
+    pub schema_version: u16,
+    pub snapshots: BTreeMap<String, BaselineSummary>,
+}
+
+impl Default for BaselineSnapshotStore {
+    fn default() -> Self {
+        Self {
+            schema_version: BASELINE_STATE_VERSION,
+            snapshots: BTreeMap::new(),
+        }
+    }
+}
+
+pub fn baseline_snapshot_id(key: &BaselineKey) -> String {
+    [
+        key.client.as_str(),
+        key.agent.as_deref().unwrap_or(""),
+        key.model.as_deref().unwrap_or(""),
+        key.provider.as_deref().unwrap_or(""),
+    ]
+    .join("\u{1f}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use crate::discovery::discover_sources;
-    use crate::parser::parse_source_records;
+    use telltale_sources::discovery::discover_sources;
+    use telltale_sources::parser::parse_source_records;
 
     use super::*;
 
@@ -552,7 +580,10 @@ mod tests {
 
     #[test]
     fn benign_fixture_records_produce_baseline_without_side_effects() {
-        let sources = discover_sources(Path::new("tests/fixtures/benign_baselines"));
+        let sources = discover_sources(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/benign_baselines"
+        )));
         let mut records = Vec::new();
         for source in sources {
             records.extend(parse_source_records(&source).expect("parse benign source"));

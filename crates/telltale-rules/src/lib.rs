@@ -216,6 +216,10 @@ pub fn bundled_default_rule_yaml() -> &'static str {
     DEFAULT_RULE_YAML
 }
 
+pub fn load_default_rule_set() -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
+    load_rule_set_from_documents(&[bundled_default_rule_yaml()], None)
+}
+
 pub fn bundled_default_rule_set() -> Result<RuleSet, Box<dyn std::error::Error>> {
     Ok(serde_yaml::from_str::<RuleSet>(bundled_default_rule_yaml())?)
 }
