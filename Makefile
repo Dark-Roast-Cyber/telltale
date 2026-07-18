@@ -10,7 +10,7 @@ STATE_DIR = $(PROJECT_DIR)/state
 LOG_PATH = $(LOG_DIR)/adr-events.jsonl
 STATE_PATH = $(STATE_DIR)/adr-state.json
 SCAN_ROOT = $(HOME)
-PUBLIC_RELEASE_BRANCH ?= public-main
+PUBLIC_RELEASE_BRANCH ?= main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= release-downloads
@@ -206,16 +206,22 @@ release-artifact-manifest:
 			*.zip) command -v unzip >/dev/null || { echo "unzip is required to inspect $$archive."; exit 1; }; entries="$$(unzip -Z1 "$$archive")" ;; \
 			*) echo "Unsupported release archive: $$archive"; exit 1 ;; \
 		esac; \
-		printf '%s\n' "$$entries" | sed 's/^/  /'; \
-		entry_count="$$(printf '%s\n' "$$entries" | sed '/^$$/d' | wc -l | tr -d ' ')"; \
-		if [ "$$entry_count" -ne 1 ]; then \
-			echo "Release archive $$archive must contain exactly one binary entry."; \
-			exit 1; \
-		fi; \
-		unexpected="$$(printf '%s\n' "$$entries" | awk '$$0 != "adr" && $$0 != "adr.exe" { print }')"; \
-		if [ -n "$$unexpected" ]; then \
-			echo "Unexpected release archive entries in $$archive:"; \
-			printf '%s\n' "$$unexpected"; \
+		file_entries="$$(printf '%s\n' "$$entries" | sed '/\/$$/d; /^$$/d')"; \
+		printf '%s\n' "$$file_entries" | sed 's/^/  /'; \
+		case "$$archive" in \
+			*.zip) binary="adr.exe" ;; \
+			*) binary="adr" ;; \
+		esac; \
+		expected_sorted="$$(printf '%s\n' "$$binary" "LICENSE" "README.md" "config/examples/telltale-outputs.yaml" "config/examples/adr-scan.service" "config/examples/adr-scan.timer" "config/examples/adr-scan-task.xml" | sort)"; \
+		actual_sorted="$$(printf '%s\n' "$$file_entries" | sort)"; \
+		if [ "$$expected_sorted" != "$$actual_sorted" ]; then \
+			echo "Release archive $$archive does not match the expected bundle manifest."; \
+			echo "Expected:"; printf '%s\n' "$$expected_sorted" | sed 's/^/  /'; \
+			echo "Actual:"; printf '%s\n' "$$actual_sorted" | sed 's/^/  /'; \
+			missing="$$(printf '%s\n%s\n' "$$expected_sorted" "$$actual_sorted" | sort | uniq -u)"; \
+			extra="$$(printf '%s\n%s\n' "$$actual_sorted" "$$expected_sorted" | sort | uniq -u)"; \
+			if [ -n "$$missing" ]; then echo "Missing entries:"; printf '%s\n' "$$missing" | sed 's/^/  /'; fi; \
+			if [ -n "$$extra" ]; then echo "Unexpected entries:"; printf '%s\n' "$$extra" | sed 's/^/  /'; fi; \
 			exit 1; \
 		fi; \
 	done

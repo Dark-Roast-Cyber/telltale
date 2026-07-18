@@ -13,8 +13,9 @@ configuration. It should not include local scanner state, telemetry logs, raw
 agent transcripts, credentials, private planning notes, local agent workflow
 state, or deployment-specific SIEM settings.
 
-Release archives should contain the compiled `adr` command-line binary and
-release metadata generated from checked-in public repository contents.
+Release archives should contain the compiled `adr` command-line binary, the
+Apache-2.0 license, a concise quick-start README, and reviewed deployment
+examples generated from checked-in public repository contents.
 
 Public release evidence should be reproducible from synthetic fixtures or
 already-redacted telemetry output. Keep live host validation notes local-only;
@@ -69,7 +70,7 @@ cargo test --quiet public_docs_
 ```
 
 `make release-context-check` verifies the working tree is clean, the current
-branch is `public-main`, the `origin` fetch and push URLs point at the public
+branch is `main`, the `origin` fetch and push URLs point at the public
 Telltale repository, and `HEAD` is not behind the public upstream. For an
 intentional alternate public release branch or remote, override
 `PUBLIC_RELEASE_BRANCH` or `PUBLIC_RELEASE_REMOTE` when running the target.
@@ -108,10 +109,12 @@ Keep environment-specific service files and SIEM shipper configuration outside
 the archive unless they are reviewed public examples with placeholder values.
 
 For generated binary archives, inspect the archive listing before upload. The
-archive should contain the `adr` binary, release metadata, and public license or
-readme material only. It should not contain checked-out working-tree residue,
-scanner state, telemetry output, session stores, local planning notes, or
-local agent workflow state, or deployment-specific configuration.
+archive should contain the `adr` binary, `LICENSE`, `README.md`, and the
+curated `config/examples/` deployment files (`telltale-outputs.yaml`,
+`adr-scan.service`, `adr-scan.timer`, `adr-scan-task.xml`) only. It should not
+contain checked-out working-tree residue, scanner state, telemetry output,
+session stores, local planning notes, local agent workflow state, or
+deployment-specific configuration.
 
 Use the archive format's listing command, such as:
 
@@ -129,8 +132,9 @@ make release-artifact-manifest
 ```
 
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
-current binary archive contains only the expected `adr` or `adr.exe` binary
-entry. When `SHA256SUMS` is present in the same directory, the target also
+archive contains exactly the expected bundle manifest: the `adr` or `adr.exe`
+binary, `LICENSE`, `README.md`, and the curated `config/examples/` deployment
+files. When `SHA256SUMS` is present in the same directory, the target also
 verifies that its entries match the reviewed archives exactly and that each
 checksum validates. The default `release-downloads/` directory is local review
 residue and is ignored and excluded from source packages; legacy local

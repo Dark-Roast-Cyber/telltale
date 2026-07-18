@@ -96,7 +96,7 @@ fn release_context_check_rejects_empty_public_config() {
     let repo = temp.path();
 
     let init = Command::new("git")
-        .args(["init", "--quiet", "--initial-branch=public-main"])
+        .args(["init", "--quiet", "--initial-branch=main"])
         .current_dir(repo)
         .output()
         .expect("git init");
@@ -153,7 +153,7 @@ fn release_context_check_rejects_empty_public_config() {
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile"))
         .args([
             "release-context-check",
-            "PUBLIC_RELEASE_BRANCH=public-main",
+            "PUBLIC_RELEASE_BRANCH=main",
             "PUBLIC_RELEASE_REMOTE=",
         ])
         .current_dir(repo)
@@ -182,7 +182,7 @@ fn public_push_review_summarizes_repo_and_staged_context() {
     let repo = temp.path();
 
     let init = Command::new("git")
-        .args(["init", "--quiet", "--initial-branch=public-main"])
+        .args(["init", "--quiet", "--initial-branch=main"])
         .current_dir(repo)
         .output()
         .expect("git init");
@@ -230,7 +230,7 @@ fn public_push_review_summarizes_repo_and_staged_context() {
 
     let stdout = String::from_utf8(output.stdout).expect("stdout must be UTF-8");
     assert!(
-        stdout.contains("Public branch: public-main"),
+        stdout.contains("Public branch: main"),
         "missing branch summary: {stdout}"
     );
     assert!(
@@ -263,7 +263,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
     let peer = temp.path().join("peer");
 
     let init_bare = Command::new("git")
-        .args(["init", "--bare", "--quiet", "--initial-branch=public-main"])
+        .args(["init", "--bare", "--quiet", "--initial-branch=main"])
         .arg(&bare)
         .output()
         .expect("git init bare");
@@ -291,7 +291,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
         &repo,
         &["commit", "--quiet", "-m", "Initial public content"],
     );
-    git_expect(&repo, &["push", "--quiet", "-u", "origin", "public-main"]);
+    git_expect(&repo, &["push", "--quiet", "-u", "origin", "main"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = Command::new("make")
@@ -310,7 +310,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("origin/public-main matches HEAD"),
+        String::from_utf8_lossy(&output.stdout).contains("origin/main matches HEAD"),
         "unexpected output: {}",
         String::from_utf8_lossy(&output.stdout)
     );
@@ -330,7 +330,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
     fs::write(peer.join("public.txt"), "remote public content\n").expect("write peer");
     git_expect(&peer, &["commit", "--quiet", "-am", "Remote public update"]);
     git_expect(&peer, &["push", "--quiet"]);
-    git_expect(&repo, &["fetch", "--quiet", "origin", "public-main"]);
+    git_expect(&repo, &["fetch", "--quiet", "origin", "main"]);
 
     let output = Command::new("make")
         .arg("--silent")
@@ -352,7 +352,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("HEAD is behind origin/public-main by 1 commit(s)"),
+        combined.contains("HEAD is behind origin/main by 1 commit(s)"),
         "unexpected output: {combined}"
     );
 }
@@ -374,7 +374,7 @@ edition = "2021"
     fs::write(repo.join("src").join("lib.rs"), "pub fn fixture() {}\n").expect("write lib.rs");
 
     let init = Command::new("git")
-        .args(["init", "--quiet", "--initial-branch=public-main"])
+        .args(["init", "--quiet", "--initial-branch=main"])
         .current_dir(repo)
         .output()
         .expect("git init");
@@ -465,7 +465,7 @@ fn release_context_check_reports_empty_and_staged_paths() {
     let repo = temp.path().join("work");
 
     let init_bare = Command::new("git")
-        .args(["init", "--bare", "--quiet", "--initial-branch=public-main"])
+        .args(["init", "--bare", "--quiet", "--initial-branch=main"])
         .arg(&bare)
         .output()
         .expect("git init bare");
@@ -493,7 +493,7 @@ fn release_context_check_reports_empty_and_staged_paths() {
         &repo,
         &["commit", "--quiet", "-m", "Initial public content"],
     );
-    git_expect(&repo, &["push", "--quiet", "-u", "origin", "public-main"]);
+    git_expect(&repo, &["push", "--quiet", "-u", "origin", "main"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = Command::new("make")
@@ -632,15 +632,37 @@ fn release_crate_manifest_excludes_host_only_release_material() {
 }
 
 #[test]
-fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries() {
+fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries() {
     let temp = tempdir().expect("tempdir");
     let artifacts = temp.path().join("artifacts");
     let good_payload = temp.path().join("good-payload");
     let bad_payload = temp.path().join("bad-payload");
     fs::create_dir_all(&artifacts).expect("create artifacts");
-    fs::create_dir_all(&good_payload).expect("create good payload");
+    fs::create_dir_all(good_payload.join("config/examples")).expect("create good payload");
     fs::create_dir_all(bad_payload.join("logs")).expect("create bad payload logs");
     fs::write(good_payload.join("adr"), "binary\n").expect("write adr");
+    fs::write(good_payload.join("LICENSE"), "Apache-2.0\n").expect("write LICENSE");
+    fs::write(good_payload.join("README.md"), "# quick start\n").expect("write README");
+    fs::write(
+        good_payload.join("config/examples/telltale-outputs.yaml"),
+        "outputs: {}\n",
+    )
+    .expect("write outputs example");
+    fs::write(
+        good_payload.join("config/examples/adr-scan.service"),
+        "[Service]\n",
+    )
+    .expect("write service example");
+    fs::write(
+        good_payload.join("config/examples/adr-scan.timer"),
+        "[Timer]\n",
+    )
+    .expect("write timer example");
+    fs::write(
+        good_payload.join("config/examples/adr-scan-task.xml"),
+        "<Task/>\n",
+    )
+    .expect("write task example");
     fs::write(bad_payload.join("adr"), "binary\n").expect("write bad adr");
     fs::write(
         bad_payload.join("logs").join("adr-events.jsonl"),
@@ -655,6 +677,12 @@ fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries()
         .arg("-C")
         .arg(&good_payload)
         .arg("adr")
+        .arg("LICENSE")
+        .arg("README.md")
+        .arg("config/examples/telltale-outputs.yaml")
+        .arg("config/examples/adr-scan.service")
+        .arg("config/examples/adr-scan.timer")
+        .arg("config/examples/adr-scan-task.xml")
         .output()
         .expect("tar good archive");
     assert!(
@@ -688,12 +716,18 @@ fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries()
     );
     assert!(stdout.contains("  adr"), "missing binary entry: {stdout}");
 
-    let good_zip = artifacts.join("adr-v0.1.0-x86_64-pc-windows-msvc.zip");
     fs::write(good_payload.join("adr.exe"), "binary\n").expect("write adr.exe");
+    let good_zip = artifacts.join("adr-v0.1.0-x86_64-pc-windows-msvc.zip");
     let zip = Command::new("zip")
         .arg("-q")
         .arg(&good_zip)
         .arg("adr.exe")
+        .arg("LICENSE")
+        .arg("README.md")
+        .arg("config/examples/telltale-outputs.yaml")
+        .arg("config/examples/adr-scan.service")
+        .arg("config/examples/adr-scan.timer")
+        .arg("config/examples/adr-scan-task.xml")
         .current_dir(&good_payload)
         .output()
         .expect("zip good archive");
@@ -826,7 +860,7 @@ fn release_artifact_manifest_accepts_binary_archives_and_rejects_extra_entries()
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("must contain exactly one binary entry"),
+        combined.contains("does not match the expected bundle manifest"),
         "unexpected output: {combined}"
     );
 }
