@@ -14,7 +14,7 @@ pub mod paths;
 pub mod projects;
 pub mod rules;
 pub mod schema;
-pub mod scoring;
+pub use telltale_schema::scoring;
 pub mod sink;
 pub mod sources;
 pub mod state;

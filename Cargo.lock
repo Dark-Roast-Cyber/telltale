@@ -18,6 +18,8 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "telltale-rules",
+ "telltale-schema",
  "tempfile",
  "time",
  "ureq",
@@ -1771,6 +1773,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "telltale-rules"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_yaml",
+ "telltale-schema",
+]
+
+[[package]]
+name = "telltale-schema"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "uuid",
 ]
 
 [[package]]

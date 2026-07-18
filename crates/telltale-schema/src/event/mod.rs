@@ -4,16 +4,14 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::clients::ClientId;
-use crate::discovery::Source;
-use crate::parser::ParseError;
 use crate::scoring::{RiskThresholds, assess_risk_with_thresholds, load_thresholds};
-use crate::state::SourceInventoryChangeSummary;
+use crate::source::{Source, SourceInventoryChangeSummary};
 
 mod inventory;
 mod redaction;
 mod time;
 
-pub use inventory::{append_jsonl_events, evidence_hash, path_hash};
+pub use inventory::{evidence_hash, path_hash};
 pub use redaction::redact_sensitive_text;
 pub use time::{format_timestamp, parse_event_timestamp};
 
@@ -644,7 +642,7 @@ pub fn correlation_event(input: CorrelationEventInput) -> Event {
     .build()
 }
 
-pub fn scanner_error_event(source: &Source, error: &ParseError) -> Event {
+pub fn scanner_error_event(source: &Source, error: &impl std::fmt::Display) -> Event {
     let error_msg = redaction::redact_error_message(&error.to_string());
     let source_label = format!(
         "{}:{}:{}",
@@ -996,7 +994,7 @@ mod tests {
 
     #[test]
     fn health_event_can_include_source_inventory_change_marker() {
-        let change = crate::state::SourceInventoryChangeSummary {
+        let change = crate::source::SourceInventoryChangeSummary {
             baseline: false,
             added: 0,
             removed: 0,
@@ -1263,8 +1261,7 @@ mod tests {
     #[test]
     fn scanner_error_event_has_correct_shape() {
         use crate::clients::SourceKind;
-        use crate::discovery::Source;
-        use crate::parser::ParseError;
+        use crate::source::Source;
         use std::path::PathBuf;
 
         let source = Source {
@@ -1273,7 +1270,7 @@ mod tests {
             source_id: "opencode.sqlite".to_string(),
             path: PathBuf::from("/home/user/.local/share/opencode/opencode.db"),
         };
-        let error = ParseError::Sqlite(rusqlite::Error::InvalidQuery);
+        let error = "sqlite error: Query is not read-only";
 
         let event = scanner_error_event(&source, &error);
 

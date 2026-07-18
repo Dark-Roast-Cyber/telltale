@@ -3,26 +3,16 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::clients::{
-    ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern, supported_clients,
-};
+use crate::clients::{ClientId, ClientSourceDef, PathRoot, SourcePattern, supported_clients};
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Source {
-    pub client: ClientId,
-    pub kind: SourceKind,
-    pub source_id: String,
-    pub path: PathBuf,
-}
+pub use telltale_schema::source::Source;
 
-impl Source {
-    fn new(client: ClientId, source_def: ClientSourceDef, path: PathBuf) -> Self {
-        Self {
-            client,
-            kind: source_def.kind,
-            source_id: source_def.id.to_string(),
-            path,
-        }
+fn new_source(client: ClientId, source_def: ClientSourceDef, path: PathBuf) -> Source {
+    Source {
+        client,
+        kind: source_def.kind,
+        source_id: source_def.id.to_string(),
+        path,
     }
 }
 
@@ -160,13 +150,13 @@ fn discover_source(root: &Path, client: ClientId, source_def: ClientSourceDef) -
             source_def.recursive,
         )
         .into_iter()
-        .map(|path| Source::new(client, source_def, path))
+        .map(|path| new_source(client, source_def, path))
         .collect();
     }
 
     discover_matching_paths(&search_root, source_def.pattern, source_def.recursive)
         .into_iter()
-        .map(|path| Source::new(client, source_def, path))
+        .map(|path| new_source(client, source_def, path))
         .collect()
 }
 
@@ -314,7 +304,7 @@ fn discover_source_from_context(
 
     discover_matching_paths(&search_root, source_def.pattern, source_def.recursive)
         .into_iter()
-        .map(|path| Source::new(client, source_def, path))
+        .map(|path| new_source(client, source_def, path))
         .collect()
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "telltale-rules"
+version.workspace = true
+edition.workspace = true
+description = "Telltale rule language: YAML parsing, validation, policy merge, and in-memory evaluation"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+telltale-schema.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true

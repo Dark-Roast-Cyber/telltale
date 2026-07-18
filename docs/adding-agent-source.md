@@ -14,8 +14,10 @@ be expressed over normalized fields.
 
 The current implementation is intentionally simple, but it is centralized:
 
-- `src/clients.rs` owns `ClientId`, `SourceKind`, path roots, source patterns,
-  and the static `supported_clients()` registry.
+- `src/clients.rs` owns path roots, source patterns, and the static
+  `supported_clients()` registry; the `ClientId` and `SourceKind` enums live in
+  `crates/telltale-schema/src/clients.rs` and are re-exported from
+  `src/clients.rs`.
 - `src/discovery.rs` resolves OS-specific roots, project-local roots, watch
   roots, and fixture paths for every registered source.
 - `src/parser.rs` dispatches by `SourceKind` and converts raw records into

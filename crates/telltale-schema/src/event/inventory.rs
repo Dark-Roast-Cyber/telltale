@@ -1,13 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
 use super::Evidence;
-use crate::discovery::Source;
-use crate::state::SourceInventoryChangeSummary;
+use crate::source::{Source, SourceInventoryChangeSummary};
 
 pub(crate) fn source_counts(sources: &[Source]) -> BTreeMap<String, u32> {
     let mut counts = BTreeMap::new();
@@ -70,22 +67,6 @@ pub(crate) fn display_name(source: &Source) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or("unknown")
         .to_string()
-}
-
-pub fn append_jsonl_events(
-    path: &Path,
-    events: &[super::Event],
-) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    for event in events {
-        serde_json::to_writer(&mut file, event)?;
-        file.write_all(b"\n")?;
-    }
-    Ok(())
 }
 
 pub fn path_hash(path: &Path) -> String {

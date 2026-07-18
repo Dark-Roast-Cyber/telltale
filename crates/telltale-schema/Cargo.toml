@@ -1,0 +1,15 @@
+[package]
+name = "telltale-schema"
+version.workspace = true
+edition.workspace = true
+description = "Telltale canonical event model and normalized record schema"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+uuid.workspace = true

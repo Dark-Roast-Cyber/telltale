@@ -49,14 +49,7 @@ pub struct SqliteIngestionCursor {
     pub observed_at_unix_ms: u64,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct SourceInventoryChangeSummary {
-    pub baseline: bool,
-    pub added: u32,
-    pub removed: u32,
-    pub unchanged: u32,
-    pub hash: String,
-}
+pub use telltale_schema::source::SourceInventoryChangeSummary;
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BaselineSourceContribution {
