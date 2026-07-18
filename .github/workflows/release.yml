@@ -8,10 +8,16 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions: {}
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -47,19 +53,72 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Package (unix)
+      - name: Stage and package release bundle (unix)
         if: matrix.archive == 'tar.gz'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../adr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz adr
-          cd ../../..
-      - name: Package (windows)
-        if: matrix.archive == 'zip'
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
-          7z a ../../../adr-${{ github.ref_name }}-${{ matrix.target }}.zip adr.exe
-          cd ../../..
+          set -euo pipefail
+          bundle_dir="$RUNNER_TEMP/adr-bundle"
+          rm -rf "$bundle_dir"
+          mkdir -p "$bundle_dir/config/examples"
+
+          install -m 0755 "target/${{ matrix.target }}/release/adr" "$bundle_dir/adr"
+          install -m 0644 LICENSE "$bundle_dir/LICENSE"
+          install -m 0644 release/README.md "$bundle_dir/README.md"
+          for example in \
+            config/examples/telltale-outputs.yaml \
+            config/examples/adr-scan.service \
+            config/examples/adr-scan.timer \
+            config/examples/adr-scan-task.xml; do
+            install -m 0644 "$example" "$bundle_dir/$example"
+          done
+
+          archive="adr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar czf "$archive" \
+            -C "$bundle_dir" \
+            adr LICENSE README.md \
+            config/examples/telltale-outputs.yaml \
+            config/examples/adr-scan.service \
+            config/examples/adr-scan.timer \
+            config/examples/adr-scan-task.xml
+          tar -tzf "$archive"
+      - name: Stage and package release bundle (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = Join-Path $env:RUNNER_TEMP 'adr-bundle'
+          if (Test-Path -LiteralPath $bundleDir) {
+            Remove-Item -LiteralPath $bundleDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path (Join-Path $bundleDir 'config/examples') -Force | Out-Null
+
+          Copy-Item "target\${{ matrix.target }}\release\adr.exe" (Join-Path $bundleDir 'adr.exe')
+          Copy-Item 'LICENSE' (Join-Path $bundleDir 'LICENSE')
+          Copy-Item 'release\README.md' (Join-Path $bundleDir 'README.md')
+          $examples = @(
+            'telltale-outputs.yaml',
+            'adr-scan.service',
+            'adr-scan.timer',
+            'adr-scan-task.xml'
+          )
+          foreach ($example in $examples) {
+            Copy-Item "config\examples\$example" (Join-Path $bundleDir "config/examples/$example")
+          }
+
+          $archive = "adr-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $archive -CompressionLevel Optimal
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path (Get-Location) $archive))
+          try {
+            $zip.Entries | ForEach-Object FullName
+          } finally {
+            $zip.Dispose()
+          }
+      - name: Attest release archive
+        uses: actions/attest@v4
+        with:
+          subject-path: adr-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

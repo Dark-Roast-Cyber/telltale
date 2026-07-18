@@ -19,9 +19,40 @@ Linux, macOS, and Windows. Download the archive that matches your platform,
 extract the `adr` binary, and place it on your `PATH` or run it from the
 extracted directory.
 
-Release archives contain the command-line binary and release metadata generated
-from the public repository. They do not include local scanner state, telemetry
-logs, session stores, credentials, or deployment-specific SIEM configuration.
+Each archive contains exactly these file members (with `adr.exe` replacing
+`adr` in the Windows archive):
+
+```text
+adr                         # or adr.exe
+LICENSE
+README.md                   # concise release quick start
+config/examples/
+  telltale-outputs.yaml
+  adr-scan.service
+  adr-scan.timer
+  adr-scan-task.xml
+```
+
+`SHA256SUMS` is published as a separate release asset, not inside the binary
+archives. Archives do not include local scanner state, telemetry logs, session
+stores, credentials, Splunk/Filebeat content, or other deployment-specific
+configuration.
+
+### Verify a release archive
+
+The release workflow publishes a GitHub artifact attestation for every `.tar.gz`
+and `.zip` archive. After downloading an archive, verify its provenance before
+extracting it:
+
+```sh
+gh attestation verify adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+  --repo Dark-Roast-Cyber/telltale
+```
+
+Replace the filename with the archive for your platform. The command checks the
+archive's digest and its signed GitHub Actions provenance; an online GitHub CLI
+environment is required. The Linux installer verifies the published
+`SHA256SUMS` checksum, but it does not perform this GitHub attestation check.
 
 ### Quick install (Linux)
 
@@ -49,6 +80,24 @@ Built-in size-based log rotation is enabled by default (100 MB max, keep 5
 rotated files). No OS-specific rotation tooling is required for user-profile
 installs. See [telemetry-output.md](telemetry-output.md#built-in-rotation) for
 configuration details.
+
+The release archive does not include the Linux installer script itself. The
+installer downloads and checksum-verifies the platform archive, then installs
+only the `adr` binary unless `--with-timer` is explicitly requested.
+
+### Windows Scheduled Task example
+
+The Windows archive includes
+[`config/examples/adr-scan-task.xml`](../config/examples/adr-scan-task.xml).
+Replace both `YOUR_WINDOWS_USERNAME` values with the account that should run the
+task, then import it from PowerShell after extracting `adr.exe`:
+
+```powershell
+$xml = Get-Content .\config\examples\adr-scan-task.xml -Raw
+Register-ScheduledTask -TaskName TelltaleScan -Xml $xml
+```
+
+This phase does not provide a Windows `install.ps1` installer.
 
 ## Build From Source
 
@@ -221,7 +270,7 @@ that SIEM dashboards can group by as `component`, `check_name`, and `status`.
 
 ## Optional Service Setup (Advanced)
 
-The repository includes Linux-oriented systemd examples in
+The repository and release archives include Linux-oriented systemd examples in
 `config/examples/adr-scan.service` and `config/examples/adr-scan.timer` for
 managed deployments that use the `system` path profile with a dedicated service
 account. This is an advanced path for shared scan servers or fleet-managed
