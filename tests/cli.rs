@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use jsonschema::validator_for;
+#[cfg(target_os = "linux")]
 use rusqlite::Connection;
 use serde_json::Value;
 use tempfile::tempdir;
