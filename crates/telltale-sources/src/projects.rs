@@ -113,11 +113,23 @@ mod tests {
     fn loads_valid_yaml() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("projects.yaml");
-        fs::write(&path, "projects:\n  - name: test\n    path: /tmp\n").expect("write");
+        let project_path = temp.path().join("project");
+        fs::create_dir_all(&project_path).expect("project dir");
+        fs::write(
+            &path,
+            format!(
+                "projects:\n  - name: test\n    path: '{}'\n",
+                project_path.display()
+            ),
+        )
+        .expect("write");
         let projects = load_project_config(&path).expect("load");
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "test");
-        assert_eq!(projects[0].path, PathBuf::from("/tmp"));
+        assert_eq!(
+            projects[0].path,
+            project_path.canonicalize().expect("canonical project path")
+        );
     }
 
     #[test]
