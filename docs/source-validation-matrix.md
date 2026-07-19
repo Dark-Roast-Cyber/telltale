@@ -42,6 +42,10 @@ Live host validation is an additional operational confidence signal, not a
 support gate. Record it when safe and available, but do not scan large or
 sensitive real session stores just to satisfy fixture coverage.
 
+Windows P54 coverage is limited to deterministic Codex `CodexHome` and VS Code
+`globalStorage` discovery tests for RooCode and KiloCode. These candidates are
+experimental and not live-validated; see [Session Sources](session-sources.md).
+
 ## Public Validation Boundary
 
 Public support claims should be backed by synthetic fixtures and deterministic
