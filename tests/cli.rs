@@ -3949,6 +3949,7 @@ fn scan_once_can_emit_activity_events() {
     }));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn scan_once_persists_opencode_sqlite_part_cursor() {
     let temp = tempdir().expect("tempdir");
