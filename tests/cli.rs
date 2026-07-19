@@ -4000,6 +4000,7 @@ fn scan_once_persists_opencode_sqlite_part_cursor() {
         ),
     )
     .expect("insert part");
+    drop(conn);
 
     let log_path = temp.path().join("adr-events.jsonl");
     let state_path = temp.path().join("adr-state.json");
@@ -7847,7 +7848,9 @@ fn config_validate_discovers_local_rules_d_additively() {
 fn config_validate_reports_discovered_override_paths() {
     let temp = tempdir().expect("tempdir");
     let config_root = temp.path().join("config");
-    let override_path = config_root.join("overrides.d/lower-secret-score.yml");
+    let override_path = config_root
+        .join("overrides.d")
+        .join("lower-secret-score.yml");
     fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
     fs::write(
         &override_path,
@@ -8104,7 +8107,7 @@ fn config_validate_reports_ambiguous_allowlist_unless_explicit_allowlist_is_supp
 fn config_validate_reports_single_discovered_allowlist_path() {
     let temp = tempdir().expect("tempdir");
     let config_root = temp.path().join("config");
-    let allowlist_path = config_root.join("allowlists.d/known-benign.yaml");
+    let allowlist_path = config_root.join("allowlists.d").join("known-benign.yaml");
     fs::create_dir_all(allowlist_path.parent().expect("allowlists dir")).expect("allowlists dir");
     fs::write(
         &allowlist_path,

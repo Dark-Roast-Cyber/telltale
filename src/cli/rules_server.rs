@@ -426,26 +426,28 @@ fn resolve_save_target(
     }
 
     let Some(requested) = requested else {
-        return Ok(editable_paths[0].clone());
+        return Ok(rule_paths[0].clone());
     };
 
-    let canonical_requested = requested.canonicalize().map_err(|error| {
-        format!(
-            "cannot resolve requested path '{}': {error}",
-            requested.display()
-        )
-    })?;
-    if editable_paths
+    let canonical_requested = match requested.canonicalize() {
+        Ok(path) => path,
+        Err(_) => {
+            return Err(format!(
+                "requested path '{}' is not one of the loaded rule files editable via --rules",
+                requested.display()
+            ));
+        }
+    };
+    editable_paths
         .iter()
-        .any(|path| path == &canonical_requested)
-    {
-        Ok(canonical_requested)
-    } else {
-        Err(format!(
-            "requested path '{}' is not one of the loaded rule files editable via --rules",
-            requested.display()
-        ))
-    }
+        .position(|path| path == &canonical_requested)
+        .map(|index| rule_paths[index].clone())
+        .ok_or_else(|| {
+            format!(
+                "requested path '{}' is not one of the loaded rule files editable via --rules",
+                requested.display()
+            )
+        })
 }
 
 fn compile_rule_yaml(
@@ -472,10 +474,14 @@ fn canonical_fixture_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Er
 
 fn display_fixture_path(path: &Path) -> String {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    path.strip_prefix(manifest_dir)
-        .unwrap_or(path)
+    let relative = match manifest_dir.canonicalize() {
+        Ok(canonical_manifest_dir) => path.strip_prefix(&canonical_manifest_dir).unwrap_or(path),
+        Err(_) => path.strip_prefix(manifest_dir).unwrap_or(path),
+    };
+    relative
         .display()
         .to_string()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 fn write_json_api_response(
