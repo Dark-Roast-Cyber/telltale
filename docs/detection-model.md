@@ -41,7 +41,9 @@ flags add custom YAML files on top of those defaults:
 adr scan --once --no-local-config --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
 ```
 
-Use `--no-default-rules` only when you intentionally want a custom-only rule set:
+Use `--no-default-rules` to omit only the embedded bundled pack. Managed
+directories still load; combine it with `--no-local-config` for an explicit
+custom-only rule set:
 
 ```sh
 adr scan --once --no-local-config --no-default-rules --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
@@ -54,19 +56,35 @@ existing `/etc/telltale` and per-user config roots by default; pass
 
 ```text
 ~/.config/telltale/
+  organization-rules.d/*.yaml|*.yml
   rules.d/*.yaml|*.yml
+  ui-rules.d/*.yaml|*.yml
   overrides.d/*.yaml|*.yml
   policies.d/*.yaml|*.yml
   allowlists.d/*.yaml|*.yml
 ```
 
-Discovered `rules.d` files are loaded before explicit `--rules` paths.
-Discovered `overrides.d` files are applied after bundled/custom rules are merged
-and before policy filtering, so disabled rules are absent from the effective rule
-set and score changes affect detection risk. A single discovered policy is used
-only when `--policy` is absent; multiple discovered policies produce an error so
-hidden policy merges do not occur. `scan` and `watch` use the same single-file
-behavior for discovered allowlists when `--allowlist` is absent.
+Rule packs resolve as bundled defaults, organization files, `rules.d` deployment
+files, then `ui-rules.d` local/UI files. Files are sorted lexically within each
+configured root and roots are processed in argument order. A higher tier fully
+replaces a same-ID definition in place; unique IDs are additive. Duplicate IDs
+within one tier fail, including duplicates across configured roots. Replacements
+and winners are available in the provenance columns of `adr rules list --verbose`
+and in `adr rules validate`.
+
+**Trust boundary:** Treat `organization-rules.d`, `rules.d`, and `ui-rules.d` as
+trusted operator configuration. Protect them from untrusted or unsigned writes:
+higher tiers can fully replace bundled rules, including disabling or changing
+detections. Rule-pack integrity or signing is not provided by this configuration
+mechanism.
+Repeated explicit `--rules` files remain an additive-only stage after managed
+packs, so they cannot replace managed definitions. `overrides.d` remains a
+transitional post-resolution stage and is applied before policy filtering, so
+disabled rules are absent from the effective rule set and score changes affect
+detection risk. A single discovered policy is used only when `--policy` is
+absent; multiple discovered policies produce an error so hidden policy merges do
+not occur. `scan` and `watch` use the same single-file behavior for discovered
+allowlists when `--allowlist` is absent.
 
 Override files are strict YAML with a required reason for every entry:
 
@@ -139,10 +157,16 @@ disabled_rules: [network.controlled_test_domain.darkroast]
 ```
 
 Use `adr rules list`, `adr rules validate`, and `adr rules test` to inspect,
-compile, and preview configured rules before writing scan output. These commands
-also load bundled defaults unless `--no-default-rules` is set. Use
+compile, and preview configured rules before writing scan output. `adr rules list`
+keeps its default five tab-separated columns (`id`, `category`, `severity`,
+`score`, `enabled`); add `--verbose` for the winner and replaced-source
+provenance columns. All three commands also load bundled defaults unless
+`--no-default-rules` is set; managed
+directories still load when bundled defaults are disabled. Use
 `adr rules export-default --output <local-path>` when an operator wants a local
-copy of the embedded default pack to inspect or adapt.
+copy of the embedded default pack to inspect or adapt. An edited copy placed in
+a managed tier intentionally replaces matching IDs; passing it with `--rules`
+requires `--no-default-rules` to avoid additive collision with the embedded copy.
 
 Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to ADR categories, rule IDs, fixtures, and validation commands.
 

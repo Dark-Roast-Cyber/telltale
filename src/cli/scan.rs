@@ -31,7 +31,10 @@ use crate::mcp::{discover_mcp_inventory, discover_mcp_usage};
 use crate::parser::{
     NormalizedRecord, ParseError, ParseOptions, parse_source_records_with_options,
 };
-use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode_and_override_paths};
+use crate::rules::{
+    RuleLoadMode, RulePackPaths,
+    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
+};
 use crate::scoring::load_thresholds;
 use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, source_fingerprint};
@@ -52,6 +55,7 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) allow_fixtures: bool,
     pub(crate) backfill: bool,
     pub(crate) rebuild_baselines: bool,
+    pub(crate) rule_pack_paths: &'a RulePackPaths,
     pub(crate) rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
     pub(crate) rule_load_mode: RuleLoadMode,
@@ -75,6 +79,7 @@ pub(crate) struct ScanCommandArgs<'a> {
     pub(crate) allow_fixtures: bool,
     pub(crate) backfill: bool,
     pub(crate) rebuild_baselines: bool,
+    pub(crate) rule_pack_paths: &'a RulePackPaths,
     pub(crate) rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
     pub(crate) rule_load_mode: RuleLoadMode,
@@ -99,6 +104,7 @@ pub(crate) struct WatchConfig<'a> {
     pub(crate) iterations: Option<u32>,
     pub(crate) debounce: Duration,
     pub(crate) min_scan_interval: Duration,
+    pub(crate) rule_pack_paths: &'a RulePackPaths,
     pub(crate) rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
     pub(crate) rule_load_mode: RuleLoadMode,
@@ -122,6 +128,7 @@ pub(crate) struct WatchCommandArgs<'a> {
     pub(crate) iterations: Option<u32>,
     pub(crate) debounce: Duration,
     pub(crate) min_scan_interval: Duration,
+    pub(crate) rule_pack_paths: &'a RulePackPaths,
     pub(crate) rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
     pub(crate) rule_load_mode: RuleLoadMode,
@@ -145,6 +152,7 @@ pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
         allow_fixtures: args.allow_fixtures,
         backfill: args.backfill,
         rebuild_baselines: args.rebuild_baselines,
+        rule_pack_paths: args.rule_pack_paths,
         rule_paths: args.rule_paths,
         override_paths: args.override_paths,
         rule_load_mode: args.rule_load_mode,
@@ -171,6 +179,7 @@ pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a
         iterations: args.iterations,
         debounce: args.debounce,
         min_scan_interval: args.min_scan_interval,
+        rule_pack_paths: args.rule_pack_paths,
         rule_paths: args.rule_paths,
         override_paths: args.override_paths,
         rule_load_mode: args.rule_load_mode,
@@ -195,6 +204,7 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
         allow_fixtures: config.allow_fixtures,
         backfill: false,
         rebuild_baselines: false,
+        rule_pack_paths: config.rule_pack_paths,
         rule_paths: config.rule_paths,
         override_paths: config.override_paths,
         rule_load_mode: config.rule_load_mode,
@@ -236,11 +246,13 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
                 .into(),
         );
     }
-    let _rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
+    let _rule_set = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        config.rule_pack_paths,
         config.rule_paths,
         config.policy_path,
         config.rule_load_mode,
         config.override_paths,
+        &[],
     )?;
 
     // Note: structural changes to project YAML (new projects, new roots) require a process
@@ -542,12 +554,15 @@ fn run_scan(
     if let Some(max_sources) = config.max_sources {
         sources.truncate(max_sources);
     }
-    let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
+    let rule_set = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        config.rule_pack_paths,
         config.rule_paths,
         config.policy_path,
         config.rule_load_mode,
         config.override_paths,
-    )?;
+        &[],
+    )?
+    .rule_set;
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let allowlist = load_allowlist(config.allowlist_path)?;

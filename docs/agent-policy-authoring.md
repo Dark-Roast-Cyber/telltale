@@ -57,10 +57,11 @@ Detection bundles remain ADR rule YAML. Bundles can be organized by purpose:
 - `config/rules/ad-hoc/*.yaml` for temporary or bleeding-edge rules that should be validated before promotion.
 - `config/rules/policy-violations/*.yaml` for detections whose primary purpose is policy enforcement or audit.
 - Deployment-specific custom bundles passed with repeated `--rules` flags. These
-  bundles are additive to bundled defaults unless `--no-default-rules` is set.
-- Small deployments can place deployment-specific bundles under local
-  `rules.d/*.yaml|*.yml` config directories and reserve `--rules` for explicit
-  one-off additions.
+  bundles are additive-only after managed packs and cannot replace their IDs.
+- Small deployments can place organization, deployment, and local/UI bundles
+  under `organization-rules.d/*.yaml|*.yml`, `rules.d/*.yaml|*.yml`, and
+  `ui-rules.d/*.yaml|*.yml`; reserve `--rules` for explicit one-off additions.
+  `--no-default-rules` omits bundled defaults but does not disable managed packs.
 
 Policy-violation bundles use exactly the same engine and syntax as other detection bundles.
 

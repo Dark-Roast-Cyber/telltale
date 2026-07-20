@@ -8,37 +8,27 @@ use crate::clients::{ClientId, SourceKind};
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
 use crate::rules::{
-    CompiledRuleSet, RuleLoadMode, load_rule_set_from_documents,
-    load_rule_set_from_paths_with_mode_and_override_paths,
-    load_rule_set_from_paths_with_mode_override_paths_and_replacements,
+    CompiledRuleSet, RuleLoadMode, RulePackPaths, RuleResolution, load_rule_set_from_documents,
+    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 
 pub(crate) fn run_rules_server(
     addr: SocketAddr,
-    rule_paths: &[PathBuf],
-    editable_rule_paths: &[PathBuf],
-    override_paths: &[PathBuf],
-    policy_path: Option<&Path>,
-    rule_load_mode: RuleLoadMode,
+    config: RuleServerConfig<'_>,
     once: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !addr.ip().is_loopback() {
         return Err("rules serve only binds to loopback addresses".into());
     }
-    let config = RuleServerConfig {
-        rule_paths,
-        editable_rule_paths,
-        override_paths,
-        policy_path,
-        rule_load_mode,
-    };
-    let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
-        rule_paths,
-        policy_path,
-        rule_load_mode,
-        override_paths,
+    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        config.rule_pack_paths,
+        config.explicit_rule_paths,
+        config.policy_path,
+        config.rule_load_mode,
+        config.override_paths,
+        &[],
     )?;
-    let mut state = RuleServerState::new(rule_set);
+    let mut state = RuleServerState::new(resolution);
     let listener = TcpListener::bind(addr)?;
     println!(
         "{}",
@@ -66,12 +56,13 @@ pub(crate) fn run_rules_server(
     Ok(())
 }
 
-struct RuleServerConfig<'a> {
-    rule_paths: &'a [PathBuf],
-    editable_rule_paths: &'a [PathBuf],
-    override_paths: &'a [PathBuf],
-    policy_path: Option<&'a Path>,
-    rule_load_mode: RuleLoadMode,
+pub(crate) struct RuleServerConfig<'a> {
+    pub(crate) rule_pack_paths: &'a RulePackPaths,
+    pub(crate) explicit_rule_paths: &'a [PathBuf],
+    pub(crate) editable_rule_paths: &'a [PathBuf],
+    pub(crate) override_paths: &'a [PathBuf],
+    pub(crate) policy_path: Option<&'a Path>,
+    pub(crate) rule_load_mode: RuleLoadMode,
 }
 
 struct RuleServerState {
@@ -80,25 +71,30 @@ struct RuleServerState {
 }
 
 impl RuleServerState {
-    fn new(rule_set: CompiledRuleSet) -> Self {
-        let rule_summary = rule_summary_json(&rule_set);
+    fn new(resolution: RuleResolution) -> Self {
+        let rule_summary = rule_summary_json(&resolution.rule_set, &resolution.diagnostics);
         Self {
-            rule_set,
+            rule_set: resolution.rule_set,
             rule_summary,
         }
     }
 
-    fn reload(&mut self, rule_set: CompiledRuleSet) {
-        *self = Self::new(rule_set);
+    fn reload(&mut self, resolution: RuleResolution) {
+        *self = Self::new(resolution);
     }
 }
 
-fn rule_summary_json(rule_set: &CompiledRuleSet) -> serde_json::Value {
+fn rule_summary_json(
+    rule_set: &CompiledRuleSet,
+    diagnostics: &crate::rules::RuleResolutionDiagnostics,
+) -> serde_json::Value {
     serde_json::json!({
         "status": "ok",
         "rule_count": rule_set.rule_count(),
         "policy": rule_set.policy_name(),
         "rules": rule_set.summaries(),
+        "sources": diagnostics.sources,
+        "provenance": diagnostics.provenance,
     })
 }
 
@@ -210,19 +206,24 @@ fn write_rules_route_response(
         RuleServerRoute::Save => {
             let response = save_rules_request(
                 body,
-                config.rule_paths,
+                config.rule_pack_paths,
+                config.explicit_rule_paths,
                 config.editable_rule_paths,
                 config.override_paths,
                 config.policy_path,
                 config.rule_load_mode,
             )?;
             if response.status_code == 200 {
-                state.reload(load_rule_set_from_paths_with_mode_and_override_paths(
-                    config.rule_paths,
-                    config.policy_path,
-                    config.rule_load_mode,
-                    config.override_paths,
-                )?);
+                state.reload(
+                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                        config.rule_pack_paths,
+                        config.explicit_rule_paths,
+                        config.policy_path,
+                        config.rule_load_mode,
+                        config.override_paths,
+                        &[],
+                    )?,
+                );
             }
             write_json_api_response(stream, response)
         }
@@ -282,7 +283,13 @@ impl ApiResponse {
 fn validate_rules_request(body: &[u8]) -> Result<ApiResponse, Box<dyn std::error::Error>> {
     let request: RuleValidationRequest = serde_json::from_slice(body)?;
     match compile_rule_yaml(&request.rules_yaml, request.policy_yaml.as_deref()) {
-        Ok(rule_set) => Ok(ApiResponse::ok(rule_summary_json(&rule_set))),
+        Ok(rule_set) => Ok(ApiResponse::ok(rule_summary_json(
+            &rule_set,
+            &crate::rules::RuleResolutionDiagnostics {
+                sources: Vec::new(),
+                provenance: Vec::new(),
+            },
+        ))),
         Err(error) => Ok(ApiResponse::bad_request(error.to_string())),
     }
 }
@@ -355,7 +362,8 @@ struct RuleSaveRequest {
 
 fn save_rules_request(
     body: &[u8],
-    rule_paths: &[PathBuf],
+    rule_pack_paths: &RulePackPaths,
+    explicit_rule_paths: &[PathBuf],
     editable_rule_paths: &[PathBuf],
     override_paths: &[PathBuf],
     policy_path: Option<&Path>,
@@ -376,8 +384,9 @@ fn save_rules_request(
     // Validate the effective rule set that would be active after this save. This
     // catches conflicts with bundled defaults or other configured rule files
     // before any on-disk content is changed.
-    if let Err(error) = load_rule_set_from_paths_with_mode_override_paths_and_replacements(
-        rule_paths,
+    if let Err(error) = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        rule_pack_paths,
+        explicit_rule_paths,
         policy_path,
         rule_load_mode,
         override_paths,

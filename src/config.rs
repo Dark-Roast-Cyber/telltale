@@ -5,6 +5,9 @@ const SYSTEM_CONFIG_ROOT: &str = "/etc/telltale";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalConfigFiles {
+    pub organization_rule_paths: Vec<PathBuf>,
+    pub deployment_rule_paths: Vec<PathBuf>,
+    pub local_rule_paths: Vec<PathBuf>,
     pub rule_paths: Vec<PathBuf>,
     pub override_paths: Vec<PathBuf>,
     pub policy_paths: Vec<PathBuf>,
@@ -36,8 +39,20 @@ pub fn discover_local_config_files(
     } else {
         (Vec::new(), Vec::new())
     };
+    let organization_rule_paths = discover_yaml_files(&roots, "organization-rules.d")?;
+    let deployment_rule_paths = discover_yaml_files(&roots, "rules.d")?;
+    let local_rule_paths = discover_yaml_files(&roots, "ui-rules.d")?;
+    let rule_paths = organization_rule_paths
+        .iter()
+        .chain(deployment_rule_paths.iter())
+        .chain(local_rule_paths.iter())
+        .cloned()
+        .collect();
     Ok(LocalConfigFiles {
-        rule_paths: discover_yaml_files(&roots, "rules.d")?,
+        organization_rule_paths,
+        deployment_rule_paths,
+        local_rule_paths,
+        rule_paths,
         override_paths: discover_yaml_files(&roots, "overrides.d")?,
         policy_paths: discover_yaml_files(&roots, "policies.d")?,
         allowlist_paths,
@@ -181,10 +196,14 @@ mod tests {
         let root_b = temp.path().join("b");
         write(&root_a.join("rules.d/z.yml"));
         write(&root_a.join("rules.d/a.yaml"));
+        write(&root_a.join("organization-rules.d/org.yaml"));
+        write(&root_a.join("ui-rules.d/ui.yaml"));
         write(&root_a.join("rules.d/ignored.txt"));
         write(&root_a.join("overrides.d/z.yml"));
         write(&root_a.join("overrides.d/a.yaml"));
         write(&root_b.join("rules.d/b.yaml"));
+        write(&root_b.join("organization-rules.d/org-b.yaml"));
+        write(&root_b.join("ui-rules.d/ui-b.yaml"));
         write(&root_b.join("overrides.d/b.yaml"));
 
         let discovered = discover_local_config_files(
@@ -197,9 +216,35 @@ mod tests {
         assert_eq!(
             discovered.rule_paths,
             vec![
+                root_a.join("organization-rules.d/org.yaml"),
+                root_b.join("organization-rules.d/org-b.yaml"),
                 root_a.join("rules.d/a.yaml"),
                 root_a.join("rules.d/z.yml"),
                 root_b.join("rules.d/b.yaml"),
+                root_a.join("ui-rules.d/ui.yaml"),
+                root_b.join("ui-rules.d/ui-b.yaml"),
+            ]
+        );
+        assert_eq!(
+            discovered.organization_rule_paths,
+            vec![
+                root_a.join("organization-rules.d/org.yaml"),
+                root_b.join("organization-rules.d/org-b.yaml"),
+            ]
+        );
+        assert_eq!(
+            discovered.deployment_rule_paths,
+            vec![
+                root_a.join("rules.d/a.yaml"),
+                root_a.join("rules.d/z.yml"),
+                root_b.join("rules.d/b.yaml"),
+            ]
+        );
+        assert_eq!(
+            discovered.local_rule_paths,
+            vec![
+                root_a.join("ui-rules.d/ui.yaml"),
+                root_b.join("ui-rules.d/ui-b.yaml")
             ]
         );
         assert_eq!(
@@ -223,6 +268,9 @@ mod tests {
                 .expect("discover config");
 
         assert!(discovered.rule_paths.is_empty());
+        assert!(discovered.organization_rule_paths.is_empty());
+        assert!(discovered.deployment_rule_paths.is_empty());
+        assert!(discovered.local_rule_paths.is_empty());
         assert!(discovered.override_paths.is_empty());
         assert!(discovered.policy_paths.is_empty());
         assert!(discovered.allowlist_paths.is_empty());
@@ -256,6 +304,7 @@ mod tests {
             .expect("discover config");
 
         assert!(discovered.rule_paths.is_empty());
+        assert!(discovered.organization_rule_paths.is_empty());
         assert!(discovered.override_paths.is_empty());
     }
 

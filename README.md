@@ -106,24 +106,42 @@ this order: `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or
 
 ```text
 ~/.config/telltale/
+  organization-rules.d/*.yaml|*.yml
   rules.d/*.yaml|*.yml
+  ui-rules.d/*.yaml|*.yml
   overrides.d/*.yaml|*.yml
   policies.d/*.yaml|*.yml
   allowlists.d/*.yaml|*.yml
 ```
 
-Discovered `rules.d` files are loaded before explicit `--rules` files, so CLI
-paths remain the most visible operator intent. Use `--config-dir <path>` to use
+Rule packs resolve in fixed order: bundled defaults, organization files,
+deployment files in `rules.d`, then local/UI files in `ui-rules.d`. A higher tier
+fully replaces a same-ID definition in place; unique IDs are additive. Files are
+sorted lexically within each root, while roots at the same tier have equal
+precedence and duplicate IDs fail. Explicit repeated `--rules` files are loaded
+after managed packs and remain additive-only. Use `--config-dir <path>` to use
 one or more explicit local config roots, or `--no-local-config` to disable this
 discovery for a command. Explicit config roots must exist so typos fail closed
 instead of silently falling back to bundled rules.
+
+**Trust boundary:** Treat `organization-rules.d`, `rules.d`, and `ui-rules.d` as
+trusted operator configuration. Protect them from untrusted or unsigned writes:
+higher tiers can fully replace bundled rules, including disabling or changing
+detections. Rule-pack integrity or signing is not provided by this configuration
+mechanism.
+
+`--no-default-rules` excludes only the embedded bundled pack; discovered managed
+packs still load. Combine it with `--no-local-config` when an explicit
+`--rules`-only set is required.
 
 Run `adr config validate` before enabling local config in scans. It uses the same
 rule, override, policy, and allowlist discovery semantics as `scan`/`watch`,
 validates the effective rule set and allowlist YAML, and prints a compact JSON
 health summary.
 Use `adr rules export-default` to inspect or fork the bundled default rule pack
-from an installed binary without needing a source checkout.
+from an installed binary without needing a source checkout. Save an edited fork
+under the intended managed tier when it should replace matching IDs; use
+`--no-default-rules` with an explicit `--rules` path for a standalone custom set.
 
 Local `overrides.d` files are applied after bundled and custom rule files are
 merged, before policy filtering. They can disable or retune rules without editing

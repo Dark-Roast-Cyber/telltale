@@ -4773,6 +4773,13 @@ fn rules_list_and_validate_default_rules() {
     let stdout = String::from_utf8_lossy(&list.stdout);
     assert!(stdout.contains("mcp.tool_metadata.prompt_injection"));
     assert!(stdout.contains("secret.env.read"));
+    for line in stdout.lines().filter(|line| !line.is_empty()) {
+        assert_eq!(
+            line.split('\t').count(),
+            5,
+            "unexpected rule-list row: {line}"
+        );
+    }
 
     let validate = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["rules", "validate"])
@@ -4830,6 +4837,63 @@ fn rules_serve_exposes_read_only_rule_summary_endpoint() {
     );
 
     let output = child.wait_with_output().expect("wait for rules server");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn rules_serve_uses_ordered_managed_pack_for_summary() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "rules",
+            "serve",
+            "--addr",
+            "127.0.0.1:0",
+            "--once",
+            "--no-default-rules",
+            "--config-dir",
+            "tests/fixtures/rule_packs/ordered",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ordered rules serve");
+    let stdout = child.stdout.take().expect("server stdout");
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read listen summary");
+    let listen: Value = serde_json::from_str(line.trim()).expect("listen summary json");
+    let addr = listen["addr"].as_str().expect("listener addr");
+
+    let response = rules_serve_request(addr, "GET", "/api/rules", None);
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    let summary = json_response_body(&response);
+    let rule = summary["rules"]
+        .as_array()
+        .expect("rules array")
+        .iter()
+        .find(|rule| rule["id"] == "secret.env.read")
+        .expect("managed replacement rule");
+    assert_eq!(rule["score"], 77);
+    let provenance = summary["provenance"]
+        .as_array()
+        .expect("provenance array")
+        .iter()
+        .find(|entry| entry["id"] == "secret.env.read")
+        .expect("replacement provenance");
+    assert!(
+        provenance["winner"]
+            .as_str()
+            .unwrap()
+            .contains("deployment:")
+    );
+
+    let output = child
+        .wait_with_output()
+        .expect("wait for ordered rules server");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -7469,6 +7533,106 @@ fn rules_validate_discovers_local_rules_d_and_can_disable_local_config() {
 }
 
 #[test]
+fn rules_validate_reports_ordered_pack_winner_and_replacements() {
+    let temp = tempdir().expect("tempdir");
+    let config_root = temp.path().join("config");
+    fs::create_dir_all(config_root.join("organization-rules.d")).expect("organization rules dir");
+    fs::write(
+        config_root.join("organization-rules.d/org.yaml"),
+        custom_rule_yaml("replacement.target", "organization"),
+    )
+    .expect("write organization rule");
+    fs::create_dir_all(config_root.join("rules.d")).expect("deployment rules dir");
+    fs::write(
+        config_root.join("rules.d/deployment.yaml"),
+        custom_rule_yaml("replacement.target", "deployment"),
+    )
+    .expect("write deployment rule");
+    fs::create_dir_all(config_root.join("ui-rules.d")).expect("local rules dir");
+    fs::write(
+        config_root.join("ui-rules.d/local.yaml"),
+        custom_rule_yaml("replacement.target", "local"),
+    )
+    .expect("write local rule");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "validate", "--no-default-rules", "--config-dir"])
+        .arg(&config_root)
+        .output()
+        .expect("run ordered pack validation");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("validation json");
+    let provenance = summary["provenance"]
+        .as_array()
+        .expect("provenance array")
+        .iter()
+        .find(|entry| entry["id"] == "replacement.target")
+        .expect("replacement provenance");
+    assert!(provenance["winner"].as_str().unwrap().contains("local-ui:"));
+    assert_eq!(provenance["replaced_sources"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn rules_list_reports_pack_winner_and_replaced_sources() {
+    let pack_root = Path::new("tests/fixtures/rule_packs/ordered");
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "list", "--verbose", "--config-dir"])
+        .arg(pack_root)
+        .output()
+        .expect("run fixture pack list");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .find(|line| line.starts_with("secret.env.read\t"))
+        .expect("listed replaced bundled rule");
+    let columns: Vec<_> = line.split('\t').collect();
+    assert_eq!(columns.len(), 7, "unexpected verbose rule-list row: {line}");
+    assert!(
+        columns[5].contains("deployment:"),
+        "missing winner source: {line}"
+    );
+    assert!(
+        columns[6].contains("builtin:telltale.default"),
+        "missing replaced source: {line}"
+    );
+}
+
+#[test]
+fn rules_validate_rejects_equal_tier_duplicates_across_config_roots() {
+    let temp = tempdir().expect("tempdir");
+    let first_root = temp.path().join("first");
+    let second_root = temp.path().join("second");
+    for (root, name) in [(&first_root, "first.yaml"), (&second_root, "second.yaml")] {
+        let path = root.join("organization-rules.d").join(name);
+        fs::create_dir_all(path.parent().expect("organization rules dir"))
+            .expect("organization rules dir");
+        fs::write(&path, custom_rule_yaml("same.id", "same")).expect("duplicate rule");
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "validate", "--no-default-rules", "--config-dir"])
+        .arg(&first_root)
+        .args(["--config-dir"])
+        .arg(&second_root)
+        .output()
+        .expect("run duplicate validation");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("duplicate rule id: same.id"));
+    assert!(stderr.contains("first.yaml"));
+    assert!(stderr.contains("second.yaml"));
+}
+
+#[test]
 fn rules_validate_discovers_local_overrides_and_can_disable_local_config() {
     let temp = tempdir().expect("tempdir");
     let config_root = temp.path().join("config");
@@ -7600,6 +7764,45 @@ overrides:
         .as_u64()
         .expect("tuned risk");
     assert_eq!(tuned_risk, baseline_risk - 15);
+}
+
+#[test]
+fn rules_test_uses_ordered_managed_replacement_rule() {
+    let temp = tempdir().expect("tempdir");
+    let fixture = temp.path().join("codex-fixture.jsonl");
+    fs::write(
+        &fixture,
+        r#"{"type":"event_msg","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"bash","command":"printf fixture-secret-marker","message":"Synthetic managed replacement fixture."}}
+"#,
+    )
+    .expect("write Codex fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "rules",
+            "test",
+            "--no-default-rules",
+            "--config-dir",
+            "tests/fixtures/rule_packs/ordered",
+        ])
+        .arg(&fixture)
+        .output()
+        .expect("run ordered rules test");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("rules test json");
+    assert_eq!(summary["match_count"], 1);
+    assert_eq!(summary["matches"][0]["risk_score"], 77);
+    assert!(
+        summary["matches"][0]["rule_ids"]
+            .as_array()
+            .expect("rule ids")
+            .iter()
+            .any(|rule| rule == "secret.env.read")
+    );
 }
 
 #[test]
@@ -7961,7 +8164,7 @@ overrides:
 }
 
 #[test]
-fn config_validate_rejects_invalid_local_rule() {
+fn config_validate_reports_managed_rule_replacement() {
     let temp = tempdir().expect("tempdir");
     let config_root = temp.path().join("config");
     let rule_path = config_root.join("rules.d/duplicate-bundled.yaml");
@@ -7993,11 +8196,27 @@ modifiers: []
         .output()
         .expect("run adr config validate");
 
-    assert!(!output.status.success(), "config validate should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("duplicate rule id: secret.env.read"),
-        "unexpected stderr: {stderr}"
+        output.status.success(),
+        "config validate should accept managed replacement: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("config validation json");
+    let replacement = summary["rules"]["provenance"]
+        .as_array()
+        .expect("rule provenance")
+        .iter()
+        .find(|entry| entry["id"] == "secret.env.read")
+        .expect("replaced bundled rule provenance");
+    assert!(
+        replacement["winner"]
+            .as_str()
+            .unwrap()
+            .contains("deployment:")
+    );
+    assert_eq!(
+        replacement["replaced_sources"],
+        serde_json::json!(["builtin:telltale.default"])
     );
 }
 
@@ -9109,4 +9328,29 @@ fn rules_coverage_reports_fixture_and_client_coverage() {
     assert!(stdout.contains("chain.secret_then_network"));
     assert!(stdout.contains("secret_access+download"));
     assert!(stdout.contains("Authorized troubleshooting may inspect environment files"));
+}
+
+#[test]
+fn rules_coverage_uses_ordered_managed_pack() {
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "rules",
+            "coverage",
+            "--no-default-rules",
+            "--config-dir",
+            "tests/fixtures/rule_packs/ordered",
+            "--root",
+            "tests/fixtures/session_stores",
+        ])
+        .output()
+        .expect("run ordered rules coverage");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("pack.organization"));
+    assert!(stdout.contains("pack.deployment"));
+    assert!(stdout.contains("pack.local"));
 }

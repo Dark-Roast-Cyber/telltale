@@ -5,7 +5,10 @@ use crate::clients::{ClientId, SourceKind, supported_clients};
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::Source;
 use crate::paths::{self, PathProfile};
-use crate::rules::{RuleLoadMode, load_rule_set_from_paths_with_mode_and_override_paths};
+use crate::rules::{
+    RuleLoadMode, RulePackPaths,
+    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
+};
 use crate::sink::config as sink_config;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 
@@ -100,7 +103,7 @@ enum Command {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -206,7 +209,7 @@ enum Command {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -371,7 +374,7 @@ enum ConfigCommand {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -389,6 +392,10 @@ enum ConfigCommand {
 enum RulesCommand {
     /// List loaded rules.
     List {
+        /// Include winner and replaced-source provenance columns.
+        #[arg(long)]
+        verbose: bool,
+
         /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
         #[arg(long = "rules")]
         rule_paths: Vec<PathBuf>,
@@ -396,7 +403,7 @@ enum RulesCommand {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -414,7 +421,7 @@ enum RulesCommand {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -435,7 +442,7 @@ enum RulesCommand {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -457,7 +464,7 @@ enum RulesCommand {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -483,7 +490,7 @@ enum RulesCommand {
         #[command(flatten)]
         local_config: LocalConfigCliArgs,
 
-        /// Do not load bundled default rules. Use only rules passed with --rules.
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
         #[arg(long)]
         no_default_rules: bool,
 
@@ -510,13 +517,15 @@ struct LocalConfigCliArgs {
     #[arg(long = "config-dir")]
     config_dirs: Vec<PathBuf>,
 
-    /// Disable local config discovery from rules.d, overrides.d, policies.d, allowlists.d, and outputs.d.
+    /// Disable local config discovery from organization-rules.d, rules.d, ui-rules.d,
+    /// overrides.d, policies.d, allowlists.d, and outputs.d.
     #[arg(long)]
     no_local_config: bool,
 }
 
 struct ResolvedRuleConfig {
-    rule_paths: Vec<PathBuf>,
+    explicit_rule_paths: Vec<PathBuf>,
+    rule_pack_paths: RulePackPaths,
     editable_rule_paths: Vec<PathBuf>,
     override_paths: Vec<PathBuf>,
     policy_path: Option<PathBuf>,
@@ -524,6 +533,8 @@ struct ResolvedRuleConfig {
 
 struct ResolvedScanConfig {
     rule_paths: Vec<PathBuf>,
+    explicit_rule_paths: Vec<PathBuf>,
+    rule_pack_paths: RulePackPaths,
     override_paths: Vec<PathBuf>,
     policy_path: Option<PathBuf>,
     allowlist_path: Option<PathBuf>,
@@ -563,8 +574,14 @@ fn resolve_rule_config(
         local_config.no_local_config,
         crate::config::LocalConfigDiscoveryKind::Rules,
     )?;
+    let rule_pack_paths = RulePackPaths {
+        organization: discovered.organization_rule_paths.clone(),
+        deployment: discovered.deployment_rule_paths.clone(),
+        local: discovered.local_rule_paths.clone(),
+    };
     Ok(ResolvedRuleConfig {
-        rule_paths: crate::config::effective_rule_paths(&discovered.rule_paths, rule_paths),
+        explicit_rule_paths: rule_paths.to_vec(),
+        rule_pack_paths,
         editable_rule_paths: rule_paths.to_vec(),
         override_paths: discovered.override_paths.clone(),
         policy_path: crate::config::resolve_policy_path(policy, &discovered.policy_paths)?,
@@ -584,12 +601,19 @@ fn resolve_scan_config(
     )?;
     let effective_rule_paths =
         crate::config::effective_rule_paths(&discovered.rule_paths, rule_paths);
+    let rule_pack_paths = RulePackPaths {
+        organization: discovered.organization_rule_paths.clone(),
+        deployment: discovered.deployment_rule_paths.clone(),
+        local: discovered.local_rule_paths.clone(),
+    };
     let policy_path = crate::config::resolve_policy_path(policy, &discovered.policy_paths)?;
     let allowlist_path =
         crate::config::resolve_allowlist_path(allowlist, &discovered.allowlist_paths)?;
 
     Ok(ResolvedScanConfig {
         rule_paths: effective_rule_paths,
+        explicit_rule_paths: rule_paths.to_vec(),
+        rule_pack_paths,
         override_paths: discovered.override_paths.clone(),
         policy_path,
         allowlist_path,
@@ -616,12 +640,15 @@ fn run_config_validate(
     allowlist: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let resolved_config = resolve_scan_config(local_config, rule_paths, policy, allowlist)?;
-    let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
-        &resolved_config.rule_paths,
+    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        &resolved_config.rule_pack_paths,
+        &resolved_config.explicit_rule_paths,
         resolved_config.policy_path.as_deref(),
         rule_load_mode(no_default_rules),
         &resolved_config.override_paths,
+        &[],
     )?;
+    let rule_set = &resolution.rule_set;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
     let output_specs = sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
     let mut output_warnings: Vec<String> = output_specs
@@ -685,6 +712,8 @@ fn run_config_validate(
                 "paths": display_paths(&resolved_config.rule_paths),
                 "explicit_count": rule_paths.len(),
                 "discovered_count": resolved_config.discovered.rule_paths.len(),
+                "provenance": resolution.diagnostics.provenance,
+                "sources": resolution.diagnostics.sources,
             },
             "overrides": {
                 "paths": display_paths(&resolved_config.override_paths),
@@ -873,7 +902,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 allow_fixtures,
                 backfill,
                 rebuild_baselines,
-                rule_paths: &resolved_config.rule_paths,
+                rule_pack_paths: &resolved_config.rule_pack_paths,
+                rule_paths: &resolved_config.explicit_rule_paths,
                 override_paths: &resolved_config.override_paths,
                 rule_load_mode: rule_load_mode(no_default_rules),
                 policy_path: resolved_config.policy_path.as_deref(),
@@ -898,6 +928,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Rules { command } => match command {
             RulesCommand::List {
+                verbose,
                 rule_paths,
                 local_config,
                 no_default_rules,
@@ -905,17 +936,47 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let resolved_config =
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
-                    &resolved_config.rule_paths,
-                    resolved_config.policy_path.as_deref(),
-                    rule_load_mode(no_default_rules),
-                    &resolved_config.override_paths,
-                )?;
-                for rule in rule_set.summaries() {
-                    println!(
-                        "{}\t{}\t{}\t{}\t{}",
-                        rule.id, rule.category, rule.severity, rule.score, rule.enabled
-                    );
+                let resolution =
+                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                        &resolved_config.rule_pack_paths,
+                        &resolved_config.explicit_rule_paths,
+                        resolved_config.policy_path.as_deref(),
+                        rule_load_mode(no_default_rules),
+                        &resolved_config.override_paths,
+                        &[],
+                    )?;
+                let provenance = resolution
+                    .diagnostics
+                    .provenance
+                    .iter()
+                    .map(|entry| (entry.id.as_str(), entry))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                for rule in resolution.rule_set.summaries() {
+                    let source = provenance
+                        .get(rule.id.as_str())
+                        .map(|entry| entry.winner.as_str())
+                        .unwrap_or("-");
+                    let replaced = provenance
+                        .get(rule.id.as_str())
+                        .map(|entry| entry.replaced_sources.join(","))
+                        .unwrap_or_default();
+                    if verbose {
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                            rule.id,
+                            rule.category,
+                            rule.severity,
+                            rule.score,
+                            rule.enabled,
+                            source,
+                            replaced
+                        );
+                    } else {
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}",
+                            rule.id, rule.category, rule.severity, rule.score, rule.enabled
+                        );
+                    }
                 }
             }
             RulesCommand::Validate {
@@ -926,18 +987,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let resolved_config =
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
-                    &resolved_config.rule_paths,
-                    resolved_config.policy_path.as_deref(),
-                    rule_load_mode(no_default_rules),
-                    &resolved_config.override_paths,
-                )?;
+                let resolution =
+                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                        &resolved_config.rule_pack_paths,
+                        &resolved_config.explicit_rule_paths,
+                        resolved_config.policy_path.as_deref(),
+                        rule_load_mode(no_default_rules),
+                        &resolved_config.override_paths,
+                        &[],
+                    )?;
                 println!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
                         "status": "ok",
-                        "rule_count": rule_set.rule_count(),
-                        "policy": rule_set.policy_name(),
+                        "rule_count": resolution.rule_set.rule_count(),
+                        "policy": resolution.rule_set.policy_name(),
+                        "sources": resolution.diagnostics.sources,
+                        "provenance": resolution.diagnostics.provenance,
                     }))?
                 );
             }
@@ -950,19 +1016,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let resolved_config =
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
-                    &resolved_config.rule_paths,
-                    resolved_config.policy_path.as_deref(),
-                    rule_load_mode(no_default_rules),
-                    &resolved_config.override_paths,
-                )?;
+                let resolution =
+                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                        &resolved_config.rule_pack_paths,
+                        &resolved_config.explicit_rule_paths,
+                        resolved_config.policy_path.as_deref(),
+                        rule_load_mode(no_default_rules),
+                        &resolved_config.override_paths,
+                        &[],
+                    )?;
                 let source = Source {
                     client: ClientId::Codex,
                     kind: SourceKind::Jsonl,
                     source_id: "rules.test".to_string(),
                     path: fixture,
                 };
-                let detections = detect_sources_with_rules(&[source], &rule_set);
+                let detections = detect_sources_with_rules(&[source], &resolution.rule_set);
                 let matches = detections
                     .iter()
                     .filter(|(_, event)| event.event_type == "detection")
@@ -996,11 +1065,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
                 rules_server::run_rules_server(
                     addr,
-                    &resolved_config.rule_paths,
-                    &resolved_config.editable_rule_paths,
-                    &resolved_config.override_paths,
-                    resolved_config.policy_path.as_deref(),
-                    rule_load_mode(no_default_rules),
+                    rules_server::RuleServerConfig {
+                        rule_pack_paths: &resolved_config.rule_pack_paths,
+                        explicit_rule_paths: &resolved_config.explicit_rule_paths,
+                        editable_rule_paths: &resolved_config.editable_rule_paths,
+                        override_paths: &resolved_config.override_paths,
+                        policy_path: resolved_config.policy_path.as_deref(),
+                        rule_load_mode: rule_load_mode(no_default_rules),
+                    },
                     once,
                 )?;
             }
@@ -1015,7 +1087,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
                 coverage::run_rules_coverage(
                     &root,
-                    &resolved_config.rule_paths,
+                    &resolved_config.rule_pack_paths,
+                    &resolved_config.explicit_rule_paths,
                     &resolved_config.override_paths,
                     resolved_config.policy_path.as_deref(),
                     rule_load_mode(no_default_rules),
@@ -1108,7 +1181,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 iterations,
                 debounce: std::time::Duration::from_millis(debounce_ms),
                 min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
-                rule_paths: &resolved_config.rule_paths,
+                rule_pack_paths: &resolved_config.rule_pack_paths,
+                rule_paths: &resolved_config.explicit_rule_paths,
                 override_paths: &resolved_config.override_paths,
                 rule_load_mode: rule_load_mode(no_default_rules),
                 policy_path: resolved_config.policy_path.as_deref(),

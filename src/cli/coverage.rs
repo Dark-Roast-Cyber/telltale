@@ -1,25 +1,31 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::detection::detect_sources_with_rules;
 use crate::discovery::discover_sources;
-use crate::rules::{RuleLoadMode, RuleSet, load_rule_set_from_paths_with_mode_and_override_paths};
+use crate::rules::{
+    RuleLoadMode, RulePackPaths,
+    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
+};
 
 pub(crate) fn run_rules_coverage(
     root: &Path,
+    rule_pack_paths: &RulePackPaths,
     rule_paths: &[PathBuf],
     override_paths: &[PathBuf],
     policy_path: Option<&Path>,
     rule_load_mode: RuleLoadMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rule_set = load_rule_set_from_paths_with_mode_and_override_paths(
+    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        rule_pack_paths,
         rule_paths,
         policy_path,
         rule_load_mode,
         override_paths,
+        &[],
     )?;
-    let (all_falsepositives, all_rule_categories) = load_rule_metadata(rule_paths, rule_load_mode)?;
+    let rule_set = &resolution.rule_set;
+    let (all_falsepositives, all_rule_categories) = load_rule_metadata(&resolution.merged_rule_set);
 
     let sources = discover_sources(root);
     if sources.is_empty() {
@@ -27,7 +33,7 @@ pub(crate) fn run_rules_coverage(
         return Ok(());
     }
 
-    let detections = detect_sources_with_rules(&sources, &rule_set);
+    let detections = detect_sources_with_rules(&sources, rule_set);
 
     // Build coverage map: rule_id -> (positive session_ids, clients).
     let mut positive_sessions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -118,49 +124,27 @@ pub(crate) fn run_rules_coverage(
     Ok(())
 }
 
-fn load_rule_metadata(
-    rule_paths: &[PathBuf],
-    rule_load_mode: RuleLoadMode,
-) -> Result<RuleMetadata, Box<dyn std::error::Error>> {
-    // Load raw YAML metadata to get false-positive notes and modifier categories.
-    // Bundled defaults come from the embedded rule document so standalone binaries
-    // do not need a source checkout at runtime.
-    let mut parsed_rule_sets = Vec::new();
-    if matches!(rule_load_mode, RuleLoadMode::IncludeDefault) {
-        parsed_rule_sets.push(crate::rules::bundled_default_rule_set()?);
-    }
-    for path in rule_paths
-        .iter()
-        .filter(|path| crate::rules::should_load_rule_path(path, rule_load_mode))
-    {
-        let raw = fs::read_to_string(path)?;
-        parsed_rule_sets.push(serde_yaml::from_str::<RuleSet>(&raw)?);
-    }
-
+fn load_rule_metadata(rule_set: &crate::rules::RuleSet) -> RuleMetadata {
     let mut all_falsepositives: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut all_rule_categories: BTreeMap<String, String> = BTreeMap::new();
-    for parsed in &parsed_rule_sets {
-        for rule in &parsed.rules {
-            all_rule_categories.insert(rule.id.clone(), rule.category.clone());
-            if !rule.falsepositives.is_empty() {
-                all_falsepositives.insert(rule.id.clone(), rule.falsepositives.clone());
-            }
+    for rule in &rule_set.rules {
+        all_rule_categories.insert(rule.id.clone(), rule.category.clone());
+        if !rule.falsepositives.is_empty() {
+            all_falsepositives.insert(rule.id.clone(), rule.falsepositives.clone());
         }
-        for modifier in &parsed.modifiers {
-            if !modifier.when_all_categories.is_empty() {
-                all_rule_categories
-                    .insert(modifier.id.clone(), modifier.when_all_categories.join("+"));
-            } else if !modifier.when_all_rule_ids.is_empty() {
-                all_rule_categories
-                    .insert(modifier.id.clone(), modifier.when_all_rule_ids.join("+"));
-            }
-            if !modifier.falsepositives.is_empty() {
-                all_falsepositives.insert(modifier.id.clone(), modifier.falsepositives.clone());
-            }
+    }
+    for modifier in &rule_set.modifiers {
+        if !modifier.when_all_categories.is_empty() {
+            all_rule_categories.insert(modifier.id.clone(), modifier.when_all_categories.join("+"));
+        } else if !modifier.when_all_rule_ids.is_empty() {
+            all_rule_categories.insert(modifier.id.clone(), modifier.when_all_rule_ids.join("+"));
+        }
+        if !modifier.falsepositives.is_empty() {
+            all_falsepositives.insert(modifier.id.clone(), modifier.falsepositives.clone());
         }
     }
 
-    Ok((all_falsepositives, all_rule_categories))
+    (all_falsepositives, all_rule_categories)
 }
 
 type RuleMetadata = (BTreeMap<String, Vec<String>>, BTreeMap<String, String>);
@@ -168,12 +152,10 @@ type RuleMetadata = (BTreeMap<String, Vec<String>>, BTreeMap<String, String>);
 #[cfg(test)]
 mod tests {
     use super::load_rule_metadata;
-    use crate::rules::RuleLoadMode;
-
     #[test]
     fn coverage_metadata_uses_embedded_default_rules() {
-        let (falsepositives, categories) =
-            load_rule_metadata(&[], RuleLoadMode::IncludeDefault).expect("load default metadata");
+        let default = crate::rules::bundled_default_rule_set().expect("default rules");
+        let (falsepositives, categories) = load_rule_metadata(&default);
 
         assert_eq!(
             categories.get("secret.env.read").map(String::as_str),

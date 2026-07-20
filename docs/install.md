@@ -176,19 +176,32 @@ Supported directories for this phase are:
 
 ```text
 /etc/telltale/
+  organization-rules.d/*.yaml|*.yml
   rules.d/*.yaml|*.yml
+  ui-rules.d/*.yaml|*.yml
   overrides.d/*.yaml|*.yml
   policies.d/*.yaml|*.yml
   allowlists.d/*.yaml|*.yml
 ```
 
-`rules.d` files are sorted within each root and loaded before explicit
-`--rules` paths. `overrides.d` files are sorted the same way and applied after
-rules are merged, before policy filtering. If no explicit `--policy` is provided,
-exactly one discovered `policies.d` file may be used; multiple discovered
-policies require passing `--policy` explicitly or removing extras. `scan` and
-`watch` apply the same single-file rule for discovered `allowlists.d` files when
-`--allowlist` is not provided.
+Rule packs resolve in fixed tier order: bundled defaults, `organization-rules.d`,
+`rules.d` deployment files, and `ui-rules.d` local/UI files. Files are sorted
+within each root and roots are processed in configured root order. A higher tier
+fully replaces a same-ID definition in place; unique IDs are additive. Equal-tier
+duplicate IDs fail with source diagnostics. Repeated explicit `--rules` paths are
+loaded afterward as additive-only documents and cannot replace managed packs.
+`overrides.d` files are sorted the same way and applied after packs are merged,
+before policy filtering. If no explicit `--policy` is provided, exactly one
+discovered `policies.d` file may be used; multiple discovered policies require
+passing `--policy` explicitly or removing extras. `scan` and `watch` apply the
+same single-file rule for discovered `allowlists.d` files when `--allowlist` is
+not provided.
+
+**Trust boundary:** Treat `organization-rules.d`, `rules.d`, and `ui-rules.d` as
+trusted operator configuration. Protect them from untrusted or unsigned writes:
+higher tiers can fully replace bundled rules, including disabling or changing
+detections. Rule-pack integrity or signing is not provided by this configuration
+mechanism.
 
 Use overrides for local rule disablement or score tuning without editing bundled
 or custom rule files:
@@ -215,9 +228,11 @@ the effective rule, override, and policy set, validates the selected allowlist
 YAML, and prints a JSON status summary without reading session stores.
 
 Use `adr rules export-default` when you want to inspect or fork the bundled
-default rules from an installed binary. Write the output into a local `rules.d`
-file or pass the exported file explicitly with `--rules`; do not edit bundled
-defaults in place.
+default rules from an installed binary. Save an edited copy in the intended
+managed tier (`organization-rules.d`, `rules.d`, or `ui-rules.d`) when it should
+replace matching IDs. Passing an exported copy with `--rules` is additive-only;
+use `--no-default-rules` if it is intended to be the complete explicit rule set.
+Do not edit bundled defaults in place.
 
 ## Project-Local Session Stores
 
