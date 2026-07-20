@@ -1,0 +1,262 @@
+# Changelog
+
+> **Note:** Future releases will use [GitHub Releases](https://github.com/agentarchaeology/telltale/releases) as the primary change log. This file will remain as a high-level weekly summary for the current development phase.
+
+---
+
+## Past Week — 2026-07-13 to 2026-07-20
+
+21 commits across 8 days, grouped by theme.
+
+**Ordered Rule Packs (Phase 0 closure)**
+- `5687ef8` (07-20) — Add ordered rule-pack precedence with provenance and trust boundary. Bundled < organization < deployment < local/UI tiers; higher tiers fully replace same-ID definitions; equal-tier/cross-kind/explicit collisions fail with both source identities. `adr rules list` keeps five-column default and gains `--verbose` provenance. Shared resolver across scan/watch/coverage/rules serve. Trust-boundary docs added.
+- `4e146e1` (07-20) — Add public ROADMAP.md with stable project direction summary.
+
+**Windows CI & Test Portability**
+- `35696bd` (07-18) — Add Windows CI quality gate.
+- `172da44` (07-18) — Fix Windows CLI test portability.
+- `f9ba8fe` (07-18) — Scope OpenCode cursor test to Linux.
+- `f267ddd` (07-18) — Gate Linux-only SQLite test import.
+- `8867968` (07-18) — Make project config test platform neutral.
+- `2149e7c` (07-18) — Document experimental Windows P54 coverage.
+
+**Release Bundles & Installer**
+- `738c0d5` (07-18) — Package signed Telltale release bundles.
+- `e20cea8` (07-18) — Validate curated release bundles and align release context on main.
+- `ebb36cb` (07-17) — Verify release checksums in installer and make timer setup opt-in (`--with-timer` instead of on-by-default; `--skip-checksum` opt-out).
+
+**Workspace Extraction**
+- `bc1f1b0` (07-17) — Add telltale embedding facade crate (`Pipeline::builder()`, `scan_root()`, `detect_records()`, `evaluate_session()`).
+- `57014cb` (07-17) — Extract `telltale-detect` workspace crate (detection, timeline, correlation, baseline, allowlist, MCP analysis).
+- `abc7b35` (07-17) — Extract `telltale-sources` workspace crate (discovery, OS path roots, per-agent adapters, parsers, install inventory).
+- `6661c43` (07-17) — Convert repo to Cargo workspace with `telltale-schema` and `telltale-rules` crates.
+- `bcf15bc` (07-17) — Move install inventory definitions behind per-agent source adapters (Phase 5 of source adapter refactor).
+- `a98615f` (07-17) — Apply rustfmt to sink and CLI modules (formatting-only).
+
+**Event Sinks & Delivery**
+- `6f11494` (07-16) — Add policy-configurable event sinks with Elastic and Splunk HEC emitters. SinkSet with explicit failure policy, `outputs.d/*.yaml` config, shared ureq/rustls HTTP transport, Elasticsearch Bulk API sink, upgraded Splunk HEC with batched envelopes, `adr config validate` sink reporting.
+- `1138b78` (07-16) — Move OpenCode SQLite parser and source defs behind `src/sources/opencode/`.
+
+**Logging & Sink Testing**
+- `331892c` (07-13) — Test detection delivery across sinks.
+- `8f834ca` (07-13) — Harden production event logging.
+
+> **Notable:** Workspace modularization (07-17) — four commits splitting the monolithic crate into `telltale-schema`, `telltale-rules`, `telltale-sources`, `telltale-detect`, plus an embedding facade — all preserving binary-parity fixture scans. Cross-platform CI (07-18) — Windows joined the quality gate; six commits fixed platform-specific test assumptions. Rule-pack precedence (07-20) — the largest single change (22 files, +1546/−200), closing Phase 0 of the 0.2.0 maturity plan.
+
+---
+
+## Week — 2026-07-06 to 2026-07-12
+
+18 commits across 6 days, grouped by theme.
+
+**Source Adapter Refactor (Phases 2–4)**
+- `6c47f7d` (07-08) — Move Copilot parser and source defs behind `src/sources/copilot/`.
+- `5fce36c` (07-08) — Move Codex source defs and tests behind `src/sources/codex/`.
+- `5d4b6f8` (07-08) — Move RooCode and KiloCode source defs and tests behind `src/sources/`.
+- `df3e151` (07-08) — Move Qwen and OpenClaw source defs and tests behind `src/sources/`.
+- `370a85a` (07-08) — Move Claude source defs and tests behind `src/sources/claude/`.
+- `1138b78` (07-16) — Move OpenCode SQLite parser and source defs behind `src/sources/opencode/` (carried forward from prior week).
+- `4b9948b` (07-07) — Move Gemini source behind adapter.
+
+**Watch Mode & Health Events**
+- `56e1f7d` (07-07) — Refactor watch mode into a resource-efficient monitor (targeted re-scans, event coalescing, `--min-scan-interval-ms`, WAL sidecar filtering, clean shutdown).
+- `b20eb06` (07-07) — Track `install_inventory` in StateChangeProbe and add watch-mode tests.
+- `305acf4` (07-07) — Enrich health events with build version and scan counts.
+- `a13a2ee` (07-07) — Harden SQLite source parsing against lock contention (5-second `busy_timeout`).
+
+**Bug Fixes**
+- `137054d` (07-08) — Fix OpenCode SQLite parser: qualify `time_updated` as `part.time_updated` in JOIN query.
+- `7dc2835` (07-08) — Fix `scanner_error` dedup mismatch: bypass `should_emit` for scanner_error events.
+- `cd8031b` (07-12) — Deduplicate `source_discovery` health events after source removal.
+
+**Rule Management**
+- `9ee1a7a` (07-07) — Add local rule overrides (`overrides.d/*.yaml`).
+- `c77f06a` (07-07) — Add bundled default rule export (`adr rules export-default`).
+- `bfbfe9e` (07-07) — Add local rule configuration workflow (`adr config validate`, local `rules.d/` discovery).
+
+**Scaffolding**
+- `4726d7a` (07-07) — Add source adapter scaffolding (`src/sources/registry.rs`, `SourceAdapter` trait placeholder).
+- `d2eeff8` (07-07) — Gitignore `PLAN-watch-followups.md` as internal planning doc.
+
+> **Notable:** Source adapter refactor moved 7 agent parsers behind per-agent modules in a single week, completing Phases 2–4 of the planned refactor. Watch mode was rebuilt for resource efficiency with targeted re-scans and clean shutdown.
+
+---
+
+## Week — 2026-06-29 to 2026-07-05
+
+1 commit.
+
+- `b6bb4b2` (07-03) — Document source adapter links in README.
+
+---
+
+## Week — 2026-06-22 to 2026-06-28
+
+2 commits.
+
+- `233c7b3` (06-22) — Document source adapter refactor plan.
+- `867b324` (06-22) — Add install inventory telemetry.
+
+---
+
+## Week — 2026-06-15 to 2026-06-21
+
+12 commits across 6 days, grouped by theme.
+
+**Installer & Deployment**
+- `fad54fe` (06-21) — Add user-first Linux installer (sudo-free, no SIEM config).
+- `995241a` (06-21) — Validate Linux installer on host; add macOS/Windows install directions to README.
+- `5b56f44` (06-21) — Align Splunk UF helper with system path profile.
+- `3745ac3` (06-21) — Add OS path profiles for telemetry logs.
+- `922797f` (06-21) — Document OS telemetry path profiles.
+- `043e85b` (06-21) — Add OS-native telemetry rotation guidance.
+- `b6ddf4d` (06-21) — Document active telemetry file monitoring paths.
+
+**Log Rotation**
+- `db20f29` (06-21) — Add built-in cross-platform size-based log rotation (100 MB max, keep 5, same behavior on Linux/macOS/Windows).
+- `5eb9261` (06-21) — Fix review issues: strict cleanup matching, same-day ordering, best-effort cleanup.
+
+**OpenCode SQLite Ingestion**
+- `a318b99` (06-16) — Add cursor-aware OpenCode SQLite ingestion.
+- `d71d0ce` (06-16) — Parse OpenCode SQLite `part` rows.
+
+**Housekeeping**
+- `d823657` (06-21) — Untrack internal OpenCode SQLite ingestion plan.
+
+> **Notable:** The user-first Linux installer shipped — a single curl|bash command that installs to `~/.local/bin` with no sudo. Built-in cross-platform log rotation went live, removing the need for OS-specific logrotate on basic deployments.
+
+---
+
+## Week — 2026-06-08 to 2026-06-14
+
+13 commits across 2 days, grouped by theme.
+
+**Performance & Cleanup**
+- `220b473` (06-09) — Replace O(n*m) session grouping with HashMap-based O(n) approach.
+- `2769d21` (06-09) — Hoist regex compilation to `LazyLock` statics in redaction paths.
+- `ccdcd59` (06-09) — Decompose `cli.rs` and `event.rs` into focused submodules.
+- `22df237` (06-09) — Remove `http` from Cargo.lock (dependency removed earlier).
+- `77cbcfc` (06-09) — Remove unused `http` dependency.
+
+**Project Discovery & MCP**
+- `ee4a06d` (06-10) — Add default project-local discovery roots (`~/github`, `~/projects`).
+- `6417394` (06-10) — Add runtime MCP usage events.
+- `ba0f998` (06-10) — Fix `approval.bypass.context` false positives from system prompts.
+- `943836d` (06-10) — Remove `source_silence_threshold` operational alert.
+
+**Release & Docs**
+- `ace93c0` (06-09) — Consolidate release preflight targets and public-docs tests.
+- `575e249` (06-09) — Add badges and rename Documentation to Related resources.
+- `1618b19` (06-09) — Gitignore website planning artifacts that belong in agentarchaeology repo.
+- `64d9a1a` (06-09) — Add AgentArchaeology.ai cross-references to README and docs.
+
+> **Notable:** Performance improvements to session grouping (O(n) instead of O(n*m)) and regex compilation (LazyLock statics). Project-local discovery gained sensible defaults. MCP runtime usage events shipped.
+
+---
+
+## Week — 2026-05-25 to 2026-05-31
+
+68 commits across 6 days, grouped by theme.
+
+**Release Boundary Guards (bulk of the week)**
+- 30+ commits establishing the public-release boundary guard framework: host-only path classification, public docs inventory, release workflow internal-only path lists, split-checkout wording removal, `.gitignore` alignment, and bidirectional consistency checks between the release checklist and documentation inventory.
+- Key structural commits: `ec4d250` (05-28) — Add public release preflight target. `5dcc769` (05-27) — Add public release readiness checklist. `1f2fb0d` (05-27) — Add public telemetry output guide. `e03f987` (05-27) — Consolidate public boundary guard tests.
+
+**Release Artifact Pipeline**
+- `f89ab0a` (05-30) — Publish release archive checksums.
+- `21dcf9d` (05-30) — Validate release checksum manifests.
+- `a3835a6` (05-30) — Add release artifact manifest check.
+- `5f1444c` (05-30) — Cover release zip artifact manifest.
+- `8b77b34` (05-30) — Review Cargo package release contents.
+- `f38a19b` (05-30) — Expand release fixture smoke coverage.
+- `8dd1e24` (05-30) — Wire public boundary checks into release preflight.
+- `ff5a922` (05-30) — Check public branch alignment before release.
+- `343a17e` (05-30) — Add public push review helper.
+- `0902457` (05-30) — Check release tag version in preflight.
+
+**Scanner Error Suppression**
+- `68f5b7f` (05-30) — Suppress `scanner_error` events for empty sources.
+
+> **Notable:** The single largest week by commit count. The entire public-release boundary framework was built — preflight checks, documentation inventory, boundary guards, and release artifact validation. This established the single-local-repo/public-remote release model that all subsequent releases follow.
+
+---
+
+## Week — 2026-05-18 to 2026-05-24
+
+50 commits across 6 days, grouped by theme.
+
+**Health & Telemetry**
+- `7e8d0dc` (05-20) — Expose health dimensions in status.
+- `aa09314` (05-20) — Suppress unchanged health heartbeats.
+- `6970eff` (05-20) — Add health source inventory change markers.
+- `209ca57` (05-20) — Add health telemetry check dimensions.
+- `a73a017` (05-20) — Compact health event source inventory evidence.
+- `3eecef0` (05-20) — Add static MCP inventory activity events.
+- `89ce54c` (05-20) — Cover unsupported MCP inventory events.
+- `8489b7c` (05-20) — Validate MCP inventory activity schema.
+- `4602f8c` (05-19) — Add session risk summary events.
+- `286974a` (05-19) — Validate session risk summary schema.
+- `63fd27e` (05-19) — Cover session risk summary dry-run output.
+
+**Watch & Export**
+- `7974e3c` (05-23) — Add watch client filtering (`--client`).
+- `f092e0c` (05-23) — docs: document watch client filters.
+- `eb9b7c1` (05-23) — Stabilize detection fingerprints.
+- `7e671a7` (05-23) — Reject malformed JSONL in status.
+- `054d62c` (05-23) — Add export malformed JSONL regression.
+- `3f4711d` (05-19) — Harden export timeline validation.
+- `a230938` (05-19) — Aggregate duplicate correlation windows.
+- `9deeac2` (05-19) — Normalize offset event timestamps.
+- `f793d5a` (05-19) — Harden Splunk HEC endpoint parsing.
+- `7b5b799` (05-19) — Test timeline elastic bulk rejection.
+
+**Documentation & Public Surface**
+- `c84d132` (05-19) — Trim public documentation surface.
+- `9f89ee3` (05-19) — Trim policy authoring examples.
+- `2a1a2c0` (05-19) — Add simple detection rule example.
+- `9479657` (05-19) — Tighten public documentation wording.
+- `4bf41f9` (05-23) — Expand README public docs index.
+- `5747e39` (05-23) — Test public docs local links.
+- `f9734e5` (05-23) — Add README local link regression test.
+- `1122d75` (05-23) — Clarify public packaging boundary.
+- `f7a4e11` (05-23) — Update systemd scan example cadence.
+- `994f09a` (05-19) — Add OpenCode durable workflow.
+- `a9c1baf` (05-19) — Refactor CLI scan and parser helpers.
+- `f8721c6` (05-19) — Cap redacted evidence excerpts.
+- `f65ead9` (05-19) — Improve chain modifier coverage guidance.
+- `1722c72` (05-19) — Update Copilot timestamp capability docs.
+- `4fefff5` (05-19) — Cover export timeline text validation.
+- `31e5e0b` (05-19) — Validate source timeline client filters.
+- `51dcc21` (05-19) — Keep Ralph diary local only.
+
+**CI & Config**
+- `b8ad6ad` (05-18) — Simplify CI workflow.
+- `203cbf8` (05-18) — Fix Rust CI formatting and discovery checks.
+- `d2919e8` (05-18) — Restore README Splunk telemetry dashboard.
+- `3544316` (05-18) — Trim public documentation bloat.
+- `3d0314e` (05-18) — Clarify install scan root.
+- `594e601` (05-18) — Align install verification with README.
+- `9c5f913` (05-18) — Add README links for public reference docs.
+- `1cb3545` (05-18) — Ignore local OpenCode skills.
+- `c59b162` (05-18) — Ignore local SIEM development files.
+- `a6135ef` (05-18) — Ignore local-only development files.
+
+> **Notable:** Health telemetry matured significantly — health dimensions, inventory change markers, MCP inventory activity, and session risk summaries all shipped. Watch mode gained client filtering. The public documentation surface was trimmed and tightened. Detection fingerprints were stabilized.
+
+---
+
+## Week — 2026-05-11 to 2026-05-17
+
+5 commits — the initial public release preparation.
+
+- `655ebc9` (05-17) — Prepare starter public Telltale release.
+- `34462b6` (05-17) — Refresh public logo image.
+- `ff2a1a3` (05-17) — Remove Docker packaging from public starter.
+- `ecb92ce` (05-17) — Polish public starter documentation.
+- `e2d17e1` (05-17) — Add README telemetry dashboard image.
+
+> **Notable:** The first public-facing commits captured in this changelog. The repository has substantial development history prior to this week that is not represented here — this changelog begins with the initial public release preparation (logo, documentation, and packaging trimmed for public consumption).
+
+---
+
+*This changelog covers 200 commits from 2026-05-17 to 2026-07-20. Weekly summaries are grouped by theme within each week. For detailed per-commit descriptions, see the [GitHub commit log](https://github.com/agentarchaeology/telltale/commits/main).*
