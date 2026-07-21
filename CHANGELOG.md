@@ -28,9 +28,9 @@
 **Workspace Extraction**
 - `bc1f1b0` (07-17) — Add telltale embedding facade crate (`Pipeline::builder()`, `scan_root()`, `detect_records()`, `evaluate_session()`).
 - `57014cb` (07-17) — Extract `telltale-detect` workspace crate (detection, timeline, correlation, baseline, allowlist, MCP analysis).
-- `abc7b35` (07-17) — Extract `telltale-sources` workspace crate (discovery, OS path roots, per-agent adapters, parsers, install inventory).
+- `abc7b35` (07-17) — Extract `telltale-sources` workspace crate (discovery, OS path roots, the static per-agent source-definition/install registry, parser entry points, and install inventory; parser dispatch remained centralized with selected source-specific helpers).
 - `6661c43` (07-17) — Convert repo to Cargo workspace with `telltale-schema` and `telltale-rules` crates.
-- `bcf15bc` (07-17) — Move install inventory definitions behind per-agent source adapters (Phase 5 of source adapter refactor).
+- `bcf15bc` (07-17) — Move install inventory definitions into per-agent source modules and collect them through the static registry (Phase 5 of source-module refactor).
 - `a98615f` (07-17) — Apply rustfmt to sink and CLI modules (formatting-only).
 
 **Event Sinks & Delivery**
@@ -49,14 +49,14 @@
 
 18 commits across 6 days, grouped by theme.
 
-**Source Adapter Refactor (Phases 2–4)**
+**Source Module Organization (selected parser moves)**
 - `6c47f7d` (07-08) — Move Copilot parser and source defs behind `src/sources/copilot/`.
 - `5fce36c` (07-08) — Move Codex source defs and tests behind `src/sources/codex/`.
 - `5d4b6f8` (07-08) — Move RooCode and KiloCode source defs and tests behind `src/sources/`.
 - `df3e151` (07-08) — Move Qwen and OpenClaw source defs and tests behind `src/sources/`.
-- `370a85a` (07-08) — Move Claude source defs and tests behind `src/sources/claude/`.
+- `370a85a` (07-08) — Move Claude source definitions and tests behind `src/sources/claude/`.
 - `1138b78` (07-16) — Move OpenCode SQLite parser and source defs behind `src/sources/opencode/` (carried forward from prior week).
-- `4b9948b` (07-07) — Move Gemini source behind adapter.
+- `4b9948b` (07-07) — Move Gemini source definition and source-specific JSON parser behind `src/sources/gemini/`.
 
 **Watch Mode & Health Events**
 - `56e1f7d` (07-07) — Refactor watch mode into a resource-efficient monitor (targeted re-scans, event coalescing, `--min-scan-interval-ms`, WAL sidecar filtering, clean shutdown).
@@ -78,7 +78,7 @@
 - `4726d7a` (07-07) — Add source adapter scaffolding (`src/sources/registry.rs`, `SourceAdapter` trait placeholder).
 - `d2eeff8` (07-07) — Gitignore `PLAN-watch-followups.md` as internal planning doc.
 
-> **Notable:** Source adapter refactor moved 7 agent parsers behind per-agent modules in a single week, completing Phases 2–4 of the planned refactor. Watch mode was rebuilt for resource efficiency with targeted re-scans and clean shutdown.
+> **Notable:** Source module work moved per-agent source definitions and tests into `src/sources/<agent>/`; selected source-specific parser implementations moved for Copilot, Gemini, and OpenCode, while generic extraction and `SourceKind` dispatch remained centralized. The unused `SourceAdapter` trait is scaffolding, not a runtime parser contract. Watch mode was rebuilt for resource efficiency with targeted re-scans and clean shutdown.
 
 ---
 

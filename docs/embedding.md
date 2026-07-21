@@ -12,7 +12,7 @@ SIEM, or exits the process.
 | --- | --- | --- |
 | Consume or emit Telltale events (backend, analytics) | `telltale-schema` | Event model, normalized records, redaction, risk thresholds. Serde only. |
 | Evaluate the rule language inline (proxy, gateway) | `telltale-rules` | YAML rule parsing/validation/policy merge and in-memory regex evaluation. I/O-free: no filesystem, watcher, or database access. |
-| Discover and parse agent session stores | `telltale-sources` | Cross-platform discovery, per-agent adapters, parsers, install inventory. |
+| Discover and parse agent session stores | `telltale-sources` | Cross-platform discovery, static per-agent source definitions, parser entry points, and install inventory. |
 | Full pipeline in-process (EDR, security tool) | `telltale` | The facade: discover → parse → detect with one dependency. |
 
 ## Getting the crates

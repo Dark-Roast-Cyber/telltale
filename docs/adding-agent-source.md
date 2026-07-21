@@ -14,22 +14,25 @@ be expressed over normalized fields.
 
 The current implementation is intentionally simple, but it is centralized:
 
-- `crates/telltale-sources/src/clients.rs` owns path roots, source patterns, and the static
-  `supported_clients()` registry; the `ClientId` and `SourceKind` enums live in
+- `crates/telltale-sources/src/clients.rs` owns path roots, source patterns, and the
+  `supported_clients()` compatibility wrapper; the static registry and per-agent
+  source definitions live under `crates/telltale-sources/src/sources/`. The `ClientId` and `SourceKind` enums live in
   `crates/telltale-schema/src/clients.rs` and are re-exported from
   `crates/telltale-sources/src/clients.rs`.
 - `crates/telltale-sources/src/discovery.rs` resolves OS-specific roots, project-local roots, watch
   roots, and fixture paths for every registered source.
-- `crates/telltale-sources/src/parser.rs` dispatches by `SourceKind` and converts raw records into
-  `NormalizedRecord`.
+- `crates/telltale-sources/src/parser.rs` currently dispatches by `SourceKind` and converts raw
+  records into `NormalizedRecord`; the post-0.2.0 target is explicit parser registration by
+  `(ClientId, source_id)`.
 - `crates/telltale-sources/src/install_inventory.rs` separately answers "does this agent appear
   installed?" using metadata-only executable, package, extension, and
   globalStorage checks.
 
 This is workable while the supported source list is small. As support expands,
-the better target is an adapter layout that keeps each agent's source registry,
-parser, install inventory hints, fixtures, and focused tests near each other.
-See [Recommended Adapter Layout](#recommended-adapter-layout) below and the
+the better target is a source-module layout that keeps each agent's source
+registry, explicit parser, install inventory hints, fixtures, and focused tests
+near each other. The target migration is deferred until after 0.2.0.
+See [Recommended Source Module Layout](#recommended-source-module-layout) below and the
 [Source Adapter Refactor Plan](source-adapter-refactor-plan.md) for the detailed
 migration plan.
 
@@ -77,18 +80,23 @@ Do not read or publish real transcript content while researching. Prefer
 metadata, file names, schema excerpts, synthetic examples, hashes, and redacted
 summaries.
 
-### 2. Update the source registry
+### 2. Update the source registry and parser registration
 
 Current files:
 
-- `crates/telltale-sources/src/clients.rs`
+- `crates/telltale-sources/src/sources/<agent>/mod.rs` for existing per-agent
+  source definitions and its adjacent `install.rs` metadata;
+- `crates/telltale-sources/src/sources/registry.rs` for the built-in static
+  registry;
+- `crates/telltale-schema/src/clients.rs` for `ClientId` and `SourceKind`;
 - `crates/telltale-sources/src/discovery.rs` only if a new root or discovery behavior is needed
 
-Required `crates/telltale-sources/src/clients.rs` updates:
+Required registry updates:
 
 - Add a `ClientId` variant.
 - Add the lowercase stable id in `ClientId::as_str()`.
-- Add or reuse a `SourceKind`.
+- Add or reuse a `SourceKind` as container/reporting metadata only; it must not
+  choose semantic parsing.
 - Add one or more `ClientSourceDef` entries with:
   - stable `id`, such as `antigravity.sessions`;
   - `kind`;
@@ -98,18 +106,25 @@ Required `crates/telltale-sources/src/clients.rs` updates:
   - `pattern`;
   - `recursive`;
   - `project_relative_path` when `PathRoot::ProjectLocal` is used.
-- Add the client to the `CLIENTS` slice returned by `supported_clients()`.
-- Update registry tests in the same file.
+- Add the client/source definitions to the static source registry.
+- Register an explicit parser for every `(ClientId, source_id)` identity. If a
+  source is intentionally not modeled yet, register the generic parser as an
+  explicit fallback and document that choice.
+- Update registry and parser characterization tests in the same change.
 
 Only edit `crates/telltale-sources/src/discovery.rs` when the source needs a new cross-platform root,
 new bounded search behavior, or source matching that cannot be represented with
 `SourcePattern`.
 
-### 3. Add parser support
+### 3. Add the explicit source parser
 
-Current file:
+Target files:
 
-- `crates/telltale-sources/src/parser.rs`
+- `crates/telltale-sources/src/sources/<agent>/parser.rs` for semantic extraction
+  and source-specific record classification;
+- `crates/telltale-sources/src/sources/registry.rs` for source-identity parser
+  registration;
+- shared low-level readers may live under `crates/telltale-sources/src/sources/common/`.
 
 Parser requirements:
 
@@ -124,9 +139,20 @@ Parser requirements:
 - Avoid logging raw transcripts or secrets in errors, tests, or debug output.
 - For SQLite or append-only databases, consider state/cursor needs before
   scanning the entire database repeatedly.
+- Use the parser selected by `(source.client, source.source_id)`, not by
+  `SourceKind` alone.
+- A known source parser error or schema-drift result must fail through the
+  existing parse-error/scanner-diagnostic path. Do not silently retry with a
+  generic or different parser.
+- Represent an unknown record variant as `RecordKind::Other` or an explicit
+  diagnostic according to the source contract; do not infer a kind from a
+  coincidental field shape.
 
-If the new source can use an existing generic parser, document that explicitly.
-If it needs a new parser branch, add focused unit tests next to the parser code.
+If the new source can use an existing generic parser, opt into that fallback in
+the source registration and document why it is safe. Generic fallback is not a
+post-failure recovery path for a known source. Add focused unit tests next to
+the source parser for successful extraction, schema drift, unknown variants,
+and the fallback boundary.
 
 ### 4. Add install inventory support
 
@@ -174,7 +200,8 @@ Fixture rules:
 
 At minimum, add or update tests covering:
 
-- source registry entries in `crates/telltale-sources/src/clients.rs`;
+- source registry entries in `crates/telltale-sources/src/sources/registry.rs` and
+  the relevant `sources/<agent>/mod.rs`;
 - discovery for fixture paths and any new OS/path-root behavior in
   `crates/telltale-sources/src/discovery.rs`;
 - parser extraction for benign records, tool calls, and tool results;
@@ -233,24 +260,24 @@ Examples that may require additional work:
 When adding normalized fields, make them additive and optional. Do not fork the
 schema for one agent.
 
-## Recommended Adapter Layout
+## Recommended Source Module Layout
 
-The current centralized layout is not the best long-term shape. It is easy to
-start with but it spreads one agent across `clients.rs`, `parser.rs`,
-`install_inventory.rs`, docs, and tests. That makes adding agents like
-Antigravity more error-prone. The step-by-step migration plan lives in
-[Source Adapter Refactor Plan](source-adapter-refactor-plan.md).
+The current centralized parser dispatch is not the best long-term shape. It is
+easy to start with but makes source-specific schema handling depend on a shared
+`SourceKind` branch. The step-by-step migration plan lives in [Source Adapter
+Refactor Plan](source-adapter-refactor-plan.md).
 
-A better internal organization is compiled-in source adapters:
+A better internal organization is compiled-in source modules with direct parser
+registration:
 
 ```text
 src/
   sources/
     mod.rs
-    adapter.rs          # shared SourceAdapter contract/types
-    registry.rs         # collects built-in adapters
+    registry.rs         # source definitions and (ClientId, source_id) parsers
+    common/              # optional low-level JSON/JSONL/SQLite readers
     codex/
-      mod.rs            # client id, source defs, parser dispatch
+      mod.rs            # client id, source definitions, install hints
       parser.rs
       install.rs
       tests.rs
@@ -266,14 +293,19 @@ src/
       tests.rs
 ```
 
-The stable adapter contract should expose roughly:
+The source registration contract should provide:
 
-- client id and display name;
-- source definitions;
-- optional install inventory definitions;
-- parser function for that agent's source kinds;
-- fixture root and test helpers;
-- capability metadata used by docs/tests.
+- a client id and stable source IDs;
+- source definitions and optional metadata-only install hints;
+- one semantic parser for each `(ClientId, source_id)`;
+- fixture roots, focused tests, and capability metadata;
+- an explicit generic-parser registration only when the source is not yet
+  modeled.
+
+`SourceKind` describes the source container and reporting metadata; it is not a
+parser selection mechanism. A known parser error must remain an error and must
+not fall through to generic extraction. Unknown records must be represented as
+`Other` or an explicit diagnostic rather than guessed from fields.
 
 The rest of the pipeline should continue to depend on stable interfaces:
 
@@ -281,37 +313,11 @@ The rest of the pipeline should continue to depend on stable interfaces:
 discover -> parse -> normalize -> detect -> score -> triage -> emit
 ```
 
-This keeps `codex` code in `crates/telltale-sources/src/sources/codex/`, future `antigravity` code in
-`crates/telltale-sources/src/sources/antigravity/`, and shared JSON/JSONL/SQLite helpers in common
-modules.
-
-## Plugin Strategy
-
-External parsers are a good goal, but do not jump straight to arbitrary dynamic
-loading. Parser plugins touch sensitive transcripts, so the trust boundary needs
-to be explicit.
-
-Recommended phases:
-
-1. **Compiled-in adapters**: refactor built-in agents into per-agent modules
-   while keeping the current Rust type safety and test coverage.
-2. **Config-only custom sources**: allow operators to declare additional
-   generic JSON/JSONL sources when an existing parser shape is enough.
-3. **Subprocess parser plugins**: run external parsers as explicit commands that
-   read a source path and emit normalized JSON records on stdout. This is easier
-   to sandbox, version, and audit than in-process dynamic libraries.
-4. **Optional WASM plugin ABI**: consider only after the normalized schema and
-   plugin lifecycle are stable.
-
-For third-party parsers, require:
-
-- declared plugin name, version, supported client id, and source ids;
-- deterministic stdout schema;
-- stderr/error redaction rules;
-- timeout and size limits;
-- no network access by default;
-- fixture conformance tests supplied by the plugin author;
-- clear marking in telemetry that records came from an external parser.
+This keeps `codex` code in `crates/telltale-sources/src/sources/codex/`, future
+`antigravity` code in `crates/telltale-sources/src/sources/antigravity/`, and
+shared JSON/JSONL/SQLite helpers in common modules. Trait-based adapters and
+external parser plugins are outside this workstream; revisit them only through
+a separate security and architecture decision.
 
 ## Antigravity Example Checklist
 

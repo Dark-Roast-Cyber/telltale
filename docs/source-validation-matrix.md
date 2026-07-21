@@ -67,10 +67,10 @@ bounded command shape is understood.
 
 ## New Source Checklist
 
-When adding a source adapter, include these artifacts in the same change or keep the source marked experimental until they exist:
+When adding a source, include these artifacts in the same change or keep the source marked experimental until they exist:
 
 - a `ClientId` variant and `ClientSourceDef` path pattern;
-- a parser branch that produces normalized records without source-specific detection logic;
+- an explicit `(ClientId, source_id)` parser registration that produces normalized records without source-specific detection logic;
 - a fixture directory under `tests/fixtures/session_stores/<client>/` or another documented fixture root;
 - focused discovery and parser tests for benign, tool-call, and tool-result records;
 - a positive detection fixture and assertion proving bundled rules apply after normalization;
@@ -100,7 +100,7 @@ local source paths or transcript identifiers.
 
 ## Related Documents
 
-- [Adding an Agent Source](adding-agent-source.md) — implementation checklist and adapter/plugin direction
+- [Adding an Agent Source](adding-agent-source.md) — implementation checklist and explicit parser registration
 - [Source Adapter Refactor Plan](source-adapter-refactor-plan.md) — phased plan for moving built-in agents to `src/sources/<agent>/`
 - [Agent Capability Profiles](agent-capability-profiles.md) — per-source field availability and known gaps
 - [Client Capability Matrix](client-capability-matrix.md) — field-level availability per client
