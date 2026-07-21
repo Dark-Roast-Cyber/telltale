@@ -1,10 +1,10 @@
 # Changelog
 
-> **Note:** Future releases will use [GitHub Releases](https://github.com/agentarchaeology/telltale/releases) as the primary change log. This file will remain as a high-level weekly summary for the current development phase.
+> **Note:** The change log will eventually move over to [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) as the project cuts versioned releases. For now, this file is a high-level weekly summary of the current development phase.
 
 ---
 
-## Past Week — 2026-07-13 to 2026-07-20
+## Week — 2026-07-13 to 2026-07-20
 
 21 commits across 8 days, grouped by theme.
 
