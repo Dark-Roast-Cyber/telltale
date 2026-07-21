@@ -72,6 +72,23 @@ fn source_inventory_change_value(event: &Value) -> &str {
         .expect("source inventory change value")
 }
 
+fn assert_http_header(request: &str, expected_name: &str, expected_value: &str) {
+    let actual = request
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case(expected_name)
+                .then_some(value.trim())
+        });
+    assert_eq!(
+        actual,
+        Some(expected_value),
+        "expected HTTP header {expected_name}: {expected_value}; captured request:\n{request}"
+    );
+}
+
 #[cfg(unix)]
 fn configure_git_user(repo: &Path) {
     git_expect(repo, &["config", "user.email", "adr-test@example.invalid"]);
@@ -2755,11 +2772,7 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         .recv_timeout(Duration::from_secs(2))
         .expect("hec request");
     assert!(request.starts_with("POST /services/collector HTTP/1.1"));
-    assert!(
-        request
-            .to_lowercase()
-            .contains("authorization: splunk test-token")
-    );
+    assert_http_header(&request, "Authorization", "Splunk test-token");
     let body = request.split_once("\r\n\r\n").expect("body split").1;
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["index"], "adr");
@@ -2818,11 +2831,7 @@ fn scan_once_emits_identical_events_to_jsonl_and_splunk_hec() {
         .iter()
         .flat_map(|request| {
             assert!(request.starts_with("POST /services/collector HTTP/1.1"));
-            assert!(
-                request
-                    .to_lowercase()
-                    .contains("authorization: splunk test-token")
-            );
+            assert_http_header(&request, "Authorization", "Splunk test-token");
             // Envelopes are batched: one request body holds one envelope
             // per line.
             let body = request.split_once("\r\n\r\n").expect("body split").1;
@@ -3017,11 +3026,7 @@ sinks:
     let request = requests
         .recv_timeout(Duration::from_secs(2))
         .expect("hec request");
-    assert!(
-        request
-            .to_lowercase()
-            .contains("authorization: splunk env-secret-token")
-    );
+    assert_http_header(&request, "Authorization", "Splunk env-secret-token");
     let body = request.split_once("\r\n\r\n").expect("body split").1;
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["source"], "telltale:outputs-test");
