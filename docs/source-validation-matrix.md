@@ -16,7 +16,7 @@ This matrix tracks each supported agent source across discovery, parsing, tool-c
 | Codex | `codex.sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ R01 complete | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | Codex | `codex.archived_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ R01 complete | Same as `codex.sessions` |
 | Codex | `codex.headless_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ R01 complete | Same as `codex.sessions` |
-| Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ No live sessions | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ R04 complete | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | Gemini CLI | `gemini.tmp` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
@@ -92,6 +92,7 @@ Codex, OpenCode, and Copilot have received bounded live validation:
 - **Codex** (R01): `~/.codex/sessions/`, `archived_sessions/`, `headless/` (complete)
 - **OpenCode** (R02): Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db`, plus `storage/message/` below the same root (complete)
 - **Copilot** (R03): `logs/copilot/process-*.log` (complete)
+- **Claude Code** (R04): `~/.claude/projects/` (complete) — bounded `--client claude --max-sources 5 --dry-run` parsed 5 sources with 5 activities and 1 benign detection, zero scanner errors; repeated at cap 10 with consistent results.
 
 Future live-validation notes should record the client filter and source cap
 used, for example `--client codex --max-sources 5 --dry-run`, rather than exact
