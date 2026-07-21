@@ -23,6 +23,10 @@ public summaries should cite deterministic fixture commands, supported client
 families, schema checks, or aggregate results without exposing workstation
 paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
+Version selection and package/tag alignment follow
+[Versioning and Releases](versioning.md). Compatible maintenance releases
+remain on the current `0.2.x` line; do not create an unplanned `0.5.x` line.
+
 ## Pre-Release Checks
 
 Run these checks from a clean working tree in the local ADR checkout before

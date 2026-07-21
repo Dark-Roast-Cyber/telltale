@@ -19,13 +19,18 @@ Priorities, in order:
    Telltale; "ADR" remains the category name. Cross-repo refactor (CLI, crates,
    config, docs) sequenced before the remaining release work so everything
    ships on the new product identity.
-3. **Configuration consolidation** — one shared scan/watch configuration path
+3. **Crates.io package preparation** — package the five library crates after the
+   rename with clean metadata, package boundaries, and dependency-ordered
+   publication. Versioning follows the conservative `0.x` policy in
+   [Versioning and Releases](docs/versioning.md), with `0.2.x` maintenance
+   releases rather than a direct jump to `0.5.x`.
+4. **Configuration consolidation** — one shared scan/watch configuration path
    to remove a high-risk duplication seam.
-4. **Explicit delivery semantics** — honest local JSONL + best-effort remote
+5. **Explicit delivery semantics** — honest local JSONL + best-effort remote
    sinks, with documented retry, loss, and replay behavior.
-5. **Maintainability cleanup** — split large test files, remove unused
+6. **Maintainability cleanup** — split large test files, remove unused
    placeholders, deduplicate documentation.
-6. **Claims and evidence** — public support claims match measured evidence;
+7. **Claims and evidence** — public support claims match measured evidence;
    unknowns are labeled preview rather than converted into broad claims.
 
 Before a tagged release: installer integrity checks, CI preflight, archive
@@ -53,7 +58,7 @@ Explicitly deferred until the 0.2.0 release is stable:
 - Remote rule feeds, manifests, signatures, and polling
 - Tamper-evident signing and forensic snapshots
 - Native persistent delivery outbox
-- Crates.io publication and broad semver promises
+- Long-lived semver promises and a feature-flag matrix
 
 ## Principles
 

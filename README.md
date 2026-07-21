@@ -348,6 +348,7 @@ These files are the source-of-truth for Telltale's implementation, rules, and sc
 - [Threat taxonomy](docs/threat-taxonomy.md) — operational threat categories
 - [Privacy model](docs/privacy-model.md) — redaction policy and evidence boundaries
 - [Release readiness](docs/release-readiness.md) — preflight checklist for public releases
+- [Versioning and releases](docs/versioning.md) — package, CLI, schema, and tag version policy
 
 ### Additional references
 
