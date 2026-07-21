@@ -497,7 +497,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        RuleLoadMode, RulePackPaths,
+        RuleLoadMode, RulePackPaths, canonical_or_original,
         resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
     };
 
@@ -786,8 +786,8 @@ modifiers: []
         .expect_err("equal-tier duplicate");
         let error = error.to_string();
         assert!(error.starts_with("duplicate rule id: same.id"));
-        assert!(error.contains(&first.display().to_string()));
-        assert!(error.contains(&second.display().to_string()));
+        assert!(error.contains(&canonical_or_original(&first).display().to_string()));
+        assert!(error.contains(&canonical_or_original(&second).display().to_string()));
     }
 
     #[test]
@@ -842,8 +842,14 @@ modifiers: []
         )
         .expect_err("distinct explicit collision");
         let collision = collision.to_string();
-        assert!(collision.contains(&managed.display().to_string()));
-        assert!(collision.contains(&explicit_collision.display().to_string()));
+        assert!(collision.contains(&canonical_or_original(&managed).display().to_string()));
+        assert!(
+            collision.contains(
+                &canonical_or_original(&explicit_collision)
+                    .display()
+                    .to_string()
+            )
+        );
 
         let duplicate = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
             &RulePackPaths::default(),
