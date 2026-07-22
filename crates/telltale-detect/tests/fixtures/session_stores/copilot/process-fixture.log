@@ -1,0 +1,8 @@
+2026-04-27T16:16:57.779Z [INFO] Session indexing debug: SESSION_INDEXING=false, repository=undefined, savedIndexingLevel=undefined
+2026-04-27T16:16:57.841Z [INFO] Workspace initialized: copilot-fixture-session-001 (checkpoints: 0)
+2026-04-27T16:16:57.847Z [INFO] Starting Copilot CLI: 1.0.36
+2026-04-27T16:16:57.847Z [INFO] Node.js version: v24.11.1
+2026-04-27T16:17:00.362Z [INFO] Memory is not enabled; skipping memory tools.
+2026-04-27T16:17:17.990Z [INFO] Accumulated output items (2): [{"type":"reasoning","id":"r1","summary":[],"encrypted_content":"fixture-encrypted-reasoning"},{"arguments":"{\"path\":\"/home/user/project/src/main.rs\"}","call_id":"call_fixture_001","id":"c1","name":"view","status":"completed","type":"function_call"}]
+2026-04-27T16:17:30.100Z [INFO] Accumulated output items (1): [{"arguments":"{\"path\":\"/home/user/project/README.md\"}","call_id":"call_fixture_002","id":"c2","name":"view","status":"completed","type":"function_call"}]
+2026-04-27T16:17:45.200Z [INFO] Session completed.

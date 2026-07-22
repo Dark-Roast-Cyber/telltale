@@ -1,0 +1,6 @@
+2026-04-27T16:16:57.841Z [INFO] Workspace initialized: copilot-mixed-format-session (checkpoints: 0)
+2026-04-27T16:16:58.110Z [INFO] Plain startup line without structured output.
+2026-04-27T16:17:01.220Z [DEBUG] {"event":"heartbeat","status":"ok"}
+2026-04-27T16:17:17.990Z [INFO] Accumulated output items (3): [{"type":"reasoning","id":"r1","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect synthetic files."}]},{"arguments":"{\"path\":\"README.md\"}","call_id":"call_mixed_001","id":"c1","name":"view","status":"completed","type":"function_call"}]
+[{"arguments":"{\"path\":\"Cargo.toml\"}","call_id":"call_mixed_002","id":"c2","name":"view","status":"completed","type":"function_call","message":"Synthetic Cargo manifest excerpt"}]
+2026-04-27T16:17:45.200Z [INFO] Session completed.

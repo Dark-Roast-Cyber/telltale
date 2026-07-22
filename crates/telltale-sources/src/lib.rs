@@ -17,48 +17,10 @@ pub mod sources;
 pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir.join("../../tests/fixtures");
-    let workspace_root_is_dir = workspace_root.is_dir();
-    let root = if workspace_root_is_dir {
-        workspace_root.clone()
+    let root = if workspace_root.is_dir() {
+        workspace_root
     } else {
         manifest_dir.join("tests/fixtures")
     };
-    let result = root.join(relative);
-    if !result.exists() && relative.contains("gemini") {
-        eprintln!(
-            "test_fixture_path MISSING: manifest_dir={:?} result={:?}",
-            manifest_dir, result
-        );
-        let fixture_root = manifest_dir.join("tests/fixtures");
-        if let Ok(entries) = std::fs::read_dir(&fixture_root) {
-            eprintln!("  fixture_root {:?} entries:", fixture_root);
-            for entry in entries.flatten() {
-                eprintln!("    {}", entry.path().display());
-            }
-        }
-        let session_stores = fixture_root.join("session_stores");
-        if let Ok(entries) = std::fs::read_dir(&session_stores) {
-            eprintln!("  session_stores entries:");
-            for entry in entries.flatten() {
-                eprintln!("    {}", entry.path().display());
-            }
-        }
-        let gemini = session_stores.join("gemini");
-        eprintln!("  gemini exists: {}", gemini.exists());
-        if let Ok(entries) = std::fs::read_dir(&gemini) {
-            eprintln!("  gemini entries:");
-            for entry in entries.flatten() {
-                eprintln!("    {}", entry.path().display());
-            }
-        }
-        let gemini_tmp = gemini.join("tmp");
-        eprintln!("  gemini/tmp exists: {}", gemini_tmp.exists());
-        if let Ok(entries) = std::fs::read_dir(&gemini_tmp) {
-            eprintln!("  gemini/tmp entries:");
-            for entry in entries.flatten() {
-                eprintln!("    {}", entry.path().display());
-            }
-        }
-    }
-    result
+    root.join(relative)
 }
