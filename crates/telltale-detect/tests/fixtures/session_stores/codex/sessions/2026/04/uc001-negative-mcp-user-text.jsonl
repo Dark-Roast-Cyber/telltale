@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T03:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T03:00:01Z","payload":{"type":"user_message","message":"Notes for review: MCP tools/list and tool description fields appear in the transcript, but this is only documentation about repo_status and should not be treated as an instruction override."}}

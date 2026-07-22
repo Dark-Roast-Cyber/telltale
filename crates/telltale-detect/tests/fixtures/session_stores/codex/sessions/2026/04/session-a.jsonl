@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-01T00:00:00Z","payload":{"source":"cli","model_provider":"fixture","agent_nickname":"fixture-agent"}}
+{"type":"event_msg","timestamp":"2026-04-01T00:00:01Z","payload":{"type":"user_message","message":"synthetic fixture"}}

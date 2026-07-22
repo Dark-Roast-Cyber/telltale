@@ -3,11 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-use adr::detection::{detect_sources_with_rules, summarize_source_activities};
-use adr::discovery::discover_sources;
-use adr::parser::parse_source_records;
-use adr::rules::load_default_rule_set;
-use adr::schema::Provenance;
+use telltale_cli::detection::{detect_sources_with_rules, summarize_source_activities};
+use telltale_cli::discovery::discover_sources;
+use telltale_cli::parser::parse_source_records;
+use telltale_cli::rules::load_default_rule_set;
+use telltale_cli::schema::Provenance;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -271,7 +271,7 @@ fn bench_conformance(c: &mut Criterion) {
             for source in &sources {
                 if let Ok(records) = parse_source_records(source) {
                     for record in &records {
-                        let v1 = adr::schema::NormalizedRecordV1::from_legacy(
+                        let v1 = telltale_cli::schema::NormalizedRecordV1::from_legacy(
                             record.clone(),
                             Provenance {
                                 source_path_hash: "bench_hash".to_string(),

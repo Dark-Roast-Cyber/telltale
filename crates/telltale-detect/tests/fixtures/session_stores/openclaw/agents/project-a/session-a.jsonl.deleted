@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"openclaw-session-a","timestamp":"2026-04-27T19:00:00Z","agent":"openclaw","provider":"openclaw","model":"openclaw-fixture-model","content":"Summarize repository status without reading sensitive files or calling tools."}
+{"type":"assistant","sessionId":"openclaw-session-a","timestamp":"2026-04-27T19:00:01Z","agent":"openclaw","provider":"openclaw","model":"openclaw-fixture-model","content":"This is a benign OpenClaw fixture response with no tool calls or sensitive access."}

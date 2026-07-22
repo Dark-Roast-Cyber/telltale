@@ -6,7 +6,7 @@
 
 ADR uses its own operational categories for deterministic detection, scoring, policy filters, and SIEM output. MITRE ATLAS is an offline reference for naming, tagging, and documentation only.
 
-ATLAS must not be fetched or parsed during `adr scan`, `adr rules validate`, tests, or normal runtime execution. Use it while authoring detection content, then commit the resulting ADR rule tags, explanations, fixtures, and docs.
+ATLAS must not be fetched or parsed during `telltale scan`, `telltale rules validate`, tests, or normal runtime execution. Use it while authoring detection content, then commit the resulting ADR rule tags, explanations, fixtures, and docs.
 
 ## Offline ATLAS Reference
 

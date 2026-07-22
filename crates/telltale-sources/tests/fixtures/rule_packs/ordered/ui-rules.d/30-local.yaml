@@ -1,0 +1,15 @@
+version: 1
+description: Synthetic local UI rule pack.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: pack.local
+    category: pack_test
+    severity: high
+    score: 33
+    targets: [command]
+    regex: 'local-marker'
+    tags: [fixture]
+    explanation: Synthetic local UI rule.
+modifiers: []

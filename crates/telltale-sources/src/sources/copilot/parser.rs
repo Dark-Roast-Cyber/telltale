@@ -115,8 +115,6 @@ fn copilot_log_timestamp(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
-
     use tempfile::tempdir;
 
     use crate::clients::{ClientId, SourceKind};
@@ -202,18 +200,15 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 
     #[test]
     fn parses_copilot_multi_session_process_log_boundaries() {
-        let source = discover_sources(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/session_stores"
-        )))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Copilot
-                && source.kind == SourceKind::CopilotProcessLog
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("process-multi-session.log")
-        })
-        .expect("fixture source");
+        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+            .into_iter()
+            .find(|source| {
+                source.client == ClientId::Copilot
+                    && source.kind == SourceKind::CopilotProcessLog
+                    && source.path.file_name().and_then(|name| name.to_str())
+                        == Some("process-multi-session.log")
+            })
+            .expect("fixture source");
 
         let records = parse_source_records(&source).expect("records");
         let tool_calls = records
@@ -233,18 +228,15 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 
     #[test]
     fn parses_copilot_mixed_format_process_log_items() {
-        let source = discover_sources(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/session_stores"
-        )))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Copilot
-                && source.kind == SourceKind::CopilotProcessLog
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("process-mixed-format.log")
-        })
-        .expect("fixture source");
+        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+            .into_iter()
+            .find(|source| {
+                source.client == ClientId::Copilot
+                    && source.kind == SourceKind::CopilotProcessLog
+                    && source.path.file_name().and_then(|name| name.to_str())
+                        == Some("process-mixed-format.log")
+            })
+            .expect("fixture source");
 
         let records = parse_source_records(&source).expect("records");
         let tool_calls = records
@@ -271,18 +263,15 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 
     #[test]
     fn parses_copilot_uc001_tool_result_fixture() {
-        let source = discover_sources(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/session_stores"
-        )))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Copilot
-                && source.kind == SourceKind::CopilotProcessLog
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("process-uc001.log")
-        })
-        .expect("fixture source");
+        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+            .into_iter()
+            .find(|source| {
+                source.client == ClientId::Copilot
+                    && source.kind == SourceKind::CopilotProcessLog
+                    && source.path.file_name().and_then(|name| name.to_str())
+                        == Some("process-uc001.log")
+            })
+            .expect("fixture source");
 
         let records = parse_source_records(&source).expect("records");
         let tool_calls = records

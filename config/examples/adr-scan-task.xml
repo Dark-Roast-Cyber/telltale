@@ -33,7 +33,7 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%LOCALAPPDATA%\Telltale\adr.exe</Command>
+      <Command>%LOCALAPPDATA%\Telltale\telltale.exe</Command>
       <Arguments>scan --once --emit-activity --root "%USERPROFILE%"</Arguments>
       <WorkingDirectory>%LOCALAPPDATA%\Telltale</WorkingDirectory>
     </Exec>

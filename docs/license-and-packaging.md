@@ -1,5 +1,8 @@
 # License And Packaging
 
+The crates.io package name `telltale` is an unrelated session-types crate. It is
+not this project; Telltale's embedding facade is packaged as `telltale-core`.
+
 Telltale Core is licensed under the Apache License 2.0. The root `LICENSE`
 file applies to the open-source core in this repository.
 
@@ -58,10 +61,11 @@ assumptions must stay out of public commits and remain local-only.
 ## Release Artifacts
 
 Tagged GitHub releases build the checked-in Rust crate from the public
-repository and publish platform-specific `adr` binary archives. Every archive
-contains exactly these file members:
+repository and publish canonical platform-specific `telltale-*` binary
+archives. Every archive contains exactly these file members:
 
 ```text
+telltale                    # or telltale.exe on Windows
 adr                         # or adr.exe on Windows
 LICENSE
 README.md                   # release quick start
@@ -77,8 +81,10 @@ release members. `SHA256SUMS` is published alongside the archives as a separate
 release asset.
 
 The release workflow also creates a GitHub artifact attestation for each
-archive using the workflow's short-lived GitHub/Sigstore identity. Verify a
-download before extraction with the GitHub CLI:
+archive using the workflow's short-lived GitHub/Sigstore identity. The existing
+`v0.1.0` release used the legacy asset name below; `0.2.x` and later canonical
+assets use `telltale-v<version>-...` while matching `adr-*` aliases remain exact
+copies. Verify a download before extraction with the GitHub CLI:
 
 ```sh
 gh attestation verify adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \

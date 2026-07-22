@@ -478,17 +478,15 @@ mod tests {
 
     #[test]
     fn parses_gemini_json_message_array_records() {
-        let source = discover_sources(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/session_stores"
-        )))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Gemini
-                && source.kind == SourceKind::Json
-                && source.path.file_name().and_then(|name| name.to_str()) == Some("session-a.json")
-        })
-        .expect("fixture source");
+        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+            .into_iter()
+            .find(|source| {
+                source.client == ClientId::Gemini
+                    && source.kind == SourceKind::Json
+                    && source.path.file_name().and_then(|name| name.to_str())
+                        == Some("session-a.json")
+            })
+            .expect("fixture source");
 
         let records = parse_source_records(&source).expect("records");
 
@@ -510,18 +508,15 @@ mod tests {
 
     #[test]
     fn parses_gemini_json_tool_call_and_result_records() {
-        let source = discover_sources(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/session_stores"
-        )))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Gemini
-                && source.kind == SourceKind::Json
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("uc001-gemini-tool-result.json")
-        })
-        .expect("fixture source");
+        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+            .into_iter()
+            .find(|source| {
+                source.client == ClientId::Gemini
+                    && source.kind == SourceKind::Json
+                    && source.path.file_name().and_then(|name| name.to_str())
+                        == Some("uc001-gemini-tool-result.json")
+            })
+            .expect("fixture source");
 
         let records = parse_source_records(&source).expect("records");
 
@@ -547,11 +542,7 @@ mod tests {
             client: crate::clients::ClientId::Codex,
             kind: crate::clients::SourceKind::Jsonl,
             source_id: "codex.malformed".to_string(),
-            path: Path::new(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../tests/fixtures/rule_samples/malformed-source.jsonl"
-            ))
-            .to_path_buf(),
+            path: crate::test_fixture_path("rule_samples/malformed-source.jsonl").to_path_buf(),
         };
 
         let result = parse_source_records(&source);

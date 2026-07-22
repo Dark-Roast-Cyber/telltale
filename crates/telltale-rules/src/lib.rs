@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use telltale_schema::event::{Evidence, evidence_hash, redact_sensitive_text};
 
-const DEFAULT_RULE_YAML: &str = include_str!("../../../config/rules/tool-call-regex.yaml");
+const DEFAULT_RULE_YAML: &str = include_str!("../data/tool-call-regex.yaml");
 
 const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "arguments",

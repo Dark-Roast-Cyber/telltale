@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T01:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T01:00:01Z","payload":{"type":"user_message","message":"For documentation, the controlled test domain is https://darkroastcyber.io and should appear in examples only."}}

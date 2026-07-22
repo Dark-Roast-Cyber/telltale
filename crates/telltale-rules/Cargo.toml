@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 description = "Telltale rule language: YAML parsing, validation, policy merge, and in-memory evaluation"
 license.workspace = true
+authors.workspace = true
+homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/telltale-rules"
+readme = "README.md"
+keywords = ["security", "rules", "regex", "yaml"]
+categories = ["parser-implementations", "development-tools"]
+include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/data/**", "/examples/**", "/src/**"]
 
 [dependencies]
 telltale-schema.workspace = true

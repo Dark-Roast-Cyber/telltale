@@ -1,7 +1,7 @@
 # Release Readiness
 
 Use this checklist before preparing a tagged Telltale Core release or publishing
-release artifacts from the public repository. The single local ADR checkout is
+release artifacts from the public repository. The single local Telltale checkout is
 the release source of truth; public release curation stages reviewed public-safe
 material from this checkout to the public remote.
 
@@ -13,9 +13,10 @@ configuration. It should not include local scanner state, telemetry logs, raw
 agent transcripts, credentials, private planning notes, local agent workflow
 state, or deployment-specific SIEM settings.
 
-Release archives should contain the compiled `adr` command-line binary, the
-Apache-2.0 license, a concise quick-start README, and reviewed deployment
-examples generated from checked-in public repository contents.
+Release archives should contain the primary `telltale` command-line binary and
+the compiled `adr` compatibility command, the Apache-2.0 license, a concise
+quick-start README, and reviewed deployment examples generated from checked-in
+public repository contents.
 
 Public release evidence should be reproducible from synthetic fixtures or
 already-redacted telemetry output. Keep live host validation notes local-only;
@@ -29,7 +30,7 @@ remain on the current `0.2.x` line; do not create an unplanned `0.5.x` line.
 
 ## Pre-Release Checks
 
-Run these checks from a clean working tree in the local ADR checkout before
+Run these checks from a clean working tree in the local Telltale checkout before
 tagging a release:
 
 ```sh
@@ -42,6 +43,7 @@ The preflight target wraps the same public release checks shown below:
 make release-context-check
 make release-tag-review
 make release-crate-manifest
+make package-verify
 make release-public-docs-check
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -91,11 +93,27 @@ checkout, keep ignored host-only material local, and review
 branch, public remote URLs, short working-tree status, staged path list, and the
 release-readiness reminder in one reviewable summary.
 
-`make release-crate-manifest` lists the Cargo source package contents with
-`cargo package --list` and fails if the package would include host-only planning,
-local automation, telemetry, scanner state, or deployment-specific Splunk
-material. Use it to review source package contents before publishing a crate or
-tagged source release.
+`make release-crate-manifest` lists all six functional Cargo package inventories
+with `cargo package --list` and fails if a package would include host-only
+planning, local automation, telemetry, scanner state, or deployment-specific
+Splunk material. It also requires the package-owned default rules data in
+`telltale-rules`. Use it to review source package contents before publishing a
+crate or tagged source release.
+
+`make package-verify` performs full locked `cargo package` verification in
+dependency order using temporary local crates.io patches for unpublished
+workspace packages. It then compiles a registry-style external consumer and
+installs the normalized `telltale-cli` package into a temporary root, checking
+both `telltale --version` and `adr --version`. The target supports Linux and
+macOS and cleans its temporary workspace on exit.
+
+For the actual publication pass, first recheck crates.io ownership and name
+availability. Publish in dependency order, waiting for each prerequisite to
+appear in the index and verifying that it resolves without a local patch before
+publishing the next dependent package. After all six packages are available,
+repeat the external consumer and CLI installation checks with every local
+`patch.crates-io` override removed. Those final checks must resolve only the
+pinned `=0.2.0` registry packages before publication is declared complete.
 
 ## Artifact Boundary
 
@@ -113,8 +131,9 @@ Keep environment-specific service files and SIEM shipper configuration outside
 the archive unless they are reviewed public examples with placeholder values.
 
 For generated binary archives, inspect the archive listing before upload. The
-archive should contain the `adr` binary, `LICENSE`, `README.md`, and the
-curated `config/examples/` deployment files (`telltale-outputs.yaml`,
+archive should contain both `telltale` and `adr` binaries, `LICENSE`,
+`README.md`, and the curated `config/examples/` deployment files
+(`telltale-outputs.yaml`,
 `adr-scan.service`, `adr-scan.timer`, `adr-scan-task.xml`) only. It should not
 contain checked-out working-tree residue, scanner state, telemetry output,
 session stores, local planning notes, local agent workflow state, or
@@ -136,9 +155,11 @@ make release-artifact-manifest
 ```
 
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
-archive contains exactly the expected bundle manifest: the `adr` or `adr.exe`
-binary, `LICENSE`, `README.md`, and the curated `config/examples/` deployment
-files. When `SHA256SUMS` is present in the same directory, the target also
+archive contains exactly the expected bundle manifest: both the `telltale` and
+`adr` binaries (or their `.exe` forms), `LICENSE`, `README.md`, and the curated
+`config/examples/` deployment files. It also verifies that every `adr-*` archive
+is an exact copy of its matching `telltale-*` archive. When `SHA256SUMS` is
+present in the same directory, the target also
 verifies that its entries match the reviewed archives exactly and that each
 checksum validates. The default `release-downloads/` directory is local review
 residue and is ignored and excluded from source packages; legacy local
@@ -157,8 +178,8 @@ After downloading a release archive, run a fixture-safe smoke test before
 scanning real session stores:
 
 ```sh
-adr scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
-adr rules validate --no-local-config
+telltale scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+telltale rules validate --no-local-config
 ```
 
 Only point Telltale at real session-store roots after the fixture scan and rule

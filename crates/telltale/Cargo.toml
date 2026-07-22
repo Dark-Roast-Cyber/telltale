@@ -1,10 +1,17 @@
 [package]
-name = "telltale"
+name = "telltale-core"
 version.workspace = true
 edition.workspace = true
 description = "Telltale embedding facade: discover, parse, and detect agentic coding activity in-process"
 license.workspace = true
+authors.workspace = true
+homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/telltale-core"
+readme = "README.md"
+keywords = ["security", "agents", "detection", "embedding"]
+categories = ["development-tools"]
+include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/examples/**", "/src/**"]
 
 [dependencies]
 telltale-schema.workspace = true

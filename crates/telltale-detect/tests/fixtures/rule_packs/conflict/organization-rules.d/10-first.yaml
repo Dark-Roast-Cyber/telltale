@@ -1,0 +1,15 @@
+version: 1
+description: First equal-tier conflict fixture.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: pack.conflict
+    category: pack_test
+    severity: low
+    score: 1
+    targets: [command]
+    regex: 'first-conflict-marker'
+    tags: [fixture]
+    explanation: Synthetic conflict rule.
+modifiers: []

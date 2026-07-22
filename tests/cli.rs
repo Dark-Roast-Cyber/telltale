@@ -590,6 +590,7 @@ fn release_crate_manifest_excludes_host_only_release_material() {
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
+        .arg("CARGO_LOCKED=--locked")
         .arg("release-crate-manifest")
         .env("MAKEFLAGS", "")
         .output()
@@ -622,6 +623,7 @@ fn release_crate_manifest_excludes_host_only_release_material() {
         .arg("--no-print-directory")
         .arg("-f")
         .arg(&makefile)
+        .arg("CARGO_LOCKED=--locked")
         .arg("release-preflight")
         .env("MAKEFLAGS", "")
         .output()
@@ -633,17 +635,20 @@ fn release_crate_manifest_excludes_host_only_release_material() {
     );
     let preflight_stdout = String::from_utf8_lossy(&preflight.stdout);
     let manifest_pos = preflight_stdout
-        .find("cargo package --list --allow-dirty")
+        .find("cargo package --locked --list --allow-dirty")
         .expect("release-preflight should review Cargo package contents");
     let tag_pos = preflight_stdout
-        .find("cargo metadata --no-deps --format-version 1")
+        .find("cargo metadata --no-deps --locked --format-version 1")
         .expect("release-preflight should review the public release tag");
     let fmt_pos = preflight_stdout
         .find("cargo fmt --check")
         .expect("release-preflight should still run format checks");
     let public_docs_pos = preflight_stdout
-        .find("cargo test --quiet public_docs_")
+        .find("cargo test --locked --quiet public_docs_")
         .expect("release-preflight should run focused public boundary checks");
+    let package_verify_pos = preflight_stdout
+        .find("scripts/package-verify")
+        .expect("release-preflight should run normalized package verification");
     assert!(
         tag_pos < manifest_pos,
         "release-preflight should review the public release tag before package contents: {preflight_stdout}"
@@ -651,6 +656,10 @@ fn release_crate_manifest_excludes_host_only_release_material() {
     assert!(
         manifest_pos < fmt_pos,
         "release-preflight should review Cargo package contents before expensive checks: {preflight_stdout}"
+    );
+    assert!(
+        manifest_pos < package_verify_pos,
+        "release-preflight should run package verification after the manifest check: {preflight_stdout}"
     );
     assert!(
         public_docs_pos < fmt_pos,
@@ -668,6 +677,7 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
     fs::create_dir_all(&artifacts).expect("create artifacts");
     fs::create_dir_all(good_payload.join("config/examples")).expect("create good payload");
     fs::create_dir_all(bad_payload.join("logs")).expect("create bad payload logs");
+    fs::write(good_payload.join("telltale"), "binary\n").expect("write telltale");
     fs::write(good_payload.join("adr"), "binary\n").expect("write adr");
     fs::write(good_payload.join("LICENSE"), "Apache-2.0\n").expect("write LICENSE");
     fs::write(good_payload.join("README.md"), "# quick start\n").expect("write README");
@@ -691,19 +701,21 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         "<Task/>\n",
     )
     .expect("write task example");
-    fs::write(bad_payload.join("adr"), "binary\n").expect("write bad adr");
+    fs::write(bad_payload.join("telltale.exe"), "binary\n").expect("write bad telltale.exe");
+    fs::write(bad_payload.join("adr.exe"), "binary\n").expect("write bad adr.exe");
     fs::write(
         bad_payload.join("logs").join("adr-events.jsonl"),
         "{\"event_type\":\"activity\"}\n",
     )
     .expect("write bad log");
 
-    let good_archive = artifacts.join("adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+    let good_archive = artifacts.join("telltale-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
     let tar = Command::new("tar")
         .arg("-czf")
         .arg(&good_archive)
         .arg("-C")
         .arg(&good_payload)
+        .arg("telltale")
         .arg("adr")
         .arg("LICENSE")
         .arg("README.md")
@@ -718,6 +730,8 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         "tar good archive failed: {}",
         String::from_utf8_lossy(&tar.stderr)
     );
+    let legacy_archive = artifacts.join("adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+    fs::copy(&good_archive, &legacy_archive).expect("copy legacy tar archive");
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = Command::new("make")
@@ -742,13 +756,22 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         stdout.contains("Archive:"),
         "missing archive header: {stdout}"
     );
-    assert!(stdout.contains("  adr"), "missing binary entry: {stdout}");
+    assert!(
+        stdout.contains("  telltale"),
+        "missing primary binary entry: {stdout}"
+    );
+    assert!(
+        stdout.contains("  adr"),
+        "missing compatibility binary entry: {stdout}"
+    );
 
     fs::write(good_payload.join("adr.exe"), "binary\n").expect("write adr.exe");
-    let good_zip = artifacts.join("adr-v0.1.0-x86_64-pc-windows-msvc.zip");
+    fs::write(good_payload.join("telltale.exe"), "binary\n").expect("write telltale.exe");
+    let good_zip = artifacts.join("telltale-v0.1.0-x86_64-pc-windows-msvc.zip");
     let zip = Command::new("zip")
         .arg("-q")
         .arg(&good_zip)
+        .arg("telltale.exe")
         .arg("adr.exe")
         .arg("LICENSE")
         .arg("README.md")
@@ -764,10 +787,22 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         "zip good archive failed: {}",
         String::from_utf8_lossy(&zip.stderr)
     );
+    let legacy_zip = artifacts.join("adr-v0.1.0-x86_64-pc-windows-msvc.zip");
+    fs::copy(&good_zip, &legacy_zip).expect("copy legacy zip archive");
 
     let checksums = Command::new("sha256sum")
         .arg(good_archive.file_name().expect("tar archive file name"))
+        .arg(
+            legacy_archive
+                .file_name()
+                .expect("legacy tar archive file name"),
+        )
         .arg(good_zip.file_name().expect("zip archive file name"))
+        .arg(
+            legacy_zip
+                .file_name()
+                .expect("legacy zip archive file name"),
+        )
         .current_dir(&artifacts)
         .output()
         .expect("sha256sum release archives");
@@ -805,8 +840,20 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         "missing zip archive header: {stdout}"
     );
     assert!(
+        stdout.contains(legacy_archive.to_string_lossy().as_ref()),
+        "missing legacy tar archive header: {stdout}"
+    );
+    assert!(
+        stdout.contains(legacy_zip.to_string_lossy().as_ref()),
+        "missing legacy zip archive header: {stdout}"
+    );
+    assert!(
         stdout.contains("  adr.exe"),
         "missing Windows binary entry: {stdout}"
+    );
+    assert!(
+        stdout.contains("  telltale.exe"),
+        "missing primary Windows binary entry: {stdout}"
     );
     assert!(
         stdout.contains("adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz: OK"),
@@ -816,6 +863,62 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         stdout.contains("adr-v0.1.0-x86_64-pc-windows-msvc.zip: OK"),
         "missing zip checksum verification: {stdout}"
     );
+
+    fs::remove_file(&legacy_archive).expect("remove legacy archive");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!(
+            "RELEASE_ARTIFACT_DIR={}",
+            artifacts.to_string_lossy()
+        ))
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-artifact-manifest for missing pair");
+    assert!(
+        !output.status.success(),
+        "release-artifact-manifest should reject a missing canonical/legacy pair"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("missing matching legacy archive"),
+        "unexpected missing pair output: {combined}"
+    );
+    fs::copy(&good_archive, &legacy_archive).expect("restore missing legacy archive");
+
+    fs::write(&legacy_archive, "different archive bytes\n").expect("mutate legacy archive");
+    let output = Command::new("make")
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!(
+            "RELEASE_ARTIFACT_DIR={}",
+            artifacts.to_string_lossy()
+        ))
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-artifact-manifest for mismatched pair");
+    assert!(
+        !output.status.success(),
+        "release-artifact-manifest should reject mismatched canonical/legacy archives"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("different digests"),
+        "unexpected mismatched pair output: {combined}"
+    );
+    fs::copy(&good_archive, &legacy_archive).expect("restore legacy archive");
 
     fs::write(
         artifacts.join("SHA256SUMS"),
@@ -849,13 +952,16 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
     );
 
     fs::remove_file(&good_archive).expect("remove good archive");
+    fs::remove_file(&legacy_archive).expect("remove legacy archive");
     fs::remove_file(&good_zip).expect("remove good zip");
+    fs::remove_file(&legacy_zip).expect("remove legacy zip");
     fs::remove_file(artifacts.join("SHA256SUMS")).expect("remove stale SHA256SUMS");
-    let bad_archive = artifacts.join("adr-v0.1.0-with-log.zip");
+    let bad_archive = artifacts.join("telltale-v0.1.0-with-log.zip");
     let zip = Command::new("zip")
         .arg("-q")
         .arg(&bad_archive)
-        .arg("adr")
+        .arg("telltale.exe")
+        .arg("adr.exe")
         .arg("logs/adr-events.jsonl")
         .current_dir(&bad_payload)
         .output()
@@ -865,6 +971,8 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         "zip bad archive failed: {}",
         String::from_utf8_lossy(&zip.stderr)
     );
+    let bad_legacy_archive = artifacts.join("adr-v0.1.0-with-log.zip");
+    fs::copy(&bad_archive, &bad_legacy_archive).expect("copy bad legacy archive");
 
     let output = Command::new("make")
         .arg("--silent")
@@ -902,6 +1010,7 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
         .arg("--no-print-directory")
         .arg("-f")
         .arg(&makefile)
+        .arg("CARGO_LOCKED=--locked")
         .arg("release-fixture-smoke")
         .env("MAKEFLAGS", "")
         .output()
@@ -915,14 +1024,109 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            "cargo run -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores"
+            "cargo run --locked --bin telltale -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores"
         ),
         "fixture scan must stay dry-run, fixture-rooted, and summary-enabled: {stdout}"
     );
     assert!(
-        stdout.contains("cargo run -- rules validate"),
+        stdout.contains("cargo run --locked --bin telltale -- rules validate"),
         "bundled rule validation missing from fixture smoke target: {stdout}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn makefile_build_install_and_scan_targets_use_primary_binary() {
+    let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
+    let output = Command::new("make")
+        .args(["--dry-run", "--no-print-directory", "-f"])
+        .arg(&makefile)
+        .args(["build", "install", "scan-dry", "scan"])
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make primary binary targets");
+
+    assert!(
+        output.status.success(),
+        "primary binary targets failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("target/release/telltale"));
+    assert!(stdout.contains("target/release/adr"));
+    assert!(stdout.contains("install -m 0755 target/release/telltale"));
+    assert!(stdout.contains("install -m 0755 target/release/adr"));
+    assert!(stdout.contains("/telltale scan --once"));
+    assert!(!stdout.contains("/adr scan --once"));
+}
+
+#[test]
+fn release_workflow_packages_and_verifies_canonical_legacy_pairs() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    assert!(workflow.contains("telltale-${{ github.ref_name }}-${{ matrix.target }}"));
+    assert!(workflow.contains("adr-${{ github.ref_name }}-${{ matrix.target }}"));
+    assert!(workflow.contains("telltale adr LICENSE README.md"));
+    assert!(workflow.contains("cp \"$archive\" \"$legacy_archive\""));
+    assert!(workflow.contains(
+        "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
+    ));
+    assert!(workflow.contains(
+        "subject-path: adr-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
+    ));
+    assert!(workflow.contains("cmp -s \"$canonical\" \"$legacy\""));
+}
+
+#[test]
+fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    serde_yaml::from_str::<serde_yaml::Value>(&workflow).expect("release workflow YAML");
+
+    for required in [
+        "preflight:",
+        "needs: preflight",
+        "needs: [preflight, build]",
+        "fetch-depth: 0",
+        "git fetch --no-tags --force origin main:refs/remotes/origin/main",
+        "git merge-base --is-ancestor",
+        "expected_tag=\"v${package_version}\"",
+        "cargo fmt --all --check",
+        "cargo metadata --no-deps --locked --format-version 1",
+        "cargo clippy --locked --all-targets -- -D warnings",
+        "cargo test --locked --quiet",
+        "make --silent CARGO_LOCKED=--locked release-public-docs-check",
+        "make --silent CARGO_LOCKED=--locked release-crate-manifest",
+        "make --silent CARGO_LOCKED=--locked package-verify",
+        "make --silent CARGO_LOCKED=--locked release-fixture-smoke",
+        "cargo build --locked --release --target",
+        "Release gate: verify installer provenance",
+        "INSTALLER_COMMIT=\"",
+        "uncommitted|unknown|placeholder|local|dirty|none|todo",
+        "^[0-9a-f]{7,40}$",
+        "git cat-file -e \"${installer_commit}^{commit}\"",
+        "git merge-base --is-ancestor \"${installer_commit}\" \"${GITHUB_SHA}\"",
+        "is not present in the checkout",
+        "is not an ancestor of tagged commit",
+        "Native staged binary --version smoke (unix)",
+        "Mandatory Windows staged binary --version smoke",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "release workflow is missing {required:?}"
+        );
+    }
+
+    for forbidden in [
+        "release-preflight",
+        "release-context-check",
+        "release-tag-review",
+        "git branch --show-current",
+        "git status --short",
+    ] {
+        assert!(
+            !workflow.contains(forbidden),
+            "CI release workflow must not invoke local-only check {forbidden:?}"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -930,7 +1134,7 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
 fn release_public_docs_check_runs_focused_boundary_tests() {
     let stdout = release_public_docs_check_dry_run_stdout();
     assert!(
-        stdout.contains("cargo test --quiet public_docs_"),
+        stdout.contains("cargo test --locked --quiet public_docs_"),
         "release-public-docs-check must run consolidated public-docs tests with a prefix filter: {stdout}"
     );
 }
@@ -959,6 +1163,7 @@ fn release_public_docs_check_dry_run_stdout() -> String {
         .arg("--no-print-directory")
         .arg("-f")
         .arg(&makefile)
+        .arg("CARGO_LOCKED=--locked")
         .arg("release-public-docs-check")
         .env("MAKEFLAGS", "")
         .output()
@@ -3603,6 +3808,151 @@ fn repeated_scans_suppress_duplicate_detections() {
 }
 
 #[test]
+fn cross_alias_scans_share_state_and_deduplicate_in_both_directions() {
+    for (first_name, first_path, second_name, second_path) in [
+        (
+            "telltale",
+            env!("CARGO_BIN_EXE_telltale"),
+            "adr",
+            env!("CARGO_BIN_EXE_adr"),
+        ),
+        (
+            "adr",
+            env!("CARGO_BIN_EXE_adr"),
+            "telltale",
+            env!("CARGO_BIN_EXE_telltale"),
+        ),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("adr-events.jsonl");
+        let state_path = temp.path().join("adr-state.json");
+        let run_scan = |path: &str| {
+            Command::new(path)
+                .args([
+                    "scan",
+                    "--once",
+                    "--allow-fixtures",
+                    "--emit-activity",
+                    "--install-inventory-disabled",
+                    "--no-local-config",
+                    "--root",
+                    "tests/fixtures/session_stores",
+                    "--log-path",
+                ])
+                .arg(&log_path)
+                .args(["--state-path"])
+                .arg(&state_path)
+                .output()
+                .unwrap_or_else(|error| panic!("run {path}: {error}"))
+        };
+
+        let first = run_scan(first_path);
+        assert!(
+            first.status.success(),
+            "{first_name} stderr: {}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let first_summary: Value = serde_json::from_slice(&first.stdout).expect("first summary");
+        assert!(
+            first_summary["detection_count"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
+            first_summary["activity_count"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
+            first_summary["emitted_count"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        let first_log = fs::read_to_string(&log_path).expect("first log");
+        let first_state: Value =
+            serde_json::from_str(&fs::read_to_string(&state_path).expect("first state"))
+                .expect("first state json");
+        let first_events = first_log
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("first event json"))
+            .collect::<Vec<_>>();
+        assert!(
+            first_events
+                .iter()
+                .any(|event| event["event_type"] == "detection")
+        );
+        assert!(
+            first_events
+                .iter()
+                .any(|event| event["event_type"] == "activity")
+        );
+
+        let status = Command::new(second_path)
+            .args(["status", "--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .unwrap_or_else(|error| panic!("run {second_name} status: {error}"));
+        assert!(
+            status.status.success(),
+            "{second_name} status stderr: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        let status_summary: Value = serde_json::from_slice(&status.stdout).expect("status json");
+        assert_eq!(status_summary["status"], "ok");
+        assert_eq!(status_summary["log_path"], log_path.display().to_string());
+        assert_eq!(
+            status_summary["state_path"],
+            state_path.display().to_string()
+        );
+        assert!(
+            status_summary["detection_count"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+
+        let second = run_scan(second_path);
+        assert!(
+            second.status.success(),
+            "{second_name} stderr: {}",
+            String::from_utf8_lossy(&second.stderr)
+        );
+        let second_summary: Value = serde_json::from_slice(&second.stdout).expect("second summary");
+        assert_eq!(
+            second_summary["detection_count"],
+            first_summary["detection_count"]
+        );
+        assert_eq!(
+            second_summary["activity_count"],
+            first_summary["activity_count"]
+        );
+        assert_eq!(second_summary["emitted_count"], 0);
+        assert_eq!(
+            fs::read_to_string(&log_path).expect("second log"),
+            first_log,
+            "{second_name} must not duplicate first-scan telemetry"
+        );
+        let second_state: Value =
+            serde_json::from_str(&fs::read_to_string(&state_path).expect("second state"))
+                .expect("second state json");
+        for field in [
+            "seen_source_fingerprints",
+            "seen_detection_fingerprints",
+            "baseline_source_contributions",
+            "baseline_snapshots",
+            "sqlite_ingestion_cursors",
+            "install_inventory",
+        ] {
+            assert_eq!(
+                second_state[field], first_state[field],
+                "{second_name} must preserve shared dedup state field {field}"
+            );
+        }
+    }
+}
+
+#[test]
 fn scan_once_persists_incremental_baseline_snapshots() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");
@@ -4618,7 +4968,8 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
                 .find("EnvironmentFile=-/etc/telltale/adr.env")
                 .expect("env file")
     );
-    assert!(service.contains("/usr/local/bin/adr scan --once"));
+    assert!(service.contains("/usr/local/bin/telltale scan --once"));
+    assert!(!service.contains("ExecStart=/usr/local/bin/adr "));
     assert!(service.contains("--emit-activity"));
     assert!(service.contains("--path-profile system"));
     assert!(
@@ -4636,6 +4987,11 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
     assert!(timer_template.contains("OnUnitActiveSec=5min"));
     assert!(timer_template.contains("Unit=adr-scan.service"));
     assert!(timer_template.contains("WantedBy=timers.target"));
+
+    let task = include_str!("../config/examples/adr-scan-task.xml");
+    assert!(task.contains(r#"<URI>\TelltaleScan</URI>"#));
+    assert!(task.contains(r#"<Command>%LOCALAPPDATA%\Telltale\telltale.exe</Command>"#));
+    assert!(!task.contains("\\adr.exe"));
 }
 
 #[test]
@@ -5884,25 +6240,99 @@ fn export_help_mentions_client_for_ambiguous_timeline_session_ids() {
 }
 
 #[test]
-fn top_level_version_prints_package_version() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
-        .arg("--version")
+fn top_level_version_prints_package_version_for_both_aliases() {
+    for (name, path) in [
+        ("telltale", env!("CARGO_BIN_EXE_telltale")),
+        ("adr", env!("CARGO_BIN_EXE_adr")),
+    ] {
+        let output = Command::new(path)
+            .arg("--version")
+            .output()
+            .unwrap_or_else(|error| panic!("run {name} --version: {error}"));
+        assert!(
+            output.status.success(),
+            "{name} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            stdout.trim(),
+            format!(
+                "{name} {} ({})",
+                env!("CARGO_PKG_VERSION"),
+                env!("ADR_GIT_HASH")
+            )
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{name} --version should not write stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn top_level_help_uses_invocation_name_for_both_aliases() {
+    for (name, path) in [
+        ("telltale", env!("CARGO_BIN_EXE_telltale")),
+        ("adr", env!("CARGO_BIN_EXE_adr")),
+    ] {
+        let output = Command::new(path)
+            .arg("--help")
+            .output()
+            .unwrap_or_else(|error| panic!("run {name} --help: {error}"));
+        assert!(
+            output.status.success(),
+            "{name} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.starts_with(&format!(
+            "Telltale detection layer for AI coding agent sessions\n\nUsage: {name}"
+        )));
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn parse_errors_use_invocation_name_without_deprecation_warning() {
+    for (name, path) in [
+        ("telltale", env!("CARGO_BIN_EXE_telltale")),
+        ("adr", env!("CARGO_BIN_EXE_adr")),
+    ] {
+        let output = Command::new(path)
+            .arg("--not-a-real-option")
+            .output()
+            .unwrap_or_else(|error| panic!("run {name} with invalid option: {error}"));
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("Usage: {name}")),
+            "stderr: {stderr}"
+        );
+        assert!(
+            !stderr.to_lowercase().contains("deprecat"),
+            "stderr: {stderr}"
+        );
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn executable_aliases_have_identical_safe_rule_listing_behavior() {
+    let args = ["rules", "list", "--no-local-config"];
+    let telltale = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(args)
         .output()
-        .expect("run adr --version");
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        stdout.trim(),
-        format!(
-            "adr {} ({})",
-            env!("CARGO_PKG_VERSION"),
-            env!("ADR_GIT_HASH")
-        )
-    );
+        .expect("run telltale rules list");
+    let adr = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(args)
+        .output()
+        .expect("run adr rules list");
+
+    assert_eq!(telltale.status, adr.status);
+    assert_eq!(telltale.stdout, adr.stdout);
+    assert_eq!(telltale.stderr, adr.stderr);
 }
 
 #[test]

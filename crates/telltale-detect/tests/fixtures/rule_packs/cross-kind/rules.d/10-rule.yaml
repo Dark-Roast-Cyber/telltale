@@ -1,0 +1,15 @@
+version: 1
+description: Synthetic rule side of a cross-kind collision.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: pack.cross_kind
+    category: pack_test
+    severity: low
+    score: 1
+    targets: [command]
+    regex: 'cross-kind-marker'
+    tags: [fixture]
+    explanation: Synthetic cross-kind rule.
+modifiers: []

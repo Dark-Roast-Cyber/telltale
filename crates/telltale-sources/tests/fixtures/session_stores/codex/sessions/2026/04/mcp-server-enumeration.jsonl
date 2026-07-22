@@ -1,0 +1,4 @@
+{"type":"session_meta","timestamp":"2026-04-03T06:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T06:00:01Z","payload":{"type":"user_message","message":"Inventory the MCP configuration for this synthetic workspace."}}
+{"type":"event_msg","timestamp":"2026-04-03T06:00:02Z","payload":{"type":"tool_call","tool_name":"mcp_inspector","command":"probe mcp servers before selecting an integration","arguments":{"server":"filesystem","inventory_method":"tools/list"},"message":"Run an MCP inspection probe."}}
+{"type":"event_msg","timestamp":"2026-04-03T06:00:03Z","payload":{"type":"tool_result","tool_name":"mcp_inspector","message":"filesystem tools/list => repo_status, read_file; github tools/list => repo_search, issue_create"}}

@@ -18,10 +18,21 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
-> Compatibility note: Telltale currently keeps the existing Rust crate
-> name, binary name, environment variable prefixes, and a few schema fields
-> under `adr` for build and data-format compatibility. The project name is
-> Telltale.
+> **Executable and compatibility contract:** Use `telltale` (`telltale.exe`) and
+> `telltale-*` release assets for new integrations. `adr` (`adr.exe`) is the
+> compiled deprecated compatibility command and remains available through every
+> `0.2.x` release. Each `adr-*` release archive is an exact byte-for-byte copy
+> of its matching `telltale-*` archive, and both archives contain both binaries.
+> The earliest possible removal is `0.3.0`, only after at least six months of
+> compatibility and advance notice.
+>
+> The executable rename does not rename compatibility data or configuration:
+> preserve `ADR_*`, `adr-events.jsonl`, `adr-state.json`,
+> `/etc/telltale/adr.env`, `adr_version`, `adr-` event IDs, and the Splunk
+> `index=adr`, `sourcetype=adr:json`, and existing `telltale:adr` /
+> `telltale:adr-events` source identities. Keep uppercase ADR category
+> terminology and unrelated architecture decision records and fixtures
+> unchanged.
 
 ## Why Telltale exists
 
@@ -78,10 +89,10 @@ Telltale can parse multiple source shapes, but real-world validation depth is no
 ## Quick start
 
 ```sh
-cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
-cargo run -- config validate --no-local-config
-cargo run -- rules validate --no-local-config
-cargo run -- rules export-default > /tmp/telltale-default-rules.yaml
+cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+cargo run --bin telltale -- config validate --no-local-config
+cargo run --bin telltale -- rules validate --no-local-config
+cargo run --bin telltale -- rules export-default > /tmp/telltale-default-rules.yaml
 cargo test
 ```
 
@@ -89,12 +100,39 @@ The fixture tree in `tests/fixtures/` is synthetic and safe for local verificati
 Use `--dry-run` for fixture checks. Reserve `--allow-fixtures` for intentional
 synthetic writes in CI or local development, not normal scans.
 
-When you are ready to scan real session stores, point `adr scan --root` at the
+## Cargo packages
+
+Cargo publication is in current release preparation; these packages should not
+be treated as already published. The six official package names and planned
+publication order are:
+
+1. `telltale-schema`
+2. `telltale-rules`
+3. `telltale-sources`
+4. `telltale-detect`
+5. `telltale-core` — the supported embedding surface (`telltale_core` in Rust)
+6. `telltale-cli`
+
+Install the CLI from crates.io after publication with:
+
+```sh
+cargo install telltale-cli
+```
+
+That package installs both the canonical `telltale` binary and the `adr`
+compatibility binary.
+
+> **Crates.io name warning:** The package named `telltale` is an unrelated
+> active session-types crate, not this project. Telltale uses `telltale-core`
+> for its embedding facade. Recheck crates.io availability immediately before
+> any future publication.
+
+When you are ready to scan real session stores, point `telltale scan --root` at the
 directory that contains your actual supported session-store roots, such as `$HOME`
 on a typical single-user workstation, instead of `tests/fixtures/`.
 
-For continuous local monitoring, `adr watch` accepts the same repeated
-`--client <id>` filters as `adr scan`, so watched runs can stay scoped to one
+For continuous local monitoring, `telltale watch` accepts the same repeated
+`--client <id>` filters as `telltale scan`, so watched runs can stay scoped to one
 or more supported client IDs such as `codex` or `opencode`.
 
 ### Local rule configuration
@@ -134,11 +172,11 @@ mechanism.
 packs still load. Combine it with `--no-local-config` when an explicit
 `--rules`-only set is required.
 
-Run `adr config validate` before enabling local config in scans. It uses the same
+Run `telltale config validate` before enabling local config in scans. It uses the same
 rule, override, policy, and allowlist discovery semantics as `scan`/`watch`,
 validates the effective rule set and allowlist YAML, and prints a compact JSON
 health summary.
-Use `adr rules export-default` to inspect or fork the bundled default rule pack
+Use `telltale rules export-default` to inspect or fork the bundled default rule pack
 from an installed binary without needing a source checkout. Save an edited fork
 under the intended managed tier when it should replace matching IDs; use
 `--no-default-rules` with an explicit `--rules` path for a standalone custom set.
@@ -178,23 +216,30 @@ for each project.
 
 - Install and setup guide: [docs/install.md](docs/install.md)
 
-Tagged GitHub releases publish platform-specific `adr` binary archives when
-available. Source builds remain supported; the install guide covers both paths
-and the fixture-safe verification step.
+Tagged GitHub releases publish platform-specific `telltale-*` binary archives
+when available, with matching exact-copy `adr-*` compatibility aliases. Source
+builds remain supported; the install guide covers both paths and the
+fixture-safe verification step.
 
 ### Linux
 
-A user-first installer downloads the latest release binary, installs it to
-`~/.local/bin/adr` (no sudo), and optionally sets up a user-level systemd
-timer for periodic scans:
+A user-first installer is being synchronized to the current two-binary contract.
+The hosted one-line installer remains pending synchronization and provenance
+finalization; do not rely on it yet to install both binaries. Until that is
+complete, use a canonical release archive or run `scripts/install-telltale`
+from this checkout. The repository installer installs both binaries to
+`~/.local/bin/telltale` and `~/.local/bin/adr` (no sudo) and installs a
+user-level systemd timer only when `--with-timer` is provided.
 
 ```sh
-curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
+./scripts/install-telltale
+./scripts/install-telltale --with-timer
 ```
 
 Add `--from-source` to build with cargo instead of downloading a prebuilt
-binary, or `--no-timer` to skip the systemd timer. The installer does not
-create system accounts or configure SIEM shippers.
+binary. `--no-timer` is accepted only for legacy compatibility and is normally
+unnecessary. The installer does not create system accounts or configure SIEM
+shippers.
 
 ### macOS
 
@@ -202,8 +247,9 @@ Download the release archive for your architecture and extract the binary:
 
 ```sh
 # Apple Silicon (aarch64)
-curl -fsSLO https://github.com/Dark-Roast-Cyber/telltale/releases/latest/download/adr-$(curl -fsSL https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')-aarch64-apple-darwin.tar.gz
-tar xzf adr-*-aarch64-apple-darwin.tar.gz
+curl -fsSLO https://github.com/Dark-Roast-Cyber/telltale/releases/latest/download/telltale-$(curl -fsSL https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')-aarch64-apple-darwin.tar.gz
+tar xzf telltale-*-aarch64-apple-darwin.tar.gz
+sudo mv telltale /usr/local/bin/telltale
 sudo mv adr /usr/local/bin/adr
 ```
 
@@ -213,6 +259,7 @@ Or build from source:
 git clone https://github.com/Dark-Roast-Cyber/telltale.git
 cd telltale
 cargo build --release
+sudo cp target/release/telltale /usr/local/bin/telltale
 sudo cp target/release/adr /usr/local/bin/adr
 ```
 
@@ -233,7 +280,7 @@ For periodic scans, create a user LaunchAgent at
     <string>ai.agentarchaeology.telltale</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/adr</string>
+        <string>/usr/local/bin/telltale</string>
         <string>scan</string>
         <string>--once</string>
         <string>--emit-activity</string>
@@ -256,15 +303,15 @@ launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
 
 ### Windows
 
-Download the release archive and extract `adr.exe`:
+Download the canonical release archive and extract `telltale.exe` and `adr.exe`:
 
 ```powershell
 # PowerShell
 $release = Invoke-RestMethod "https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest"
 $tag = $release.tag_name
-$asset = $release.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.zip" }
-Invoke-WebRequest $asset.browser_download_url -OutFile "adr-$tag.zip"
-Expand-Archive "adr-$tag.zip" -DestinationPath "$env:LOCALAPPDATA\Telltale"
+$asset = $release.assets | Where-Object { $_.name -eq "telltale-$tag-x86_64-pc-windows-msvc.zip" }
+Invoke-WebRequest $asset.browser_download_url -OutFile "telltale-$tag.zip"
+Expand-Archive "telltale-$tag.zip" -DestinationPath "$env:LOCALAPPDATA\Telltale"
 ```
 
 Or build from source:
@@ -273,10 +320,11 @@ Or build from source:
 git clone https://github.com/Dark-Roast-Cyber/telltale.git
 cd telltale
 cargo build --release
+Copy-Item target\release\telltale.exe $env:LOCALAPPDATA\Telltale\telltale.exe
 Copy-Item target\release\adr.exe $env:LOCALAPPDATA\Telltale\adr.exe
 ```
 
-Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `adr` from any
+Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `telltale` from any
 terminal. The default `user` path profile writes telemetry to
 `%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` and state to
 `%LOCALAPPDATA%\Telltale\State\adr-state.json`. No elevation is needed for
@@ -285,7 +333,7 @@ scans — run as your user.
 For periodic scans, create a Scheduled Task at user logon:
 
 ```powershell
-$action = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\Telltale\adr.exe" -Argument "scan --once --emit-activity --root $env:USERPROFILE"
+$action = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\Telltale\telltale.exe" -Argument "scan --once --emit-activity --root $env:USERPROFILE"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RepeatInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 365)
 Register-ScheduledTask -TaskName "TelltaleScan" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited

@@ -1,0 +1,15 @@
+version: 1
+description: Synthetic organization rule pack.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: pack.organization
+    category: pack_test
+    severity: low
+    score: 11
+    targets: [command]
+    regex: 'organization-marker'
+    tags: [fixture]
+    explanation: Synthetic organization rule.
+modifiers: []

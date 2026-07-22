@@ -149,7 +149,7 @@ Each use case in [use-cases.md](use-cases.md) should document:
 - Expected false-positive rate on a developer workstation.
 - Mitigation strategies (e.g., suppressing `user_context` from targets, requiring chain modifiers before escalating).
 
-Bundled rules and chain modifiers should include a `falsepositives` list in rule YAML so `adr rules coverage` can report whether analyst guidance exists. Keep notes concrete and operational: describe the benign workflow, what context makes it safe, and whether the signal should usually be interpreted alone or as part of a chain.
+Bundled rules and chain modifiers should include a `falsepositives` list in rule YAML so `telltale rules coverage` can report whether analyst guidance exists. Keep notes concrete and operational: describe the benign workflow, what context makes it safe, and whether the signal should usually be interpreted alone or as part of a chain.
 
 ## Changelog Expectations
 
@@ -186,8 +186,8 @@ Follow this checklist:
 8. Create a positive fixture under `tests/fixtures/`.
 9. Create a negative fixture if the rule could false-positive on common activity.
 10. Add a detection test in `src/detection.rs` (or the current detection test module).
-11. Run `adr rules validate --rules <path>` to check YAML syntax and regex compilation.
-12. Run `adr rules test --rules <path> <fixture>` to preview matches.
+11. Run `telltale rules validate --rules <path>` to check YAML syntax and regex compilation.
+12. Run `telltale rules test --rules <path> <fixture>` to preview matches.
 13. Run `cargo test` to verify no regressions.
 14. Record the rule in the relevant detection documentation.
 15. If this rule is part of a use case, update [use-cases.md](use-cases.md).
@@ -203,7 +203,7 @@ Before merging detection content changes:
 - [ ] At least one positive fixture exists.
 - [ ] Negative fixture exists if false-positive risk is known.
 - [ ] Detection test asserts rule ID, severity, and evidence redaction.
-- [ ] `adr rules validate` passes.
+- [ ] `telltale rules validate` passes.
 - [ ] `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` passes.
 - [ ] Changelog entry exists.
 - [ ] Use-case doc updated if applicable.

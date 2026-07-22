@@ -1,0 +1,23 @@
+version: 1
+description: Synthetic deployment rule pack.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: secret.env.read
+    category: secret_access
+    severity: high
+    score: 77
+    targets: [command]
+    regex: 'fixture-secret-marker'
+    tags: [fixture, replacement]
+    explanation: Synthetic replacement for the bundled secret rule.
+  - id: pack.deployment
+    category: pack_test
+    severity: medium
+    score: 22
+    targets: [command]
+    regex: 'deployment-marker'
+    tags: [fixture]
+    explanation: Synthetic deployment rule.
+modifiers: []

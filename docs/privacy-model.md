@@ -80,7 +80,7 @@ When `--baseline-deviation-scoring` is enabled, emitted activity evidence report
 - Add an optional `local_context` field to events that is populated only when `--emit-local-context` is set.
 - Local context could include longer excerpts, unredacted tool names, or full argument shapes.
 - The SIEM JSONL writer would strip `local_context` unless explicitly opted in.
-- A local review tool (`adr inspect <event_id>`) could read the local context from the JSONL file.
+- A local review tool (`telltale inspect <event_id>`) could read the local context from the JSONL file.
 
 ### 5. Never Emit
 

@@ -1,0 +1,11 @@
+version: 1
+description: Second equal-tier modifier conflict fixture.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules: []
+modifiers:
+  - id: pack.modifier.conflict
+    score: 2
+    when_all_categories: [pack_test]
+    explanation: Synthetic modifier conflict.

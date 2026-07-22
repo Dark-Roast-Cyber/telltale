@@ -1,0 +1,242 @@
+#!/bin/sh
+set -eu
+
+case "$(uname -s)" in
+    Linux|Darwin) ;;
+    *)
+        echo "package verification supports Linux and macOS only" >&2
+        exit 77
+        ;;
+esac
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+CARGO_BIN=${CARGO:-cargo}
+VERSION=$("$CARGO_BIN" metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "telltale-cli"))')
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/telltale-package-verify.XXXXXX")
+TARGET_DIR="$WORK_DIR/target"
+PACKAGE_DIR="$TARGET_DIR/package"
+DETECT_CONSUMER_DIR="$WORK_DIR/detect-consumer"
+CORE_CONSUMER_DIR="$WORK_DIR/core-consumer"
+SCHEMA_CONSUMER_DIR="$WORK_DIR/schema-consumer"
+INSTALL_ROOT="$WORK_DIR/install"
+START_TIME=$(date +%s)
+
+cleanup() {
+    rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT HUP INT TERM
+
+package_path() {
+    printf '%s/%s-%s\n' "$PACKAGE_DIR" "$1" "$VERSION"
+}
+
+manifest_path() {
+    case "$1" in
+        telltale-cli) printf '%s/Cargo.toml\n' "$REPO_ROOT" ;;
+        telltale-core) printf '%s/crates/telltale/Cargo.toml\n' "$REPO_ROOT" ;;
+        *) printf '%s/crates/%s/Cargo.toml\n' "$REPO_ROOT" "$1" ;;
+    esac
+}
+
+source_path() {
+    case "$1" in
+        telltale-core) printf '%s/crates/telltale\n' "$REPO_ROOT" ;;
+        *) printf '%s/crates/%s\n' "$REPO_ROOT" "$1" ;;
+    esac
+}
+
+run_package() {
+    package=$1
+    shift
+    dependencies="$*"
+    set -- "$CARGO_BIN" package --locked --allow-dirty --manifest-path "$(manifest_path "$package")"
+    for dependency in $dependencies; do
+        dependency_path=$(source_path "$dependency")
+        test -f "$dependency_path/Cargo.toml" || {
+            echo "normalized dependency source is missing: $dependency_path" >&2
+            exit 1
+        }
+        set -- "$@" --config "patch.crates-io.$dependency.path=\"$dependency_path\""
+    done
+    echo "== cargo package $package =="
+    (cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" "$@")
+    test -f "$(package_path "$package")/Cargo.toml" || {
+        echo "cargo did not produce normalized source for $package" >&2
+        exit 1
+    }
+}
+
+run_package telltale-schema
+run_package telltale-rules telltale-schema
+run_package telltale-sources telltale-schema
+run_package telltale-detect telltale-schema telltale-rules telltale-sources
+run_package telltale-core telltale-schema telltale-rules telltale-sources telltale-detect
+run_package telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect
+
+run_normalized_test() {
+    package=$1
+    shift
+    dependencies="$*"
+    set -- "$CARGO_BIN" test --locked --manifest-path "$(package_path "$package")/Cargo.toml"
+    for dependency in $dependencies; do
+        set -- "$@" --config "patch.crates-io.$dependency.path=\"$(package_path "$dependency")\""
+    done
+    echo "== normalized cargo test $package =="
+    CARGO_TARGET_DIR="$TARGET_DIR/test-$package" "$@"
+}
+
+run_normalized_test telltale-schema
+run_normalized_test telltale-rules telltale-schema
+run_normalized_test telltale-sources telltale-schema
+run_normalized_test telltale-detect telltale-schema telltale-rules telltale-sources
+run_normalized_test telltale-core telltale-schema telltale-rules telltale-sources telltale-detect
+run_normalized_test telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect
+echo "Note: workspace integration tests outside package include boundaries remain intentionally excluded."
+
+EMPTY_ROOT="$WORK_DIR/empty-root"
+mkdir -p "$EMPTY_ROOT"
+
+set -- "$CARGO_BIN" run --locked --manifest-path "$(package_path telltale-rules)/Cargo.toml" --example evaluate_stream
+set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path telltale-schema)\""
+echo "== normalized telltale-rules example =="
+CARGO_TARGET_DIR="$TARGET_DIR/example-rules" "$@" >/dev/null
+
+set -- "$CARGO_BIN" run --locked --manifest-path "$(package_path telltale-core)/Cargo.toml" --example embed_scan
+for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+set -- "$@" -- "$EMPTY_ROOT"
+echo "== normalized telltale-core example =="
+CARGO_TARGET_DIR="$TARGET_DIR/example-core" "$@" >/dev/null
+
+PACKAGED_SHA_FULL=$(python3 - "$(package_path telltale-cli)/.cargo_vcs_info.json" <<'PY'
+import json
+import re
+import sys
+
+sha = json.load(open(sys.argv[1], encoding="utf-8"))["git"]["sha1"]
+if not re.fullmatch(r"[0-9a-f]{40}", sha):
+    raise SystemExit("packaged VCS sha must be 40 lowercase hex characters")
+print(sha)
+PY
+)
+PACKAGED_SHA_PREFIX=$(printf '%.12s' "$PACKAGED_SHA_FULL")
+
+mkdir -p "$DETECT_CONSUMER_DIR/src" "$CORE_CONSUMER_DIR/src" "$SCHEMA_CONSUMER_DIR/src"
+cat > "$DETECT_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-detect-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+telltale-detect = "=$VERSION"
+EOF
+
+cat > "$DETECT_CONSUMER_DIR/src/main.rs" <<'EOF'
+fn main() {
+    let _events = telltale_detect::detection::detect_sources(&[]);
+}
+EOF
+
+cat > "$CORE_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-core-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+telltale-core = "=$VERSION"
+EOF
+
+cat > "$CORE_CONSUMER_DIR/src/main.rs" <<'EOF'
+fn main() {
+    let pipeline = telltale_core::Pipeline::builder().build().expect("pipeline");
+    println!("{}", pipeline.rule_count());
+}
+EOF
+
+cat > "$SCHEMA_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-schema-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+telltale-schema = "=$VERSION"
+EOF
+
+cat > "$SCHEMA_CONSUMER_DIR/src/main.rs" <<'EOF'
+use telltale_schema::event::{health_event_with_metadata, HealthEventInput};
+use telltale_schema::scoring::RiskThresholds;
+
+fn main() {
+    let event = health_event_with_metadata(HealthEventInput {
+        sources: &[],
+        source_inventory_change: None,
+        scan_duration_ms: 0,
+        rule_count: 0,
+        threshold_config: RiskThresholds {
+            low: 20,
+            medium: 40,
+            triage: 60,
+            alert: 80,
+        },
+        active_policy_name: None,
+        emitted_count: 0,
+        suppressed_count: 0,
+        scanner_error_count: 0,
+    });
+    println!("{}", event.adr_version.expect("schema provenance"));
+}
+EOF
+
+set -- "$CARGO_BIN" run --manifest-path "$SCHEMA_CONSUMER_DIR/Cargo.toml"
+set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path telltale-schema)\""
+echo "== registry-style schema consumer =="
+schema_version=$(CARGO_TARGET_DIR="$TARGET_DIR/schema-consumer" "$@")
+case "$schema_version" in
+    "$VERSION ($PACKAGED_SHA_PREFIX)") ;;
+    *) echo "unexpected schema provenance: $schema_version" >&2; exit 1 ;;
+esac
+
+set -- "$CARGO_BIN" check --manifest-path "$DETECT_CONSUMER_DIR/Cargo.toml"
+set -- "$@" --config "patch.crates-io.telltale-detect.path=\"$(package_path telltale-detect)\""
+for package in telltale-schema telltale-rules telltale-sources; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+echo "== registry-style detect-only consumer =="
+CARGO_TARGET_DIR="$TARGET_DIR/detect-consumer" "$@"
+
+set -- "$CARGO_BIN" run --manifest-path "$CORE_CONSUMER_DIR/Cargo.toml"
+set -- "$@" --config "patch.crates-io.telltale-core.path=\"$(package_path telltale-core)\""
+for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+echo "== registry-style core-only consumer =="
+CARGO_TARGET_DIR="$TARGET_DIR/core-consumer" "$@" >/dev/null
+
+set -- "$CARGO_BIN" install --locked --path "$(package_path telltale-cli)" --root "$INSTALL_ROOT"
+for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+echo "== packaged telltale-cli install =="
+CARGO_TARGET_DIR="$TARGET_DIR/install" "$@"
+
+for binary in telltale adr; do
+    test -x "$INSTALL_ROOT/bin/$binary" || {
+        echo "packaged install omitted $binary" >&2
+        exit 1
+    }
+    version_output=$("$INSTALL_ROOT/bin/$binary" --version)
+    case "$version_output" in
+        "$binary $VERSION ($PACKAGED_SHA_PREFIX)") printf '%s\n' "$version_output" ;;
+        *)
+            echo "unexpected $binary version output: $version_output" >&2
+            exit 1
+            ;;
+    esac
+done
+
+elapsed=$(( $(date +%s) - START_TIME ))
+echo "Package verification passed in ${elapsed}s."

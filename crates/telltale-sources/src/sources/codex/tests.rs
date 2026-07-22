@@ -1,23 +1,18 @@
-use std::path::Path;
-
 use crate::clients::{ClientId, SourceKind};
 use crate::discovery::discover_sources;
 use crate::parser::{RecordKind, parse_source_records};
 
 #[test]
 fn parses_jsonl_records_in_order_with_session_metadata() {
-    let source = discover_sources(Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/session_stores"
-    )))
-    .into_iter()
-    .find(|source| {
-        source.client == ClientId::Codex
-            && source.kind == SourceKind::Jsonl
-            && source.path.file_name().and_then(|name| name.to_str())
-                == Some("uc001-positive.jsonl")
-    })
-    .expect("fixture source");
+    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        .into_iter()
+        .find(|source| {
+            source.client == ClientId::Codex
+                && source.kind == SourceKind::Jsonl
+                && source.path.file_name().and_then(|name| name.to_str())
+                    == Some("uc001-positive.jsonl")
+        })
+        .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 
@@ -34,17 +29,15 @@ fn parses_jsonl_records_in_order_with_session_metadata() {
 
 #[test]
 fn parses_headless_jsonl_as_single_session_meta_record() {
-    let source = discover_sources(Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/session_stores"
-    )))
-    .into_iter()
-    .find(|source| {
-        source.client == ClientId::Codex
-            && source.kind == SourceKind::HeadlessJsonl
-            && source.path.file_name().and_then(|name| name.to_str()) == Some("headless-a.jsonl")
-    })
-    .expect("fixture source");
+    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        .into_iter()
+        .find(|source| {
+            source.client == ClientId::Codex
+                && source.kind == SourceKind::HeadlessJsonl
+                && source.path.file_name().and_then(|name| name.to_str())
+                    == Some("headless-a.jsonl")
+        })
+        .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 
@@ -59,17 +52,14 @@ fn parses_headless_jsonl_as_single_session_meta_record() {
 
 #[test]
 fn parses_archived_jsonl_as_single_session_meta_record() {
-    let source = discover_sources(Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/session_stores"
-    )))
-    .into_iter()
-    .find(|source| {
-        source.client == ClientId::Codex
-            && source.kind == SourceKind::ArchivedJsonl
-            && source.path.file_name().and_then(|name| name.to_str()) == Some("session-b.jsonl")
-    })
-    .expect("fixture source");
+    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        .into_iter()
+        .find(|source| {
+            source.client == ClientId::Codex
+                && source.kind == SourceKind::ArchivedJsonl
+                && source.path.file_name().and_then(|name| name.to_str()) == Some("session-b.jsonl")
+        })
+        .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 
@@ -91,11 +81,8 @@ fn parses_nested_codex_tool_call_payload_fields() {
         client: crate::clients::ClientId::Codex,
         kind: crate::clients::SourceKind::Jsonl,
         source_id: "codex-payload-arguments-injection".to_string(),
-        path: Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/rule_samples/codex-payload-arguments-injection.jsonl"
-        ))
-        .to_path_buf(),
+        path: crate::test_fixture_path("rule_samples/codex-payload-arguments-injection.jsonl")
+            .to_path_buf(),
     };
 
     let records = parse_source_records(&source).expect("records");

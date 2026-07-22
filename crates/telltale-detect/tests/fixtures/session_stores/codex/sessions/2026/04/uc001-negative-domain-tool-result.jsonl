@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T05:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_result","tool_name":"repo_status","message":"Status report copied from documentation: darkroastcyber.io is the controlled test domain for examples, and this note does not include any hidden instruction or exfiltration step."}}

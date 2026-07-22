@@ -1,0 +1,15 @@
+version: 1
+description: Second equal-tier conflict fixture.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: pack.conflict
+    category: pack_test
+    severity: medium
+    score: 2
+    targets: [command]
+    regex: 'second-conflict-marker'
+    tags: [fixture]
+    explanation: Synthetic conflict rule.
+modifiers: []

@@ -38,7 +38,7 @@ ADR loads bundled default rules from the binary by default. Repeated `--rules`
 flags add custom YAML files on top of those defaults:
 
 ```sh
-adr scan --once --no-local-config --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
+telltale scan --once --no-local-config --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
 ```
 
 Use `--no-default-rules` to omit only the embedded bundled pack. Managed
@@ -46,7 +46,7 @@ directories still load; combine it with `--no-local-config` for an explicit
 custom-only rule set:
 
 ```sh
-adr scan --once --no-local-config --no-default-rules --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
+telltale scan --once --no-local-config --no-default-rules --rules custom-rules.yaml --root tests/fixtures/session_stores --dry-run
 ```
 
 Custom rule files can also live under local config roots. Telltale checks
@@ -69,8 +69,8 @@ files, then `ui-rules.d` local/UI files. Files are sorted lexically within each
 configured root and roots are processed in argument order. A higher tier fully
 replaces a same-ID definition in place; unique IDs are additive. Duplicate IDs
 within one tier fail, including duplicates across configured roots. Replacements
-and winners are available in the provenance columns of `adr rules list --verbose`
-and in `adr rules validate`.
+and winners are available in the provenance columns of `telltale rules list --verbose`
+and in `telltale rules validate`.
 
 **Trust boundary:** Treat `organization-rules.d`, `rules.d`, and `ui-rules.d` as
 trusted operator configuration. Protect them from untrusted or unsigned writes:
@@ -100,11 +100,11 @@ overrides:
     reason: Lab environment tuning.
 ```
 
-Use `adr config validate` as a preflight for local rule, policy, and allowlist
+Use `telltale config validate` as a preflight for local rule, policy, and allowlist
 configuration. It resolves the same effective config as scans, validates the
 compiled rule set after overrides plus allowlist YAML, and emits a small JSON
 health summary.
-Use `adr rules export-default` to print or write the embedded bundled default
+Use `telltale rules export-default` to print or write the embedded bundled default
 rule YAML for inspection or local forking from a standalone binary.
 
 The simplest valid custom rule uses `targets` plus `regex`:
@@ -156,14 +156,14 @@ enabled_categories: [secret_access, credential_pattern, exfiltration, mcp_prompt
 disabled_rules: [network.controlled_test_domain.darkroast]
 ```
 
-Use `adr rules list`, `adr rules validate`, and `adr rules test` to inspect,
-compile, and preview configured rules before writing scan output. `adr rules list`
+Use `telltale rules list`, `telltale rules validate`, and `telltale rules test` to inspect,
+compile, and preview configured rules before writing scan output. `telltale rules list`
 keeps its default five tab-separated columns (`id`, `category`, `severity`,
 `score`, `enabled`); add `--verbose` for the winner and replaced-source
 provenance columns. All three commands also load bundled defaults unless
 `--no-default-rules` is set; managed
 directories still load when bundled defaults are disabled. Use
-`adr rules export-default --output <local-path>` when an operator wants a local
+`telltale rules export-default --output <local-path>` when an operator wants a local
 copy of the embedded default pack to inspect or adapt. An edited copy placed in
 a managed tier intentionally replaces matching IDs; passing it with `--rules`
 requires `--no-default-rules` to avoid additive collision with the embedded copy.

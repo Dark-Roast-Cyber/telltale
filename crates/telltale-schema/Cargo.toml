@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 description = "Telltale canonical event model and normalized record schema"
 license.workspace = true
+authors.workspace = true
+homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/telltale-schema"
+readme = "README.md"
+keywords = ["security", "events", "schema", "serde"]
+categories = ["data-structures", "encoding"]
+include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**"]
 
 [dependencies]
 regex.workspace = true

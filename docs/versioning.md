@@ -11,8 +11,27 @@ format.
 - `0.2.0` is the next planned maturity release.
 - The project does not jump directly to `0.5.0`. Compatible follow-up releases
   use the `0.2.x` patch line.
+- The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
+  `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
+  The planned publication order is schema → rules → sources → detect → core →
+  cli. Recheck crates.io availability immediately before any future
+  publication.
+- **Crates.io name warning:** The package named `telltale` is an unrelated
+  active session-types crate. It is not this project; the embedding package is
+  `telltale-core` and its Rust import is `telltale_core`.
+- `telltale` is the canonical executable and `telltale-*` is the canonical
+  release asset naming. The compiled `adr` compatibility command and exact-copy
+  `adr-*` archive aliases remain through every `0.2.x` release. The earliest
+  possible removal is `0.3.0`, only after at least six months of compatibility
+  and advance notice.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.
+
+## Rust Toolchain Policy
+
+The current support policy is the current stable Rust toolchain used by CI. No
+minimum supported Rust version (MSRV) is promised and no `rust-version` field is
+set until a dedicated MSRV CI lane exists.
 
 ## SemVer Policy
 
@@ -63,20 +82,30 @@ The Cargo/package version is not the version of every data contract:
 
 ## Crates.io Publication
 
-Publish library crates only after `cargo package --list`, package-boundary
-checks, and a workspace-independent consumer build pass. Publish dependencies
-first:
+Publish functional packages only after `cargo package --list`, package-boundary
+checks, and a workspace-independent consumer build pass. Recheck crates.io name
+availability immediately before publication. Publish dependencies first:
 
 1. `telltale-schema`
 2. `telltale-rules`
 3. `telltale-sources`
 4. `telltale-detect`
-5. `telltale`
+5. `telltale-core`
+6. `telltale-cli`
 
 If the crates have not previously been published, their first crates.io version
 must equal the current workspace version. A version already published on
 crates.io cannot be republished; increment the package version deliberately
 instead of reusing it.
+
+Before publication, recheck registry ownership and availability for every name.
+Publish schema → rules → sources → detect → core → cli, waiting after each
+publish until that prerequisite resolves from the index without a local patch.
+After all six packages are available, remove every local `patch.crates-io`
+override and confirm the clean consumers and CLI installation using only pinned
+`=0.2.0` registry dependencies. Do not declare publication complete before
+those unpatched checks pass, and do not publish credentials or local release
+state.
 
 ## Pre-Releases
 

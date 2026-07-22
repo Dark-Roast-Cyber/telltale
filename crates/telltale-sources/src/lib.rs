@@ -12,3 +12,15 @@ pub mod parser;
 pub mod paths;
 pub mod projects;
 pub mod sources;
+
+#[cfg(test)]
+pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir.join("../../tests/fixtures");
+    let root = if workspace_root.is_dir() {
+        workspace_root
+    } else {
+        manifest_dir.join("tests/fixtures")
+    };
+    root.join(relative)
+}

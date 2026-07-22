@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 description = "Telltale detection pipeline: rule evaluation over parsed sessions, timelines, baselines, correlation, and MCP analysis"
 license.workspace = true
+authors.workspace = true
+homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/telltale-detect"
+readme = "README.md"
+keywords = ["security", "detection", "sessions", "correlation"]
+categories = ["development-tools", "parser-implementations"]
+include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**", "/tests/fixtures/**"]
 
 [dependencies]
 telltale-schema.workspace = true

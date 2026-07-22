@@ -1,22 +1,17 @@
-use std::path::Path;
-
 use crate::clients::{ClientId, SourceKind};
 use crate::discovery::discover_sources;
 use crate::parser::{RecordKind, parse_source_records};
 
 #[test]
 fn parses_qwen_jsonl_records() {
-    let source = discover_sources(Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/session_stores"
-    )))
-    .into_iter()
-    .find(|source| {
-        source.client == ClientId::Qwen
-            && source.kind == SourceKind::Jsonl
-            && source.path.file_name().and_then(|name| name.to_str()) == Some("session-a.jsonl")
-    })
-    .expect("fixture source");
+    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        .into_iter()
+        .find(|source| {
+            source.client == ClientId::Qwen
+                && source.kind == SourceKind::Jsonl
+                && source.path.file_name().and_then(|name| name.to_str()) == Some("session-a.jsonl")
+        })
+        .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 
@@ -36,18 +31,15 @@ fn parses_qwen_jsonl_records() {
 
 #[test]
 fn parses_qwen_jsonl_tool_call_and_result_records() {
-    let source = discover_sources(Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/session_stores"
-    )))
-    .into_iter()
-    .find(|source| {
-        source.client == ClientId::Qwen
-            && source.kind == SourceKind::Jsonl
-            && source.path.file_name().and_then(|name| name.to_str())
-                == Some("uc001-qwen-tool-result.jsonl")
-    })
-    .expect("fixture source");
+    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        .into_iter()
+        .find(|source| {
+            source.client == ClientId::Qwen
+                && source.kind == SourceKind::Jsonl
+                && source.path.file_name().and_then(|name| name.to_str())
+                    == Some("uc001-qwen-tool-result.jsonl")
+        })
+        .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 

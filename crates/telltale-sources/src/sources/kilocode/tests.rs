@@ -1,27 +1,22 @@
-use std::path::Path;
-
 use crate::clients::{ClientId, SourceKind};
 use crate::discovery::discover_sources;
 use crate::parser::{RecordKind, parse_source_records};
 
 #[test]
 fn parses_kilocode_ui_messages_json_records() {
-    let source = discover_sources(Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/session_stores"
-    )))
-    .into_iter()
-    .find(|source| {
-        source.client == ClientId::KiloCode
-            && source.kind == SourceKind::UiMessagesJson
-            && source
-                .path
-                .parent()
-                .and_then(|path| path.file_name())
-                .and_then(|name| name.to_str())
-                == Some("task-a")
-    })
-    .expect("fixture source");
+    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        .into_iter()
+        .find(|source| {
+            source.client == ClientId::KiloCode
+                && source.kind == SourceKind::UiMessagesJson
+                && source
+                    .path
+                    .parent()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    == Some("task-a")
+        })
+        .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 
@@ -43,22 +38,19 @@ fn parses_kilocode_ui_messages_json_records() {
 
 #[test]
 fn parses_kilocode_ui_messages_tool_call_and_result_records() {
-    let source = discover_sources(Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/session_stores"
-    )))
-    .into_iter()
-    .find(|source| {
-        source.client == ClientId::KiloCode
-            && source.kind == SourceKind::UiMessagesJson
-            && source
-                .path
-                .parent()
-                .and_then(|path| path.file_name())
-                .and_then(|name| name.to_str())
-                == Some("task-b")
-    })
-    .expect("fixture source");
+    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        .into_iter()
+        .find(|source| {
+            source.client == ClientId::KiloCode
+                && source.kind == SourceKind::UiMessagesJson
+                && source
+                    .path
+                    .parent()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    == Some("task-b")
+        })
+        .expect("fixture source");
 
     let records = parse_source_records(&source).expect("records");
 

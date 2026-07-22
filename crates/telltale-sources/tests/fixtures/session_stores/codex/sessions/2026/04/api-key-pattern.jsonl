@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T09:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T09:00:01Z","payload":{"type":"assistant_message","message":"The token to inspect is ghp_1234567890abcdef1234, please verify it is valid."}}

@@ -1,0 +1,27 @@
+version: 1
+description: Test-only custom ADR rules using Sigma-inspired detection selection.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: custom.agent.malicious_behavior
+    title: Custom malicious agent behavior
+    status: experimental
+    author: adr-test
+    references:
+      - https://example.invalid/adr-custom-rule
+    falsepositives:
+      - Synthetic fixture text.
+    level: high
+    category: custom_agent_behavior
+    severity: high
+    score: 70
+    detection:
+      selection:
+        assistant_context: 'exfiltrate project secrets'
+        arguments: 'exfiltrate project secrets'
+        tool_result: 'exfiltrate project secrets'
+      condition: selection
+    tags: [custom, agent-behavior]
+    explanation: User-defined rule for suspicious agent behavior.
+modifiers: []

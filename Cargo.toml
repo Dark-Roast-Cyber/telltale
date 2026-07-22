@@ -16,9 +16,11 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
+authors = ["Dark Roast Cyber"]
+homepage = "https://github.com/Dark-Roast-Cyber/telltale"
 repository = "https://github.com/Dark-Roast-Cyber/telltale"
 
 [workspace.dependencies]
@@ -29,43 +31,35 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 uuid = { version = "1.11", features = ["v4"] }
-telltale-schema = { path = "crates/telltale-schema", version = "0.1.0" }
-telltale-rules = { path = "crates/telltale-rules", version = "0.1.0" }
-telltale-sources = { path = "crates/telltale-sources", version = "0.1.0" }
-telltale-detect = { path = "crates/telltale-detect", version = "0.1.0" }
+telltale-schema = { path = "crates/telltale-schema", version = "0.2.0" }
+telltale-rules = { path = "crates/telltale-rules", version = "0.2.0" }
+telltale-sources = { path = "crates/telltale-sources", version = "0.2.0" }
+telltale-detect = { path = "crates/telltale-detect", version = "0.2.0" }
+telltale-core = { path = "crates/telltale", version = "0.2.0" }
 
 [package]
-name = "adr"
+name = "telltale-cli"
 version.workspace = true
 edition.workspace = true
+default-run = "telltale"
 description = "Telltale detection layer for AI coding agent sessions"
 license.workspace = true
-readme = "README.md"
+authors.workspace = true
+homepage.workspace = true
+readme = "crates/telltale-cli/README.md"
 repository.workspace = true
-homepage = "https://github.com/Dark-Roast-Cyber/telltale"
-exclude = [
-    "AGENTS.md",
-    "PLAN.md",
-    "VISION.md",
-    "IDEAS.md",
-    "docs/internal/**",
-    "docs/CHANGELOG.md",
-    "docs/research-urls.md",
-    "docs/siem-logging.md",
-    "docs/splunk-content.md",
-    "skills/**",
-    ".ai/**",
-    "scripts/ralph*",
-    "scripts/inspiration/**",
-    "tasks/**",
-    ".opencode/**",
-    "logs/**",
-    "state/**",
-    "artifacts/**",
-    "release-downloads/**",
-    "runtime/ralph/**",
-    "config/examples/splunk-*.conf",
-    "config/examples/splunk-*.xml",
+documentation = "https://docs.rs/telltale-cli"
+keywords = ["security", "ai", "agents", "detection", "telemetry"]
+categories = ["command-line-utilities", "development-tools"]
+include = [
+    "/Cargo.toml",
+    "/crates/telltale-cli/README.md",
+    "/LICENSE",
+    "/build.rs",
+    "/benches/benchmarks.rs",
+    "/src/**",
+    "/config/rules/tool-call-regex.yaml",
+    "/tests/fixtures/**",
 ]
 
 [dependencies]
@@ -96,3 +90,11 @@ tempfile = "3.14"
 [[bench]]
 name = "benchmarks"
 harness = false
+
+[[bin]]
+name = "telltale"
+path = "src/main.rs"
+
+[[bin]]
+name = "adr"
+path = "src/bin/adr.rs"

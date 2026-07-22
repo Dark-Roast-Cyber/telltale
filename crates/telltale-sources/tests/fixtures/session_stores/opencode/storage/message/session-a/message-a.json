@@ -1,0 +1,9 @@
+{
+  "id": "message-a",
+  "sessionID": "session-a",
+  "role": "assistant",
+  "modelID": "fixture-model",
+  "providerID": "fixture-provider",
+  "time": { "created": 1775000000000, "completed": 1775000001000 },
+  "agent": "build"
+}

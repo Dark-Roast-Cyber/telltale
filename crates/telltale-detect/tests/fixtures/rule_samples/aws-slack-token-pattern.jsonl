@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T09:30:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T09:30:01Z","payload":{"type":"assistant_message","message":"Fixture credential-like tokens appeared in output: AKIA1234567890ABCDEF and xoxb-1234567890abcdefABCDE."}}
