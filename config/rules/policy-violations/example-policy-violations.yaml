@@ -10,7 +10,8 @@ rules:
     detection_class: policy_violation
     signal_type: atomic
     analytic_intent: audit
-    atlas_tags: []
+    atlas_tags:
+      - atlas:AML.T0081
     severity: medium
     score: 45
     targets: [command, arguments, file_path]
