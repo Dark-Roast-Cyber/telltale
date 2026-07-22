@@ -1561,6 +1561,7 @@ fn start_mock_llm_server_with_content(
         while handled < 2 && Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking stream");
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .expect("read timeout");
@@ -1622,6 +1623,7 @@ fn start_mock_hec_server() -> (
             }
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking stream");
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .expect("read timeout");
@@ -3261,6 +3263,7 @@ fn start_mock_elastic_server() -> (
             }
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking stream");
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .expect("read timeout");
