@@ -1,0 +1,46 @@
+[
+  {
+    "type": "user",
+    "sessionId": "roocode-baseline-session",
+    "timestamp": "2026-05-10T15:00:00Z",
+    "agent": "roocode",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4",
+    "content": "Check the current git status."
+  },
+  {
+    "type": "assistant",
+    "sessionId": "roocode-baseline-session",
+    "timestamp": "2026-05-10T15:00:01Z",
+    "agent": "roocode",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4",
+    "content": "I'll check the git status for you.",
+    "tool_calls": [
+      {
+        "id": "tc-roocode-baseline-001",
+        "name": "execute_command",
+        "arguments": { "command": "git status --short" }
+      }
+    ]
+  },
+  {
+    "type": "tool_result",
+    "sessionId": "roocode-baseline-session",
+    "timestamp": "2026-05-10T15:00:02Z",
+    "agent": "roocode",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4",
+    "tool_call_id": "tc-roocode-baseline-001",
+    "content": " M src/main.rs\n?? new-file.txt"
+  },
+  {
+    "type": "assistant",
+    "sessionId": "roocode-baseline-session",
+    "timestamp": "2026-05-10T15:00:03Z",
+    "agent": "roocode",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4",
+    "content": "There are two changes: a modification to src/main.rs and an untracked file new-file.txt."
+  }
+]

@@ -1,0 +1,43 @@
+{
+  "sessionId": "gemini-baseline-session",
+  "projectHash": "baseline-project",
+  "startTime": "2026-05-10T12:00:00Z",
+  "lastUpdated": "2026-05-10T12:00:05Z",
+  "model": "gemini-2.5-pro",
+  "messages": [
+    {
+      "id": "msg-1",
+      "timestamp": "2026-05-10T12:00:00Z",
+      "type": "user",
+      "content": [{ "text": "What files are in the current directory?" }]
+    },
+    {
+      "id": "msg-2",
+      "timestamp": "2026-05-10T12:00:01Z",
+      "type": "gemini",
+      "model": "gemini-2.5-pro",
+      "content": "I'll check the current directory for you.",
+      "tool_calls": [
+        {
+          "id": "call-baseline-gemini-001",
+          "name": "run_shell_command",
+          "args": { "command": "ls -1" }
+        }
+      ]
+    },
+    {
+      "id": "msg-3",
+      "timestamp": "2026-05-10T12:00:02Z",
+      "type": "tool",
+      "tool_call_id": "call-baseline-gemini-001",
+      "content": "Cargo.toml\nREADME.md\nsrc/"
+    },
+    {
+      "id": "msg-4",
+      "timestamp": "2026-05-10T12:00:03Z",
+      "type": "gemini",
+      "model": "gemini-2.5-pro",
+      "content": "The directory contains Cargo.toml, README.md, and a src/ directory. This is a standard Rust project layout."
+    }
+  ]
+}

@@ -13,10 +13,10 @@ runtime/*
 !runtime/ralph/
 runtime/ralph/*
 tmp/
-!tests/fixtures/session_stores/gemini/tmp/
-!tests/fixtures/session_stores/gemini/tmp/**
-!crates/*/tests/fixtures/session_stores/gemini/tmp/
-!crates/*/tests/fixtures/session_stores/gemini/tmp/**
+!tests/fixtures/**/tmp/
+!tests/fixtures/**/tmp/**
+!crates/*/tests/fixtures/**/tmp/
+!crates/*/tests/fixtures/**/tmp/**
 *.log
 !tests/fixtures/**/*.log
 !crates/*/tests/fixtures/**/*.log
@@ -45,10 +45,10 @@ scripts/inspiration/ralph-loop.local.zsh
 
 # Ralph TUI task working files (local only, not committed)
 tasks/
-!crates/*/tests/fixtures/session_stores/*/tasks/
-!crates/*/tests/fixtures/session_stores/*/tasks/**
-!tests/fixtures/session_stores/*/tasks/
-!tests/fixtures/session_stores/*/tasks/**
+!tests/fixtures/**/tasks/
+!tests/fixtures/**/tasks/**
+!crates/*/tests/fixtures/**/tasks/
+!crates/*/tests/fixtures/**/tasks/**
 
 # Optional local reference checkouts and symlinks.
 references/
