@@ -12,7 +12,7 @@ Environment=ADR_LOG_PATH=__LOG_PATH__
 Environment=ADR_STATE_PATH=__STATE_PATH__
 Environment=ADR_SCAN_ROOT=__SCAN_ROOT__
 EnvironmentFile=-__ENV_FILE__
-ExecStart=__BINDIR__/adr scan --once --emit-activity --root ${ADR_SCAN_ROOT} --path-profile system
+ExecStart=__BINDIR__/telltale scan --once --emit-activity --root ${ADR_SCAN_ROOT} --path-profile system
 NoNewPrivileges=true
 PrivateTmp=true
 ReadWritePaths=__LOG_DIR__ __STATE_DIR__

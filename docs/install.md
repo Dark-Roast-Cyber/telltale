@@ -12,17 +12,35 @@ fixture-safe scan before pointing the scanner at real agent session stores.
 - Local access to the agent session stores you want to scan
 - Optional: a SIEM or log shipper for the generated JSONL event stream
 
+## Install the CLI with Cargo
+
+The Cargo packages are in current release preparation and are not published to
+crates.io yet. After publication, install the CLI with:
+
+```sh
+cargo install telltale-cli
+```
+
+This installs both `telltale` and the `adr` compatibility binary. The supported
+Rust embedding surface is the separate `telltale-core` package.
+
 ## Install From A Release Archive
 
-Tagged GitHub releases publish platform-specific `adr` binary archives for
-Linux, macOS, and Windows. Download the archive that matches your platform,
-extract the `adr` binary, and place it on your `PATH` or run it from the
-extracted directory.
+Tagged GitHub releases publish platform-specific `telltale-*` binary archives
+for Linux, macOS, and Windows. Download the canonical archive that matches your
+platform, extract both binaries, and use `telltale` (`telltale.exe` on Windows)
+for new integrations.
 
-Each archive contains exactly these file members (with `adr.exe` replacing
-`adr` in the Windows archive):
+The compiled `adr` (`adr.exe`) command is a deprecated compatibility command
+retained through every `0.2.x` release. Each matching `adr-*` archive is an
+exact byte-for-byte copy of the canonical `telltale-*` archive. The earliest
+possible removal is `0.3.0`, only after at least six months of compatibility
+and advance notice.
+
+Each archive contains exactly these file members (with `.exe` on Windows):
 
 ```text
+telltale                    # or telltale.exe
 adr                         # or adr.exe
 LICENSE
 README.md                   # concise release quick start
@@ -41,8 +59,10 @@ configuration.
 ### Verify a release archive
 
 The release workflow publishes a GitHub artifact attestation for every `.tar.gz`
-and `.zip` archive. After downloading an archive, verify its provenance before
-extracting it:
+and `.zip` archive. The existing `v0.1.0` release used the legacy asset name
+below; `0.2.x` and later canonical assets use `telltale-v<version>-...` while
+matching `adr-*` aliases remain exact copies. After downloading an archive,
+verify its provenance before extracting it:
 
 ```sh
 gh attestation verify adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \
@@ -56,21 +76,22 @@ environment is required. The Linux installer verifies the published
 
 ### Quick install (Linux)
 
-A user-first installer is available for Linux. It downloads the latest release
-binary, verifies it against the release's published `SHA256SUMS`, and installs
-it to `~/.local/bin/adr` (no sudo). It does not enable anything beyond the
-binary install unless you opt in:
+A repository installer is available for Linux. It downloads the latest release
+binaries, verifies them against the release's published `SHA256SUMS`, and
+installs them to `~/.local/bin/telltale` and `~/.local/bin/adr` (no sudo). It
+does not enable anything beyond the binary install unless you opt in:
 
 ```sh
-curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
+./scripts/install-telltale
+./scripts/install-telltale --with-timer
 ```
 
-To build from source instead of downloading a prebuilt binary, or to also
-install a user-level systemd timer for periodic scans, pass flags:
-
-```sh
-curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash -s -- --from-source --with-timer
-```
+The hosted one-line installer at `agentarchaeology.ai/telltale_install.sh` is
+pending synchronization and provenance finalization. Do not rely on that hosted
+copy yet to install both Phase 0.5 binaries. To build from source instead of
+downloading a prebuilt binary, pass `--from-source`; add `--with-timer` to opt
+into the user-level systemd timer. `--no-timer` is accepted only for legacy
+compatibility and is normally unnecessary.
 
 The installer does not create system users, configure SIEM shippers, or require
 root. For managed Linux deployments with the `system` path profile, use the
@@ -83,14 +104,16 @@ configuration details.
 
 The release archive does not include the Linux installer script itself. The
 installer downloads and checksum-verifies the platform archive, then installs
-only the `adr` binary unless `--with-timer` is explicitly requested.
+both `telltale` and `adr`; `--with-timer` additionally installs the user-level
+timer.
 
 ### Windows Scheduled Task example
 
 The Windows archive includes
 [`config/examples/adr-scan-task.xml`](../config/examples/adr-scan-task.xml).
 Replace both `YOUR_WINDOWS_USERNAME` values with the account that should run the
-task, then import it from PowerShell after extracting `adr.exe`:
+task, then import it from PowerShell after extracting `telltale.exe` and
+`adr.exe`:
 
 ```powershell
 $xml = Get-Content .\config\examples\adr-scan-task.xml -Raw
@@ -107,17 +130,18 @@ cd telltale
 cargo build --release
 ```
 
-The release binary will be available at `target/release/adr`.
+The primary release binary will be available at `target/release/telltale`; the
+compiled compatibility binary is `target/release/adr`.
 
 ## Verify The Install Safely
 
 Run a fixture-safe dry run before scanning real local session stores:
 
 ```sh
-cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
-cargo run -- config validate --no-local-config
-cargo run -- rules validate --no-local-config
-cargo run -- rules export-default > /tmp/telltale-default-rules.yaml
+cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+cargo run --bin telltale -- config validate --no-local-config
+cargo run --bin telltale -- rules validate --no-local-config
+cargo run --bin telltale -- rules export-default > /tmp/telltale-default-rules.yaml
 cargo test
 ```
 
@@ -136,7 +160,7 @@ scan; for a typical single-user workstation, that is usually your home
 directory. Keep `tests/fixtures/` for dry-run verification only:
 
 ```sh
-cargo run -- scan --once --emit-activity --root "$HOME"
+cargo run --bin telltale -- scan --once --emit-activity --root "$HOME"
 ```
 
 For a first real-store check, keep the scan read-only and bounded before
@@ -145,7 +169,7 @@ more supported clients, and `--max-sources` deterministically caps the number of
 sources scanned after that filtering:
 
 ```sh
-cargo run -- scan --once --dry-run --root "$HOME" --client codex --max-sources 5
+cargo run --bin telltale -- scan --once --dry-run --root "$HOME" --client codex --max-sources 5
 ```
 
 Telltale writes append-only JSONL by default so the output can be reviewed
@@ -222,12 +246,12 @@ Use `--config-dir <path>` to use explicit config roots instead of the default
 roots, and `--no-local-config` when a command should ignore local config.
 Explicit config roots must exist so path typos fail closed.
 
-Use `adr config validate` as the local config preflight before running scans with
+Use `telltale config validate` as the local config preflight before running scans with
 custom content. It resolves config the same way as `scan` and `watch`, validates
 the effective rule, override, and policy set, validates the selected allowlist
 YAML, and prints a JSON status summary without reading session stores.
 
-Use `adr rules export-default` when you want to inspect or fork the bundled
+Use `telltale rules export-default` when you want to inspect or fork the bundled
 default rules from an installed binary. Save an edited copy in the intended
 managed tier (`organization-rules.d`, `rules.d`, or `ui-rules.d`) when it should
 replace matching IDs. Passing an exported copy with `--rules` is additive-only;
@@ -251,7 +275,7 @@ projects:
 Pass the config to scans or watch mode:
 
 ```sh
-cargo run -- scan --once --root "$HOME" --project-config projects.yaml
+cargo run --bin telltale -- scan --once --root "$HOME" --project-config projects.yaml
 ```
 
 You can also set the colon-separated `ADR_PROJECT_CONFIG` environment variable
@@ -260,22 +284,22 @@ default paths (`~/github` and `~/projects`).
 
 ## Optional Watch Mode
 
-Use `adr watch` when you want repeated scans after local session-store changes.
+Use `telltale watch` when you want repeated scans after local session-store changes.
 The watch command accepts the same repeated `--client <id>` filters as
-`adr scan`, which keeps filesystem watches and triggered scans scoped to the
+`telltale scan`, which keeps filesystem watches and triggered scans scoped to the
 selected supported clients:
 
 ```sh
-cargo run -- watch --client codex --client opencode --root "$HOME"
+cargo run --bin telltale -- watch --client codex --client opencode --root "$HOME"
 ```
 
 ## Check Scanner Status
 
-After a scan writes JSONL telemetry, use `adr status` to review the latest local
+After a scan writes JSONL telemetry, use `telltale status` to review the latest local
 scanner summary:
 
 ```sh
-cargo run -- status
+cargo run --bin telltale -- status
 ```
 
 The command keeps its top-level `status` field for the status lookup result. The
@@ -292,7 +316,7 @@ account. This is an advanced path for shared scan servers or fleet-managed
 hosts where the scanned session stores are explicitly made readable by the scan
 account.
 
-The example service assumes a managed Linux deployment with `/usr/local/bin/adr`,
+The example service assumes a managed Linux deployment with `/usr/local/bin/telltale`,
 `/var/log/telltale/adr-events.jsonl`, and `/var/lib/telltale/adr-state.json`.
 Create the service account and directories with permissions that let Telltale
 append telemetry while granting your shipper read-only access to the log file.

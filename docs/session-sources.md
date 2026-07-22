@@ -16,7 +16,7 @@ a configurable cadence and never reads transcript/session contents.
 ## Host Discovery Candidates
 
 These are the host-side locations Telltale currently resolves when
-`adr scan --root .` uses host-style discovery instead of a checked-in fixture
+`telltale scan --root .` uses host-style discovery instead of a checked-in fixture
 tree. Windows locations are experimental until live validation exists, and only
 Codex plus VS Code `globalStorage`-backed clients are currently in scope for
 native Windows discovery.
@@ -59,7 +59,7 @@ projects:
 Pass the config to scans:
 
 ```sh
-adr scan --once --root "$HOME" --project-config projects.yaml
+telltale scan --once --root "$HOME" --project-config projects.yaml
 ```
 
 Project-local discovery is additive: home-relative sources are still discovered from `--root`. The registry in `crates/telltale-sources/src/clients.rs` defines the per-client subpath for each project (for example, `logs/copilot` for Copilot, `.opencode` for OpenCode, and `.codex-worktree` for Codex). If a project has a non-standard subpath, rename the directory to match the registry subpath rather than overriding per-project paths in the YAML.
@@ -68,7 +68,7 @@ The `ADR_PROJECT_CONFIG` environment variable accepts a colon-separated list of 
 
 ## Fixture Behavior
 
-- When `adr scan --root` points at a checked-in fixture tree such as `tests/fixtures/session_stores`, Telltale does not use host-path resolution.
+- When `telltale scan --root` points at a checked-in fixture tree such as `tests/fixtures/session_stores`, Telltale does not use host-path resolution.
 - Fixture discovery still uses each source's `fixture_relative_path` directly.
 - The OS-aware host-path work in P50 and P51 does not change fixture layout or fixture-path expectations.
 - Public verification should prefer checked-in synthetic fixtures and commands that do not touch real agent stores, such as a dry-run fixture scan or focused parser/discovery tests.

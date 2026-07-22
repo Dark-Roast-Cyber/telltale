@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T06:10:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T06:10:01Z","payload":{"type":"user_message","message":"Please review the repository documentation that mentions AGENTS.md and policy.yaml, but do not edit any files."}}

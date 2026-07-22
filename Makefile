@@ -14,8 +14,10 @@ PUBLIC_RELEASE_BRANCH ?= main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= release-downloads
+CARGO_LOCKED ?=
+PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -24,15 +26,16 @@ help:
 	@echo "Targets:"
 	@grep -h '^## ' $(MAKEFILE_LIST) | sed 's/^## //' | sort
 
-## Build release binary
+## Build release binaries
 build:
-	cargo build --release
-	@echo "Binary: target/release/adr"
+	cargo build $(CARGO_LOCKED) --release
+	@echo "Binaries: target/release/telltale target/release/adr"
 
-## Install binary + systemd user service + timer
+## Install binaries + systemd user service + timer
 install: build
-	@echo "Installing adr to $(BINDIR)..."
+	@echo "Installing telltale and adr to $(BINDIR)..."
 	mkdir -p $(BINDIR)
+	install -m 0755 target/release/telltale $(BINDIR)/telltale
 	install -m 0755 target/release/adr $(BINDIR)/adr
 	@echo "Installing systemd user units..."
 	mkdir -p $(SYSTEMD_USER_DIR)
@@ -64,11 +67,11 @@ uninstall:
 	rm -f $(SYSTEMD_USER_DIR)/adr-scan.service
 	rm -f $(SYSTEMD_USER_DIR)/adr-scan.timer
 	systemctl --user daemon-reload
-	@echo "Uninstalled. Binary still at $(BINDIR)/adr"
+	@echo "Uninstalled. Binaries still at $(BINDIR)/telltale and $(BINDIR)/adr"
 
 ## Run tests
 test:
-	cargo test
+	cargo test $(CARGO_LOCKED)
 
 ## Format check
 fmt:
@@ -76,7 +79,7 @@ fmt:
 
 ## Lint
 clippy:
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy $(CARGO_LOCKED) --all-targets -- -D warnings
 
 ## Full verification
 check: fmt clippy test
@@ -151,7 +154,7 @@ release-context-check:
 
 ## Verify the public release tag matches the Cargo package version
 release-tag-review:
-	@package_version="$$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"; \
+	@package_version="$$(cargo metadata --no-deps $(CARGO_LOCKED) --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"; \
 	test -n "$$package_version" || { echo "Could not determine Cargo package version."; exit 1; }; \
 	expected_tag="v$$package_version"; \
 	release_tag="$(PUBLIC_RELEASE_TAG)"; \
@@ -168,25 +171,75 @@ release-tag-review:
 
 ## List and validate Cargo source package contents
 release-crate-manifest:
-	@manifest="$$(cargo package --list --allow-dirty)"; \
-	printf '%s\n' "$$manifest"; \
-	unexpected="$$(printf '%s\n' "$$manifest" | while IFS= read -r path; do \
-		case "$$path" in \
-			AGENTS.md|PLAN.md|VISION.md|IDEAS.md|docs/internal/*|docs/CHANGELOG.md|docs/research-urls.md|docs/siem-logging.md|docs/splunk-content.md|skills/*|.ai/*|scripts/ralph*|scripts/inspiration/*|tasks/*|.opencode/*|logs/*|state/*|artifacts/*|release-downloads/*|runtime/ralph/*|config/examples/splunk-*.conf|config/examples/splunk-*.xml) \
-				printf '%s\n' "$$path" ;; \
+	@$(MAKE) --no-print-directory package-manifest
+
+## List and validate all Phase 0.6 Cargo package inventories
+package-manifest:
+	@set -eu; \
+	for package in $(PACKAGE_ORDER); do \
+		echo "=== $$package ==="; \
+		manifest="$$(cargo package $(CARGO_LOCKED) --list --allow-dirty -p "$$package")"; \
+		printf '%s\n' "$$manifest"; \
+		case "$$manifest" in *"Cargo.toml"*) ;; *) echo "$$package is missing Cargo.toml"; exit 1 ;; esac; \
+		case "$$manifest" in *"README.md"*) ;; *) echo "$$package is missing README.md"; exit 1 ;; esac; \
+		case "$$package" in \
+			telltale-rules) case "$$manifest" in *"data/tool-call-regex.yaml"*) ;; *) echo "$$package is missing packaged rules data"; exit 1 ;; esac ;; \
+		telltale-schema|telltale-rules|telltale-sources|telltale-detect|telltale-core) \
+			for path in $$manifest; do \
+				case "$$path" in \
+					.cargo_vcs_info.json|Cargo.lock|Cargo.toml|Cargo.toml.orig|README.md|LICENSE|build.rs|src/*|examples/*|data/*|tests/fixtures/*) ;; \
+					*) echo "$$package includes unexpected path: $$path"; exit 1 ;; \
+				 esac; \
+			done ;; \
+			telltale-cli) \
+			for path in $$manifest; do \
+				case "$$path" in \
+					.cargo_vcs_info.json|Cargo.lock|Cargo.toml|Cargo.toml.orig|crates/telltale-cli/README.md|LICENSE|build.rs|benches/benchmarks.rs|src/*|config/rules/tool-call-regex.yaml|tests/fixtures/*) ;; \
+					*) echo "$$package includes unexpected path: $$path"; exit 1 ;; \
+				 esac; \
+			done; \
+			case "$$manifest" in *"crates/telltale-cli/README.md"*) ;; *) echo "$$package is missing its package README"; exit 1 ;; esac; \
+			case "$$manifest" in *"src/main.rs"*) ;; *) echo "$$package is missing the telltale binary source"; exit 1 ;; esac; \
+			case "$$manifest" in *"src/bin/adr.rs"*) ;; *) echo "$$package is missing the adr compatibility binary source"; exit 1 ;; esac; \
+			case "$$manifest" in *"benches/benchmarks.rs"*) ;; *) echo "$$package is missing the declared benchmark source"; exit 1 ;; esac; \
+			case "$$manifest" in *"config/rules/tool-call-regex.yaml"*) ;; *) echo "$$package is missing canonical rules"; exit 1 ;; esac ;; \
 		esac; \
-	done)"; \
-	if [ -n "$$unexpected" ]; then \
-		echo "Cargo package includes host-only release material:"; \
-		printf '%s\n' "$$unexpected"; \
-		exit 1; \
-	fi
+		done
+
+## Verify normalized packages, an external consumer, and the packaged CLI
+package-verify:
+	@scripts/package-verify
 
 ## List and validate downloaded public release archives
 release-artifact-manifest:
 	@test -d "$(RELEASE_ARTIFACT_DIR)" || { echo "Release artifact directory not found: $(RELEASE_ARTIFACT_DIR)"; exit 1; }
 	@archives="$$(find "$(RELEASE_ARTIFACT_DIR)" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | sort)"; \
 	test -n "$$archives" || { echo "No release archives found in $(RELEASE_ARTIFACT_DIR)."; exit 1; }; \
+	for archive in $$archives; do \
+		name="$$(basename "$$archive")"; \
+		case "$$name" in \
+			telltale-*.tar.gz|telltale-*.zip|adr-*.tar.gz|adr-*.zip) ;; \
+			*) echo "Release archive $$archive must use a telltale-* or adr-* filename."; exit 1 ;; \
+		esac; \
+	done; \
+	for canonical in "$(RELEASE_ARTIFACT_DIR)"/telltale-*.tar.gz "$(RELEASE_ARTIFACT_DIR)"/telltale-*.zip; do \
+		test -f "$$canonical" || continue; \
+		name="$$(basename "$$canonical")"; \
+		legacy="$(RELEASE_ARTIFACT_DIR)/adr-$${name#telltale-}"; \
+		test -f "$$legacy" || { echo "Release archive $$canonical is missing matching legacy archive $$legacy."; exit 1; }; \
+		canonical_digest="$$(sha256sum "$$canonical" | awk '{ print $$1 }')"; \
+		legacy_digest="$$(sha256sum "$$legacy" | awk '{ print $$1 }')"; \
+		if [ "$$canonical_digest" != "$$legacy_digest" ]; then \
+			echo "Canonical/legacy release archives have different digests: $$canonical and $$legacy."; \
+			exit 1; \
+		fi; \
+	done; \
+	for legacy in "$(RELEASE_ARTIFACT_DIR)"/adr-*.tar.gz "$(RELEASE_ARTIFACT_DIR)"/adr-*.zip; do \
+		test -f "$$legacy" || continue; \
+		name="$$(basename "$$legacy")"; \
+		canonical="$(RELEASE_ARTIFACT_DIR)/telltale-$${name#adr-}"; \
+		test -f "$$canonical" || { echo "Release archive $$legacy is missing matching canonical archive $$canonical."; exit 1; }; \
+	done; \
 	checksum_file="$(RELEASE_ARTIFACT_DIR)/SHA256SUMS"; \
 	if [ -f "$$checksum_file" ]; then \
 		expected="$$(for archive in $$archives; do basename "$$archive"; done | sort)"; \
@@ -209,10 +262,10 @@ release-artifact-manifest:
 		file_entries="$$(printf '%s\n' "$$entries" | sed '/\/$$/d; /^$$/d')"; \
 		printf '%s\n' "$$file_entries" | sed 's/^/  /'; \
 		case "$$archive" in \
-			*.zip) binary="adr.exe" ;; \
-			*) binary="adr" ;; \
+			*.zip) binaries="adr.exe telltale.exe" ;; \
+			*) binaries="adr telltale" ;; \
 		esac; \
-		expected_sorted="$$(printf '%s\n' "$$binary" "LICENSE" "README.md" "config/examples/telltale-outputs.yaml" "config/examples/adr-scan.service" "config/examples/adr-scan.timer" "config/examples/adr-scan-task.xml" | sort)"; \
+		expected_sorted="$$(printf '%s\n' $$binaries "LICENSE" "README.md" "config/examples/telltale-outputs.yaml" "config/examples/adr-scan.service" "config/examples/adr-scan.timer" "config/examples/adr-scan-task.xml" | sort)"; \
 		actual_sorted="$$(printf '%s\n' "$$file_entries" | sort)"; \
 		if [ "$$expected_sorted" != "$$actual_sorted" ]; then \
 			echo "Release archive $$archive does not match the expected bundle manifest."; \
@@ -228,15 +281,15 @@ release-artifact-manifest:
 
 ## Run focused public documentation boundary checks
 release-public-docs-check:
-	cargo test --quiet public_docs_
+	cargo test $(CARGO_LOCKED) --quiet public_docs_
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:
-	cargo run -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
-	cargo run -- rules validate
+	cargo run $(CARGO_LOCKED) --bin telltale -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
+	cargo run $(CARGO_LOCKED) --bin telltale -- rules validate
 
 ## Public release preflight
-release-preflight: release-context-check release-tag-review release-crate-manifest release-public-docs-check check release-fixture-smoke
+release-preflight: release-context-check release-tag-review release-crate-manifest package-verify release-public-docs-check check release-fixture-smoke
 
 ## Show timer status
 status:
@@ -253,11 +306,11 @@ logs:
 
 ## One-shot scan (dry run, fixture-safe)
 scan-dry:
-	$(BINDIR)/adr scan --once --dry-run --root tests/fixtures/session_stores
+	$(BINDIR)/telltale scan --once --dry-run --root tests/fixtures/session_stores
 
 ## One-shot scan (real, writes to log)
 scan:
-	$(BINDIR)/adr scan --once --emit-activity --root $(SCAN_ROOT) --log-path $(LOG_PATH) --state-path $(STATE_PATH)
+	$(BINDIR)/telltale scan --once --emit-activity --root $(SCAN_ROOT) --log-path $(LOG_PATH) --state-path $(STATE_PATH)
 
 ## Clean build artifacts
 clean:

@@ -480,8 +480,6 @@ pub fn baseline_snapshot_id(key: &BaselineKey) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use telltale_sources::discovery::discover_sources;
     use telltale_sources::parser::parse_source_records;
 
@@ -580,10 +578,7 @@ mod tests {
 
     #[test]
     fn benign_fixture_records_produce_baseline_without_side_effects() {
-        let sources = discover_sources(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/benign_baselines"
-        )));
+        let sources = discover_sources(&crate::test_fixture_path("benign_baselines"));
         let mut records = Vec::new();
         for source in sources {
             records.extend(parse_source_records(&source).expect("parse benign source"));

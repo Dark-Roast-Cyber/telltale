@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T09:45:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T09:45:01Z","payload":{"type":"assistant_message","message":"Synthetic credential-like output included a JWT-shaped fixture token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ.eyJzdWIiOiJhZHItZml4dHVyZSIsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c and OAuth bearer text Bearer fixture_oauth_token_1234567890abcdef."}}

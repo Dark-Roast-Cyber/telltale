@@ -1,0 +1,284 @@
+version: 1
+description: Seed static rules for agentic coding tool-call monitoring.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: secret.env.read
+    category: secret_access
+    severity: medium
+    score: 35
+    targets: [command, arguments, file_path, assistant_context, tool_result]
+    regex: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+    tags: [credentials, env, file-read]
+    explanation: Access to .env files can expose API keys and secrets.
+    falsepositives:
+      - Legitimate debugging or deployment work may inspect local env-style files when explicitly requested by the user.
+
+  - id: secret.private_key.read
+    category: secret_access
+    severity: high
+    score: 55
+    targets: [command, arguments, file_path, tool_result]
+    regex: '(id_rsa|id_ed25519|\.pem|\.p12|BEGIN\s+(RSA|OPENSSH|EC|DSA)?\s*PRIVATE\s+KEY)'
+    tags: [credentials, private-key]
+    explanation: Private key access is high risk and should match explicit user intent.
+    falsepositives:
+      - Certificate inventory, key-format documentation, or authorized SSH troubleshooting can mention private-key filenames without malicious intent.
+
+  - id: credential.api_key.pattern
+    category: credential_pattern
+    detection_class: threat_hunting
+    signal_type: atomic
+    analytic_intent: hunt
+    atlas_tags:
+      - atlas:AML.T0057
+    severity: medium
+    score: 30
+    targets: [command, arguments, tool_result, assistant_context]
+    regex: '(sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|Bearer\s+[A-Za-z0-9._~+\/=\-]{20,})'
+    tags: [credentials, token-pattern]
+    explanation: Credential-like token appeared in tool context.
+    falsepositives:
+      - Synthetic examples, redacted fixtures, or documentation may contain token-shaped strings that are not usable credentials.
+
+  - id: execution.shell
+    category: execution
+    severity: low
+    score: 15
+    targets: [tool_name, command, arguments]
+    regex: '(^|\b)(bash|sh|zsh|fish|pwsh|powershell|cmd\.exe)\b|python\s+-c|node\s+-e|perl\s+-e|ruby\s+-e'
+    tags: [execution]
+    explanation: Shell or interpreter execution occurred.
+    falsepositives:
+      - Normal development tasks frequently use shells or one-line interpreters; chain with other risky behavior before escalating.
+
+  - id: execution.encoded_payload
+    category: execution
+    severity: high
+    score: 50
+    targets: [command, arguments]
+    regex: '(base64\s+(-d|--decode)|openssl\s+enc|certutil\s+-decode|FromBase64String|xxd\s+-r|echo\s+[A-Za-z0-9+/]{80,}={0,2}\s*\|)'
+    tags: [execution, obfuscation]
+    explanation: Encoded payload decoding before execution is often malicious.
+    falsepositives:
+      - Build scripts, test fixtures, or incident-response decoding tasks may legitimately handle encoded blobs.
+
+  - id: network.download
+    category: download
+    severity: low
+    score: 20
+    targets: [command, arguments, url]
+    regex: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
+    tags: [network, download]
+    explanation: Network download from a tool call.
+    falsepositives:
+      - Installing tools, fetching release artifacts, or following documented setup steps can require expected downloads.
+
+  - id: install.package_manager
+    category: install
+    severity: low
+    score: 20
+    targets: [command, arguments]
+    regex: '(^|\b)(npm|pnpm|yarn|bun|pip|pipx|uv|cargo|go|brew|apt|apt-get|dnf|yum)\b\s+(install|add|i|get|run|create|x)'
+    tags: [install, supply-chain]
+    explanation: Package install or package-manager execution.
+    falsepositives:
+      - Dependency installation is common during setup and repair; review package source and surrounding commands for risk.
+
+  - id: exfil.outbound_upload
+    category: exfiltration
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0025
+    severity: high
+    score: 60
+    targets: [command, arguments, url]
+    regex: '(curl|wget).*(-X\s*POST|-F\s|--data|--data-binary|--upload-file|PUT\s)|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    tags: [network, exfiltration]
+    explanation: Outbound upload or object-storage copy in a tool call.
+    falsepositives:
+      - Authorized uploads of build artifacts, logs, or release assets may match when the destination is expected.
+
+  - id: persistence.shell_profile
+    category: persistence
+    severity: high
+    score: 45
+    targets: [command, arguments, file_path]
+    regex: '(\.bashrc|\.zshrc|\.profile|\.bash_profile|config/fish/config\.fish|crontab|systemctl\s+enable|launchctl\s+load)'
+    tags: [persistence]
+    explanation: Persistence-sensitive startup or profile modification.
+    falsepositives:
+      - Shell profile edits and service enablement can be legitimate environment setup when user-approved.
+
+  - id: approval.bypass.context
+    category: approval_bypass
+    detection_class: policy_violation
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: high
+    score: 45
+    targets: [assistant_context, command, arguments, tool_result]
+    regex: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+    tags: [approval, intent]
+    explanation: Context suggests bypassing human approval or hiding execution.
+    falsepositives:
+      - Quoted policy text, copied transcripts, or discussions about unsafe behavior may contain bypass language without agent intent.
+
+  - id: tool.injection.shape
+    category: tool_injection
+    severity: high
+    score: 55
+    targets: [assistant_context, tool_name, arguments]
+    regex: '(<tool_call>|</tool_call>|"tool_calls"\s*:|\bfunction_call\b|recipient_name\s*:|namespace\s*:|arguments\s*:\s*\{)'
+    tags: [tool-injection, model-output]
+    explanation: Tool-call-shaped content may indicate injected or spoofed tool execution.
+    falsepositives:
+      - Parser tests, docs, or copied logs may include serialized tool-call examples that were not executed.
+
+  - id: mcp.tool_metadata.prompt_injection
+    category: mcp_prompt_injection
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+    severity: high
+    score: 60
+    targets: [assistant_context, arguments, tool_result]
+    regex: '((\bmcp\b|tools/list|tool\s+description|parameter\s+description|server\s+instructions?|tool\s+result).{0,240}(ignore\s+(all\s+)?previous\s+instructions?|hidden\s+instruction|without\s+(asking|approval|confirmation)|do\s+not\s+tell|silently\s+(run|execute|call)|bypass\s+approval|call\s+(the\s+)?tool))|((ignore\s+(all\s+)?previous\s+instructions?|hidden\s+instruction|without\s+(asking|approval|confirmation)|do\s+not\s+tell|silently\s+(run|execute|call)|bypass\s+approval|call\s+(the\s+)?tool).{0,240}(\bmcp\b|tools/list|tool\s+description|parameter\s+description|server\s+instructions?|tool\s+result))'
+    tags: [mcp, prompt-injection, tool-poisoning]
+    explanation: MCP tool metadata or output appears to contain prompt-injection instructions.
+    falsepositives:
+      - Security tests and documentation may intentionally embed MCP prompt-injection phrases in synthetic metadata.
+
+  - id: network.controlled_test_domain.darkroast
+    category: exfiltration
+    severity: high
+    score: 45
+    targets: [command, arguments, url, assistant_context, tool_result]
+    regex: 'https?://([A-Za-z0-9_-]+\.)?darkroastcyber\.io(/[^\s"'']*)?'
+    tags: [network, controlled-domain, test-fixture]
+    explanation: Controlled tester domain appeared in network or injection context.
+    falsepositives:
+      - ADR fixtures, documentation, and operator validation commands may intentionally reference the controlled test domain.
+
+  - id: exfil.dns_encoding
+    category: exfiltration
+    severity: high
+    score: 55
+    targets: [command, arguments]
+    regex: '(base64\s+(-e|--encode)|echo\s+[A-Za-z0-9+/]{40,}={0,2}\s*\|\s*(nslookup|dig|host)\b|nslookup\s+[A-Za-z0-9+/]{20,}|dig\s+[A-Za-z0-9+/]{20,}|host\s+[A-Za-z0-9+/]{20,})'
+    tags: [exfiltration, dns, encoding, obfuscation]
+    explanation: Base64-encoded data being exfiltrated via DNS queries.
+    falsepositives:
+      - DNS troubleshooting or demonstrations may include encoded labels, but secret-adjacent context should raise priority.
+
+  - id: exfil.encoded_http
+    category: exfiltration
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0025
+    severity: high
+    score: 50
+    targets: [command, arguments]
+    regex: '(curl|wget|fetch|Invoke-WebRequest)\s+.*[A-Za-z0-9+/]{60,}={0,2}.*https?://|(curl|wget|fetch)\s+.*https?://[A-Za-z0-9+/]{20,}\.[a-z]{2,}'
+    tags: [exfiltration, encoding, network]
+    explanation: Encoded data being sent to external HTTP endpoint.
+    falsepositives:
+      - Tests or API calls may send encoded payloads over HTTP when the destination and data are expected.
+
+  - id: credential.cloud_harvest
+    category: credential_harvesting
+    severity: high
+    score: 50
+    targets: [command, arguments, file_path]
+    regex: '(\.aws/credentials|\.aws/config|\.gcloud/credentials\.json|\.kube/config|\.docker/config\.json|credentials\.json|service-account\.json|\.azure/accessTokens\.json|\.config/gcloud/credentials\.db)'
+    tags: [credentials, cloud, harvesting]
+    explanation: Access to cloud provider credential files.
+    falsepositives:
+      - Authorized cloud CLI troubleshooting or inventory may read credential paths under explicit operator direction.
+
+  - id: supply_chain.publish
+    category: supply_chain
+    severity: high
+    score: 45
+    targets: [command, arguments]
+    regex: '(^|\b)(npm|pnpm|yarn|bun)\s+publish\b|pip\s+upload|twine\s+upload|cargo\s+publish|gem\s+push|nuget\s+push|maven\s+deploy'
+    tags: [supply-chain, publish]
+    explanation: Package publishing command detected.
+    falsepositives:
+      - Legitimate release workflows publish packages; correlate with credential access and user release intent.
+
+  - id: mcp.server_enumeration
+    category: mcp_enumeration
+    severity: medium
+    score: 40
+    targets: [command, arguments, assistant_context, tool_result]
+    regex: '(tools/list.{0,80}tools/list|servers?\s*(probe|scan|enumerate|list\s+all)|enumerate.{0,40}(mcp|server|tool)|probe.{0,40}(mcp|server|tool))'
+    tags: [mcp, enumeration, reconnaissance]
+    explanation: MCP server enumeration or probing pattern detected.
+    falsepositives:
+      - Inventory, diagnostics, and integration tests may enumerate MCP tools with operator approval.
+
+modifiers:
+  - id: chain.secret_then_network
+    score: 35
+    when_all_categories: [secret_access, download]
+    explanation: Secret access near network activity materially increases exfiltration risk.
+    falsepositives:
+      - Authorized troubleshooting may inspect environment files and fetch documented resources in the same session; confirm the network destination and user intent before escalating.
+  - id: chain.download_then_execute
+    score: 35
+    when_all_categories: [download, execution]
+    explanation: Download followed by execution is a common malware pattern.
+    falsepositives:
+      - Normal installer workflows often download and execute setup scripts; validate the source, checksum, and explicit user request.
+  - id: chain.shell_encoded_payload
+    score: 10
+    when_all_rule_ids: [execution.shell, execution.encoded_payload]
+    explanation: Shell execution of decoded payload content should cross the triage threshold.
+    falsepositives:
+      - Incident response, parser tests, or build tooling may decode payloads under operator control; review whether decoded content was executed or only inspected.
+  - id: chain.install_then_persistence
+    score: 30
+    when_all_categories: [install, persistence]
+    explanation: Install plus persistence modification requires triage.
+    falsepositives:
+      - Developer environment setup may install packages and update shell profiles or services when those changes match the requested setup steps.
+  - id: chain.mcp_injection_then_egress
+    score: 35
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: alert
+    atlas_tags:
+      - atlas:AML.T0051
+      - atlas:AML.T0086
+    when_all_categories: [mcp_prompt_injection, exfiltration]
+    explanation: MCP prompt injection near outbound egress is the first ADR high-signal alert use case.
+    falsepositives:
+      - ADR security fixtures and controlled validation runs may intentionally pair prompt-injection text with test-domain egress.
+  - id: chain.credential_then_publish
+    score: 40
+    when_all_categories: [credential_harvesting, supply_chain]
+    explanation: Credential harvesting followed by package publishing is a supply chain attack pattern.
+    falsepositives:
+      - Authorized release automation may read cloud or package credentials before publishing; verify release intent, credential scope, and package destination.
+  - id: chain.harvest_then_exfil
+    score: 35
+    when_all_categories: [credential_harvesting, exfiltration]
+    explanation: Credential harvesting followed by exfiltration is a data theft pattern.
+    falsepositives:
+      - Backup, migration, or inventory work may read credential-adjacent files and upload artifacts when both actions are explicitly approved.
+  - id: chain.mcp_enumeration_then_injection
+    score: 30
+    when_all_categories: [mcp_enumeration, mcp_prompt_injection]
+    explanation: MCP server enumeration followed by prompt injection indicates targeted attack.
+    falsepositives:
+      - MCP integration tests may enumerate tools and include synthetic injection strings to validate defenses.

@@ -10,19 +10,20 @@ SIEM, or exits the process.
 
 | Integrator profile | Dependency | What you get |
 | --- | --- | --- |
-| Consume or emit Telltale events (backend, analytics) | `telltale-schema` | Event model, normalized records, redaction, risk thresholds. Serde only. |
+| Consume or emit Telltale events (backend, analytics) | `telltale-schema` | Event model, normalized records, redaction, risk thresholds. Serde-backed types with no runtime I/O. |
 | Evaluate the rule language inline (proxy, gateway) | `telltale-rules` | YAML rule parsing/validation/policy merge and in-memory regex evaluation. I/O-free: no filesystem, watcher, or database access. |
 | Discover and parse agent session stores | `telltale-sources` | Cross-platform discovery, static per-agent source definitions, parser entry points, and install inventory. |
-| Full pipeline in-process (EDR, security tool) | `telltale` | The facade: discover → parse → detect with one dependency. |
+| Full pipeline in-process (EDR, security tool) | `telltale-core` | The supported embedding facade: discover → parse → detect with one dependency. |
 
 ## Getting the crates
 
-The crates are not published to crates.io yet. Consume them as git
-dependencies and pin a revision:
+These packages are in current release preparation and are not published to
+crates.io yet. The supported embedding surface is `telltale-core`; consume it
+as a git dependency and pin a revision until publication:
 
 ```toml
 [dependencies]
-telltale = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>" }
+telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>" }
 ```
 
 Pin a `rev` (not a branch): the crates are pre-1.0 and APIs may change
@@ -31,7 +32,7 @@ between commits. Update the pin deliberately and re-run your tests.
 ## Quick start
 
 ```rust
-use telltale::Pipeline;
+use telltale_core::Pipeline;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bundled default rules; add .rules_document(yaml) for custom packs.
@@ -46,8 +47,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 A compile-tested version lives at `crates/telltale/examples/embed_scan.rs`
-(`cargo run -p telltale --example embed_scan` scans the repository's synthetic
+(`cargo run -p telltale-core --example embed_scan` scans the repository's synthetic
 fixtures).
+
+> **Crates.io name warning:** The crates.io package named `telltale` is an
+> unrelated session-types crate, not this project. Do not use it for Telltale
+> integrations.
+
+Existing local or git consumers that already import `telltale::Pipeline` can
+use an explicit Cargo alias during migration; this is compatibility guidance,
+not the official package name:
+
+```toml
+[dependencies]
+telltale = { package = "telltale-core", git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>" }
+```
 
 ### Records you already have
 
@@ -60,13 +74,13 @@ let matched = pipeline.evaluate_session(&records);         // raw rule matches
 ```
 
 `detect_records` stamps events with the identity in `source`; construct a
-`telltale::Source` with a synthetic path if the records did not come from a
+`telltale_core::Source` with a synthetic path if the records did not come from a
 file. `evaluate_session` returns the raw `MatchResult` (rule ids, categories,
 score, redacted evidence) for callers that build their own alerting.
 
 ### Custom rules and policy
 
-The builder mirrors the `adr` CLI's rule semantics:
+The builder mirrors the `telltale` CLI's rule semantics:
 
 ```rust
 let pipeline = Pipeline::builder()
@@ -94,8 +108,8 @@ keeps the rule engine usable in processes with no filesystem access.
 
 ## Stability
 
-Pre-1.0: the facade (`Pipeline`) is the intended stable surface; the
-lower-level crates re-exported through `telltale::{schema, rules, sources,
-detect}` may reorganize more freely. If you need something the facade does not
+Pre-1.0: the `telltale-core` facade (`Pipeline`) is the intended stable surface;
+the lower-level crates re-exported through `telltale_core::{schema, rules,
+sources, detect}` may reorganize more freely. If you need something the facade does not
 expose, open an issue describing the integration — that feedback drives what
 gets stabilized.

@@ -1,0 +1,13 @@
+[
+  {
+    "id": "noise-approval-1",
+    "sessionID": "opencode-noise-approval-cost-data",
+    "type": "tool_result",
+    "tool_name": "log_review",
+    "modelID": "fixture-model",
+    "providerID": "fixture-provider",
+    "time": "2026-04-28T10:10:00Z",
+    "agent": "build",
+    "content": "cost data {\"role\":\"assistant\",\"system\":[\"You are opencode, an interactive CLI tool that helps users with software engineering tasks.\",\"Examples in the policy mention bypass approval and silently run as forbidden behavior.\"]}"
+  }
+]

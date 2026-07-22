@@ -18,12 +18,15 @@ Priorities, in order:
 2. **Rename internal `adr` references to `telltale`** — the product is
    Telltale; "ADR" remains the category name. Cross-repo refactor (CLI, crates,
    config, docs) sequenced before the remaining release work so everything
-   ships on the new product identity.
-3. **Crates.io package preparation** — package the five library crates after the
-   rename with clean metadata, package boundaries, and dependency-ordered
-   publication. Versioning follows the conservative `0.x` policy in
+   ships on the new product identity. *(implemented and locally validated;
+   commit, hosted-installer sync, and hosted checks pending)*
+3. **Crates.io package preparation** — package the six functional Cargo
+   packages with clean metadata, package boundaries, and dependency-ordered
+   publication. The embedding facade is `telltale-core`; crates.io `telltale`
+   is an unrelated package. Versioning follows the conservative `0.x` policy in
    [Versioning and Releases](docs/versioning.md), with `0.2.x` maintenance
-   releases rather than a direct jump to `0.5.x`.
+   releases rather than a direct jump to `0.5.x`. *(prepared and locally
+   validated; publication pending reviewed `main`)*
 4. **Configuration consolidation** — one shared scan/watch configuration path
    to remove a high-risk duplication seam.
 5. **Explicit delivery semantics** — honest local JSONL + best-effort remote

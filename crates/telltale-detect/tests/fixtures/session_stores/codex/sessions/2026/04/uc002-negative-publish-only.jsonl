@@ -1,0 +1,3 @@
+{"type":"session_meta","timestamp":"2026-04-03T10:10:00Z","payload":{"source":"cli","model_provider":"fixture-provider","agent_nickname":"fixture-agent","model":"fixture-model"}}
+{"type":"event_msg","timestamp":"2026-04-03T10:10:01Z","payload":{"type":"user_message","message":"Synthetic fixture: publish a package without reading credential stores."}}
+{"type":"event_msg","timestamp":"2026-04-03T10:10:02Z","payload":{"type":"tool_call","tool_name":"bash","command":"npm publish --access public","message":"Publish-only fixture with no credential file access."}}

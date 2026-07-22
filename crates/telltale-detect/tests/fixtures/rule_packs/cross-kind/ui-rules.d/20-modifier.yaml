@@ -1,0 +1,11 @@
+version: 1
+description: Synthetic modifier side of a cross-kind collision.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules: []
+modifiers:
+  - id: pack.cross_kind
+    score: 5
+    when_all_categories: [pack_test]
+    explanation: Synthetic cross-kind modifier.

@@ -1,0 +1,2 @@
+{"type":"user_message","timestamp":"2026-04-27T12:00:00Z","model":"claude-fixture-model","message":{"role":"user","content":"Summarize the repository layout without reading sensitive files."}}
+{"type":"assistant_message","timestamp":"2026-04-27T12:00:01Z","model":"claude-fixture-model","message":{"role":"assistant","content":"This is a benign fixture response that mentions source directories only."}}

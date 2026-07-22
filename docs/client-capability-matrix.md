@@ -1,12 +1,12 @@
 # Client Capability Matrix
 
-This matrix documents what ADR's fixture-backed sources can currently normalize into `NormalizedRecordV1`.
+This matrix documents what Telltale's fixture-backed sources can currently normalize into `NormalizedRecordV1`.
 
 Legend:
 
-- `required`: canonical metadata ADR expects on every normalized record.
+- `required`: canonical metadata Telltale expects on every normalized record.
 - `optional`: field is preserved when present in the source.
-- `derived`: ADR derives the field during legacy conversion.
+- `derived`: Telltale derives the field during legacy conversion.
 - `unavailable`: the current source or legacy conversion cannot expose the field reliably.
 
 ## Cross-Client Coverage
@@ -46,7 +46,12 @@ Legend:
 | `ToolResult.is_error` | unavailable | Not exposed by the legacy flat record. |
 | `SessionMeta.workspace` | unavailable | Not exposed by the legacy flat record. |
 
-The fixture-backed conformance test in `crates/telltale-schema/src/canonical.rs` (re-exported as `adr::schema`) verifies that every source id in `supported_clients()` is discovered from `tests/fixtures/session_stores`, parses at least one record, converts into `NormalizedRecordV1`, preserves required metadata, and records the legacy kind extension.
+The fixture-backed conformance test in `crates/telltale-schema/src/canonical.rs`
+(re-exported by the root CLI library as `telltale_cli::schema`) verifies that
+every source id in `supported_clients()` is discovered from
+`tests/fixtures/session_stores`, parses at least one record, converts into
+`NormalizedRecordV1`, preserves required metadata, and records the legacy kind
+extension.
 
 ## Related Documents
 

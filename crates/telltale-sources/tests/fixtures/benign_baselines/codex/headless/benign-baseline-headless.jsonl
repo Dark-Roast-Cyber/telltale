@@ -1,0 +1,5 @@
+{"type":"session_meta","timestamp":"2026-05-10T10:00:00Z","payload":{"source":"headless","model_provider":"openai","agent_nickname":"codex-headless-baseline","model":"o3"}}
+{"type":"event_msg","timestamp":"2026-05-10T10:00:01Z","payload":{"type":"user_message","message":"Check if the build compiles cleanly."}}
+{"type":"event_msg","timestamp":"2026-05-10T10:00:02Z","payload":{"type":"function_call","name":"shell","call_id":"call-headless-001","arguments":{"command":"cargo build 2>&1"}}}
+{"type":"event_msg","timestamp":"2026-05-10T10:00:03Z","payload":{"type":"function_call_output","call_id":"call-headless-001","output":"   Compiling my-project v0.1.0\n    Finished dev [unoptimized + debuginfo] target(s) in 2.34s"}}
+{"type":"event_msg","timestamp":"2026-05-10T10:00:04Z","payload":{"type":"assistant_message","message":"The project compiles cleanly with no warnings."}}

@@ -1,0 +1,11 @@
+version: 1
+description: Synthetic modifier base pack.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules: []
+modifiers:
+  - id: pack.modifier
+    score: 4
+    when_all_categories: [pack_test]
+    explanation: Synthetic base modifier.

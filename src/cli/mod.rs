@@ -10,7 +10,7 @@ use crate::rules::{
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::sink::config as sink_config;
-use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 mod coverage;
 mod export;
@@ -827,7 +827,16 @@ fn resolve_install_inventory_interval_seconds(
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let is_adr_alias = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .and_then(|name| name.to_str().map(|name| name == "adr"))
+        })
+        .unwrap_or(false);
+    let binary_name = if is_adr_alias { "adr" } else { "telltale" };
+    let command = Args::command().name(binary_name);
+    let args = Args::from_arg_matches(&command.get_matches())?;
 
     match args.command {
         Command::Scan {

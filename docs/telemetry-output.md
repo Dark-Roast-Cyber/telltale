@@ -9,7 +9,7 @@ specific sink without changing the event schema.
 
 ## Default JSONL Sink
 
-By default, `adr scan` uses the `user` path profile and appends telemetry to
+By default, `telltale scan` uses the `user` path profile and appends telemetry to
 an operating-system-standard per-user JSONL path:
 
 | OS | Default user telemetry path |
@@ -19,7 +19,7 @@ an operating-system-standard per-user JSONL path:
 | Windows | `%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` |
 
 ```sh
-cargo run -- scan --once --emit-activity
+cargo run --bin telltale -- scan --once --emit-activity
 ```
 
 Use `--path-profile system` for managed service deployments, or
@@ -32,7 +32,7 @@ Use `--dry-run` when validating fixtures or command behavior without writing
 events:
 
 ```sh
-cargo run -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
 ```
 
 The JSONL sink is the stable interchange point. Each line is a complete event
@@ -76,7 +76,7 @@ Enable optional activity and session summary events when dashboards need more
 than detection-only output:
 
 ```sh
-cargo run -- scan --once --emit-activity --emit-session-risk-summary
+cargo run --bin telltale -- scan --once --emit-activity --emit-session-risk-summary
 ```
 
 Installed-agent inventory is separate from session-store discovery. It checks
@@ -169,14 +169,14 @@ Defaults:
 CLI flags override env vars:
 
 ```sh
-adr scan --once --emit-activity --log-rotate-max-size 52428800 --log-rotate-keep 10
+telltale scan --once --emit-activity --log-rotate-max-size 52428800 --log-rotate-keep 10
 ```
 
 To disable built-in rotation (for system-profile deployments that use OS-native
 `logrotate` instead):
 
 ```sh
-adr scan --once --emit-activity --log-rotate-disabled
+telltale scan --once --emit-activity --log-rotate-disabled
 ```
 
 The local JSONL file is a **transient spool**, not the canonical store. Once
@@ -187,9 +187,9 @@ canonical. Rotation keeps the local spool bounded without external tooling.
 
 The canonical event payload remains the same across delivery paths:
 
-- `adr export --format jsonl` reads existing JSONL telemetry.
-- `adr export --format elastic-bulk` writes Elasticsearch Bulk API pairs.
-- `adr scan --splunk-hec-endpoint ... --splunk-hec-token ...` can post the same
+- `telltale export --format jsonl` reads existing JSONL telemetry.
+- `telltale export --format elastic-bulk` writes Elasticsearch Bulk API pairs.
+- `telltale scan --splunk-hec-endpoint ... --splunk-hec-token ...` can post the same
   events through a Splunk HEC envelope when a deployment explicitly opts in.
 
 Sink-specific metadata belongs at the sink or export layer. Do not add

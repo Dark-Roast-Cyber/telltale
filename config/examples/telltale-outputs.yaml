@@ -3,7 +3,7 @@
 # Install as /etc/telltale/outputs.d/50-outputs.yaml (fleet/system root) or
 # ~/.config/telltale/outputs.d/50-outputs.yaml (user root). Files merge in
 # discovery order keyed by sink `name`: a later file's sink with the same name
-# replaces the earlier definition entirely. Validate with `adr config validate`.
+# replaces the earlier definition entirely. Validate with `telltale config validate`.
 version: 1
 sinks:
   # Durable local JSONL log — the system of record, and what a Splunk

@@ -110,9 +110,9 @@ If a control depends on missing user intent, process ancestry, network packet co
 4. Reuse existing rule IDs when they already cover the behavior.
 5. Add new policy-violation rules only for observable gaps.
 6. Add synthetic positive and negative fixtures.
-7. Validate syntax with `adr rules validate`.
-8. Preview fixture behavior with `adr rules test`.
-9. Measure coverage with `adr rules coverage`.
+7. Validate syntax with `telltale rules validate`.
+8. Preview fixture behavior with `telltale rules test`.
+9. Measure coverage with `telltale rules coverage`.
 10. Update the relevant use-case or detection docs.
 
 ## Deterministic Validation
@@ -120,7 +120,7 @@ If a control depends on missing user intent, process ancestry, network packet co
 Validate existing and policy-violation bundles together:
 
 ```sh
-cargo run -- rules validate \
+cargo run --bin telltale -- rules validate \
   --no-local-config \
   --rules config/rules/policy-violations/example-policy-violations.yaml
 ```
@@ -128,7 +128,7 @@ cargo run -- rules validate \
 Preview a fixture:
 
 ```sh
-cargo run -- rules test \
+cargo run --bin telltale -- rules test \
   --no-local-config \
   --rules config/rules/policy-violations/example-policy-violations.yaml \
   tests/fixtures/rule_samples/policy-agent-guardrail-modification.jsonl
@@ -137,7 +137,7 @@ cargo run -- rules test \
 Scan synthetic fixtures without writing:
 
 ```sh
-cargo run -- scan --once --dry-run \
+cargo run --bin telltale -- scan --once --dry-run \
   --no-local-config \
   --root tests/fixtures/session_stores \
   --rules config/rules/policy-violations/example-policy-violations.yaml

@@ -11,8 +11,87 @@ env:
 permissions: {}
 
 jobs:
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Verify tag, package version, and public ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin main:refs/remotes/origin/main
+
+          package_version="$({
+            cargo metadata --no-deps --locked --format-version 1
+          } | python3 -c 'import json, sys; metadata = json.load(sys.stdin); root = metadata["workspace_root"] + "/Cargo.toml"; print(next(package["version"] for package in metadata["packages"] if package["manifest_path"] == root))')"
+          expected_tag="v${package_version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match workspace package version ${expected_tag}." >&2
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if ! git merge-base --is-ancestor "${tag_commit}" refs/remotes/origin/main; then
+            echo "Tagged commit ${tag_commit} is not an ancestor of fetched origin/main." >&2
+            exit 1
+          fi
+      - name: "Release gate: verify installer provenance"
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer_commit="$(sed -n 's/^INSTALLER_COMMIT="\([^"]*\)"$/\1/p' scripts/install-telltale)"
+          case "${installer_commit}" in
+            uncommitted|unknown|placeholder|local|dirty|none|todo)
+              echo "Installer provenance is a placeholder: ${installer_commit}." >&2
+              exit 1
+              ;;
+          esac
+          if [[ ! "${installer_commit}" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "Installer provenance must be a lowercase hex commit id: ${installer_commit}." >&2
+            exit 1
+          fi
+          if ! git cat-file -e "${installer_commit}^{commit}" 2>/dev/null; then
+            echo "Installer provenance commit ${installer_commit} is not present in the checkout." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${installer_commit}" "${GITHUB_SHA}"; then
+            echo "Installer provenance commit ${installer_commit} is not an ancestor of tagged commit ${GITHUB_SHA}." >&2
+            exit 1
+          fi
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Run Clippy with warnings denied
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run full test suite
+        run: cargo test --locked --quiet
+      - name: Check public documentation boundary
+        run: make --silent CARGO_LOCKED=--locked release-public-docs-check
+      - name: Check package and public-boundary manifest
+        run: make --silent CARGO_LOCKED=--locked release-crate-manifest
+      - name: Verify normalized packages and packaged CLI
+        run: make --silent CARGO_LOCKED=--locked package-verify
+      - name: Validate bundled rules and fixture-safe smoke
+        run: make --silent CARGO_LOCKED=--locked release-fixture-smoke
+
   build:
     name: Build (${{ matrix.target }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -52,16 +131,17 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
       - name: Stage and package release bundle (unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
           set -euo pipefail
-          bundle_dir="$RUNNER_TEMP/adr-bundle"
+          bundle_dir="$RUNNER_TEMP/telltale-bundle"
           rm -rf "$bundle_dir"
           mkdir -p "$bundle_dir/config/examples"
 
+          install -m 0755 "target/${{ matrix.target }}/release/telltale" "$bundle_dir/telltale"
           install -m 0755 "target/${{ matrix.target }}/release/adr" "$bundle_dir/adr"
           install -m 0644 LICENSE "$bundle_dir/LICENSE"
           install -m 0644 release/README.md "$bundle_dir/README.md"
@@ -73,26 +153,45 @@ jobs:
             install -m 0644 "$example" "$bundle_dir/$example"
           done
 
-          archive="adr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          archive="telltale-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
           tar czf "$archive" \
             -C "$bundle_dir" \
-            adr LICENSE README.md \
+            telltale adr LICENSE README.md \
             config/examples/telltale-outputs.yaml \
             config/examples/adr-scan.service \
             config/examples/adr-scan.timer \
             config/examples/adr-scan-task.xml
           tar -tzf "$archive"
+          legacy_archive="adr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          cp "$archive" "$legacy_archive"
+          cmp -s "$archive" "$legacy_archive"
+      - name: Native staged binary --version smoke (unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner="${RUNNER_OS}:$(uname -m)"
+          case "${{ matrix.target }}:${runner}" in
+            x86_64-unknown-linux-gnu:Linux:x86_64|aarch64-unknown-linux-gnu:Linux:aarch64|aarch64-unknown-linux-gnu:Linux:arm64|x86_64-apple-darwin:macOS:x86_64|aarch64-apple-darwin:macOS:arm64|aarch64-apple-darwin:macOS:aarch64)
+              "$RUNNER_TEMP/telltale-bundle/telltale" --version
+              "$RUNNER_TEMP/telltale-bundle/adr" --version
+              ;;
+            *)
+              echo "Skipping native --version smoke for cross-compiled target ${{ matrix.target }} on ${runner}."
+              ;;
+          esac
       - name: Stage and package release bundle (windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $bundleDir = Join-Path $env:RUNNER_TEMP 'adr-bundle'
+          $bundleDir = Join-Path $env:RUNNER_TEMP 'telltale-bundle'
           if (Test-Path -LiteralPath $bundleDir) {
             Remove-Item -LiteralPath $bundleDir -Recurse -Force
           }
           New-Item -ItemType Directory -Path (Join-Path $bundleDir 'config/examples') -Force | Out-Null
 
+          Copy-Item "target\${{ matrix.target }}\release\telltale.exe" (Join-Path $bundleDir 'telltale.exe')
           Copy-Item "target\${{ matrix.target }}\release\adr.exe" (Join-Path $bundleDir 'adr.exe')
           Copy-Item 'LICENSE' (Join-Path $bundleDir 'LICENSE')
           Copy-Item 'release\README.md' (Join-Path $bundleDir 'README.md')
@@ -106,7 +205,7 @@ jobs:
             Copy-Item "config\examples\$example" (Join-Path $bundleDir "config/examples/$example")
           }
 
-          $archive = "adr-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          $archive = "telltale-${{ github.ref_name }}-${{ matrix.target }}.zip"
           Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $archive -CompressionLevel Optimal
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path (Get-Location) $archive))
@@ -115,19 +214,41 @@ jobs:
           } finally {
             $zip.Dispose()
           }
+          $legacyArchive = "adr-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Copy-Item -LiteralPath $archive -Destination $legacyArchive
+          if ((Get-FileHash -LiteralPath $archive).Hash -ne (Get-FileHash -LiteralPath $legacyArchive).Hash) {
+            throw "Canonical and legacy release archives differ"
+          }
+      - name: Mandatory Windows staged binary --version smoke
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($binary in @('telltale.exe', 'adr.exe')) {
+            & (Join-Path $env:RUNNER_TEMP "telltale-bundle/$binary") --version
+            if ($LASTEXITCODE -ne 0) {
+              throw "$binary --version smoke failed"
+            }
+          }
       - name: Attest release archive
+        uses: actions/attest@v4
+        with:
+          subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+      - name: Attest legacy release archive
         uses: actions/attest@v4
         with:
           subject-path: adr-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: adr-${{ matrix.target }}
-          path: adr-${{ github.ref_name }}-${{ matrix.target }}.*
+          name: telltale-${{ matrix.target }}
+          path: |
+            telltale-${{ github.ref_name }}-${{ matrix.target }}.*
+            adr-${{ github.ref_name }}-${{ matrix.target }}.*
 
   release:
     name: Create Release
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -145,6 +266,22 @@ jobs:
           shopt -s nullglob
           archives=(*.tar.gz *.zip)
           test "${#archives[@]}" -gt 0
+          canonical_archives=(telltale-${GITHUB_REF_NAME}-*.tar.gz telltale-${GITHUB_REF_NAME}-*.zip)
+          legacy_archives=(adr-${GITHUB_REF_NAME}-*.tar.gz adr-${GITHUB_REF_NAME}-*.zip)
+          test "${#canonical_archives[@]}" -gt 0
+          test "${#canonical_archives[@]}" -eq "${#legacy_archives[@]}"
+          for canonical in "${canonical_archives[@]}"; do
+            legacy="adr-${canonical#telltale-}"
+            test -f "$legacy" || { echo "Missing legacy release archive: $legacy"; exit 1; }
+            cmp -s "$canonical" "$legacy" || {
+              echo "Canonical and legacy release archives differ: $canonical and $legacy"
+              exit 1
+            }
+          done
+          for legacy in "${legacy_archives[@]}"; do
+            canonical="telltale-${legacy#adr-}"
+            test -f "$canonical" || { echo "Missing canonical release archive: $canonical"; exit 1; }
+          done
           printf '%s\0' "${archives[@]}" | sort -z | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
       - name: Create GitHub Release

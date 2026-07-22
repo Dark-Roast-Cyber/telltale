@@ -1,0 +1,1 @@
+{"type":"event_msg","timestamp":"2026-04-03T08:10:00Z","payload":{"type":"tool_result","tool_name":"bash","message":"Command output: -----BEGIN OpenSSH PRIVATE KEY----- synthetic-fixture-body -----END OpenSSH PRIVATE KEY-----"}}

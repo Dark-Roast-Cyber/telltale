@@ -1,6 +1,6 @@
 # MCP Tool Inventory
 
-ADR emits MCP inventory as `activity` events when `adr scan --emit-activity` or `adr watch --emit-activity` is enabled.
+ADR emits MCP inventory as `activity` events when `telltale scan --emit-activity` or `telltale watch --emit-activity` is enabled.
 
 The first implementation is static and local-only. It reads known MCP configuration files, normalizes configured server metadata, and emits one `activity` event per configured server with:
 

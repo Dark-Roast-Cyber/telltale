@@ -1,0 +1,3 @@
+name: no-custom-agent-behavior
+disabled_categories:
+  - custom_agent_behavior

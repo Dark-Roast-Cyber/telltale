@@ -4,10 +4,10 @@
 //!
 //! Events come back as values; the host decides where they go. Nothing here
 //! writes JSONL, talks to a SIEM, or exits the process — those runtime
-//! concerns belong to the `adr` CLI or the host application.
+//! concerns belong to the `telltale` CLI or the host application.
 //!
 //! ```no_run
-//! use telltale::Pipeline;
+//! use telltale_core::Pipeline;
 //!
 //! let pipeline = Pipeline::builder().build()?;
 //! for (source, event) in pipeline.scan_root(std::path::Path::new("/home/user"))? {
@@ -37,7 +37,7 @@ pub struct Pipeline {
     rule_set: CompiledRuleSet,
 }
 
-/// Builder for [`Pipeline`]. Defaults mirror the `adr` CLI: bundled default
+/// Builder for [`Pipeline`]. Defaults mirror the `telltale` CLI: bundled default
 /// rules are included, and extra rule documents are additive.
 #[derive(Default)]
 pub struct PipelineBuilder {
@@ -64,7 +64,7 @@ impl Pipeline {
 
     /// Discover session stores under `root` and run detection over every
     /// parseable source. Parse failures surface as `scanner_error` events in
-    /// the stream, exactly as the `adr` CLI reports them.
+    /// the stream, exactly as the `telltale` CLI reports them.
     pub fn scan_root(&self, root: &Path) -> Result<Vec<(Source, Event)>, BoxError> {
         let sources = telltale_sources::discovery::discover_sources(root);
         Ok(telltale_detect::detection::detect_sources_with_rules(

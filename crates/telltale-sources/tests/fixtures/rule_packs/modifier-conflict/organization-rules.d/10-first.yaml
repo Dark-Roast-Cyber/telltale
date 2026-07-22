@@ -1,0 +1,11 @@
+version: 1
+description: First equal-tier modifier conflict fixture.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules: []
+modifiers:
+  - id: pack.modifier.conflict
+    score: 1
+    when_all_categories: [pack_test]
+    explanation: Synthetic modifier conflict.

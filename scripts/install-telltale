@@ -13,9 +13,9 @@
 #   ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer] [--skip-checksum]
 #
 # What it does:
-#   1. Downloads the latest adr binary for your Linux arch from GitHub releases.
+#   1. Downloads the latest telltale release for your Linux arch from GitHub releases.
 #   2. Verifies the archive against the release's published SHA256SUMS.
-#   3. Installs it to ~/.local/bin/adr (user-writable, no sudo).
+#   3. Installs telltale and the adr compatibility command to ~/.local/bin.
 #   4. With --with-timer, installs a user-level systemd timer for periodic scans.
 #   5. Prints the default telemetry path and next steps.
 #
@@ -39,11 +39,12 @@ FROM_SOURCE=0
 WITH_TIMER=0
 SKIP_CHECKSUM=0
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+RELEASE_BASE_URL="https://github.com/${REPO}/releases/download"
 
 # Installer self-identification. Update INSTALLER_COMMIT when syncing to the
 # hosted copy; bump INSTALLER_VERSION when installer behavior changes.
-INSTALLER_VERSION="2026.07.20"
-INSTALLER_COMMIT="095e642"
+INSTALLER_VERSION="2026.07.21"
+INSTALLER_COMMIT="uncommitted"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m==>\033[0m %s\n' "$*" >&2; }
@@ -55,22 +56,50 @@ print_version() {
         "$INSTALLER_VERSION" "$REPO" "$INSTALLER_COMMIT"
 }
 
+print_help() {
+    cat <<'EOF'
+Telltale Linux installer — user-first, sudo-free by default.
+
+Usage:
+  curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
+  curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash -s -- --with-timer
+  ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer] [--skip-checksum]
+
+Options:
+  --from-source       Build the exact latest release tag with cargo.
+  --install-dir DIR  Install telltale and adr into DIR.
+  --with-timer        Install and enable the user adr-scan.timer.
+  --no-timer          Do not configure a timer.
+  --skip-checksum     Explicitly bypass SHA256SUMS verification.
+  --version, -V       Print installer version information.
+  --help, -h          Print this help.
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --from-source)  FROM_SOURCE=1; shift ;;
-        --install-dir)  INSTALL_DIR="$2"; shift 2 ;;
+        --install-dir)
+            [[ $# -ge 2 ]] || die "--install-dir requires a directory"
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
         --with-timer)   WITH_TIMER=1; shift ;;
         # Historical default was timer-on; accepted for compatibility.
         --no-timer)     WITH_TIMER=0; shift ;;
         --skip-checksum) SKIP_CHECKSUM=1; shift ;;
         --version|-V)   print_version; exit 0 ;;
         --help|-h)
-            sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+            print_help
             exit 0
             ;;
         *) die "Unknown option: $1" ;;
     esac
 done
+
+if [[ "$WITH_TIMER" -eq 1 && "$INSTALL_DIR" != /* ]]; then
+    die "--with-timer requires an absolute --install-dir"
+fi
 
 info "Telltale installer ${INSTALLER_VERSION} (from ${REPO}@${INSTALLER_COMMIT})"
 
@@ -85,169 +114,353 @@ esac
 
 info "Detected Linux ${arch} → ${target}"
 
-# --- ensure install dir exists -----------------------------------------------
+download_to() {
+    local url="$1" destination="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "$destination" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$destination" "$url"
+    else
+        die "Neither curl nor wget found. Install one, or use --from-source with a downloader available"
+    fi
+}
 
-mkdir -p "$INSTALL_DIR"
+download_stdout() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$url"
+    else
+        die "Neither curl nor wget found. Install one, or use --from-source with a downloader available"
+    fi
+}
+
+release_json=""
+if ! release_json="$(download_stdout "$API_URL")"; then
+    die "Could not fetch latest release metadata"
+fi
+[[ -n "$release_json" ]] || die "Latest release metadata was empty"
+
+version_tag="$(printf '%s' "$release_json" \
+    | tr '\r\n' '  ' \
+    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | sed -n '1s/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/p' || true)"
+[[ -n "$version_tag" ]] || die "Latest release metadata did not contain an exact tag"
+if [[ ! "$version_tag" =~ ^v[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z]+)*$ ]]; then
+    die "Latest release tag is not a supported version tag"
+fi
+expected_version="${version_tag#v}"
+
+tmpdir="$(mktemp -d)"
+install_stage_dir=""
+unit_stage_dir=""
+cleanup() {
+    [[ -z "$install_stage_dir" ]] || rm -rf -- "$install_stage_dir"
+    [[ -z "$unit_stage_dir" ]] || rm -rf -- "$unit_stage_dir"
+    rm -rf -- "$tmpdir"
+}
+trap cleanup EXIT
 
 # --- checksum verification ---------------------------------------------------
 
 verify_checksum() {
-    local archive="$1" archive_name="$2" version_tag="$3" tmpdir="$4"
+    local archive="$1" archive_name="$2" tmpdir_for_checksums="$3"
 
     if [[ "$SKIP_CHECKSUM" -eq 1 ]]; then
         warn "Skipping checksum verification (--skip-checksum passed)."
         return 0
     fi
 
-    local sums_url="https://github.com/${REPO}/releases/download/${version_tag}/SHA256SUMS"
-    local sums_file="${tmpdir}/SHA256SUMS"
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "$sums_file" "$sums_url" 2>/dev/null || true
-    else
-        wget -qO "$sums_file" "$sums_url" 2>/dev/null || true
+    local sums_url="${RELEASE_BASE_URL}/${version_tag}/SHA256SUMS"
+    local sums_file="${tmpdir_for_checksums}/SHA256SUMS"
+    if ! download_to "$sums_url" "$sums_file"; then
+        die "Could not fetch SHA256SUMS for ${version_tag}; use --skip-checksum only if this is intentional"
     fi
-
-    if [[ ! -s "$sums_file" ]]; then
-        warn "Could not fetch SHA256SUMS for ${version_tag}; skipping checksum verification."
-        warn "Re-run with --skip-checksum to silence this warning, or verify manually."
-        return 0
-    fi
+    [[ -s "$sums_file" ]] || die "SHA256SUMS for ${version_tag} was empty; use --skip-checksum only if this is intentional"
 
     local expected
-    expected="$(grep "  ${archive_name}\$" "$sums_file" | awk '{print $1}' || true)"
-    if [[ -z "$expected" ]]; then
-        warn "No SHA256SUMS entry for ${archive_name}; skipping checksum verification."
-        return 0
+    if ! expected="$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; found=1; exit } END { if (!found) exit 1 }' "$sums_file")"; then
+        die "No exact SHA256SUMS entry for ${archive_name}; use --skip-checksum only if this is intentional"
     fi
+    [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || die "Invalid SHA256SUMS entry for ${archive_name}"
 
     local actual
     if command -v sha256sum >/dev/null 2>&1; then
-        actual="$(sha256sum "$archive" | awk '{print $1}')"
+        if ! actual="$(sha256sum "$archive" | awk '{print $1}')"; then
+            die "Could not calculate SHA256 for ${archive_name}"
+        fi
     elif command -v shasum >/dev/null 2>&1; then
-        actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+        if ! actual="$(shasum -a 256 "$archive" | awk '{print $1}')"; then
+            die "Could not calculate SHA256 for ${archive_name}"
+        fi
     else
-        warn "Neither sha256sum nor shasum found; skipping checksum verification."
-        return 0
+        die "Neither sha256sum nor shasum is available; use --skip-checksum only if this is intentional"
     fi
 
-    if [[ "$expected" != "$actual" ]]; then
-        die "Checksum mismatch for ${archive_name}: expected ${expected}, got ${actual}"
-    fi
+    [[ "$expected" == "$actual" ]] || die "Checksum mismatch for ${archive_name}"
     info "Checksum verified: ${archive_name}"
 }
 
-# --- get the binary ----------------------------------------------------------
+verify_binary() {
+    local binary="$1" invocation="$2" allow_legacy_adr="${3:-0}"
+    [[ -f "$binary" && ! -L "$binary" ]] || die "Required binary is missing: ${binary}"
 
-# cargo install --root <dir> places the binary at <dir>/bin/adr.
-# Compute the cargo root so the binary lands at ${INSTALL_DIR}/adr.
-if [[ "${INSTALL_DIR##*/}" == "bin" ]]; then
-    cargo_root="${INSTALL_DIR%/bin}"
-else
-    cargo_root="$INSTALL_DIR"
-fi
+    local version_output prefix
+    if ! version_output="$("$binary" --version 2>/dev/null)"; then
+        die "Binary failed version verification: ${binary}"
+    fi
 
-installed_bin=""
+    prefix="${invocation} ${expected_version}"
+    case "$version_output" in
+        "$prefix"|"$prefix "*|"$prefix"$'\n'*) return 0 ;;
+    esac
+    if [[ "$allow_legacy_adr" -eq 1 ]]; then
+        prefix="adr ${expected_version}"
+        case "$version_output" in
+            "$prefix"|"$prefix "*|"$prefix"$'\n'*) return 0 ;;
+        esac
+    fi
+    die "Binary version does not match ${invocation} ${version_tag}: ${binary}"
+}
+
+# --- stage the binaries ------------------------------------------------------
+
+staged_dir="${tmpdir}/staged"
+mkdir -p "$staged_dir"
+legacy_bootstrap=0
 
 if [[ "$FROM_SOURCE" -eq 1 ]]; then
-    info "Building from source with cargo (requires Rust toolchain)..."
+    info "Building exact release ${version_tag} from source with cargo (requires Rust toolchain)..."
     command -v cargo >/dev/null 2>&1 || die "cargo not found. Install Rust from https://rustup.rs"
-    # cargo install --root <dir> places the binary at <dir>/bin/adr.
-    cargo install --git "https://github.com/${REPO}" --root "${cargo_root}" --force
-    installed_bin="${cargo_root}/bin/adr"
-    # If the cargo bin dir isn't the requested install dir, move the binary.
-    if [[ "$(dirname "${installed_bin}")" != "$INSTALL_DIR" ]]; then
-        mkdir -p "$INSTALL_DIR"
-        install -m 0755 "${installed_bin}" "${INSTALL_DIR}/adr"
-        installed_bin="${INSTALL_DIR}/adr"
+    source_root="${tmpdir}/cargo-root"
+    if ! cargo install --git "https://github.com/${REPO}" \
+        --tag "$version_tag" --root "$source_root" --force --locked --bins; then
+        die "cargo install failed for release ${version_tag}"
     fi
-    info "Installed adr to ${installed_bin} via cargo"
+    [[ -f "${source_root}/bin/adr" && ! -L "${source_root}/bin/adr" ]] \
+        || die "Source release ${version_tag} did not produce adr"
+    if [[ -L "${source_root}/bin/telltale" ]]; then
+        die "Source release ${version_tag} produced an invalid telltale link"
+    elif [[ ! -e "${source_root}/bin/telltale" && "$version_tag" == "v0.1.0" ]]; then
+        legacy_bootstrap=1
+        install -m 0755 "${source_root}/bin/adr" "${staged_dir}/adr"
+        install -m 0755 "${source_root}/bin/adr" "${staged_dir}/telltale"
+    else
+        [[ -f "${source_root}/bin/telltale" ]] \
+            || die "Source release ${version_tag} did not produce telltale"
+        install -m 0755 "${source_root}/bin/telltale" "${staged_dir}/telltale"
+        install -m 0755 "${source_root}/bin/adr" "${staged_dir}/adr"
+    fi
 else
-    info "Fetching latest release from GitHub..."
-    download_url=""
-    version_tag=""
-
-    # Try the GitHub API first.
-    if command -v curl >/dev/null 2>&1; then
-        release_json="$(curl -fsSL "$API_URL" 2>/dev/null || true)"
-    elif command -v wget >/dev/null 2>&1; then
-        release_json="$(wget -qO- "$API_URL" 2>/dev/null || true)"
-    else
-        die "Neither curl nor wget found. Install one, or use --from-source."
-    fi
-
-    if [[ -n "$release_json" ]]; then
-        version_tag="$(printf '%s' "$release_json" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//' || true)"
-        # Look for an asset matching our target.
-        asset_url="$(printf '%s' "$release_json" | grep -o '"browser_download_url": *"[^"]*"' | grep "${target}" | head -1 | sed 's/.*"browser_download_url": *"//;s/"$//' || true)"
-        if [[ -n "$asset_url" ]]; then
-            download_url="$asset_url"
+    canonical_name="telltale-${version_tag}-${target}.tar.gz"
+    legacy_name="adr-${version_tag}-${target}.tar.gz"
+    selected_name="$canonical_name"
+    selected_kind="canonical"
+    archive="${tmpdir}/${selected_name}"
+    info "Downloading Telltale ${version_tag} for ${target}..."
+    if ! download_to "${RELEASE_BASE_URL}/${version_tag}/${canonical_name}" "$archive"; then
+        selected_name="$legacy_name"
+        selected_kind="legacy"
+        archive="${tmpdir}/${selected_name}"
+        if ! download_to "${RELEASE_BASE_URL}/${version_tag}/${legacy_name}" "$archive"; then
+            die "No exact release asset for ${target}: expected ${canonical_name} or ${legacy_name}"
         fi
     fi
+    [[ -s "$archive" ]] || die "Downloaded release asset ${selected_name} was empty"
+    verify_checksum "$archive" "$selected_name" "$tmpdir"
 
-    if [[ -z "$download_url" ]]; then
-        warn "No prebuilt binary found for ${target}."
-        warn "Falling back to building from source (requires Rust toolchain)."
-        command -v cargo >/dev/null 2>&1 || die "cargo not found. Install Rust from https://rustup.rs"
-        cargo install --git "https://github.com/${REPO}" --root "${cargo_root}" --force
-        installed_bin="${cargo_root}/bin/adr"
-        if [[ "$(dirname "${installed_bin}")" != "$INSTALL_DIR" ]]; then
-            mkdir -p "$INSTALL_DIR"
-            install -m 0755 "${installed_bin}" "${INSTALL_DIR}/adr"
-            installed_bin="${INSTALL_DIR}/adr"
-        fi
-        info "Installed adr to ${installed_bin} via cargo"
+    archive_members=""
+    if ! archive_members="$(tar tzf "$archive")"; then
+        die "Could not inspect release asset ${selected_name}"
+    fi
+    archive_listing=""
+    if ! archive_listing="$(tar tvzf "$archive")"; then
+        die "Could not inspect release asset types ${selected_name}"
+    fi
+    while IFS= read -r member; do
+        [[ -n "$member" ]] || continue
+        [[ "$member" != /* ]] || die "Release asset ${selected_name} contains an absolute path"
+        case "/${member}/" in
+            */../*) die "Release asset ${selected_name} contains path traversal" ;;
+        esac
+    done <<< "$archive_members"
+    while IFS= read -r listing_line; do
+        [[ -n "$listing_line" ]] || continue
+        case "${listing_line:0:1}" in
+            l|h) die "Release asset ${selected_name} contains a link" ;;
+        esac
+    done <<< "$archive_listing"
+
+    has_telltale=0
+    has_adr=0
+    while IFS= read -r member; do
+        case "$member" in
+            telltale) has_telltale=1 ;;
+            adr) has_adr=1 ;;
+        esac
+    done <<< "$archive_members"
+    [[ "$has_adr" -eq 1 ]] || die "Release asset ${selected_name} is missing adr"
+    if [[ "$selected_kind" == "canonical" ]]; then
+        [[ "$has_telltale" -eq 1 ]] || die "Release asset ${selected_name} is missing telltale"
+    elif [[ "$has_telltale" -eq 0 && "$version_tag" != "v0.1.0" ]]; then
+        die "Legacy release asset ${selected_name} without telltale is supported only for v0.1.0"
+    fi
+    if [[ "$has_telltale" -eq 1 ]]; then
+        telltale_type="$(printf '%s\n' "$archive_listing" | awk '$NF == "telltale" { type=substr($0, 1, 1); count++ } END { if (count != 1) exit 1; print type }')" \
+            || die "Release asset ${selected_name} has an invalid telltale member"
+        [[ "$telltale_type" == "-" ]] || die "Release asset ${selected_name} has a non-regular telltale member"
+    fi
+    adr_type="$(printf '%s\n' "$archive_listing" | awk '$NF == "adr" { type=substr($0, 1, 1); count++ } END { if (count != 1) exit 1; print type }')" \
+        || die "Release asset ${selected_name} has an invalid adr member"
+    [[ "$adr_type" == "-" ]] || die "Release asset ${selected_name} has a non-regular adr member"
+
+    extract_dir="${tmpdir}/extract"
+    mkdir -p "$extract_dir"
+    extract_members=(adr)
+    if [[ "$has_telltale" -eq 1 ]]; then
+        extract_members+=(telltale)
+    fi
+    if ! tar xzf "$archive" -C "$extract_dir" --no-same-owner -- "${extract_members[@]}"; then
+        die "Could not extract release asset ${selected_name}"
+    fi
+
+    legacy_bootstrap=0
+    if [[ "$selected_kind" == "legacy" && "$has_telltale" -eq 0 ]]; then
+        # v0.1-style assets contained only adr. Keep this compatibility path
+        # conditional on the legacy asset actually lacking telltale.
+        legacy_bootstrap=1
+        install -m 0755 "${extract_dir}/adr" "${staged_dir}/adr"
+        install -m 0755 "${extract_dir}/adr" "${staged_dir}/telltale"
     else
-        info "Downloading Telltale ${version_tag} for ${target}..."
-        tmpdir="$(mktemp -d)"
-        trap 'rm -rf "$tmpdir"' EXIT
-
-        archive_name="$(basename "$download_url")"
-        archive="${tmpdir}/${archive_name}"
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL -o "$archive" "$download_url"
-        else
-            wget -qO "$archive" "$download_url"
-        fi
-
-        verify_checksum "$archive" "$archive_name" "$version_tag" "$tmpdir"
-
-        tar xzf "$archive" -C "$tmpdir"
-        install -m 0755 "${tmpdir}/adr" "${INSTALL_DIR}/adr"
-        installed_bin="${INSTALL_DIR}/adr"
-        info "Installed adr ${version_tag} to ${installed_bin}"
+        install -m 0755 "${extract_dir}/telltale" "${staged_dir}/telltale"
+        install -m 0755 "${extract_dir}/adr" "${staged_dir}/adr"
     fi
 fi
 
-# --- verify the binary runs --------------------------------------------------
+verify_binary "${staged_dir}/telltale" telltale "$legacy_bootstrap"
+verify_binary "${staged_dir}/adr" adr
 
-adr_bin="$installed_bin"
-if ! "$adr_bin" --version >/dev/null 2>&1; then
-    die "adr binary at ${adr_bin} did not run. Check your platform and try --from-source."
+# --- replace the installation only after staging and validation -------------
+
+[[ ! -L "$INSTALL_DIR" ]] || die "Refusing symlink install directory ${INSTALL_DIR}"
+[[ ! -L "${INSTALL_DIR}/telltale" ]] || die "Refusing to replace symlink ${INSTALL_DIR}/telltale"
+[[ ! -L "${INSTALL_DIR}/adr" ]] || die "Refusing to replace symlink ${INSTALL_DIR}/adr"
+mkdir -p "$INSTALL_DIR"
+install_stage_dir="$(mktemp -d "${INSTALL_DIR}/.telltale-install.XXXXXX")"
+install -m 0755 "${staged_dir}/telltale" "${install_stage_dir}/telltale.new"
+install -m 0755 "${staged_dir}/adr" "${install_stage_dir}/adr.new"
+verify_binary "${install_stage_dir}/telltale.new" telltale "$legacy_bootstrap"
+verify_binary "${install_stage_dir}/adr.new" adr
+
+old_telltale=0
+old_adr=0
+telltale_new_attempted=0
+adr_new_attempted=0
+replacement_active=1
+rollback_installation() {
+    if [[ "$old_telltale" -eq 1 && -e "${install_stage_dir}/telltale.old" ]]; then
+        rm -f -- "${INSTALL_DIR}/telltale" || true
+        mv -- "${install_stage_dir}/telltale.old" "${INSTALL_DIR}/telltale" || true
+    elif [[ "$telltale_new_attempted" -eq 1 ]]; then
+        rm -f -- "${INSTALL_DIR}/telltale" || true
+    fi
+    if [[ "$old_adr" -eq 1 && -e "${install_stage_dir}/adr.old" ]]; then
+        rm -f -- "${INSTALL_DIR}/adr" || true
+        mv -- "${install_stage_dir}/adr.old" "${INSTALL_DIR}/adr" || true
+    elif [[ "$adr_new_attempted" -eq 1 ]]; then
+        rm -f -- "${INSTALL_DIR}/adr" || true
+    fi
+}
+trap 'if [[ "$replacement_active" -eq 1 ]]; then rollback_installation; fi; cleanup' EXIT
+
+if [[ -e "${INSTALL_DIR}/telltale" ]]; then
+    [[ -f "${INSTALL_DIR}/telltale" ]] || die "Existing telltale installation is not a regular file"
+    old_telltale=1
+    if ! mv -- "${INSTALL_DIR}/telltale" "${install_stage_dir}/telltale.old"; then
+        die "Could not move the existing telltale aside"
+    fi
 fi
-info "Verified: $(${adr_bin} --version)"
+if [[ -e "${INSTALL_DIR}/adr" ]]; then
+    [[ -f "${INSTALL_DIR}/adr" ]] || die "Existing adr installation is not a regular file"
+    old_adr=1
+    if ! mv -- "${INSTALL_DIR}/adr" "${install_stage_dir}/adr.old"; then
+        die "Could not move the existing adr aside"
+    fi
+fi
+telltale_new_attempted=1
+if ! mv -- "${install_stage_dir}/telltale.new" "${INSTALL_DIR}/telltale"; then
+    die "Could not install ${INSTALL_DIR}/telltale"
+fi
+adr_new_attempted=1
+if ! mv -- "${install_stage_dir}/adr.new" "${INSTALL_DIR}/adr"; then
+    die "Could not install ${INSTALL_DIR}/adr"
+fi
+verify_binary "${INSTALL_DIR}/telltale" telltale "$legacy_bootstrap"
+verify_binary "${INSTALL_DIR}/adr" adr
+replacement_active=0
+trap cleanup EXIT
 
-# --- optional user systemd timer ---------------------------------------------
+info "Installed telltale and adr ${version_tag} to ${INSTALL_DIR}"
+
+# --- optional user systemd timer --------------------------------------------
+
+systemd_quote_exec_path() {
+    local escaped="$1"
+    [[ "$escaped" != *$'\n'* && "$escaped" != *$'\r'* ]] \
+        || die "Install directory contains a line break and cannot be used in a systemd unit"
+    escaped="${escaped//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    escaped="${escaped//%/%%}"
+    printf '"%s"' "$escaped"
+}
 
 setup_timer() {
-    command -v systemctl >/dev/null 2>&1 || { warn "systemctl not found, skipping timer setup."; return 0; }
+    command -v systemctl >/dev/null 2>&1 \
+        || die "--with-timer requires systemctl; install systemd or omit --with-timer"
 
     local unit_dir="${HOME}/.config/systemd/user"
-    mkdir -p "$unit_dir"
-
     local service_file="${unit_dir}/adr-scan.service"
     local timer_file="${unit_dir}/adr-scan.timer"
+    local exec_start
+    local previous_enabled=0 previous_active=0
+    if ! mkdir -p "$unit_dir"; then
+        die "Could not create user systemd unit directory ${unit_dir}"
+    fi
+    [[ ! -L "$unit_dir" ]] || die "Refusing symlink user systemd unit directory ${unit_dir}"
+    [[ ! -L "$service_file" ]] || die "Refusing symlink ${service_file}"
+    [[ ! -L "$timer_file" ]] || die "Refusing symlink ${timer_file}"
+    [[ ! -e "$service_file" || -f "$service_file" ]] \
+        || die "Existing ${service_file} is not a regular file"
+    [[ ! -e "$timer_file" || -f "$timer_file" ]] \
+        || die "Existing ${timer_file} is not a regular file"
 
-    cat > "$service_file" <<EOF
+    if systemctl --user is-enabled adr-scan.timer >/dev/null 2>&1; then
+        previous_enabled=1
+    fi
+    if systemctl --user is-active adr-scan.timer >/dev/null 2>&1; then
+        previous_active=1
+    fi
+
+    exec_start="$(systemd_quote_exec_path "${INSTALL_DIR}/telltale")"
+    unit_stage_dir="$(mktemp -d "${unit_dir}/.telltale-timer.XXXXXX")"
+    local staged_service="${unit_stage_dir}/adr-scan.service.new"
+    local staged_timer="${unit_stage_dir}/adr-scan.timer.new"
+
+    if ! cat > "$staged_service" <<EOF
 [Unit]
 Description=Telltale one-shot agent session scan
 
 [Service]
 Type=oneshot
-ExecStart=${adr_bin} scan --once --emit-activity --root %h
+ExecStart=:/usr/bin/env -- ${exec_start} scan --once --emit-activity --root %h
 EOF
+    then
+        die "Could not stage ${service_file}"
+    fi
+    chmod 0644 "$staged_service"
 
-    cat > "$timer_file" <<EOF
+    if ! cat > "$staged_timer" <<EOF
 [Unit]
 Description=Run Telltale scan periodically
 
@@ -259,16 +472,73 @@ Unit=adr-scan.service
 [Install]
 WantedBy=timers.target
 EOF
-
-    systemctl --user daemon-reload
-    if systemctl --user enable --now adr-scan.timer 2>/dev/null; then
-        info "Installed user systemd timer (runs every 30 min as your user)"
-        info "  Manage with: systemctl --user status adr-scan.timer"
-        info "  Disable with: systemctl --user disable --now adr-scan.timer"
-    else
-        warn "Could not enable adr-scan.timer. The service files are installed at ~/.config/systemd/user/."
-        warn "Enable manually with: systemctl --user enable --now adr-scan.timer"
+    then
+        die "Could not stage ${timer_file}"
     fi
+    chmod 0644 "$staged_timer"
+
+    local old_service=0 old_timer=0
+    local service_new_attempted=0 timer_new_attempted=0
+    timer_transaction_active=1
+    rollback_timer() {
+        if [[ "$old_service" -eq 1 && -e "${unit_stage_dir}/adr-scan.service.old" ]]; then
+            rm -f -- "$service_file" || true
+            mv -- "${unit_stage_dir}/adr-scan.service.old" "$service_file" || true
+        elif [[ "$service_new_attempted" -eq 1 ]]; then
+            rm -f -- "$service_file" || true
+        fi
+        if [[ "$old_timer" -eq 1 && -e "${unit_stage_dir}/adr-scan.timer.old" ]]; then
+            rm -f -- "$timer_file" || true
+            mv -- "${unit_stage_dir}/adr-scan.timer.old" "$timer_file" || true
+        elif [[ "$timer_new_attempted" -eq 1 ]]; then
+            rm -f -- "$timer_file" || true
+        fi
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+        if [[ "$previous_enabled" -eq 1 ]]; then
+            systemctl --user enable adr-scan.timer >/dev/null 2>&1 || true
+        else
+            systemctl --user disable adr-scan.timer >/dev/null 2>&1 || true
+        fi
+        if [[ "$previous_active" -eq 1 ]]; then
+            systemctl --user start adr-scan.timer >/dev/null 2>&1 || true
+        else
+            systemctl --user stop adr-scan.timer >/dev/null 2>&1 || true
+        fi
+    }
+    trap 'if [[ "$timer_transaction_active" -eq 1 ]]; then rollback_timer; fi; cleanup' EXIT
+
+    if [[ -e "$service_file" ]]; then
+        old_service=1
+        if ! mv -- "$service_file" "${unit_stage_dir}/adr-scan.service.old"; then
+            die "Could not snapshot ${service_file}"
+        fi
+    fi
+    if [[ -e "$timer_file" ]]; then
+        old_timer=1
+        if ! mv -- "$timer_file" "${unit_stage_dir}/adr-scan.timer.old"; then
+            die "Could not snapshot ${timer_file}"
+        fi
+    fi
+    service_new_attempted=1
+    if ! mv -- "$staged_service" "$service_file"; then
+        die "Could not install ${service_file}"
+    fi
+    timer_new_attempted=1
+    if ! mv -- "$staged_timer" "$timer_file"; then
+        die "Could not install ${timer_file}"
+    fi
+
+    if ! systemctl --user daemon-reload; then
+        die "Could not reload the user systemd manager; binaries were installed, but timer setup failed and previous state restoration was attempted"
+    fi
+    if ! systemctl --user enable --now adr-scan.timer; then
+        die "Could not enable adr-scan.timer; binaries were installed, but timer setup failed and previous state restoration was attempted"
+    fi
+    timer_transaction_active=0
+    trap cleanup EXIT
+    info "Installed user systemd timer (runs every 30 min as your user)"
+    info "  Manage with: systemctl --user status adr-scan.timer"
+    info "  Disable with: systemctl --user disable --now adr-scan.timer"
 }
 
 if [[ "$WITH_TIMER" -eq 1 ]]; then
@@ -278,7 +548,8 @@ fi
 # --- PATH check + next steps -------------------------------------------------
 
 info ""
-info "Telltale installed to: ${adr_bin}"
+info "Telltale installed to: ${INSTALL_DIR}/telltale"
+info "Compatibility command installed to: ${INSTALL_DIR}/adr"
 if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
     warn "${INSTALL_DIR} is not on your PATH."
     warn "Add this to your shell profile and restart your shell:"
@@ -294,8 +565,8 @@ else
 fi
 info ""
 info "Next steps:"
-info "  adr scan --once --dry-run --root \$HOME  # read-only first check"
-info "  adr scan --once --emit-activity          # write telemetry"
-info "  adr status                               # review latest summary"
+info "  telltale scan --once --dry-run --root \$HOME  # read-only first check"
+info "  telltale scan --once --emit-activity          # write telemetry"
+info "  telltale status                               # review latest summary"
 info ""
 info "Docs: https://github.com/${REPO}/tree/main/docs"

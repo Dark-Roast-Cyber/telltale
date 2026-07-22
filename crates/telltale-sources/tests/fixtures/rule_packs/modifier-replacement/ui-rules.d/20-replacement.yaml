@@ -1,0 +1,11 @@
+version: 1
+description: Synthetic modifier replacement pack.
+defaults:
+  case_insensitive: false
+  enabled: true
+rules: []
+modifiers:
+  - id: pack.modifier
+    score: 9
+    when_all_categories: [pack_test]
+    explanation: Synthetic replacement modifier.

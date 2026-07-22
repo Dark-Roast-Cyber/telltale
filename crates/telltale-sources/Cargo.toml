@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 description = "Telltale session-store discovery, per-agent source adapters, parsers, and install inventory"
 license.workspace = true
+authors.workspace = true
+homepage.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/telltale-sources"
+readme = "README.md"
+keywords = ["security", "agents", "sessions", "parsing", "discovery"]
+categories = ["filesystem", "parsing", "os"]
+include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**", "/tests/fixtures/**"]
 
 [dependencies]
 telltale-schema.workspace = true

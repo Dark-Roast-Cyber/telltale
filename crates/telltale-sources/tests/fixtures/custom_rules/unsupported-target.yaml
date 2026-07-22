@@ -1,0 +1,15 @@
+version: 1
+description: Test-only rule with a target that ADR does not evaluate.
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: custom.unsupported_target
+    category: custom_agent_behavior
+    severity: low
+    score: 10
+    targets: [raw_transcript]
+    regex: 'exfiltrate'
+    tags: [custom]
+    explanation: This fixture should fail validation because raw_transcript is not a supported target.
+modifiers: []

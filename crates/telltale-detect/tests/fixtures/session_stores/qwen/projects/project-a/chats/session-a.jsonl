@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"qwen-session-a","timestamp":"2026-04-27T18:00:00Z","agent":"qwen","provider":"qwen","model":"qwen3-coder-plus","content":"Summarize the repository status without running tools."}
+{"type":"assistant","sessionId":"qwen-session-a","timestamp":"2026-04-27T18:00:01Z","agent":"qwen","provider":"qwen","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":42,"thoughtsTokenCount":0,"cachedContentTokenCount":0},"content":"This is a benign Qwen fixture response with no tool calls or sensitive access."}

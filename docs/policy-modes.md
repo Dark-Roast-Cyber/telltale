@@ -133,7 +133,7 @@ disabled_rules:
 Load a policy at scan time:
 
 ```sh
-adr scan --once --policy config/policy.yaml --root ~/.codex/sessions
+telltale scan --once --policy config/policy.yaml --root ~/.codex/sessions
 ```
 
 The policy YAML controls *which rules fire*. The policy mode controls *what happens when they fire*. In the current log-review phase, the mode is implicitly `alert` for all detections that pass the policy filter.
