@@ -59,6 +59,7 @@ fn publication_order_and_binary_targets_are_explicit() {
     assert!(facade.contains("include = ["));
 
     let cli = fs::read_to_string(root.join("Cargo.toml")).expect("cli manifest");
+    let cli = cli.replace("\r\n", "\n");
     assert!(cli.contains("name = \"telltale\"\npath = \"src/main.rs\""));
     assert!(cli.contains("name = \"adr\"\npath = \"src/bin/adr.rs\""));
 }
