@@ -6,6 +6,8 @@ defaults:
 rules:
   - id: secret.env.read
     category: secret_access
+    atlas_tags:
+      - atlas:AML.T0055
     severity: medium
     score: 35
     targets: [command, arguments, file_path, assistant_context, tool_result]
@@ -17,6 +19,8 @@ rules:
 
   - id: secret.private_key.read
     category: secret_access
+    atlas_tags:
+      - atlas:AML.T0055
     severity: high
     score: 55
     targets: [command, arguments, file_path, tool_result]
@@ -44,6 +48,8 @@ rules:
 
   - id: execution.shell
     category: execution
+    atlas_tags:
+      - atlas:AML.T0050
     severity: low
     score: 15
     targets: [tool_name, command, arguments]
@@ -55,6 +61,8 @@ rules:
 
   - id: execution.encoded_payload
     category: execution
+    atlas_tags:
+      - atlas:AML.T0050
     severity: high
     score: 50
     targets: [command, arguments]
@@ -131,6 +139,8 @@ rules:
 
   - id: tool.injection.shape
     category: tool_injection
+    atlas_tags:
+      - atlas:AML.T0051
     severity: high
     score: 55
     targets: [assistant_context, tool_name, arguments]
@@ -158,6 +168,8 @@ rules:
 
   - id: network.controlled_test_domain.darkroast
     category: exfiltration
+    atlas_tags:
+      - atlas:AML.T0025
     severity: high
     score: 45
     targets: [command, arguments, url, assistant_context, tool_result]
@@ -169,6 +181,8 @@ rules:
 
   - id: exfil.dns_encoding
     category: exfiltration
+    atlas_tags:
+      - atlas:AML.T0025
     severity: high
     score: 55
     targets: [command, arguments]
@@ -196,6 +210,8 @@ rules:
 
   - id: credential.cloud_harvest
     category: credential_harvesting
+    atlas_tags:
+      - atlas:AML.T0055
     severity: high
     score: 50
     targets: [command, arguments, file_path]
@@ -218,6 +234,8 @@ rules:
 
   - id: mcp.server_enumeration
     category: mcp_enumeration
+    atlas_tags:
+      - atlas:AML.T0084
     severity: medium
     score: 40
     targets: [command, arguments, assistant_context, tool_result]
@@ -272,12 +290,18 @@ modifiers:
       - Authorized release automation may read cloud or package credentials before publishing; verify release intent, credential scope, and package destination.
   - id: chain.harvest_then_exfil
     score: 35
+    atlas_tags:
+      - atlas:AML.T0055
+      - atlas:AML.T0025
     when_all_categories: [credential_harvesting, exfiltration]
     explanation: Credential harvesting followed by exfiltration is a data theft pattern.
     falsepositives:
       - Backup, migration, or inventory work may read credential-adjacent files and upload artifacts when both actions are explicitly approved.
   - id: chain.mcp_enumeration_then_injection
     score: 30
+    atlas_tags:
+      - atlas:AML.T0084
+      - atlas:AML.T0051
     when_all_categories: [mcp_enumeration, mcp_prompt_injection]
     explanation: MCP server enumeration followed by prompt injection indicates targeted attack.
     falsepositives:
