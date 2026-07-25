@@ -1,28 +1,29 @@
+# Environment files and local secrets.
 .env
 .env.*
 !.env.example
-.codex
-.codex/
-opencode.json
-.ralph-tui/*
+
+# Generated runtime data and local build artifacts.
 logs/
 state/
 artifacts/
 release-downloads/
-runtime/*
-!runtime/ralph/
-runtime/ralph/*
+runtime/
 tmp/
+tasks/
+*.log
 !tests/fixtures/**/tmp/
 !tests/fixtures/**/tmp/**
 !crates/*/tests/fixtures/**/tmp/
 !crates/*/tests/fixtures/**/tmp/**
-*.log
+!tests/fixtures/**/tasks/
+!tests/fixtures/**/tasks/**
+!crates/*/tests/fixtures/**/tasks/
+!crates/*/tests/fixtures/**/tasks/**
 !tests/fixtures/**/*.log
 !crates/*/tests/fixtures/**/*.log
 
-.agents/
-
+# Language, build, operating-system, and editor artifacts.
 __pycache__/
 .pytest_cache/
 .ruff_cache/
@@ -35,58 +36,3 @@ target/
 *.swo
 .idea/
 .vscode/
-
-# Local automation loops can contain machine-specific commands and logs.
-scripts/ralph-loop.local.zsh
-scripts/inspiration/ralph-loop.local.zsh
-
-# Keep local OpenCode workflow, runtime, and config files out of public commits.
-.opencode/
-
-# Ralph TUI task working files (local only, not committed)
-tasks/
-!tests/fixtures/**/tasks/
-!tests/fixtures/**/tasks/**
-!crates/*/tests/fixtures/**/tasks/
-!crates/*/tests/fixtures/**/tasks/**
-
-# Optional local reference checkouts and symlinks.
-references/
-
-# Local-only development planning and automation files.
-# These are restored from the internal local branch for day-to-day work, but
-# must not be included in public repository commits.
-.ai/
-AGENTS.md
-PLAN.md
-VISION.md
-IDEAS.md
-PRIVATE_README.md
-docs/internal/
-docs/CHANGELOG.md
-docs/research-urls.md
-docs/siem-logging.md
-docs/splunk-content.md
-skills/
-scripts/ralph*
-scripts/atlas-lookup
-scripts/RALPH_PLAN.md
-scripts/inspiration/
-runtime/ralph/
-config/examples/splunk-*.conf
-config/examples/splunk-*.xml
-telltale-siem-dashboard.png
-
-# Website planning artifacts (belong in agentarchaeology repo, not here).
-ASTRO_WEBSITE_PLAN.md
-OPENCODE-SQLITE-INGESTION-PLAN.md
-PLAN-monitor-mode.md
-PLAN-watch-followups.md
-public-website/
-
-# Machine-local Claude Code settings.
-.claude/
-
-# Local live-test workspace: generated outputs.d configs with real endpoints,
-# live-test event logs, and scanner state (see scripts/dev/live-emitter-test.sh).
-local/
