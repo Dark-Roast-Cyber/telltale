@@ -69,3 +69,34 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+
+  macos:
+    name: macOS (aarch64-apple-darwin)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+          targets: aarch64-apple-darwin
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: Build staged native binaries
+        run: cargo build --release --bin telltale --bin adr
+      - name: Smoke-test staged native binaries
+        run: |
+          ./target/release/telltale --version
+          ./target/release/adr --version
+          ./target/release/telltale rules validate
+          ./target/release/telltale scan --once --dry-run \
+            --emit-activity --emit-session-risk-summary \
+            --root tests/fixtures/session_stores
