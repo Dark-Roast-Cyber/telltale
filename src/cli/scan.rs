@@ -44,8 +44,13 @@ const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
 pub(crate) const DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
+/// Options that resolve identically for `scan` and `watch`.
+///
+/// Both commands run the same scan through `run_scan`, so rules, policies,
+/// allowlists, outputs, paths, client filters, project roots, and inventory
+/// cadence resolve here once rather than being copied between two structs.
 #[derive(Clone, Copy)]
-pub(crate) struct ScanConfig<'a> {
+pub(crate) struct ScanExecutionConfig<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
     pub(crate) sinks: &'a SinkSet,
@@ -54,8 +59,6 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) emit_activity: bool,
     pub(crate) emit_session_risk_summary: bool,
     pub(crate) allow_fixtures: bool,
-    pub(crate) backfill: bool,
-    pub(crate) rebuild_baselines: bool,
     pub(crate) rule_pack_paths: &'a RulePackPaths,
     pub(crate) rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
@@ -64,59 +67,42 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) allowlist_path: Option<&'a Path>,
     pub(crate) baseline_deviation_scoring: bool,
     pub(crate) clients: &'a [ClientId],
-    pub(crate) max_sources: Option<usize>,
     pub(crate) project_config_paths: &'a [PathBuf],
     pub(crate) install_inventory_interval_seconds: Option<u64>,
 }
 
+/// A shared scan plus the options only `scan` accepts.
 #[derive(Clone, Copy)]
-pub(crate) struct WatchConfig<'a> {
-    pub(crate) root: &'a Path,
-    pub(crate) log_path: &'a Path,
-    pub(crate) sinks: &'a SinkSet,
-    pub(crate) state_path: &'a Path,
-    pub(crate) dry_run: bool,
-    pub(crate) emit_activity: bool,
-    pub(crate) emit_session_risk_summary: bool,
-    pub(crate) allow_fixtures: bool,
+pub(crate) struct ScanConfig<'a> {
+    pub(crate) execution: ScanExecutionConfig<'a>,
+    pub(crate) backfill: bool,
+    pub(crate) rebuild_baselines: bool,
+    pub(crate) max_sources: Option<usize>,
+}
+
+/// When `watch` decides to run a scan. Watch never backfills, rebuilds
+/// baselines, or caps sources, so those options are absent by construction
+/// rather than pinned to a default at conversion time.
+#[derive(Clone, Copy)]
+pub(crate) struct WatchTriggerConfig {
     pub(crate) iterations: Option<u32>,
     pub(crate) debounce: Duration,
     pub(crate) min_scan_interval: Duration,
-    pub(crate) rule_pack_paths: &'a RulePackPaths,
-    pub(crate) rule_paths: &'a [PathBuf],
-    pub(crate) override_paths: &'a [PathBuf],
-    pub(crate) rule_load_mode: RuleLoadMode,
-    pub(crate) policy_path: Option<&'a Path>,
-    pub(crate) allowlist_path: Option<&'a Path>,
-    pub(crate) baseline_deviation_scoring: bool,
-    pub(crate) clients: &'a [ClientId],
-    pub(crate) project_config_paths: &'a [PathBuf],
-    pub(crate) install_inventory_interval_seconds: Option<u64>,
 }
 
-fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
+/// A shared scan plus the triggering behavior only `watch` accepts.
+#[derive(Clone, Copy)]
+pub(crate) struct WatchConfig<'a> {
+    pub(crate) execution: ScanExecutionConfig<'a>,
+    pub(crate) trigger: WatchTriggerConfig,
+}
+
+fn watch_scan_config<'a>(config: &WatchConfig<'a>) -> ScanConfig<'a> {
     ScanConfig {
-        root: config.root,
-        log_path: config.log_path,
-        sinks: config.sinks,
-        state_path: config.state_path,
-        dry_run: config.dry_run,
-        emit_activity: config.emit_activity,
-        emit_session_risk_summary: config.emit_session_risk_summary,
-        allow_fixtures: config.allow_fixtures,
+        execution: config.execution,
         backfill: false,
         rebuild_baselines: false,
-        rule_pack_paths: config.rule_pack_paths,
-        rule_paths: config.rule_paths,
-        override_paths: config.override_paths,
-        rule_load_mode: config.rule_load_mode,
-        policy_path: config.policy_path,
-        allowlist_path: config.allowlist_path,
-        baseline_deviation_scoring: config.baseline_deviation_scoring,
-        clients: config.clients,
         max_sources: None,
-        project_config_paths: config.project_config_paths,
-        install_inventory_interval_seconds: config.install_inventory_interval_seconds,
     }
 }
 
@@ -142,36 +128,43 @@ pub(crate) fn run_scan_loop(
 const WATCH_SHUTDOWN_POLL: Duration = Duration::from_millis(200);
 
 pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
-    if !config.dry_run && !config.allow_fixtures && is_fixture_root(config.root) {
+    if !config.execution.dry_run
+        && !config.execution.allow_fixtures
+        && is_fixture_root(config.execution.root)
+    {
         return Err(
             "refusing to write fixture/demo data to log path; use --dry-run or --allow-fixtures"
                 .into(),
         );
     }
     let _rule_set = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-        config.rule_pack_paths,
-        config.rule_paths,
-        config.policy_path,
-        config.rule_load_mode,
-        config.override_paths,
+        config.execution.rule_pack_paths,
+        config.execution.rule_paths,
+        config.execution.policy_path,
+        config.execution.rule_load_mode,
+        config.execution.override_paths,
         &[],
     )?;
 
     // Note: structural changes to project YAML (new projects, new roots) require a process
     // restart; the notify watcher is not rebuilt at runtime.
-    let project_configs = if config.project_config_paths.is_empty() && config.root == Path::new(".")
+    let project_configs = if config.execution.project_config_paths.is_empty()
+        && config.execution.root == Path::new(".")
     {
         // Use default project paths only when root is the sentinel for home-relative discovery
         crate::projects::load_default_projects()
     } else {
-        crate::projects::load_project_configs(config.project_config_paths)
+        crate::projects::load_project_configs(config.execution.project_config_paths)
     };
-    let watch_roots =
-        discover_watch_roots_with_projects(config.root, config.clients, &project_configs);
+    let watch_roots = discover_watch_roots_with_projects(
+        config.execution.root,
+        config.execution.clients,
+        &project_configs,
+    );
     if watch_roots.is_empty() {
         return Err(format!(
             "no existing Telltale session-store roots found under {}",
-            config.root.display()
+            config.execution.root.display()
         )
         .into());
     }
@@ -192,7 +185,7 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
     }
 
     let mut source_index = build_watch_source_index(&config, &project_configs);
-    let mut remaining = config.iterations;
+    let mut remaining = config.trigger.iterations;
     let mut last_scan_completed: Option<Instant> = None;
 
     'watch: loop {
@@ -211,15 +204,15 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
         }
 
         // Debounce window: coalesce rapid writes into one scan.
-        collect_watch_events_for(&rx, &mut pending, config.debounce, &shutdown)?;
+        collect_watch_events_for(&rx, &mut pending, config.trigger.debounce, &shutdown)?;
         // Rate limit: keep coalescing until the minimum scan interval has passed.
         if let Some(completed) = last_scan_completed {
             let elapsed = completed.elapsed();
-            if elapsed < config.min_scan_interval {
+            if elapsed < config.trigger.min_scan_interval {
                 collect_watch_events_for(
                     &rx,
                     &mut pending,
-                    config.min_scan_interval - elapsed,
+                    config.trigger.min_scan_interval - elapsed,
                     &shutdown,
                 )?;
             }
@@ -369,12 +362,17 @@ fn build_watch_source_index(
     config: &WatchConfig<'_>,
     project_configs: &[crate::projects::ProjectDef],
 ) -> BTreeMap<PathBuf, Source> {
-    let mut sources = discover_sources_with_projects(config.root, project_configs);
-    if !config.clients.is_empty() {
-        let allowed_clients = config.clients.iter().copied().collect::<BTreeSet<_>>();
+    let mut sources = discover_sources_with_projects(config.execution.root, project_configs);
+    if !config.execution.clients.is_empty() {
+        let allowed_clients = config
+            .execution
+            .clients
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
         sources.retain(|source| allowed_clients.contains(&source.client));
     }
-    if !is_fixture_root(config.root) {
+    if !is_fixture_root(config.execution.root) {
         prefer_opencode_sqlite_over_legacy_json(&mut sources);
     }
     sources
@@ -425,8 +423,8 @@ fn run_scan(
     save_policy: StateSavePolicy,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let scan_started = Instant::now();
-    let fixture_root = is_fixture_root(config.root);
-    if !config.dry_run && !config.allow_fixtures && fixture_root {
+    let fixture_root = is_fixture_root(config.execution.root);
+    if !config.execution.dry_run && !config.execution.allow_fixtures && fixture_root {
         return Err(
             "refusing to write fixture/demo data to log path; use --dry-run or --allow-fixtures"
                 .into(),
@@ -435,16 +433,23 @@ fn run_scan(
     let (mut sources, targeted) = match targets {
         ScanTargets::Targeted(sources) => (sources, true),
         ScanTargets::Full => {
-            let project_configs =
-                if config.project_config_paths.is_empty() && config.root == Path::new(".") {
-                    // Use default project paths only when root is the sentinel for home-relative discovery
-                    crate::projects::load_default_projects()
-                } else {
-                    crate::projects::load_project_configs(config.project_config_paths)
-                };
-            let mut sources = discover_sources_with_projects(config.root, &project_configs);
-            if !config.clients.is_empty() {
-                let allowed_clients = config.clients.iter().copied().collect::<BTreeSet<_>>();
+            let project_configs = if config.execution.project_config_paths.is_empty()
+                && config.execution.root == Path::new(".")
+            {
+                // Use default project paths only when root is the sentinel for home-relative discovery
+                crate::projects::load_default_projects()
+            } else {
+                crate::projects::load_project_configs(config.execution.project_config_paths)
+            };
+            let mut sources =
+                discover_sources_with_projects(config.execution.root, &project_configs);
+            if !config.execution.clients.is_empty() {
+                let allowed_clients = config
+                    .execution
+                    .clients
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>();
                 sources.retain(|source| allowed_clients.contains(&source.client));
             }
             if !fixture_root {
@@ -457,30 +462,31 @@ fn run_scan(
         sources.truncate(max_sources);
     }
     let rule_set = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-        config.rule_pack_paths,
-        config.rule_paths,
-        config.policy_path,
-        config.rule_load_mode,
-        config.override_paths,
+        config.execution.rule_pack_paths,
+        config.execution.rule_paths,
+        config.execution.policy_path,
+        config.execution.rule_load_mode,
+        config.execution.override_paths,
         &[],
     )?
     .rule_set;
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
-    let allowlist = load_allowlist(config.allowlist_path)?;
-    let mut state = ScanState::load(config.state_path)?;
+    let allowlist = load_allowlist(config.execution.allowlist_path)?;
+    let mut state = ScanState::load(config.execution.state_path)?;
     let state_probe = match save_policy {
         StateSavePolicy::Always => None,
         StateSavePolicy::OnChange => Some(StateChangeProbe::capture(&state)),
     };
     let baseline_snapshots = state.baseline_snapshots.clone();
-    let install_inventory_interval_seconds = config.install_inventory_interval_seconds;
+    let install_inventory_interval_seconds = config.execution.install_inventory_interval_seconds;
     let observed_at_unix_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
-    let parsed_sources = parse_scan_sources(&sources, &state, config.backfill, config.dry_run);
+    let parsed_sources =
+        parse_scan_sources(&sources, &state, config.backfill, config.execution.dry_run);
     update_baseline_snapshots(&mut state, &parsed_sources, config.rebuild_baselines);
     let mut install_inventory_event = None;
-    if config.clients.is_empty()
+    if config.execution.clients.is_empty()
         && let Some(interval_seconds) = install_inventory_interval_seconds
         && install_inventory_due(
             state.install_inventory.as_ref(),
@@ -491,9 +497,9 @@ fn run_scan(
         let snapshot = collect_install_inventory(observed_at_unix_ms);
         install_inventory_event = Some((snapshot_to_event(&snapshot), snapshot));
     }
-    let activities = if config.emit_activity {
+    let activities = if config.execution.emit_activity {
         let baseline_deviation_config = BaselineDeviationConfig {
-            enabled: config.baseline_deviation_scoring,
+            enabled: config.execution.baseline_deviation_scoring,
             ..BaselineDeviationConfig::default()
         };
         let mut activities = parsed_sources
@@ -519,8 +525,8 @@ fn run_scan(
         // MCP discovery walks host-wide config directories; targeted scans only
         // re-examine changed session sources, so leave it to full scans.
         if !targeted {
-            activities.extend(discover_mcp_inventory(config.root));
-            activities.extend(discover_mcp_usage(config.root, &sources));
+            activities.extend(discover_mcp_inventory(config.execution.root));
+            activities.extend(discover_mcp_usage(config.execution.root, &sources));
         }
         activities
     } else {
@@ -574,7 +580,7 @@ fn run_scan(
     }
     let activity_count = activities.len();
     let detection_count = detections.len();
-    let session_risk_summaries = if config.emit_session_risk_summary {
+    let session_risk_summaries = if config.execution.emit_session_risk_summary {
         summarize_session_risk_events(&activities, &detections)
     } else {
         Vec::new()
@@ -635,7 +641,7 @@ fn run_scan(
     }
     if let Some((event, snapshot)) = install_inventory_event {
         emitted_events.push(event);
-        if !config.dry_run {
+        if !config.execution.dry_run {
             state.install_inventory = Some(snapshot);
         }
     }
@@ -657,7 +663,7 @@ fn run_scan(
         }
     }
 
-    let health_emitted = config.dry_run
+    let health_emitted = config.execution.dry_run
         || config.backfill
         || inventory_health_change
         || scanner_error_emitted
@@ -683,24 +689,27 @@ fn run_scan(
     } else {
         state.replace_source_observations(&sources, observed_at_unix_ms);
     }
-    if !config.dry_run && !config.backfill {
+    if !config.execution.dry_run && !config.backfill {
         observe_sqlite_ingestion_cursors(&mut state, &parsed_sources, observed_at_unix_ms);
     }
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
-    if !config.dry_run {
-        sink_failures = config.sinks.deliver(&emitted_events)?;
+    if !config.execution.dry_run {
+        sink_failures = config.execution.sinks.deliver(&emitted_events)?;
         if !sink_failures.is_empty() {
             let alerts: Vec<Event> = sink_failures.iter().map(sink_failure_alert_event).collect();
             let failed_names: Vec<&str> = sink_failures.iter().map(|f| f.name.as_str()).collect();
-            config.sinks.deliver_alerts(&alerts, &failed_names);
+            config
+                .execution
+                .sinks
+                .deliver_alerts(&alerts, &failed_names);
         }
         let should_save = match &state_probe {
             None => true,
             Some(probe) => !emitted_events.is_empty() || probe.changed(&state),
         };
         if should_save {
-            state.save(config.state_path)?;
+            state.save(config.execution.state_path)?;
         }
     }
 
@@ -714,8 +723,8 @@ fn run_scan(
         suppressed_count,
         rule_count,
         active_policy_name: active_policy_name.as_deref(),
-        dry_run: config.dry_run,
-        log_path: config.log_path,
+        dry_run: config.execution.dry_run,
+        log_path: config.execution.log_path,
         sink_failures: &sink_failures,
     });
     println!("{}", serde_json::to_string(&summary)?);
@@ -1193,6 +1202,112 @@ fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_jso
 mod tests {
     use super::*;
     use crate::install_inventory::InstallInventorySnapshot;
+
+    fn assert_same_execution_config(
+        left: &ScanExecutionConfig<'_>,
+        right: &ScanExecutionConfig<'_>,
+    ) {
+        assert!(std::ptr::eq(left.root, right.root), "root");
+        assert!(std::ptr::eq(left.log_path, right.log_path), "log_path");
+        assert!(std::ptr::eq(left.sinks, right.sinks), "sinks");
+        assert!(
+            std::ptr::eq(left.state_path, right.state_path),
+            "state_path"
+        );
+        assert_eq!(left.dry_run, right.dry_run, "dry_run");
+        assert_eq!(left.emit_activity, right.emit_activity, "emit_activity");
+        assert_eq!(
+            left.emit_session_risk_summary, right.emit_session_risk_summary,
+            "emit_session_risk_summary"
+        );
+        assert_eq!(left.allow_fixtures, right.allow_fixtures, "allow_fixtures");
+        assert!(
+            std::ptr::eq(left.rule_pack_paths, right.rule_pack_paths),
+            "rule_pack_paths"
+        );
+        assert_eq!(left.rule_paths, right.rule_paths, "rule_paths");
+        assert_eq!(left.override_paths, right.override_paths, "override_paths");
+        assert_eq!(left.rule_load_mode, right.rule_load_mode, "rule_load_mode");
+        assert_eq!(left.policy_path, right.policy_path, "policy_path");
+        assert_eq!(left.allowlist_path, right.allowlist_path, "allowlist_path");
+        assert_eq!(
+            left.baseline_deviation_scoring, right.baseline_deviation_scoring,
+            "baseline_deviation_scoring"
+        );
+        assert_eq!(left.clients, right.clients, "clients");
+        assert_eq!(
+            left.project_config_paths, right.project_config_paths,
+            "project_config_paths"
+        );
+        assert_eq!(
+            left.install_inventory_interval_seconds, right.install_inventory_interval_seconds,
+            "install_inventory_interval_seconds"
+        );
+    }
+
+    /// Equivalent options must resolve identically whether they arrive through
+    /// `scan` or through `watch`. Watch runs the same scan, so the only
+    /// permitted differences are the scan-only options watch does not accept.
+    #[test]
+    fn scan_and_watch_resolve_equivalent_options_identically() {
+        let root = PathBuf::from("/tmp/telltale-root");
+        let log_path = PathBuf::from("/tmp/telltale.jsonl");
+        let state_path = PathBuf::from("/tmp/telltale-state.json");
+        let policy_path = PathBuf::from("/tmp/policy.yaml");
+        let allowlist_path = PathBuf::from("/tmp/allowlist.yaml");
+        let sinks = SinkSet::default();
+        let rule_pack_paths = RulePackPaths::default();
+        let rule_paths = vec![PathBuf::from("/tmp/rules.yaml")];
+        let override_paths = vec![PathBuf::from("/tmp/overrides.d")];
+        let clients = vec![ClientId::Claude, ClientId::OpenCode];
+        let project_config_paths = vec![PathBuf::from("/tmp/projects.yaml")];
+
+        let execution = ScanExecutionConfig {
+            root: &root,
+            log_path: &log_path,
+            sinks: &sinks,
+            state_path: &state_path,
+            dry_run: true,
+            emit_activity: true,
+            emit_session_risk_summary: true,
+            allow_fixtures: true,
+            rule_pack_paths: &rule_pack_paths,
+            rule_paths: &rule_paths,
+            override_paths: &override_paths,
+            rule_load_mode: RuleLoadMode::IncludeDefault,
+            policy_path: Some(&policy_path),
+            allowlist_path: Some(&allowlist_path),
+            baseline_deviation_scoring: true,
+            clients: &clients,
+            project_config_paths: &project_config_paths,
+            install_inventory_interval_seconds: Some(3_600),
+        };
+
+        let scan = ScanConfig {
+            execution,
+            backfill: false,
+            rebuild_baselines: false,
+            max_sources: None,
+        };
+        let watch = WatchConfig {
+            execution,
+            trigger: WatchTriggerConfig {
+                iterations: Some(3),
+                debounce: Duration::from_millis(250),
+                min_scan_interval: Duration::from_millis(1_000),
+            },
+        };
+
+        let watch_derived_scan = watch_scan_config(&watch);
+
+        assert_same_execution_config(&scan.execution, &watch_derived_scan.execution);
+        assert_same_execution_config(&watch.execution, &watch_derived_scan.execution);
+
+        // Watch never backfills, rebuilds baselines, or caps sources.
+        assert!(!watch_derived_scan.backfill);
+        assert!(!watch_derived_scan.rebuild_baselines);
+        assert_eq!(watch_derived_scan.max_sources, None);
+    }
 
     #[test]
     fn opencode_sqlite_scan_options_use_cursor_overlap_for_live_scans() {
