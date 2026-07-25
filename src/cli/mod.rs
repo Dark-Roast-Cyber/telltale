@@ -900,36 +900,38 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     splunk_hec_token: splunk_hec_token.as_deref(),
                 },
             )?;
-            let scan_args = scan::ScanCommandArgs {
-                root: &root,
-                log_path: &log_path,
-                sinks: &sink_set,
-                state_path: &state_path,
-                dry_run,
-                emit_activity,
-                emit_session_risk_summary,
-                allow_fixtures,
+            let scan_config = scan::ScanConfig {
+                execution: scan::ScanExecutionConfig {
+                    root: &root,
+                    log_path: &log_path,
+                    sinks: &sink_set,
+                    state_path: &state_path,
+                    dry_run,
+                    emit_activity,
+                    emit_session_risk_summary,
+                    allow_fixtures,
+                    rule_pack_paths: &resolved_config.rule_pack_paths,
+                    rule_paths: &resolved_config.explicit_rule_paths,
+                    override_paths: &resolved_config.override_paths,
+                    rule_load_mode: rule_load_mode(no_default_rules),
+                    policy_path: resolved_config.policy_path.as_deref(),
+                    allowlist_path: resolved_config.allowlist_path.as_deref(),
+                    baseline_deviation_scoring,
+                    clients: &clients,
+                    project_config_paths: &project_paths,
+                    install_inventory_interval_seconds,
+                },
                 backfill,
                 rebuild_baselines,
-                rule_pack_paths: &resolved_config.rule_pack_paths,
-                rule_paths: &resolved_config.explicit_rule_paths,
-                override_paths: &resolved_config.override_paths,
-                rule_load_mode: rule_load_mode(no_default_rules),
-                policy_path: resolved_config.policy_path.as_deref(),
-                allowlist_path: resolved_config.allowlist_path.as_deref(),
-                baseline_deviation_scoring,
-                clients: &clients,
                 max_sources,
-                project_config_paths: &project_paths,
-                install_inventory_interval_seconds,
             };
             if once {
-                scan::run_scan_once(scan::scan_config(&scan_args))?;
+                scan::run_scan_once(scan_config)?;
             } else {
                 let interval =
                     interval_seconds.ok_or("scan requires --once or --interval-seconds")?;
                 scan::run_scan_loop(
-                    &scan_args,
+                    scan_config,
                     iterations,
                     std::time::Duration::from_secs(interval),
                 )?;
@@ -1178,30 +1180,34 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     splunk_hec_token: None,
                 },
             )?;
-            let watch_args = scan::WatchCommandArgs {
-                root: &root,
-                log_path: &log_path,
-                sinks: &sink_set,
-                state_path: &state_path,
-                dry_run,
-                emit_activity,
-                emit_session_risk_summary,
-                allow_fixtures,
-                iterations,
-                debounce: std::time::Duration::from_millis(debounce_ms),
-                min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
-                rule_pack_paths: &resolved_config.rule_pack_paths,
-                rule_paths: &resolved_config.explicit_rule_paths,
-                override_paths: &resolved_config.override_paths,
-                rule_load_mode: rule_load_mode(no_default_rules),
-                policy_path: resolved_config.policy_path.as_deref(),
-                allowlist_path: resolved_config.allowlist_path.as_deref(),
-                baseline_deviation_scoring,
-                clients: &clients,
-                project_config_paths: &project_paths,
-                install_inventory_interval_seconds,
+            let watch_config = scan::WatchConfig {
+                execution: scan::ScanExecutionConfig {
+                    root: &root,
+                    log_path: &log_path,
+                    sinks: &sink_set,
+                    state_path: &state_path,
+                    dry_run,
+                    emit_activity,
+                    emit_session_risk_summary,
+                    allow_fixtures,
+                    rule_pack_paths: &resolved_config.rule_pack_paths,
+                    rule_paths: &resolved_config.explicit_rule_paths,
+                    override_paths: &resolved_config.override_paths,
+                    rule_load_mode: rule_load_mode(no_default_rules),
+                    policy_path: resolved_config.policy_path.as_deref(),
+                    allowlist_path: resolved_config.allowlist_path.as_deref(),
+                    baseline_deviation_scoring,
+                    clients: &clients,
+                    project_config_paths: &project_paths,
+                    install_inventory_interval_seconds,
+                },
+                trigger: scan::WatchTriggerConfig {
+                    iterations,
+                    debounce: std::time::Duration::from_millis(debounce_ms),
+                    min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
+                },
             };
-            scan::run_watch(scan::watch_config(&watch_args))?;
+            scan::run_watch(watch_config)?;
         }
         Command::Status {
             path_profile,
