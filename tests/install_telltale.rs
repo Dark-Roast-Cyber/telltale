@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -1001,12 +1001,20 @@ fn piped_bash_help_does_not_read_script_from_bash_zero() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn piped installer");
-    child
+    // `--help` prints usage and exits without reading the rest of the script,
+    // so bash can close stdin mid-write. The installer script is larger than a
+    // pipe buffer, so whether the write completes depends on scheduling; a
+    // broken pipe here is expected and the assertions below are what matter.
+    match child
         .stdin
         .as_mut()
         .expect("installer stdin")
         .write_all(script.as_bytes())
-        .expect("pipe installer script");
+    {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("pipe installer script: {error}"),
+    }
     let output = child.wait_with_output().expect("wait for piped installer");
     assert_success(&output);
     let stdout = String::from_utf8_lossy(&output.stdout);
