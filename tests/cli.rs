@@ -36,31 +36,6 @@ const HOST_ONLY_REPO_PATHS: &[&str] = &[
     "config/examples/splunk-",
 ];
 
-const HOST_ONLY_GITIGNORE_PATTERNS: &[&str] = &[
-    "AGENTS.md",
-    "PLAN.md",
-    "VISION.md",
-    "IDEAS.md",
-    "docs/internal/",
-    "docs/CHANGELOG.md",
-    "docs/research-urls.md",
-    "docs/siem-logging.md",
-    "docs/splunk-content.md",
-    "skills/",
-    ".ai/",
-    "scripts/ralph*",
-    "scripts/inspiration/",
-    "tasks/",
-    ".opencode/",
-    "logs/",
-    "state/",
-    "artifacts/",
-    "release-downloads/",
-    "runtime/ralph/",
-    "config/examples/splunk-*.conf",
-    "config/examples/splunk-*.xml",
-];
-
 fn source_inventory_change_value(event: &Value) -> &str {
     event["evidence"]
         .as_array()
@@ -1303,21 +1278,18 @@ fn public_docs_links_and_paths_are_safe() {
         "public docs must link only to tracked example configs: {unclassified:?}"
     );
 
-    // Host-only release paths remain ignored
-    let gitignore = fs::read_to_string(".gitignore").expect(".gitignore");
-    let patterns = gitignore
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect::<Vec<_>>();
-    let missing = HOST_ONLY_GITIGNORE_PATTERNS
-        .iter()
-        .filter(|pattern| !patterns.contains(pattern))
-        .copied()
+    // Host-only release material is never tracked in the public repository.
+    // Some paths are excluded by the tracked `.gitignore`; the internal
+    // planning and workflow ones are excluded per-clone via `.git/info/exclude`
+    // so the public `.gitignore` does not enumerate host-only material. The
+    // invariant that matters either way is that git does not track them.
+    let tracked_host_only = git_tracked_repo_paths()
+        .into_iter()
+        .filter(|path| is_host_only_repo_path(Path::new(path)))
         .collect::<Vec<_>>();
     assert!(
-        missing.is_empty(),
-        "host-only release paths must stay ignored: {missing:?}"
+        tracked_host_only.is_empty(),
+        "host-only release material must not be tracked: {tracked_host_only:?}"
     );
 }
 
@@ -1381,6 +1353,24 @@ fn top_level_markdown_docs() -> Vec<std::path::PathBuf> {
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .collect()
+}
+
+fn git_tracked_repo_paths() -> Vec<String> {
+    let output = Command::new("git")
+        .arg("ls-files")
+        .output()
+        .expect("git ls-files");
+
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
         .collect()
 }
 
