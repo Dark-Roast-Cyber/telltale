@@ -50,13 +50,24 @@ impl SplunkHecHttpSink {
 
     /// Replace the transport with fully-specified options (config-file path).
     pub fn with_transport(
-        mut self,
+        self,
         timeout: Duration,
         retry: RetryConfig,
         tls: &TlsOptions,
         max_batch_bytes: usize,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        self.client = HttpClient::new(timeout, retry, tls)?;
+        self.with_transport_warning(timeout, retry, tls, max_batch_bytes, true)
+    }
+
+    pub(crate) fn with_transport_warning(
+        mut self,
+        timeout: Duration,
+        retry: RetryConfig,
+        tls: &TlsOptions,
+        max_batch_bytes: usize,
+        emit_warning: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        self.client = HttpClient::new_with_warning(timeout, retry, tls, emit_warning)?;
         self.max_batch_bytes = max_batch_bytes;
         Ok(self)
     }
@@ -90,27 +101,12 @@ impl EventSink for SplunkHecHttpSink {
             if !(200..300).contains(&response.status) {
                 return Err(SinkDeliveryError {
                     attempts: response.attempts,
-                    message: format!(
-                        "Splunk HEC request failed with HTTP {}: {}",
-                        response.status,
-                        truncate_body(&response.body)
-                    ),
+                    message: format!("Splunk HEC request failed with HTTP {}", response.status),
                 }
                 .into());
             }
         }
         Ok(())
-    }
-}
-
-fn truncate_body(body: &str) -> String {
-    const MAX: usize = 300;
-    if body.chars().count() > MAX {
-        let mut truncated: String = body.chars().take(MAX).collect();
-        truncated.push('…');
-        truncated
-    } else {
-        body.to_string()
     }
 }
 
@@ -330,6 +326,54 @@ mod tests {
             assert_eq!(envelope["sourcetype"], "adr:json");
             assert_eq!(envelope["event"]["event_type"], "health");
         }
+    }
+
+    #[test]
+    fn splunk_hec_non_success_error_excludes_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock hec listener");
+        let addr = listener.local_addr().expect("mock hec addr");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while let Ok(read) = stream.read(&mut buffer) {
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let text = String::from_utf8_lossy(&request).to_lowercase();
+                if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if body.len() >= content_length {
+                        break;
+                    }
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 29\r\nConnection: close\r\n\r\ncredential-marker=do-not-leak",
+                )
+                .expect("respond");
+        });
+        let sink = SplunkHecHttpSink::new(
+            format!("http://{addr}/services/collector"),
+            "test-token".to_string(),
+            SplunkHecConfig::default(),
+        )
+        .with_timeout(Duration::from_secs(2));
+
+        let error = emit_events(&sink, &[make_health_event()]).expect_err("HTTP failure");
+        handle.join().expect("mock hec join");
+        let message = error.to_string();
+        assert!(message.contains("HTTP 403"), "message: {message}");
+        assert!(!message.contains("credential-marker"), "message: {message}");
     }
 
     #[test]

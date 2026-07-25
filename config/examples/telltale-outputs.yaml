@@ -6,9 +6,10 @@
 # replaces the earlier definition entirely. Validate with `telltale config validate`.
 version: 1
 sinks:
-  # Durable local JSONL log — the system of record, and what a Splunk
-  # Universal Forwarder or Filebeat tails. Omit `path`/`rotation` to inherit
-  # the resolved --log-path / ADR_LOG_PATH / path-profile defaults.
+  # Durable first-write JSONL handoff, which a Splunk Universal Forwarder or
+  # Filebeat can tail. The central platform becomes canonical after ingestion.
+  # Omit `path`/`rotation` to inherit the resolved --log-path / ADR_LOG_PATH /
+  # path-profile defaults.
   - name: local
     type: jsonl
     # path: /var/log/telltale/adr-events.jsonl

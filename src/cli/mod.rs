@@ -651,6 +651,39 @@ fn run_config_validate(
     let rule_set = &resolution.rule_set;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
     let output_specs = sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
+    let outputs_config_present = !resolved_config.discovered.output_paths.is_empty();
+    sink_config::build_sink_set_with_presence(
+        &output_specs,
+        outputs_config_present,
+        &sink_config::CliSinkOverrides {
+            log_path: Path::new("adr-events.jsonl"),
+            rotation: crate::sink::RotationConfig::default(),
+            splunk_hec_endpoint: None,
+            splunk_hec_token: None,
+        },
+        false,
+    )?;
+    let delivery_posture =
+        sink_config::effective_delivery_posture(&output_specs, outputs_config_present);
+    let (enabled_sink_count, durable_sink_count, remote_sink_count, delivery_source) =
+        if !outputs_config_present {
+            (1, 1, 0, "legacy_default")
+        } else {
+            let enabled = output_specs.iter().filter(|spec| spec.enabled);
+            let enabled_specs = enabled.collect::<Vec<_>>();
+            (
+                enabled_specs.len(),
+                enabled_specs
+                    .iter()
+                    .filter(|spec| matches!(spec.kind, sink_config::SinkKind::Jsonl(_)))
+                    .count(),
+                enabled_specs
+                    .iter()
+                    .filter(|spec| !matches!(spec.kind, sink_config::SinkKind::Jsonl(_)))
+                    .count(),
+                "outputs_config",
+            )
+        };
     let mut output_warnings: Vec<String> = output_specs
         .iter()
         .filter(|spec| spec.has_inline_secret())
@@ -672,6 +705,16 @@ fn run_config_validate(
                 )
             }),
     );
+    match delivery_posture {
+        crate::sink::DeliveryPosture::BestEffortNoReplay => output_warnings.push(
+            "remote-only delivery is best-effort with no persistent replay; events may be lost after retry exhaustion, process exit, or restart"
+                .to_string(),
+        ),
+        crate::sink::DeliveryPosture::NoEnabledSinks => output_warnings.push(
+            "no enabled sinks are configured; events will not be delivered".to_string(),
+        ),
+        crate::sink::DeliveryPosture::DurableFirstWrite => {}
+    }
     let output_sinks: Vec<serde_json::Value> = output_specs
         .iter()
         .map(|spec| {
@@ -706,6 +749,15 @@ fn run_config_validate(
             "outputs": {
                 "paths": display_paths(&resolved_config.discovered.output_paths),
                 "sinks": output_sinks,
+                "delivery": {
+                    "posture": delivery_posture.as_str(),
+                    "durable_first_write": delivery_posture.has_durable_first_write(),
+                    "built_in_persistent_replay": false,
+                    "enabled_sink_count": enabled_sink_count,
+                    "durable_sink_count": durable_sink_count,
+                    "remote_sink_count": remote_sink_count,
+                    "source": delivery_source,
+                },
                 "warnings": output_warnings,
             },
             "rules": {
@@ -891,14 +943,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             let output_specs =
                 sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
-            let sink_set = sink_config::build_sink_set(
+            let sink_set = sink_config::build_sink_set_with_presence(
                 &output_specs,
+                !resolved_config.discovered.output_paths.is_empty(),
                 &sink_config::CliSinkOverrides {
                     log_path: &log_path,
                     rotation,
                     splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
                     splunk_hec_token: splunk_hec_token.as_deref(),
                 },
+                true,
             )?;
             let scan_config = scan::ScanConfig {
                 execution: scan::ScanExecutionConfig {
@@ -1171,14 +1225,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             let output_specs =
                 sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
-            let sink_set = sink_config::build_sink_set(
+            let sink_set = sink_config::build_sink_set_with_presence(
                 &output_specs,
+                !resolved_config.discovered.output_paths.is_empty(),
                 &sink_config::CliSinkOverrides {
                     log_path: &log_path,
                     rotation,
                     splunk_hec_endpoint: None,
                     splunk_hec_token: None,
                 },
+                true,
             )?;
             let watch_config = scan::WatchConfig {
                 execution: scan::ScanExecutionConfig {

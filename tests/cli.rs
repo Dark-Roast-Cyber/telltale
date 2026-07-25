@@ -3138,6 +3138,12 @@ fn scan_once_continues_and_alerts_when_splunk_hec_is_unreachable() {
     assert_eq!(alert["check_name"], "sink_delivery");
     let evidence = alert["evidence"].as_array().expect("alert evidence");
     assert!(evidence.iter().any(|item| {
+        item["field"] == "threshold"
+            && item["redacted_value"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("attempts_made="))
+    }));
+    assert!(evidence.iter().any(|item| {
         item["field"] == "alert_type" && item["redacted_value"] == "sink_delivery_failure"
     }));
     assert!(evidence.iter().any(|item| {
@@ -3155,6 +3161,11 @@ fn scan_once_continues_and_alerts_when_splunk_hec_is_unreachable() {
     assert_eq!(sink_failures.len(), 1);
     assert_eq!(sink_failures[0]["name"], "cli-splunk-hec");
     assert_eq!(sink_failures[0]["type"], "splunk_hec");
+    assert_eq!(summary["delivery"]["posture"], "durable_first_write");
+    assert_eq!(summary["delivery"]["status"], "failed");
+    assert_eq!(summary["delivery"]["durable_first_write"], true);
+    assert_eq!(summary["delivery"]["built_in_persistent_replay"], false);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("local JSONL retains"));
 }
 
 #[test]
@@ -3228,6 +3239,278 @@ sinks:
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["source"], "telltale:outputs-test");
     assert_eq!(envelope["event"]["event_type"], "health");
+}
+
+#[test]
+fn scan_once_remote_only_delivers_without_creating_local_log() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("should-not-exist.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
+
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            r#"
+version: 1
+sinks:
+  - name: remote-only
+    type: splunk_hec
+    endpoint: {hec_endpoint}
+    token: test-token
+    retry: {{ max_attempts: 1, base_delay_ms: 0 }}
+"#
+        ),
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    let request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("hec request");
+    shutdown.send(()).expect("stop mock hec server");
+    handle.join().expect("mock hec thread");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !log_path.exists(),
+        "remote-only delivery must not create JSONL"
+    );
+
+    let body = request.split_once("\r\n\r\n").expect("body split").1;
+    let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
+    assert_eq!(envelope["event"]["event_type"], "health");
+    assert_eq!(envelope["event"]["schema_version"], "1.0");
+    assert!(envelope["event"]["event_id"].is_string());
+    assert!(envelope["event"].get("index").is_none());
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["delivery"]["posture"], "best_effort_no_replay");
+    assert_eq!(summary["delivery"]["status"], "delivered");
+    assert_eq!(summary["delivery"]["built_in_persistent_replay"], false);
+    assert_eq!(summary["sink_failures"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn scan_once_explicit_empty_outputs_has_no_legacy_local_sink() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("should-not-exist.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(outputs_dir.join("outputs.yaml"), "version: 1\nsinks: []\n")
+        .expect("write empty outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert!(
+        !log_path.exists(),
+        "explicit empty outputs must not use legacy JSONL"
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["delivery"]["posture"], "no_enabled_sinks");
+    assert_eq!(summary["delivery"]["status"], "not_delivered");
+}
+
+#[test]
+fn scan_once_all_disabled_outputs_have_no_local_sink() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("should-not-exist.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        "version: 1\nsinks:\n  - name: disabled-local\n    type: jsonl\n    enabled: false\n",
+    )
+    .expect("write disabled outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert!(
+        !log_path.exists(),
+        "all-disabled outputs must not write JSONL"
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["delivery"]["posture"], "no_enabled_sinks");
+    assert_eq!(summary["delivery"]["status"], "not_delivered");
+}
+
+#[test]
+fn scan_once_explicit_empty_outputs_keeps_cli_hec_overlay_only() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("should-not-exist.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(outputs_dir.join("outputs.yaml"), "version: 1\nsinks: []\n")
+        .expect("write empty outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .args(["--splunk-hec-endpoint", &hec_endpoint])
+        .args(["--splunk-hec-token", "test-token"])
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    let request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("hec request");
+    shutdown.send(()).expect("stop mock hec server");
+    handle.join().expect("mock hec thread");
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    assert!(
+        !log_path.exists(),
+        "explicit empty outputs must not add JSONL"
+    );
+    let body = request.split_once("\r\n\r\n").expect("body split").1;
+    let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
+    assert_eq!(envelope["event"]["event_type"], "health");
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["delivery"]["posture"], "best_effort_no_replay");
+    assert_eq!(summary["delivery"]["status"], "delivered");
+}
+
+#[test]
+fn scan_once_exhausted_remote_only_delivery_is_failed_without_replay_claim() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("should-not-exist.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let unreachable_endpoint = {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("probe listener");
+        let addr = listener.local_addr().expect("probe addr");
+        drop(listener);
+        format!("http://{addr}/services/collector")
+    };
+
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            r#"
+version: 1
+sinks:
+  - name: remote-only
+    type: splunk_hec
+    endpoint: {unreachable_endpoint}
+    token: test-token
+    retry: {{ max_attempts: 1, base_delay_ms: 0 }}
+"#
+        ),
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "remote failure should remain non-fatal: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !log_path.exists(),
+        "remote-only delivery must not create JSONL"
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["delivery"]["posture"], "best_effort_no_replay");
+    assert_eq!(summary["delivery"]["status"], "failed");
+    let failures = summary["sink_failures"].as_array().expect("sink failures");
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0]["attempts"], 1);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("recoverable"));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no persistent replay"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("retries exhausted or not applicable"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("not persisted") && stderr.contains("not recoverable for replay"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("test-token"),
+        "secret leaked in stderr: {stderr}"
+    );
 }
 
 /// Mock Elasticsearch: accepts requests until shutdown, captures each raw
@@ -3457,6 +3740,12 @@ sinks:
     assert_eq!(sinks[0]["type"], "jsonl");
     assert_eq!(sinks[1]["name"], "corp-splunk");
     assert_eq!(sinks[1]["enabled"], false);
+    assert_eq!(
+        report["outputs"]["delivery"]["posture"],
+        "durable_first_write"
+    );
+    assert_eq!(report["outputs"]["delivery"]["enabled_sink_count"], 1);
+    assert_eq!(report["outputs"]["delivery"]["remote_sink_count"], 0);
     let warnings = report["outputs"]["warnings"].as_array().expect("warnings");
     assert_eq!(warnings.len(), 1);
     assert!(
@@ -3465,6 +3754,96 @@ sinks:
             .expect("warning text")
             .contains("inline secret")
     );
+}
+
+#[test]
+fn config_validate_reports_remote_only_delivery_without_rejecting_it() {
+    let temp = tempdir().expect("tempdir");
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        r#"
+version: 1
+sinks:
+  - name: remote-only
+    type: splunk_hec
+    endpoint: https://splunk.example.com:8088/services/collector
+    token: inline-lab-token
+"#,
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_dir)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected validation warning: {:?}",
+        output.stderr
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("config validate json");
+    assert_eq!(
+        report["outputs"]["delivery"]["posture"],
+        "best_effort_no_replay"
+    );
+    assert_eq!(report["outputs"]["delivery"]["enabled_sink_count"], 1);
+    assert_eq!(report["outputs"]["delivery"]["durable_sink_count"], 0);
+    assert_eq!(report["outputs"]["delivery"]["remote_sink_count"], 1);
+    assert_eq!(
+        report["outputs"]["delivery"]["built_in_persistent_replay"],
+        false
+    );
+    let warnings = report["outputs"]["warnings"].as_array().expect("warnings");
+    assert!(warnings.iter().any(|warning| {
+        warning
+            .as_str()
+            .is_some_and(|warning| warning.contains("no persistent replay"))
+    }));
+}
+
+#[test]
+fn config_validate_rejects_missing_enabled_sink_secret() {
+    let temp = tempdir().expect("tempdir");
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        r#"
+version: 1
+sinks:
+  - name: remote-only
+    type: splunk_hec
+    endpoint: https://splunk.example.com:8088/services/collector
+    token: { env: ADR_TEST_MISSING_VALIDATE_TOKEN }
+"#,
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_dir)
+        .env_remove("ADR_TEST_MISSING_VALIDATE_TOKEN")
+        .output()
+        .expect("run adr");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ADR_TEST_MISSING_VALIDATE_TOKEN"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("test-token"), "secret leaked: {stderr}");
 }
 
 #[test]
@@ -8338,6 +8717,12 @@ fn config_validate_default_rules_without_local_config() {
         Value::Array(vec![])
     );
     assert_eq!(summary["local_config"]["discovered_rule_count"], 0);
+    assert_eq!(
+        summary["outputs"]["delivery"]["posture"],
+        "durable_first_write"
+    );
+    assert_eq!(summary["outputs"]["delivery"]["source"], "legacy_default");
+    assert_eq!(summary["outputs"]["delivery"]["enabled_sink_count"], 1);
 }
 
 #[test]

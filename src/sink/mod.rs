@@ -10,6 +10,27 @@ pub use splunk_hec::{SplunkHecConfig, SplunkHecEnvelope, SplunkHecHttpSink, splu
 
 use crate::event::Event;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum DeliveryPosture {
+    DurableFirstWrite,
+    BestEffortNoReplay,
+    NoEnabledSinks,
+}
+
+impl DeliveryPosture {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::DurableFirstWrite => "durable_first_write",
+            Self::BestEffortNoReplay => "best_effort_no_replay",
+            Self::NoEnabledSinks => "no_enabled_sinks",
+        }
+    }
+
+    pub(crate) fn has_durable_first_write(self) -> bool {
+        matches!(self, Self::DurableFirstWrite)
+    }
+}
+
 pub trait EventSink {
     /// Operator-facing sink name, used in delivery-failure alerts and logs.
     fn name(&self) -> &str;
@@ -52,9 +73,9 @@ impl std::error::Error for SinkDeliveryError {}
 struct SinkEntry {
     sink: Box<dyn EventSink + Send + Sync>,
     kind: &'static str,
-    /// Durable sinks (the local JSONL file) are the system of record: a write
-    /// failure there aborts the scan. Non-durable (remote) sink failures are
-    /// collected and reported instead.
+    /// Durable sinks (the local JSONL file) are the durable first-write and
+    /// bounded handoff: a write failure there aborts the scan. Non-durable
+    /// (remote) sink failures are collected and reported instead.
     durable: bool,
 }
 
@@ -93,18 +114,31 @@ impl SinkSet {
         self.entries.iter().any(|entry| entry.durable)
     }
 
-    /// Deliver a batch to every sink. A durable sink failure is fatal (`Err`);
-    /// remote failures are collected and returned while delivery to the
-    /// remaining sinks continues.
+    pub(crate) fn delivery_posture(&self) -> DeliveryPosture {
+        if self.entries.is_empty() {
+            DeliveryPosture::NoEnabledSinks
+        } else if self.has_durable() {
+            DeliveryPosture::DurableFirstWrite
+        } else {
+            DeliveryPosture::BestEffortNoReplay
+        }
+    }
+
+    /// Deliver a batch to every sink. Durable sinks are always attempted first,
+    /// preserving order within each class. A durable sink failure is fatal
+    /// (`Err`); remote failures are collected and returned while delivery to
+    /// the remaining remote sinks continues.
     pub fn deliver(
         &self,
         events: &[Event],
     ) -> Result<Vec<SinkFailure>, Box<dyn std::error::Error>> {
         let mut failures = Vec::new();
-        for entry in &self.entries {
+        for entry in self.entries.iter().filter(|entry| entry.durable) {
+            entry.sink.emit(events)?;
+        }
+        for entry in self.entries.iter().filter(|entry| !entry.durable) {
             match entry.sink.emit(events) {
                 Ok(()) => {}
-                Err(err) if entry.durable => return Err(err),
                 Err(err) => {
                     let attempts = err
                         .downcast_ref::<SinkDeliveryError>()
@@ -125,9 +159,22 @@ impl SinkSet {
     /// Deliver follow-up delivery-failure alert events, skipping the named
     /// (just-failed) sinks. Errors here are logged to stderr and never
     /// generate further events, so a failing sink cannot alert about itself
-    /// recursively.
+    /// recursively. Durable sinks are attempted before remotes, preserving
+    /// order within each class; a durable alert failure stops alert delivery.
     pub fn deliver_alerts(&self, events: &[Event], skip: &[&str]) {
-        for entry in &self.entries {
+        for entry in self.entries.iter().filter(|entry| entry.durable) {
+            if skip.contains(&entry.sink.name()) {
+                continue;
+            }
+            if let Err(err) = entry.sink.emit(events) {
+                eprintln!(
+                    "warning: could not deliver sink-failure alert to sink {}: {err}",
+                    entry.sink.name()
+                );
+                return;
+            }
+        }
+        for entry in self.entries.iter().filter(|entry| !entry.durable) {
             if skip.contains(&entry.sink.name()) {
                 continue;
             }
@@ -165,6 +212,31 @@ mod tests {
     struct RecordingSink {
         name: String,
         batches: Arc<Mutex<Vec<usize>>>,
+    }
+
+    struct OrderedSink {
+        name: String,
+        order: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl OrderedSink {
+        fn new(name: &str, order: Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                name: name.to_string(),
+                order,
+            }
+        }
+    }
+
+    impl EventSink for OrderedSink {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn emit(&self, _events: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
+            self.order.lock().expect("lock").push(self.name.clone());
+            Ok(())
+        }
     }
 
     impl RecordingSink {
@@ -252,6 +324,21 @@ mod tests {
     }
 
     #[test]
+    fn durable_failure_prevents_remote_delivery_even_when_remote_was_added_first() {
+        let (remote, batches) = RecordingSink::new("remote");
+        let (durable, _) = FailingSink::new("local");
+        let mut sinks = SinkSet::new();
+        sinks.add_remote("splunk_hec", Box::new(remote));
+        sinks.add_durable("jsonl", Box::new(durable));
+
+        assert!(sinks.deliver(&[make_health_event()]).is_err());
+        assert!(
+            batches.lock().expect("lock").is_empty(),
+            "remote delivery must wait for durable sinks"
+        );
+    }
+
+    #[test]
     fn deliver_alerts_skips_failed_sinks_and_never_recurses() {
         let (failing, emit_calls) = FailingSink::new("corp-splunk");
         let (recorder, batches) = RecordingSink::new("local");
@@ -282,6 +369,51 @@ mod tests {
         // No skip: the failing sink receives the alert, fails, and the error
         // is swallowed (stderr only) instead of propagating or recursing.
         sinks.deliver_alerts(&[make_health_event()], &[]);
+    }
+
+    #[test]
+    fn deliver_alerts_runs_durable_sinks_before_remotes_in_class_order() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut sinks = SinkSet::new();
+        sinks.add_remote(
+            "splunk_hec",
+            Box::new(OrderedSink::new("remote-1", Arc::clone(&order))),
+        );
+        sinks.add_durable(
+            "jsonl",
+            Box::new(OrderedSink::new("local-1", Arc::clone(&order))),
+        );
+        sinks.add_remote(
+            "elastic_bulk",
+            Box::new(OrderedSink::new("remote-2", Arc::clone(&order))),
+        );
+        sinks.add_durable(
+            "jsonl",
+            Box::new(OrderedSink::new("local-2", Arc::clone(&order))),
+        );
+
+        sinks.deliver_alerts(&[make_health_event()], &[]);
+
+        assert_eq!(
+            *order.lock().expect("lock"),
+            vec!["local-1", "local-2", "remote-1", "remote-2"]
+        );
+    }
+
+    #[test]
+    fn durable_alert_failure_stops_before_remote_alert_even_when_remote_was_added_first() {
+        let (remote, batches) = RecordingSink::new("remote");
+        let (durable, _) = FailingSink::new("local");
+        let mut sinks = SinkSet::new();
+        sinks.add_remote("splunk_hec", Box::new(remote));
+        sinks.add_durable("jsonl", Box::new(durable));
+
+        sinks.deliver_alerts(&[make_health_event()], &[]);
+
+        assert!(
+            batches.lock().expect("lock").is_empty(),
+            "remote alert must wait for durable alert delivery"
+        );
     }
 
     #[test]

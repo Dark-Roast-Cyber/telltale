@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -63,13 +64,24 @@ impl ElasticBulkSink {
 
     /// Replace the transport with fully-specified options (config-file path).
     pub fn with_transport(
-        mut self,
+        self,
         timeout: Duration,
         retry: RetryConfig,
         tls: &TlsOptions,
         max_batch_bytes: usize,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        self.client = HttpClient::new(timeout, retry, tls)?;
+        self.with_transport_warning(timeout, retry, tls, max_batch_bytes, true)
+    }
+
+    pub(crate) fn with_transport_warning(
+        mut self,
+        timeout: Duration,
+        retry: RetryConfig,
+        tls: &TlsOptions,
+        max_batch_bytes: usize,
+        emit_warning: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        self.client = HttpClient::new_with_warning(timeout, retry, tls, emit_warning)?;
         self.max_batch_bytes = max_batch_bytes;
         Ok(self)
     }
@@ -105,19 +117,40 @@ impl EventSink for ElasticBulkSink {
                 return Err(SinkDeliveryError {
                     attempts: response.attempts,
                     message: format!(
-                        "Elasticsearch bulk request failed with HTTP {}: {}",
-                        response.status,
-                        truncate_body(&response.body)
+                        "Elasticsearch bulk request failed with HTTP {}",
+                        response.status
                     ),
                 }
                 .into());
             }
-            // The bulk API returns 200 even when individual items failed.
-            if let Some(item_errors) = bulk_item_errors(&response.body) {
+            // The bulk API returns 200 even when individual items failed, but
+            // every successful response must still carry a valid `errors` flag.
+            let item_errors = match bulk_item_errors(&response.body) {
+                Ok(item_errors) => item_errors,
+                Err(reason) => {
+                    return Err(SinkDeliveryError {
+                        attempts: response.attempts,
+                        message: format!("Elasticsearch bulk response is invalid: {reason}"),
+                    }
+                    .into());
+                }
+            };
+            if let Some(item_errors) = item_errors {
+                let statuses = item_errors
+                    .statuses
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>();
+                let detail = if statuses.is_empty() {
+                    "no parseable item statuses".to_string()
+                } else {
+                    format!("status codes: {}", statuses.join(", "))
+                };
                 return Err(SinkDeliveryError {
                     attempts: response.attempts,
                     message: format!(
-                        "Elasticsearch bulk response reported item errors: {item_errors}"
+                        "Elasticsearch bulk response reported {} failed item(s); {detail}",
+                        item_errors.failed_count
                     ),
                 }
                 .into());
@@ -144,68 +177,62 @@ pub fn elastic_bulk_action_json(index: &str, event_id: Option<&str>) -> serde_js
     serde_json::json!({ "index": metadata })
 }
 
-/// Parse a bulk response body; when `errors` is true, summarize up to three
-/// distinct item error reasons. Returns None when every item succeeded (or
-/// the body is unparseable, which non-2xx handling already covers).
-fn bulk_item_errors(body: &str) -> Option<String> {
-    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
-    if !parsed.get("errors").and_then(|value| value.as_bool())? {
-        return None;
+#[derive(Debug, Eq, PartialEq)]
+struct BulkItemErrorSummary {
+    failed_count: usize,
+    statuses: BTreeSet<u16>,
+}
+
+/// Parse a bulk response body; when `errors` is true, summarize only the count
+/// and HTTP statuses of failed items. Error reasons are endpoint-controlled and
+/// are intentionally excluded from diagnostics.
+fn bulk_item_errors(body: &str) -> Result<Option<BulkItemErrorSummary>, &'static str> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| "response is not valid JSON")?;
+    let errors = parsed
+        .get("errors")
+        .and_then(|value| value.as_bool())
+        .ok_or("response errors field is missing or not boolean")?;
+    if !errors {
+        return Ok(None);
     }
-    let mut reasons: Vec<String> = Vec::new();
     let mut failed_count = 0_usize;
+    let mut statuses = BTreeSet::new();
     if let Some(items) = parsed.get("items").and_then(|value| value.as_array()) {
         for item in items {
             let Some(action) = item.as_object().and_then(|map| map.values().next()) else {
                 continue;
             };
-            let Some(error) = action.get("error") else {
+            let Some(_) = action.get("error") else {
                 continue;
             };
             failed_count += 1;
-            let status = action.get("status").and_then(|value| value.as_u64());
-            let reason = error
-                .get("reason")
-                .and_then(|value| value.as_str())
-                .unwrap_or("unknown reason");
-            let summary = match status {
-                Some(status) => format!("status {status}: {reason}"),
-                None => reason.to_string(),
-            };
-            if reasons.len() < 3 && !reasons.contains(&summary) {
-                reasons.push(summary);
+            if let Some(status) = action
+                .get("status")
+                .and_then(|value| value.as_u64())
+                .and_then(|status| u16::try_from(status).ok())
+            {
+                statuses.insert(status);
             }
         }
     }
-    if failed_count == 0 {
-        // errors=true with no parseable item errors: still a failure.
-        return Some("errors=true with no parseable items".to_string());
-    }
-    Some(format!(
-        "{failed_count} item(s) failed; first distinct errors: {}",
-        reasons.join(" | ")
-    ))
-}
-
-fn truncate_body(body: &str) -> String {
-    const MAX: usize = 300;
-    if body.chars().count() > MAX {
-        let mut truncated: String = body.chars().take(MAX).collect();
-        truncated.push('…');
-        truncated
-    } else {
-        body.to_string()
-    }
+    Ok(Some(BulkItemErrorSummary {
+        failed_count,
+        statuses,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
     use std::time::Duration;
 
-    use super::{ElasticBulkSink, bulk_item_errors, elastic_bulk_action_json};
+    use super::{
+        BulkItemErrorSummary, ElasticBulkSink, bulk_item_errors, elastic_bulk_action_json,
+    };
     use crate::event::health_event_with_metadata;
     use crate::sink::emit_events;
 
@@ -297,7 +324,7 @@ mod tests {
     #[test]
     fn bulk_response_item_errors_fail_the_batch() {
         let (endpoint, handle) = start_mock_elastic(
-            r#"{"took":1,"errors":true,"items":[{"index":{"_id":"a","status":403,"error":{"type":"security_exception","reason":"index write blocked"}}},{"index":{"_id":"b","status":201}}]}"#,
+            r#"{"took":1,"errors":true,"items":[{"index":{"_id":"a","status":403,"error":{"type":"security_exception","reason":"credential-marker=do-not-leak"}}},{"index":{"_id":"b","status":201}}]}"#,
         );
         let sink = ElasticBulkSink::new(&endpoint, "adr-events");
 
@@ -305,11 +332,26 @@ mod tests {
         handle.join().expect("mock join");
 
         let message = err.to_string();
-        assert!(message.contains("1 item(s) failed"), "message: {message}");
+        assert!(message.contains("1 failed item(s)"), "message: {message}");
+        assert!(message.contains("status codes: 403"), "message: {message}");
+        assert!(!message.contains("credential-marker"), "message: {message}");
+    }
+
+    #[test]
+    fn malformed_bulk_response_fails_without_body_or_losing_attempt_count() {
+        let (endpoint, handle) = start_mock_elastic("credential-marker=malformed-body");
+        let sink = ElasticBulkSink::new(&endpoint, "adr-events");
+
+        let err = emit_events(&sink, &[make_health_event()]).expect_err("malformed response");
+        handle.join().expect("mock join");
+
+        let message = err.to_string();
         assert!(
-            message.contains("index write blocked"),
+            message.contains("response is not valid JSON"),
             "message: {message}"
         );
+        assert!(message.contains("after 1 attempts"), "message: {message}");
+        assert!(!message.contains("credential-marker"), "message: {message}");
     }
 
     #[test]
@@ -325,22 +367,39 @@ mod tests {
     }
 
     #[test]
-    fn bulk_item_errors_summarizes_distinct_reasons() {
-        assert_eq!(bulk_item_errors(r#"{"errors":false,"items":[]}"#), None);
-        assert_eq!(bulk_item_errors("not json"), None);
+    fn bulk_item_errors_summarizes_counts_and_statuses_without_reasons() {
+        assert_eq!(bulk_item_errors(r#"{"errors":false,"items":[]}"#), Ok(None));
+        assert_eq!(
+            bulk_item_errors("not json"),
+            Err("response is not valid JSON")
+        );
+        assert_eq!(bulk_item_errors(""), Err("response is not valid JSON"));
+        assert_eq!(
+            bulk_item_errors(r#"{"items":[]}"#),
+            Err("response errors field is missing or not boolean")
+        );
+        assert_eq!(
+            bulk_item_errors(r#"{"errors":"false","items":[]}"#),
+            Err("response errors field is missing or not boolean")
+        );
 
         let summary = bulk_item_errors(
             r#"{"errors":true,"items":[
-                {"index":{"status":400,"error":{"reason":"mapper_parsing_exception"}}},
-                {"index":{"status":400,"error":{"reason":"mapper_parsing_exception"}}},
-                {"index":{"status":429,"error":{"reason":"too many requests"}}},
+                {"index":{"status":400,"error":{"reason":"credential-marker=one"}}},
+                {"index":{"status":400,"error":{"reason":"credential-marker=two"}}},
+                {"index":{"status":429,"error":{"reason":"credential-marker=three"}}},
                 {"index":{"status":201}}
             ]}"#,
         )
+        .expect("valid response")
         .expect("summary");
-        assert!(summary.contains("3 item(s) failed"));
-        assert!(summary.contains("mapper_parsing_exception"));
-        assert!(summary.contains("too many requests"));
+        assert_eq!(
+            summary,
+            BulkItemErrorSummary {
+                failed_count: 3,
+                statuses: BTreeSet::from([400, 429]),
+            }
+        );
     }
 
     #[test]
