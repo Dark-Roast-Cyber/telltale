@@ -65,6 +65,15 @@ impl HttpClient {
         retry: RetryConfig,
         tls: &TlsOptions,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::new_with_warning(timeout, retry, tls, true)
+    }
+
+    pub(crate) fn new_with_warning(
+        timeout: Duration,
+        retry: RetryConfig,
+        tls: &TlsOptions,
+        emit_warning: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut builder = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .http_status_as_error(false);
@@ -93,9 +102,11 @@ impl HttpClient {
                 tls_builder = tls_builder.root_certs(ureq::tls::RootCerts::new_with_certs(&certs));
             }
             if tls.insecure_skip_verify {
-                eprintln!(
-                    "warning: TLS certificate verification is disabled (insecure_skip_verify); this is unsafe outside a lab"
-                );
+                if emit_warning {
+                    eprintln!(
+                        "warning: TLS certificate verification is disabled (insecure_skip_verify); this is unsafe outside a lab"
+                    );
+                }
                 tls_builder = tls_builder.disable_verification(true);
             }
             builder = builder.tls_config(tls_builder.build());

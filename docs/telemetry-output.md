@@ -63,7 +63,7 @@ Splunk HEC and the Elasticsearch Bulk API, configured centrally through
 `outputs.d` YAML files under the standard config roots (`/etc/telltale`, the
 user config dir, or `--config-dir`); an annotated example ships in
 [config/examples/telltale-outputs.yaml](../config/examples/telltale-outputs.yaml).
-Remote delivery is retried with backoff; on final failure the scan continues
+Remote delivery uses bounded in-memory retries where applicable; on failure the scan continues
 and emits an `operational_alert` event with `alert_type=sink_delivery_failure`
 (check name `sink_delivery`) to the remaining healthy sinks. The failed sink
 never receives its own failure alert, so delivery problems cannot cascade.
@@ -71,6 +71,31 @@ These alerts bypass duplicate suppression and are not counted in the health
 event's `emitted_count`; the scan's stdout summary also lists failures under
 `sink_failures`. A failure writing the local JSONL sink itself still aborts
 the scan, because that file is the durable record.
+
+## Delivery Guarantees
+
+Local JSONL is the durable first-write and bounded local handoff record. It is
+not an indefinite system of record or a built-in replay queue; rotation or
+deletion can remove events before an external shipper ingests them. Direct
+Splunk HEC and Elastic HTTP delivery are best-effort sinks with bounded
+in-memory retries, not queues. A process exit or restart discards pending direct
+delivery attempts, while the JSONL record remains available to an external
+shipper when JSONL is enabled. Uncertain responses and retries can produce
+duplicate delivery.
+
+Remote-only output is valid but has no built-in persistent replay. After retry
+exhaustion, or process exit/restart while the endpoint is unavailable, events
+may be lost. Elastic uses `_id = event_id`, so a redelivery overwrites the same
+document rather than duplicating it, but this is not an exactly-once guarantee.
+Elastic item-level Bulk API errors are observable failures and are not retried by
+the current sink.
+
+`telltale config validate` reports the `outputs.d` delivery posture, while each
+scan summary reports its effective posture and delivery status, including
+whether Telltale itself has `built_in_persistent_replay` (currently false).
+Scan CLI HEC overlays can change the runtime posture; they are not part of the
+`config validate` report. These reports do not create remote history or imply
+external-shipper replay capability.
 
 Enable optional activity and session summary events when dashboards need more
 than detection-only output:
@@ -179,9 +204,9 @@ To disable built-in rotation (for system-profile deployments that use OS-native
 telltale scan --once --emit-activity --log-rotate-disabled
 ```
 
-The local JSONL file is a **transient spool**, not the canonical store. Once
-events are shipped to a SIEM or central log platform, that platform is
-canonical. Rotation keeps the local spool bounded without external tooling.
+The local JSONL file is a **bounded handoff record**, not the canonical store.
+Once events are shipped to a SIEM or central log platform, that platform is
+canonical. Rotation keeps local retention bounded without external tooling.
 
 ## Optional Export And Sink Paths
 

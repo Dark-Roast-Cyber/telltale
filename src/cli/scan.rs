@@ -694,9 +694,19 @@ fn run_scan(
     }
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
+    let delivery_posture = config.execution.sinks.delivery_posture();
     if !config.execution.dry_run {
         sink_failures = config.execution.sinks.deliver(&emitted_events)?;
         if !sink_failures.is_empty() {
+            if config.execution.sinks.has_durable() {
+                eprintln!(
+                    "warning: remote delivery failed (retries exhausted or not applicable); local JSONL retains the event record"
+                );
+            } else {
+                eprintln!(
+                    "warning: remote-only delivery failed (retries exhausted or not applicable); the failed batch is not persisted and is not recoverable for replay"
+                );
+            }
             let alerts: Vec<Event> = sink_failures.iter().map(sink_failure_alert_event).collect();
             let failed_names: Vec<&str> = sink_failures.iter().map(|f| f.name.as_str()).collect();
             config
@@ -725,6 +735,7 @@ fn run_scan(
         active_policy_name: active_policy_name.as_deref(),
         dry_run: config.execution.dry_run,
         log_path: config.execution.log_path,
+        delivery_posture,
         sink_failures: &sink_failures,
     });
     println!("{}", serde_json::to_string(&summary)?);
@@ -742,7 +753,7 @@ fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
     }
     operational_alert_event(OperationalAlertInput {
         alert_type: "sink_delivery_failure".to_string(),
-        threshold: format!("max_attempts={}", failure.attempts),
+        threshold: format!("attempts_made={}", failure.attempts),
         actual_value: format!(
             "sink={} type={} error={}",
             failure.name, failure.kind, error
@@ -1130,10 +1141,20 @@ struct ScanSummaryInput<'a> {
     active_policy_name: Option<&'a str>,
     dry_run: bool,
     log_path: &'a Path,
+    delivery_posture: crate::sink::DeliveryPosture,
     sink_failures: &'a [SinkFailure],
 }
 
 fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
+    let delivery_status = if summary.dry_run {
+        "not_attempted"
+    } else if summary.delivery_posture == crate::sink::DeliveryPosture::NoEnabledSinks {
+        "not_delivered"
+    } else if summary.sink_failures.is_empty() {
+        "delivered"
+    } else {
+        "failed"
+    };
     let sink_failures: Vec<serde_json::Value> = summary
         .sink_failures
         .iter()
@@ -1157,6 +1178,12 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         "rule_count": summary.rule_count,
         "policy": summary.active_policy_name,
         "log_path": if summary.dry_run { None } else { Some(summary.log_path.display().to_string()) },
+        "delivery": {
+            "posture": summary.delivery_posture.as_str(),
+            "status": delivery_status,
+            "durable_first_write": summary.delivery_posture.has_durable_first_write(),
+            "built_in_persistent_replay": false,
+        },
         "source_counts": summary.health_event.source_counts.clone().unwrap_or_default(),
         "sink_failures": sink_failures,
     })

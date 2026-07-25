@@ -8,8 +8,8 @@ use serde::Deserialize;
 use crate::sink::http::{RetryConfig, TlsOptions};
 use crate::sink::splunk_hec::DEFAULT_HEC_MAX_BATCH_BYTES;
 use crate::sink::{
-    DEFAULT_ELASTIC_INDEX, ElasticBulkSink, LocalJsonlSink, RotationConfig, SinkSet,
-    SplunkHecConfig, SplunkHecHttpSink,
+    DEFAULT_ELASTIC_INDEX, DeliveryPosture, ElasticBulkSink, LocalJsonlSink, RotationConfig,
+    SinkSet, SplunkHecConfig, SplunkHecHttpSink,
 };
 
 /// The only outputs document version this build understands.
@@ -66,6 +66,26 @@ impl SinkSpec {
             SinkKind::ElasticBulk(spec) => &spec.tls,
         };
         tls.as_ref().is_some_and(|tls| tls.insecure_skip_verify)
+    }
+}
+
+pub(crate) fn effective_delivery_posture(
+    specs: &[SinkSpec],
+    outputs_config_present: bool,
+) -> DeliveryPosture {
+    if !outputs_config_present {
+        return DeliveryPosture::DurableFirstWrite;
+    }
+    if !specs.iter().any(|spec| spec.enabled) {
+        return DeliveryPosture::NoEnabledSinks;
+    }
+    if specs
+        .iter()
+        .any(|spec| spec.enabled && matches!(spec.kind, SinkKind::Jsonl(_)))
+    {
+        DeliveryPosture::DurableFirstWrite
+    } else {
+        DeliveryPosture::BestEffortNoReplay
     }
 }
 
@@ -317,6 +337,15 @@ pub fn build_sink_set(
     specs: &[SinkSpec],
     cli: &CliSinkOverrides<'_>,
 ) -> Result<SinkSet, Box<dyn std::error::Error>> {
+    build_sink_set_with_presence(specs, !specs.is_empty(), cli, true)
+}
+
+pub(crate) fn build_sink_set_with_presence(
+    specs: &[SinkSpec],
+    outputs_config_present: bool,
+    cli: &CliSinkOverrides<'_>,
+    emit_warnings: bool,
+) -> Result<SinkSet, Box<dyn std::error::Error>> {
     let cli_hec = match (cli.splunk_hec_endpoint, cli.splunk_hec_token) {
         (None, None) => None,
         (Some(endpoint), Some(token)) => Some((endpoint, token)),
@@ -326,7 +355,7 @@ pub fn build_sink_set(
     };
 
     let mut sinks = SinkSet::new();
-    if specs.is_empty() {
+    if !outputs_config_present {
         sinks.add_durable(
             "jsonl",
             Box::new(LocalJsonlSink::with_rotation(
@@ -375,11 +404,12 @@ pub fn build_sink_set(
                     };
                     let sink = SplunkHecHttpSink::new(hec.endpoint.clone(), token, config)
                         .with_name(&spec.name)
-                        .with_transport(
+                        .with_transport_warning(
                             Duration::from_millis(hec.timeout_ms.unwrap_or(10_000)),
                             retry_config_from_spec(hec.retry.as_ref()),
                             &tls_options_from_spec(hec.tls.as_ref()),
                             hec.max_batch_bytes.unwrap_or(DEFAULT_HEC_MAX_BATCH_BYTES),
+                            emit_warnings,
                         )
                         .map_err(|err| format!("sink '{}': {err}", spec.name))?;
                     sinks.add_remote("splunk_hec", Box::new(sink));
@@ -392,13 +422,14 @@ pub fn build_sink_set(
                         .unwrap_or_else(|| DEFAULT_ELASTIC_INDEX.to_string());
                     let mut sink = ElasticBulkSink::new(&elastic.endpoint, index)
                         .with_name(&spec.name)
-                        .with_transport(
+                        .with_transport_warning(
                             Duration::from_millis(elastic.timeout_ms.unwrap_or(10_000)),
                             retry_config_from_spec(elastic.retry.as_ref()),
                             &tls_options_from_spec(elastic.tls.as_ref()),
                             elastic
                                 .max_batch_bytes
                                 .unwrap_or(crate::sink::elastic::DEFAULT_ELASTIC_MAX_BATCH_BYTES),
+                            emit_warnings,
                         )
                         .map_err(|err| format!("sink '{}': {err}", spec.name))?;
                     match (&elastic.api_key, &elastic.username, &elastic.password) {
@@ -445,9 +476,11 @@ pub fn build_sink_set(
         );
     }
 
-    if !sinks.has_durable() {
+    if emit_warnings && sinks.is_empty() {
+        eprintln!("warning: outputs config defines no enabled sinks; events will not be delivered");
+    } else if emit_warnings && !sinks.has_durable() {
         eprintln!(
-            "warning: outputs config defines no enabled jsonl sink; the local durable event log is disabled and remote delivery is best-effort"
+            "warning: outputs config defines no enabled jsonl sink; remote delivery is best-effort with no persistent replay, and events may be lost after retry exhaustion, process exit, or restart"
         );
     }
 
