@@ -900,7 +900,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     splunk_hec_token: splunk_hec_token.as_deref(),
                 },
             )?;
-            let scan_args = scan::ScanCommandArgs {
+            let scan_config = scan::ScanConfig {
                 root: &root,
                 log_path: &log_path,
                 sinks: &sink_set,
@@ -924,12 +924,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 install_inventory_interval_seconds,
             };
             if once {
-                scan::run_scan_once(scan::scan_config(&scan_args))?;
+                scan::run_scan_once(scan_config)?;
             } else {
                 let interval =
                     interval_seconds.ok_or("scan requires --once or --interval-seconds")?;
                 scan::run_scan_loop(
-                    &scan_args,
+                    scan_config,
                     iterations,
                     std::time::Duration::from_secs(interval),
                 )?;
@@ -1178,7 +1178,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     splunk_hec_token: None,
                 },
             )?;
-            let watch_args = scan::WatchCommandArgs {
+            let watch_config = scan::WatchConfig {
                 root: &root,
                 log_path: &log_path,
                 sinks: &sink_set,
@@ -1201,7 +1201,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 project_config_paths: &project_paths,
                 install_inventory_interval_seconds,
             };
-            scan::run_watch(scan::watch_config(&watch_args))?;
+            scan::run_watch(watch_config)?;
         }
         Command::Status {
             path_profile,

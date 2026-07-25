@@ -44,6 +44,7 @@ const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
 pub(crate) const DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
+#[derive(Clone, Copy)]
 pub(crate) struct ScanConfig<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
@@ -68,30 +69,7 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) install_inventory_interval_seconds: Option<u64>,
 }
 
-pub(crate) struct ScanCommandArgs<'a> {
-    pub(crate) root: &'a Path,
-    pub(crate) log_path: &'a Path,
-    pub(crate) sinks: &'a SinkSet,
-    pub(crate) state_path: &'a Path,
-    pub(crate) dry_run: bool,
-    pub(crate) emit_activity: bool,
-    pub(crate) emit_session_risk_summary: bool,
-    pub(crate) allow_fixtures: bool,
-    pub(crate) backfill: bool,
-    pub(crate) rebuild_baselines: bool,
-    pub(crate) rule_pack_paths: &'a RulePackPaths,
-    pub(crate) rule_paths: &'a [PathBuf],
-    pub(crate) override_paths: &'a [PathBuf],
-    pub(crate) rule_load_mode: RuleLoadMode,
-    pub(crate) policy_path: Option<&'a Path>,
-    pub(crate) allowlist_path: Option<&'a Path>,
-    pub(crate) baseline_deviation_scoring: bool,
-    pub(crate) clients: &'a [ClientId],
-    pub(crate) max_sources: Option<usize>,
-    pub(crate) project_config_paths: &'a [PathBuf],
-    pub(crate) install_inventory_interval_seconds: Option<u64>,
-}
-
+#[derive(Clone, Copy)]
 pub(crate) struct WatchConfig<'a> {
     pub(crate) root: &'a Path,
     pub(crate) log_path: &'a Path,
@@ -114,82 +92,6 @@ pub(crate) struct WatchConfig<'a> {
     pub(crate) clients: &'a [ClientId],
     pub(crate) project_config_paths: &'a [PathBuf],
     pub(crate) install_inventory_interval_seconds: Option<u64>,
-}
-
-pub(crate) struct WatchCommandArgs<'a> {
-    pub(crate) root: &'a Path,
-    pub(crate) log_path: &'a Path,
-    pub(crate) sinks: &'a SinkSet,
-    pub(crate) state_path: &'a Path,
-    pub(crate) dry_run: bool,
-    pub(crate) emit_activity: bool,
-    pub(crate) emit_session_risk_summary: bool,
-    pub(crate) allow_fixtures: bool,
-    pub(crate) iterations: Option<u32>,
-    pub(crate) debounce: Duration,
-    pub(crate) min_scan_interval: Duration,
-    pub(crate) rule_pack_paths: &'a RulePackPaths,
-    pub(crate) rule_paths: &'a [PathBuf],
-    pub(crate) override_paths: &'a [PathBuf],
-    pub(crate) rule_load_mode: RuleLoadMode,
-    pub(crate) policy_path: Option<&'a Path>,
-    pub(crate) allowlist_path: Option<&'a Path>,
-    pub(crate) baseline_deviation_scoring: bool,
-    pub(crate) clients: &'a [ClientId],
-    pub(crate) project_config_paths: &'a [PathBuf],
-    pub(crate) install_inventory_interval_seconds: Option<u64>,
-}
-
-pub(crate) fn scan_config<'a>(args: &'a ScanCommandArgs<'a>) -> ScanConfig<'a> {
-    ScanConfig {
-        root: args.root,
-        log_path: args.log_path,
-        sinks: args.sinks,
-        state_path: args.state_path,
-        dry_run: args.dry_run,
-        emit_activity: args.emit_activity,
-        emit_session_risk_summary: args.emit_session_risk_summary,
-        allow_fixtures: args.allow_fixtures,
-        backfill: args.backfill,
-        rebuild_baselines: args.rebuild_baselines,
-        rule_pack_paths: args.rule_pack_paths,
-        rule_paths: args.rule_paths,
-        override_paths: args.override_paths,
-        rule_load_mode: args.rule_load_mode,
-        policy_path: args.policy_path,
-        allowlist_path: args.allowlist_path,
-        baseline_deviation_scoring: args.baseline_deviation_scoring,
-        clients: args.clients,
-        max_sources: args.max_sources,
-        project_config_paths: args.project_config_paths,
-        install_inventory_interval_seconds: args.install_inventory_interval_seconds,
-    }
-}
-
-pub(crate) fn watch_config<'a>(args: &'a WatchCommandArgs<'a>) -> WatchConfig<'a> {
-    WatchConfig {
-        root: args.root,
-        log_path: args.log_path,
-        sinks: args.sinks,
-        state_path: args.state_path,
-        dry_run: args.dry_run,
-        emit_activity: args.emit_activity,
-        emit_session_risk_summary: args.emit_session_risk_summary,
-        allow_fixtures: args.allow_fixtures,
-        iterations: args.iterations,
-        debounce: args.debounce,
-        min_scan_interval: args.min_scan_interval,
-        rule_pack_paths: args.rule_pack_paths,
-        rule_paths: args.rule_paths,
-        override_paths: args.override_paths,
-        rule_load_mode: args.rule_load_mode,
-        policy_path: args.policy_path,
-        allowlist_path: args.allowlist_path,
-        baseline_deviation_scoring: args.baseline_deviation_scoring,
-        clients: args.clients,
-        project_config_paths: args.project_config_paths,
-        install_inventory_interval_seconds: args.install_inventory_interval_seconds,
-    }
 }
 
 fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
@@ -219,13 +121,13 @@ fn watch_scan_config<'a>(config: &'a WatchConfig<'a>) -> ScanConfig<'a> {
 }
 
 pub(crate) fn run_scan_loop(
-    scan_args: &ScanCommandArgs<'_>,
+    config: ScanConfig<'_>,
     iterations: Option<u32>,
     interval: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut remaining = iterations;
     loop {
-        run_scan_once(scan_config(scan_args))?;
+        run_scan_once(config)?;
         if let Some(value) = remaining.as_mut() {
             if *value == 1 {
                 break;
