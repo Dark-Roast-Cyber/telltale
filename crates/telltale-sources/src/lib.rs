@@ -1,5 +1,5 @@
 //! Telltale's filesystem-facing source layer: session-store discovery,
-//! per-agent source adapters, record parsers, and installed-agent inventory.
+//! per-agent source modules, record parsers, and installed-agent inventory.
 //!
 //! Everything here reads local agent session stores and normalizes them into
 //! `telltale-schema` records; detection, scoring, and delivery live in the

@@ -1,12 +1,11 @@
-//! Per-agent source adapter scaffolding.
+//! Per-agent source modules and the static source registry.
 //!
-//! This module is the future home of built-in source adapters. Phase 1 only
-//! introduces the directory layout, a minimal adapter trait placeholder, and a
-//! delegated registry that the existing `crate::clients::supported_clients()`
-//! wraps. Parser code, install inventory, and runtime dispatch are intentionally
-//! unchanged in Phase 1.
+//! Each agent module owns its static source definitions and install-inventory
+//! evidence. `registry` collects them into the fixed table that
+//! `crate::clients::supported_clients()` wraps; there is no trait-based adapter
+//! contract and no runtime registration. Parser dispatch remains centralized,
+//! with selected source-specific helpers living in the agent modules.
 
-pub mod adapter;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod copilot;
