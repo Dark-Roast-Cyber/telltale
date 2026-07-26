@@ -3216,6 +3216,465 @@ fn watch_skips_no_op_state_save() {
     );
 }
 
+#[cfg(target_os = "linux")]
+struct WatchChildGuard {
+    child: Option<std::process::Child>,
+}
+
+#[cfg(target_os = "linux")]
+impl WatchChildGuard {
+    fn new(child: std::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn id(&self) -> u32 {
+        self.child.as_ref().expect("watch child guard").id()
+    }
+
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.child.as_mut().expect("watch child guard")
+    }
+
+    fn disarm(mut self) -> std::process::Child {
+        self.child.take().expect("watch child guard")
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for WatchChildGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Phase 4 synthetic watch soak; run explicitly on Linux"]
+fn watch_synthetic_multi_cycle_soak() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).expect("codex sessions dir");
+    let malformed_path = sessions.join("malformed-source.jsonl");
+    fs::copy(
+        Path::new("tests/fixtures/rule_samples/malformed-source.jsonl"),
+        &malformed_path,
+    )
+    .expect("copy malformed fixture");
+    let valid_later_path = sessions.join("uc001-positive.jsonl");
+    let valid_later = include_bytes!(
+        "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl"
+    );
+    let valid_second_path = sessions.join("uc001-positive-server-instructions.jsonl");
+    let valid_second = include_bytes!(
+        "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-server-instructions.jsonl"
+    );
+    let valid_third_path = sessions.join("uc001-positive-tool-description.jsonl");
+    let valid_third = include_bytes!(
+        "../../tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive-tool-description.jsonl"
+    );
+    for path in [&valid_later_path, &valid_second_path, &valid_third_path] {
+        fs::write(path, b"").expect("pre-create valid source");
+    }
+
+    let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let mut child = WatchChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_adr"))
+            .args([
+                "watch",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--client",
+                "codex",
+                "--iterations",
+                "6",
+                "--debounce-ms",
+                "100",
+                "--min-scan-interval-ms",
+                "0",
+                "--install-inventory-disabled",
+                "--log-rotate-max-size",
+                "1",
+                "--log-rotate-keep",
+                "2",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--log-path")
+            .arg(&log_path)
+            .arg("--state-path")
+            .arg(&state_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn adr watch soak"),
+    );
+
+    let (summary_tx, summary_rx) = mpsc::channel();
+    let stdout = child.child_mut().stdout.take().expect("watch stdout");
+    let stdout_reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if summary_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let pid = child.id();
+    let proc_fd_path = format!("/proc/{pid}/fd");
+    let proc_fdinfo_path = format!("/proc/{pid}/fdinfo");
+    if !Path::new("/proc").is_dir()
+        || fs::read_dir("/proc/self/fd").is_err()
+        || !Path::new(&proc_fd_path).is_dir()
+        || !Path::new(&proc_fdinfo_path).is_dir()
+    {
+        panic!("Linux procfs prerequisite unavailable for watch readiness: /proc/<pid>/fd");
+    }
+    let readiness_deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let mut has_inotify_watch = false;
+        for entry in fs::read_dir(&proc_fd_path)
+            .expect("Linux procfs prerequisite unavailable while reading child fds")
+        {
+            let entry = entry.expect("Linux procfs prerequisite unavailable while reading fd");
+            match fs::read_link(entry.path()) {
+                Ok(target) if target.to_string_lossy().contains("inotify") => {
+                    let Some(fd) = entry.file_name().to_string_lossy().parse::<u32>().ok() else {
+                        continue;
+                    };
+                    let fdinfo = match fs::read_to_string(format!("{proc_fdinfo_path}/{fd}")) {
+                        Ok(fdinfo) => fdinfo,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => panic!(
+                            "Linux procfs prerequisite unavailable while reading inotify fdinfo: {error}"
+                        ),
+                    };
+                    if fdinfo
+                        .lines()
+                        .any(|line| line.trim_start().starts_with("inotify wd:"))
+                    {
+                        has_inotify_watch = true;
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    panic!("Linux procfs prerequisite unavailable while reading fd target: {error}")
+                }
+            }
+        }
+        if has_inotify_watch {
+            break;
+        }
+        if Instant::now() >= readiness_deadline {
+            let _ = child.child_mut().kill();
+            let _ = child.child_mut().wait();
+            panic!(
+                "Linux inotify readiness prerequisite unavailable: no inotify fdinfo contained an inotify wd: line"
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let fd_count = || {
+        let mut count = 0;
+        for entry in fs::read_dir(&proc_fd_path).expect("read child file descriptors") {
+            entry.expect("read child file descriptor");
+            count += 1;
+        }
+        count
+    };
+
+    let wait_for_next_scan = |child: &mut std::process::Child,
+                              path: &Path,
+                              contents: &[u8],
+                              allow_exit_during_quiet: bool| {
+        match summary_rx.try_recv() {
+            Ok(_) => panic!("unexpected extra watch summary before single-cycle write"),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("watch summary reader disconnected before single-cycle write")
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        fs::write(path, contents).expect("trigger exactly one watch event");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let summary = loop {
+            match summary_rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(line) => break serde_json::from_str::<Value>(&line).expect("summary json"),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("watch summary reader disconnected before scan completed")
+                }
+            }
+            if let Some(status) = child.try_wait().expect("poll adr watch") {
+                panic!("adr watch exited before scan completed: {status:?}")
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("adr watch did not complete the single triggered scan within timeout")
+            }
+        };
+        let quiet_deadline = Instant::now() + Duration::from_millis(150);
+        while Instant::now() < quiet_deadline {
+            let remaining = quiet_deadline.saturating_duration_since(Instant::now());
+            match summary_rx.recv_timeout(remaining.min(Duration::from_millis(20))) {
+                Ok(_) => panic!("extra watch summary followed a single-cycle write"),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    if !allow_exit_during_quiet {
+                        panic!("watch summary reader disconnected during quiet period")
+                    }
+                    thread::sleep(remaining);
+                    break;
+                }
+            }
+            if child
+                .try_wait()
+                .expect("poll adr watch quiet period")
+                .is_some()
+                && !allow_exit_during_quiet
+            {
+                panic!("adr watch exited unexpectedly during quiet period")
+            }
+        }
+        summary
+    };
+    let telemetry_paths = || {
+        fs::read_dir(temp.path())
+            .expect("read telemetry directory")
+            .map(|entry| entry.expect("telemetry entry").path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name == "adr-events.jsonl"
+                            || (name.starts_with("adr-events-") && name.ends_with(".jsonl"))
+                    })
+            })
+            .collect::<Vec<_>>()
+    };
+    let rotated_paths = || {
+        telemetry_paths()
+            .into_iter()
+            .filter(|path| path != &log_path)
+            .collect::<Vec<_>>()
+    };
+    let read_events = || {
+        telemetry_paths()
+            .iter()
+            .flat_map(|path| {
+                fs::read_to_string(path)
+                    .expect("read telemetry file")
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    let assert_detection = |session_id: &str| {
+        assert!(
+            read_events().iter().any(|event| {
+                event["event_type"] == "detection" && event["session_id"] == session_id
+            }),
+            "expected detection for {session_id} after its scan"
+        );
+    };
+    let malformed = fs::read(&malformed_path).expect("read malformed fixture");
+    let mut summaries = Vec::new();
+    summaries.push(wait_for_next_scan(
+        child.child_mut(),
+        &malformed_path,
+        &malformed,
+        false,
+    ));
+    assert_eq!(summaries[0]["event_type"], "health");
+    assert_eq!(summaries[0]["detection_count"], 1);
+    assert_eq!(summaries[0]["emitted_count"], 1);
+    assert_eq!(summaries[0]["delivery"]["status"], "delivered");
+    let first_events = fs::read_to_string(&log_path).expect("first telemetry");
+    assert!(first_events.lines().any(|line| {
+        serde_json::from_str::<Value>(line).expect("first event json")["event_type"]
+            == "scanner_error"
+    }));
+    let fd_baseline = fd_count();
+    let mut fd_counts: Vec<usize> = vec![fd_baseline];
+
+    let read_state = || {
+        let bytes = fs::read(&state_path).expect("scanner state");
+        let state = serde_json::from_slice::<Value>(&bytes).expect("scanner state json");
+        (state, bytes.len())
+    };
+    let (first_state, first_state_bytes) = read_state();
+    let first_state_mtime = fs::metadata(&state_path)
+        .expect("first state metadata")
+        .modified()
+        .expect("first state mtime");
+
+    let run_noop = |child: &mut std::process::Child,
+                    path: &Path,
+                    contents: &[u8],
+                    prior_state: &Value,
+                    prior_mtime: std::time::SystemTime| {
+        thread::sleep(Duration::from_millis(2_100));
+        let summary = wait_for_next_scan(child, path, contents, false);
+        let fd_sample = fd_count();
+        let (state, bytes) = read_state();
+        let mtime = fs::metadata(&state_path)
+            .expect("no-op state metadata")
+            .modified()
+            .expect("no-op state mtime");
+        assert_eq!(&state, prior_state);
+        assert_eq!(mtime, prior_mtime);
+        assert_eq!(summary["event_type"], "health");
+        assert_eq!(summary["detection_count"], 1);
+        assert_eq!(summary["emitted_count"], 0);
+        assert_eq!(summary["delivery"]["status"], "delivered");
+        (summary, state, bytes, mtime, fd_sample)
+    };
+
+    let (second_summary, second_state, second_state_bytes, _, second_fd) = run_noop(
+        child.child_mut(),
+        &malformed_path,
+        &malformed,
+        &first_state,
+        first_state_mtime,
+    );
+    summaries.push(second_summary);
+    fd_counts.push(second_fd);
+
+    let valid_summary =
+        wait_for_next_scan(child.child_mut(), &valid_later_path, valid_later, false);
+    assert_eq!(valid_summary["emitted_count"], 1);
+    summaries.push(valid_summary);
+    assert_detection("uc001-positive");
+    fd_counts.push(fd_count());
+    let (state_after_valid, valid_state_bytes) = read_state();
+    let valid_state_mtime = fs::metadata(&state_path)
+        .expect("valid state metadata")
+        .modified()
+        .expect("valid state mtime");
+    assert_ne!(state_after_valid, second_state);
+    let first_rotated_paths = rotated_paths();
+    assert_eq!(first_rotated_paths.len(), 1);
+    let oldest_rotated_path = first_rotated_paths
+        .into_iter()
+        .next()
+        .expect("first rotated path");
+
+    let (no_op_summary, _state_after_noop, no_op_state_bytes, _, no_op_fd) = run_noop(
+        child.child_mut(),
+        &valid_later_path,
+        valid_later,
+        &state_after_valid,
+        valid_state_mtime,
+    );
+    summaries.push(no_op_summary);
+    fd_counts.push(no_op_fd);
+
+    let followup_sources: [(&Path, &[u8], &str, bool); 2] = [
+        (
+            &valid_second_path,
+            valid_second,
+            "uc001-positive-server-instructions",
+            false,
+        ),
+        (
+            &valid_third_path,
+            valid_third,
+            "uc001-positive-tool-description",
+            true,
+        ),
+    ];
+    let mut scanner_errors_before_pruning = 0;
+    for (index, (path, contents, session_id, terminal)) in followup_sources.into_iter().enumerate()
+    {
+        let summary = wait_for_next_scan(child.child_mut(), path, contents, terminal);
+        assert_eq!(summary["emitted_count"], 1);
+        summaries.push(summary);
+        assert_detection(session_id);
+        if index == 0 {
+            fd_counts.push(fd_count());
+            scanner_errors_before_pruning = read_events()
+                .iter()
+                .filter(|event| event["event_type"] == "scanner_error")
+                .count();
+            assert_eq!(scanner_errors_before_pruning, 1);
+        }
+    }
+
+    let exit_deadline = Instant::now() + Duration::from_secs(20);
+    let final_status = loop {
+        if let Some(status) = child.child_mut().try_wait().expect("poll final adr watch") {
+            break status;
+        }
+        if Instant::now() >= exit_deadline {
+            let _ = child.child_mut().kill();
+            let _ = child.child_mut().wait();
+            panic!("adr watch did not exit after finite soak iterations")
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(
+        final_status.success(),
+        "watch soak failed: {final_status:?}"
+    );
+    let exited_child = child.disarm();
+    let output = exited_child
+        .wait_with_output()
+        .expect("collect adr watch output");
+    stdout_reader.join().expect("join watch summary reader");
+    assert!(!Path::new(&proc_fd_path).exists());
+
+    assert_eq!(summaries.len(), 6, "every triggered scan must complete");
+    assert!(
+        summaries
+            .iter()
+            .all(|summary| summary["event_type"] == "health")
+    );
+    assert!(summaries[2]["detection_count"].as_u64().unwrap_or(0) > 0);
+    assert!(summaries[4]["detection_count"].as_u64().unwrap_or(0) > 0);
+    assert!(summaries[5]["detection_count"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let rotated_count = rotated_paths().len();
+    assert_eq!(rotated_count, 2, "rotation should retain exactly two files");
+    assert!(!oldest_rotated_path.exists());
+
+    let events = read_events();
+    assert!(events.iter().any(|event| {
+        event["event_type"] == "detection" && event["session_id"] == "uc001-positive"
+    }));
+    assert!(events.iter().any(|event| {
+        event["event_type"] == "detection"
+            && event["session_id"] == "uc001-positive-server-instructions"
+    }));
+    assert!(events.iter().any(|event| {
+        event["event_type"] == "detection"
+            && event["session_id"] == "uc001-positive-tool-description"
+    }));
+
+    assert!(
+        fd_counts
+            .iter()
+            .all(|count| *count <= fd_baseline.saturating_add(2)),
+        "watch fd count exceeded the justified two-descriptor delta from baseline {fd_baseline}: {fd_counts:?}"
+    );
+    println!(
+        "watch soak measurements: cycles={} state_bytes=[{first_state_bytes},{second_state_bytes},{valid_state_bytes},{no_op_state_bytes}] fd_baseline={fd_baseline} fd_counts={fd_counts:?} rotated_files={rotated_count} scanner_errors_before_pruning={scanner_errors_before_pruning}",
+        summaries.len(),
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn watch_exits_cleanly_on_sigterm() {

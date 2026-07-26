@@ -57,6 +57,22 @@ make release-fixture-smoke
 scan must use `--dry-run` unless you are intentionally writing synthetic fixture
 output in CI or local development.
 
+### Synthetic watch soak
+
+Before broadening watch reliability claims, run the ignored Linux soak
+explicitly:
+
+```sh
+cargo test --test cli scan_watch::watch_synthetic_multi_cycle_soak -- --ignored --nocapture
+```
+
+The test uses temporary synthetic stores only. It exercises six triggered scan
+cycles, unchanged-state persistence, bounded process file descriptors, built-in
+JSONL rotation and retention, deduplicated malformed-source errors followed by
+valid detections, and clean finite-cycle exit. It requires Linux procfs/inotify,
+so it is evidence for that bounded runtime path rather than a macOS or Windows
+live-watch claim.
+
 When only public documentation or release guidance changed, run the focused
 boundary check before the full release preflight:
 

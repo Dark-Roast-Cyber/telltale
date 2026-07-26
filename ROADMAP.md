@@ -35,7 +35,7 @@ Priorities, in order:
    placeholders, deduplicate documentation. *(shipped)*
 7. **Claims and evidence** — public support claims match measured evidence;
    unknowns are labeled preview rather than converted into broad claims.
-   *(in progress)*
+   *(shipped)*
 
 For future tagged releases: installer integrity checks, CI preflight, archive
 verification, and cross-platform smoke tests.
