@@ -52,60 +52,18 @@ telltale scan --once --no-local-config --no-default-rules --rules custom-rules.y
 Custom rule files can also live under local config roots. Telltale checks
 existing `/etc/telltale` and per-user config roots by default; pass
 `--config-dir <path>` to use an explicit root for a command, or
-`--no-local-config` to disable discovery. Explicit config roots must exist:
+`--no-local-config` to disable discovery. Rule packs resolve in fixed tier
+order (bundled defaults → `organization-rules.d` → `rules.d` → `ui-rules.d`);
+a higher tier fully replaces a same-ID definition in place, while unique IDs are
+additive. Replacements and winners are available in the provenance columns of
+`telltale rules list --verbose` and in `telltale rules validate`. Repeated
+explicit `--rules` files remain an additive-only stage after managed packs, so
+they cannot replace managed definitions.
 
-```text
-~/.config/telltale/
-  organization-rules.d/*.yaml|*.yml
-  rules.d/*.yaml|*.yml
-  ui-rules.d/*.yaml|*.yml
-  overrides.d/*.yaml|*.yml
-  policies.d/*.yaml|*.yml
-  allowlists.d/*.yaml|*.yml
-```
-
-Rule packs resolve as bundled defaults, organization files, `rules.d` deployment
-files, then `ui-rules.d` local/UI files. Files are sorted lexically within each
-configured root and roots are processed in argument order. A higher tier fully
-replaces a same-ID definition in place; unique IDs are additive. Duplicate IDs
-within one tier fail, including duplicates across configured roots. Replacements
-and winners are available in the provenance columns of `telltale rules list --verbose`
-and in `telltale rules validate`.
-
-**Trust boundary:** Treat `organization-rules.d`, `rules.d`, and `ui-rules.d` as
-trusted operator configuration. Protect them from untrusted or unsigned writes:
-higher tiers can fully replace bundled rules, including disabling or changing
-detections. Rule-pack integrity or signing is not provided by this configuration
-mechanism.
-Repeated explicit `--rules` files remain an additive-only stage after managed
-packs, so they cannot replace managed definitions. `overrides.d` remains a
-transitional post-resolution stage and is applied before policy filtering, so
-disabled rules are absent from the effective rule set and score changes affect
-detection risk. A single discovered policy is used only when `--policy` is
-absent; multiple discovered policies produce an error so hidden policy merges do
-not occur. `scan` and `watch` use the same single-file behavior for discovered
-allowlists when `--allowlist` is absent.
-
-Override files are strict YAML with a required reason for every entry:
-
-```yaml
-version: 1
-description: Local workstation tuning.
-overrides:
-  - rule_id: network.download
-    enabled: false
-    reason: Too noisy on this workstation.
-  - rule_id: secret.env.read
-    score: 20
-    reason: Lab environment tuning.
-```
-
-Use `telltale config validate` as a preflight for local rule, policy, and allowlist
-configuration. It resolves the same effective config as scans, validates the
-compiled rule set after overrides plus allowlist YAML, and emits a small JSON
-health summary.
-Use `telltale rules export-default` to print or write the embedded bundled default
-rule YAML for inspection or local forking from a standalone binary.
+See [Install](install.md) for the full config directory layout, trust-boundary
+guidance, override YAML format, `--no-default-rules`/`--no-local-config`
+behavior, and `telltale config validate` / `telltale rules export-default`
+usage.
 
 The simplest valid custom rule uses `targets` plus `regex`:
 

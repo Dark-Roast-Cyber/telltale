@@ -90,28 +90,29 @@ Telltale can parse multiple source shapes, but real-world validation depth is no
 
 ```sh
 cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
-cargo run --bin telltale -- config validate --no-local-config
-cargo run --bin telltale -- rules validate --no-local-config
-cargo run --bin telltale -- rules export-default > /tmp/telltale-default-rules.yaml
 cargo test
 ```
 
 The fixture tree in `tests/fixtures/` is synthetic and safe for local verification.
 Use `--dry-run` for fixture checks. Reserve `--allow-fixtures` for intentional
-synthetic writes in CI or local development, not normal scans.
+synthetic writes in CI or local development, not normal scans. See
+[Install](docs/install.md) for the full fixture-safe verification sequence and
+real-session-store setup.
 
 ## Cargo packages
 
 Cargo publication is in current release preparation; these packages should not
-be treated as already published. The six official package names and planned
-publication order are:
+be treated as already published. The six official packages are:
 
-1. `telltale-schema`
-2. `telltale-rules`
-3. `telltale-sources`
-4. `telltale-detect`
-5. `telltale-core` — the supported embedding surface (`telltale_core` in Rust)
-6. `telltale-cli`
+- `telltale-schema`
+- `telltale-rules`
+- `telltale-sources`
+- `telltale-detect`
+- `telltale-core` — the supported embedding surface (`telltale_core` in Rust)
+- `telltale-cli`
+
+See [Versioning and releases](docs/versioning.md) for the dependency-ordered
+publication sequence and `0.x` compatibility policy.
 
 Install the CLI from crates.io after publication with:
 
@@ -137,82 +138,31 @@ or more supported client IDs such as `codex` or `opencode`.
 
 ### Local rule configuration
 
-For small deployments, Telltale also discovers local YAML config files without
-requiring every path on the command line. Existing config roots are checked in
-this order: `/etc/telltale`, then `$XDG_CONFIG_HOME/telltale` or
-`$HOME/.config/telltale`.
+Telltale discovers local YAML config files under `/etc/telltale` and
+`$XDG_CONFIG_HOME/telltale` (or `$HOME/.config/telltale`) without requiring
+every path on the command line. Managed rule packs resolve in fixed tier order
+(bundled defaults → `organization-rules.d` → `rules.d` → `ui-rules.d`); a
+higher tier fully replaces a same-ID definition in place, while unique IDs are
+additive. `overrides.d` tunes rules without editing source YAML, and
+`policies.d`/`allowlists.d` provide policy and suppression config.
 
-```text
-~/.config/telltale/
-  organization-rules.d/*.yaml|*.yml
-  rules.d/*.yaml|*.yml
-  ui-rules.d/*.yaml|*.yml
-  overrides.d/*.yaml|*.yml
-  policies.d/*.yaml|*.yml
-  allowlists.d/*.yaml|*.yml
-```
+Use `--config-dir <path>` for explicit config roots, or `--no-local-config` to
+disable discovery. Run `telltale config validate` as the local config preflight
+before scans with custom content, and `telltale rules export-default` to inspect
+or fork the bundled default rules.
 
-Rule packs resolve in fixed order: bundled defaults, organization files,
-deployment files in `rules.d`, then local/UI files in `ui-rules.d`. A higher tier
-fully replaces a same-ID definition in place; unique IDs are additive. Files are
-sorted lexically within each root, while roots at the same tier have equal
-precedence and duplicate IDs fail. Explicit repeated `--rules` files are loaded
-after managed packs and remain additive-only. Use `--config-dir <path>` to use
-one or more explicit local config roots, or `--no-local-config` to disable this
-discovery for a command. Explicit config roots must exist so typos fail closed
-instead of silently falling back to bundled rules.
-
-**Trust boundary:** Treat `organization-rules.d`, `rules.d`, and `ui-rules.d` as
-trusted operator configuration. Protect them from untrusted or unsigned writes:
-higher tiers can fully replace bundled rules, including disabling or changing
-detections. Rule-pack integrity or signing is not provided by this configuration
-mechanism.
-
-`--no-default-rules` excludes only the embedded bundled pack; discovered managed
-packs still load. Combine it with `--no-local-config` when an explicit
-`--rules`-only set is required.
-
-Run `telltale config validate` before enabling local config in scans. It uses the same
-rule, override, policy, and allowlist discovery semantics as `scan`/`watch`,
-validates the effective rule set and allowlist YAML, and prints a compact JSON
-health summary.
-Use `telltale rules export-default` to inspect or fork the bundled default rule pack
-from an installed binary without needing a source checkout. Save an edited fork
-under the intended managed tier when it should replace matching IDs; use
-`--no-default-rules` with an explicit `--rules` path for a standalone custom set.
-
-Local `overrides.d` files are applied after bundled and custom rule files are
-merged, before policy filtering. They can disable or retune rules without editing
-the source rule YAML:
-
-```yaml
-version: 1
-description: Local workstation tuning.
-overrides:
-  - rule_id: network.download
-    enabled: false
-    reason: Too noisy on this workstation.
-  - rule_id: secret.env.read
-    score: 20
-    reason: Lab environment tuning.
-```
+See [Install](docs/install.md) for the full directory layout, rule-pack
+precedence, trust-boundary guidance, override YAML format, and flag behavior.
 
 ### Project-local session stores
 
 Some clients (Copilot, OpenCode-in-project, Codex per-project) store data inside
 project directories. By default, Telltale scans `~/github` and `~/projects` if
 they exist. To customize, declare project roots in a YAML file and pass it with
-`--project-config`:
+`--project-config` (or set `ADR_PROJECT_CONFIG`). Project-local discovery is
+additive — home-relative sources are still discovered from `--root`.
 
-```yaml
-projects:
-  - name: my-project
-    path: ~/github/my-project
-```
-
-Project-local discovery is additive — home-relative sources are still discovered
-from `--root`. The registry in `src/clients.rs` defines the per-client subpath
-for each project.
+See [Install](docs/install.md) for the YAML format and `--project-config` usage.
 
 - Install and setup guide: [docs/install.md](docs/install.md)
 
