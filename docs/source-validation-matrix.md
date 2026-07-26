@@ -1,6 +1,17 @@
 # Source Validation Matrix
 
-This matrix tracks each supported agent source across discovery, parsing, tool-call handling, tool-result handling, use-case coverage, live validation status, and known lossy fields. A source is only considered supported when the required coverage gates below have fixture-backed proof.
+This matrix is the canonical public record for source-support claims. It tracks
+the 12 fixture-backed source identities across discovery, parsing, tool-call handling,
+tool-result handling, use-case coverage, live validation status, and known lossy
+fields. README and installation guidance link here rather than assigning
+subjective confidence labels. A source is only considered supported when the
+required coverage gates below have fixture-backed proof; live validation is an
+additional, bounded signal rather than broad source-store coverage.
+
+The static registry also contains two project-local candidates,
+`codex.project_sessions` and `opencode.project_json`. They are excluded from the
+supported matrix until they pass every coverage gate. Their registered paths and
+candidate status are documented in [Session Sources](session-sources.md).
 
 ## Legend
 
@@ -11,20 +22,20 @@ This matrix tracks each supported agent source across discovery, parsing, tool-c
 
 ## Validation Matrix
 
-| Client | Source Kind | Discovery | Parse Benign | Parse Tool Call | Parse Tool Result | UC-001 | UC-002 | UC-003 | Live Validation | Known Lossy Fields |
+| Client | Source Identity | Discovery | Parse Benign | Parse Tool Call | Parse Tool Result | UC-001 | UC-002 | UC-003 | Support Status / Live Validation | Known Lossy Fields |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex | `codex.sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ R01 complete | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| Codex | `codex.archived_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ R01 complete | Same as `codex.sessions` |
-| Codex | `codex.headless_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ R01 complete | Same as `codex.sessions` |
-| Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ R04 complete | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| Gemini CLI | `gemini.tmp` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| RooCode | `roocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| KiloCode | `kilocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ❌ Not installed | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ R02 complete | `call_id`, `is_error`, workspace, `content_parts` unavailable via legacy flat record |
-| OpenCode | `opencode.legacy_json` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ R02 complete | Same as `opencode.sqlite` |
-| Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ R03 complete | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, `content_parts` unavailable |
+| Codex | `codex.sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Fixture-backed + bounded live validation (R01 complete) | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| Codex | `codex.archived_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (R01 complete) | Same as `codex.sessions` |
+| Codex | `codex.headless_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (R01 complete) | Same as `codex.sessions` |
+| Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (R04 complete) | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| Gemini CLI | `gemini.tmp` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| RooCode | `roocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| KiloCode | `kilocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (R02 complete) | `call_id`, `is_error`, workspace, `content_parts` unavailable via legacy flat record |
+| OpenCode | `opencode.legacy_json` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ Fixture-backed + bounded live validation (R02 complete) | Same as `opencode.sqlite` |
+| Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ Fixture-backed + bounded live validation (R03 complete) | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, `content_parts` unavailable |
 
 ## Coverage Gates
 
@@ -45,6 +56,12 @@ sensitive real session stores just to satisfy fixture coverage.
 Windows P54 coverage is limited to deterministic Codex `CodexHome` and VS Code
 `globalStorage` discovery tests for RooCode and KiloCode. These candidates are
 experimental and not live-validated; see [Session Sources](session-sources.md).
+
+The v0.2.0 release archives and CI smoke checks establish binary packaging and
+execution support on macOS and Windows. They do not prove broad live validation
+of source stores on either platform. Clients marked **fixture-backed only** are
+preview/experimental for live source-store use until bounded live validation is
+recorded here.
 
 ## Public Validation Boundary
 
@@ -70,7 +87,7 @@ bounded command shape is understood.
 When adding a source, include these artifacts in the same change or keep the source marked experimental until they exist:
 
 - a `ClientId` variant and `ClientSourceDef` path pattern;
-- an explicit `(ClientId, source_id)` parser registration that produces normalized records without source-specific detection logic;
+- a current `SourceKind` parser-dispatch path that produces normalized records without source-specific detection logic; explicit `(ClientId, source_id)` parser registration is the planned source-adapter migration;
 - a fixture directory under `tests/fixtures/session_stores/<client>/` or another documented fixture root;
 - focused discovery and parser tests for benign, tool-call, and tool-result records;
 - a positive detection fixture and assertion proving bundled rules apply after normalization;
@@ -81,13 +98,13 @@ When adding a source, include these artifacts in the same change or keep the sou
 
 | Use Case | Description | Clients Covered | Status |
 | --- | --- | --- | --- |
-| UC-001 | Fake MCP prompt injection to controlled domain | All 9 clients (12 source kinds) | ✅ Complete |
+| UC-001 | Fake MCP prompt injection to controlled domain | All 9 clients (12 supported source identities) | ✅ Complete |
 | UC-002 | Credential harvesting before package publish | Codex, OpenCode (legacy_json), Copilot | ✅ 3 clients |
 | UC-003 | DNS exfiltration with encoded payload | Codex | ✅ 1 client |
 
 ## Live Validation Status
 
-Codex, OpenCode, and Copilot have received bounded live validation:
+Codex, OpenCode, Claude Code, and Copilot have received bounded live validation:
 
 - **Codex** (R01): `~/.codex/sessions/`, `archived_sessions/`, `headless/` (complete)
 - **OpenCode** (R02): Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db`, plus `storage/message/` below the same root (complete)
@@ -100,7 +117,7 @@ local source paths or transcript identifiers.
 
 ## Related Documents
 
-- [Adding an Agent Source](adding-agent-source.md) — implementation checklist and explicit parser registration
+- [Adding an Agent Source](adding-agent-source.md) — implementation checklist and current/future parser registration
 - [Source Adapter Refactor Plan](source-adapter-refactor-plan.md) — phased plan for moving built-in agents to `src/sources/<agent>/`
 - [Agent Capability Profiles](agent-capability-profiles.md) — per-source field availability and known gaps
 - [Client Capability Matrix](client-capability-matrix.md) — field-level availability per client

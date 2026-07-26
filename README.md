@@ -66,25 +66,17 @@ Set it up around your agent session stores and point the output at your alerting
 
 ## Source support status
 
-Current source support should be read conservatively.
+The [Source Validation Matrix](docs/source-validation-matrix.md) is canonical
+for public source-support claims. Current client-level status is:
 
-- **Most validated so far**: Codex and OpenCode
-- **Some real-world validation**: Claude Code, GitHub Copilot, Gemini CLI
-- **Primarily fixture-backed today**: Qwen CLI, RooCode, KiloCode, OpenClaw
+- **Fixture-backed plus bounded live validation**: Codex, OpenCode, Claude Code,
+  and GitHub Copilot.
+- **Fixture-backed only**: Gemini CLI, OpenClaw, Qwen CLI, RooCode, and KiloCode.
 
-Telltale can parse multiple source shapes, but real-world validation depth is not yet uniform across every client.
-
-| Source | Client ID | Session format | Current confidence |
-| --- | --- | --- | --- |
-| Codex | `codex` | JSONL sessions, archived sessions, headless JSONL | highest |
-| OpenCode | `opencode` | SQLite and legacy JSON | highest |
-| Claude Code | `claude` | JSONL | medium |
-| GitHub Copilot | `copilot` | process logs | medium |
-| Gemini CLI | `gemini` | JSON | medium-low |
-| Qwen CLI | `qwen` | JSONL | fixture-backed |
-| RooCode | `roocode` | `ui_messages.json` | fixture-backed |
-| KiloCode | `kilocode` | `ui_messages.json` | fixture-backed |
-| OpenClaw | `openclaw` | JSONL-like files | fixture-backed |
+These labels describe parser and source-store validation, not broad live coverage.
+Release archives and CI smoke checks cover binary packaging and execution on
+Linux, macOS, and Windows; they do not establish broad live source-store
+validation. Fixture-backed-only clients remain preview/experimental for live use.
 
 ## Quick start
 
@@ -173,13 +165,17 @@ fixture-safe verification step.
 
 ### Linux
 
-A user-first installer is being synchronized to the current two-binary contract.
-The hosted one-line installer remains pending synchronization and provenance
-finalization; do not rely on it yet to install both binaries. Until that is
-complete, use a canonical release archive or run `scripts/install-telltale`
-from this checkout. The repository installer installs both binaries to
-`~/.local/bin/telltale` and `~/.local/bin/adr` (no sudo) and installs a
-user-level systemd timer only when `--with-timer` is provided.
+The v0.2.0 release records establish a synchronized hosted copy of the
+repository installer. It downloads the latest release, verifies its published
+`SHA256SUMS`, and installs both binaries to `~/.local/bin` without sudo. Use it
+with:
+
+```sh
+curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
+```
+
+The repository installer provides the same behavior from this checkout and
+installs a user-level systemd timer only when `--with-timer` is provided.
 
 ```sh
 ./scripts/install-telltale

@@ -8,35 +8,36 @@ category.
 This roadmap is a stable public summary of project direction. Detailed
 execution planning is maintained internally.
 
-## Current Focus: 0.2.0 Maturity
+## Current Focus: Post-0.2.0 Maturity
 
-The 0.2.0 release makes Telltale safe, understandable, and practical to run.
+The v0.2.0 release makes Telltale safe, understandable, and practical to run.
 Priorities, in order:
 
 1. **Ordered rule packs** — bundled < organization < deployment < local/UI
    precedence, with provenance and conflict diagnostics. *(shipped)*
 2. **Rename internal `adr` references to `telltale`** — the product is
    Telltale; "ADR" remains the category name. Cross-repo refactor (CLI, crates,
-   config, docs) sequenced before the remaining release work so everything
-   ships on the new product identity. *(implemented and locally validated;
-   commit, hosted-installer sync, and hosted checks pending)*
+   config, docs) shipped on the new product identity in `v0.2.0`, with the
+   compatibility command retained. *(shipped; hosted installer and release
+   checks complete)*
 3. **Crates.io package preparation** — package the six functional Cargo
    packages with clean metadata, package boundaries, and dependency-ordered
    publication. The embedding facade is `telltale-core`; crates.io `telltale`
    is an unrelated package. Versioning follows the conservative `0.x` policy in
    [Versioning and Releases](docs/versioning.md), with `0.2.x` maintenance
-   releases rather than a direct jump to `0.5.x`. *(prepared and locally
-   validated; publication pending reviewed `main`)*
+   releases rather than a direct jump to `0.5.x`. *(packaging shipped with
+   `v0.2.0`; crates.io publication pending)*
 4. **Configuration consolidation** — one shared scan/watch configuration path
-   to remove a high-risk duplication seam.
+   to remove a high-risk duplication seam. *(shipped)*
 5. **Explicit delivery semantics** — honest local JSONL + best-effort remote
-   sinks, with documented retry, loss, and replay behavior.
+   sinks, with documented retry, loss, and replay behavior. *(shipped)*
 6. **Maintainability cleanup** — split large test files, remove unused
-   placeholders, deduplicate documentation.
+   placeholders, deduplicate documentation. *(shipped)*
 7. **Claims and evidence** — public support claims match measured evidence;
    unknowns are labeled preview rather than converted into broad claims.
+   *(in progress)*
 
-Before a tagged release: installer integrity checks, CI preflight, archive
+For future tagged releases: installer integrity checks, CI preflight, archive
 verification, and cross-platform smoke tests.
 
 ## Near-Term Themes

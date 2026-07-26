@@ -22,8 +22,8 @@ The current implementation is intentionally simple, but it is centralized:
 - `crates/telltale-sources/src/discovery.rs` resolves OS-specific roots, project-local roots, watch
   roots, and fixture paths for every registered source.
 - `crates/telltale-sources/src/parser.rs` currently dispatches by `SourceKind` and converts raw
-  records into `NormalizedRecord`; the post-0.2.0 target is explicit parser registration by
-  `(ClientId, source_id)`.
+  records into `NormalizedRecord`; explicit parser registration by `(ClientId, source_id)` is
+  the planned source-adapter migration.
 - `crates/telltale-sources/src/install_inventory.rs` separately answers "does this agent appear
   installed?" using metadata-only executable, package, extension, and
   globalStorage checks.
@@ -95,8 +95,9 @@ Required registry updates:
 
 - Add a `ClientId` variant.
 - Add the lowercase stable id in `ClientId::as_str()`.
-- Add or reuse a `SourceKind` as container/reporting metadata only; it must not
-  choose semantic parsing.
+- Add or reuse a `SourceKind`; in the current implementation it selects the
+  shared semantic parser branch. The planned migration will make it container
+  and reporting metadata only, with semantic parsing selected by source identity.
 - Add one or more `ClientSourceDef` entries with:
   - stable `id`, such as `antigravity.sessions`;
   - `kind`;
@@ -107,16 +108,23 @@ Required registry updates:
   - `recursive`;
   - `project_relative_path` when `PathRoot::ProjectLocal` is used.
 - Add the client/source definitions to the static source registry.
-- Register an explicit parser for every `(ClientId, source_id)` identity. If a
-  source is intentionally not modeled yet, register the generic parser as an
-  explicit fallback and document that choice.
+- Extend the current `SourceKind` dispatch in `crates/telltale-sources/src/parser.rs`,
+  or reuse an existing branch when the semantics match, and document that choice.
+  Do not present this current path as explicit `(ClientId, source_id)` registration;
+  that is the planned source-adapter migration.
 - Update registry and parser characterization tests in the same change.
 
 Only edit `crates/telltale-sources/src/discovery.rs` when the source needs a new cross-platform root,
 new bounded search behavior, or source matching that cannot be represented with
 `SourcePattern`.
 
-### 3. Add the explicit source parser
+### 3. Add or extend the source parser
+
+For the current implementation, extend the matching `SourceKind` branch in
+`crates/telltale-sources/src/parser.rs` or its existing source-specific helper.
+Exercise it through `parse_source_records` and add focused tests. The explicit
+`(ClientId, source_id)` parser module layout below is the migration target, not
+the current registration mechanism.
 
 Target files:
 
@@ -139,8 +147,9 @@ Parser requirements:
 - Avoid logging raw transcripts or secrets in errors, tests, or debug output.
 - For SQLite or append-only databases, consider state/cursor needs before
   scanning the entire database repeatedly.
-- Use the parser selected by `(source.client, source.source_id)`, not by
-  `SourceKind` alone.
+- Current code selects the parser by `SourceKind`; follow that dispatch until the
+  planned migration. The target implementation will select it by
+  `(source.client, source.source_id)`.
 - A known source parser error or schema-drift result must fail through the
   existing parse-error/scanner-diagnostic path. Do not silently retry with a
   generic or different parser.
@@ -148,11 +157,10 @@ Parser requirements:
   diagnostic according to the source contract; do not infer a kind from a
   coincidental field shape.
 
-If the new source can use an existing generic parser, opt into that fallback in
-the source registration and document why it is safe. Generic fallback is not a
-post-failure recovery path for a known source. Add focused unit tests next to
-the source parser for successful extraction, schema drift, unknown variants,
-and the fallback boundary.
+If the new source can use an existing `SourceKind` parser branch, document why
+that is safe. This is a dispatch choice, not post-failure recovery for a known
+source. Add focused unit tests next to the source parser for successful
+extraction, schema drift, unknown variants, and the dispatch boundary.
 
 ### 4. Add install inventory support
 

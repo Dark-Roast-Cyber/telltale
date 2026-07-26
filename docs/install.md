@@ -4,7 +4,9 @@
 
 Telltale Core can be installed from a tagged GitHub release archive when one
 is available, or built from source with Cargo. In both cases, start with a
-fixture-safe scan before pointing the scanner at real agent session stores.
+fixture-safe scan before pointing the scanner at real agent session stores. See
+the [Source Validation Matrix](source-validation-matrix.md) for the canonical
+source-support claims and their evidence.
 
 ## Prerequisites
 
@@ -30,6 +32,11 @@ Tagged GitHub releases publish platform-specific `telltale-*` binary archives
 for Linux, macOS, and Windows. Download the canonical archive that matches your
 platform, extract both binaries, and use `telltale` (`telltale.exe` on Windows)
 for new integrations.
+
+The v0.2.0 release archives and CI smoke checks establish binary packaging and
+execution support for Linux, macOS, and Windows. They do not establish broad
+live validation of agent source stores on those platforms; source-store support
+claims remain bounded by the [Source Validation Matrix](source-validation-matrix.md).
 
 The compiled `adr` (`adr.exe`) command is a deprecated compatibility command
 retained through every `0.2.x` release. Each matching `adr-*` archive is an
@@ -86,9 +93,10 @@ does not enable anything beyond the binary install unless you opt in:
 ./scripts/install-telltale --with-timer
 ```
 
-The hosted one-line installer at `agentarchaeology.ai/telltale_install.sh` is
-pending synchronization and provenance finalization. Do not rely on that hosted
-copy yet to install both Phase 0.5 binaries. To build from source instead of
+The v0.2.0 release records establish that the hosted one-line installer at
+`agentarchaeology.ai/telltale_install.sh` is synchronized with the repository
+installer and validated end-to-end. It downloads the latest release, verifies
+`SHA256SUMS`, and installs both binaries. To build from source instead of
 downloading a prebuilt binary, pass `--from-source`; add `--with-timer` to opt
 into the user-level systemd timer. `--no-timer` is accepted only for legacy
 compatibility and is normally unnecessary.
