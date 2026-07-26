@@ -82,7 +82,7 @@ Discovery responsibilities to preserve:
 
 ### Parser
 
-`crates/telltale-sources/src/parser.rs` is the largest coupling point. It currently dispatches by
+`crates/telltale-sources/src/parser.rs` is the primary coupling point. It currently dispatches by
 `SourceKind`, not by the registered `(ClientId, source_id)` identity. That makes
 generic source shapes easy, but it permits source-specific details for Codex,
 Gemini, OpenCode SQLite, Copilot logs, Claude tool blocks, and VS Code UI
