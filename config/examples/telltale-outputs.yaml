@@ -26,7 +26,7 @@ sinks:
     endpoint: https://splunk.example.com:8088/services/collector
     # Secrets: prefer {env: NAME} or {file: PATH}; inline strings are for labs.
     token: { env: SPLUNK_HEC_TOKEN }
-    index: adr
+    index: telltale
     sourcetype: adr:json
     source: telltale:adr
     timeout_ms: 10000
