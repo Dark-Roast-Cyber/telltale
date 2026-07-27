@@ -352,7 +352,12 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
     hasher.update(event.session_id.as_bytes());
     hasher.update(event.event_type.as_bytes());
     hasher.update(event.severity.as_bytes());
-    hasher.update(event.risk_score.to_le_bytes());
+    if let Ok(score) = u32::try_from(event.risk_score) {
+        hasher.update(score.to_le_bytes());
+    } else {
+        hasher.update(b"risk_score:u64:");
+        hasher.update(event.risk_score.to_le_bytes());
+    }
     if let Some(agent) = &event.agent {
         hasher.update(agent.as_bytes());
     }
@@ -420,7 +425,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: Some("repo_status".to_string()),
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -433,9 +438,10 @@ mod tests {
                 hash: Some("abc".to_string()),
                 rule_id: None,
             }],
-            risk_score: 90,
+            risk_contributions: Vec::new(),
             event_time: Some("2026-05-01T00:00:00.000Z".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         let mut state = ScanState::default();
         assert!(state.should_emit(&source, &event));
@@ -445,6 +451,12 @@ mod tests {
         assert_eq!(
             detection_fingerprint(&event, &source_fingerprint(&source)),
             detection_fingerprint(&event, &source_fingerprint(&source))
+        );
+        let mut wide_score = event.clone();
+        wide_score.risk_score = u64::from(u32::MAX) + 1;
+        assert_ne!(
+            detection_fingerprint(&event, &source_fingerprint(&source)),
+            detection_fingerprint(&wide_score, &source_fingerprint(&source))
         );
     }
 
@@ -458,7 +470,7 @@ mod tests {
             session_id: "ses_stable".to_string(),
             source_path_hash: "stable-source-hash".to_string(),
             tool_name: None,
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -471,9 +483,10 @@ mod tests {
                 hash: Some("abc".to_string()),
                 rule_id: None,
             }],
-            risk_score: 10,
+            risk_contributions: Vec::new(),
             event_time: Some("2026-05-01T00:00:00.000Z".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         assert_eq!(
             detection_fingerprint(&event, "container-fingerprint-a"),

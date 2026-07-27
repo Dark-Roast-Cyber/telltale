@@ -452,7 +452,7 @@ sinks:
     let body = request.split_once("\r\n\r\n").expect("body split").1;
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["event"]["event_type"], "health");
-    assert_eq!(envelope["event"]["schema_version"], "1.0");
+    assert_eq!(envelope["event"]["schema_version"], "2.0");
     assert!(envelope["event"]["event_id"].is_string());
     assert!(envelope["event"].get("index").is_none());
 

@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(envelope["host"], "developer-workstation");
         assert_eq!(envelope["time"], 1_779_069_600.0);
         assert_eq!(envelope["event"]["event_type"], "health");
-        assert_eq!(envelope["event"]["schema_version"], "1.0");
+        assert_eq!(envelope["event"]["schema_version"], "2.0");
         assert!(envelope["event"].get("index").is_none());
         assert!(envelope["event"].get("sourcetype").is_none());
     }

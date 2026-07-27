@@ -2459,3 +2459,80 @@ fn rules_coverage_uses_ordered_managed_pack() {
     assert!(stdout.contains("pack.deployment"));
     assert!(stdout.contains("pack.local"));
 }
+
+#[test]
+fn rules_coverage_fails_nonzero_on_invalid_accounting() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("codex/sessions/2026/04");
+    fs::create_dir_all(&root).expect("create fixture root");
+    fs::write(
+        root.join("overflow.jsonl"),
+        "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-08T10:00:01Z\",\"payload\":{\"type\":\"assistant_message\",\"message\":\"trigger\"}}\n",
+    )
+    .expect("write fixture");
+    let rules = temp.path().join("overflow.yaml");
+    fs::write(
+        &rules,
+        r#"version: 1
+description: overflow fixture
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: rule.one
+    category: test
+    severity: high
+    score: 18446744073709551615
+    targets: [assistant_context]
+    regex: trigger
+    tags: []
+    explanation: first overflow contribution
+  - id: rule.two
+    category: test
+    severity: high
+    score: 18446744073709551615
+    targets: [assistant_context]
+    regex: trigger
+    tags: []
+    explanation: second overflow contribution
+modifiers: []
+"#,
+    )
+    .expect("write overflow rules");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "rules",
+            "coverage",
+            "--no-local-config",
+            "--no-default-rules",
+            "--root",
+        ])
+        .arg(temp.path())
+        .arg("--rules")
+        .arg(&rules)
+        .output()
+        .expect("run overflow coverage");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("risk contribution total overflowed u64"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn rules_test_fails_nonzero_on_scanner_error() {
+    let temp = tempdir().expect("tempdir");
+    let fixture = temp.path().join("invalid.jsonl");
+    fs::write(&fixture, "not json\n").expect("write invalid fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["rules", "test", "--no-local-config"])
+        .arg(&fixture)
+        .output()
+        .expect("run invalid rules test");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("rules test failed"), "{stderr}");
+}

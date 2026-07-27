@@ -501,7 +501,7 @@ mod tests {
         resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
     };
 
-    fn rule_yaml(id: &str, regex: &str, score: u32) -> String {
+    fn rule_yaml(id: &str, regex: &str, score: u64) -> String {
         format!(
             r#"version: 1
 description: Test rules.
@@ -522,7 +522,7 @@ modifiers: []
         )
     }
 
-    fn write_rule(path: &std::path::Path, id: &str, regex: &str, score: u32) {
+    fn write_rule(path: &std::path::Path, id: &str, regex: &str, score: u64) {
         fs::create_dir_all(path.parent().expect("rule parent")).expect("rule parent");
         fs::write(path, rule_yaml(id, regex, score)).expect("rule file");
     }
@@ -606,6 +606,7 @@ modifiers: []
         let matched = resolution
             .rule_set
             .evaluate(&[("command", "fixture-secret-marker")])
+            .expect("replacement should evaluate")
             .expect("replacement should match");
         assert!(matched.rule_ids.contains(&"secret.env.read".to_string()));
     }
@@ -718,12 +719,12 @@ modifiers: []
         let deployment_first = temp.path().join("rules.d/a-deployment.yaml");
         let deployment_second = temp.path().join("rules.d/b-deployment.yaml");
         let local = temp.path().join("ui-rules.d/local.yaml");
-        write_rule(&deployment_first, "first", "first", 1);
-        write_rule(&deployment_second, "second", "second", 2);
-        write_rule(&local, "first", "replacement", 9);
+        write_rule(&deployment_first, "pack.first", "first", 1);
+        write_rule(&deployment_second, "pack.second", "second", 2);
+        write_rule(&local, "pack.first", "replacement", 9);
         write_rule(
             &temp.path().join("organization-rules.d/organization.yaml"),
-            "organization-only",
+            "organization.only",
             "organization",
             3,
         );
@@ -750,14 +751,14 @@ modifiers: []
                 .iter()
                 .map(|rule| rule.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["organization-only", "first", "second"]
+            vec!["organization.only", "pack.first", "pack.second"]
         );
         assert_eq!(resolution.merged_rule_set.rules[1].score, 9);
         let first = resolution
             .diagnostics
             .provenance
             .iter()
-            .find(|entry| entry.id == "first")
+            .find(|entry| entry.id == "pack.first")
             .expect("replacement provenance");
         assert!(first.winner.contains("local-ui:"));
         assert_eq!(first.replaced_sources.len(), 1);

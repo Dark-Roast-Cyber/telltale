@@ -129,7 +129,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-pinned `=0.2.0` registry packages before publication is declared complete.
+pinned `=0.3.0` registry packages before publication is declared complete.
 
 ## Artifact Boundary
 
@@ -150,7 +150,8 @@ For generated binary archives, inspect the archive listing before upload. The
 archive should contain both `telltale` and `adr` binaries, `LICENSE`,
 `README.md`, and the curated `config/examples/` deployment files
 (`telltale-outputs.yaml`,
-`adr-scan.service`, `adr-scan.timer`, `adr-scan-task.xml`) only. It should not
+`adr-scan.service`, `adr-scan.timer`, `adr-scan-task.xml`,
+`elastic-telltale-index-template.json`) only. It should not
 contain checked-out working-tree residue, scanner state, telemetry output,
 session stores, local planning notes, local agent workflow state, or
 deployment-specific configuration.

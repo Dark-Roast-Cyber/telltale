@@ -95,6 +95,7 @@ impl Suppression {
 pub fn suppress_detection(event: &mut Event, suppression_match: &SuppressionMatch) {
     event.severity = "informational".to_string();
     event.risk_score = 0;
+    event.risk_contributions.clear();
     push_tag(&mut event.tags, "suppressed");
     push_tag(
         &mut event.tags,
@@ -139,6 +140,7 @@ mod tests {
     use std::path::PathBuf;
 
     use telltale_schema::event::{DetectionEventInput, detection_event};
+    use telltale_schema::scoring::{RiskContribution, RiskContributionType};
     use telltale_sources::clients::{ClientId, SourceKind};
     use telltale_sources::discovery::Source;
 
@@ -170,9 +172,18 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["secret".to_string()],
             evidence: Vec::new(),
-            risk_score: 90,
+            risk_contributions: vec![
+                RiskContribution::new(
+                    "secret.env.read",
+                    RiskContributionType::DeterministicRule,
+                    90,
+                    "matched synthetic secret path",
+                )
+                .expect("contribution"),
+            ],
             event_time: Some("2026-05-01T00:00:00.000Z".to_string()),
         })
+        .expect("build detection event")
     }
 
     #[test]
@@ -209,6 +220,7 @@ mod tests {
         assert_eq!(event.event_type, "detection");
         assert_eq!(event.severity, "informational");
         assert_eq!(event.risk_score, 0);
+        assert!(event.risk_contributions.is_empty());
         assert!(event.tags.iter().any(|tag| tag == "suppressed"));
         assert!(event.response.is_none());
         assert_eq!(

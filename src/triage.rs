@@ -382,7 +382,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: Some("repo_status".to_string()),
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -390,9 +390,10 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: vec![],
-            risk_score: 90,
+            risk_contributions: Vec::new(),
             event_time: Some("2026-05-01T00:00:00.000Z".to_string()),
-        });
+        })
+        .expect("build detection event");
         event.triage = Some(serde_json::json!({
             "required": true,
             "verdict": "pending",

@@ -26,7 +26,9 @@ fn detection_analysis_builds_timeline_anchors_from_canonical_records() {
     ];
     let rule_set = load_default_rule_set().expect("rule set");
 
-    let analysis = detect_records_with_timeline(&source, &rule_set, &records).expect("detection");
+    let analysis = detect_records_with_timeline(&source, &rule_set, &records)
+        .expect("detection")
+        .expect("matching");
 
     assert_eq!(analysis.event.session_id, "timeline-session");
     assert!(

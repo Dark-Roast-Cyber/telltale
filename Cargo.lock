@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "clap",
@@ -1779,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "telltale-detect",
  "telltale-rules",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-detect"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -1806,7 +1806,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-rules"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde",
@@ -1816,7 +1816,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-schema"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-sources"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rusqlite",
  "serde",

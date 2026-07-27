@@ -8,7 +8,9 @@ format.
 ## Current Series
 
 - `v0.1.0` is the first public binary release.
-- `0.2.0` is the next planned maturity release.
+- `0.2.0` is the prior maturity release.
+- `0.3.0` is the next planned breaking compatibility line for the event and
+  scoring contract.
 - The project does not jump directly to `0.5.0`. Compatible follow-up releases
   use the `0.2.x` patch line.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
@@ -45,7 +47,7 @@ allowance for `0.y.z` versions:
 | Breaking change | Next minor (`0.3.0`, then `0.4.0` if needed) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
 | Stable compatibility commitment | Major (`1.0.0`) | Public interfaces are sufficiently settled for documented compatibility guarantees |
 
-The `0.2.x` line is the default path for post-`0.2.0` fixes and small
+The `0.2.x` line remains the compatibility path for post-`0.2.0` fixes and small
 compatible improvements. A later `0.x` minor line requires a documented reason;
 it is not a destination for routine progress or accumulated patch releases.
 
@@ -103,7 +105,7 @@ Publish schema → rules → sources → detect → core → cli, waiting after 
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.2.0` registry dependencies. Do not declare publication complete before
+`=0.3.0` registry dependencies. Do not declare publication complete before
 those unpatched checks pass, and do not publish credentials or local release
 state.
 

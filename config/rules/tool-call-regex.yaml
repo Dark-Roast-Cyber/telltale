@@ -52,7 +52,7 @@ rules:
       - atlas:AML.T0050
     severity: low
     score: 15
-    targets: [tool_name, command, arguments]
+    targets: [command, arguments]
     regex: '(^|\b)(bash|sh|zsh|fish|pwsh|powershell|cmd\.exe)\b|python\s+-c|node\s+-e|perl\s+-e|ruby\s+-e'
     tags: [execution]
     explanation: Shell or interpreter execution occurred.

