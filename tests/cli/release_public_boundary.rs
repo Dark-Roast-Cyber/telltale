@@ -640,6 +640,11 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         "{}\n",
     )
     .expect("write Elastic mapping example");
+    fs::write(
+        good_payload.join("config/examples/elastic-telltale-role.json"),
+        "{}\n",
+    )
+    .expect("write Elastic role example");
     fs::write(bad_payload.join("telltale.exe"), "binary\n").expect("write bad telltale.exe");
     fs::write(bad_payload.join("adr.exe"), "binary\n").expect("write bad adr.exe");
     fs::write(
@@ -663,6 +668,7 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         .arg("config/examples/adr-scan.timer")
         .arg("config/examples/adr-scan-task.xml")
         .arg("config/examples/elastic-telltale-index-template.json")
+        .arg("config/examples/elastic-telltale-role.json")
         .output()
         .expect("tar good archive");
     assert!(
@@ -720,6 +726,7 @@ fn release_artifact_manifest_accepts_curated_bundles_and_rejects_extra_entries()
         .arg("config/examples/adr-scan.timer")
         .arg("config/examples/adr-scan-task.xml")
         .arg("config/examples/elastic-telltale-index-template.json")
+        .arg("config/examples/elastic-telltale-role.json")
         .current_dir(&good_payload)
         .output()
         .expect("zip good archive");
@@ -1008,6 +1015,7 @@ fn release_workflow_packages_and_verifies_canonical_legacy_pairs() {
     assert!(workflow.contains("adr-${{ github.ref_name }}-${{ matrix.target }}"));
     assert!(workflow.contains("telltale adr LICENSE README.md"));
     assert!(workflow.contains("config/examples/elastic-telltale-index-template.json"));
+    assert!(workflow.contains("config/examples/elastic-telltale-role.json"));
     assert!(workflow.contains("cp \"$archive\" \"$legacy_archive\""));
     assert!(workflow.contains(
         "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"

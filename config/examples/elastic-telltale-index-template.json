@@ -1,5 +1,5 @@
 {
-  "index_patterns": ["adr-events", "adr-events-*", "telltale-*"],
+  "index_patterns": ["telltale", "telltale-*", "adr-events", "adr-events-*"],
   "template": {
     "mappings": {
       "properties": {

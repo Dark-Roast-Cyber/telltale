@@ -151,7 +151,7 @@ archive should contain both `telltale` and `adr` binaries, `LICENSE`,
 `README.md`, and the curated `config/examples/` deployment files
 (`telltale-outputs.yaml`,
 `adr-scan.service`, `adr-scan.timer`, `adr-scan-task.xml`,
-`elastic-telltale-index-template.json`) only. It should not
+`elastic-telltale-index-template.json`, `elastic-telltale-role.json`) only. It should not
 contain checked-out working-tree residue, scanner state, telemetry output,
 session stores, local planning notes, local agent workflow state, or
 deployment-specific configuration.

@@ -44,7 +44,7 @@ sinks:
     type: elastic_bulk
     enabled: false
     endpoint: https://elastic.example.com:9243
-    index: adr-events
+    index: telltale
     api_key: { file: /etc/telltale/secrets/elastic-api-key }
     # or basic auth instead of api_key:
     # username: telltale

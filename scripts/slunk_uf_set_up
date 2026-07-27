@@ -10,7 +10,7 @@ UF_BIN="${UF_BIN:-$UF_HOME/bin/splunk}"
 # Defaults target the Linux `system` path profile used by managed/Splunk-forwarded
 # deployments. Override ADR_LOG_PATH/COPILOT_LOG_DIR for non-default profiles.
 ADR_LOG_PATH="${ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl}"
-ADR_INDEX="${ADR_INDEX:-telltale}"
+ADR_INDEX="${ADR_INDEX:-adr}"
 ADR_SOURCETYPE="${ADR_SOURCETYPE:-adr:json}"
 
 ENABLE_COPILOT_MONITOR="${ENABLE_COPILOT_MONITOR:-1}"
