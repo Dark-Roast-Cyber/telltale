@@ -4,18 +4,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use telltale_schema::scoring::RiskAccountingError;
 use telltale_sources::parser::{NormalizedRecord, RecordKind};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct BaselineDeviationConfig {
     pub enabled: bool,
     pub min_previous_tool_calls: u64,
-    pub max_risk_modifier: u32,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct BaselineDeviation {
-    pub risk_modifier: u32,
+    pub risk_modifier: u64,
     pub new_tool_names: usize,
     pub new_path_classes: usize,
     pub new_network_hosts: usize,
@@ -26,7 +26,6 @@ impl Default for BaselineDeviationConfig {
         Self {
             enabled: false,
             min_previous_tool_calls: 5,
-            max_risk_modifier: 15,
         }
     }
 }
@@ -107,14 +106,16 @@ pub fn assess_baseline_deviation(
     previous: Option<&BaselineSummary>,
     current: &BaselineSummary,
     config: BaselineDeviationConfig,
-) -> Option<BaselineDeviation> {
+) -> Result<Option<BaselineDeviation>, RiskAccountingError> {
     if !config.enabled || current.key.model.is_none() || current.key.provider.is_none() {
-        return None;
+        return Ok(None);
     }
 
-    let previous = previous?;
+    let Some(previous) = previous else {
+        return Ok(None);
+    };
     if previous.observations.tool_calls < config.min_previous_tool_calls {
-        return None;
+        return Ok(None);
     }
 
     let previous_network_hosts = baseline_host_identity_counts(previous);
@@ -135,20 +136,34 @@ pub fn assess_baseline_deviation(
         .filter(|host| !previous_network_hosts.contains_key(host))
         .count();
 
-    let raw_modifier = (new_tool_names as u32 * 5)
-        + (new_path_classes as u32 * 5)
-        + (new_network_hosts as u32 * 5);
-    let risk_modifier = raw_modifier.min(config.max_risk_modifier);
+    let risk_modifier = u64::try_from(new_tool_names)
+        .map_err(|_| RiskAccountingError::Overflow)?
+        .checked_mul(5)
+        .ok_or(RiskAccountingError::Overflow)?
+        .checked_add(
+            u64::try_from(new_path_classes)
+                .map_err(|_| RiskAccountingError::Overflow)?
+                .checked_mul(5)
+                .ok_or(RiskAccountingError::Overflow)?,
+        )
+        .ok_or(RiskAccountingError::Overflow)?
+        .checked_add(
+            u64::try_from(new_network_hosts)
+                .map_err(|_| RiskAccountingError::Overflow)?
+                .checked_mul(5)
+                .ok_or(RiskAccountingError::Overflow)?,
+        )
+        .ok_or(RiskAccountingError::Overflow)?;
     if risk_modifier == 0 {
-        return None;
+        return Ok(None);
     }
 
-    Some(BaselineDeviation {
+    Ok(Some(BaselineDeviation {
         risk_modifier,
         new_tool_names,
         new_path_classes,
         new_network_hosts,
-    })
+    }))
 }
 
 impl BaselineSummary {
@@ -636,7 +651,8 @@ mod tests {
                 Some(&previous),
                 &current,
                 BaselineDeviationConfig::default()
-            ),
+            )
+            .expect("baseline assessment"),
             None,
             "default config must not alter scores"
         );
@@ -647,12 +663,12 @@ mod tests {
             BaselineDeviationConfig {
                 enabled: true,
                 min_previous_tool_calls: 5,
-                max_risk_modifier: 10,
             },
         )
+        .expect("baseline assessment")
         .expect("deviation");
 
-        assert_eq!(deviation.risk_modifier, 10);
+        assert_eq!(deviation.risk_modifier, 15);
         assert_eq!(deviation.new_tool_names, 1);
         assert!(deviation.new_path_classes > 0);
         assert_eq!(deviation.new_network_hosts, 1);
@@ -693,9 +709,9 @@ mod tests {
                 BaselineDeviationConfig {
                     enabled: true,
                     min_previous_tool_calls: 5,
-                    max_risk_modifier: 15,
                 },
-            ),
+            )
+            .expect("baseline assessment"),
             None,
             "raw current hosts should match hashed persisted baseline hosts"
         );
@@ -731,9 +747,9 @@ mod tests {
                 BaselineDeviationConfig {
                     enabled: true,
                     min_previous_tool_calls: 0,
-                    max_risk_modifier: 15,
                 },
-            ),
+            )
+            .expect("baseline assessment"),
             None
         );
     }

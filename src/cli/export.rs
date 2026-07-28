@@ -4,10 +4,15 @@ use std::path::Path;
 use time::OffsetDateTime;
 
 use crate::correlation::{CorrelationConfig, correlation_events_from_detections};
-use crate::event::{Event, evidence_hash, parse_event_timestamp};
+use crate::event::{
+    Event, evidence_hash, parse_event_timestamp, validate_risk_accounting_scope,
+    validate_schema_two_rule_ids,
+};
 use crate::rules::{CompiledRuleSet, load_default_rule_set};
 use crate::schema::{NormalizedRecordV1, Provenance};
-use crate::scoring::{assess_risk_with_thresholds, load_thresholds};
+use crate::scoring::{
+    RiskAccountingError, assess_risk_with_thresholds, canonicalize_contributions, load_thresholds,
+};
 use crate::timeline::build_exported_session_timeline;
 
 pub(crate) struct ExportConfig<'a> {
@@ -38,6 +43,7 @@ pub(crate) fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::er
     }
 
     let events = super::read_jsonl_events(config.log_path)?;
+    validate_imported_event_accounting(&events)?;
     let filtered = filtered_export_events(&events, &config, &range);
 
     if config.timeline {
@@ -49,9 +55,11 @@ pub(crate) fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::er
         );
     }
 
-    let correlation_events = config
-        .correlate
-        .then(|| correlation_events_from_filtered(&filtered));
+    let correlation_events = if config.correlate {
+        Some(correlation_events_from_filtered(&filtered)?)
+    } else {
+        None
+    };
     let output_events = correlation_events
         .as_ref()
         .map(|events| events.iter().collect::<Vec<_>>())
@@ -136,7 +144,7 @@ fn run_source_backed_timeline_export(
     let client_filters = string_set(config.clients);
     let session_filters = string_set(config.session_ids);
     let timeline_events =
-        build_source_backed_session_timelines(source_root, &session_filters, &client_filters);
+        build_source_backed_session_timelines(source_root, &session_filters, &client_filters)?;
     print_single_session_timeline(
         &timeline_events,
         config.session_ids[0].as_str(),
@@ -179,15 +187,90 @@ fn print_single_session_timeline(
     print_timeline_events(timeline_events, format)
 }
 
-fn correlation_events_from_filtered(filtered: &[&serde_json::Value]) -> Vec<serde_json::Value> {
+fn validate_imported_event_accounting(
+    events: &[serde_json::Value],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for event in events {
+        let schema_version = event
+            .get("schema_version")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("1.0");
+        let event_type = event
+            .get("event_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if schema_version != "2.0"
+            || !matches!(
+                event_type,
+                "activity" | "detection" | "session_risk_summary"
+            )
+        {
+            if schema_version == "2.0" {
+                let rule_ids = imported_rule_ids(event)?;
+                validate_schema_two_rule_ids(&rule_ids)?;
+            }
+            continue;
+        }
+        let rule_ids = imported_rule_ids(event)?;
+        validate_schema_two_rule_ids(&rule_ids)?;
+        let raw = event
+            .get("risk_contributions")
+            .ok_or("schema 2 risk-bearing event is missing risk_contributions")?
+            .clone();
+        let contributions: Vec<telltale_schema::scoring::RiskContribution> =
+            serde_json::from_value(raw)?;
+        let canonical = canonicalize_contributions(contributions.clone())?;
+        if contributions != canonical {
+            return Err(RiskAccountingError::NonCanonicalContributions.into());
+        }
+        validate_risk_accounting_scope(event_type, &string_array(event, "rule_ids"), &canonical)?;
+        let declared = event
+            .get("risk_score")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("schema 2 risk-bearing event has an invalid risk_score")?;
+        let computed = crate::scoring::checked_risk_sum(&canonical)?;
+        if declared != computed {
+            return Err(RiskAccountingError::ScoreMismatch { declared, computed }.into());
+        }
+    }
+    Ok(())
+}
+
+fn imported_rule_ids(event: &serde_json::Value) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let Some(value) = event.get("rule_ids") else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or("schema 2 event has an invalid rule_ids array")?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "schema 2 event has a non-string rule_id".into())
+        })
+        .collect()
+}
+
+fn correlation_events_from_filtered(
+    filtered: &[&serde_json::Value],
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     let detection_events = filtered
         .iter()
-        .filter_map(|event| event_from_json_value(event))
-        .collect::<Vec<_>>();
+        .filter(|event| {
+            event.get("event_type").and_then(serde_json::Value::as_str) == Some("detection")
+        })
+        .map(|event| {
+            let parsed = event_from_json_value(event)?;
+            parsed.ok_or_else(|| "correlation input event is not schema-shaped".into())
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
 
-    correlation_events_from_detections(&detection_events, &CorrelationConfig::default())
+    correlation_events_from_detections(&detection_events, &CorrelationConfig::default())?
         .into_iter()
-        .map(|event| serde_json::to_value(event).expect("event serializes"))
+        .map(|event| serde_json::to_value(event).map_err(Into::into))
         .collect()
 }
 
@@ -620,12 +703,12 @@ fn build_source_backed_session_timelines(
     source_root: &Path,
     session_filters: &BTreeSet<String>,
     client_filters: &BTreeSet<String>,
-) -> Vec<serde_json::Value> {
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     type SessionKey = (String, String);
     type CanonicalSessionRecord = (String, usize, NormalizedRecordV1);
     type LegacySessionRecord = (String, usize, crate::parser::NormalizedRecord);
 
-    let rule_set = load_default_rule_set().expect("rule set");
+    let rule_set = load_default_rule_set()?;
     let mut by_session: BTreeMap<SessionKey, Vec<CanonicalSessionRecord>> = BTreeMap::new();
     let mut legacy_by_session: BTreeMap<SessionKey, Vec<LegacySessionRecord>> = BTreeMap::new();
     let mut sources = crate::discovery::discover_sources(source_root);
@@ -634,9 +717,8 @@ fn build_source_backed_session_timelines(
     }
 
     for source in &sources {
-        let Ok(records) = crate::parser::parse_source_records(source) else {
-            continue;
-        };
+        let records = crate::parser::parse_source_records(source)
+            .map_err(|error| format!("source parse failed for {}: {error}", source.source_id))?;
         let client = source.client.as_str().to_string();
         let source_path = source.path.to_string_lossy();
         let source_path_hash = evidence_hash(&source_path);
@@ -665,9 +747,9 @@ fn build_source_backed_session_timelines(
         }
     }
 
-    by_session
+    let timelines = by_session
         .into_iter()
-        .filter_map(|(session_key, mut records)| {
+        .map(|(session_key, mut records)| {
             records.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
             let mut legacy_records = legacy_by_session.remove(&session_key).unwrap_or_default();
             legacy_records
@@ -682,17 +764,20 @@ fn build_source_backed_session_timelines(
                 .collect::<Vec<_>>();
             build_source_backed_timeline_value(&canonical_records, &parsed_records, &rule_set)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(timelines.into_iter().flatten().collect())
 }
 
 fn build_source_backed_timeline_value(
     canonical_records: &[NormalizedRecordV1],
     parsed_records: &[crate::parser::NormalizedRecord],
     rule_set: &CompiledRuleSet,
-) -> Option<serde_json::Value> {
-    let mut timeline =
-        serde_json::to_value(build_exported_session_timeline(canonical_records)?).ok()?;
-    let summary = build_source_backed_risk_summary(parsed_records, rule_set);
+) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let Some(session_timeline) = build_exported_session_timeline(canonical_records) else {
+        return Ok(None);
+    };
+    let mut timeline = serde_json::to_value(session_timeline)?;
+    let summary = build_source_backed_risk_summary(parsed_records, rule_set)?;
     let max_severity = summary
         .get("max_severity")
         .and_then(|value| value.as_str())
@@ -710,18 +795,18 @@ fn build_source_backed_timeline_value(
     timeline["max_severity"] = serde_json::Value::String(max_severity.to_string());
     timeline["has_triage"] = serde_json::Value::Bool(has_triage);
     timeline["risk_summary"] = summary;
-    Some(timeline)
+    Ok(Some(timeline))
 }
 
 fn build_source_backed_risk_summary(
     parsed_records: &[crate::parser::NormalizedRecord],
     rule_set: &CompiledRuleSet,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, RiskAccountingError> {
     let tool_call_count = parsed_records
         .iter()
         .filter(|record| matches!(record.kind, crate::parser::RecordKind::ToolCall))
         .count() as u64;
-    let matches = crate::detection::evaluate_session_matches(rule_set, parsed_records);
+    let matches = crate::detection::evaluate_session_matches(rule_set, parsed_records)?;
     let risk_score = matches.as_ref().map(|matches| matches.score).unwrap_or(0);
     let max_severity = if risk_score == 0 {
         "informational"
@@ -732,7 +817,7 @@ fn build_source_backed_risk_summary(
     };
     let risky_action_count = u64::from(matches.is_some());
 
-    serde_json::json!({
+    Ok(serde_json::json!({
         "tool_call_count": tool_call_count,
         "risky_action_count": risky_action_count,
         "top_rule_ids": matches
@@ -745,7 +830,7 @@ fn build_source_backed_risk_summary(
             .unwrap_or(serde_json::Value::Null),
         "max_severity": max_severity,
         "triage_ran": false,
-    })
+    }))
 }
 
 fn build_session_risk_summary(session_events: &[&serde_json::Value]) -> serde_json::Value {
@@ -846,9 +931,40 @@ fn severity_rank(severity: &str) -> u8 {
     }
 }
 
-fn event_from_json_value(event: &serde_json::Value) -> Option<Event> {
-    Some(Event {
-        timestamp: event.get("timestamp")?.as_str()?.to_string(),
+fn event_from_json_value(
+    event: &serde_json::Value,
+) -> Result<Option<Event>, Box<dyn std::error::Error>> {
+    let required_string = |key: &str| event.get(key).and_then(|value| value.as_str());
+    let Some(timestamp) = required_string("timestamp") else {
+        return Ok(None);
+    };
+    let Some(event_id) = required_string("event_id") else {
+        return Ok(None);
+    };
+    let Some(event_type) = required_string("event_type") else {
+        return Ok(None);
+    };
+    let Some(severity) = required_string("severity") else {
+        return Ok(None);
+    };
+    let Some(client) = required_string("client") else {
+        return Ok(None);
+    };
+    let Some(session_id) = required_string("session_id") else {
+        return Ok(None);
+    };
+    let Some(risk_score) = event.get("risk_score").and_then(|value| value.as_u64()) else {
+        return Ok(None);
+    };
+    let risk_contributions = serde_json::from_value(
+        event
+            .get("risk_contributions")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )?;
+
+    Ok(Some(Event {
+        timestamp: timestamp.to_string(),
         event_time: optional_string(event, "event_time"),
         observed_at: event
             .get("observed_at")
@@ -886,15 +1002,16 @@ fn event_from_json_value(event: &serde_json::Value) -> Option<Event> {
             .and_then(|value| value.as_str())
             .unwrap_or("1.0")
             .to_string(),
-        event_id: event.get("event_id")?.as_str()?.to_string(),
-        event_type: event.get("event_type")?.as_str()?.to_string(),
-        severity: event.get("severity")?.as_str()?.to_string(),
-        risk_score: event.get("risk_score")?.as_u64()? as u32,
-        client: event.get("client")?.as_str()?.to_string(),
+        event_id: event_id.to_string(),
+        event_type: event_type.to_string(),
+        severity: severity.to_string(),
+        risk_score,
+        risk_contributions,
+        client: client.to_string(),
         agent: optional_string(event, "agent"),
         model: optional_string(event, "model"),
         provider: optional_string(event, "provider"),
-        session_id: event.get("session_id")?.as_str()?.to_string(),
+        session_id: session_id.to_string(),
         workspace: optional_string(event, "workspace"),
         source_path_hash: optional_string(event, "source_path_hash"),
         tool_name: optional_string(event, "tool_name"),
@@ -929,7 +1046,7 @@ fn event_from_json_value(event: &serde_json::Value) -> Option<Event> {
         scanner_error_count: event
             .get("scanner_error_count")
             .and_then(|value| value.as_u64()),
-    })
+    }))
 }
 
 fn optional_string(event: &serde_json::Value, key: &str) -> Option<String> {

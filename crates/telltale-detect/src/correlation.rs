@@ -17,7 +17,7 @@ use telltale_schema::event::{
 pub struct CorrelationConfig {
     pub window: Duration,
     pub min_sessions: usize,
-    pub min_risk_score: u32,
+    pub min_risk_score: u64,
 }
 
 impl Default for CorrelationConfig {
@@ -44,7 +44,7 @@ pub struct CorrelatedSession {
     pub event_id: String,
     pub timestamp: String,
     pub severity: String,
-    pub risk_score: u32,
+    pub risk_score: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -54,7 +54,7 @@ pub struct CrossSessionCorrelation {
     pub sessions: Vec<CorrelatedSession>,
     pub window_start: String,
     pub window_end: String,
-    pub max_risk_score: u32,
+    pub max_risk_score: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -113,7 +113,7 @@ fn aggregate_correlations(
     correlations: Vec<CrossSessionCorrelation>,
 ) -> Vec<CrossSessionCorrelation> {
     let mut aggregated: BTreeMap<
-        (ActorKey, Vec<CorrelatedSession>, String, String, u32),
+        (ActorKey, Vec<CorrelatedSession>, String, String, u64),
         CrossSessionCorrelation,
     > = BTreeMap::new();
 
@@ -142,7 +142,7 @@ fn aggregate_correlations(
 pub fn correlation_events_from_detections(
     events: &[Event],
     config: &CorrelationConfig,
-) -> Vec<Event> {
+) -> Result<Vec<Event>, telltale_schema::scoring::RiskAccountingError> {
     correlate_detection_events(events, config)
         .into_iter()
         .map(correlation_to_event)
@@ -232,7 +232,9 @@ fn format_timestamp(timestamp: OffsetDateTime) -> String {
         .expect("RFC3339 timestamp")
 }
 
-fn correlation_to_event(correlation: CrossSessionCorrelation) -> Event {
+fn correlation_to_event(
+    correlation: CrossSessionCorrelation,
+) -> Result<Event, telltale_schema::scoring::RiskAccountingError> {
     correlation_event(CorrelationEventInput {
         client: correlation.actor.client,
         agent: correlation.actor.agent,
@@ -267,7 +269,7 @@ mod tests {
         timestamp: &str,
         rule_ids: &[&str],
         model: Option<&str>,
-        risk_score: u32,
+        risk_score: u64,
     ) -> Event {
         Event {
             timestamp: timestamp.to_string(),
@@ -282,6 +284,7 @@ mod tests {
             event_type: "detection".to_string(),
             severity: "high".to_string(),
             risk_score,
+            risk_contributions: Vec::new(),
             client: "codex".to_string(),
             agent: Some("codex".to_string()),
             model: model.map(ToOwned::to_owned),
@@ -495,7 +498,8 @@ mod tests {
             ),
         ];
 
-        let events = correlation_events_from_detections(&detections, &CorrelationConfig::default());
+        let events = correlation_events_from_detections(&detections, &CorrelationConfig::default())
+            .expect("correlation events");
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, "correlation");

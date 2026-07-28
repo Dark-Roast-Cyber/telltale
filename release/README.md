@@ -31,6 +31,8 @@ such as `%LOCALAPPDATA%\Telltale` and run `telltale.exe --version`. The included
 
 The included `config/examples/telltale-outputs.yaml` is optional output
 configuration. The systemd service/timer and Windows task files are examples;
-none are enabled by extracting this archive. Use `adr` only when compatibility
-with older scripts is required; both commands preserve the existing ADR
-environment, log, state, event, and service identities.
+`config/examples/elastic-telltale-index-template.json` provides unsigned 64-bit
+risk mappings for Elasticsearch-compatible consumers. None are enabled by
+extracting this archive. Use `adr` only when compatibility with older scripts
+is required; both commands preserve the existing ADR environment, log, state,
+event, and service identities.

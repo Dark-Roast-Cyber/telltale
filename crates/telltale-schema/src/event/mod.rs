@@ -4,7 +4,11 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::clients::ClientId;
-use crate::scoring::{RiskThresholds, assess_risk_with_thresholds, load_thresholds};
+use crate::scoring::{
+    RiskAccountingError, RiskContribution, RiskContributionType, RiskThresholds,
+    assess_risk_with_thresholds, canonicalize_contributions, checked_risk_sum,
+    is_canonical_contribution_id, load_thresholds,
+};
 use crate::source::{Source, SourceInventoryChangeSummary};
 
 mod inventory;
@@ -12,10 +16,11 @@ mod redaction;
 mod time;
 
 pub use inventory::{evidence_hash, path_hash};
+pub(crate) use redaction::contains_high_confidence_credential_marker;
 pub use redaction::redact_sensitive_text;
 pub use time::{format_timestamp, parse_event_timestamp};
 
-const SCHEMA_VERSION: &str = "1.0";
+const SCHEMA_VERSION: &str = "2.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
@@ -32,7 +37,8 @@ pub struct Event {
     pub event_id: String,
     pub event_type: String,
     pub severity: String,
-    pub risk_score: u32,
+    pub risk_score: u64,
+    pub risk_contributions: Vec<RiskContribution>,
     pub client: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -126,7 +132,7 @@ pub struct DetectionEventInput {
     pub atlas_tags: Vec<String>,
     pub tags: Vec<String>,
     pub evidence: Vec<Evidence>,
-    pub risk_score: u32,
+    pub risk_contributions: Vec<RiskContribution>,
     pub event_time: Option<String>,
 }
 
@@ -141,7 +147,7 @@ pub struct ActivityEventInput {
     pub tool_name: Option<String>,
     pub tags: Vec<String>,
     pub evidence: Vec<Evidence>,
-    pub risk_score: u32,
+    pub risk_contributions: Vec<RiskContribution>,
     pub event_time: Option<String>,
 }
 
@@ -161,7 +167,7 @@ pub struct SessionRiskSummaryEventInput {
     pub atlas_tags: Vec<String>,
     pub tags: Vec<String>,
     pub evidence: Vec<Evidence>,
-    pub risk_score: u32,
+    pub risk_contributions: Vec<RiskContribution>,
     pub event_time: Option<String>,
 }
 
@@ -212,7 +218,7 @@ pub struct CorrelationEventInput {
     pub sessions: Vec<CorrelationSessionInput>,
     pub window_start: String,
     pub window_end: String,
-    pub max_risk_score: u32,
+    pub max_risk_score: u64,
 }
 
 #[derive(Debug)]
@@ -221,7 +227,7 @@ pub struct CorrelationSessionInput {
     pub event_id: String,
     pub timestamp: String,
     pub severity: String,
-    pub risk_score: u32,
+    pub risk_score: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,7 +248,8 @@ struct EventBuilder {
     event_time: Option<String>,
     event_type: &'static str,
     severity: &'static str,
-    risk_score: u32,
+    risk_score: u64,
+    risk_contributions: Vec<RiskContribution>,
     client: String,
     agent: Option<String>,
     model: Option<String>,
@@ -293,6 +300,7 @@ impl EventBuilder {
             event_type: self.event_type.to_string(),
             severity: self.severity.to_string(),
             risk_score: self.risk_score,
+            risk_contributions: self.risk_contributions,
             client: self.client,
             agent: self.agent,
             model: self.model,
@@ -343,6 +351,7 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         event_type: "health",
         severity: "informational",
         risk_score: 0,
+        risk_contributions: Vec::new(),
         client: if clients.is_empty() {
             "none".to_string()
         } else {
@@ -385,9 +394,68 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
     .build()
 }
 
-pub fn detection_event(input: DetectionEventInput) -> Event {
+fn score_for_contributions(
+    contributions: &[RiskContribution],
+) -> Result<u64, crate::scoring::RiskAccountingError> {
+    checked_risk_sum(contributions)
+}
+
+pub fn validate_risk_accounting_scope(
+    event_type: &str,
+    rule_ids: &[String],
+    contributions: &[RiskContribution],
+) -> Result<(), RiskAccountingError> {
+    for contribution in contributions {
+        let type_allowed = match event_type {
+            "activity" => contribution.contribution_type == RiskContributionType::BaselineDeviation,
+            "detection" => matches!(
+                contribution.contribution_type,
+                RiskContributionType::DeterministicRule | RiskContributionType::ChainModifier
+            ),
+            "session_risk_summary" => true,
+            _ => true,
+        };
+        if !type_allowed {
+            return Err(RiskAccountingError::ContributionTypeNotAllowed {
+                event_type: event_type.to_string(),
+                id: contribution.id.clone(),
+                contribution_type: contribution.contribution_type,
+            });
+        }
+
+        let rule_backed = matches!(
+            contribution.contribution_type,
+            RiskContributionType::DeterministicRule | RiskContributionType::ChainModifier
+        );
+        if (event_type == "detection" || (event_type == "session_risk_summary" && rule_backed))
+            && !rule_ids.iter().any(|rule_id| rule_id == &contribution.id)
+        {
+            return Err(RiskAccountingError::ContributionRuleIdMissing(
+                contribution.id.clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_schema_two_rule_ids(rule_ids: &[String]) -> Result<(), RiskAccountingError> {
+    for rule_id in rule_ids {
+        if !is_canonical_contribution_id(rule_id) {
+            return Err(RiskAccountingError::InvalidRuleId(rule_id.clone()));
+        }
+    }
+    Ok(())
+}
+
+pub fn detection_event(
+    input: DetectionEventInput,
+) -> Result<Event, crate::scoring::RiskAccountingError> {
+    validate_schema_two_rule_ids(&input.rule_ids)?;
+    let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
+    validate_risk_accounting_scope("detection", &input.rule_ids, &risk_contributions)?;
+    let risk_score = score_for_contributions(&risk_contributions)?;
     let thresholds = load_thresholds();
-    let assessment = assess_risk_with_thresholds(input.risk_score, thresholds);
+    let assessment = assess_risk_with_thresholds(risk_score, thresholds);
     let response = time::response_metadata(
         assessment.severity.as_str(),
         &input.rule_ids,
@@ -405,11 +473,12 @@ pub fn detection_event(input: DetectionEventInput) -> Event {
             "verdict": "not_required"
         })
     };
-    EventBuilder {
+    Ok(EventBuilder {
         event_time: input.event_time,
         event_type: "detection",
         severity: assessment.severity.as_str(),
-        risk_score: input.risk_score,
+        risk_score,
+        risk_contributions,
         client: input.client.as_str().to_string(),
         agent: input.agent,
         model: input.model,
@@ -441,17 +510,23 @@ pub fn detection_event(input: DetectionEventInput) -> Event {
         suppressed_count: None,
         scanner_error_count: None,
     }
-    .build()
+    .build())
 }
 
-pub fn activity_event(input: ActivityEventInput) -> Event {
+pub fn activity_event(
+    input: ActivityEventInput,
+) -> Result<Event, crate::scoring::RiskAccountingError> {
+    let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
+    validate_risk_accounting_scope("activity", &[], &risk_contributions)?;
+    let risk_score = score_for_contributions(&risk_contributions)?;
     let thresholds = load_thresholds();
-    let assessment = assess_risk_with_thresholds(input.risk_score, thresholds);
-    EventBuilder {
+    let assessment = assess_risk_with_thresholds(risk_score, thresholds);
+    Ok(EventBuilder {
         event_time: input.event_time,
         event_type: "activity",
         severity: assessment.severity.as_str(),
-        risk_score: input.risk_score,
+        risk_score,
+        risk_contributions,
         client: input.client.as_str().to_string(),
         agent: input.agent,
         model: input.model,
@@ -483,7 +558,7 @@ pub fn activity_event(input: ActivityEventInput) -> Event {
         suppressed_count: None,
         scanner_error_count: None,
     }
-    .build()
+    .build())
 }
 
 pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
@@ -492,6 +567,7 @@ pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
         event_type: "activity",
         severity: "informational",
         risk_score: 0,
+        risk_contributions: Vec::new(),
         client: "install_inventory".to_string(),
         agent: None,
         model: None,
@@ -530,14 +606,21 @@ pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
     .build()
 }
 
-pub fn session_risk_summary_event(input: SessionRiskSummaryEventInput) -> Event {
+pub fn session_risk_summary_event(
+    input: SessionRiskSummaryEventInput,
+) -> Result<Event, crate::scoring::RiskAccountingError> {
+    validate_schema_two_rule_ids(&input.rule_ids)?;
+    let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
+    validate_risk_accounting_scope("session_risk_summary", &input.rule_ids, &risk_contributions)?;
+    let risk_score = score_for_contributions(&risk_contributions)?;
     let thresholds = load_thresholds();
-    let assessment = assess_risk_with_thresholds(input.risk_score, thresholds);
-    EventBuilder {
+    let assessment = assess_risk_with_thresholds(risk_score, thresholds);
+    Ok(EventBuilder {
         event_time: input.event_time,
         event_type: "session_risk_summary",
         severity: assessment.severity.as_str(),
-        risk_score: input.risk_score,
+        risk_score,
+        risk_contributions,
         client: input.client,
         agent: input.agent,
         model: input.model,
@@ -569,10 +652,13 @@ pub fn session_risk_summary_event(input: SessionRiskSummaryEventInput) -> Event 
         suppressed_count: None,
         scanner_error_count: None,
     }
-    .build()
+    .build())
 }
 
-pub fn correlation_event(input: CorrelationEventInput) -> Event {
+pub fn correlation_event(
+    input: CorrelationEventInput,
+) -> Result<Event, crate::scoring::RiskAccountingError> {
+    validate_schema_two_rule_ids(&input.shared_rule_ids)?;
     let thresholds = load_thresholds();
     let assessment = assess_risk_with_thresholds(input.max_risk_score, thresholds);
     let mut evidence = vec![
@@ -603,11 +689,12 @@ pub fn correlation_event(input: CorrelationEventInput) -> Event {
         rule_id: None,
     }));
 
-    EventBuilder {
+    Ok(EventBuilder {
         event_time: Some(input.window_end.clone()),
         event_type: "correlation",
         severity: assessment.severity.as_str(),
         risk_score: input.max_risk_score,
+        risk_contributions: Vec::new(),
         client: input.client,
         agent: input.agent,
         model: input.model,
@@ -639,7 +726,7 @@ pub fn correlation_event(input: CorrelationEventInput) -> Event {
         suppressed_count: None,
         scanner_error_count: None,
     }
-    .build()
+    .build())
 }
 
 pub fn scanner_error_event(source: &Source, error: &impl std::fmt::Display) -> Event {
@@ -655,6 +742,7 @@ pub fn scanner_error_event(source: &Source, error: &impl std::fmt::Display) -> E
         event_type: "scanner_error",
         severity: "informational",
         risk_score: 0,
+        risk_contributions: Vec::new(),
         client: source.client.as_str().to_string(),
         agent: None,
         model: None,
@@ -745,6 +833,7 @@ pub fn operational_alert_event(input: OperationalAlertInput) -> Event {
         event_type: "operational_alert",
         severity: "warning",
         risk_score: 0,
+        risk_contributions: Vec::new(),
         client: "scanner".to_string(),
         agent: None,
         model: None,
@@ -791,12 +880,28 @@ fn operational_alert_check_name(alert_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivityEventInput, DetectionEventInput, Evidence, HealthEventInput, OperationalAlertInput,
-        activity_event, detection_event, health_event_with_metadata, operational_alert_event,
-        scanner_error_event,
+        ActivityEventInput, CorrelationEventInput, DetectionEventInput, Evidence, HealthEventInput,
+        OperationalAlertInput, SessionRiskSummaryEventInput, activity_event, correlation_event,
+        detection_event, health_event_with_metadata, operational_alert_event, scanner_error_event,
+        session_risk_summary_event, validate_risk_accounting_scope,
     };
     use crate::clients::ClientId;
-    use crate::scoring::{RiskSeverity, RiskThresholds, assess_risk_with_thresholds};
+    use crate::scoring::{
+        RiskContribution, RiskContributionType, RiskSeverity, RiskThresholds,
+        assess_risk_with_thresholds,
+    };
+
+    fn test_contribution(points: u64) -> Vec<RiskContribution> {
+        vec![
+            RiskContribution::new(
+                "rule.test",
+                RiskContributionType::DeterministicRule,
+                points,
+                "test rationale",
+            )
+            .expect("contribution"),
+        ]
+    }
 
     fn assert_no_top_level_nulls(event: &serde_json::Value) {
         let fields = event.as_object().expect("serialized event object");
@@ -808,28 +913,33 @@ mod tests {
 
     #[test]
     fn activity_event_serialization_omits_unset_optional_fields() {
-        let event = serde_json::to_value(activity_event(ActivityEventInput {
-            client: ClientId::Codex,
-            agent: None,
-            model: None,
-            provider: None,
-            session_id: "session".to_string(),
-            source_path_hash: "hash".to_string(),
-            tool_name: Some("shell".to_string()),
-            tags: vec!["tag".to_string()],
-            evidence: vec![Evidence {
-                field: "activity".to_string(),
-                redacted_value: "summary".to_string(),
-                hash: None,
-                rule_id: None,
-            }],
-            risk_score: 10,
-            event_time: None,
-        }))
+        let event = serde_json::to_value(
+            activity_event(ActivityEventInput {
+                client: ClientId::Codex,
+                agent: None,
+                model: None,
+                provider: None,
+                session_id: "session".to_string(),
+                source_path_hash: "hash".to_string(),
+                tool_name: Some("shell".to_string()),
+                tags: vec!["tag".to_string()],
+                evidence: vec![Evidence {
+                    field: "activity".to_string(),
+                    redacted_value: "summary".to_string(),
+                    hash: None,
+                    rule_id: None,
+                }],
+                risk_contributions: Vec::new(),
+                event_time: None,
+            })
+            .expect("build activity event"),
+        )
         .expect("serialize activity event");
 
         assert_no_top_level_nulls(&event);
         assert_eq!(event["event_type"], "activity");
+        assert_eq!(event["risk_score"], 0);
+        assert_eq!(event["risk_contributions"], serde_json::json!([]));
         assert_eq!(event["source_path_hash"], "hash");
         assert_eq!(event["tool_name"], "shell");
         assert!(event.get("agent").is_none());
@@ -849,45 +959,250 @@ mod tests {
     }
 
     #[test]
-    fn detection_event_serialization_omits_unset_optional_fields() {
-        let event = serde_json::to_value(detection_event(DetectionEventInput {
+    fn activity_event_emits_canonical_contribution_order_and_sum() {
+        let z = RiskContribution::new(
+            "baseline.z",
+            RiskContributionType::BaselineDeviation,
+            3,
+            "z",
+        )
+        .expect("contribution");
+        let a = RiskContribution::new(
+            "baseline.a",
+            RiskContributionType::BaselineDeviation,
+            4,
+            "a",
+        )
+        .expect("contribution");
+        let event = activity_event(ActivityEventInput {
             client: ClientId::Codex,
-            agent: Some("agent".to_string()),
-            model: Some("model".to_string()),
-            provider: Some("provider".to_string()),
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: "hash".to_string(),
+            tool_name: Some("shell".to_string()),
+            tags: Vec::new(),
+            evidence: Vec::new(),
+            risk_contributions: vec![z.clone(), a.clone(), z],
+            event_time: None,
+        })
+        .expect("build activity event");
+
+        assert_eq!(event.risk_score, 7);
+        assert_eq!(event.risk_contributions.len(), 2);
+        assert_eq!(event.risk_contributions[0], a);
+        assert_eq!(event.risk_contributions[1].id, "baseline.z");
+    }
+
+    #[test]
+    fn risk_accounting_scope_rejects_invalid_types_and_rule_links() {
+        let deterministic = RiskContribution::new(
+            "rule.detected",
+            RiskContributionType::DeterministicRule,
+            1,
+            "detected",
+        )
+        .expect("contribution");
+        let baseline = RiskContribution::new(
+            "baseline.deviation",
+            RiskContributionType::BaselineDeviation,
+            1,
+            "baseline",
+        )
+        .expect("contribution");
+
+        assert!(matches!(
+            validate_risk_accounting_scope("activity", &[], std::slice::from_ref(&deterministic)),
+            Err(crate::scoring::RiskAccountingError::ContributionTypeNotAllowed { .. })
+        ));
+        assert!(matches!(
+            validate_risk_accounting_scope("detection", &[], std::slice::from_ref(&baseline)),
+            Err(crate::scoring::RiskAccountingError::ContributionTypeNotAllowed { .. })
+        ));
+        assert!(matches!(
+            validate_risk_accounting_scope("detection", &[], std::slice::from_ref(&deterministic)),
+            Err(crate::scoring::RiskAccountingError::ContributionRuleIdMissing(id))
+                if id == "rule.detected"
+        ));
+        assert!(
+            validate_risk_accounting_scope(
+                "detection",
+                &["rule.detected".to_string()],
+                std::slice::from_ref(&deterministic)
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_risk_accounting_scope(
+                "session_risk_summary",
+                &["rule.detected".to_string()],
+                &[deterministic]
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn event_builders_enforce_contribution_scope() {
+        let invalid_activity = activity_event(ActivityEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: "hash".to_string(),
+            tool_name: None,
+            tags: Vec::new(),
+            evidence: Vec::new(),
+            risk_contributions: vec![
+                RiskContribution::new(
+                    "rule.activity",
+                    RiskContributionType::DeterministicRule,
+                    1,
+                    "invalid",
+                )
+                .expect("contribution"),
+            ],
+            event_time: None,
+        });
+        assert!(invalid_activity.is_err());
+
+        let invalid_detection = detection_event(DetectionEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: None,
             rule_ids: vec!["rule".to_string()],
-            categories: vec!["category".to_string()],
-            detection_classes: vec!["security_detection".to_string()],
-            signal_types: vec!["atomic".to_string()],
-            analytic_intents: vec!["alert".to_string()],
-            atlas_tags: vec!["atlas:AML.T0051".to_string()],
-            tags: vec!["tag".to_string()],
-            evidence: vec![Evidence {
-                field: "matched_field".to_string(),
-                redacted_value: "redacted".to_string(),
-                hash: Some("evidence-hash".to_string()),
-                rule_id: Some("rule".to_string()),
-            }],
-            risk_score: 10,
-            event_time: Some("2026-05-01T00:00:00Z".to_string()),
-        }))
+            categories: Vec::new(),
+            detection_classes: Vec::new(),
+            signal_types: Vec::new(),
+            analytic_intents: Vec::new(),
+            atlas_tags: Vec::new(),
+            tags: Vec::new(),
+            evidence: Vec::new(),
+            risk_contributions: Vec::new(),
+            event_time: None,
+        });
+        assert!(matches!(
+            invalid_detection,
+            Err(crate::scoring::RiskAccountingError::InvalidRuleId(id)) if id == "rule"
+        ));
+
+        let invalid_summary = session_risk_summary_event(SessionRiskSummaryEventInput {
+            client: "codex".to_string(),
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: None,
+            rule_ids: vec!["rule".to_string()],
+            categories: Vec::new(),
+            detection_classes: Vec::new(),
+            signal_types: Vec::new(),
+            analytic_intents: Vec::new(),
+            atlas_tags: Vec::new(),
+            tags: Vec::new(),
+            evidence: Vec::new(),
+            risk_contributions: Vec::new(),
+            event_time: None,
+        });
+        assert!(matches!(
+            invalid_summary,
+            Err(crate::scoring::RiskAccountingError::InvalidRuleId(id)) if id == "rule"
+        ));
+
+        let invalid_correlation = correlation_event(CorrelationEventInput {
+            client: "codex".to_string(),
+            agent: None,
+            model: None,
+            provider: None,
+            shared_rule_ids: vec!["rule".to_string()],
+            sessions: Vec::new(),
+            window_start: "2026-05-01T00:00:00Z".to_string(),
+            window_end: "2026-05-01T00:00:00Z".to_string(),
+            max_risk_score: 0,
+        });
+        assert!(matches!(
+            invalid_correlation,
+            Err(crate::scoring::RiskAccountingError::InvalidRuleId(id)) if id == "rule"
+        ));
+
+        let valid_session = session_risk_summary_event(SessionRiskSummaryEventInput {
+            client: "codex".to_string(),
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: None,
+            rule_ids: vec!["rule.session".to_string()],
+            categories: Vec::new(),
+            detection_classes: Vec::new(),
+            signal_types: Vec::new(),
+            analytic_intents: Vec::new(),
+            atlas_tags: Vec::new(),
+            tags: Vec::new(),
+            evidence: Vec::new(),
+            risk_contributions: vec![
+                RiskContribution::new(
+                    "rule.session",
+                    RiskContributionType::DeterministicRule,
+                    1,
+                    "valid",
+                )
+                .expect("contribution"),
+            ],
+            event_time: None,
+        });
+        assert!(valid_session.is_ok());
+    }
+
+    #[test]
+    fn detection_event_serialization_omits_unset_optional_fields() {
+        let event = serde_json::to_value(
+            detection_event(DetectionEventInput {
+                client: ClientId::Codex,
+                agent: Some("agent".to_string()),
+                model: Some("model".to_string()),
+                provider: Some("provider".to_string()),
+                session_id: "session".to_string(),
+                source_path_hash: "hash".to_string(),
+                tool_name: None,
+                rule_ids: vec!["rule.test".to_string()],
+                categories: vec!["category".to_string()],
+                detection_classes: vec!["security_detection".to_string()],
+                signal_types: vec!["atomic".to_string()],
+                analytic_intents: vec!["alert".to_string()],
+                atlas_tags: vec!["atlas:AML.T0051".to_string()],
+                tags: vec!["tag".to_string()],
+                evidence: vec![Evidence {
+                    field: "matched_field".to_string(),
+                    redacted_value: "redacted".to_string(),
+                    hash: Some("evidence-hash".to_string()),
+                    rule_id: Some("rule.test".to_string()),
+                }],
+                risk_contributions: Vec::new(),
+                event_time: Some("2026-05-01T00:00:00Z".to_string()),
+            })
+            .expect("build detection event"),
+        )
         .expect("serialize detection event");
 
         assert_no_top_level_nulls(&event);
         assert_eq!(event["event_type"], "detection");
         assert_eq!(event["agent"], "agent");
         assert_eq!(event["event_time"], "2026-05-01T00:00:00.000Z");
-        assert_eq!(event["rule_ids"][0], "rule");
+        assert_eq!(event["rule_ids"][0], "rule.test");
         assert_eq!(event["categories"][0], "category");
         assert_eq!(event["detection_classes"][0], "security_detection");
         assert_eq!(event["signal_types"][0], "atomic");
         assert_eq!(event["analytic_intents"][0], "alert");
         assert_eq!(event["atlas_tags"][0], "atlas:AML.T0051");
         assert_eq!(event["evidence"][0]["hash"], "evidence-hash");
-        assert_eq!(event["evidence"][0]["rule_id"], "rule");
+        assert_eq!(event["evidence"][0]["rule_id"], "rule.test");
         assert!(event["triage"].is_object());
         assert!(event.get("tool_name").is_none());
         assert!(event.get("source_counts").is_none());
@@ -1038,7 +1353,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: None,
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -1046,9 +1361,10 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
-            risk_score: 90,
+            risk_contributions: test_contribution(90),
             event_time: Some("2026-05-01T00:00:00Z".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         assert_eq!(event.severity, "critical");
         assert_eq!(event.timestamp, "2026-05-01T00:00:00.000Z");
@@ -1073,7 +1389,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: None,
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -1081,9 +1397,10 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
-            risk_score: 10,
+            risk_contributions: Vec::new(),
             event_time: Some("2026-05-01T00:00:00Z".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         assert_eq!(event.severity, "informational");
         let triage = event.triage.expect("triage metadata");
@@ -1109,9 +1426,18 @@ mod tests {
             atlas_tags: vec!["atlas:AML.T0051".to_string()],
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
-            risk_score: 90,
+            risk_contributions: vec![
+                RiskContribution::new(
+                    "mcp.tool_metadata.prompt_injection",
+                    RiskContributionType::DeterministicRule,
+                    90,
+                    "test rationale",
+                )
+                .expect("contribution"),
+            ],
             event_time: Some("2026-05-01T00:00:00Z".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         let response = event.response.expect("response metadata");
         assert_eq!(response.recommended_action, "investigate_immediately");
@@ -1142,7 +1468,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: Some("null".to_string()),
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -1150,9 +1476,10 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
-            risk_score: 10,
+            risk_contributions: Vec::new(),
             event_time: Some("2026-05-01T00:00:00Z".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         assert_eq!(event.tool_name, None);
     }
@@ -1167,7 +1494,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: None,
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -1175,9 +1502,10 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
-            risk_score: 10,
+            risk_contributions: Vec::new(),
             event_time: Some("2999-01-01T00:00:00Z".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         assert_eq!(event.time_source, "override");
         assert_eq!(event.time_confidence, "low");
@@ -1203,7 +1531,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: None,
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -1211,9 +1539,10 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
-            risk_score: 10,
+            risk_contributions: Vec::new(),
             event_time: None,
-        });
+        })
+        .expect("build detection event");
 
         assert_eq!(event.time_source, "observed");
         assert_eq!(event.time_confidence, "low");
@@ -1236,7 +1565,7 @@ mod tests {
             session_id: "session".to_string(),
             source_path_hash: "hash".to_string(),
             tool_name: None,
-            rule_ids: vec!["rule".to_string()],
+            rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
             detection_classes: Vec::new(),
             signal_types: Vec::new(),
@@ -1244,9 +1573,10 @@ mod tests {
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
-            risk_score: 10,
+            risk_contributions: Vec::new(),
             event_time: Some("2026-05-01T12:00:00+02:00".to_string()),
-        });
+        })
+        .expect("build detection event");
 
         assert_eq!(event.time_source, "source");
         assert_eq!(event.time_confidence, "high");

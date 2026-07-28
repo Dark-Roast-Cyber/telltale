@@ -255,7 +255,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         validator.is_valid(event),
         "health event failed schema validation"
     );
-    assert_eq!(event["schema_version"], "1.0");
+    assert_eq!(event["schema_version"], "2.0");
     assert_eq!(event["event_type"], "health");
     assert_eq!(event["severity"], "informational");
     assert_eq!(event["risk_score"], 0);
@@ -2441,18 +2441,41 @@ fn scan_once_can_emit_session_risk_summary_events() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
         .collect::<Vec<_>>();
-    let summary_event = events
+    let summary_events = events
         .iter()
-        .find(|event| event["event_type"] == "session_risk_summary")
-        .expect("session risk summary event");
+        .filter(|event| event["event_type"] == "session_risk_summary")
+        .collect::<Vec<_>>();
+    assert!(!summary_events.is_empty(), "session risk summary events");
     let schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
     let validator = validator_for(&schema).expect("schema validator");
-    assert!(
-        validator.is_valid(summary_event),
-        "session_risk_summary event should match schema: {summary_event}"
-    );
-    assert!(summary_event["risk_score"].as_u64().unwrap_or_default() > 0);
+    for summary_event in &summary_events {
+        assert!(
+            validator.is_valid(summary_event),
+            "session_risk_summary event should match schema: {summary_event}"
+        );
+        let contribution_total = summary_event["risk_contributions"]
+            .as_array()
+            .expect("risk contributions")
+            .iter()
+            .map(|contribution| {
+                contribution["points"]
+                    .as_u64()
+                    .expect("contribution points")
+            })
+            .sum::<u64>();
+        assert_eq!(summary_event["risk_score"], contribution_total);
+    }
+    assert!(summary_events.iter().any(|event| {
+        event["risk_score"].as_u64().unwrap_or_default() == 0
+            && event["risk_contributions"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+    }));
+    let summary_event = summary_events
+        .iter()
+        .find(|event| event["risk_score"].as_u64().unwrap_or_default() > 0)
+        .expect("positive session risk summary event");
     assert!(
         summary_event["tags"]
             .as_array()
@@ -2551,6 +2574,37 @@ fn shipper_examples_target_default_jsonl_path() {
     assert!(
         !splunk_uf_setup.contains("/home/christian/github/adr/logs"),
         "splunk UF helper must not default to stale repo-local log paths"
+    );
+}
+
+#[test]
+fn elastic_template_preserves_schema_two_u64_risk_fields() {
+    use telltale_cli::sink::DEFAULT_ELASTIC_INDEX;
+
+    let template: Value = serde_json::from_str(include_str!(
+        "../../config/examples/elastic-telltale-index-template.json"
+    ))
+    .expect("elastic template json");
+    let patterns = template["index_patterns"]
+        .as_array()
+        .expect("elastic index patterns");
+    assert!(
+        patterns
+            .iter()
+            .any(|pattern| { pattern.as_str() == Some(DEFAULT_ELASTIC_INDEX) })
+    );
+    let rollover_pattern = format!("{DEFAULT_ELASTIC_INDEX}-*");
+    assert!(
+        patterns
+            .iter()
+            .any(|pattern| pattern.as_str() == Some(rollover_pattern.as_str()))
+    );
+    let properties = &template["template"]["mappings"]["properties"];
+    assert_eq!(properties["risk_score"]["type"], "unsigned_long");
+    assert_eq!(properties["risk_contributions"]["type"], "nested");
+    assert_eq!(
+        properties["risk_contributions"]["properties"]["points"]["type"],
+        "unsigned_long"
     );
 }
 

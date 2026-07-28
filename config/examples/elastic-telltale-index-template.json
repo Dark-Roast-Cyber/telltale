@@ -1,0 +1,19 @@
+{
+  "index_patterns": ["telltale", "telltale-*", "adr-events", "adr-events-*"],
+  "template": {
+    "mappings": {
+      "properties": {
+        "risk_score": { "type": "unsigned_long" },
+        "risk_contributions": {
+          "type": "nested",
+          "properties": {
+            "id": { "type": "keyword" },
+            "type": { "type": "keyword" },
+            "points": { "type": "unsigned_long" },
+            "rationale": { "type": "keyword", "ignore_above": 256 }
+          }
+        }
+      }
+    }
+  }
+}

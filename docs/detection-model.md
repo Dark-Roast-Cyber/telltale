@@ -4,7 +4,24 @@
 
 ## Risk Flow
 
-Each tool call starts at score `0`. Rules add points. Context modifiers add or subtract points. Severity is derived from the final score unless triage overrides it.
+Each activity starts at score `0`. Routine tool activity, powerful-looking tool
+names, and error text are informational only. Positive risk is a typed ledger of
+deterministic rule, chain-modifier, or enabled baseline-deviation contributions;
+the event score is the checked exact sum of that ledger. Negative contributions,
+caps, quantization, and subtraction are not part of the current contract.
+
+Emitted risk-bearing activity, detection, and session-summary events use schema
+version `2.0` and include `risk_contributions`. Each entry has a stable `id`,
+`type`, positive `points`, and bounded deterministic `rationale`. Session
+summaries deduplicate contribution keys within the paired client/source/session
+scope, so replay and same-source duplicate contributions do not inflate risk.
+Distinct source IDs remain distinct; source-alias canonicalization is deferred.
+
+For Elasticsearch-compatible consumers, install the repository-native
+`config/examples/elastic-telltale-index-template.json` index template for
+schema 2 events. It maps both `risk_score` and nested
+`risk_contributions.points` as `unsigned_long`; using a narrower integer mapping
+would not preserve the canonical `u64` contract.
 
 | Score | Severity | Behavior |
 | ---: | --- | --- |

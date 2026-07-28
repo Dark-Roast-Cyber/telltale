@@ -1097,6 +1097,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     path: fixture,
                 };
                 let detections = detect_sources_with_rules(&[source], &resolution.rule_set);
+                if let Some((_, error_event)) = detections
+                    .iter()
+                    .find(|(_, event)| event.event_type == "scanner_error")
+                {
+                    let detail = error_event
+                        .evidence
+                        .iter()
+                        .find(|evidence| evidence.field == "error")
+                        .map(|evidence| evidence.redacted_value.as_str())
+                        .unwrap_or("rule evaluation failed");
+                    return Err(format!("rules test failed: {detail}").into());
+                }
                 let matches = detections
                     .iter()
                     .filter(|(_, event)| event.event_type == "detection")

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "0.3.0";
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),
@@ -34,6 +34,22 @@ fn official_packages_have_lockstep_metadata() {
         assert!(manifest.contains(&format!("documentation = \"https://docs.rs/{name}\"")));
         assert!(manifest.contains("keywords = ["));
         assert!(manifest.contains("categories = ["));
+    }
+}
+
+#[test]
+fn registry_consumer_docs_follow_current_package_version() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in ["docs/versioning.md", "docs/release-readiness.md"] {
+        let document = fs::read_to_string(root.join(relative)).expect("versioning document");
+        assert!(
+            document.contains("`=0.3.0`"),
+            "{relative} does not name the current registry pin"
+        );
+        assert!(
+            !document.contains("`=0.2.0`"),
+            "{relative} retains a stale registry pin"
+        );
     }
 }
 

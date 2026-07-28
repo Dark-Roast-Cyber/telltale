@@ -100,7 +100,7 @@ if docker inspect "$SPLUNK_CONTAINER" >/dev/null 2>&1; then
             token_json=$(mgmt "https://$MGMT_ADDR/services/data/inputs/http/$HEC_TOKEN_NAME?output_mode=json" || true)
             if ! printf '%s' "$token_json" | grep -q '"token"'; then
                 token_json=$(mgmt -X POST "https://$MGMT_ADDR/services/data/inputs/http?output_mode=json" \
-                    -d name="$HEC_TOKEN_NAME" -d index=adr -d sourcetype=adr:json)
+                    -d name="$HEC_TOKEN_NAME" -d index=telltale -d sourcetype=adr:json)
             fi
             ADR_LIVETEST_HEC_TOKEN=$(printf '%s' "$token_json" \
                 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["entry"][0]["content"]["token"])' 2>/dev/null || true)
@@ -151,7 +151,7 @@ EOF
     type: splunk_hec
     endpoint: $HEC_URL
     token: { env: ADR_LIVETEST_HEC_TOKEN }
-    index: adr
+    index: telltale
     sourcetype: adr:json
     retry: { max_attempts: 3, base_delay_ms: 250 }
 EOF
@@ -208,7 +208,7 @@ PYEOF
     for _ in $(seq 1 20); do
         SPLUNK_COUNT=$(mgmt "https://$MGMT_ADDR/services/search/jobs/export" \
             -d output_mode=json -d earliest_time=-10m \
-            --data-urlencode "search=search index=adr \"$HEALTH_ID\" | stats count" \
+            --data-urlencode "search=search index=telltale \"$HEALTH_ID\" | stats count" \
             | python3 -c 'import json,sys
 count = 0
 for line in sys.stdin:
@@ -223,7 +223,7 @@ print(count)' || echo 0)
         sleep 3
     done
     echo "Splunk events matching this run's health event_id: $SPLUNK_COUNT"
-    [ "${SPLUNK_COUNT:-0}" -ge 1 ] 2>/dev/null || fail "health event not found in Splunk index=adr"
+    [ "${SPLUNK_COUNT:-0}" -ge 1 ] 2>/dev/null || fail "health event not found in Splunk index=telltale"
     echo "PASS: Splunk HEC sink"
 fi
 

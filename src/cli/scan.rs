@@ -36,6 +36,7 @@ use crate::rules::{
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::scoring::load_thresholds;
+use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
 use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, source_fingerprint};
 use crate::triage::maybe_triage;
@@ -581,7 +582,7 @@ fn run_scan(
     let activity_count = activities.len();
     let detection_count = detections.len();
     let session_risk_summaries = if config.execution.emit_session_risk_summary {
-        summarize_session_risk_events(&activities, &detections)
+        summarize_session_risk_events(&activities, &detections)?
     } else {
         Vec::new()
     };
@@ -900,7 +901,8 @@ struct SessionRiskSummaryAccumulator {
     provider: Option<String>,
     session_id: String,
     source_path_hash: Option<String>,
-    risk_score: u32,
+    contributions:
+        BTreeMap<(telltale_schema::scoring::RiskContributionType, String), RiskContribution>,
     event_time: Option<String>,
     event_counts: BTreeMap<String, u32>,
     tool_call_count: Option<u64>,
@@ -917,8 +919,8 @@ struct SessionRiskSummaryAccumulator {
 fn summarize_session_risk_events(
     activities: &[(Source, Event)],
     detections: &[(Source, Event)],
-) -> Vec<(Source, Event)> {
-    let mut summaries: BTreeMap<(String, String, Option<String>), SessionRiskSummaryAccumulator> =
+) -> Result<Vec<(Source, Event)>, RiskAccountingError> {
+    let mut summaries: BTreeMap<(String, String, String), SessionRiskSummaryAccumulator> =
         BTreeMap::new();
 
     for (source, event) in activities.iter().chain(detections.iter()) {
@@ -927,10 +929,20 @@ fn summarize_session_risk_events(
         {
             continue;
         }
+        let contribution_score =
+            telltale_schema::scoring::checked_risk_sum(&event.risk_contributions)?;
+        if (!event.risk_contributions.is_empty() || event.schema_version == "2.0")
+            && event.risk_score != contribution_score
+        {
+            return Err(RiskAccountingError::ScoreMismatch {
+                declared: event.risk_score,
+                computed: contribution_score,
+            });
+        }
         let key = (
             event.client.clone(),
+            source.source_id.clone(),
             event.session_id.clone(),
-            event.source_path_hash.clone(),
         );
         let summary = summaries
             .entry(key)
@@ -942,7 +954,7 @@ fn summarize_session_risk_events(
                 provider: event.provider.clone(),
                 session_id: event.session_id.clone(),
                 source_path_hash: event.source_path_hash.clone(),
-                risk_score: 0,
+                contributions: BTreeMap::new(),
                 event_time: None,
                 event_counts: BTreeMap::new(),
                 tool_call_count: None,
@@ -956,7 +968,18 @@ fn summarize_session_risk_events(
                 atlas_tags: BTreeSet::new(),
             });
 
-        summary.risk_score = summary.risk_score.max(event.risk_score);
+        for contribution in &event.risk_contributions {
+            let key = (contribution.contribution_type, contribution.id.clone());
+            if let Some(existing) = summary.contributions.get(&key) {
+                if existing != contribution {
+                    return Err(RiskAccountingError::ConflictingContribution(
+                        contribution.id.clone(),
+                    ));
+                }
+            } else {
+                summary.contributions.insert(key, contribution.clone());
+            }
+        }
         if summary
             .event_time
             .as_deref()
@@ -989,6 +1012,9 @@ fn summarize_session_risk_events(
             let source = summary.source.clone();
             let tags = session_risk_summary_tags(&summary);
             let evidence = session_risk_summary_evidence(&summary);
+            let risk_contributions = canonicalize_contributions(
+                summary.contributions.into_values().collect::<Vec<_>>(),
+            )?;
             let event = session_risk_summary_event(SessionRiskSummaryEventInput {
                 client: summary.client,
                 agent: summary.agent,
@@ -1004,10 +1030,10 @@ fn summarize_session_risk_events(
                 atlas_tags: summary.atlas_tags.into_iter().collect(),
                 tags,
                 evidence,
-                risk_score: summary.risk_score,
+                risk_contributions,
                 event_time: summary.event_time,
-            });
-            (source, event)
+            })?;
+            Ok((source, event))
         })
         .collect()
 }
@@ -1602,5 +1628,125 @@ mod tests {
         prefer_opencode_sqlite_over_legacy_json(&mut sources);
 
         assert_eq!(sources, vec![sqlite, codex]);
+    }
+
+    #[test]
+    fn session_summary_unions_exact_contributions_by_source_identity() {
+        use crate::event::{ActivityEventInput, activity_event};
+        use crate::scoring::{RiskContribution, RiskContributionType};
+
+        let contribution = || {
+            RiskContribution::new(
+                "baseline.synthetic",
+                RiskContributionType::BaselineDeviation,
+                30,
+                "synthetic rule match",
+            )
+            .expect("contribution")
+        };
+        let event = || {
+            activity_event(ActivityEventInput {
+                client: ClientId::Codex,
+                agent: None,
+                model: None,
+                provider: None,
+                session_id: "session-union".to_string(),
+                source_path_hash: "path".to_string(),
+                tool_name: Some("shell".to_string()),
+                tags: vec!["activity".to_string()],
+                evidence: Vec::new(),
+                risk_contributions: vec![contribution()],
+                event_time: None,
+            })
+            .expect("build activity event")
+        };
+        let source_a = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "source-a".to_string(),
+            path: PathBuf::from("a.jsonl"),
+        };
+        let source_b = Source {
+            source_id: "source-b".to_string(),
+            path: PathBuf::from("b.jsonl"),
+            ..source_a.clone()
+        };
+        let source_alias = Source {
+            path: PathBuf::from("alias.jsonl"),
+            ..source_a.clone()
+        };
+
+        let summaries = summarize_session_risk_events(
+            &[
+                (source_a.clone(), event()),
+                (source_alias, event()),
+                (source_b, event()),
+            ],
+            &[],
+        )
+        .expect("summary");
+        assert_eq!(summaries.len(), 2);
+        assert!(
+            summaries
+                .iter()
+                .all(|(_, summary)| summary.risk_score == 30)
+        );
+        assert!(
+            summaries
+                .iter()
+                .all(|(_, summary)| summary.risk_contributions.len() == 1)
+        );
+        let serialized = serde_json::to_value(&summaries[0].1).expect("serialize summary");
+        assert_eq!(serialized["risk_score"], 30);
+        assert_eq!(
+            serialized["risk_contributions"][0]["id"],
+            "baseline.synthetic"
+        );
+    }
+
+    #[test]
+    fn session_summary_rejects_conflicting_contribution_metadata() {
+        use crate::event::{ActivityEventInput, activity_event};
+        use crate::scoring::{RiskContribution, RiskContributionType};
+
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "source-conflict".to_string(),
+            path: PathBuf::from("conflict.jsonl"),
+        };
+        let make_event = |points| {
+            activity_event(ActivityEventInput {
+                client: ClientId::Codex,
+                agent: None,
+                model: None,
+                provider: None,
+                session_id: "session-conflict".to_string(),
+                source_path_hash: "path".to_string(),
+                tool_name: None,
+                tags: Vec::new(),
+                evidence: Vec::new(),
+                risk_contributions: vec![
+                    RiskContribution::new(
+                        "baseline.synthetic",
+                        RiskContributionType::BaselineDeviation,
+                        points,
+                        "synthetic rule match",
+                    )
+                    .expect("contribution"),
+                ],
+                event_time: None,
+            })
+            .expect("build activity event")
+        };
+
+        let result = summarize_session_risk_events(
+            &[(source.clone(), make_event(30)), (source, make_event(31))],
+            &[],
+        );
+        assert!(matches!(
+            result,
+            Err(RiskAccountingError::ConflictingContribution(id)) if id == "baseline.synthetic"
+        ));
     }
 }

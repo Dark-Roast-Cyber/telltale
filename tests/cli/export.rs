@@ -1008,6 +1008,255 @@ fn export_timeline_rejects_summary_format() {
 }
 
 #[test]
+fn event_schema_accepts_historical_v1_and_requires_v2_activity_ledger() {
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
+    let validator = validator_for(&schema).expect("validator");
+    let historical = serde_json::json!({
+        "schema_version": "1.0",
+        "event_id": "historical",
+        "event_type": "activity",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "informational",
+        "risk_score": 0,
+        "client": "codex",
+        "session_id": "session",
+        "rule_ids": ["Legacy Rule ID"],
+    });
+    let missing_ledger = serde_json::json!({
+        "schema_version": "2.0",
+        "event_id": "current",
+        "event_type": "activity",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "informational",
+        "risk_score": 0,
+        "client": "codex",
+        "session_id": "session",
+    });
+    let invalid_rule_id = serde_json::json!({
+        "schema_version": "2.0",
+        "event_id": "invalid-rule-id",
+        "event_type": "detection",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "informational",
+        "risk_score": 0,
+        "client": "codex",
+        "session_id": "session",
+        "risk_contributions": [],
+        "rule_ids": ["Invalid.Rule"]
+    });
+    let valid_rule_id = serde_json::json!({
+        "schema_version": "2.0",
+        "event_id": "valid-rule-id",
+        "event_type": "detection",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "informational",
+        "risk_score": 0,
+        "client": "codex",
+        "session_id": "session",
+        "risk_contributions": [],
+        "rule_ids": ["rule.valid"]
+    });
+    let v1_legacy_anchor = serde_json::json!({
+        "schema_version": "1.0",
+        "event_id": "historical-anchor",
+        "event_type": "detection",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "informational",
+        "risk_score": 0,
+        "client": "codex",
+        "session_id": "session",
+        "triage": {
+            "timeline_anchors": [{
+                "entry_index": 0,
+                "rule_ids": ["legacy-rule"],
+                "categories": [],
+                "evidence_fields": []
+            }]
+        }
+    });
+    let v2_invalid_nested_rule_id = serde_json::json!({
+        "schema_version": "2.0",
+        "event_id": "invalid-nested-rule-id",
+        "event_type": "detection",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "informational",
+        "risk_score": 0,
+        "client": "codex",
+        "session_id": "session",
+        "risk_contributions": [],
+        "triage": {
+            "timeline_anchors": [{
+                "entry_index": 0,
+                "rule_ids": ["Legacy.Rule"],
+                "categories": [],
+                "evidence_fields": []
+            }]
+        }
+    });
+
+    assert!(validator.is_valid(&historical));
+    assert!(!validator.is_valid(&missing_ledger));
+    assert!(!validator.is_valid(&invalid_rule_id));
+    assert!(validator.is_valid(&valid_rule_id));
+    assert!(validator.is_valid(&v1_legacy_anchor));
+    assert!(!validator.is_valid(&v2_invalid_nested_rule_id));
+}
+
+#[test]
+fn export_rejects_schema_two_overflowing_contribution_ledger() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "2.0",
+            "event_id": "overflow",
+            "event_type": "detection",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "severity": "critical",
+            "risk_score": 18446744073709551615_u64,
+            "client": "codex",
+            "session_id": "overflow-session",
+            "risk_contributions": [
+                {"id": "rule.max", "type": "deterministic_rule", "points": 18446744073709551615_u64, "rationale": "max"},
+                {"id": "rule.one", "type": "deterministic_rule", "points": 1, "rationale": "one"}
+            ]
+        })
+        .to_string(),
+    )
+    .expect("write overflow event");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .output()
+        .expect("run export");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("overflowed u64"));
+}
+
+#[test]
+fn export_rejects_schema_two_contribution_outside_event_scope() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "2.0",
+            "event_id": "invalid-scope",
+            "event_type": "detection",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "severity": "low",
+            "risk_score": 1,
+            "client": "codex",
+            "session_id": "invalid-scope-session",
+            "risk_contributions": [
+                {"id": "rule.missing", "type": "deterministic_rule", "points": 1, "rationale": "missing rule link"}
+            ]
+        })
+        .to_string(),
+    )
+    .expect("write invalid scope event");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .output()
+        .expect("run export");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing from rule_ids"));
+}
+
+#[test]
+fn export_rejects_schema_two_invalid_rule_ids_even_with_empty_ledger() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "2.0",
+            "event_id": "invalid-rule-id",
+            "event_type": "detection",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "severity": "informational",
+            "risk_score": 0,
+            "client": "codex",
+            "session_id": "invalid-rule-id-session",
+            "rule_ids": ["rule"],
+            "risk_contributions": []
+        })
+        .to_string(),
+    )
+    .expect("write invalid rule-id event");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .output()
+        .expect("run export");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("rule id rule is not canonical"));
+}
+
+#[test]
+fn export_fails_when_legacy_invalid_rule_ids_are_promoted_to_correlation() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("adr-events.jsonl");
+    fs::write(
+        &log_path,
+        [
+            serde_json::json!({
+                "schema_version": "1.0",
+                "event_id": "legacy-a",
+                "timestamp": "2026-05-01T00:00:00Z",
+                "event_type": "detection",
+                "severity": "critical",
+                "risk_score": 95,
+                "client": "codex",
+                "agent": "codex",
+                "model": "gpt-5",
+                "provider": "openai",
+                "session_id": "legacy-session-a",
+                "rule_ids": ["rule"],
+                "categories": ["test"],
+                "evidence": []
+            }),
+            serde_json::json!({
+                "schema_version": "1.0",
+                "event_id": "legacy-b",
+                "timestamp": "2026-05-01T00:20:00Z",
+                "event_type": "detection",
+                "severity": "high",
+                "risk_score": 80,
+                "client": "codex",
+                "agent": "codex",
+                "model": "gpt-5",
+                "provider": "openai",
+                "session_id": "legacy-session-b",
+                "rule_ids": ["rule"],
+                "categories": ["test"],
+                "evidence": []
+            }),
+        ]
+        .into_iter()
+        .map(|event| event.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    )
+    .expect("write legacy events");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .arg("--correlate")
+        .output()
+        .expect("run correlation export");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("rule id rule is not canonical"));
+}
+
+#[test]
 fn export_timeline_rejects_elastic_bulk_format() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");

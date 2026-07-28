@@ -2,6 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://adr.local/schemas/event.schema.json",
   "title": "Telltale SIEM Event",
+  "$defs": {
+    "canonicalRuleId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$"
+    },
+    "canonicalRuleIds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/canonicalRuleId" }
+    }
+  },
   "type": "object",
   "required": [
     "schema_version",
@@ -13,8 +25,46 @@
     "client",
     "session_id"
   ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": { "const": "2.0" },
+          "event_type": { "enum": ["activity", "detection", "session_risk_summary"] }
+        },
+        "required": ["schema_version", "event_type"]
+      },
+      "then": { "required": ["risk_contributions"] }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "2.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "rule_ids": {
+            "$ref": "#/$defs/canonicalRuleIds"
+          },
+          "triage": {
+            "properties": {
+              "timeline_anchors": {
+                "items": {
+                  "properties": {
+                    "rule_ids": {
+                      "$ref": "#/$defs/canonicalRuleIds"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
-    "schema_version": { "type": "string" },
+    "schema_version": { "type": "string", "enum": ["1.0", "2.0"] },
     "event_id": { "type": "string" },
     "event_type": {
       "type": "string",
@@ -25,7 +75,41 @@
       "type": "string",
       "enum": ["informational", "low", "medium", "high", "critical", "warning"]
     },
-    "risk_score": { "type": "integer", "minimum": 0 },
+    "risk_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "risk_contributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "points", "rationale"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96,
+            "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["deterministic_rule", "chain_modifier", "baseline_deviation"]
+          },
+          "points": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18446744073709551615
+          },
+          "rationale": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ,_;:'()_-]*$",
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "client": { "type": "string" },
     "agent": { "type": ["string", "null"] },
     "model": { "type": ["string", "null"] },
@@ -34,10 +118,7 @@
     "workspace": { "type": ["string", "null"] },
     "source_path_hash": { "type": ["string", "null"] },
     "tool_name": { "type": ["string", "null"] },
-    "rule_ids": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
+    "rule_ids": { "type": "array", "items": { "type": "string" } },
     "categories": {
       "type": "array",
       "items": { "type": "string" }

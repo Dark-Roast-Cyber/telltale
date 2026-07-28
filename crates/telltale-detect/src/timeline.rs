@@ -408,6 +408,7 @@ mod tests {
             event_type: "detection".to_string(),
             severity: "critical".to_string(),
             risk_score: 90,
+            risk_contributions: Vec::new(),
             client: "codex".to_string(),
             agent: Some("codex".to_string()),
             model: Some("gpt-5".to_string()),

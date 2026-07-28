@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     for (session_key, fields) in stream {
-        match rule_set.evaluate(fields) {
+        match rule_set.evaluate(fields)? {
             Some(result) => println!(
                 "{session_key}: matched {:?} (score {})",
                 result.rule_ids, result.score

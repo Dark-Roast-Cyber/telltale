@@ -73,6 +73,7 @@ config/examples/telltale-outputs.yaml
 config/examples/adr-scan.service
 config/examples/adr-scan.timer
 config/examples/adr-scan-task.xml
+config/examples/elastic-telltale-index-template.json
 ```
 
 The examples are intentionally curated. Existing `config/examples/splunk-*`

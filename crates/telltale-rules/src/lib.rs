@@ -13,6 +13,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use telltale_schema::event::{Evidence, evidence_hash, redact_sensitive_text};
+use telltale_schema::scoring::{
+    RiskAccountingError, RiskContribution, RiskContributionType, canonicalize_contributions,
+    is_canonical_contribution_id,
+};
 
 const DEFAULT_RULE_YAML: &str = include_str!("../data/tool-call-regex.yaml");
 
@@ -71,7 +75,7 @@ pub struct RuleDefinition {
     #[serde(default)]
     pub atlas_tags: Vec<String>,
     pub severity: String,
-    pub score: u32,
+    pub score: u64,
     #[serde(default)]
     pub targets: Vec<String>,
     #[serde(default)]
@@ -96,7 +100,7 @@ pub struct DetectionDefinition {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModifierDefinition {
     pub id: String,
-    pub score: u32,
+    pub score: u64,
     #[serde(default = "default_detection_class")]
     pub detection_class: String,
     #[serde(default = "default_chain_signal_type")]
@@ -132,7 +136,8 @@ pub struct MatchResult {
     pub analytic_intents: Vec<String>,
     pub atlas_tags: Vec<String>,
     pub tags: Vec<String>,
-    pub score: u32,
+    pub score: u64,
+    pub contributions: Vec<RiskContribution>,
     pub evidence: Vec<Evidence>,
 }
 
@@ -163,7 +168,7 @@ pub struct RuleSummary {
     pub analytic_intent: String,
     pub atlas_tags: Vec<String>,
     pub severity: String,
-    pub score: u32,
+    pub score: u64,
     pub enabled: bool,
 }
 
@@ -203,7 +208,7 @@ pub struct RuleOverrideEntry {
     #[serde(default)]
     enabled: Option<bool>,
     #[serde(default)]
-    score: Option<u32>,
+    score: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,6 +382,7 @@ impl RuleSet {
         self,
         policy: Option<&RulePolicy>,
     ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
+        validate_rule_ids(&self)?;
         let case_insensitive = self.defaults.case_insensitive;
         let rules = self
             .rules
@@ -419,6 +425,26 @@ impl RuleSet {
     }
 }
 
+fn validate_rule_ids(rule_set: &RuleSet) -> Result<(), Box<dyn std::error::Error>> {
+    for rule in &rule_set.rules {
+        validate_canonical_rule_id(&rule.id, "rule")?;
+    }
+    for modifier in &rule_set.modifiers {
+        validate_canonical_rule_id(&modifier.id, "modifier")?;
+        for rule_id in &modifier.when_all_rule_ids {
+            validate_canonical_rule_id(rule_id, "modifier rule reference")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_rule_id(id: &str, kind: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if !is_canonical_contribution_id(id) {
+        return Err(format!("{kind} id '{id}' is not canonical").into());
+    }
+    Ok(())
+}
+
 impl CompiledRuleSet {
     pub fn rule_count(&self) -> usize {
         self.rules.len()
@@ -445,7 +471,10 @@ impl CompiledRuleSet {
             .collect()
     }
 
-    pub fn evaluate(&self, fields: &[(&str, &str)]) -> Option<MatchResult> {
+    pub fn evaluate(
+        &self,
+        fields: &[(&str, &str)],
+    ) -> Result<Option<MatchResult>, RiskAccountingError> {
         let mut rule_ids = Vec::new();
         let mut categories = BTreeSet::new();
         let mut detection_classes = BTreeSet::new();
@@ -453,7 +482,7 @@ impl CompiledRuleSet {
         let mut analytic_intents = BTreeSet::new();
         let mut atlas_tags = BTreeSet::new();
         let mut tags = BTreeSet::new();
-        let mut score = 0;
+        let mut contributions = Vec::new();
         let mut evidence = Vec::new();
 
         for rule in &self.rules {
@@ -465,7 +494,6 @@ impl CompiledRuleSet {
                 analytic_intents.insert(rule.definition.analytic_intent.clone());
                 atlas_tags.extend(rule.definition.atlas_tags.iter().cloned());
                 tags.extend(rule.definition.tags.iter().cloned());
-                score += rule.definition.score;
                 if should_skip_match(&rule.definition.id, matched) {
                     rule_ids.pop();
                     categories.remove(&rule.definition.category);
@@ -476,8 +504,15 @@ impl CompiledRuleSet {
                         atlas_tags.remove(atlas_tag);
                     }
                     tags.retain(|tag| !rule.definition.tags.contains(tag));
-                    score = score.saturating_sub(rule.definition.score);
                     continue;
+                }
+                if rule.definition.score > 0 {
+                    contributions.push(RiskContribution::new(
+                        &rule.definition.id,
+                        RiskContributionType::DeterministicRule,
+                        rule.definition.score,
+                        redact_sensitive_text(&rule.definition.explanation),
+                    )?);
                 }
                 evidence.push(Evidence {
                     field: matched.name.to_string(),
@@ -511,14 +546,24 @@ impl CompiledRuleSet {
                 signal_types.insert(modifier.signal_type.clone());
                 analytic_intents.insert(modifier.analytic_intent.clone());
                 atlas_tags.extend(modifier.atlas_tags.iter().cloned());
-                score += modifier.score;
+                if modifier.score > 0 {
+                    contributions.push(RiskContribution::new(
+                        &modifier.id,
+                        RiskContributionType::ChainModifier,
+                        modifier.score,
+                        redact_sensitive_text(&modifier.explanation),
+                    )?);
+                }
             }
         }
 
+        let contributions = canonicalize_contributions(contributions)?;
+
         if rule_ids.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(MatchResult {
+            let score = telltale_schema::scoring::checked_risk_sum(&contributions)?;
+            Ok(Some(MatchResult {
                 rule_ids,
                 categories: categories.into_iter().collect(),
                 detection_classes: detection_classes.into_iter().collect(),
@@ -527,8 +572,9 @@ impl CompiledRuleSet {
                 atlas_tags: atlas_tags.into_iter().collect(),
                 tags: tags.into_iter().collect(),
                 score,
+                contributions,
                 evidence,
-            })
+            }))
         }
     }
 }
@@ -830,7 +876,9 @@ fn secret_env_read_match_should_skip(matched: MatchedField<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DetectionDefinition, RuleDefaults, RuleDefinition, RulePolicy, RuleSet};
+    use super::{
+        DetectionDefinition, ModifierDefinition, RuleDefaults, RuleDefinition, RulePolicy, RuleSet,
+    };
     use std::collections::BTreeMap;
 
     fn single_rule_set(rule: RuleDefinition) -> super::CompiledRuleSet {
@@ -889,6 +937,7 @@ mod tests {
                 ),
                 ("tool_result", ""),
             ])
+            .expect("evaluate")
             .expect("match");
 
         assert_eq!(result.evidence.len(), 1);
@@ -896,6 +945,99 @@ mod tests {
         assert_eq!(
             result.evidence[0].rule_id.as_deref(),
             Some("mcp.tool_metadata.prompt_injection")
+        );
+    }
+
+    #[test]
+    fn matched_rules_emit_positive_contribution_metadata() {
+        let mut definition = rule("rule.large", "hidden instruction");
+        definition.score = 4_294_967_296;
+        definition.explanation = "synthetic execution match".to_string();
+        let rule_set = single_rule_set(definition);
+        let result = rule_set
+            .evaluate(&[("assistant_context", "hidden instruction")])
+            .expect("evaluate")
+            .expect("match");
+
+        assert_eq!(result.score, 4_294_967_296);
+        assert_eq!(result.contributions.len(), 1);
+        assert_eq!(result.contributions[0].id, "rule.large");
+        assert_eq!(
+            result.contributions[0].contribution_type,
+            telltale_schema::scoring::RiskContributionType::DeterministicRule
+        );
+    }
+
+    #[test]
+    fn matched_modifiers_emit_chain_contribution_metadata() {
+        let mut definition = rule("rule.base", "hidden instruction");
+        definition.category = "execution".to_string();
+        let rule_set = RuleSet {
+            version: 1,
+            description: "test rules".to_string(),
+            defaults: RuleDefaults {
+                case_insensitive: true,
+                enabled: true,
+            },
+            rules: vec![definition],
+            modifiers: vec![ModifierDefinition {
+                id: "chain.test".to_string(),
+                score: 7,
+                detection_class: super::default_detection_class(),
+                signal_type: super::default_chain_signal_type(),
+                analytic_intent: super::default_analytic_intent(),
+                atlas_tags: Vec::new(),
+                when_all_categories: vec!["execution".to_string()],
+                when_all_rule_ids: Vec::new(),
+                falsepositives: Vec::new(),
+                explanation: "synthetic chain modifier".to_string(),
+                enabled: true,
+            }],
+        }
+        .compile(None)
+        .expect("compile rules");
+
+        let result = rule_set
+            .evaluate(&[("assistant_context", "hidden instruction")])
+            .expect("evaluate")
+            .expect("match");
+        assert_eq!(result.score, 67);
+        assert_eq!(result.contributions.len(), 2);
+        assert_eq!(
+            result.contributions[1].contribution_type,
+            telltale_schema::scoring::RiskContributionType::ChainModifier
+        );
+    }
+
+    #[test]
+    fn contributions_are_sorted_by_type_then_resolved_id() {
+        let rule_set = RuleSet {
+            version: 1,
+            description: "test rules".to_string(),
+            defaults: RuleDefaults {
+                case_insensitive: true,
+                enabled: true,
+            },
+            rules: vec![
+                rule("rule.z", "hidden instruction"),
+                rule("rule.a", "hidden instruction"),
+            ],
+            modifiers: Vec::new(),
+        }
+        .compile(None)
+        .expect("compile rules");
+
+        let result = rule_set
+            .evaluate(&[("assistant_context", "hidden instruction")])
+            .expect("evaluate")
+            .expect("match");
+        assert_eq!(
+            result
+                .contributions
+                .iter()
+                .map(|contribution| contribution.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["rule.a", "rule.z"]
         );
     }
 
@@ -914,6 +1056,7 @@ mod tests {
 
         let result = rule_set
             .evaluate(&[("arguments", "run evil-action now")])
+            .expect("evaluate")
             .expect("match");
 
         assert_eq!(result.rule_ids, vec!["custom.agent_behavior"]);
@@ -931,6 +1074,7 @@ mod tests {
 
         let result = rule_set
             .evaluate(&[("assistant_context", "hidden instruction")])
+            .expect("evaluate")
             .expect("match");
 
         assert_eq!(result.detection_classes, vec!["policy_violation"]);
@@ -956,6 +1100,61 @@ mod tests {
         .compile(None);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_noncanonical_rule_ids_before_matching_for_zero_and_positive_scores() {
+        for score in [0, 1] {
+            let mut definition = rule("invalid", "custom");
+            definition.score = score;
+            let result = RuleSet {
+                version: 1,
+                description: "test rules".to_string(),
+                defaults: RuleDefaults {
+                    case_insensitive: true,
+                    enabled: true,
+                },
+                rules: vec![definition],
+                modifiers: Vec::new(),
+            }
+            .compile(None);
+            assert!(result.is_err(), "score {score} should reject invalid id");
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_modifier_ids_and_rule_references_before_matching() {
+        for score in [0, 1] {
+            for (id, references) in [("invalid", Vec::new()), ("chain.valid", vec!["invalid"])] {
+                let result = RuleSet {
+                    version: 1,
+                    description: "test rules".to_string(),
+                    defaults: RuleDefaults {
+                        case_insensitive: true,
+                        enabled: true,
+                    },
+                    rules: Vec::new(),
+                    modifiers: vec![ModifierDefinition {
+                        id: id.to_string(),
+                        score,
+                        detection_class: super::default_detection_class(),
+                        signal_type: super::default_chain_signal_type(),
+                        analytic_intent: super::default_analytic_intent(),
+                        atlas_tags: Vec::new(),
+                        when_all_categories: Vec::new(),
+                        when_all_rule_ids: references.into_iter().map(str::to_string).collect(),
+                        falsepositives: Vec::new(),
+                        explanation: "test modifier".to_string(),
+                        enabled: true,
+                    }],
+                }
+                .compile(None);
+                assert!(
+                    result.is_err(),
+                    "invalid modifier metadata should reject at score {score}"
+                );
+            }
+        }
     }
 
     #[test]

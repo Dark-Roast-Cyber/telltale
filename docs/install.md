@@ -56,6 +56,8 @@ config/examples/
   adr-scan.service
   adr-scan.timer
   adr-scan-task.xml
+  elastic-telltale-index-template.json
+  elastic-telltale-role.json
 ```
 
 `SHA256SUMS` is published as a separate release asset, not inside the binary

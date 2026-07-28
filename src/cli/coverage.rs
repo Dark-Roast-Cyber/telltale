@@ -46,6 +46,22 @@ pub(crate) fn run_rules_coverage(
     }
 
     for (source, event) in &detections {
+        if event.event_type == "scanner_error" {
+            let detail = event
+                .evidence
+                .iter()
+                .find(|evidence| evidence.field == "error")
+                .map(|evidence| evidence.redacted_value.as_str())
+                .unwrap_or("scanner error");
+            return Err(format!(
+                "rules coverage failed for {}: {detail}",
+                source.path.display()
+            )
+            .into());
+        }
+        if event.event_type != "detection" {
+            continue;
+        }
         detected_source_paths.insert(source.path.to_string_lossy().to_string());
         for rule_id in &event.rule_ids {
             all_rule_ids.insert(rule_id.clone());

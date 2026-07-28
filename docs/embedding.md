@@ -70,13 +70,16 @@ discovery:
 
 ```rust
 let events = pipeline.detect_records(&source, &records);   // full events
-let matched = pipeline.evaluate_session(&records);         // raw rule matches
+let matched = pipeline.evaluate_session(&records)?;        // raw rule matches
 ```
 
 `detect_records` stamps events with the identity in `source`; construct a
 `telltale_core::Source` with a synthetic path if the records did not come from a
-file. `evaluate_session` returns the raw `MatchResult` (rule ids, categories,
-score, redacted evidence) for callers that build their own alerting.
+file. `evaluate_session(&records)` returns
+`Result<Option<MatchResult>, RiskAccountingError>`. `Ok(None)` means no rule
+matched; `Ok(Some(match_result))` contains rule IDs, categories, score, and
+redacted evidence. Contribution overflow, invalid rule IDs, or other accounting
+failures are returned to the host and must not be silently dropped.
 
 ### Custom rules and policy
 

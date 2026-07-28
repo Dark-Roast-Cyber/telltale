@@ -149,7 +149,9 @@ jobs:
             config/examples/telltale-outputs.yaml \
             config/examples/adr-scan.service \
             config/examples/adr-scan.timer \
-            config/examples/adr-scan-task.xml; do
+            config/examples/adr-scan-task.xml \
+            config/examples/elastic-telltale-index-template.json \
+            config/examples/elastic-telltale-role.json; do
             install -m 0644 "$example" "$bundle_dir/$example"
           done
 
@@ -160,7 +162,9 @@ jobs:
             config/examples/telltale-outputs.yaml \
             config/examples/adr-scan.service \
             config/examples/adr-scan.timer \
-            config/examples/adr-scan-task.xml
+            config/examples/adr-scan-task.xml \
+            config/examples/elastic-telltale-index-template.json \
+            config/examples/elastic-telltale-role.json
           tar -tzf "$archive"
           legacy_archive="adr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
           cp "$archive" "$legacy_archive"
@@ -199,7 +203,9 @@ jobs:
             'telltale-outputs.yaml',
             'adr-scan.service',
             'adr-scan.timer',
-            'adr-scan-task.xml'
+            'adr-scan-task.xml',
+            'elastic-telltale-index-template.json',
+            'elastic-telltale-role.json'
           )
           foreach ($example in $examples) {
             Copy-Item "config\examples\$example" (Join-Path $bundleDir "config/examples/$example")

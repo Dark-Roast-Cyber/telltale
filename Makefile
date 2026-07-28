@@ -265,7 +265,7 @@ release-artifact-manifest:
 			*.zip) binaries="adr.exe telltale.exe" ;; \
 			*) binaries="adr telltale" ;; \
 		esac; \
-		expected_sorted="$$(printf '%s\n' $$binaries "LICENSE" "README.md" "config/examples/telltale-outputs.yaml" "config/examples/adr-scan.service" "config/examples/adr-scan.timer" "config/examples/adr-scan-task.xml" | sort)"; \
+		expected_sorted="$$(printf '%s\n' $$binaries "LICENSE" "README.md" "config/examples/telltale-outputs.yaml" "config/examples/adr-scan.service" "config/examples/adr-scan.timer" "config/examples/adr-scan-task.xml" "config/examples/elastic-telltale-index-template.json" "config/examples/elastic-telltale-role.json" | sort)"; \
 		actual_sorted="$$(printf '%s\n' "$$file_entries" | sort)"; \
 		if [ "$$expected_sorted" != "$$actual_sorted" ]; then \
 			echo "Release archive $$archive does not match the expected bundle manifest."; \

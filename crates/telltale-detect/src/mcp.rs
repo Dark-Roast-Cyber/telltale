@@ -540,9 +540,10 @@ fn mcp_inventory_event(server: &McpServerInventory) -> Event {
         tool_name: Some(format!("mcp::{}", server.server_name)),
         tags,
         evidence: inventory_evidence(server),
-        risk_score: 0,
+        risk_contributions: Vec::new(),
         event_time: None,
     })
+    .expect("MCP inventory activity has no risk contributions")
 }
 
 fn mcp_usage_event(source: &Source, session: &McpSessionUsage, usage: &McpServerUsage) -> Event {
@@ -561,9 +562,10 @@ fn mcp_usage_event(source: &Source, session: &McpSessionUsage, usage: &McpServer
             "tool_usage".to_string(),
         ],
         evidence: mcp_usage_evidence(session, usage),
-        risk_score: 0,
+        risk_contributions: Vec::new(),
         event_time: usage.event_time.clone(),
     })
+    .expect("MCP usage activity has no risk contributions")
 }
 
 fn mcp_usage_evidence(session: &McpSessionUsage, usage: &McpServerUsage) -> Vec<Evidence> {
@@ -639,9 +641,10 @@ fn mcp_inventory_error_event(client: ClientId, error: std::io::Error) -> Event {
             hash: Some(evidence_hash(&error.to_string())),
             rule_id: None,
         }],
-        risk_score: 0,
+        risk_contributions: Vec::new(),
         event_time: None,
     })
+    .expect("MCP inventory error activity has no risk contributions")
 }
 
 fn inventory_evidence(server: &McpServerInventory) -> Vec<Evidence> {

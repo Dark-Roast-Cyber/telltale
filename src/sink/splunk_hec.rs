@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::event::{Event, parse_event_timestamp};
 use crate::sink::http::{HttpClient, RetryConfig, TlsOptions, chunk_segments};
@@ -14,6 +15,8 @@ pub struct SplunkHecHttpSink {
     name: String,
     url: String,
     token: String,
+    // Required by HEC tokens with indexer acknowledgment enabled.
+    request_channel: String,
     config: SplunkHecConfig,
     client: HttpClient,
     max_batch_bytes: usize,
@@ -31,6 +34,7 @@ impl SplunkHecHttpSink {
             name: "cli-splunk-hec".to_string(),
             url: hec_url(&endpoint),
             token,
+            request_channel: Uuid::new_v4().to_string(),
             config,
             client,
             max_batch_bytes: DEFAULT_HEC_MAX_BATCH_BYTES,
@@ -85,15 +89,14 @@ impl EventSink for SplunkHecHttpSink {
             segments.push(serde_json::to_vec(envelope)?);
         }
         let auth = format!("Splunk {}", self.token);
+        let headers = [
+            ("Authorization", auth.as_str()),
+            ("X-Splunk-Request-Channel", self.request_channel.as_str()),
+        ];
         for chunk in chunk_segments(&segments, self.max_batch_bytes) {
             let response = self
                 .client
-                .post(
-                    &self.url,
-                    &[("Authorization", &auth)],
-                    "application/json",
-                    &chunk,
-                )
+                .post(&self.url, &headers, "application/json", &chunk)
                 .map_err(|err| SinkDeliveryError {
                     attempts: err.attempts,
                     message: format!("Splunk HEC request failed: {}", err.message),
@@ -197,6 +200,8 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use uuid::Uuid;
+
     use super::{SplunkHecConfig, SplunkHecHttpSink, hec_url, splunk_hec_envelopes};
     use crate::event::health_event_with_metadata;
     use crate::sink::emit_events;
@@ -236,7 +241,7 @@ mod tests {
         assert_eq!(envelope["host"], "developer-workstation");
         assert_eq!(envelope["time"], 1_779_069_600.0);
         assert_eq!(envelope["event"]["event_type"], "health");
-        assert_eq!(envelope["event"]["schema_version"], "1.0");
+        assert_eq!(envelope["event"]["schema_version"], "2.0");
         assert!(envelope["event"].get("index").is_none());
         assert!(envelope["event"].get("sourcetype").is_none());
     }
@@ -312,6 +317,15 @@ mod tests {
         assert!(request.starts_with("POST /services/collector HTTP/1.1"));
         let lowercase = request.to_lowercase();
         assert!(lowercase.contains("authorization: splunk test-token"));
+        let request_channel = request
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("x-splunk-request-channel")
+                    .then_some(value.trim())
+            })
+            .unwrap_or_else(|| panic!("request channel header missing; request:\n{request}"));
+        assert!(Uuid::parse_str(request_channel.trim()).is_ok());
         assert!(lowercase.contains("content-type: application/json"));
         // Both envelopes arrive in one newline-batched request body.
         let body = request.split_once("\r\n\r\n").expect("body split").1;

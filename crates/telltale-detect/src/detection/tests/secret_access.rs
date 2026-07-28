@@ -235,7 +235,7 @@ fn detects_private_key_header_fixture_without_leaking_header() {
     assert_eq!(detections.len(), 1);
     let event = &detections[0].1;
     assert_eq!(event.session_id, "private-key-header-pattern");
-    assert_eq!(event.severity, "high");
+    assert_eq!(event.severity, "medium");
     assert!(
         event
             .rule_ids
