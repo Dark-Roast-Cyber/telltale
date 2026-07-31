@@ -263,7 +263,7 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::Gemini,
         "gemini.tmp",
         SourceKind::Json,
-        ParserImplementation::Modeled(extract_gemini_registered),
+        ParserImplementation::Modeled(crate::sources::gemini::parser::extract_gemini_json_source),
     ),
     registration(
         ClientId::OpenClaw,
@@ -360,15 +360,6 @@ fn extract_json_document_registered(
     )?))
 }
 
-fn extract_gemini_registered(
-    source: &Source,
-    _options: ParseOptions,
-) -> Result<ExtractedSourceRecords, ParseError> {
-    Ok(ExtractedSourceRecords::records(
-        crate::sources::gemini::parser::extract_gemini_json_source(source)?,
-    ))
-}
-
 fn normalize_source_records(source: &Source, records: Vec<ParsedRecord>) -> Vec<NormalizedRecord> {
     records
         .into_iter()
@@ -433,6 +424,11 @@ fn json_record(value: &Value, default_session_id: &str) -> ParsedRecord {
 }
 
 pub(crate) fn record_kind(value: &Value) -> RecordKind {
+    let discriminator = record_discriminator(value);
+    if discriminator.is_some_and(|kind| !is_known_record_discriminator(kind)) {
+        return RecordKind::Other;
+    }
+
     if has_content_block_type(value, "tool_use") {
         return RecordKind::ToolCall;
     }
@@ -440,25 +436,7 @@ pub(crate) fn record_kind(value: &Value) -> RecordKind {
         return RecordKind::ToolResult;
     }
 
-    match value
-        .get("payload")
-        .and_then(|payload| payload.get("type"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            value
-                .get("payload")
-                .and_then(|payload| payload.get("payload"))
-                .and_then(|payload| payload.get("type"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| value.get("type").and_then(Value::as_str))
-        .or_else(|| value.get("role").and_then(Value::as_str))
-        .or_else(|| {
-            value
-                .get("message")
-                .and_then(|message| message.get("role"))
-                .and_then(Value::as_str)
-        }) {
+    match discriminator {
         Some("user_message" | "user") => RecordKind::UserMessage,
         Some("assistant_message" | "assistant" | "gemini" | "model") => {
             RecordKind::AssistantMessage
@@ -484,6 +462,45 @@ pub(crate) fn record_kind(value: &Value) -> RecordKind {
         _ if value.get("session_meta").is_some() => RecordKind::SessionMeta,
         _ => RecordKind::Other,
     }
+}
+
+fn record_discriminator(value: &Value) -> Option<&str> {
+    value
+        .get("payload")
+        .and_then(|payload| payload.get("type"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("payload"))
+                .and_then(|payload| payload.get("type"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| value.get("type").and_then(Value::as_str))
+        .or_else(|| value.get("role").and_then(Value::as_str))
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("role"))
+                .and_then(Value::as_str)
+        })
+}
+
+fn is_known_record_discriminator(kind: &str) -> bool {
+    matches!(
+        kind,
+        "user_message"
+            | "user"
+            | "assistant_message"
+            | "assistant"
+            | "gemini"
+            | "model"
+            | "text"
+            | "tool_call"
+            | "tool_result"
+            | "tool"
+            | "session_meta"
+    )
 }
 
 pub(crate) fn record_content(value: &Value) -> String {
