@@ -5,14 +5,15 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use crate::baseline::BaselineKey;
 use crate::baseline::{
-    BASELINE_STATE_VERSION, BaselineKey, BaselineSnapshotStore, BaselineSummary,
-    baseline_snapshot_id,
+    BASELINE_STATE_VERSION, BaselineSnapshotStore, BaselineSummary, baseline_snapshot_id,
 };
-use crate::clients::SourceKind;
-use crate::discovery::Source;
 use crate::event::Event;
 use crate::install_inventory::InstallInventorySnapshot;
+use telltale_schema::clients::SourceKind;
+use telltale_schema::source::Source;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ScanState {
@@ -102,7 +103,8 @@ impl ScanState {
         true
     }
 
-    pub fn replace_baseline_snapshots(&mut self, snapshots: Vec<BaselineSummary>) {
+    #[cfg(test)]
+    fn replace_baseline_snapshots(&mut self, snapshots: Vec<BaselineSummary>) {
         self.baseline_snapshots = BaselineSnapshotStore {
             schema_version: BASELINE_STATE_VERSION,
             snapshots: snapshots
@@ -166,7 +168,8 @@ impl ScanState {
         self.merge_baseline_snapshots(snapshots);
     }
 
-    pub fn baseline_snapshot(&self, key: &BaselineKey) -> Option<&BaselineSummary> {
+    #[cfg(test)]
+    fn baseline_snapshot(&self, key: &BaselineKey) -> Option<&BaselineSummary> {
         self.baseline_snapshots
             .snapshots
             .get(&baseline_snapshot_id(key))
@@ -397,9 +400,9 @@ mod tests {
         BASELINE_HOST_HASH_PREFIX, BaselineKey, BaselineObservationTotals, BaselineSummary,
         PathClass, baseline_host_identity,
     };
-    use crate::clients::{ClientId, SourceKind};
-    use crate::discovery::Source;
     use crate::event::{DetectionEventInput, Evidence, detection_event};
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::source::Source;
 
     use super::{
         BASELINE_STATE_VERSION, ScanState, baseline_snapshot_id, detection_fingerprint,

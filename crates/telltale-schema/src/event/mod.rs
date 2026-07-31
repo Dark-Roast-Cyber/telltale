@@ -407,9 +407,11 @@ pub fn validate_risk_accounting_scope(
 ) -> Result<(), RiskAccountingError> {
     for contribution in contributions {
         let type_allowed = match event_type {
-            "activity" => contribution.contribution_type == RiskContributionType::BaselineDeviation,
+            "activity" => {
+                contribution.contribution_type() == RiskContributionType::BaselineDeviation
+            }
             "detection" => matches!(
-                contribution.contribution_type,
+                contribution.contribution_type(),
                 RiskContributionType::DeterministicRule | RiskContributionType::ChainModifier
             ),
             "session_risk_summary" => true,
@@ -418,20 +420,20 @@ pub fn validate_risk_accounting_scope(
         if !type_allowed {
             return Err(RiskAccountingError::ContributionTypeNotAllowed {
                 event_type: event_type.to_string(),
-                id: contribution.id.clone(),
-                contribution_type: contribution.contribution_type,
+                id: contribution.id().to_string(),
+                contribution_type: contribution.contribution_type(),
             });
         }
 
         let rule_backed = matches!(
-            contribution.contribution_type,
+            contribution.contribution_type(),
             RiskContributionType::DeterministicRule | RiskContributionType::ChainModifier
         );
         if (event_type == "detection" || (event_type == "session_risk_summary" && rule_backed))
-            && !rule_ids.iter().any(|rule_id| rule_id == &contribution.id)
+            && !rule_ids.iter().any(|rule_id| rule_id == contribution.id())
         {
             return Err(RiskAccountingError::ContributionRuleIdMissing(
-                contribution.id.clone(),
+                contribution.id().to_string(),
             ));
         }
     }
@@ -992,7 +994,7 @@ mod tests {
         assert_eq!(event.risk_score, 7);
         assert_eq!(event.risk_contributions.len(), 2);
         assert_eq!(event.risk_contributions[0], a);
-        assert_eq!(event.risk_contributions[1].id, "baseline.z");
+        assert_eq!(event.risk_contributions[1].id(), "baseline.z");
     }
 
     #[test]

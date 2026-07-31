@@ -5,22 +5,30 @@ use crate::baseline::{
 };
 use crate::baseline::{BaselineSnapshotStore, baseline_snapshot_id};
 use crate::timeline::{TimelineRuleAnchor, build_session_timeline};
-use telltale_rules::{CompiledRuleSet, MatchResult, load_default_rule_set};
+#[cfg(feature = "source-io")]
+use telltale_rules::load_default_rule_set;
+use telltale_rules::{CompiledRuleSet, MatchResult};
 use telltale_schema::canonical::{NormalizedRecordV1, Provenance};
+#[cfg(feature = "source-io")]
+use telltale_schema::event::scanner_error_event;
 use telltale_schema::event::{
     ActivityEventInput, DetectionEventInput, Event, Evidence, activity_event, evidence_hash,
-    parse_event_timestamp, path_hash, scanner_error_event,
+    parse_event_timestamp, path_hash,
 };
+use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
-use telltale_sources::discovery::Source;
-use telltale_sources::parser::{NormalizedRecord, ParseError, RecordKind, parse_source_records};
+use telltale_schema::source::Source;
+#[cfg(feature = "source-io")]
+use telltale_sources::parser::{ParseError, parse_source_records};
 
+#[cfg(feature = "source-io")]
 #[allow(dead_code)]
 pub fn detect_sources(sources: &[Source]) -> Vec<(Source, Event)> {
     let rule_set = load_default_rule_set().expect("rule set");
     detect_sources_with_rules(sources, &rule_set)
 }
 
+#[cfg(feature = "source-io")]
 pub fn detect_sources_with_rules(
     sources: &[Source],
     rule_set: &CompiledRuleSet,
@@ -35,6 +43,7 @@ pub fn detect_sources_with_rules(
         .collect()
 }
 
+#[cfg(feature = "source-io")]
 pub fn summarize_source_activities(sources: &[Source]) -> Vec<(Source, Event)> {
     summarize_source_activities_with_baselines(
         sources,
@@ -43,6 +52,7 @@ pub fn summarize_source_activities(sources: &[Source]) -> Vec<(Source, Event)> {
     )
 }
 
+#[cfg(feature = "source-io")]
 pub fn summarize_source_activities_with_baselines(
     sources: &[Source],
     baseline_snapshots: &BaselineSnapshotStore,
@@ -58,6 +68,7 @@ pub fn summarize_source_activities_with_baselines(
         .collect()
 }
 
+#[cfg(feature = "source-io")]
 fn detect_source(source: &Source, rule_set: &telltale_rules::CompiledRuleSet) -> Vec<Event> {
     let parsed = match parse_source_records(source) {
         Ok(records) => records,
@@ -87,6 +98,7 @@ pub fn detect_parsed_source_records(
         .collect()
 }
 
+#[cfg(feature = "source-io")]
 fn summarize_source_activity(
     source: &Source,
     baseline_snapshots: &BaselineSnapshotStore,
@@ -297,6 +309,7 @@ fn activity_records(
             RecordKind::ToolResult => "tool_result",
             RecordKind::SessionMeta => "session_meta",
             RecordKind::Other => "other",
+            _ => "other",
         };
         *record_counts.entry(key.to_string()).or_insert(0_u32) += 1;
 
@@ -462,10 +475,18 @@ fn context_fields(record: &NormalizedRecord) -> ContextFields<'_> {
             file_path: "",
             url: "",
         },
+        _ => ContextFields {
+            assistant_context: "",
+            user_context: "",
+            tool_result: "",
+            command: "",
+            file_path: "",
+            url: "",
+        },
     }
 }
 
-fn tool_name(records: &[telltale_sources::parser::NormalizedRecord]) -> Option<String> {
+fn tool_name(records: &[NormalizedRecord]) -> Option<String> {
     records
         .iter()
         .filter_map(|record| record.tool_name.clone())
@@ -482,26 +503,25 @@ fn tool_name(records: &[telltale_sources::parser::NormalizedRecord]) -> Option<S
         })
 }
 
-fn first_field<T, F>(
-    records: &[telltale_sources::parser::NormalizedRecord],
-    extract: F,
-) -> Option<T>
+fn first_field<T, F>(records: &[NormalizedRecord], extract: F) -> Option<T>
 where
-    F: FnMut(&telltale_sources::parser::NormalizedRecord) -> Option<T>,
+    F: FnMut(&NormalizedRecord) -> Option<T>,
 {
     records.iter().find_map(extract)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "source-io"))]
 #[allow(clippy::useless_conversion)]
 mod tests {
     use super::{detect_records_with_timeline, detect_sources};
     use std::collections::BTreeSet;
     use std::path::PathBuf;
     use telltale_rules::load_default_rule_set;
-    use telltale_sources::clients::{ClientId, SourceKind, supported_clients};
-    use telltale_sources::discovery::{Source, discover_sources};
-    use telltale_sources::parser::{NormalizedRecord, RecordKind};
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::record::{NormalizedRecord, RecordKind};
+    use telltale_schema::source::Source;
+    use telltale_sources::clients::supported_clients;
+    use telltale_sources::discovery::discover_sources_best_effort;
 
     #[path = "approval_bypass.rs"]
     mod approval_bypass;

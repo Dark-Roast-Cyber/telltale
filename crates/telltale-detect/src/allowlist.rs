@@ -4,7 +4,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use telltale_schema::event::{Event, Evidence};
-use telltale_sources::discovery::Source;
+use telltale_schema::source::Source;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,10 +139,10 @@ fn optional_slice(value: Option<&str>) -> Vec<&str> {
 mod tests {
     use std::path::PathBuf;
 
+    use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::event::{DetectionEventInput, detection_event};
     use telltale_schema::scoring::{RiskContribution, RiskContributionType};
-    use telltale_sources::clients::{ClientId, SourceKind};
-    use telltale_sources::discovery::Source;
+    use telltale_schema::source::Source;
 
     use super::{Allowlist, Suppression, suppress_detection};
 

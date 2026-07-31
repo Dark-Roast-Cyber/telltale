@@ -41,7 +41,8 @@ impl SplunkHecHttpSink {
         }
     }
 
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    #[cfg(test)]
+    fn with_timeout(mut self, timeout: Duration) -> Self {
         self.client = HttpClient::new(timeout, RetryConfig::default(), &TlsOptions::default())
             .expect("default http client");
         self
@@ -53,16 +54,6 @@ impl SplunkHecHttpSink {
     }
 
     /// Replace the transport with fully-specified options (config-file path).
-    pub fn with_transport(
-        self,
-        timeout: Duration,
-        retry: RetryConfig,
-        tls: &TlsOptions,
-        max_batch_bytes: usize,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        self.with_transport_warning(timeout, retry, tls, max_batch_bytes, true)
-    }
-
     pub(crate) fn with_transport_warning(
         mut self,
         timeout: Duration,

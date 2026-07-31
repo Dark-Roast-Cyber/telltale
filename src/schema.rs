@@ -9,16 +9,17 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
 
-    use crate::clients::{ClientId, supported_clients};
-    use crate::discovery::discover_sources;
+    use crate::discovery::discover_sources_best_effort;
     use crate::parser::{ParseError, parse_source_records};
+    use telltale_schema::clients::ClientId;
+    use telltale_sources::clients::supported_clients;
 
     use super::*;
 
     #[test]
     fn converts_all_fixture_sources_to_v1_contract() {
         let fixture_root = Path::new("tests/fixtures/session_stores");
-        let sources = discover_sources(fixture_root);
+        let sources = discover_sources_best_effort(fixture_root);
         let discovered_clients: BTreeSet<_> = sources.iter().map(|source| source.client).collect();
         let expected_clients: BTreeSet<_> =
             supported_clients().iter().map(|client| client.id).collect();

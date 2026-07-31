@@ -7,7 +7,7 @@ use telltale_rules::load_default_rule_set;
 
 #[test]
 fn benign_baseline_corpus_produces_zero_detections() {
-    let sources = discover_sources(&crate::test_fixture_path("benign_baselines"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("benign_baselines"));
     assert!(
         !sources.is_empty(),
         "benign baselines directory should contain discoverable sources"
@@ -143,7 +143,7 @@ fn enabled_baseline_deviation_is_one_attributable_activity_contribution() {
     );
     assert_eq!(enabled[0].risk_score, 10);
     assert_eq!(enabled[0].risk_contributions.len(), 1);
-    assert_eq!(enabled[0].risk_contributions[0].id, "baseline.deviation");
+    assert_eq!(enabled[0].risk_contributions[0].id(), "baseline.deviation");
 
     let disabled = summarize_parsed_source_activity(
         &source,

@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
-pub use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::clients::{ClientId, SourceKind};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum PathRoot {
     CodexHome,
     Home,
@@ -12,6 +13,7 @@ pub enum PathRoot {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum SourcePattern {
     Extension(&'static str),
     ExactFile(&'static str),

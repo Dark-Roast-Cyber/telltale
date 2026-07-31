@@ -3,11 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-use telltale_cli::detection::{detect_sources_with_rules, summarize_source_activities};
-use telltale_cli::discovery::discover_sources;
-use telltale_cli::parser::parse_source_records;
-use telltale_cli::rules::load_default_rule_set;
-use telltale_cli::schema::Provenance;
+use telltale_detect::detection::{detect_sources_with_rules, summarize_source_activities};
+use telltale_rules::load_default_rule_set;
+use telltale_schema::canonical::Provenance;
+use telltale_sources::discovery::discover_sources_best_effort;
+use telltale_sources::parser::parse_source_records;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -180,7 +180,7 @@ fn bench_discovery(c: &mut Criterion) {
 
     group.bench_function("all_clients_fixture", |b| {
         b.iter(|| {
-            let _ = discover_sources(&root);
+            let _ = discover_sources_best_effort(&root);
         });
     });
 
@@ -195,7 +195,7 @@ fn bench_scan_throughput(c: &mut Criterion) {
     group.sample_size(20);
 
     // Benchmark: discover + parse + detect on all fixture sources
-    let sources = discover_sources(&root);
+    let sources = discover_sources_best_effort(&root);
     group.bench_function("all_fixtures_full_pipeline", |b| {
         b.iter(|| {
             let _ = detect_sources_with_rules(&sources, &rule_set);
@@ -230,7 +230,7 @@ fn bench_synthetic_throughput(c: &mut Criterion) {
     for size in [10, 50, 200, 1000] {
         let tmp = TempDir::new().expect("temp dir");
         write_synthetic_codex_fixture(&tmp, size);
-        let sources = discover_sources(tmp.path());
+        let sources = discover_sources_best_effort(tmp.path());
 
         group.bench_with_input(
             BenchmarkId::new("parse_detect", format!("{}tool_calls", size)),
@@ -260,7 +260,7 @@ fn bench_synthetic_throughput(c: &mut Criterion) {
 
 fn bench_conformance(c: &mut Criterion) {
     let root = fixture_root();
-    let sources = discover_sources(&root);
+    let sources = discover_sources_best_effort(&root);
 
     let mut group = c.benchmark_group("conformance");
     group.sample_size(50);
@@ -271,7 +271,7 @@ fn bench_conformance(c: &mut Criterion) {
             for source in &sources {
                 if let Ok(records) = parse_source_records(source) {
                     for record in &records {
-                        let v1 = telltale_cli::schema::NormalizedRecordV1::from_legacy(
+                        let v1 = telltale_schema::canonical::NormalizedRecordV1::from_legacy(
                             record.clone(),
                             Provenance {
                                 source_path_hash: "bench_hash".to_string(),

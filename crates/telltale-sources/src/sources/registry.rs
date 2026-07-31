@@ -5,9 +5,10 @@
 //! here; the types themselves remain in `crate::clients` to preserve the public
 //! API during migration.
 
-use crate::clients::{ClientDef, ClientId};
+use crate::clients::ClientDef;
 use crate::install_inventory::AgentInstallDef;
 use crate::sources::{claude, codex, copilot, gemini, kilocode, openclaw, opencode, qwen, roocode};
+use telltale_schema::clients::ClientId;
 
 const CLIENTS: &[ClientDef] = &[
     ClientDef {
@@ -82,9 +83,11 @@ pub(crate) fn builtin_install_defs() -> &'static [AgentInstallDef] {
 
 #[cfg(test)]
 mod tests {
-    use crate::clients::{ClientId, PathRoot, SourceKind, SourcePattern};
     use crate::install_inventory::AgentInstallDef;
     use crate::sources::registry::{builtin_client_defs, builtin_install_defs};
+    use telltale_schema::clients::{ClientId, SourceKind};
+
+    use crate::clients::{PathRoot, SourcePattern};
 
     /// Exhaustive regression snapshot of the per-agent install evidence
     /// definitions collected through the registry. This test must fail if any

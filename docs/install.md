@@ -39,10 +39,9 @@ live validation of agent source stores on those platforms; source-store support
 claims remain bounded by the [Source Validation Matrix](source-validation-matrix.md).
 
 The compiled `adr` (`adr.exe`) command is a deprecated compatibility command
-retained through every `0.2.x` release. Each matching `adr-*` archive is an
-exact byte-for-byte copy of the canonical `telltale-*` archive. The earliest
-possible removal is `0.3.0`, only after at least six months of compatibility
-and advance notice.
+that remains part of the current release contract. Each matching `adr-*` archive
+is an exact byte-for-byte copy of the canonical `telltale-*` archive. This
+migration does not schedule removal of the compatibility command.
 
 Each archive contains exactly these file members (with `.exe` on Windows):
 

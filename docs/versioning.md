@@ -9,10 +9,11 @@ format.
 
 - `v0.1.0` is the first public binary release.
 - `0.2.0` is the prior maturity release.
-- `0.3.0` is the next planned breaking compatibility line for the event and
-  scoring contract.
-- The project does not jump directly to `0.5.0`. Compatible follow-up releases
-  use the `0.2.x` patch line.
+- `0.3.0` is the current released line for the event and scoring contract.
+- `0.4.0` is the unpublished breaking API-hardening line; publication is not
+  authorized by this repository's development workflow.
+- The project does not skip the documented `0.4.0` breaking line for a later
+  minor. Compatible follow-up releases use the patch line of the current minor.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
@@ -23,9 +24,8 @@ format.
   `telltale-core` and its Rust import is `telltale_core`.
 - `telltale` is the canonical executable and `telltale-*` is the canonical
   release asset naming. The compiled `adr` compatibility command and exact-copy
-  `adr-*` archive aliases remain through every `0.2.x` release. The earliest
-  possible removal is `0.3.0`, only after at least six months of compatibility
-  and advance notice.
+  `adr-*` archive aliases remain part of the current release contract. This
+  migration does not schedule their removal.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.
 
@@ -42,14 +42,15 @@ allowance for `0.y.z` versions:
 
 | Change | Version | Examples |
 | --- | --- | --- |
-| Compatible fix | Patch (`0.2.x`) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
-| Additive maturity work | Minor (`0.2.0`, then a later planned minor line) | New compatible capability or API that does not invalidate existing consumers |
-| Breaking change | Next minor (`0.3.0`, then `0.4.0` if needed) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
+| Compatible fix | Patch (for example, `0.3.x` or `0.4.x`) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
+| Additive maturity work | Minor (`0.4.0` after `0.3.0`, then a later planned minor line) | New compatible capability or API that does not invalidate existing consumers |
+| Breaking change | Next minor (`0.4.0`, then `0.5.0` if needed) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
 | Stable compatibility commitment | Major (`1.0.0`) | Public interfaces are sufficiently settled for documented compatibility guarantees |
 
-The `0.2.x` line remains the compatibility path for post-`0.2.0` fixes and small
-compatible improvements. A later `0.x` minor line requires a documented reason;
-it is not a destination for routine progress or accumulated patch releases.
+The `0.3.x` line is the compatibility path for post-`0.3.0` fixes; after the
+`0.4.0` line is released, its `0.4.x` series will serve the same role. A later
+`0.x` minor line requires a documented reason; it is not a destination for
+routine progress or accumulated patch releases.
 
 ## Versioned Surfaces
 
@@ -82,6 +83,9 @@ The Cargo/package version is not the version of every data contract:
 6. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
+For the exact 0.4.0 Rust API changes, see the
+[0.4.0 migration guide](migrations/0.4.0.md).
+
 ## Crates.io Publication
 
 Publish functional packages only after `cargo package --list`, package-boundary
@@ -105,7 +109,7 @@ Publish schema → rules → sources → detect → core → cli, waiting after 
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.3.0` registry dependencies. Do not declare publication complete before
+`=0.4.0` registry dependencies. Do not declare publication complete before
 those unpatched checks pass, and do not publish credentials or local release
 state.
 

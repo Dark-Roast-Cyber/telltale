@@ -63,14 +63,15 @@ pub enum RiskContributionType {
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "RiskContributionWire")]
 pub struct RiskContribution {
-    pub id: String,
+    id: String,
     #[serde(rename = "type")]
-    pub contribution_type: RiskContributionType,
-    pub points: u64,
-    pub rationale: String,
+    contribution_type: RiskContributionType,
+    points: u64,
+    rationale: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RiskAccountingError {
     NonPositiveContribution(String),
     EmptyContributionId,
@@ -155,6 +156,22 @@ impl std::fmt::Display for RiskAccountingError {
 impl std::error::Error for RiskAccountingError {}
 
 impl RiskContribution {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn contribution_type(&self) -> RiskContributionType {
+        self.contribution_type
+    }
+
+    pub fn points(&self) -> u64 {
+        self.points
+    }
+
+    pub fn rationale(&self) -> &str {
+        &self.rationale
+    }
+
     pub fn new(
         id: impl Into<String>,
         contribution_type: RiskContributionType,
@@ -282,7 +299,7 @@ pub fn checked_risk_sum(contributions: &[RiskContribution]) -> Result<u64, RiskA
     contributions.iter().try_fold(0_u64, |total, contribution| {
         contribution.validate()?;
         total
-            .checked_add(contribution.points)
+            .checked_add(contribution.points())
             .ok_or(RiskAccountingError::Overflow)
     })
 }
@@ -293,11 +310,14 @@ pub fn canonicalize_contributions(
     let mut canonical = BTreeMap::new();
     for contribution in contributions {
         contribution.validate()?;
-        let key = (contribution.contribution_type, contribution.id.clone());
+        let key = (
+            contribution.contribution_type(),
+            contribution.id().to_string(),
+        );
         if let Some(existing) = canonical.get(&key) {
             if existing != &contribution {
                 return Err(RiskAccountingError::ConflictingContribution(
-                    contribution.id,
+                    contribution.id().to_string(),
                 ));
             }
         } else {
@@ -561,18 +581,15 @@ mod tests {
             "  .secret/path @ value;  ",
         )
         .expect("valid contribution");
-        assert_eq!(contribution.rationale, "secret path value;");
-        assert!(contribution.rationale.len() <= MAX_RISK_RATIONALE_LENGTH);
-        assert!(
-            contribution
-                .rationale
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric()
-                    || matches!(
-                        character,
-                        ' ' | ',' | '_' | ';' | ':' | '\'' | '(' | ')' | '-'
-                    ))
-        );
+        assert_eq!(contribution.rationale(), "secret path value;");
+        assert!(contribution.rationale().len() <= MAX_RISK_RATIONALE_LENGTH);
+        assert!(contribution.rationale().chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(
+                    character,
+                    ' ' | ',' | '_' | ';' | ':' | '\'' | '(' | ')' | '-'
+                )
+        }));
     }
 
     #[test]
@@ -586,7 +603,7 @@ mod tests {
         )
         .expect("bounded contribution");
 
-        assert!(contribution.rationale.len() <= MAX_RISK_RATIONALE_LENGTH);
+        assert!(contribution.rationale().len() <= MAX_RISK_RATIONALE_LENGTH);
     }
 
     #[test]
@@ -693,7 +710,7 @@ mod tests {
                 rationale,
             )
             .expect("near miss should remain valid");
-            assert!(!contribution.rationale.is_empty());
+            assert!(!contribution.rationale().is_empty());
         }
     }
 }

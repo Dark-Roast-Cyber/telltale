@@ -15,9 +15,9 @@ session-types crate. The Telltale CLI package is `telltale-cli`.
 The package installs both binaries:
 
 - `telltale` is the canonical CLI.
-- `adr` is the deprecated compatibility command retained through every `0.2.x`
-  release. Matching `adr-*` release archives remain exact copies of the
-  canonical `telltale-*` archives.
+- `adr` is the deprecated compatibility command retained by the current release
+  contract. Matching `adr-*` release archives remain exact copies of the
+  canonical `telltale-*` archives; this migration does not schedule its removal.
 
 The supported Rust embedding surface is [`telltale-core`](https://crates.io/crates/telltale-core),
 imported as `telltale_core`; the CLI package is not the embedding API.

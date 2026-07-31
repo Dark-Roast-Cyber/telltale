@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn detects_api_key_pattern_in_assistant_context() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     let event = detections

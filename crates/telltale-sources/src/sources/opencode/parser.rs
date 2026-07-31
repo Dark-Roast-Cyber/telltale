@@ -3,12 +3,12 @@
 use rusqlite::{Connection, ErrorCode};
 use serde_json::Value;
 
-use crate::discovery::Source;
 use crate::parser::{
     ExtractedSourceRecords, ParseError, ParseOptions, ParsedRecord, arguments_field,
     extract_json_source, model_field, provider_field, record_content, record_kind,
     session_id_with_fallback, string_field, tool_name,
 };
+use telltale_schema::source::Source;
 
 pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
 

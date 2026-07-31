@@ -10,15 +10,21 @@ normalized record model, and let the existing detection/rule pipeline run
 unchanged. Do not add source-specific detection logic unless a rule truly cannot
 be expressed over normalized fields.
 
+This is a maintainer implementation checklist, not a runtime plugin contract.
+The released crates do not support registering custom clients, discovery roots,
+or parsers at runtime; an arbitrary `NormalizedRecord.client` string only labels
+a caller-supplied record. New source support is a bundled registry/parser change.
+
 ## Current Code Layout
 
 The current implementation is intentionally simple, but it is centralized:
 
 - `crates/telltale-sources/src/clients.rs` owns path roots, source patterns, and the
   `supported_clients()` compatibility wrapper; the static registry and per-agent
-  source definitions live under `crates/telltale-sources/src/sources/`. The `ClientId` and `SourceKind` enums live in
-  `crates/telltale-schema/src/clients.rs` and are re-exported from
-  `crates/telltale-sources/src/clients.rs`.
+  source definitions live under `crates/telltale-sources/src/sources/`. The
+  canonical `ClientId` and `SourceKind` enums are owned by
+  `crates/telltale-schema/src/clients.rs`; sources consumes them without a
+  duplicate public path.
 - `crates/telltale-sources/src/discovery.rs` resolves OS-specific roots, project-local roots, watch
   roots, and fixture paths for every registered source.
 - `crates/telltale-sources/src/parser.rs` currently dispatches by `SourceKind` and converts raw

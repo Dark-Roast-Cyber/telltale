@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-pub use telltale_rules::*;
+pub(crate) use telltale_rules::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct RulePackPaths {
@@ -41,22 +41,8 @@ pub fn default_rule_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("config/rules/tool-call-regex.yaml")
 }
 
-pub fn load_rule_set_from_paths(
-    rule_paths: &[PathBuf],
-    policy_path: Option<&Path>,
-) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    load_rule_set_from_paths_with_mode(rule_paths, policy_path, RuleLoadMode::IncludeDefault)
-}
-
-pub fn load_rule_set_from_paths_with_mode(
-    rule_paths: &[PathBuf],
-    policy_path: Option<&Path>,
-    mode: RuleLoadMode,
-) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    load_rule_set_from_paths_with_mode_and_override_paths(rule_paths, policy_path, mode, &[])
-}
-
-pub(crate) fn load_rule_set_from_paths_with_mode_and_override_paths(
+#[cfg(test)]
+fn load_rule_set_from_paths_with_mode_and_override_paths(
     rule_paths: &[PathBuf],
     policy_path: Option<&Path>,
     mode: RuleLoadMode,

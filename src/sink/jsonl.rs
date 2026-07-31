@@ -49,7 +49,8 @@ pub struct LocalJsonlSink {
 }
 
 impl LocalJsonlSink {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
+    #[cfg(test)]
+    fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             name: "local".to_string(),
             path: path.into(),

@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[non_exhaustive]
 pub enum ClientId {
     Codex,
     Claude,
@@ -28,6 +29,7 @@ impl ClientId {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[non_exhaustive]
 pub enum SourceKind {
     Json,
     Jsonl,

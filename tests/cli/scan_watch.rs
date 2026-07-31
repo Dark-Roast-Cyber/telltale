@@ -2579,7 +2579,7 @@ fn shipper_examples_target_default_jsonl_path() {
 
 #[test]
 fn elastic_template_preserves_schema_two_u64_risk_fields() {
-    use telltale_cli::sink::DEFAULT_ELASTIC_INDEX;
+    const DEFAULT_ELASTIC_INDEX: &str = "adr-events";
 
     let template: Value = serde_json::from_str(include_str!(
         "../../config/examples/elastic-telltale-index-template.json"

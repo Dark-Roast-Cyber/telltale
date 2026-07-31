@@ -2,8 +2,9 @@ use serde_json::Value;
 use std::fmt;
 use std::fs;
 
-use crate::clients::SourceKind;
-use crate::discovery::Source;
+use telltale_schema::clients::SourceKind;
+use telltale_schema::record::{NormalizedRecord, RecordKind};
+use telltale_schema::source::Source;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ParseOptions {
@@ -22,12 +23,14 @@ impl Default for ParseOptions {
 
 #[derive(Debug)]
 #[allow(dead_code)]
+#[non_exhaustive]
 pub enum ParseError {
     Io(std::io::Error),
     Json(serde_json::Error),
     Sqlite(rusqlite::Error),
     Empty,
     Locked(String),
+    UnsupportedSourceKind(SourceKind),
 }
 
 impl fmt::Display for ParseError {
@@ -38,6 +41,9 @@ impl fmt::Display for ParseError {
             ParseError::Sqlite(e) => write!(f, "sqlite error: {e}"),
             ParseError::Empty => write!(f, "empty source"),
             ParseError::Locked(msg) => write!(f, "locked: {msg}"),
+            ParseError::UnsupportedSourceKind(kind) => {
+                write!(f, "unsupported source kind: {}", kind.as_str())
+            }
         }
     }
 }
@@ -53,8 +59,6 @@ impl From<serde_json::Error> for ParseError {
         ParseError::Json(e)
     }
 }
-
-pub use telltale_schema::record::{NormalizedRecord, RecordKind};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedRecord {
@@ -128,6 +132,7 @@ fn extract_source_records(
         SourceKind::CopilotProcessLog => Ok(ExtractedSourceRecords::records(
             crate::sources::copilot::parser::extract_copilot_process_log(source)?,
         )),
+        _ => Err(ParseError::UnsupportedSourceKind(source.kind)),
     }
 }
 
@@ -431,14 +436,15 @@ fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
 mod tests {
     use std::path::Path;
 
-    use crate::clients::{ClientId, SourceKind};
-    use crate::discovery::discover_sources;
+    use crate::discovery::discover_sources_best_effort;
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::source::Source;
 
     use super::{ParsedRecord, RecordKind, normalize_source_record, parse_source_records};
 
     #[test]
     fn normalizes_parsed_records_with_source_client() {
-        let source = crate::discovery::Source {
+        let source = Source {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "codex.fixture".to_string(),
@@ -478,7 +484,7 @@ mod tests {
 
     #[test]
     fn parses_gemini_json_message_array_records() {
-        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
             .into_iter()
             .find(|source| {
                 source.client == ClientId::Gemini
@@ -508,7 +514,7 @@ mod tests {
 
     #[test]
     fn parses_gemini_json_tool_call_and_result_records() {
-        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
             .into_iter()
             .find(|source| {
                 source.client == ClientId::Gemini
@@ -538,9 +544,9 @@ mod tests {
 
     #[test]
     fn parse_source_records_returns_error_for_malformed_jsonl() {
-        let source = crate::discovery::Source {
-            client: crate::clients::ClientId::Codex,
-            kind: crate::clients::SourceKind::Jsonl,
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
             source_id: "codex.malformed".to_string(),
             path: crate::test_fixture_path("rule_samples/malformed-source.jsonl").to_path_buf(),
         };
@@ -557,9 +563,9 @@ mod tests {
 
     #[test]
     fn parse_source_records_returns_error_for_missing_file() {
-        let source = crate::discovery::Source {
-            client: crate::clients::ClientId::Codex,
-            kind: crate::clients::SourceKind::Jsonl,
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
             source_id: "codex.missing".to_string(),
             path: Path::new("/nonexistent/path/session.jsonl").to_path_buf(),
         };

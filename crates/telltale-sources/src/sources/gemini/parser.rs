@@ -2,12 +2,12 @@ use std::fs;
 
 use serde_json::Value;
 
-use crate::clients::ClientId;
-use crate::discovery::Source;
 use crate::parser::{
     ParseError, ParsedRecord, arguments_field, default_source_file_stem, extract_json_source,
     record_content, record_kind, string_field, tool_name,
 };
+use telltale_schema::clients::ClientId;
+use telltale_schema::source::Source;
 
 pub(crate) fn extract_gemini_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
     if source.client != ClientId::Gemini {
@@ -46,9 +46,11 @@ pub(crate) fn extract_gemini_json_source(source: &Source) -> Result<Vec<ParsedRe
 
 #[cfg(test)]
 mod tests {
-    use crate::clients::{ClientId, PathRoot, SourceKind, SourcePattern};
-    use crate::discovery::Source;
-    use crate::parser::{RecordKind, extract_json_source};
+    use crate::clients::{PathRoot, SourcePattern};
+    use crate::parser::extract_json_source;
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::record::RecordKind;
+    use telltale_schema::source::Source;
 
     use super::super::SOURCES;
     use super::extract_gemini_json_source;

@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::clients::{ClientId, SourceKind};
 use crate::detection::detect_sources_with_rules;
-use crate::discovery::Source;
 use crate::rules::{
     CompiledRuleSet, RuleLoadMode, RulePackPaths, RuleResolution, load_rule_set_from_documents,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::source::Source;
 
 pub(crate) fn run_rules_server(
     addr: SocketAddr,

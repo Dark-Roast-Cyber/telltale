@@ -14,10 +14,9 @@ use time::OffsetDateTime;
 
 use crate::allowlist::{load_allowlist, suppress_detection};
 use crate::baseline::{BaselineDeviationConfig, build_baseline_summaries};
-use crate::clients::{ClientId, SourceKind};
 use crate::detection::{detect_parsed_source_records, summarize_parsed_source_activity};
 use crate::discovery::{
-    Source, discover_sources_with_projects, discover_watch_roots_with_projects, is_fixture_root,
+    discover_sources_with_projects_best_effort, discover_watch_roots_with_projects, is_fixture_root,
 };
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertInput, SessionRiskSummaryEventInput,
@@ -28,9 +27,7 @@ use crate::install_inventory::{
     collect_install_inventory, install_inventory_due, snapshot_to_event,
 };
 use crate::mcp::{discover_mcp_inventory, discover_mcp_usage};
-use crate::parser::{
-    NormalizedRecord, ParseError, ParseOptions, parse_source_records_with_options,
-};
+use crate::parser::{ParseError, ParseOptions, parse_source_records_with_options};
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
@@ -40,6 +37,9 @@ use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contrib
 use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, source_fingerprint};
 use crate::triage::maybe_triage;
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::record::NormalizedRecord;
+use telltale_schema::source::Source;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
@@ -363,7 +363,8 @@ fn build_watch_source_index(
     config: &WatchConfig<'_>,
     project_configs: &[crate::projects::ProjectDef],
 ) -> BTreeMap<PathBuf, Source> {
-    let mut sources = discover_sources_with_projects(config.execution.root, project_configs);
+    let mut sources =
+        discover_sources_with_projects_best_effort(config.execution.root, project_configs);
     if !config.execution.clients.is_empty() {
         let allowed_clients = config
             .execution
@@ -443,7 +444,7 @@ fn run_scan(
                 crate::projects::load_project_configs(config.execution.project_config_paths)
             };
             let mut sources =
-                discover_sources_with_projects(config.execution.root, &project_configs);
+                discover_sources_with_projects_best_effort(config.execution.root, &project_configs);
             if !config.execution.clients.is_empty() {
                 let allowed_clients = config
                     .execution
@@ -969,11 +970,14 @@ fn summarize_session_risk_events(
             });
 
         for contribution in &event.risk_contributions {
-            let key = (contribution.contribution_type, contribution.id.clone());
+            let key = (
+                contribution.contribution_type(),
+                contribution.id().to_string(),
+            );
             if let Some(existing) = summary.contributions.get(&key) {
                 if existing != contribution {
                     return Err(RiskAccountingError::ConflictingContribution(
-                        contribution.id.clone(),
+                        contribution.id().to_string(),
                     ));
                 }
             } else {

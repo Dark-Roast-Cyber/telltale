@@ -4,10 +4,9 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::discovery::Source;
-use crate::parser::{
-    ParseError, ParsedRecord, RecordKind, model_field, provider_field, string_field,
-};
+use crate::parser::{ParseError, ParsedRecord, model_field, provider_field, string_field};
+use telltale_schema::record::RecordKind;
+use telltale_schema::source::Source;
 
 pub(crate) fn extract_copilot_process_log(
     source: &Source,
@@ -117,9 +116,11 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    use crate::clients::{ClientId, SourceKind};
-    use crate::discovery::discover_sources;
-    use crate::parser::{ParseError, RecordKind, parse_source_records};
+    use crate::discovery::discover_sources_best_effort;
+    use crate::parser::{ParseError, parse_source_records};
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::record::RecordKind;
+    use telltale_schema::source::Source;
 
     #[test]
     fn parses_copilot_function_call_model_and_provider_fields() {
@@ -132,7 +133,7 @@ mod tests {
 "#,
         )
         .expect("write copilot fixture");
-        let source = crate::discovery::Source {
+        let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
             source_id: "copilot.model_provider".to_string(),
@@ -174,7 +175,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 "#,
         )
         .expect("write copilot fixture");
-        let source = crate::discovery::Source {
+        let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
             source_id: "copilot.timestamps".to_string(),
@@ -200,7 +201,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 
     #[test]
     fn parses_copilot_multi_session_process_log_boundaries() {
-        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
             .into_iter()
             .find(|source| {
                 source.client == ClientId::Copilot
@@ -228,7 +229,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 
     #[test]
     fn parses_copilot_mixed_format_process_log_items() {
-        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
             .into_iter()
             .find(|source| {
                 source.client == ClientId::Copilot
@@ -263,7 +264,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 
     #[test]
     fn parses_copilot_uc001_tool_result_fixture() {
-        let source = discover_sources(&crate::test_fixture_path("session_stores"))
+        let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
             .into_iter()
             .find(|source| {
                 source.client == ClientId::Copilot
@@ -301,7 +302,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
         let temp = tempdir().expect("tempdir");
         let log_path = temp.path().join("process-empty.log");
         fs::write(&log_path, "\n\n").expect("write empty copilot fixture");
-        let source = crate::discovery::Source {
+        let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
             source_id: "copilot.empty".to_string(),
@@ -324,7 +325,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
 "#,
         )
         .expect("write truncated copilot fixture");
-        let source = crate::discovery::Source {
+        let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
             source_id: "copilot.truncated".to_string(),

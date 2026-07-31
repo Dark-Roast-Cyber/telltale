@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::detection::detect_sources_with_rules;
-use crate::discovery::discover_sources;
+use crate::discovery::discover_sources_best_effort;
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
@@ -27,7 +27,7 @@ pub(crate) fn run_rules_coverage(
     let rule_set = &resolution.rule_set;
     let (all_falsepositives, all_rule_categories) = load_rule_metadata(&resolution.merged_rule_set);
 
-    let sources = discover_sources(root);
+    let sources = discover_sources_best_effort(root);
     if sources.is_empty() {
         println!("No fixture sources found under {}", root.display());
         return Ok(());

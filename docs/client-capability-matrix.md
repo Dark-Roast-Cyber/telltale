@@ -46,9 +46,9 @@ Legend:
 | `ToolResult.is_error` | unavailable | Not exposed by the legacy flat record. |
 | `SessionMeta.workspace` | unavailable | Not exposed by the legacy flat record. |
 
-The fixture-backed conformance test in `crates/telltale-schema/src/canonical.rs`
-(re-exported by the root CLI library as `telltale_cli::schema`) verifies that
-every source id in `supported_clients()` is discovered from
+The fixture-backed conformance test in the CLI's private `src/schema.rs` module
+verifies that every source id in
+`telltale_sources::clients::supported_clients()` is discovered from
 `tests/fixtures/session_stores`, parses at least one record, converts into
 `NormalizedRecordV1`, preserves required metadata, and records the legacy kind
 extension.

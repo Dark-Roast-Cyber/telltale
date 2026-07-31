@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::event::{
     ActivityEventInput, Event, Evidence, activity_event, evidence_hash, path_hash,
 };
-use telltale_sources::clients::ClientId;
-use telltale_sources::discovery::Source;
-use telltale_sources::parser::{RecordKind, parse_source_records};
+use telltale_schema::record::RecordKind;
+use telltale_schema::source::Source;
+use telltale_sources::parser::parse_source_records;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ConfigFormat {
@@ -93,7 +94,7 @@ pub fn discover_mcp_inventory(root: &Path) -> Vec<(Source, Event)> {
     for config in discover_mcp_configs(root) {
         let source = Source {
             client: config.client,
-            kind: telltale_sources::clients::SourceKind::Json,
+            kind: SourceKind::Json,
             source_id: config.id.to_string(),
             path: config.path.clone(),
         };
@@ -795,8 +796,8 @@ mod tests {
         ConfigFormat, DiscoveredMcpConfig, McpToolIndex, discover_mcp_inventory,
         discover_mcp_inventory_servers, discover_mcp_usage, parse_toml_mcp_config,
     };
-    use telltale_sources::clients::{ClientId, SourceKind};
-    use telltale_sources::discovery::Source;
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::source::Source;
 
     #[test]
     fn emits_static_mcp_inventory_for_json_configs() {

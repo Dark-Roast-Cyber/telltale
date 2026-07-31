@@ -7,7 +7,7 @@ agents, including source definitions and install inventory. This crate parses
 and normalizes source data but does not apply detection rules or emit telemetry.
 
 ```rust
-let sources = telltale_sources::discovery::discover_sources(std::path::Path::new("/tmp"));
+let sources = telltale_sources::discovery::discover_sources(std::path::Path::new("/tmp"))?;
 println!("{} sources", sources.len());
 ```
 
