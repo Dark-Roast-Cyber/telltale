@@ -174,13 +174,11 @@ type SourceParser = fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ParserImplementationKind {
     Modeled,
-    GenericJsonLines,
     GenericJsonDocument,
 }
 
 #[derive(Clone, Copy)]
 enum GenericParser {
-    JsonLines(SourceParser),
     JsonDocument(SourceParser),
 }
 
@@ -193,14 +191,13 @@ enum ParserImplementation {
 impl GenericParser {
     fn parser(self) -> SourceParser {
         match self {
-            Self::JsonLines(parser) | Self::JsonDocument(parser) => parser,
+            Self::JsonDocument(parser) => parser,
         }
     }
 
     #[cfg(test)]
     fn kind(self) -> ParserImplementationKind {
         match self {
-            Self::JsonLines(_) => ParserImplementationKind::GenericJsonLines,
             Self::JsonDocument(_) => ParserImplementationKind::GenericJsonDocument,
         }
     }
@@ -280,7 +277,7 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::Qwen,
         "qwen.projects",
         SourceKind::Jsonl,
-        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+        ParserImplementation::Modeled(crate::sources::qwen::parser::extract_qwen_jsonl_source),
     ),
     registration(
         ClientId::RooCode,
@@ -354,15 +351,6 @@ fn parser_registration(source: &Source) -> Result<&'static ParserRegistration, P
         })
 }
 
-fn extract_jsonl_registered(
-    source: &Source,
-    _options: ParseOptions,
-) -> Result<ExtractedSourceRecords, ParseError> {
-    Ok(ExtractedSourceRecords::records(extract_jsonl_source(
-        source,
-    )?))
-}
-
 fn extract_json_document_registered(
     source: &Source,
     _options: ParseOptions,
@@ -423,51 +411,6 @@ pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, ParseErro
 pub(crate) fn read_json_document(source: &Source) -> Result<Value, ParseError> {
     let raw = fs::read_to_string(&source.path)?;
     Ok(serde_json::from_str::<Value>(&raw)?)
-}
-
-fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
-    let values = read_jsonl_values(source)?;
-    let mut records = Vec::with_capacity(values.len());
-    let default_session_id = default_source_file_stem(source);
-
-    let mut agent = None;
-    let mut provider = None;
-    let mut model = None;
-
-    for value in values {
-        agent = agent
-            .or_else(|| string_field(&value, "agent_nickname"))
-            .or_else(|| string_field(&value, "agent"));
-        provider = provider
-            .or_else(|| string_field(&value, "model_provider"))
-            .or_else(|| string_field(&value, "providerID"))
-            .or_else(|| string_field(&value, "provider"));
-        model = model
-            .or_else(|| string_field(&value, "model"))
-            .or_else(|| string_field(&value, "model_name"))
-            .or_else(|| string_field(&value, "modelID"));
-
-        let kind = record_kind(&value);
-        let timestamp = string_field(&value, "timestamp");
-        let content = record_content(&value);
-        let tool_name = tool_name(&value);
-        let arguments = arguments_field(&value).or_else(|| claude_tool_input_as_string(&value));
-        let session_id = session_id_with_fallback(&value, &default_session_id);
-
-        records.push(ParsedRecord {
-            session_id,
-            agent: agent.clone(),
-            model: model.clone(),
-            provider: provider.clone(),
-            timestamp,
-            kind,
-            tool_name,
-            arguments,
-            content,
-        });
-    }
-
-    Ok(records)
 }
 
 pub(crate) fn extract_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
@@ -667,18 +610,6 @@ pub(crate) fn tool_name(value: &Value) -> Option<String> {
                 .as_str()
                 .map(ToString::to_string)
         })
-}
-
-fn claude_tool_input_as_string(value: &Value) -> Option<String> {
-    let input = content_blocks(value)?
-        .iter()
-        .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
-        .get("input")?;
-    match input {
-        Value::String(item) => Some(item.clone()),
-        Value::Null => None,
-        item => serde_json::to_string(item).ok(),
-    }
 }
 
 fn has_content_block_type(value: &Value, block_type: &str) -> bool {
@@ -884,18 +815,11 @@ mod tests {
     }
 
     #[test]
-    fn parser_registration_maturity_snapshot_has_eleven_modeled_and_three_fallbacks() {
+    fn parser_registration_maturity_snapshot_has_twelve_modeled_and_two_fallbacks() {
         let modeled = PARSER_REGISTRATIONS
             .iter()
             .filter(|registration| {
                 registration.implementation.kind() == ParserImplementationKind::Modeled
-            })
-            .map(|registration| registration.source_id)
-            .collect::<BTreeSet<_>>();
-        let json_lines = PARSER_REGISTRATIONS
-            .iter()
-            .filter(|registration| {
-                registration.implementation.kind() == ParserImplementationKind::GenericJsonLines
             })
             .map(|registration| registration.source_id)
             .collect::<BTreeSet<_>>();
@@ -920,12 +844,12 @@ mod tests {
                 "opencode.legacy_json",
                 "opencode.project_json",
                 "openclaw.agents",
+                "qwen.projects",
                 "copilot.process_log",
             ])
         );
-        assert_eq!(modeled.len(), 11);
-        assert_eq!(json_lines, BTreeSet::from_iter(["qwen.projects"]));
-        assert_eq!(json_lines.len(), 1);
+        assert_eq!(PARSER_REGISTRATIONS.len(), 14);
+        assert_eq!(modeled.len(), 12);
         assert_eq!(
             json_documents,
             BTreeSet::from_iter(["roocode.tasks", "kilocode.tasks"])

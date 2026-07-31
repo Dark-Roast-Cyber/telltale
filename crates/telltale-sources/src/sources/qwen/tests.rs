@@ -1,7 +1,21 @@
+use std::fs;
+
+use tempfile::tempdir;
+
 use crate::discovery::discover_sources_best_effort;
-use crate::parser::parse_source_records;
+use crate::parser::{ParseError, parse_source_records};
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::record::RecordKind;
+use telltale_schema::source::Source;
+
+fn qwen_source(path: std::path::PathBuf) -> Source {
+    Source {
+        client: ClientId::Qwen,
+        kind: SourceKind::Jsonl,
+        source_id: "qwen.projects".to_string(),
+        path,
+    }
+}
 
 #[test]
 fn parses_qwen_jsonl_records() {
@@ -58,4 +72,67 @@ fn parses_qwen_jsonl_tool_call_and_result_records() {
     assert_eq!(records[2].kind, RecordKind::ToolResult);
     assert_eq!(records[2].tool_name.as_deref(), Some("repo_status"));
     assert!(records[2].content.contains("darkroastcyber.io/mcp-lab"));
+}
+
+#[test]
+fn preserves_qwen_metadata_inheritance_and_empty_jsonl() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("metadata.jsonl");
+    fs::write(
+        &path,
+        b"{\"type\":\"session_meta\",\"session_id\":\"qwen-metadata\",\"agent\":\"fixture-agent\",\"provider\":\"fixture-provider\",\"model\":\"fixture-model\",\"timestamp\":\"2026-05-04T00:00:00Z\"}\n{\"type\":\"assistant\",\"session_id\":\"qwen-metadata\",\"content\":\"Inherited metadata response.\"}\n",
+    )
+    .expect("metadata fixture");
+
+    let records = parse_source_records(&qwen_source(path)).expect("records");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].kind, RecordKind::SessionMeta);
+    assert_eq!(records[1].kind, RecordKind::AssistantMessage);
+    assert_eq!(records[1].agent.as_deref(), Some("fixture-agent"));
+    assert_eq!(records[1].provider.as_deref(), Some("fixture-provider"));
+    assert_eq!(records[1].model.as_deref(), Some("fixture-model"));
+
+    let empty_path = temp.path().join("empty.jsonl");
+    fs::write(&empty_path, b"\n  \n").expect("empty fixture");
+    assert!(
+        parse_source_records(&qwen_source(empty_path))
+            .expect("empty records")
+            .is_empty()
+    );
+}
+
+#[test]
+fn qwen_parser_has_terminal_failure_and_unknown_boundaries() {
+    let cases = [
+        (
+            "parser_maturity/non_discovered/schema-drift.jsonl",
+            "schema",
+        ),
+        (
+            "parser_maturity/non_discovered/malformed-known-parser.jsonl",
+            "json",
+        ),
+        (
+            "parser_maturity/non_discovered/unknown-shaped-discriminators.jsonl",
+            "other",
+        ),
+    ];
+
+    for (fixture, expected) in cases {
+        let result = parse_source_records(&qwen_source(crate::test_fixture_path(fixture)));
+        match expected {
+            "schema" => assert!(matches!(result, Err(ParseError::SchemaDrift { .. }))),
+            "json" => assert!(matches!(result, Err(ParseError::Json(_)))),
+            "other" => {
+                let records = result.expect("unknown discriminator records");
+                assert_eq!(records.len(), 3);
+                assert!(
+                    records
+                        .iter()
+                        .all(|record| record.kind == RecordKind::Other)
+                );
+            }
+            _ => unreachable!("test case marker"),
+        }
+    }
 }
