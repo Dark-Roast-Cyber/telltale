@@ -1257,6 +1257,8 @@ fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_jso
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::install_inventory::InstallInventorySnapshot;
 
@@ -1388,6 +1390,30 @@ mod tests {
 
         let backfill_options = parse_options_for_scan_source(&source, &state, true, false);
         assert_eq!(backfill_options.sqlite_part_min_time_updated, None);
+    }
+
+    #[test]
+    fn sqlite_parse_failure_does_not_advance_ingestion_cursor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("failed-opencode.db");
+        fs::write(&path, b"not a SQLite database").expect("invalid SQLite fixture");
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path,
+        };
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 5_000, 1_000);
+
+        let parsed = parse_scan_sources(std::slice::from_ref(&source), &state, false, false);
+        assert!(parsed[0].records.is_err());
+        observe_sqlite_ingestion_cursors(&mut state, &parsed, 2_000);
+
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
+            Some(5_000)
+        );
     }
 
     #[test]
@@ -1607,25 +1633,36 @@ mod tests {
 
     #[test]
     fn prefers_opencode_sqlite_over_host_legacy_json() {
+        let data_root = PathBuf::from("home")
+            .join("user")
+            .join(".local")
+            .join("share");
         let sqlite = Source {
             client: ClientId::OpenCode,
             kind: SourceKind::Sqlite,
             source_id: "opencode.sqlite".to_string(),
-            path: PathBuf::from("/home/user/.local/share/opencode/opencode.db"),
+            path: data_root.join("opencode").join("opencode.db"),
         };
         let legacy = Source {
             client: ClientId::OpenCode,
             kind: SourceKind::LegacyJson,
             source_id: "opencode.legacy_json".to_string(),
-            path: PathBuf::from(
-                "/home/user/.local/share/opencode/storage/message/session/message.json",
-            ),
+            path: data_root
+                .join("opencode")
+                .join("storage")
+                .join("message")
+                .join("session")
+                .join("message.json"),
         };
         let codex = Source {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "codex.sessions".to_string(),
-            path: PathBuf::from("/home/user/.codex/sessions/session.jsonl"),
+            path: PathBuf::from("home")
+                .join("user")
+                .join(".codex")
+                .join("sessions")
+                .join("session.jsonl"),
         };
         let mut sources = vec![legacy.clone(), sqlite.clone(), codex.clone()];
 

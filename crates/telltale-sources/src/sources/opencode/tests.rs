@@ -143,6 +143,75 @@ fn parses_opencode_json_documents_in_order_with_tool_fields() {
 }
 
 #[test]
+fn sqlite_identity_does_not_fall_back_to_json_records() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("not-a-database.db");
+    fs::write(&path, b"{\"role\":\"assistant\",\"content\":\"legacy\"}")
+        .expect("non-SQLite fixture");
+
+    let result = parse_source_records(&Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
+        source_id: "opencode.sqlite".to_string(),
+        path,
+    });
+
+    assert!(matches!(result, Err(ParseError::Sqlite(_))));
+}
+
+#[test]
+fn sqlite_unknown_message_variant_is_other() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("unknown-message.db");
+    let conn = Connection::open(&path).expect("open db");
+    conn.execute_batch(
+        "create table message (
+            sessionID text,
+            type text,
+            content text
+        );",
+    )
+    .expect("schema");
+    conn.execute(
+        "insert into message (sessionID, type, content) values (?1, ?2, ?3)",
+        (
+            "unknown-message-session",
+            "future_message_variant",
+            "Synthetic future message",
+        ),
+    )
+    .expect("insert row");
+
+    let records = parse_source_records(&Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
+        source_id: "opencode.sqlite".to_string(),
+        path,
+    })
+    .expect("records");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].kind, RecordKind::Other);
+}
+
+#[test]
+fn sqlite_without_supported_tables_remains_empty() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("empty-schema.db");
+    Connection::open(&path).expect("open db");
+
+    let records = parse_source_records(&Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
+        source_id: "opencode.sqlite".to_string(),
+        path,
+    })
+    .expect("empty SQLite source");
+
+    assert!(records.is_empty());
+}
+
+#[test]
 fn opencode_json_documents_have_terminal_schema_and_parse_failures() {
     let temp = tempdir().expect("tempdir");
     let cases = [
@@ -483,6 +552,19 @@ fn opencode_sqlite_part_options_apply_cursor_and_limit() {
         )
         .expect("insert row");
     }
+    conn.execute(
+        "insert into part (id, message_id, session_id, time_created, time_updated, data)
+         values (?1, ?2, ?3, ?4, ?5, ?6)",
+        (
+            "part-unknown-type",
+            "message-part",
+            "session-part-cursor",
+            4_000_i64,
+            4_000_i64,
+            serde_json::json!({"type": "future_part_variant", "text": "ignored"}).to_string(),
+        ),
+    )
+    .expect("insert unknown part row");
 
     let source = Source {
         client: ClientId::OpenCode,

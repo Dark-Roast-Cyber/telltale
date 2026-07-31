@@ -300,7 +300,7 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::OpenCode,
         "opencode.sqlite",
         SourceKind::Sqlite,
-        ParserImplementation::Modeled(extract_sqlite_registered),
+        ParserImplementation::Modeled(crate::sources::opencode::parser::extract_sqlite_source),
     ),
     registration(
         ClientId::OpenCode,
@@ -377,13 +377,6 @@ fn extract_gemini_registered(
     Ok(ExtractedSourceRecords::records(
         crate::sources::gemini::parser::extract_gemini_json_source(source)?,
     ))
-}
-
-fn extract_sqlite_registered(
-    source: &Source,
-    options: ParseOptions,
-) -> Result<ExtractedSourceRecords, ParseError> {
-    crate::sources::opencode::parser::extract_sqlite_source(source, options)
 }
 
 fn extract_copilot_registered(
