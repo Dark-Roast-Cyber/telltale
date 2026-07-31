@@ -28,7 +28,7 @@ fn detects_api_key_pattern_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "api-key-pattern".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/api-key-pattern.jsonl",
         )),
@@ -56,7 +56,7 @@ fn detects_api_key_pattern_in_session_store_fixture_directly() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "api-key-pattern".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/api-key-pattern.jsonl",
         )),
@@ -84,7 +84,7 @@ fn detects_and_redacts_aws_and_slack_token_patterns_in_rule_sample() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "aws-slack-token-pattern".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/aws-slack-token-pattern.jsonl",
         )),
@@ -115,7 +115,7 @@ fn detects_and_redacts_jwt_and_bearer_token_patterns_in_rule_sample() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "jwt-bearer-token-pattern".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/jwt-bearer-token-pattern.jsonl",
         )),
@@ -150,7 +150,7 @@ fn detects_and_redacts_jwt_and_bearer_token_patterns_in_session_store_fixture() 
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "jwt-bearer-token-pattern".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/jwt-bearer-token-pattern.jsonl",
         )),
@@ -185,7 +185,7 @@ fn detects_private_key_read_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "private-key-read".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/private-key-read.jsonl",
         )),
@@ -224,7 +224,7 @@ fn detects_private_key_header_fixture_without_leaking_header() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "private-key-header-pattern".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/private-key-header-pattern.jsonl",
         )),
@@ -257,7 +257,7 @@ fn detects_secret_network_chain_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "secret-network-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/secret-network-chain.jsonl",
         )),
@@ -292,7 +292,7 @@ fn detects_secret_then_network_chain() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "secret-network-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/secret-network-chain.jsonl",
         )),
@@ -320,7 +320,7 @@ fn detects_secret_then_network_chain_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "secret-network-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/secret-network-chain.jsonl",
         )),
@@ -348,7 +348,7 @@ fn ignores_copied_auth_failure_boilerplate_for_secret_access() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "secret-access-auth-log".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/secret-access-auth-log.jsonl",
         )),
@@ -384,7 +384,7 @@ fn detects_secret_then_network_chain_in_tool_calls() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "secret-network-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/secret-network-chain.jsonl",
         )),

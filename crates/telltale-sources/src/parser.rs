@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::fmt;
 use std::fs;
 
-use telltale_schema::clients::SourceKind;
+use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::source::Source;
 
@@ -31,6 +31,21 @@ pub enum ParseError {
     Empty,
     Locked(String),
     UnsupportedSourceKind(SourceKind),
+    UnsupportedSourceIdentity {
+        client: ClientId,
+        source_id: String,
+    },
+    SourceKindMismatch {
+        client: ClientId,
+        source_id: String,
+        expected: SourceKind,
+        actual: SourceKind,
+    },
+    SchemaDrift {
+        client: ClientId,
+        source_id: String,
+        detail: &'static str,
+    },
 }
 
 impl fmt::Display for ParseError {
@@ -44,6 +59,34 @@ impl fmt::Display for ParseError {
             ParseError::UnsupportedSourceKind(kind) => {
                 write!(f, "unsupported source kind: {}", kind.as_str())
             }
+            ParseError::UnsupportedSourceIdentity { client, .. } => {
+                write!(
+                    f,
+                    "unsupported source identity for client: {}",
+                    client.as_str()
+                )
+            }
+            ParseError::SourceKindMismatch {
+                client,
+                source_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "source kind mismatch for ({}, {source_id}): expected {}, got {}",
+                client.as_str(),
+                expected.as_str(),
+                actual.as_str()
+            ),
+            ParseError::SchemaDrift {
+                client,
+                source_id,
+                detail,
+            } => write!(
+                f,
+                "schema drift for ({}, {source_id}): {detail}",
+                client.as_str()
+            ),
         }
     }
 }
@@ -101,7 +144,7 @@ pub(crate) struct ExtractedSourceRecords {
 }
 
 impl ExtractedSourceRecords {
-    fn records(records: Vec<ParsedRecord>) -> Self {
+    pub(crate) fn records(records: Vec<ParsedRecord>) -> Self {
         Self {
             records,
             sqlite_part_max_time_updated: None,
@@ -113,27 +156,243 @@ fn extract_source_records(
     source: &Source,
     options: ParseOptions,
 ) -> Result<ExtractedSourceRecords, ParseError> {
-    match source.kind {
-        SourceKind::Json => Ok(ExtractedSourceRecords::records(
-            crate::sources::gemini::parser::extract_gemini_json_source(source)?,
-        )),
-        SourceKind::Jsonl | SourceKind::ArchivedJsonl | SourceKind::HeadlessJsonl => Ok(
-            ExtractedSourceRecords::records(extract_jsonl_source(source)?),
-        ),
-        SourceKind::LegacyJson => Ok(ExtractedSourceRecords::records(
-            crate::sources::opencode::parser::extract_legacy_json_source(source)?,
-        )),
-        SourceKind::UiMessagesJson => Ok(ExtractedSourceRecords::records(extract_json_source(
-            source,
-        )?)),
-        SourceKind::Sqlite => {
-            crate::sources::opencode::parser::extract_sqlite_source(source, options)
-        }
-        SourceKind::CopilotProcessLog => Ok(ExtractedSourceRecords::records(
-            crate::sources::copilot::parser::extract_copilot_process_log(source)?,
-        )),
-        _ => Err(ParseError::UnsupportedSourceKind(source.kind)),
+    let registration = parser_registration(source)?;
+    if source.kind != registration.expected_kind {
+        return Err(ParseError::SourceKindMismatch {
+            client: source.client,
+            source_id: source.source_id.clone(),
+            expected: registration.expected_kind,
+            actual: source.kind,
+        });
     }
+    (registration.implementation.parser())(source, options)
+}
+
+type SourceParser = fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, ParseError>;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ParserImplementationKind {
+    Modeled,
+    GenericJsonLines,
+    GenericJsonDocument,
+}
+
+#[derive(Clone, Copy)]
+enum GenericParser {
+    JsonLines(SourceParser),
+    JsonDocument(SourceParser),
+}
+
+#[derive(Clone, Copy)]
+enum ParserImplementation {
+    Modeled(SourceParser),
+    GenericFallback(GenericParser),
+}
+
+impl GenericParser {
+    fn parser(self) -> SourceParser {
+        match self {
+            Self::JsonLines(parser) | Self::JsonDocument(parser) => parser,
+        }
+    }
+
+    #[cfg(test)]
+    fn kind(self) -> ParserImplementationKind {
+        match self {
+            Self::JsonLines(_) => ParserImplementationKind::GenericJsonLines,
+            Self::JsonDocument(_) => ParserImplementationKind::GenericJsonDocument,
+        }
+    }
+}
+
+impl ParserImplementation {
+    fn parser(self) -> SourceParser {
+        match self {
+            Self::Modeled(parser) => parser,
+            Self::GenericFallback(parser) => parser.parser(),
+        }
+    }
+
+    #[cfg(test)]
+    fn kind(self) -> ParserImplementationKind {
+        match self {
+            Self::Modeled(_) => ParserImplementationKind::Modeled,
+            Self::GenericFallback(parser) => parser.kind(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ParserRegistration {
+    client: ClientId,
+    source_id: &'static str,
+    expected_kind: SourceKind,
+    implementation: ParserImplementation,
+}
+
+const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
+    registration(
+        ClientId::Codex,
+        "codex.sessions",
+        SourceKind::Jsonl,
+        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+    ),
+    registration(
+        ClientId::Codex,
+        "codex.archived_sessions",
+        SourceKind::ArchivedJsonl,
+        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+    ),
+    registration(
+        ClientId::Codex,
+        "codex.headless_sessions",
+        SourceKind::HeadlessJsonl,
+        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+    ),
+    registration(
+        ClientId::Codex,
+        "codex.project_sessions",
+        SourceKind::Jsonl,
+        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+    ),
+    registration(
+        ClientId::Claude,
+        "claude.projects",
+        SourceKind::Jsonl,
+        ParserImplementation::Modeled(crate::sources::claude::parser::extract_claude_jsonl_source),
+    ),
+    registration(
+        ClientId::Gemini,
+        "gemini.tmp",
+        SourceKind::Json,
+        ParserImplementation::Modeled(extract_gemini_registered),
+    ),
+    registration(
+        ClientId::OpenClaw,
+        "openclaw.agents",
+        SourceKind::Jsonl,
+        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+    ),
+    registration(
+        ClientId::Qwen,
+        "qwen.projects",
+        SourceKind::Jsonl,
+        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+    ),
+    registration(
+        ClientId::RooCode,
+        "roocode.tasks",
+        SourceKind::UiMessagesJson,
+        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
+            extract_json_document_registered,
+        )),
+    ),
+    registration(
+        ClientId::KiloCode,
+        "kilocode.tasks",
+        SourceKind::UiMessagesJson,
+        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
+            extract_json_document_registered,
+        )),
+    ),
+    registration(
+        ClientId::OpenCode,
+        "opencode.sqlite",
+        SourceKind::Sqlite,
+        ParserImplementation::Modeled(extract_sqlite_registered),
+    ),
+    registration(
+        ClientId::OpenCode,
+        "opencode.legacy_json",
+        SourceKind::LegacyJson,
+        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
+            extract_json_document_registered,
+        )),
+    ),
+    registration(
+        ClientId::OpenCode,
+        "opencode.project_json",
+        SourceKind::LegacyJson,
+        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
+            extract_json_document_registered,
+        )),
+    ),
+    registration(
+        ClientId::Copilot,
+        "copilot.process_log",
+        SourceKind::CopilotProcessLog,
+        ParserImplementation::Modeled(extract_copilot_registered),
+    ),
+];
+
+const fn registration(
+    client: ClientId,
+    source_id: &'static str,
+    expected_kind: SourceKind,
+    implementation: ParserImplementation,
+) -> ParserRegistration {
+    ParserRegistration {
+        client,
+        source_id,
+        expected_kind,
+        implementation,
+    }
+}
+
+fn parser_registration(source: &Source) -> Result<&'static ParserRegistration, ParseError> {
+    PARSER_REGISTRATIONS
+        .iter()
+        .find(|registration| {
+            registration.client == source.client && registration.source_id == source.source_id
+        })
+        .ok_or_else(|| ParseError::UnsupportedSourceIdentity {
+            client: source.client,
+            source_id: source.source_id.clone(),
+        })
+}
+
+fn extract_jsonl_registered(
+    source: &Source,
+    _options: ParseOptions,
+) -> Result<ExtractedSourceRecords, ParseError> {
+    Ok(ExtractedSourceRecords::records(extract_jsonl_source(
+        source,
+    )?))
+}
+
+fn extract_json_document_registered(
+    source: &Source,
+    _options: ParseOptions,
+) -> Result<ExtractedSourceRecords, ParseError> {
+    Ok(ExtractedSourceRecords::records(extract_json_source(
+        source,
+    )?))
+}
+
+fn extract_gemini_registered(
+    source: &Source,
+    _options: ParseOptions,
+) -> Result<ExtractedSourceRecords, ParseError> {
+    Ok(ExtractedSourceRecords::records(
+        crate::sources::gemini::parser::extract_gemini_json_source(source)?,
+    ))
+}
+
+fn extract_sqlite_registered(
+    source: &Source,
+    options: ParseOptions,
+) -> Result<ExtractedSourceRecords, ParseError> {
+    crate::sources::opencode::parser::extract_sqlite_source(source, options)
+}
+
+fn extract_copilot_registered(
+    source: &Source,
+    _options: ParseOptions,
+) -> Result<ExtractedSourceRecords, ParseError> {
+    Ok(ExtractedSourceRecords::records(
+        crate::sources::copilot::parser::extract_copilot_process_log(source)?,
+    ))
 }
 
 fn normalize_source_records(source: &Source, records: Vec<ParsedRecord>) -> Vec<NormalizedRecord> {
@@ -158,17 +417,24 @@ fn normalize_source_record(source: &Source, record: ParsedRecord) -> NormalizedR
     }
 }
 
-fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
+pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, ParseError> {
     let raw = fs::read_to_string(&source.path)?;
-    let mut records = Vec::new();
+    raw.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<Value>(line).map_err(ParseError::from))
+        .collect()
+}
+
+fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
+    let values = read_jsonl_values(source)?;
+    let mut records = Vec::with_capacity(values.len());
     let default_session_id = default_source_file_stem(source);
 
     let mut agent = None;
     let mut provider = None;
     let mut model = None;
 
-    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        let value = serde_json::from_str::<Value>(line)?;
+    for value in values {
         agent = agent
             .or_else(|| string_field(&value, "agent_nickname"))
             .or_else(|| string_field(&value, "agent"));
@@ -434,13 +700,18 @@ fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
 
+    use crate::clients::supported_clients;
     use crate::discovery::discover_sources_best_effort;
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::source::Source;
 
-    use super::{ParsedRecord, RecordKind, normalize_source_record, parse_source_records};
+    use super::{
+        PARSER_REGISTRATIONS, ParsedRecord, ParserImplementationKind, RecordKind,
+        normalize_source_record, parse_source_records, parser_registration,
+    };
 
     #[test]
     fn normalizes_parsed_records_with_source_client() {
@@ -448,7 +719,7 @@ mod tests {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "codex.fixture".to_string(),
-            path: Path::new("/tmp/session.jsonl").to_path_buf(),
+            path: PathBuf::from("session.jsonl"),
         };
         let parsed = ParsedRecord {
             session_id: "session-1".to_string(),
@@ -547,7 +818,7 @@ mod tests {
         let source = Source {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
-            source_id: "codex.malformed".to_string(),
+            source_id: "codex.sessions".to_string(),
             path: crate::test_fixture_path("rule_samples/malformed-source.jsonl").to_path_buf(),
         };
 
@@ -563,11 +834,12 @@ mod tests {
 
     #[test]
     fn parse_source_records_returns_error_for_missing_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
         let source = Source {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
-            source_id: "codex.missing".to_string(),
-            path: Path::new("/nonexistent/path/session.jsonl").to_path_buf(),
+            source_id: "codex.sessions".to_string(),
+            path: temp.path().join("missing-session.jsonl"),
         };
 
         let result = parse_source_records(&source);
@@ -575,5 +847,168 @@ mod tests {
         let err = result.unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("io error"), "expected io error, got: {msg}");
+    }
+
+    #[test]
+    fn parser_registrations_match_source_definitions_bidirectionally() {
+        let definitions = supported_clients()
+            .iter()
+            .flat_map(|client| {
+                client
+                    .sources
+                    .iter()
+                    .map(move |source| ((client.id, source.id), source.kind))
+            })
+            .collect::<Vec<_>>();
+        let definition_keys = definitions
+            .iter()
+            .map(|(key, _)| *key)
+            .collect::<BTreeSet<_>>();
+        let registration_keys = PARSER_REGISTRATIONS
+            .iter()
+            .map(|registration| (registration.client, registration.source_id))
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(definitions.len(), 14);
+        assert_eq!(definition_keys.len(), definitions.len());
+        assert_eq!(registration_keys.len(), PARSER_REGISTRATIONS.len());
+        assert_eq!(definition_keys, registration_keys);
+
+        let expected_kinds = definitions.into_iter().collect::<BTreeMap<_, _>>();
+        for registration in PARSER_REGISTRATIONS {
+            assert_eq!(
+                expected_kinds.get(&(registration.client, registration.source_id)),
+                Some(&registration.expected_kind),
+                "registration kind must match its source definition"
+            );
+        }
+    }
+
+    #[test]
+    fn parser_registration_maturity_snapshot_has_four_modeled_and_ten_fallbacks() {
+        let modeled = PARSER_REGISTRATIONS
+            .iter()
+            .filter(|registration| {
+                registration.implementation.kind() == ParserImplementationKind::Modeled
+            })
+            .map(|registration| registration.source_id)
+            .collect::<BTreeSet<_>>();
+        let json_lines = PARSER_REGISTRATIONS
+            .iter()
+            .filter(|registration| {
+                registration.implementation.kind() == ParserImplementationKind::GenericJsonLines
+            })
+            .map(|registration| registration.source_id)
+            .collect::<BTreeSet<_>>();
+        let json_documents = PARSER_REGISTRATIONS
+            .iter()
+            .filter(|registration| {
+                registration.implementation.kind() == ParserImplementationKind::GenericJsonDocument
+            })
+            .map(|registration| registration.source_id)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            modeled,
+            BTreeSet::from_iter([
+                "claude.projects",
+                "gemini.tmp",
+                "opencode.sqlite",
+                "copilot.process_log",
+            ])
+        );
+        assert_eq!(modeled.len(), 4);
+        assert_eq!(
+            json_lines,
+            BTreeSet::from_iter([
+                "codex.sessions",
+                "codex.archived_sessions",
+                "codex.headless_sessions",
+                "codex.project_sessions",
+                "openclaw.agents",
+                "qwen.projects",
+            ])
+        );
+        assert_eq!(json_lines.len(), 6);
+        assert_eq!(
+            json_documents,
+            BTreeSet::from_iter([
+                "roocode.tasks",
+                "kilocode.tasks",
+                "opencode.legacy_json",
+                "opencode.project_json",
+            ])
+        );
+        assert_eq!(json_documents.len(), 4);
+    }
+
+    #[test]
+    fn parser_registration_requires_case_sensitive_exact_identity_and_kind() {
+        let path = PathBuf::from("not-read.jsonl");
+        let exact = Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".to_string(),
+            path: path.clone(),
+        };
+        assert!(parser_registration(&exact).is_ok());
+
+        let wrong_case = Source {
+            source_id: "Claude.projects".to_string(),
+            ..exact.clone()
+        };
+        let error = parse_source_records(&wrong_case).expect_err("wrong case must fail");
+        let message = error.to_string();
+        assert!(matches!(
+            error,
+            super::ParseError::UnsupportedSourceIdentity { .. }
+        ));
+        assert!(message.contains("unsupported source identity"));
+        assert!(!message.contains("not-read.jsonl"));
+
+        let wrong_client = Source {
+            client: ClientId::Codex,
+            ..exact.clone()
+        };
+        assert!(matches!(
+            parse_source_records(&wrong_client),
+            Err(super::ParseError::UnsupportedSourceIdentity { .. })
+        ));
+
+        let wrong_kind = Source {
+            kind: SourceKind::Json,
+            ..exact
+        };
+        assert!(matches!(
+            parse_source_records(&wrong_kind),
+            Err(super::ParseError::SourceKindMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn registered_fallback_parses_but_unknown_identity_does_not() {
+        let path = crate::test_fixture_path(
+            "parser_maturity/non_discovered/explicit-generic-fallback.json",
+        );
+        let registered = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::LegacyJson,
+            source_id: "opencode.legacy_json".to_string(),
+            path: path.clone(),
+        };
+        let records = parse_source_records(&registered).expect("registered fallback records");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, RecordKind::AssistantMessage);
+
+        let unknown = Source {
+            source_id: "opencode.invented".to_string(),
+            path,
+            ..registered
+        };
+        let error = parse_source_records(&unknown).expect_err("unknown identity must fail");
+        assert!(matches!(
+            error,
+            super::ParseError::UnsupportedSourceIdentity { .. }
+        ));
     }
 }

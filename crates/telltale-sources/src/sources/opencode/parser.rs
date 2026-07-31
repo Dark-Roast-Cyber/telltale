@@ -4,9 +4,8 @@ use rusqlite::{Connection, ErrorCode};
 use serde_json::Value;
 
 use crate::parser::{
-    ExtractedSourceRecords, ParseError, ParseOptions, ParsedRecord, arguments_field,
-    extract_json_source, model_field, provider_field, record_content, record_kind,
-    session_id_with_fallback, string_field, tool_name,
+    ExtractedSourceRecords, ParseError, ParseOptions, ParsedRecord, arguments_field, model_field,
+    provider_field, record_content, record_kind, session_id_with_fallback, string_field, tool_name,
 };
 use telltale_schema::source::Source;
 
@@ -21,10 +20,6 @@ impl From<rusqlite::Error> for ParseError {
             _ => ParseError::Sqlite(e),
         }
     }
-}
-
-pub(crate) fn extract_legacy_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
-    extract_json_source(source)
 }
 
 pub(crate) fn extract_sqlite_source(

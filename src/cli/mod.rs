@@ -1094,7 +1094,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let source = Source {
                     client: ClientId::Codex,
                     kind: SourceKind::Jsonl,
-                    source_id: "rules.test".to_string(),
+                    source_id: "codex.sessions".to_string(),
                     path: fixture,
                 };
                 let detections = detect_sources_with_rules(&[source], &resolution.rule_set);

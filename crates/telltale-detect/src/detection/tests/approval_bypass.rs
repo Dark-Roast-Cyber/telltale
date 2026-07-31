@@ -5,7 +5,7 @@ fn ignores_quoted_approval_bypass_tool_result_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-tool-result".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-tool-result.jsonl",
         )),
@@ -21,7 +21,7 @@ fn ignores_quoted_approval_bypass_user_text_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-user-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl",
         )),
@@ -49,7 +49,7 @@ fn ignores_benign_controlled_domain_mentions_in_session_store_domain_only_fixtur
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-domain-only".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-domain-only.jsonl",
         )),
@@ -65,7 +65,7 @@ fn ignores_quoted_approval_bypass_examples() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-quoted-example".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/approval-bypass-quoted-example.jsonl",
         )),
@@ -81,7 +81,7 @@ fn ignores_quoted_approval_bypass_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-quoted-example".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-quoted-example.jsonl",
         )),
@@ -97,7 +97,7 @@ fn ignores_quoted_approval_bypass_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-quoted-example".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-quoted-example.jsonl",
         )),
@@ -125,7 +125,7 @@ fn ignores_benign_approval_bypass_user_text_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-user-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl",
         )),
@@ -252,7 +252,7 @@ fn detects_tool_injection_shape_in_assistant_context() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "tool-injection-shape".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/tool-injection-shape.jsonl",
         )),
@@ -278,7 +278,7 @@ fn detects_tool_injection_shape_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "tool-injection-shape-session".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/tool-injection-shape-session.jsonl",
         )),
@@ -304,7 +304,7 @@ fn detects_prompt_injection_in_tool_results() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "tool-result-injection".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/tool-result-injection.jsonl",
         )),
@@ -346,7 +346,7 @@ fn detects_prompt_injection_in_session_store_tool_results() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "tool-result-injection".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/tool-result-injection.jsonl",
         )),
@@ -393,7 +393,7 @@ fn detects_approval_bypass_context_in_assistant_messages() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-context".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/approval-bypass-context.jsonl",
         )),
@@ -423,7 +423,7 @@ fn detects_approval_bypass_context_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-context".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-context.jsonl",
         )),
@@ -465,7 +465,7 @@ fn ignores_benign_approval_bypass_mentions_in_user_text() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-user-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-user-text.jsonl",
         )),
@@ -481,7 +481,7 @@ fn ignores_benign_approval_bypass_mentions_in_tool_results() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-tool-result".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-tool-result.jsonl",
         )),
@@ -497,7 +497,7 @@ fn ignores_copied_cost_data_boilerplate_for_approval_bypass() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "approval-bypass-cost-data".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/approval-bypass-cost-data.jsonl",
         )),

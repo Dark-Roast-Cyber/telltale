@@ -274,12 +274,12 @@ fn registered_identities_preserve_normalized_record_shapes_and_order() {
     assert!(records[3].content.contains("MCP tool result"));
 }
 
-// These tests intentionally characterize the pre-dispatch SourceKind behavior.
-// The next migration may change only the schema-drift and invented-identity
-// expectations when exact source registration replaces kind-based dispatch.
+// These characterization tests retain the original fixtures while documenting
+// the two intended expectation changes introduced by exact source registration:
+// structural Claude drift and invented identities now fail explicitly.
 
 #[test]
-fn pre_dispatch_characterizes_schema_envelope_drift_as_generic_other() {
+fn claude_schema_envelope_drift_is_rejected() {
     let source = non_discovered_source(
         ClientId::Claude,
         SourceKind::Jsonl,
@@ -287,20 +287,14 @@ fn pre_dispatch_characterizes_schema_envelope_drift_as_generic_other() {
         "schema-drift.jsonl",
     );
 
-    let records = parse_source_records(&source).expect("current generic JSONL records");
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].session_id, "schema-drift");
-    assert_eq!(records[0].kind, RecordKind::Other);
-    assert!(
-        records[0]
-            .content
-            .contains("Synthetic schema envelope drift")
-    );
+    assert!(matches!(
+        parse_source_records(&source),
+        Err(ParseError::SchemaDrift { .. })
+    ));
 }
 
 #[test]
-fn pre_dispatch_characterizes_unknown_discriminator_as_other() {
+fn claude_unknown_discriminator_remains_other() {
     let source = non_discovered_source(
         ClientId::Claude,
         SourceKind::Jsonl,
@@ -308,7 +302,7 @@ fn pre_dispatch_characterizes_unknown_discriminator_as_other() {
         "unknown-variant.jsonl",
     );
 
-    let records = parse_source_records(&source).expect("current generic JSONL records");
+    let records = parse_source_records(&source).expect("Claude records");
 
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].session_id, "synthetic-unknown-variant");
@@ -316,7 +310,7 @@ fn pre_dispatch_characterizes_unknown_discriminator_as_other() {
 }
 
 #[test]
-fn pre_dispatch_characterizes_malformed_known_parser_as_json_error() {
+fn malformed_registered_jsonl_remains_json_error() {
     let source = non_discovered_source(
         ClientId::Codex,
         SourceKind::Jsonl,
@@ -331,7 +325,7 @@ fn pre_dispatch_characterizes_malformed_known_parser_as_json_error() {
 }
 
 #[test]
-fn pre_dispatch_characterizes_explicit_registered_generic_json_fallback() {
+fn registered_json_document_fallback_parses() {
     let source = non_discovered_source(
         ClientId::OpenCode,
         SourceKind::LegacyJson,
@@ -339,7 +333,7 @@ fn pre_dispatch_characterizes_explicit_registered_generic_json_fallback() {
         "explicit-generic-fallback.json",
     );
 
-    let records = parse_source_records(&source).expect("current explicit generic JSON records");
+    let records = parse_source_records(&source).expect("registered JSON-document fallback records");
 
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].session_id, "synthetic-generic-fallback");
@@ -352,7 +346,7 @@ fn pre_dispatch_characterizes_explicit_registered_generic_json_fallback() {
 }
 
 #[test]
-fn pre_dispatch_characterizes_invented_identity_falling_back_by_source_kind() {
+fn invented_identity_is_rejected_before_fallback() {
     let source = non_discovered_source(
         ClientId::Codex,
         SourceKind::Jsonl,
@@ -360,9 +354,8 @@ fn pre_dispatch_characterizes_invented_identity_falling_back_by_source_kind() {
         "unsupported-identity.jsonl",
     );
 
-    let records = parse_source_records(&source).expect("current kind-based fallback records");
-
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].session_id, "unsupported-identity");
-    assert_eq!(records[0].kind, RecordKind::AssistantMessage);
+    assert!(matches!(
+        parse_source_records(&source),
+        Err(ParseError::UnsupportedSourceIdentity { .. })
+    ));
 }

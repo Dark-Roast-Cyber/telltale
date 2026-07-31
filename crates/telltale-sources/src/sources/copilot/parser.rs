@@ -136,7 +136,7 @@ mod tests {
         let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
-            source_id: "copilot.model_provider".to_string(),
+            source_id: "copilot.process_log".to_string(),
             path: log_path,
         };
 
@@ -178,7 +178,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
         let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
-            source_id: "copilot.timestamps".to_string(),
+            source_id: "copilot.process_log".to_string(),
             path: log_path,
         };
 
@@ -305,7 +305,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
         let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
-            source_id: "copilot.empty".to_string(),
+            source_id: "copilot.process_log".to_string(),
             path: log_path,
         };
 
@@ -328,7 +328,7 @@ not-a-timestamp [INFO] Workspace initialized: copilot-timestamp-malformed (check
         let source = Source {
             client: ClientId::Copilot,
             kind: SourceKind::CopilotProcessLog,
-            source_id: "copilot.truncated".to_string(),
+            source_id: "copilot.process_log".to_string(),
             path: log_path,
         };
 

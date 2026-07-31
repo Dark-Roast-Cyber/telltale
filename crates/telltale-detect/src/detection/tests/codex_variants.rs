@@ -5,7 +5,7 @@ fn ignores_headless_codex_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::HeadlessJsonl,
-        source_id: "headless-a".to_string(),
+        source_id: "codex.headless_sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/headless/headless-a.jsonl",
         )),
@@ -21,7 +21,7 @@ fn detects_uc001_positive_headless_codex_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::HeadlessJsonl,
-        source_id: "uc001-headless".to_string(),
+        source_id: "codex.headless_sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/headless/uc001-headless.jsonl",
         )),
@@ -60,7 +60,7 @@ fn detects_uc001_positive_archived_codex_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::ArchivedJsonl,
-        source_id: "uc001-archived".to_string(),
+        source_id: "codex.archived_sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/archived_sessions/uc001-archived.jsonl",
         )),
@@ -99,7 +99,7 @@ fn ignores_synthetic_codex_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "session-a".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/session-a.jsonl",
         )),
@@ -115,7 +115,7 @@ fn ignores_opencode_legacy_session_fixture() {
     let source = Source {
         client: ClientId::OpenCode,
         kind: SourceKind::LegacyJson,
-        source_id: "session-a".to_string(),
+        source_id: "opencode.legacy_json".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/opencode/storage/message/session-a/message-a.json",
         )),
@@ -151,7 +151,7 @@ fn ignores_normal_mcp_tool_result_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "normal-mcp-tool-result".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/normal-mcp-tool-result.jsonl",
         )),
@@ -167,7 +167,7 @@ fn ignores_normal_mcp_tool_result_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "normal-mcp-tool-result".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/normal-mcp-tool-result.jsonl",
         )),

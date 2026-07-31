@@ -5,7 +5,7 @@ fn detects_uc002_credential_harvesting_before_publish_in_codex_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc002-positive-credential-publish".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc002-positive-credential-publish.jsonl",
         )),
@@ -47,7 +47,7 @@ fn does_not_apply_uc002_chain_to_publish_only_codex_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc002-negative-publish-only".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc002-negative-publish-only.jsonl",
         )),
