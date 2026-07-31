@@ -272,7 +272,9 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::OpenClaw,
         "openclaw.agents",
         SourceKind::Jsonl,
-        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+        ParserImplementation::Modeled(
+            crate::sources::openclaw::parser::extract_openclaw_jsonl_source,
+        ),
     ),
     registration(
         ClientId::Qwen,
@@ -882,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_registration_maturity_snapshot_has_ten_modeled_and_four_fallbacks() {
+    fn parser_registration_maturity_snapshot_has_eleven_modeled_and_three_fallbacks() {
         let modeled = PARSER_REGISTRATIONS
             .iter()
             .filter(|registration| {
@@ -917,15 +919,13 @@ mod tests {
                 "opencode.sqlite",
                 "opencode.legacy_json",
                 "opencode.project_json",
+                "openclaw.agents",
                 "copilot.process_log",
             ])
         );
-        assert_eq!(modeled.len(), 10);
-        assert_eq!(
-            json_lines,
-            BTreeSet::from_iter(["openclaw.agents", "qwen.projects"])
-        );
-        assert_eq!(json_lines.len(), 2);
+        assert_eq!(modeled.len(), 11);
+        assert_eq!(json_lines, BTreeSet::from_iter(["qwen.projects"]));
+        assert_eq!(json_lines.len(), 1);
         assert_eq!(
             json_documents,
             BTreeSet::from_iter(["roocode.tasks", "kilocode.tasks"])
