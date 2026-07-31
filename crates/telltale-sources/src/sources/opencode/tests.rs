@@ -1,15 +1,17 @@
 use rusqlite::Connection;
 use tempfile::tempdir;
 
-use crate::clients::{ClientId, SourceKind};
-use crate::discovery::discover_sources;
+use crate::discovery::discover_sources_best_effort;
 use crate::parser::{
-    ParseError, ParseOptions, RecordKind, parse_source_records, parse_source_records_with_options,
+    ParseError, ParseOptions, parse_source_records, parse_source_records_with_options,
 };
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::record::RecordKind;
+use telltale_schema::source::Source;
 
 #[test]
 fn parses_legacy_json_as_single_record() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::OpenCode
@@ -28,7 +30,7 @@ fn parses_legacy_json_as_single_record() {
 
 #[test]
 fn parses_opencode_legacy_uc001_tool_result_record() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::OpenCode
@@ -56,7 +58,7 @@ fn parses_opencode_legacy_uc001_tool_result_record() {
 
 #[test]
 fn parses_opencode_sqlite_uc001_tool_result_records() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| source.client == ClientId::OpenCode && source.kind == SourceKind::Sqlite)
         .expect("fixture source");
@@ -118,9 +120,9 @@ fn parses_sqlite_message_table_records() {
     )
     .expect("insert row");
 
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::OpenCode,
-        kind: crate::clients::SourceKind::Sqlite,
+    let source = Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
         source_id: "opencode.sqlite".to_string(),
         path: db_path,
     };
@@ -168,9 +170,9 @@ fn parses_opencode_sqlite_data_json_records() {
     )
     .expect("insert row");
 
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::OpenCode,
-        kind: crate::clients::SourceKind::Sqlite,
+    let source = Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
         source_id: "opencode.sqlite".to_string(),
         path: db_path,
     };
@@ -232,9 +234,9 @@ fn parses_opencode_sqlite_live_shape_records() {
     )
     .expect("insert row");
 
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::OpenCode,
-        kind: crate::clients::SourceKind::Sqlite,
+    let source = Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
         source_id: "opencode.sqlite".to_string(),
         path: db_path,
     };
@@ -296,9 +298,9 @@ fn parses_opencode_sqlite_part_table_tool_records() {
     )
     .expect("insert row");
 
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::OpenCode,
-        kind: crate::clients::SourceKind::Sqlite,
+    let source = Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
         source_id: "opencode.sqlite".to_string(),
         path: db_path,
     };
@@ -356,9 +358,9 @@ fn opencode_sqlite_part_options_apply_cursor_and_limit() {
         .expect("insert row");
     }
 
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::OpenCode,
-        kind: crate::clients::SourceKind::Sqlite,
+    let source = Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
         source_id: "opencode.sqlite".to_string(),
         path: db_path,
     };
@@ -426,9 +428,9 @@ fn opencode_sqlite_part_text_inherits_message_role() {
     )
     .expect("insert part");
 
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::OpenCode,
-        kind: crate::clients::SourceKind::Sqlite,
+    let source = Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
         source_id: "opencode.sqlite".to_string(),
         path: db_path,
     };
@@ -507,9 +509,9 @@ fn opencode_sqlite_part_cursor_with_message_table_does_not_ambiguous_column() {
         .expect("insert part");
     }
 
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::OpenCode,
-        kind: crate::clients::SourceKind::Sqlite,
+    let source = Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::Sqlite,
         source_id: "opencode.sqlite".to_string(),
         path: db_path,
     };

@@ -1,11 +1,67 @@
 use std::env;
+use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::clients::{ClientId, ClientSourceDef, PathRoot, SourcePattern, supported_clients};
+use crate::clients::{ClientSourceDef, PathRoot, SourcePattern, supported_clients};
+use telltale_schema::clients::ClientId;
+use telltale_schema::source::Source;
 
-pub use telltale_schema::source::Source;
+#[derive(Debug, Clone, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DiscoveryError {
+    InvalidRoot { root: PathBuf },
+    Traversal { root: PathBuf, source_id: String },
+}
+
+impl fmt::Display for DiscoveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRoot { root } => {
+                write!(
+                    formatter,
+                    "discovery root is not a readable directory: {}",
+                    root.display()
+                )
+            }
+            Self::Traversal { root, source_id } => write!(
+                formatter,
+                "could not traverse discovery root {} for source {source_id}",
+                root.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DiscoveryError {}
+
+struct DiscoveryContext<'a> {
+    root: &'a Path,
+    source_id: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum DiscoveryMode {
+    Checked,
+    BestEffort,
+}
+
+impl DiscoveryMode {
+    fn is_checked(self) -> bool {
+        matches!(self, Self::Checked)
+    }
+}
+
+impl DiscoveryContext<'_> {
+    fn traversal_error(&self) -> DiscoveryError {
+        DiscoveryError::Traversal {
+            root: self.root.to_path_buf(),
+            source_id: self.source_id.to_string(),
+        }
+    }
+}
 
 fn new_source(client: ClientId, source_def: ClientSourceDef, path: PathBuf) -> Source {
     Source {
@@ -16,21 +72,56 @@ fn new_source(client: ClientId, source_def: ClientSourceDef, path: PathBuf) -> S
     }
 }
 
-pub fn discover_sources(root: &Path) -> Vec<Source> {
+pub fn discover_sources(root: &Path) -> Result<Vec<Source>, DiscoveryError> {
     discover_sources_with_projects(root, &[])
+}
+
+pub fn discover_sources_best_effort(root: &Path) -> Vec<Source> {
+    discover_sources_with_projects_best_effort(root, &[])
 }
 
 pub fn discover_sources_with_projects(
     root: &Path,
     projects: &[crate::projects::ProjectDef],
+) -> Result<Vec<Source>, DiscoveryError> {
+    discover_sources_with_projects_impl(root, projects, DiscoveryMode::Checked)
+}
+
+pub fn discover_sources_with_projects_best_effort(
+    root: &Path,
+    projects: &[crate::projects::ProjectDef],
 ) -> Vec<Source> {
+    discover_sources_with_projects_impl(root, projects, DiscoveryMode::BestEffort)
+        .unwrap_or_default()
+}
+
+fn discover_sources_with_projects_impl(
+    root: &Path,
+    projects: &[crate::projects::ProjectDef],
+    mode: DiscoveryMode,
+) -> Result<Vec<Source>, DiscoveryError> {
+    if mode.is_checked() {
+        validate_root(root)?;
+        for project in projects {
+            validate_root(&project.path)?;
+        }
+    }
+
     let mut sources = Vec::new();
     let fixture_root = is_fixture_root(root);
 
     for client in supported_clients() {
         for source_def in client.sources {
             if source_def.root != PathRoot::ProjectLocal || fixture_root {
-                sources.extend(discover_source(root, client.id, *source_def));
+                let context = DiscoveryContext {
+                    root,
+                    source_id: source_def.id,
+                };
+                match discover_source(root, client.id, *source_def, &context, mode) {
+                    Ok(found) => sources.extend(found),
+                    Err(error) if mode.is_checked() => return Err(error),
+                    Err(_) => {}
+                }
             }
         }
     }
@@ -39,7 +130,15 @@ pub fn discover_sources_with_projects(
         for client in supported_clients() {
             for source_def in client.sources {
                 if source_def.root == PathRoot::ProjectLocal {
-                    sources.extend(discover_source(&project.path, client.id, *source_def));
+                    let context = DiscoveryContext {
+                        root: &project.path,
+                        source_id: source_def.id,
+                    };
+                    match discover_source(&project.path, client.id, *source_def, &context, mode) {
+                        Ok(found) => sources.extend(found),
+                        Err(error) if mode.is_checked() => return Err(error),
+                        Err(_) => {}
+                    }
                 }
             }
         }
@@ -59,7 +158,16 @@ pub fn discover_sources_with_projects(
                 right.path.to_string_lossy(),
             ))
     });
-    sources
+    Ok(sources)
+}
+
+fn validate_root(root: &Path) -> Result<(), DiscoveryError> {
+    match fs::metadata(root) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        _ => Err(DiscoveryError::InvalidRoot {
+            root: root.to_path_buf(),
+        }),
+    }
 }
 
 pub fn discover_watch_roots(root: &Path) -> Vec<PathBuf> {
@@ -106,18 +214,28 @@ fn source_watch_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> 
         let subpath = source_def
             .project_relative_path
             .unwrap_or(source_def.relative_path);
-        return discover_project_local_search_roots(root, subpath)
-            .into_iter()
-            .filter_map(|p| {
-                if p.is_dir() {
-                    Some(p)
-                } else {
-                    p.parent()
-                        .filter(|parent| parent.is_dir())
-                        .map(Path::to_path_buf)
-                }
-            })
-            .collect();
+        let context = DiscoveryContext {
+            root,
+            source_id: source_def.id,
+        };
+        return discover_project_local_search_roots(
+            root,
+            subpath,
+            &context,
+            DiscoveryMode::BestEffort,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| {
+            if p.is_dir() {
+                Some(p)
+            } else {
+                p.parent()
+                    .filter(|parent| parent.is_dir())
+                    .map(Path::to_path_buf)
+            }
+        })
+        .collect();
     }
 
     let search_root = source_search_root(root, source_def);
@@ -135,7 +253,13 @@ fn source_watch_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> 
     Vec::new()
 }
 
-fn discover_source(root: &Path, client: ClientId, source_def: ClientSourceDef) -> Vec<Source> {
+fn discover_source(
+    root: &Path,
+    client: ClientId,
+    source_def: ClientSourceDef,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<Source>, DiscoveryError> {
     let search_root = source_search_root(root, source_def);
 
     // For project-local sources, recursively search for the subpath under the project root
@@ -148,16 +272,30 @@ fn discover_source(root: &Path, client: ClientId, source_def: ClientSourceDef) -
             subpath,
             source_def.pattern,
             source_def.recursive,
+            context,
+            mode,
         )
-        .into_iter()
-        .map(|path| new_source(client, source_def, path))
-        .collect();
+        .map(|paths| {
+            paths
+                .into_iter()
+                .map(|path| new_source(client, source_def, path))
+                .collect()
+        });
     }
 
-    discover_matching_paths(&search_root, source_def.pattern, source_def.recursive)
-        .into_iter()
-        .map(|path| new_source(client, source_def, path))
-        .collect()
+    discover_matching_paths(
+        &search_root,
+        source_def.pattern,
+        source_def.recursive,
+        context,
+        mode,
+    )
+    .map(|paths| {
+        paths
+            .into_iter()
+            .map(|path| new_source(client, source_def, path))
+            .collect()
+    })
 }
 
 /// Search for project-local subdirectories under a project or workspace root.
@@ -169,10 +307,20 @@ fn discover_project_local_paths(
     subpath: &str,
     pattern: SourcePattern,
     recursive: bool,
-) -> Vec<PathBuf> {
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
     const MAX_WORKSPACE_DEPTH: usize = 2;
 
-    discover_project_local_paths_with_depth(root, subpath, pattern, recursive, MAX_WORKSPACE_DEPTH)
+    discover_project_local_paths_with_depth(
+        root,
+        subpath,
+        pattern,
+        recursive,
+        MAX_WORKSPACE_DEPTH,
+        context,
+        mode,
+    )
 }
 
 fn discover_project_local_paths_with_depth(
@@ -181,54 +329,98 @@ fn discover_project_local_paths_with_depth(
     pattern: SourcePattern,
     recursive: bool,
     remaining_depth: usize,
-) -> Vec<PathBuf> {
-    discover_project_local_search_roots_with_depth(root, subpath, remaining_depth)
-        .into_iter()
-        .flat_map(|search_root| discover_matching_paths(&search_root, pattern, recursive))
-        .collect()
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
+    let search_roots = discover_project_local_search_roots_with_depth(
+        root,
+        subpath,
+        remaining_depth,
+        context,
+        mode,
+    )?;
+    let mut paths = Vec::new();
+    for search_root in search_roots {
+        match discover_matching_paths(&search_root, pattern, recursive, context, mode) {
+            Ok(found) => paths.extend(found),
+            Err(error) if mode.is_checked() => return Err(error),
+            Err(_) => {}
+        }
+    }
+    Ok(paths)
 }
 
-fn discover_project_local_search_roots(root: &Path, subpath: &str) -> Vec<PathBuf> {
+fn discover_project_local_search_roots(
+    root: &Path,
+    subpath: &str,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
     const MAX_WORKSPACE_DEPTH: usize = 2;
 
-    discover_project_local_search_roots_with_depth(root, subpath, MAX_WORKSPACE_DEPTH)
+    discover_project_local_search_roots_with_depth(
+        root,
+        subpath,
+        MAX_WORKSPACE_DEPTH,
+        context,
+        mode,
+    )
 }
 
 fn discover_project_local_search_roots_with_depth(
     root: &Path,
     subpath: &str,
     remaining_depth: usize,
-) -> Vec<PathBuf> {
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
     let mut results = Vec::new();
 
     // First, check if the subpath exists directly under the root.
     let direct_path = root.join(subpath);
-    if direct_path.exists() {
+    if path_exists(&direct_path, context, mode)? {
         results.push(direct_path);
     }
 
     if remaining_depth == 0 {
-        return results;
+        return Ok(results);
     }
 
     // Then search bounded nested workspace directories without following symlinked dirs.
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() && !is_hidden_path(&path) {
-                results.extend(discover_project_local_search_roots_with_depth(
-                    &path,
-                    subpath,
-                    remaining_depth - 1,
-                ));
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(results),
+        Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+        Err(_) => return Ok(results),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+            Err(_) => continue,
+        };
+        if file_type.is_dir() && !is_hidden_path(&path) {
+            match discover_project_local_search_roots_with_depth(
+                &path,
+                subpath,
+                remaining_depth - 1,
+                context,
+                mode,
+            ) {
+                Ok(found) => results.extend(found),
+                Err(error) if mode.is_checked() => return Err(error),
+                Err(_) => {}
             }
         }
     }
 
-    results
+    Ok(results)
 }
 
 fn is_hidden_path(path: &Path) -> bool {
@@ -301,19 +493,40 @@ fn discover_source_from_context(
     source_def: ClientSourceDef,
 ) -> Vec<Source> {
     let search_root = source_search_root_from_context(context, source_def);
+    let discovery_context = DiscoveryContext {
+        root: &search_root,
+        source_id: source_def.id,
+    };
 
-    discover_matching_paths(&search_root, source_def.pattern, source_def.recursive)
-        .into_iter()
-        .map(|path| new_source(client, source_def, path))
-        .collect()
+    discover_matching_paths(
+        &search_root,
+        source_def.pattern,
+        source_def.recursive,
+        &discovery_context,
+        DiscoveryMode::Checked,
+    )
+    .expect("discover source paths")
+    .into_iter()
+    .map(|path| new_source(client, source_def, path))
+    .collect()
 }
 
-fn discover_matching_paths(root: &Path, pattern: SourcePattern, recursive: bool) -> Vec<PathBuf> {
+fn discover_matching_paths(
+    root: &Path,
+    pattern: SourcePattern,
+    recursive: bool,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
     match pattern {
-        SourcePattern::Extension(extension) => files_with_extension(root, extension, recursive),
-        SourcePattern::ExactFile(file_name) => files_named(root, file_name, recursive),
+        SourcePattern::Extension(extension) => {
+            files_with_extension(root, extension, recursive, context, mode)
+        }
+        SourcePattern::ExactFile(file_name) => {
+            files_named(root, file_name, recursive, context, mode)
+        }
         SourcePattern::FileNameContains(needle) => {
-            files_with_name_containing(root, needle, recursive)
+            files_with_name_containing(root, needle, recursive, context, mode)
         }
     }
 }
@@ -412,74 +625,67 @@ fn default_data_home(platform: HostPlatform, home: &Path) -> PathBuf {
     }
 }
 
-fn files_with_extension(root: &Path, extension: &str, recursive: bool) -> Vec<PathBuf> {
-    if !root.is_dir() {
-        return Vec::new();
-    }
-
-    let walker = if recursive {
-        WalkDir::new(root)
-    } else {
-        WalkDir::new(root).max_depth(1)
-    };
-
-    let mut paths: Vec<PathBuf> = walker
+fn files_with_extension(
+    root: &Path,
+    extension: &str,
+    recursive: bool,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
+    let mut paths: Vec<PathBuf> = walk_files(root, recursive, context, mode)?
         .into_iter()
-        .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
+        .map(|entry| entry.path().to_path_buf())
         .filter(|path| path.extension().is_some_and(|value| value == extension))
         .collect();
     paths.sort_unstable();
-    paths
+    Ok(paths)
 }
 
-fn files_named(root: &Path, file_name: &str, recursive: bool) -> Vec<PathBuf> {
-    if root.is_file() {
-        return root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| *name == file_name)
-            .map(|_| vec![root.to_path_buf()])
-            .unwrap_or_default();
-    }
-    if !root.is_dir() {
-        return Vec::new();
+fn files_named(
+    root: &Path,
+    file_name: &str,
+    recursive: bool,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
+    match fs::metadata(root) {
+        Ok(metadata) if metadata.is_file() => {
+            return Ok(root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| *name == file_name)
+                .map(|_| vec![root.to_path_buf()])
+                .unwrap_or_default());
+        }
+        Ok(metadata) if !metadata.is_dir() => return Ok(Vec::new()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+        Err(_) => return Ok(Vec::new()),
     }
 
-    let walker = if recursive {
-        WalkDir::new(root)
-    } else {
-        WalkDir::new(root).max_depth(1)
-    };
-
-    let mut paths: Vec<PathBuf> = walker
+    let mut paths: Vec<PathBuf> = walk_files(root, recursive, context, mode)?
         .into_iter()
-        .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
+        .map(|entry| entry.path().to_path_buf())
         .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(file_name))
         .collect();
     paths.sort_unstable();
-    paths
+    Ok(paths)
 }
 
-fn files_with_name_containing(root: &Path, needle: &str, recursive: bool) -> Vec<PathBuf> {
-    if !root.is_dir() {
-        return Vec::new();
-    }
-
-    let walker = if recursive {
-        WalkDir::new(root)
-    } else {
-        WalkDir::new(root).max_depth(1)
-    };
-
-    let mut paths: Vec<PathBuf> = walker
+fn files_with_name_containing(
+    root: &Path,
+    needle: &str,
+    recursive: bool,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<PathBuf>, DiscoveryError> {
+    let mut paths: Vec<PathBuf> = walk_files(root, recursive, context, mode)?
         .into_iter()
-        .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
+        .map(|entry| entry.path().to_path_buf())
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
@@ -487,7 +693,62 @@ fn files_with_name_containing(root: &Path, needle: &str, recursive: bool) -> Vec
         })
         .collect();
     paths.sort_unstable();
-    paths
+    Ok(paths)
+}
+
+fn walk_files(
+    root: &Path,
+    recursive: bool,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<Vec<walkdir::DirEntry>, DiscoveryError> {
+    match fs::metadata(root) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) if mode.is_checked() => return Err(context.traversal_error()),
+        Err(_) => return Ok(Vec::new()),
+    }
+
+    let walker = if recursive {
+        WalkDir::new(root)
+    } else {
+        WalkDir::new(root).max_depth(1)
+    };
+    collect_walk_entries(walker, mode, || context.traversal_error())
+}
+
+fn path_exists(
+    path: &Path,
+    context: &DiscoveryContext<'_>,
+    mode: DiscoveryMode,
+) -> Result<bool, DiscoveryError> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) if mode.is_checked() => Err(context.traversal_error()),
+        Err(_) => Ok(false),
+    }
+}
+
+fn collect_walk_entries<I, T, E, F>(
+    entries: I,
+    mode: DiscoveryMode,
+    error: F,
+) -> Result<Vec<T>, DiscoveryError>
+where
+    I: IntoIterator<Item = Result<T, E>>,
+    F: Fn() -> DiscoveryError,
+{
+    let mut found = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => found.push(entry),
+            Err(_) if mode.is_checked() => return Err(error()),
+            Err(_) => {}
+        }
+    }
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -496,12 +757,15 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use crate::clients::{ClientId, ClientSourceDef, PathRoot, SourceKind};
+    use telltale_schema::clients::{ClientId, SourceKind};
     use tempfile::tempdir;
 
+    use crate::clients::{ClientSourceDef, PathRoot};
+
     use super::{
-        HostPlatform, RootResolutionContext, current_host_platform, default_config_home,
-        default_data_home, discover_source_from_context, discover_sources,
+        DiscoveryError, DiscoveryMode, HostPlatform, RootResolutionContext, collect_walk_entries,
+        current_host_platform, default_config_home, default_data_home,
+        discover_source_from_context, discover_sources, discover_sources_best_effort,
         discover_sources_with_projects, discover_watch_roots, discover_watch_roots_for_clients,
         discover_watch_roots_with_projects, resolve_path_root_from_context,
         source_search_root_from_context,
@@ -523,7 +787,8 @@ mod tests {
 
     #[test]
     fn discovers_codex_and_opencode_fixture_sources() {
-        let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+        let sources =
+            discover_sources(&crate::test_fixture_path("session_stores")).expect("discovery");
 
         let keys: HashSet<_> = sources
             .iter()
@@ -574,6 +839,79 @@ mod tests {
     }
 
     #[test]
+    fn checked_discovery_reports_invalid_roots_and_best_effort_preserves_empty_behavior() {
+        let temp = tempdir().expect("tempdir");
+        let missing = temp.path().join("missing");
+
+        let error = discover_sources(&missing).expect_err("missing root should fail");
+        assert_eq!(
+            error,
+            DiscoveryError::InvalidRoot {
+                root: missing.clone()
+            }
+        );
+        assert!(discover_sources_best_effort(&missing).is_empty());
+        assert!(
+            error
+                .to_string()
+                .contains(missing.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn best_effort_walk_retains_valid_entries_around_failure() {
+        let traversal_error = DiscoveryError::Traversal {
+            root: PathBuf::from("synthetic-root"),
+            source_id: "synthetic.source".to_string(),
+        };
+        let entries = [Ok("direct"), Err("failed"), Ok("sibling")];
+
+        let retained = collect_walk_entries(entries, DiscoveryMode::BestEffort, || {
+            traversal_error.clone()
+        })
+        .expect("best effort keeps valid entries");
+        assert_eq!(retained, ["direct", "sibling"]);
+
+        let entries = [Ok("direct"), Err("failed"), Ok("sibling")];
+        let error =
+            collect_walk_entries(entries, DiscoveryMode::Checked, || traversal_error.clone())
+                .expect_err("checked discovery reports the first failure");
+        assert_eq!(error, traversal_error);
+    }
+
+    #[test]
+    fn best_effort_discovery_matches_checked_success_ordering() {
+        let fixture_root = crate::test_fixture_path("session_stores");
+        let checked = discover_sources(&fixture_root).expect("checked discovery");
+        let best_effort = discover_sources_best_effort(&fixture_root);
+
+        assert_eq!(checked, best_effort);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_discovery_reports_unreadable_source_traversal() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir().expect("tempdir");
+        let restricted = temp.path().join(".codex/sessions");
+        fs::create_dir_all(&restricted).expect("sessions directory");
+        fs::set_permissions(&restricted, fs::Permissions::from_mode(0o000))
+            .expect("restrict sessions directory");
+        let result = discover_sources(temp.path());
+        fs::set_permissions(&restricted, fs::Permissions::from_mode(0o755))
+            .expect("restore sessions directory");
+
+        let Err(error) = result else {
+            return;
+        };
+        assert!(matches!(
+            error,
+            DiscoveryError::Traversal { ref source_id, .. } if source_id == "codex.sessions"
+        ));
+    }
+
+    #[test]
     fn discovers_project_local_sources_from_tempdir() {
         let temp = tempdir().expect("tempdir");
         let project = temp.path().join("myproject");
@@ -597,7 +935,8 @@ mod tests {
             name: "myproject".to_string(),
             path: project,
         }];
-        let sources = discover_sources_with_projects(std::path::Path::new("."), &projects);
+        let sources = discover_sources_with_projects(std::path::Path::new("."), &projects)
+            .expect("discovery");
         let keys: HashSet<_> = sources
             .iter()
             .map(|source| {
@@ -660,7 +999,7 @@ mod tests {
         fs::write(data_home.join("opencode.db"), b"sqlite fixture").expect("sqlite fixture");
         fs::write(legacy_dir.join("message-a.json"), b"{}").expect("legacy fixture");
 
-        let sources = discover_sources(home);
+        let sources = discover_sources(home).expect("discovery");
         let keys: HashSet<_> = sources
             .iter()
             .map(|source| {

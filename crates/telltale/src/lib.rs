@@ -16,17 +16,16 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-pub use telltale_detect as detect;
-pub use telltale_rules as rules;
-pub use telltale_schema as schema;
-pub use telltale_sources as sources;
+use telltale_detect::detection::evaluate_session_matches;
+use telltale_rules::CompiledRuleSet;
 
-pub use telltale_detect::detection::evaluate_session_matches;
-pub use telltale_rules::{CompiledRuleSet, MatchResult};
+pub use telltale_rules::MatchResult;
+pub use telltale_schema::clients::{ClientId, SourceKind};
 pub use telltale_schema::event::Event;
-pub use telltale_schema::record::NormalizedRecord;
+pub use telltale_schema::record::{NormalizedRecord, RecordKind};
 pub use telltale_schema::scoring::{RiskAccountingError, RiskContribution, RiskContributionType};
 pub use telltale_schema::source::Source;
+pub use telltale_sources::discovery::DiscoveryError;
 
 use std::path::Path;
 
@@ -57,17 +56,11 @@ impl Pipeline {
         self.rule_set.rule_count()
     }
 
-    /// Access the compiled rule set, for hosts that drive
-    /// `telltale-detect`/`telltale-rules` APIs directly.
-    pub fn rule_set(&self) -> &CompiledRuleSet {
-        &self.rule_set
-    }
-
     /// Discover session stores under `root` and run detection over every
     /// parseable source. Parse failures surface as `scanner_error` events in
     /// the stream, exactly as the `telltale` CLI reports them.
     pub fn scan_root(&self, root: &Path) -> Result<Vec<(Source, Event)>, BoxError> {
-        let sources = telltale_sources::discovery::discover_sources(root);
+        let sources = telltale_sources::discovery::discover_sources(root)?;
         Ok(telltale_detect::detection::detect_sources_with_rules(
             &sources,
             &self.rule_set,
@@ -87,7 +80,7 @@ impl Pipeline {
     pub fn evaluate_session(
         &self,
         records: &[NormalizedRecord],
-    ) -> Result<Option<MatchResult>, telltale_schema::scoring::RiskAccountingError> {
+    ) -> Result<Option<MatchResult>, RiskAccountingError> {
         evaluate_session_matches(&self.rule_set, records)
     }
 }
@@ -213,5 +206,17 @@ mod tests {
             .expect("match");
         assert!(result.score > 0);
         assert!(!result.rule_ids.is_empty());
+    }
+
+    #[test]
+    fn scan_root_propagates_checked_discovery_errors() {
+        let pipeline = Pipeline::builder().build().expect("pipeline");
+        let root =
+            std::env::temp_dir().join(format!("telltale-core-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let error = pipeline.scan_root(&root).expect_err("missing root");
+
+        assert!(error.downcast_ref::<DiscoveryError>().is_some());
     }
 }

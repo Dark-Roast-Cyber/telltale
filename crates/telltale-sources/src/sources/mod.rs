@@ -16,7 +16,3 @@ pub(crate) mod opencode;
 pub(crate) mod qwen;
 pub mod registry;
 pub(crate) mod roocode;
-
-pub use crate::clients::{
-    ClientDef, ClientId, ClientSourceDef, PathRoot, SourceKind, SourcePattern, supported_clients,
-};

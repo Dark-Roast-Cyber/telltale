@@ -6,10 +6,9 @@ the Apache-2.0 license, and reviewed deployment examples. Detection rules are
 embedded in both binaries; no rule bundle is needed for a first scan.
 
 Use `telltale` for new integrations. `adr` is the compiled deprecated
-compatibility command retained through every `0.2.x` release. The canonical
+compatibility command retained by the current release contract. The canonical
 `telltale-*` archive and its matching `adr-*` compatibility asset are exact
-byte-for-byte copies; the earliest possible removal of `adr` is `0.3.0`, only
-after at least six months of compatibility and advance notice.
+byte-for-byte copies. This migration does not schedule removal of `adr`.
 
 ## First scan
 

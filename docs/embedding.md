@@ -10,7 +10,7 @@ SIEM, or exits the process.
 
 | Integrator profile | Dependency | What you get |
 | --- | --- | --- |
-| Consume or emit Telltale events (backend, analytics) | `telltale-schema` | Event model, normalized records, redaction, risk thresholds. Serde-backed types with no runtime I/O. |
+| Consume or emit Telltale events (backend, analytics) | `telltale-schema` | Event model, normalized records, redaction, risk thresholds. Events support Serde serialization; event deserialization is not part of the API. |
 | Evaluate the rule language inline (proxy, gateway) | `telltale-rules` | YAML rule parsing/validation/policy merge and in-memory regex evaluation. I/O-free: no filesystem, watcher, or database access. |
 | Discover and parse agent session stores | `telltale-sources` | Cross-platform discovery, static per-agent source definitions, parser entry points, and install inventory. |
 | Full pipeline in-process (EDR, security tool) | `telltale-core` | The supported embedding facade: discover → parse → detect with one dependency. |
@@ -20,6 +20,9 @@ SIEM, or exits the process.
 These packages are in current release preparation and are not published to
 crates.io yet. The supported embedding surface is `telltale-core`; consume it
 as a git dependency and pin a revision until publication:
+
+See the [0.4.0 migration guide](migrations/0.4.0.md) before upgrading an
+existing integration.
 
 ```toml
 [dependencies]
@@ -81,6 +84,11 @@ matched; `Ok(Some(match_result))` contains rule IDs, categories, score, and
 redacted evidence. Contribution overflow, invalid rule IDs, or other accounting
 failures are returned to the host and must not be silently dropped.
 
+This is record evaluation, not runtime source registration. Setting an
+arbitrary `NormalizedRecord.client` string does not add a supported client,
+discovery root, or parser. Custom client/source parser registration remains
+unsupported; new sources require a bundled implementation and registry change.
+
 ### Custom rules and policy
 
 The builder mirrors the `telltale` CLI's rule semantics:
@@ -111,8 +119,9 @@ keeps the rule engine usable in processes with no filesystem access.
 
 ## Stability
 
-Pre-1.0: the `telltale-core` facade (`Pipeline`) is the intended stable surface;
-the lower-level crates re-exported through `telltale_core::{schema, rules,
-sources, detect}` may reorganize more freely. If you need something the facade does not
-expose, open an issue describing the integration — that feedback drives what
+Pre-1.0: the `telltale-core` facade (`Pipeline`) and its documented type
+re-exports are the intended stable surface. The lower-level crates may
+reorganize more freely, and `telltale-detect` can be used without source I/O by
+disabling its default `source-io` feature. If you need something the facade does
+not expose, open an issue describing the integration — that feedback drives what
 gets stabilized.

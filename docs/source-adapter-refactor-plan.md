@@ -46,8 +46,10 @@ their current contracts.
 
 ### Source registry
 
-`crates/telltale-sources/src/clients.rs` currently owns the stable source types
-and `supported_clients()` compatibility wrapper; `sources/registry.rs` owns the
+`crates/telltale-schema/src/clients.rs` owns the canonical `ClientId` and
+`SourceKind` types. `crates/telltale-sources/src/clients.rs` owns discovery
+configuration types such as `PathRoot` and `SourcePattern`, plus the
+`supported_clients()` compatibility wrapper; `sources/registry.rs` owns the
 static client registry:
 
 - `ClientId` variants and `ClientId::as_str()` values.

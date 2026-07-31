@@ -1,6 +1,7 @@
 //! OpenCode source adapter.
 
-use crate::clients::{ClientSourceDef, PathRoot, SourceKind, SourcePattern};
+use crate::clients::{ClientSourceDef, PathRoot, SourcePattern};
+use telltale_schema::clients::SourceKind;
 
 mod install;
 pub(crate) mod parser;

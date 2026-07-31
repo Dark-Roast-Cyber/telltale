@@ -1,9 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::clients::{ClientId, SourceKind, supported_clients};
 use crate::detection::detect_sources_with_rules;
-use crate::discovery::Source;
 use crate::paths::{self, PathProfile};
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
@@ -11,13 +9,16 @@ use crate::rules::{
 };
 use crate::sink::config as sink_config;
 use clap::{Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::source::Source;
+use telltale_sources::clients::supported_clients;
 
 mod coverage;
 mod export;
 mod rules_server;
 mod scan;
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 #[command(
     name = "adr",
     about = "Telltale detection layer for AI coding agent sessions",
@@ -28,7 +29,7 @@ struct Args {
     command: Command,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Subcommand)]
 enum Command {
     /// Discover supported local session sources.
     Scan {

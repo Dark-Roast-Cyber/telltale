@@ -16,8 +16,12 @@ WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/telltale-package-verify.XXXXXX")
 TARGET_DIR="$WORK_DIR/target"
 PACKAGE_DIR="$TARGET_DIR/package"
 DETECT_CONSUMER_DIR="$WORK_DIR/detect-consumer"
+DETECT_LIGHT_CONSUMER_DIR="$WORK_DIR/detect-light-consumer"
 CORE_CONSUMER_DIR="$WORK_DIR/core-consumer"
 SCHEMA_CONSUMER_DIR="$WORK_DIR/schema-consumer"
+RULES_CONSUMER_DIR="$WORK_DIR/rules-consumer"
+SOURCES_CONSUMER_DIR="$WORK_DIR/sources-consumer"
+CLI_CONSUMER_DIR="$WORK_DIR/cli-consumer"
 INSTALL_ROOT="$WORK_DIR/install"
 START_TIME=$(date +%s)
 
@@ -122,7 +126,9 @@ PY
 )
 PACKAGED_SHA_PREFIX=$(printf '%.12s' "$PACKAGED_SHA_FULL")
 
-mkdir -p "$DETECT_CONSUMER_DIR/src" "$CORE_CONSUMER_DIR/src" "$SCHEMA_CONSUMER_DIR/src"
+mkdir -p "$DETECT_CONSUMER_DIR/src" "$DETECT_LIGHT_CONSUMER_DIR/src" \
+    "$CORE_CONSUMER_DIR/src" "$SCHEMA_CONSUMER_DIR/src" \
+    "$RULES_CONSUMER_DIR/src" "$SOURCES_CONSUMER_DIR/src" "$CLI_CONSUMER_DIR/src"
 cat > "$DETECT_CONSUMER_DIR/Cargo.toml" <<EOF
 [package]
 name = "telltale-detect-consumer"
@@ -139,6 +145,61 @@ fn main() {
 }
 EOF
 
+cat > "$DETECT_LIGHT_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-detect-light-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+telltale-detect = { version = "=$VERSION", default-features = false }
+telltale-rules = "=$VERSION"
+telltale-schema = "=$VERSION"
+EOF
+
+cat > "$DETECT_LIGHT_CONSUMER_DIR/src/main.rs" <<'EOF'
+use std::path::PathBuf;
+
+use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
+use telltale_detect::detection::{
+    detect_parsed_source_records, evaluate_session_matches, summarize_parsed_source_activity,
+};
+use telltale_rules::load_default_rule_set;
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::record::NormalizedRecord;
+use telltale_schema::source::Source;
+
+fn main() {
+    let source = Source {
+        client: ClientId::Codex,
+        kind: SourceKind::Jsonl,
+        source_id: "consumer.synthetic".to_string(),
+        path: PathBuf::from("synthetic://consumer"),
+    };
+    let records = vec![NormalizedRecord {
+        session_id: "session".to_string(),
+        client: "codex".to_string(),
+        agent: None,
+        model: None,
+        provider: None,
+        timestamp: None,
+        kind: telltale_schema::record::RecordKind::ToolCall,
+        tool_name: Some("shell".to_string()),
+        arguments: Some("{\"command\":\"printf test\"}".to_string()),
+        content: "printf test".to_string(),
+    }];
+    let rules = load_default_rule_set().expect("rules");
+    let _ = evaluate_session_matches(&rules, &records);
+    let _ = detect_parsed_source_records(&source, &rules, &records);
+    let _ = summarize_parsed_source_activity(
+        &source,
+        &records,
+        &BaselineSnapshotStore::default(),
+        BaselineDeviationConfig::default(),
+    );
+}
+EOF
+
 cat > "$CORE_CONSUMER_DIR/Cargo.toml" <<EOF
 [package]
 name = "telltale-core-consumer"
@@ -150,8 +211,43 @@ telltale-core = "=$VERSION"
 EOF
 
 cat > "$CORE_CONSUMER_DIR/src/main.rs" <<'EOF'
+use telltale_core::{
+    ClientId, DiscoveryError, Event, MatchResult, NormalizedRecord, RecordKind,
+    RiskAccountingError, RiskContribution, RiskContributionType, Source, SourceKind,
+};
+
+fn is_discovery_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    error.downcast_ref::<DiscoveryError>().is_some()
+}
+
 fn main() {
+    let _: Option<Event> = None;
+    let _: Option<Source> = None;
+    let _: Option<NormalizedRecord> = None;
+    let _: Option<MatchResult> = None;
+    let _: Option<RiskAccountingError> = None;
+    let _: Option<RiskContribution> = None;
+    let _: Option<RiskContributionType> = None;
+    let _: fn(&(dyn std::error::Error + 'static)) -> bool = is_discovery_error;
+    let _: Option<ClientId> = None;
+    let _: Option<SourceKind> = None;
+    let _: Option<RecordKind> = None;
+    let contribution = RiskContribution::new(
+        "rule.consumer",
+        RiskContributionType::DeterministicRule,
+        1,
+        "consumer test",
+    )
+    .expect("validated contribution");
+    assert_eq!(contribution.points(), 1);
     let pipeline = telltale_core::Pipeline::builder().build().expect("pipeline");
+    let missing = std::env::temp_dir().join(format!(
+        "telltale-core-consumer-missing-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&missing);
+    let error = pipeline.scan_root(&missing).expect_err("missing root");
+    assert!(is_discovery_error(error.as_ref()));
     println!("{}", pipeline.rule_count());
 }
 EOF
@@ -191,6 +287,92 @@ fn main() {
 }
 EOF
 
+cat > "$RULES_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-rules-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+telltale-rules = "=$VERSION"
+EOF
+
+cat > "$RULES_CONSUMER_DIR/src/main.rs" <<'EOF'
+use telltale_rules::{bundled_default_rule_yaml, CompiledRuleSet, MatchResult};
+
+fn main() {
+    let _: Option<CompiledRuleSet> = None;
+    let _: Option<MatchResult> = None;
+    assert!(!bundled_default_rule_yaml().is_empty());
+}
+EOF
+
+cat > "$SOURCES_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-sources-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+telltale-schema = "=$VERSION"
+telltale-sources = "=$VERSION"
+EOF
+
+cat > "$SOURCES_CONSUMER_DIR/src/main.rs" <<'EOF'
+use std::path::Path;
+
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::record::{NormalizedRecord, RecordKind};
+use telltale_schema::source::Source;
+use telltale_sources::clients::{PathRoot, SourcePattern};
+
+fn main() {
+    let _: Option<ClientId> = None;
+    let _: Option<SourceKind> = None;
+    let _: Option<NormalizedRecord> = None;
+    let _: Option<RecordKind> = None;
+    let _: Option<Source> = None;
+    let _ = match ClientId::Codex {
+        ClientId::Codex => "codex",
+        _ => "other client",
+    };
+    let _ = match SourceKind::Jsonl {
+        SourceKind::Jsonl => "jsonl",
+        _ => "other source kind",
+    };
+    let _ = match RecordKind::ToolCall {
+        RecordKind::ToolCall => "tool call",
+        _ => "other record kind",
+    };
+    let _ = match PathRoot::Home {
+        PathRoot::Home => "home",
+        _ => "other path root",
+    };
+    let _ = match SourcePattern::ExactFile("session.jsonl") {
+        SourcePattern::ExactFile(_) => "exact file",
+        _ => "other source pattern",
+    };
+    let _ = telltale_sources::clients::supported_clients();
+    let _ = telltale_sources::discovery::discover_sources(Path::new("."));
+}
+EOF
+
+cat > "$CLI_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-cli-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+telltale-cli = "=$VERSION"
+EOF
+
+cat > "$CLI_CONSUMER_DIR/src/main.rs" <<'EOF'
+fn main() {
+    let _: fn() -> Result<(), Box<dyn std::error::Error>> = telltale_cli::run;
+}
+EOF
+
 set -- "$CARGO_BIN" run --manifest-path "$SCHEMA_CONSUMER_DIR/Cargo.toml"
 set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path telltale-schema)\""
 echo "== registry-style schema consumer =="
@@ -208,6 +390,61 @@ done
 echo "== registry-style detect-only consumer =="
 CARGO_TARGET_DIR="$TARGET_DIR/detect-consumer" "$@"
 
+set -- "$CARGO_BIN" check --manifest-path "$DETECT_LIGHT_CONSUMER_DIR/Cargo.toml"
+for package in telltale-detect telltale-rules telltale-schema; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+echo "== registry-style detect no-default-features consumer =="
+CARGO_TARGET_DIR="$TARGET_DIR/detect-light-consumer" "$@"
+
+LIGHT_METADATA="$WORK_DIR/detect-light-metadata.json"
+set -- "$CARGO_BIN" metadata --format-version 1 --no-default-features \
+    --manifest-path "$DETECT_LIGHT_CONSUMER_DIR/Cargo.toml"
+for package in telltale-detect telltale-rules telltale-schema; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+echo "== inspect detect no-default-features dependency graph =="
+"$@" > "$LIGHT_METADATA"
+python3 - "$LIGHT_METADATA" <<'PY'
+import json
+import sys
+
+metadata = json.load(open(sys.argv[1], encoding="utf-8"))
+names = {package["id"]: package["name"] for package in metadata["packages"]}
+nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+root = next(package["id"] for package in metadata["packages"]
+            if package["name"] == "telltale-detect-light-consumer")
+reachable = {root}
+pending = [root]
+while pending:
+    current = pending.pop()
+    for dependency in nodes[current]["deps"]:
+        if any(kind["kind"] in (None, "normal") for kind in dependency["dep_kinds"]):
+            package_id = dependency["pkg"]
+            if package_id not in reachable:
+                reachable.add(package_id)
+                pending.append(package_id)
+
+forbidden = {"telltale-sources", "rusqlite", "walkdir"}
+present = forbidden.intersection(names[package_id] for package_id in reachable)
+if present:
+    raise SystemExit(f"light detect graph unexpectedly contains: {sorted(present)}")
+print("light detect graph excludes telltale-sources, rusqlite, and walkdir")
+PY
+
+set -- "$CARGO_BIN" check --manifest-path "$RULES_CONSUMER_DIR/Cargo.toml"
+set -- "$@" --config "patch.crates-io.telltale-rules.path=\"$(package_path telltale-rules)\""
+set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path telltale-schema)\""
+echo "== registry-style rules consumer =="
+CARGO_TARGET_DIR="$TARGET_DIR/rules-consumer" "$@"
+
+set -- "$CARGO_BIN" check --manifest-path "$SOURCES_CONSUMER_DIR/Cargo.toml"
+for package in telltale-sources telltale-schema; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+echo "== registry-style sources consumer =="
+CARGO_TARGET_DIR="$TARGET_DIR/sources-consumer" "$@"
+
 set -- "$CARGO_BIN" run --manifest-path "$CORE_CONSUMER_DIR/Cargo.toml"
 set -- "$@" --config "patch.crates-io.telltale-core.path=\"$(package_path telltale-core)\""
 for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
@@ -215,6 +452,14 @@ for package in telltale-schema telltale-rules telltale-sources telltale-detect; 
 done
 echo "== registry-style core-only consumer =="
 CARGO_TARGET_DIR="$TARGET_DIR/core-consumer" "$@" >/dev/null
+
+set -- "$CARGO_BIN" check --manifest-path "$CLI_CONSUMER_DIR/Cargo.toml"
+set -- "$@" --config "patch.crates-io.telltale-cli.path=\"$(package_path telltale-cli)\""
+for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
+    set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+done
+echo "== registry-style CLI consumer =="
+CARGO_TARGET_DIR="$TARGET_DIR/cli-consumer" "$@"
 
 set -- "$CARGO_BIN" install --locked --path "$(package_path telltale-cli)" --root "$INSTALL_ROOT"
 for package in telltale-schema telltale-rules telltale-sources telltale-detect; do

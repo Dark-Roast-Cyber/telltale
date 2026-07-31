@@ -1,10 +1,11 @@
-use crate::clients::{ClientId, SourceKind};
-use crate::discovery::discover_sources;
-use crate::parser::{RecordKind, parse_source_records};
+use crate::discovery::discover_sources_best_effort;
+use crate::parser::parse_source_records;
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::record::RecordKind;
 
 #[test]
 fn parses_roocode_ui_messages_json_records() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::RooCode
@@ -36,7 +37,7 @@ fn parses_roocode_ui_messages_json_records() {
 
 #[test]
 fn parses_roocode_ui_messages_tool_call_and_result_records() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::RooCode

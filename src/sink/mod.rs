@@ -4,9 +4,9 @@ pub mod http;
 mod jsonl;
 mod splunk_hec;
 
-pub use elastic::{DEFAULT_ELASTIC_INDEX, ElasticBulkSink, elastic_bulk_action_json};
-pub use jsonl::{LocalJsonlSink, RotationConfig};
-pub use splunk_hec::{SplunkHecConfig, SplunkHecEnvelope, SplunkHecHttpSink, splunk_hec_envelopes};
+pub(crate) use elastic::{DEFAULT_ELASTIC_INDEX, ElasticBulkSink, elastic_bulk_action_json};
+pub(crate) use jsonl::{LocalJsonlSink, RotationConfig};
+pub(crate) use splunk_hec::{SplunkHecConfig, SplunkHecHttpSink};
 
 use crate::event::Event;
 
@@ -37,10 +37,8 @@ pub trait EventSink {
     fn emit(&self, events: &[Event]) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-pub fn emit_events(
-    sink: &dyn EventSink,
-    events: &[Event],
-) -> Result<(), Box<dyn std::error::Error>> {
+#[cfg(test)]
+fn emit_events(sink: &dyn EventSink, events: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
     sink.emit(events)
 }
 

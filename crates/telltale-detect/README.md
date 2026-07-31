@@ -11,6 +11,12 @@ caller.
 let _events = telltale_detect::detection::detect_sources(&[]);
 ```
 
+The default `source-io` feature enables filesystem-backed detection, source
+parsing, MCP inventory, SQLite, and `walkdir`. Consumers that already have
+normalized records can use `default-features = false` to omit source discovery,
+parsing, SQLite, and `walkdir`; pair it with `telltale-rules` and
+`telltale-schema` for rule sets and record/source types.
+
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
 - [API documentation](https://docs.rs/telltale-detect)

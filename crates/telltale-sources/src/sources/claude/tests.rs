@@ -1,10 +1,11 @@
-use crate::clients::{ClientId, SourceKind};
-use crate::discovery::discover_sources;
-use crate::parser::{RecordKind, parse_source_records};
+use crate::discovery::discover_sources_best_effort;
+use crate::parser::parse_source_records;
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::record::RecordKind;
 
 #[test]
 fn parses_claude_code_jsonl_records() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::Claude
@@ -26,7 +27,7 @@ fn parses_claude_code_jsonl_records() {
 
 #[test]
 fn parses_claude_code_tool_use_and_tool_result_blocks() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::Claude

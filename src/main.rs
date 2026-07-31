@@ -1,7 +1,7 @@
-use telltale_cli::cli;
+use telltale_cli::run;
 
 fn main() -> std::process::ExitCode {
-    match cli::run() {
+    match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");

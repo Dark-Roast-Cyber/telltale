@@ -961,9 +961,9 @@ mod tests {
 
         assert_eq!(result.score, 4_294_967_296);
         assert_eq!(result.contributions.len(), 1);
-        assert_eq!(result.contributions[0].id, "rule.large");
+        assert_eq!(result.contributions[0].id(), "rule.large");
         assert_eq!(
-            result.contributions[0].contribution_type,
+            result.contributions[0].contribution_type(),
             telltale_schema::scoring::RiskContributionType::DeterministicRule
         );
     }
@@ -1004,7 +1004,7 @@ mod tests {
         assert_eq!(result.score, 67);
         assert_eq!(result.contributions.len(), 2);
         assert_eq!(
-            result.contributions[1].contribution_type,
+            result.contributions[1].contribution_type(),
             telltale_schema::scoring::RiskContributionType::ChainModifier
         );
     }
@@ -1035,7 +1035,7 @@ mod tests {
             result
                 .contributions
                 .iter()
-                .map(|contribution| contribution.id.as_str())
+                .map(|contribution| contribution.id())
                 .collect::<Vec<_>>(),
             vec!["rule.a", "rule.z"]
         );

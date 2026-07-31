@@ -20,11 +20,10 @@ Telltale is an open-source detection layer for AI coding agents, built as the fo
 
 > **Executable and compatibility contract:** Use `telltale` (`telltale.exe`) and
 > `telltale-*` release assets for new integrations. `adr` (`adr.exe`) is the
-> compiled deprecated compatibility command and remains available through every
-> `0.2.x` release. Each `adr-*` release archive is an exact byte-for-byte copy
+> compiled deprecated compatibility command and remains part of the current
+> release contract. Each `adr-*` release archive is an exact byte-for-byte copy
 > of its matching `telltale-*` archive, and both archives contain both binaries.
-> The earliest possible removal is `0.3.0`, only after at least six months of
-> compatibility and advance notice.
+> This migration does not schedule removal of the compatibility command.
 >
 > The executable rename does not rename compatibility data or configuration:
 > preserve `ADR_*`, `adr-events.jsonl`, `adr-state.json`,

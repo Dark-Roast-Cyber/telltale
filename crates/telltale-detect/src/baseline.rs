@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::scoring::RiskAccountingError;
-use telltale_sources::parser::{NormalizedRecord, RecordKind};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct BaselineDeviationConfig {
@@ -232,6 +232,7 @@ impl BaselineObservationTotals {
             RecordKind::ToolResult => self.tool_results += 1,
             RecordKind::SessionMeta => self.session_meta += 1,
             RecordKind::Other => self.other += 1,
+            _ => self.other += 1,
         }
     }
 }
@@ -495,7 +496,9 @@ pub fn baseline_snapshot_id(key: &BaselineKey) -> String {
 
 #[cfg(test)]
 mod tests {
-    use telltale_sources::discovery::discover_sources;
+    #[cfg(feature = "source-io")]
+    use telltale_sources::discovery::discover_sources_best_effort;
+    #[cfg(feature = "source-io")]
     use telltale_sources::parser::parse_source_records;
 
     use super::*;
@@ -592,8 +595,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "source-io")]
     fn benign_fixture_records_produce_baseline_without_side_effects() {
-        let sources = discover_sources(&crate::test_fixture_path("benign_baselines"));
+        let sources = discover_sources_best_effort(&crate::test_fixture_path("benign_baselines"));
         let mut records = Vec::new();
         for source in sources {
             records.extend(parse_source_records(&source).expect("parse benign source"));

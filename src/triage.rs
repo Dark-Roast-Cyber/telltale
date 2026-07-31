@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -16,7 +17,7 @@ const DEFAULT_TRIAGE_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_TRIAGE_MAX_RETRIES: u32 = 2;
 const DEFAULT_TRIAGE_RETRY_BASE_DELAY_MS: u64 = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TriageConfig {
     pub api_base: String,
     pub api_key: String,
@@ -24,6 +25,20 @@ pub struct TriageConfig {
     pub guard_model: String,
     pub request_timeout_ms: u64,
     pub max_retries: u32,
+}
+
+impl fmt::Debug for TriageConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TriageConfig")
+            .field("api_base", &self.api_base)
+            .field("api_key", &"<redacted>")
+            .field("model", &self.model)
+            .field("guard_model", &self.guard_model)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field("max_retries", &self.max_retries)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -334,13 +349,13 @@ mod tests {
     use super::{
         TriageConfig, chat_completion_with_retry, load_config_from, maybe_triage_with_chat,
     };
-    use crate::clients::ClientId;
     use crate::event::{DetectionEventInput, detection_event};
     use std::fs;
     use std::io;
     use std::sync::OnceLock;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use telltale_schema::clients::ClientId;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -364,6 +379,9 @@ mod tests {
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.request_timeout_ms, 2500);
         assert_eq!(config.max_retries, 4);
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"));
     }
 
     #[test]

@@ -104,7 +104,7 @@ fn validate_export_config(config: &ExportConfig<'_>) -> Result<(), Box<dyn std::
             .iter()
             .find(|client| !is_supported_client_filter(client))
         {
-            let expected = crate::clients::supported_clients()
+            let expected = telltale_sources::clients::supported_clients()
                 .iter()
                 .map(|client| client.id.as_str())
                 .collect::<Vec<_>>()
@@ -119,7 +119,7 @@ fn validate_export_config(config: &ExportConfig<'_>) -> Result<(), Box<dyn std::
 }
 
 fn is_supported_client_filter(value: &str) -> bool {
-    crate::clients::supported_clients()
+    telltale_sources::clients::supported_clients()
         .iter()
         .any(|client| client.id.as_str() == value)
 }
@@ -706,12 +706,12 @@ fn build_source_backed_session_timelines(
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     type SessionKey = (String, String);
     type CanonicalSessionRecord = (String, usize, NormalizedRecordV1);
-    type LegacySessionRecord = (String, usize, crate::parser::NormalizedRecord);
+    type LegacySessionRecord = (String, usize, telltale_schema::record::NormalizedRecord);
 
     let rule_set = load_default_rule_set()?;
     let mut by_session: BTreeMap<SessionKey, Vec<CanonicalSessionRecord>> = BTreeMap::new();
     let mut legacy_by_session: BTreeMap<SessionKey, Vec<LegacySessionRecord>> = BTreeMap::new();
-    let mut sources = crate::discovery::discover_sources(source_root);
+    let mut sources = crate::discovery::discover_sources_best_effort(source_root);
     if !client_filters.is_empty() {
         sources.retain(|source| client_filters.contains(source.client.as_str()));
     }
@@ -770,7 +770,7 @@ fn build_source_backed_session_timelines(
 
 fn build_source_backed_timeline_value(
     canonical_records: &[NormalizedRecordV1],
-    parsed_records: &[crate::parser::NormalizedRecord],
+    parsed_records: &[telltale_schema::record::NormalizedRecord],
     rule_set: &CompiledRuleSet,
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
     let Some(session_timeline) = build_exported_session_timeline(canonical_records) else {
@@ -799,12 +799,12 @@ fn build_source_backed_timeline_value(
 }
 
 fn build_source_backed_risk_summary(
-    parsed_records: &[crate::parser::NormalizedRecord],
+    parsed_records: &[telltale_schema::record::NormalizedRecord],
     rule_set: &CompiledRuleSet,
 ) -> Result<serde_json::Value, RiskAccountingError> {
     let tool_call_count = parsed_records
         .iter()
-        .filter(|record| matches!(record.kind, crate::parser::RecordKind::ToolCall))
+        .filter(|record| matches!(record.kind, telltale_schema::record::RecordKind::ToolCall))
         .count() as u64;
     let matches = crate::detection::evaluate_session_matches(rule_set, parsed_records)?;
     let risk_score = matches.as_ref().map(|matches| matches.score).unwrap_or(0);

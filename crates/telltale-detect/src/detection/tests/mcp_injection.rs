@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn detects_uc001_mcp_injection_chain_only() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert_eq!(detections.len(), 36);
@@ -49,7 +49,7 @@ fn uc001_critical_fixture_coverage_includes_every_supported_client() {
         .iter()
         .map(|client| client.id.as_str())
         .collect::<BTreeSet<_>>();
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     let covered_clients = detections
@@ -111,7 +111,7 @@ fn detects_uc001_positive_in_session_store_fixture() {
 
 #[test]
 fn ignores_benign_controlled_domain_mentions_in_user_text() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(
@@ -123,7 +123,7 @@ fn ignores_benign_controlled_domain_mentions_in_user_text() {
 
 #[test]
 fn ignores_benign_mcp_user_text_fixture() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(
@@ -151,7 +151,7 @@ fn ignores_benign_mcp_user_text_session_fixture() {
 
 #[test]
 fn ignores_benign_normal_mcp_fixture() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(
@@ -249,7 +249,7 @@ fn ignores_benign_normal_mcp_tool_result_session_fixture() {
 
 #[test]
 fn ignores_benign_server_instructions_fixture() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(
@@ -601,7 +601,7 @@ fn ignores_benign_controlled_domain_mentions_in_session_store_assistant_text() {
 
 #[test]
 fn ignores_benign_controlled_domain_mentions_in_tool_results() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(

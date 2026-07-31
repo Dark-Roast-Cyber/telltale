@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -187,12 +188,22 @@ fn validate_http_endpoint(
 /// A secret in sink config: an inline string, `{env: NAME}`, or `{file: PATH}`.
 /// Inline is allowed for lab use; env/file references are the documented best
 /// practice and what `config validate` recommends.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum SecretValue {
     Env { env: String },
     File { file: PathBuf },
     Inline(String),
+}
+
+impl fmt::Debug for SecretValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Env { env } => formatter.debug_struct("Env").field("env", env).finish(),
+            Self::File { file } => formatter.debug_struct("File").field("file", file).finish(),
+            Self::Inline(_) => formatter.write_str("Inline(\"<redacted>\")"),
+        }
+    }
 }
 
 impl SecretValue {
@@ -222,7 +233,7 @@ impl SecretValue {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OutputsDocRaw {
     version: u64,
@@ -333,7 +344,8 @@ pub struct CliSinkOverrides<'a> {
 /// With no outputs config this reproduces the legacy behavior exactly: a local
 /// JSONL sink at the resolved log path, plus a Splunk HEC sink iff both
 /// `--splunk-hec-*` flags are set.
-pub fn build_sink_set(
+#[cfg(test)]
+fn build_sink_set(
     specs: &[SinkSpec],
     cli: &CliSinkOverrides<'_>,
 ) -> Result<SinkSet, Box<dyn std::error::Error>> {
@@ -500,6 +512,25 @@ mod tests {
         let path = dir.join(file_name);
         std::fs::write(&path, contents).expect("write outputs yaml");
         path
+    }
+
+    #[test]
+    fn debug_redacts_inline_secrets_directly_and_when_nested() {
+        let secret = "sentinel-inline-secret";
+        let direct = format!("{:?}", SecretValue::Inline(secret.to_string()));
+        assert!(!direct.contains(secret));
+
+        let dir = tempdir().expect("tempdir");
+        let path = write_outputs(
+            dir.path(),
+            "outputs.yaml",
+            &format!(
+                "version: 1\nsinks:\n  - name: splunk\n    type: splunk_hec\n    endpoint: http://127.0.0.1:8088\n    token: {secret}\n  - name: elastic\n    type: elastic_bulk\n    endpoint: http://127.0.0.1:9200\n    api_key: {secret}\n"
+            ),
+        );
+        let specs = load_outputs_config(&[path]).expect("outputs");
+        let nested = format!("{specs:?}");
+        assert!(!nested.contains(secret));
     }
 
     fn cli_defaults<'a>(log_path: &'a std::path::Path) -> CliSinkOverrides<'a> {

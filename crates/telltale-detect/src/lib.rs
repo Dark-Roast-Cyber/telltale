@@ -9,10 +9,11 @@ pub mod allowlist;
 pub mod baseline;
 pub mod correlation;
 pub mod detection;
+#[cfg(feature = "source-io")]
 pub mod mcp;
 pub mod timeline;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "source-io"))]
 pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir.join("../../tests/fixtures");

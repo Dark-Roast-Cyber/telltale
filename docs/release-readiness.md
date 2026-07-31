@@ -129,7 +129,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-pinned `=0.3.0` registry packages before publication is declared complete.
+pinned `=0.4.0` registry packages before publication is declared complete.
 
 ## Artifact Boundary
 

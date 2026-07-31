@@ -34,7 +34,7 @@ fn ignores_quoted_approval_bypass_user_text_session_fixture() {
 
 #[test]
 fn ignores_benign_controlled_domain_mentions_in_user_text_session_fixture() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(
@@ -110,7 +110,7 @@ fn ignores_quoted_approval_bypass_session_store_fixture() {
 
 #[test]
 fn ignores_benign_approval_bypass_user_text_fixture() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(
@@ -138,7 +138,7 @@ fn ignores_benign_approval_bypass_user_text_session_fixture() {
 
 #[test]
 fn ignores_benign_approval_bypass_tool_result_fixture() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     assert!(
@@ -150,7 +150,7 @@ fn ignores_benign_approval_bypass_tool_result_fixture() {
 
 #[test]
 fn detects_uc001_server_instructions_chain() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     let event = detections
@@ -183,7 +183,7 @@ fn detects_uc001_server_instructions_chain() {
 
 #[test]
 fn detects_uc001_tool_description_chain() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     let event = detections
@@ -216,7 +216,7 @@ fn detects_uc001_tool_description_chain() {
 
 #[test]
 fn detects_uc001_tool_result_injection_chain() {
-    let sources = discover_sources(&crate::test_fixture_path("session_stores"));
+    let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
     let event = detections

@@ -1,10 +1,12 @@
-use crate::clients::{ClientId, SourceKind};
-use crate::discovery::discover_sources;
-use crate::parser::{RecordKind, parse_source_records};
+use crate::discovery::discover_sources_best_effort;
+use crate::parser::parse_source_records;
+use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::record::RecordKind;
+use telltale_schema::source::Source;
 
 #[test]
 fn parses_jsonl_records_in_order_with_session_metadata() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::Codex
@@ -29,7 +31,7 @@ fn parses_jsonl_records_in_order_with_session_metadata() {
 
 #[test]
 fn parses_headless_jsonl_as_single_session_meta_record() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::Codex
@@ -52,7 +54,7 @@ fn parses_headless_jsonl_as_single_session_meta_record() {
 
 #[test]
 fn parses_archived_jsonl_as_single_session_meta_record() {
-    let source = discover_sources(&crate::test_fixture_path("session_stores"))
+    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
         .into_iter()
         .find(|source| {
             source.client == ClientId::Codex
@@ -77,9 +79,9 @@ fn parses_archived_jsonl_as_single_session_meta_record() {
 
 #[test]
 fn parses_nested_codex_tool_call_payload_fields() {
-    let source = crate::discovery::Source {
-        client: crate::clients::ClientId::Codex,
-        kind: crate::clients::SourceKind::Jsonl,
+    let source = Source {
+        client: ClientId::Codex,
+        kind: SourceKind::Jsonl,
         source_id: "codex-payload-arguments-injection".to_string(),
         path: crate::test_fixture_path("rule_samples/codex-payload-arguments-injection.jsonl")
             .to_path_buf(),
