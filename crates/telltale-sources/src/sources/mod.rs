@@ -3,8 +3,10 @@
 //! Each agent module owns its static source definitions and install-inventory
 //! evidence. `registry` collects them into the fixed table that
 //! `crate::clients::supported_clients()` wraps; there is no trait-based adapter
-//! contract and no runtime registration. Parser dispatch remains centralized,
-//! with selected source-specific helpers living in the agent modules.
+//! contract and no runtime registration. The private exact `(ClientId,
+//! source_id)` parser table is maintained in `crate::parser`; `SourceKind` is
+//! container/reporting metadata, not semantic parser selection. Modeled parser
+//! code and focused tests live in the agent modules where practical.
 
 pub(crate) mod claude;
 pub(crate) mod codex;
