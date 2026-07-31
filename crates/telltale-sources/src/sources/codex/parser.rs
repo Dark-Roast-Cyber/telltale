@@ -8,7 +8,7 @@ use crate::parser::{
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
-pub(crate) fn extract_claude_jsonl_source(
+pub(crate) fn extract_codex_jsonl_source(
     source: &Source,
     _options: ParseOptions,
 ) -> Result<ExtractedSourceRecords, ParseError> {
@@ -40,16 +40,15 @@ pub(crate) fn extract_claude_jsonl_source(
             .or_else(|| string_field(&value, "model_name"))
             .or_else(|| string_field(&value, "modelID"));
 
-        let arguments = arguments_field(&value).or_else(|| claude_tool_input_as_string(&value));
         records.push(ParsedRecord {
             session_id: session_id_with_fallback(&value, &default_session_id),
             agent: agent.clone(),
             model: model.clone(),
             provider: provider.clone(),
             timestamp: string_field(&value, "timestamp"),
-            kind: claude_record_kind(&value),
-            tool_name: claude_tool_name(&value),
-            arguments,
+            kind: codex_record_kind(&value),
+            tool_name: codex_tool_name(&value),
+            arguments: arguments_field(&value).or_else(|| codex_tool_input_as_string(&value)),
             content: record_content(&value),
         });
     }
@@ -57,9 +56,9 @@ pub(crate) fn extract_claude_jsonl_source(
     Ok(ExtractedSourceRecords::records(records))
 }
 
-fn claude_record_kind(value: &Value) -> RecordKind {
-    let discriminator = claude_discriminator(value);
-    if discriminator.is_some_and(|kind| !is_known_claude_discriminator(kind)) {
+fn codex_record_kind(value: &Value) -> RecordKind {
+    let discriminator = codex_discriminator(value);
+    if discriminator.is_some_and(|kind| !is_known_codex_discriminator(kind)) {
         return RecordKind::Other;
     }
 
@@ -96,7 +95,7 @@ fn claude_record_kind(value: &Value) -> RecordKind {
         }
         Some("tool_call") => RecordKind::ToolCall,
         Some("tool_result") => RecordKind::ToolResult,
-        Some("tool") if claude_tool_part_is_result(value) => RecordKind::ToolResult,
+        Some("tool") if codex_tool_part_is_result(value) => RecordKind::ToolResult,
         Some("tool") => RecordKind::ToolCall,
         Some("session_meta") => RecordKind::SessionMeta,
         _ if value.get("session_meta").is_some() => RecordKind::SessionMeta,
@@ -104,7 +103,7 @@ fn claude_record_kind(value: &Value) -> RecordKind {
     }
 }
 
-fn claude_discriminator(value: &Value) -> Option<&str> {
+fn codex_discriminator(value: &Value) -> Option<&str> {
     value
         .get("payload")
         .and_then(|payload| payload.get("type"))
@@ -126,7 +125,7 @@ fn claude_discriminator(value: &Value) -> Option<&str> {
         })
 }
 
-fn is_known_claude_discriminator(kind: &str) -> bool {
+fn is_known_codex_discriminator(kind: &str) -> bool {
     matches!(
         kind,
         "user_message"
@@ -143,7 +142,15 @@ fn is_known_claude_discriminator(kind: &str) -> bool {
     )
 }
 
-fn claude_tool_part_is_result(value: &Value) -> bool {
+fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
+    value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .or_else(|| value.get("content"))
+        .and_then(Value::as_array)
+}
+
+fn codex_tool_part_is_result(value: &Value) -> bool {
     value
         .get("state")
         .and_then(|state| state.get("status"))
@@ -155,15 +162,7 @@ fn claude_tool_part_is_result(value: &Value) -> bool {
             .is_some()
 }
 
-fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
-    value
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .or_else(|| value.get("content"))
-        .and_then(Value::as_array)
-}
-
-fn claude_tool_name(value: &Value) -> Option<String> {
+fn codex_tool_name(value: &Value) -> Option<String> {
     string_field(value, "tool_name")
         .or_else(|| string_field(value, "tool"))
         .or_else(|| string_field(value, "name"))
@@ -177,7 +176,7 @@ fn claude_tool_name(value: &Value) -> Option<String> {
         })
 }
 
-fn claude_tool_input_as_string(value: &Value) -> Option<String> {
+fn codex_tool_input_as_string(value: &Value) -> Option<String> {
     let input = content_blocks(value)?
         .iter()
         .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
@@ -195,98 +194,62 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::extract_claude_jsonl_source;
-    use crate::parser::ParseOptions;
+    use super::extract_codex_jsonl_source;
+    use crate::parser::{ParseError, ParseOptions, parse_source_records};
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::record::RecordKind;
     use telltale_schema::source::Source;
 
-    #[test]
-    fn rejects_non_object_claude_record_envelopes_as_schema_drift() {
-        let source = Source {
-            client: ClientId::Claude,
-            kind: SourceKind::Jsonl,
-            source_id: "claude.projects".to_string(),
-            path: crate::test_fixture_path("parser_maturity/non_discovered/schema-drift.jsonl"),
-        };
+    const CODEX_IDENTITIES: &[(&str, SourceKind)] = &[
+        ("codex.sessions", SourceKind::Jsonl),
+        ("codex.archived_sessions", SourceKind::ArchivedJsonl),
+        ("codex.headless_sessions", SourceKind::HeadlessJsonl),
+        ("codex.project_sessions", SourceKind::Jsonl),
+    ];
 
-        let error = extract_claude_jsonl_source(&source, ParseOptions::default())
-            .expect_err("array envelope should be schema drift");
-
-        let message = error.to_string();
-        assert!(matches!(
-            error,
-            crate::parser::ParseError::SchemaDrift { .. }
-        ));
-        assert!(message.contains("schema drift"));
-        assert!(!message.contains("Synthetic schema envelope drift"));
+    fn source(source_id: &str, kind: SourceKind, fixture: &str) -> Source {
+        Source {
+            client: ClientId::Codex,
+            kind,
+            source_id: source_id.to_string(),
+            path: crate::test_fixture_path(fixture),
+        }
     }
 
     #[test]
-    fn preserves_claude_tool_input_arguments_and_order() {
-        let source = Source {
-            client: ClientId::Claude,
-            kind: SourceKind::Jsonl,
-            source_id: "claude.projects".to_string(),
-            path: crate::test_fixture_path(
-                "session_stores/claude/projects/project-b/session-tool-use.jsonl",
-            ),
-        };
+    fn codex_failure_boundary_is_terminal_for_all_registered_identities() {
+        for &(source_id, kind) in CODEX_IDENTITIES {
+            let drift = source(
+                source_id,
+                kind,
+                "parser_maturity/non_discovered/schema-drift.jsonl",
+            );
+            assert!(matches!(
+                parse_source_records(&drift),
+                Err(ParseError::SchemaDrift { .. })
+            ));
 
-        let records = extract_claude_jsonl_source(&source, ParseOptions::default())
-            .expect("Claude records")
-            .records;
+            let malformed = source(
+                source_id,
+                kind,
+                "parser_maturity/non_discovered/malformed-known-parser.jsonl",
+            );
+            assert!(matches!(
+                parse_source_records(&malformed),
+                Err(ParseError::Json(_))
+            ));
+        }
+    }
 
-        assert_eq!(records.len(), 3);
-        assert_eq!(records[0].kind, RecordKind::UserMessage);
-        assert_eq!(records[1].kind, RecordKind::ToolCall);
-        assert_eq!(records[1].tool_name.as_deref(), Some("Read"));
-        assert_eq!(
-            records[1].arguments.as_deref(),
-            Some("{\"file_path\":\"README.md\"}")
+    #[test]
+    fn unknown_discriminators_override_nested_codex_shapes() {
+        let source = source(
+            "codex.sessions",
+            SourceKind::Jsonl,
+            "parser_maturity/non_discovered/unknown-shaped-discriminators.jsonl",
         );
-        assert_eq!(records[2].kind, RecordKind::ToolResult);
-    }
 
-    #[test]
-    fn preserves_legacy_tool_discriminator_result_classification() {
-        let temp = tempdir().expect("tempdir");
-        let path = temp.path().join("claude-tools.jsonl");
-        fs::write(
-            &path,
-            b"{\"type\":\"tool\",\"state\":{\"status\":\"running\"}}\n{\"type\":\"tool\",\"state\":{\"status\":\"completed\"}}\n",
-        )
-        .expect("Claude tool fixture");
-        let source = Source {
-            client: ClientId::Claude,
-            kind: SourceKind::Jsonl,
-            source_id: "claude.projects".to_string(),
-            path,
-        };
-
-        let records = extract_claude_jsonl_source(&source, ParseOptions::default())
-            .expect("Claude records")
-            .records;
-
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].kind, RecordKind::ToolCall);
-        assert_eq!(records[1].kind, RecordKind::ToolResult);
-    }
-
-    #[test]
-    fn unknown_discriminators_override_shape_inference() {
-        let source = Source {
-            client: ClientId::Claude,
-            kind: SourceKind::Jsonl,
-            source_id: "claude.projects".to_string(),
-            path: crate::test_fixture_path(
-                "parser_maturity/non_discovered/unknown-shaped-discriminators.jsonl",
-            ),
-        };
-
-        let records = extract_claude_jsonl_source(&source, ParseOptions::default())
-            .expect("Claude records")
-            .records;
+        let records = parse_source_records(&source).expect("Codex records");
 
         assert_eq!(records.len(), 3);
         assert!(
@@ -294,8 +257,59 @@ mod tests {
                 .iter()
                 .all(|record| record.kind == RecordKind::Other)
         );
-        assert!(records[0].content.contains("future_tool"));
-        assert!(records[1].content.contains("Synthetic future result"));
-        assert!(records[2].content.contains("future-agent"));
+    }
+
+    #[test]
+    fn preserves_known_codex_content_block_tool_semantics() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("codex-tool-shapes.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"session_id\":\"codex-tool-shapes\",\"content\":\"Inspect repository.\"}\n{\"type\":\"assistant\",\"session_id\":\"codex-tool-shapes\",\"content\":[{\"type\":\"tool_use\",\"name\":\"repo_status\",\"input\":{\"format\":\"json\"}}]}\n{\"type\":\"assistant\",\"session_id\":\"codex-tool-shapes\",\"content\":[{\"type\":\"tool_result\",\"content\":\"status ok\"}]}\n",
+        )
+        .expect("Codex tool shape fixture");
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path,
+        };
+
+        let records = parse_source_records(&source).expect("Codex records");
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].kind, RecordKind::UserMessage);
+        assert_eq!(records[1].kind, RecordKind::ToolCall);
+        assert_eq!(records[1].tool_name.as_deref(), Some("repo_status"));
+        assert_eq!(
+            records[1].arguments.as_deref(),
+            Some("{\"format\":\"json\"}")
+        );
+        assert_eq!(records[2].kind, RecordKind::ToolResult);
+        assert_eq!(records[2].tool_name.as_deref(), None);
+    }
+
+    #[test]
+    fn preserves_codex_tool_discriminator_result_classification() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("codex-tools.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"tool\",\"state\":{\"status\":\"running\"}}\n{\"type\":\"tool\",\"state\":{\"status\":\"completed\"}}\n",
+        )
+        .expect("Codex tool fixture");
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path,
+        };
+
+        let records = extract_codex_jsonl_source(&source, ParseOptions::default())
+            .expect("Codex records")
+            .records;
+
+        assert_eq!(records[0].kind, RecordKind::ToolCall);
+        assert_eq!(records[1].kind, RecordKind::ToolResult);
     }
 }

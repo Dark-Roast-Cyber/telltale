@@ -236,25 +236,25 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::Codex,
         "codex.sessions",
         SourceKind::Jsonl,
-        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+        ParserImplementation::Modeled(crate::sources::codex::parser::extract_codex_jsonl_source),
     ),
     registration(
         ClientId::Codex,
         "codex.archived_sessions",
         SourceKind::ArchivedJsonl,
-        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+        ParserImplementation::Modeled(crate::sources::codex::parser::extract_codex_jsonl_source),
     ),
     registration(
         ClientId::Codex,
         "codex.headless_sessions",
         SourceKind::HeadlessJsonl,
-        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+        ParserImplementation::Modeled(crate::sources::codex::parser::extract_codex_jsonl_source),
     ),
     registration(
         ClientId::Codex,
         "codex.project_sessions",
         SourceKind::Jsonl,
-        ParserImplementation::GenericFallback(GenericParser::JsonLines(extract_jsonl_registered)),
+        ParserImplementation::Modeled(crate::sources::codex::parser::extract_codex_jsonl_source),
     ),
     registration(
         ClientId::Claude,
@@ -885,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_registration_maturity_snapshot_has_four_modeled_and_ten_fallbacks() {
+    fn parser_registration_maturity_snapshot_has_eight_modeled_and_six_fallbacks() {
         let modeled = PARSER_REGISTRATIONS
             .iter()
             .filter(|registration| {
@@ -911,25 +911,22 @@ mod tests {
         assert_eq!(
             modeled,
             BTreeSet::from_iter([
+                "codex.sessions",
+                "codex.archived_sessions",
+                "codex.headless_sessions",
+                "codex.project_sessions",
                 "claude.projects",
                 "gemini.tmp",
                 "opencode.sqlite",
                 "copilot.process_log",
             ])
         );
-        assert_eq!(modeled.len(), 4);
+        assert_eq!(modeled.len(), 8);
         assert_eq!(
             json_lines,
-            BTreeSet::from_iter([
-                "codex.sessions",
-                "codex.archived_sessions",
-                "codex.headless_sessions",
-                "codex.project_sessions",
-                "openclaw.agents",
-                "qwen.projects",
-            ])
+            BTreeSet::from_iter(["openclaw.agents", "qwen.projects"])
         );
-        assert_eq!(json_lines.len(), 6);
+        assert_eq!(json_lines.len(), 2);
         assert_eq!(
             json_documents,
             BTreeSet::from_iter([
