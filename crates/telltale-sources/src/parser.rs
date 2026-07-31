@@ -306,17 +306,17 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::OpenCode,
         "opencode.legacy_json",
         SourceKind::LegacyJson,
-        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
-            extract_json_document_registered,
-        )),
+        ParserImplementation::Modeled(
+            crate::sources::opencode::parser::extract_opencode_json_source,
+        ),
     ),
     registration(
         ClientId::OpenCode,
         "opencode.project_json",
         SourceKind::LegacyJson,
-        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
-            extract_json_document_registered,
-        )),
+        ParserImplementation::Modeled(
+            crate::sources::opencode::parser::extract_opencode_json_source,
+        ),
     ),
     registration(
         ClientId::Copilot,
@@ -425,6 +425,11 @@ pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, ParseErro
         .collect()
 }
 
+pub(crate) fn read_json_document(source: &Source) -> Result<Value, ParseError> {
+    let raw = fs::read_to_string(&source.path)?;
+    Ok(serde_json::from_str::<Value>(&raw)?)
+}
+
 fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
     let values = read_jsonl_values(source)?;
     let mut records = Vec::with_capacity(values.len());
@@ -471,8 +476,7 @@ fn extract_jsonl_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError
 }
 
 pub(crate) fn extract_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
-    let raw = fs::read_to_string(&source.path)?;
-    let value = serde_json::from_str::<Value>(&raw)?;
+    let value = read_json_document(source)?;
     let default_session_id = default_source_parent_name(source);
 
     match value {
@@ -586,7 +590,7 @@ pub(crate) fn default_source_file_stem(source: &Source) -> String {
         .to_string()
 }
 
-fn default_source_parent_name(source: &Source) -> String {
+pub(crate) fn default_source_parent_name(source: &Source) -> String {
     source
         .path
         .parent()
@@ -885,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_registration_maturity_snapshot_has_eight_modeled_and_six_fallbacks() {
+    fn parser_registration_maturity_snapshot_has_ten_modeled_and_four_fallbacks() {
         let modeled = PARSER_REGISTRATIONS
             .iter()
             .filter(|registration| {
@@ -918,10 +922,12 @@ mod tests {
                 "claude.projects",
                 "gemini.tmp",
                 "opencode.sqlite",
+                "opencode.legacy_json",
+                "opencode.project_json",
                 "copilot.process_log",
             ])
         );
-        assert_eq!(modeled.len(), 8);
+        assert_eq!(modeled.len(), 10);
         assert_eq!(
             json_lines,
             BTreeSet::from_iter(["openclaw.agents", "qwen.projects"])
@@ -929,14 +935,9 @@ mod tests {
         assert_eq!(json_lines.len(), 2);
         assert_eq!(
             json_documents,
-            BTreeSet::from_iter([
-                "roocode.tasks",
-                "kilocode.tasks",
-                "opencode.legacy_json",
-                "opencode.project_json",
-            ])
+            BTreeSet::from_iter(["roocode.tasks", "kilocode.tasks"])
         );
-        assert_eq!(json_documents.len(), 4);
+        assert_eq!(json_documents.len(), 2);
     }
 
     #[test]

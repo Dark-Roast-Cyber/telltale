@@ -1,3 +1,5 @@
+use std::fs;
+
 use rusqlite::Connection;
 use tempfile::tempdir;
 
@@ -8,6 +10,17 @@ use crate::parser::{
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
+
+const JSON_IDENTITIES: &[&str] = &["opencode.legacy_json", "opencode.project_json"];
+
+fn json_source(source_id: &str, path: std::path::PathBuf) -> Source {
+    Source {
+        client: ClientId::OpenCode,
+        kind: SourceKind::LegacyJson,
+        source_id: source_id.to_string(),
+        path,
+    }
+}
 
 #[test]
 fn parses_legacy_json_as_single_record() {
@@ -54,6 +67,119 @@ fn parses_opencode_legacy_uc001_tool_result_record() {
     assert_eq!(records[0].provider.as_deref(), Some("fixture-provider"));
     assert_eq!(records[0].agent.as_deref(), Some("build"));
     assert!(records[0].content.contains("darkroastcyber.io/mcp-lab"));
+}
+
+#[test]
+fn parses_opencode_json_documents_in_order_with_tool_fields() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("messages.json");
+    fs::write(
+        &path,
+        serde_json::json!([
+            {
+                "sessionID": "json-session",
+                "role": "user",
+                "agent": "fixture-agent",
+                "modelID": "fixture-model",
+                "providerID": "fixture-provider",
+                "timestamp": "2026-05-03T00:00:00Z",
+                "content": "Inspect repository."
+            },
+            {
+                "sessionID": "json-session",
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "name": "repo_status",
+                    "input": {"format": "json"}
+                }],
+                "arguments": {"format": "json"}
+            },
+            {
+                "sessionID": "json-session",
+                "role": "assistant",
+                "content": [{"type": "tool_result", "content": "status ok"}]
+            },
+            {
+                "sessionID": "json-session",
+                "type": "tool",
+                "state": {"status": "completed"},
+                "tool_name": "repo_status",
+                "arguments": {"format": "json"},
+                "time": "2026-05-03T00:00:03Z"
+            }
+        ])
+        .to_string(),
+    )
+    .expect("JSON document fixture");
+
+    for source_id in JSON_IDENTITIES {
+        let records = parse_source_records(&json_source(source_id, path.clone()))
+            .expect("OpenCode JSON records");
+
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0].session_id, "json-session");
+        assert_eq!(records[0].kind, RecordKind::UserMessage);
+        assert_eq!(records[0].agent.as_deref(), Some("fixture-agent"));
+        assert_eq!(records[0].model.as_deref(), Some("fixture-model"));
+        assert_eq!(records[0].provider.as_deref(), Some("fixture-provider"));
+        assert_eq!(
+            records[0].timestamp.as_deref(),
+            Some("2026-05-03T00:00:00Z")
+        );
+        assert_eq!(records[1].kind, RecordKind::ToolCall);
+        assert_eq!(records[1].tool_name.as_deref(), Some("repo_status"));
+        assert_eq!(
+            records[1].arguments.as_deref(),
+            Some("{\"format\":\"json\"}")
+        );
+        assert_eq!(records[2].kind, RecordKind::ToolResult);
+        assert_eq!(records[3].kind, RecordKind::ToolResult);
+        assert_eq!(
+            records[3].timestamp.as_deref(),
+            Some("2026-05-03T00:00:03Z")
+        );
+    }
+}
+
+#[test]
+fn opencode_json_documents_have_terminal_schema_and_parse_failures() {
+    let temp = tempdir().expect("tempdir");
+    let cases = [
+        ("malformed.json", "{\"type\":", "json"),
+        ("scalar.json", "\"scalar\"", "schema"),
+        (
+            "mixed-array.json",
+            "[{\"role\":\"user\"}, \"scalar\"]",
+            "schema",
+        ),
+        ("empty-array.json", "[]", "empty"),
+        (
+            "unknown-shaped.json",
+            "{\"type\":\"future_variant\",\"content\":[{\"type\":\"tool_use\"}],\"session_meta\":{\"payload\":{\"agent\":\"future\"}}}",
+            "other",
+        ),
+    ];
+
+    for source_id in JSON_IDENTITIES {
+        for (file_name, contents, expected) in cases {
+            let path = temp.path().join(file_name);
+            fs::write(&path, contents).expect("JSON boundary fixture");
+            let result = parse_source_records(&json_source(source_id, path));
+
+            match expected {
+                "json" => assert!(matches!(result, Err(ParseError::Json(_)))),
+                "schema" => assert!(matches!(result, Err(ParseError::SchemaDrift { .. }))),
+                "empty" => assert!(result.expect("empty array").is_empty()),
+                "other" => {
+                    let records = result.expect("unknown discriminator");
+                    assert_eq!(records.len(), 1);
+                    assert_eq!(records[0].kind, RecordKind::Other);
+                }
+                _ => unreachable!("test case marker"),
+            }
+        }
+    }
 }
 
 #[test]
