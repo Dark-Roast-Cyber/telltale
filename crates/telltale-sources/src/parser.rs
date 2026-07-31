@@ -321,7 +321,7 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::Copilot,
         "copilot.process_log",
         SourceKind::CopilotProcessLog,
-        ParserImplementation::Modeled(extract_copilot_registered),
+        ParserImplementation::Modeled(crate::sources::copilot::parser::extract_copilot_process_log),
     ),
 ];
 
@@ -366,15 +366,6 @@ fn extract_gemini_registered(
 ) -> Result<ExtractedSourceRecords, ParseError> {
     Ok(ExtractedSourceRecords::records(
         crate::sources::gemini::parser::extract_gemini_json_source(source)?,
-    ))
-}
-
-fn extract_copilot_registered(
-    source: &Source,
-    _options: ParseOptions,
-) -> Result<ExtractedSourceRecords, ParseError> {
-    Ok(ExtractedSourceRecords::records(
-        crate::sources::copilot::parser::extract_copilot_process_log(source)?,
     ))
 }
 
