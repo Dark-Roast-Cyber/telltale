@@ -15,6 +15,8 @@ use tempfile::tempdir;
 
 #[path = "cli/export.rs"]
 mod export;
+#[path = "cli/parser_maturity.rs"]
+mod parser_maturity;
 #[path = "cli/release_public_boundary.rs"]
 mod release_public_boundary;
 #[path = "cli/rules_config.rs"]

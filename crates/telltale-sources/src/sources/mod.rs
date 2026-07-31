@@ -16,3 +16,6 @@ pub(crate) mod opencode;
 pub(crate) mod qwen;
 pub mod registry;
 pub(crate) mod roocode;
+
+#[cfg(test)]
+mod parity;
