@@ -26,7 +26,10 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Compatible maintenance releases
-remain on the current `0.2.x` line; do not create an unplanned `0.5.x` line.
+remain on the current `0.3.x` line while the unpublished `0.4.0` line is
+prepared. Do not create `0.5.x` for a round of small tasks; a `0.5.0` release
+requires an approved significant milestone with its own compatibility,
+migration, and release-readiness review.
 
 ## Pre-Release Checks
 

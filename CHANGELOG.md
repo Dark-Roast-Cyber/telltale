@@ -259,4 +259,4 @@
 
 ---
 
-*This changelog covers 200 commits from 2026-05-17 to 2026-07-20. Weekly summaries are grouped by theme within each week. For detailed per-commit descriptions, see the [GitHub commit log](https://github.com/agentarchaeology/telltale/commits/main).*
+*This changelog covers 200 commits from 2026-05-17 to 2026-07-20. Weekly summaries are grouped by theme within each week. For detailed per-commit descriptions, see the [GitHub commit log](https://github.com/Dark-Roast-Cyber/telltale/commits/main).*

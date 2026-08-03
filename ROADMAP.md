@@ -8,9 +8,10 @@ category.
 This roadmap is a stable public summary of project direction. Detailed
 execution planning is maintained internally.
 
-## Current Focus: Post-0.2.0 Maturity
+## Current Focus: 0.4.0 Maturity
 
-The v0.2.0 release makes Telltale safe, understandable, and practical to run.
+The unpublished 0.4.0 line builds on the v0.3.0 release to make Telltale safe,
+understandable, and practical to run.
 Priorities, in order:
 
 1. **Ordered rule packs** — bundled < organization < deployment < local/UI
@@ -24,9 +25,11 @@ Priorities, in order:
    packages with clean metadata, package boundaries, and dependency-ordered
    publication. The embedding facade is `telltale-core`; crates.io `telltale`
    is an unrelated package. Versioning follows the conservative `0.x` policy in
-   [Versioning and Releases](docs/versioning.md), with `0.2.x` maintenance
-   releases rather than a direct jump to `0.5.x`. *(packaging shipped with
-   `v0.2.0`; crates.io publication pending)*
+   [Versioning and Releases](docs/versioning.md), with `0.3.x` maintenance
+   while the 0.4.0 line remains in preparation. A future `0.5.x` line is
+   reserved for a significant, coherent milestone rather than a round of
+   maintenance tasks. *(0.4.0 packaging prepared; crates.io publication
+   pending)*
 4. **Configuration consolidation** — one shared scan/watch configuration path
    to remove a high-risk duplication seam. *(shipped)*
 5. **Explicit delivery semantics** — honest local JSONL + best-effort remote
@@ -52,9 +55,11 @@ verification, and cross-platform smoke tests.
 - **Agentic development framework** — research and adopt a structured framework
   (e.g., spec-driven development) for how Telltale is built by AI agents.
 
-## Post-0.2.0 Direction
+## Future 0.5.x Direction
 
-Explicitly deferred until the 0.2.0 release is stable:
+The following are candidates for a future significant `0.5.x` milestone. They
+are not individual `0.4.x` maintenance tasks and require separate scope,
+compatibility review, and release planning:
 
 - New agent sources and third-party parser/plugin APIs
 - Sequence/data-flow detection syntax and new rule-language features

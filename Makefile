@@ -43,6 +43,8 @@ install: build
 		-e 's|__PROJECT_DIR__|$(PROJECT_DIR)|g' \
 		-e 's|__LOG_PATH__|$(LOG_PATH)|g' \
 		-e 's|__STATE_PATH__|$(STATE_PATH)|g' \
+		-e 's|__LOG_DIR__|$(LOG_DIR)|g' \
+		-e 's|__STATE_DIR__|$(STATE_DIR)|g' \
 		-e 's|__SCAN_ROOT__|$(SCAN_ROOT)|g' \
 		-e 's|__BINDIR__|$(BINDIR)|g' \
 		config/examples/adr-scan.service.in > $(SYSTEMD_USER_DIR)/adr-scan.service

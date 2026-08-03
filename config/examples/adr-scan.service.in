@@ -5,14 +5,12 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-User=__SERVICE_USER__
-Group=__SERVICE_GROUP__
-WorkingDirectory=__STATE_DIR__
+WorkingDirectory=__PROJECT_DIR__
 Environment=ADR_LOG_PATH=__LOG_PATH__
 Environment=ADR_STATE_PATH=__STATE_PATH__
 Environment=ADR_SCAN_ROOT=__SCAN_ROOT__
-EnvironmentFile=-__ENV_FILE__
-ExecStart=__BINDIR__/telltale scan --once --emit-activity --root ${ADR_SCAN_ROOT} --path-profile system
+EnvironmentFile=-__PROJECT_DIR__/.env
+ExecStart=__BINDIR__/telltale scan --once --emit-activity --root ${ADR_SCAN_ROOT} --path-profile project
 NoNewPrivileges=true
 PrivateTmp=true
 ReadWritePaths=__LOG_DIR__ __STATE_DIR__
