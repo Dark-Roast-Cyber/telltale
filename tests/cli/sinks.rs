@@ -198,6 +198,9 @@ fn scan_once_emits_identical_events_to_jsonl_and_splunk_hec() {
 
     assert_eq!(hec_events.len(), jsonl_events.len());
     assert_eq!(hec_events, jsonl_events);
+    assert!(jsonl_events.iter().all(|event| {
+        event.get("source_discovery").is_none() && event.get("diagnostic_warnings").is_none()
+    }));
 
     let detections = jsonl_events
         .iter()

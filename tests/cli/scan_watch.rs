@@ -268,6 +268,33 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_source_processing_accounting(&summary);
     assert_detection_flow_accounting(&summary, 36, 0);
     assert_eq!(summary["source_processing"]["selected_source_count"], 69);
+    assert_eq!(summary["source_discovery"]["basis"], "current_full_scan");
+    assert_eq!(
+        summary["source_discovery"]["performed_for_current_scan"],
+        true
+    );
+    assert_eq!(summary["source_discovery"]["checked_status"], "succeeded");
+    assert_eq!(
+        summary["source_discovery"]["first_error_category"],
+        Value::Null
+    );
+    assert_eq!(
+        summary["source_discovery"]["best_effort_fallback_used"],
+        false
+    );
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 69);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 69);
+    assert_eq!(
+        summary["source_discovery"]["project_configuration"],
+        serde_json::json!({
+            "mode": "none",
+            "document_attempt_count": 0,
+            "document_success_count": 0,
+            "document_failure_count": 0,
+            "loaded_project_count": 0,
+        })
+    );
+    assert_eq!(summary["diagnostic_warnings"], serde_json::json!([]));
     assert_eq!(
         summary["source_processing"]["parse_success_source_count"],
         68
@@ -309,6 +336,8 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert!(events.iter().all(|event| {
         event.get("source_processing").is_none()
             && event.get("detection_flow").is_none()
+            && event.get("source_discovery").is_none()
+            && event.get("diagnostic_warnings").is_none()
             && event.get("runtime").is_none()
             && event.get("effective_configuration").is_none()
     }));
@@ -1669,6 +1698,8 @@ fn scan_once_client_filter_limits_discovered_sources() {
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
     assert_eq!(source_counts["gemini.json"], 3);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 69);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 3);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -1779,6 +1810,8 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
     assert_eq!(source_counts["gemini.json"], 1);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 69);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 1);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -1967,6 +2000,13 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
         124
+    );
+    assert!(
+        !second_summary["diagnostic_warnings"]
+            .as_array()
+            .expect("diagnostic warnings")
+            .iter()
+            .any(|warning| warning["code"] == "no_effective_detection_candidates")
     );
 
     let lines_before_backfill = fs::read_to_string(&log_path)
@@ -3264,6 +3304,148 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
 }
 
 #[test]
+fn scan_invalid_root_reports_privacy_safe_fallback_diagnostics() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("invalid-root-sentinel");
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
+        .arg(&root)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("invalid-root-sentinel"));
+    assert!(!stderr.contains("invalid-root-sentinel"));
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["source_discovery"]["checked_status"], "first_error");
+    assert_eq!(
+        summary["source_discovery"]["first_error_category"],
+        "invalid_root"
+    );
+    assert_eq!(
+        summary["source_discovery"]["best_effort_fallback_used"],
+        true
+    );
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 0);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 0);
+    assert_eq!(
+        summary["diagnostic_warnings"],
+        serde_json::json!([
+            {
+                "code": "source_discovery_degraded",
+                "classification": "observed_failure",
+                "basis": "source_discovery"
+            },
+            {
+                "code": "no_sources_selected",
+                "classification": "suspicious_zero",
+                "basis": "source_selection"
+            }
+        ])
+    );
+}
+
+#[test]
+fn project_config_failures_are_aggregated_without_path_or_error_leakage() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("invalid-root-sentinel");
+    let project = temp.path().join("valid-project");
+    fs::create_dir_all(project.join("logs/copilot")).expect("project");
+    fs::copy(
+        "tests/fixtures/session_stores/copilot/process-uc001.log",
+        project.join("logs/copilot/process-uc001.log"),
+    )
+    .expect("copilot project source");
+    let good_config = temp.path().join("good-projects.yaml");
+    let bad_config = temp.path().join("bad-projects-error-sentinel.yaml");
+    fs::write(
+        &good_config,
+        format!(
+            "projects:\n  - name: valid\n    path: '{}'\n",
+            project.display()
+        ),
+    )
+    .expect("good project config");
+    fs::write(&bad_config, "projects: [not valid yaml").expect("bad project config");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--no-local-config", "--root"])
+        .arg(&root)
+        .args(["--project-config"])
+        .arg(&good_config)
+        .args(["--project-config"])
+        .arg(&bad_config)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run adr");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for sentinel in ["bad-projects-error-sentinel", "not valid yaml"] {
+        assert!(!stdout.contains(sentinel));
+        assert!(!stderr.contains(sentinel));
+    }
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(summary["source_discovery"]["checked_status"], "first_error");
+    assert_eq!(
+        summary["source_discovery"]["first_error_category"],
+        "invalid_root"
+    );
+    assert_eq!(
+        summary["source_discovery"]["best_effort_fallback_used"],
+        true
+    );
+    assert!(
+        summary["source_discovery"]["returned_source_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        summary["diagnostic_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["code"] == "source_discovery_degraded")
+    );
+    assert_eq!(
+        summary["source_discovery"]["project_configuration"],
+        serde_json::json!({
+            "mode": "configured_documents",
+            "document_attempt_count": 2,
+            "document_success_count": 1,
+            "document_failure_count": 1,
+            "loaded_project_count": 1,
+        })
+    );
+    assert!(
+        summary["diagnostic_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["code"] == "project_config_load_failed")
+    );
+    let events = fs::read_to_string(&log_path).expect("events");
+    assert!(!events.contains("bad-projects-error-sentinel"));
+    assert!(!events.contains("not valid yaml"));
+}
+
+#[test]
 fn scan_once_continues_after_malformed_source() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
@@ -3316,6 +3498,21 @@ fn scan_once_continues_after_malformed_source() {
     assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
     assert_detection_flow_accounting(&summary, 1, 0);
+    assert_eq!(
+        summary["diagnostic_warnings"],
+        serde_json::json!([
+            {
+                "code": "source_parse_error_observed",
+                "classification": "observed_failure",
+                "basis": "source_processing"
+            },
+            {
+                "code": "no_tool_records_observed",
+                "classification": "suspicious_zero",
+                "basis": "source_processing"
+            }
+        ])
+    );
     assert_eq!(summary["source_counts"]["codex.jsonl"], 2);
 
     let lines = fs::read_to_string(log_path).expect("log file");
@@ -3538,6 +3735,22 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
     assert_eq!(summary["event_type"], "health");
     assert_runtime_snapshot(&summary);
     assert_eq!(
+        summary["source_discovery"]["basis"],
+        "watch_source_index_snapshot"
+    );
+    assert_eq!(
+        summary["source_discovery"]["performed_for_current_scan"],
+        false
+    );
+    assert!(
+        summary["source_discovery"]["operational_source_count"]
+            .as_u64()
+            .unwrap()
+            >= summary["source_processing"]["selected_source_count"]
+                .as_u64()
+                .unwrap()
+    );
+    assert_eq!(
         summary["effective_configuration"]["local_config"]["mode"],
         "disabled"
     );
@@ -3651,6 +3864,18 @@ fn watch_skips_no_op_state_save() {
     assert_eq!(
         summaries[0]["effective_configuration"],
         summaries[1]["effective_configuration"]
+    );
+    assert_eq!(
+        summaries[0]["source_discovery"]["basis"],
+        "current_full_scan"
+    );
+    assert_eq!(
+        summaries[0]["source_discovery"]["performed_for_current_scan"],
+        true
+    );
+    assert_eq!(
+        summaries[1]["source_discovery"]["basis"],
+        "current_full_scan"
     );
 
     let state_after = fs::read(&state_path).expect("read second state snapshot");

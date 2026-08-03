@@ -16,7 +16,8 @@ use crate::allowlist::{load_allowlist, suppress_detection};
 use crate::baseline::{BaselineDeviationConfig, build_baseline_summaries};
 use crate::detection::{detect_parsed_source_records, summarize_parsed_source_activity};
 use crate::discovery::{
-    discover_sources_with_projects_best_effort, discover_watch_roots_with_projects, is_fixture_root,
+    DiscoveryError, discover_sources_with_projects, discover_sources_with_projects_best_effort,
+    discover_watch_roots_with_projects, is_fixture_root,
 };
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertInput, SessionRiskSummaryEventInput,
@@ -151,25 +152,15 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
 
     // Note: structural changes to project YAML (new projects, new roots) require a process
     // restart; the notify watcher is not rebuilt at runtime.
-    let project_configs = if config.execution.project_config_paths.is_empty()
-        && config.execution.root == Path::new(".")
-    {
-        // Use default project paths only when root is the sentinel for home-relative discovery
-        crate::projects::load_default_projects()
-    } else {
-        crate::projects::load_project_configs(config.execution.project_config_paths)
-    };
+    let (project_configs, project_configuration) =
+        load_project_configuration(config.execution.root, config.execution.project_config_paths);
     let watch_roots = discover_watch_roots_with_projects(
         config.execution.root,
         config.execution.clients,
         &project_configs,
     );
     if watch_roots.is_empty() {
-        return Err(format!(
-            "no existing Telltale session-store roots found under {}",
-            config.execution.root.display()
-        )
-        .into());
+        return Err("no existing Telltale session-store roots found".into());
     }
 
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -187,7 +178,8 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
         watcher.watch(root, RecursiveMode::Recursive)?;
     }
 
-    let mut source_index = build_watch_source_index(&config, &project_configs);
+    let (mut source_index, mut watch_discovery) =
+        build_watch_source_index(&config, &project_configs, &project_configuration);
     let mut remaining = config.trigger.iterations;
     let mut last_scan_completed: Option<Instant> = None;
 
@@ -229,17 +221,22 @@ pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::erro
             WatchScanAction::Targeted(targets) => {
                 run_scan(
                     watch_scan_config(&config),
-                    ScanTargets::Targeted(targets),
+                    ScanTargets::Targeted {
+                        sources: targets,
+                        discovery: watch_discovery.clone(),
+                    },
                     StateSavePolicy::OnChange,
                 )?;
             }
             WatchScanAction::Full => {
-                run_scan(
+                let result = run_scan(
                     watch_scan_config(&config),
                     ScanTargets::Full,
                     StateSavePolicy::OnChange,
                 )?;
-                source_index = build_watch_source_index(&config, &project_configs);
+                if let Some((sources, discovery)) = result.full_scan_discovery {
+                    (source_index, watch_discovery) = watch_index_from_sources(sources, discovery);
+                }
             }
         }
         last_scan_completed = Some(Instant::now());
@@ -358,27 +355,149 @@ fn normalize_watch_event_path(path: &Path) -> Option<PathBuf> {
     Some(path.to_path_buf())
 }
 
+#[derive(Clone)]
+struct ProjectConfigurationAccounting {
+    mode: &'static str,
+    document_attempt_count: usize,
+    document_success_count: usize,
+    document_failure_count: usize,
+    loaded_project_count: usize,
+}
+
+impl ProjectConfigurationAccounting {
+    fn none() -> Self {
+        Self {
+            mode: "none",
+            document_attempt_count: 0,
+            document_success_count: 0,
+            document_failure_count: 0,
+            loaded_project_count: 0,
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mode": self.mode,
+            "document_attempt_count": self.document_attempt_count,
+            "document_success_count": self.document_success_count,
+            "document_failure_count": self.document_failure_count,
+            "loaded_project_count": self.loaded_project_count,
+        })
+    }
+}
+
+fn load_project_configuration(
+    root: &Path,
+    paths: &[PathBuf],
+) -> (
+    Vec<crate::projects::ProjectDef>,
+    ProjectConfigurationAccounting,
+) {
+    if paths.is_empty() && root == Path::new(".") {
+        let projects = crate::projects::load_default_projects();
+        return (
+            projects.clone(),
+            ProjectConfigurationAccounting {
+                mode: "default_roots",
+                document_attempt_count: 0,
+                document_success_count: 0,
+                document_failure_count: 0,
+                loaded_project_count: projects.len(),
+            },
+        );
+    }
+    if paths.is_empty() {
+        return (Vec::new(), ProjectConfigurationAccounting::none());
+    }
+
+    let mut projects = Vec::new();
+    let mut document_success_count = 0;
+    let mut document_failure_count = 0;
+    for path in paths {
+        match crate::projects::load_project_config(path) {
+            Ok(loaded) => {
+                document_success_count += 1;
+                projects.extend(loaded);
+            }
+            Err(_) => document_failure_count += 1,
+        }
+    }
+    (
+        projects.clone(),
+        ProjectConfigurationAccounting {
+            mode: "configured_documents",
+            document_attempt_count: paths.len(),
+            document_success_count,
+            document_failure_count,
+            loaded_project_count: projects.len(),
+        },
+    )
+}
+
+#[derive(Clone)]
+pub(crate) struct SourceDiscoveryAccounting {
+    checked_status: &'static str,
+    first_error_category: Option<&'static str>,
+    best_effort_fallback_used: bool,
+    returned_source_count: usize,
+    operational_source_count: usize,
+    project_configuration: ProjectConfigurationAccounting,
+}
+
+impl SourceDiscoveryAccounting {
+    fn json(&self, basis: &'static str, performed_for_current_scan: bool) -> serde_json::Value {
+        serde_json::json!({
+            "basis": basis,
+            "performed_for_current_scan": performed_for_current_scan,
+            "checked_status": self.checked_status,
+            "first_error_category": self.first_error_category,
+            "best_effort_fallback_used": self.best_effort_fallback_used,
+            "returned_source_count": self.returned_source_count,
+            "operational_source_count": self.operational_source_count,
+            "project_configuration": self.project_configuration.json(),
+        })
+    }
+}
+
+fn discovery_error_category(error: &DiscoveryError) -> &'static str {
+    match error {
+        DiscoveryError::InvalidRoot { .. } => "invalid_root",
+        DiscoveryError::Traversal { .. } => "traversal",
+        _ => "other",
+    }
+}
+
+struct DiscoveryResolution {
+    sources: Vec<Source>,
+    checked_status: &'static str,
+    first_error_category: Option<&'static str>,
+    best_effort_fallback_used: bool,
+}
+
+fn resolve_discovery_result(
+    checked: Result<Vec<Source>, DiscoveryError>,
+    best_effort: impl FnOnce() -> Vec<Source>,
+) -> DiscoveryResolution {
+    match checked {
+        Ok(sources) => DiscoveryResolution {
+            sources,
+            checked_status: "succeeded",
+            first_error_category: None,
+            best_effort_fallback_used: false,
+        },
+        Err(error) => DiscoveryResolution {
+            sources: best_effort(),
+            checked_status: "first_error",
+            first_error_category: Some(discovery_error_category(&error)),
+            best_effort_fallback_used: true,
+        },
+    }
+}
+
 /// Index discovered sources by canonical path so notify event paths can be
 /// mapped back to the source that changed. Mirrors the discovery filtering
 /// applied by full scans.
-fn build_watch_source_index(
-    config: &WatchConfig<'_>,
-    project_configs: &[crate::projects::ProjectDef],
-) -> BTreeMap<PathBuf, Source> {
-    let mut sources =
-        discover_sources_with_projects_best_effort(config.execution.root, project_configs);
-    if !config.execution.clients.is_empty() {
-        let allowed_clients = config
-            .execution
-            .clients
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        sources.retain(|source| allowed_clients.contains(&source.client));
-    }
-    if !is_fixture_root(config.execution.root) {
-        prefer_opencode_sqlite_over_legacy_json(&mut sources);
-    }
+fn source_index_from_sources(sources: Vec<Source>) -> BTreeMap<PathBuf, Source> {
     sources
         .into_iter()
         .map(|source| {
@@ -389,6 +508,72 @@ fn build_watch_source_index(
             (key, source)
         })
         .collect()
+}
+
+fn watch_index_from_sources(
+    sources: Vec<Source>,
+    mut discovery: SourceDiscoveryAccounting,
+) -> (BTreeMap<PathBuf, Source>, SourceDiscoveryAccounting) {
+    let index = source_index_from_sources(sources);
+    discovery.operational_source_count = index.len();
+    (index, discovery)
+}
+
+fn build_watch_source_index(
+    config: &WatchConfig<'_>,
+    project_configs: &[crate::projects::ProjectDef],
+    project_configuration: &ProjectConfigurationAccounting,
+) -> (BTreeMap<PathBuf, Source>, SourceDiscoveryAccounting) {
+    let (sources, discovery) = discover_operational_sources(
+        config.execution.root,
+        config.execution.clients,
+        None,
+        project_configs,
+        project_configuration,
+    );
+    watch_index_from_sources(sources, discovery)
+}
+
+fn discover_operational_sources(
+    root: &Path,
+    clients: &[ClientId],
+    max_sources: Option<usize>,
+    project_configs: &[crate::projects::ProjectDef],
+    project_configuration: &ProjectConfigurationAccounting,
+) -> (Vec<Source>, SourceDiscoveryAccounting) {
+    let resolution = resolve_discovery_result(
+        discover_sources_with_projects(root, project_configs),
+        || discover_sources_with_projects_best_effort(root, project_configs),
+    );
+    let DiscoveryResolution {
+        mut sources,
+        checked_status,
+        first_error_category,
+        best_effort_fallback_used,
+    } = resolution;
+    let returned_source_count = sources.len();
+    if !clients.is_empty() {
+        let allowed_clients = clients.iter().copied().collect::<BTreeSet<_>>();
+        sources.retain(|source| allowed_clients.contains(&source.client));
+    }
+    if !is_fixture_root(root) {
+        prefer_opencode_sqlite_over_legacy_json(&mut sources);
+    }
+    if let Some(max_sources) = max_sources {
+        sources.truncate(max_sources);
+    }
+    let operational_source_count = sources.len();
+    (
+        sources,
+        SourceDiscoveryAccounting {
+            checked_status,
+            first_error_category,
+            best_effort_fallback_used,
+            returned_source_count,
+            operational_source_count,
+            project_configuration: project_configuration.clone(),
+        },
+    )
 }
 
 fn watch_event_should_scan(event: &NotifyEvent) -> bool {
@@ -403,7 +588,10 @@ pub(crate) enum ScanTargets {
     /// Discover and scan every source under the configured root.
     Full,
     /// Scan only the given pre-discovered sources (watch-mode targeted scan).
-    Targeted(Vec<Source>),
+    Targeted {
+        sources: Vec<Source>,
+        discovery: SourceDiscoveryAccounting,
+    },
 }
 
 /// When to persist scanner state after a scan.
@@ -418,14 +606,14 @@ pub(crate) enum StateSavePolicy {
 }
 
 pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
-    run_scan(config, ScanTargets::Full, StateSavePolicy::Always)
+    run_scan(config, ScanTargets::Full, StateSavePolicy::Always).map(|_| ())
 }
 
 fn run_scan(
     config: ScanConfig<'_>,
     targets: ScanTargets,
     save_policy: StateSavePolicy,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<ScanRunResult, Box<dyn std::error::Error>> {
     let scan_started = Instant::now();
     let fixture_root = is_fixture_root(config.execution.root);
     if !config.execution.dry_run && !config.execution.allow_fixtures && fixture_root {
@@ -434,37 +622,31 @@ fn run_scan(
                 .into(),
         );
     }
-    let (mut sources, targeted) = match targets {
-        ScanTargets::Targeted(sources) => (sources, true),
+    let (mut sources, targeted, source_discovery) = match targets {
+        ScanTargets::Targeted { sources, discovery } => (sources, true, discovery),
         ScanTargets::Full => {
-            let project_configs = if config.execution.project_config_paths.is_empty()
-                && config.execution.root == Path::new(".")
-            {
-                // Use default project paths only when root is the sentinel for home-relative discovery
-                crate::projects::load_default_projects()
-            } else {
-                crate::projects::load_project_configs(config.execution.project_config_paths)
-            };
-            let mut sources =
-                discover_sources_with_projects_best_effort(config.execution.root, &project_configs);
-            if !config.execution.clients.is_empty() {
-                let allowed_clients = config
-                    .execution
-                    .clients
-                    .iter()
-                    .copied()
-                    .collect::<BTreeSet<_>>();
-                sources.retain(|source| allowed_clients.contains(&source.client));
-            }
-            if !fixture_root {
-                prefer_opencode_sqlite_over_legacy_json(&mut sources);
-            }
-            (sources, false)
+            let (project_configs, project_configuration) = load_project_configuration(
+                config.execution.root,
+                config.execution.project_config_paths,
+            );
+            let (sources, discovery) = discover_operational_sources(
+                config.execution.root,
+                config.execution.clients,
+                config.max_sources,
+                &project_configs,
+                &project_configuration,
+            );
+            (sources, false, discovery)
         }
     };
-    if let Some(max_sources) = config.max_sources {
+    if targeted && let Some(max_sources) = config.max_sources {
         sources.truncate(max_sources);
     }
+    let full_scan_discovery = if targeted {
+        None
+    } else {
+        Some((sources.clone(), source_discovery.clone()))
+    };
     let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
         config.execution.rule_pack_paths,
         config.execution.rule_paths,
@@ -767,12 +949,22 @@ fn run_scan(
         sink_failures: &sink_failures,
         source_processing: &source_processing,
         detection_flow: &detection_flow,
+        source_discovery: &source_discovery,
+        diagnostic_warnings: &diagnostic_warnings(
+            &source_discovery,
+            &source_processing,
+            &detection_flow,
+            rule_count,
+        ),
+        targeted,
         policy_active,
         runtime: config.execution.runtime,
         effective_configuration: &effective_configuration,
     });
     println!("{}", serde_json::to_string(&summary)?);
-    Ok(())
+    Ok(ScanRunResult {
+        full_scan_discovery,
+    })
 }
 
 /// Truncation cap for delivery error text embedded in alert evidence.
@@ -1267,9 +1459,16 @@ struct ScanSummaryInput<'a> {
     sink_failures: &'a [SinkFailure],
     source_processing: &'a SourceProcessingAccounting,
     detection_flow: &'a DetectionFlowAccounting,
+    source_discovery: &'a SourceDiscoveryAccounting,
+    diagnostic_warnings: &'a [serde_json::Value],
+    targeted: bool,
     policy_active: bool,
     runtime: &'a serde_json::Value,
     effective_configuration: &'a serde_json::Value,
+}
+
+struct ScanRunResult {
+    full_scan_discovery: Option<(Vec<Source>, SourceDiscoveryAccounting)>,
 }
 
 struct DetectionFlowAccounting {
@@ -1338,6 +1537,101 @@ impl DetectionFlowAccounting {
     }
 }
 
+fn diagnostic_warnings(
+    source_discovery: &SourceDiscoveryAccounting,
+    source_processing: &SourceProcessingAccounting,
+    detection_flow: &DetectionFlowAccounting,
+    rule_count: usize,
+) -> Vec<serde_json::Value> {
+    let mut warnings = Vec::new();
+    if source_discovery
+        .project_configuration
+        .document_failure_count
+        > 0
+    {
+        warnings.push(diagnostic_warning(
+            "project_config_load_failed",
+            "observed_failure",
+            "project_configuration",
+        ));
+    }
+    if source_discovery.best_effort_fallback_used {
+        warnings.push(diagnostic_warning(
+            "source_discovery_degraded",
+            "observed_failure",
+            "source_discovery",
+        ));
+    }
+    if source_processing.parse_error_source_count > 0 {
+        warnings.push(diagnostic_warning(
+            "source_parse_error_observed",
+            "observed_failure",
+            "source_processing",
+        ));
+    }
+
+    let selected = source_processing.selected_source_count;
+    let records = source_processing.parsed_record_count;
+    if selected == 0 {
+        warnings.push(diagnostic_warning(
+            "no_sources_selected",
+            "suspicious_zero",
+            "source_selection",
+        ));
+    }
+    if selected > 0 && records == 0 {
+        warnings.push(diagnostic_warning(
+            "selected_sources_produced_no_records",
+            "suspicious_zero",
+            "source_processing",
+        ));
+    }
+    if selected > 0 && source_processing.parse_success_source_count == 0 {
+        warnings.push(diagnostic_warning(
+            "all_selected_sources_parse_failed_or_empty",
+            "suspicious_zero",
+            "source_processing",
+        ));
+    }
+    let tool_call_count = source_processing
+        .record_kind_counts
+        .get("tool_call")
+        .copied()
+        .unwrap_or_default();
+    let tool_result_count = source_processing
+        .record_kind_counts
+        .get("tool_result")
+        .copied()
+        .unwrap_or_default();
+    if records > 0 && tool_call_count == 0 && tool_result_count == 0 {
+        warnings.push(diagnostic_warning(
+            "no_tool_records_observed",
+            "suspicious_zero",
+            "source_processing",
+        ));
+    }
+    if records > 0 && rule_count > 0 && detection_flow.effective_detection_candidate_count == 0 {
+        warnings.push(diagnostic_warning(
+            "no_effective_detection_candidates",
+            "suspicious_zero",
+            "detection_flow",
+        ));
+    }
+    warnings
+}
+
+fn diagnostic_warning(
+    code: &'static str,
+    classification: &'static str,
+    basis: &'static str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "code": code,
+        "classification": classification,
+        "basis": basis,
+    })
+}
+
 fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
     let delivery_status = if summary.dry_run {
         "not_attempted"
@@ -1379,8 +1673,17 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         },
         "source_counts": summary.health_event.source_counts.clone().unwrap_or_default(),
         "sink_failures": sink_failures,
+        "source_discovery": summary.source_discovery.json(
+            if summary.targeted {
+                "watch_source_index_snapshot"
+            } else {
+                "current_full_scan"
+            },
+            !summary.targeted,
+        ),
         "source_processing": summary.source_processing.json(),
         "detection_flow": summary.detection_flow.json(summary.policy_active),
+        "diagnostic_warnings": summary.diagnostic_warnings,
         "runtime": summary.runtime,
         "effective_configuration": summary.effective_configuration,
     })
@@ -1774,6 +2077,215 @@ mod tests {
         assert!(probe.changed(&state));
     }
 
+    fn test_discovery_accounting() -> SourceDiscoveryAccounting {
+        SourceDiscoveryAccounting {
+            checked_status: "succeeded",
+            first_error_category: None,
+            best_effort_fallback_used: false,
+            returned_source_count: 0,
+            operational_source_count: 0,
+            project_configuration: ProjectConfigurationAccounting::none(),
+        }
+    }
+
+    fn warning_codes(warnings: &[serde_json::Value]) -> Vec<&str> {
+        warnings
+            .iter()
+            .map(|warning| warning["code"].as_str().expect("warning code"))
+            .collect()
+    }
+
+    #[test]
+    fn suspicious_zero_warning_predicates_keep_empty_and_dedup_cases_distinct() {
+        let discovery = test_discovery_accounting();
+        let flow = DetectionFlowAccounting {
+            effective_detection_candidate_count: 0,
+            matched_rule_id_count: 0,
+            allowlist_marked_detection_count: 0,
+            state_deduplicated_detection_count: 0,
+            emitted_detection_count: 0,
+        };
+        let no_sources = SourceProcessingAccounting {
+            selected_source_count: 0,
+            parse_success_source_count: 0,
+            empty_source_count: 0,
+            parse_error_source_count: 0,
+            parsed_record_count: 0,
+            record_kind_counts: BTreeMap::new(),
+        };
+        assert_eq!(
+            warning_codes(&diagnostic_warnings(&discovery, &no_sources, &flow, 18)),
+            vec!["no_sources_selected"]
+        );
+
+        let empty_sources = SourceProcessingAccounting {
+            selected_source_count: 2,
+            parse_success_source_count: 0,
+            empty_source_count: 2,
+            parse_error_source_count: 0,
+            parsed_record_count: 0,
+            record_kind_counts: BTreeMap::new(),
+        };
+        assert_eq!(
+            warning_codes(&diagnostic_warnings(&discovery, &empty_sources, &flow, 18)),
+            vec![
+                "selected_sources_produced_no_records",
+                "all_selected_sources_parse_failed_or_empty"
+            ]
+        );
+
+        let productive_sources = SourceProcessingAccounting {
+            selected_source_count: 2,
+            parse_success_source_count: 2,
+            empty_source_count: 1,
+            parse_error_source_count: 0,
+            parsed_record_count: 1,
+            record_kind_counts: BTreeMap::from([("user_message".to_string(), 1)]),
+        };
+        assert_eq!(
+            warning_codes(&diagnostic_warnings(
+                &discovery,
+                &productive_sources,
+                &flow,
+                18
+            )),
+            vec![
+                "no_tool_records_observed",
+                "no_effective_detection_candidates"
+            ]
+        );
+        assert!(
+            !warning_codes(&diagnostic_warnings(
+                &discovery,
+                &productive_sources,
+                &flow,
+                0,
+            ))
+            .contains(&"no_effective_detection_candidates")
+        );
+
+        let repeated_positive = DetectionFlowAccounting {
+            effective_detection_candidate_count: 1,
+            state_deduplicated_detection_count: 1,
+            ..flow
+        };
+        assert!(
+            !warning_codes(&diagnostic_warnings(
+                &discovery,
+                &SourceProcessingAccounting {
+                    selected_source_count: 1,
+                    parse_success_source_count: 1,
+                    empty_source_count: 0,
+                    parse_error_source_count: 0,
+                    parsed_record_count: 1,
+                    record_kind_counts: BTreeMap::from([("tool_call".to_string(), 1)]),
+                },
+                &repeated_positive,
+                18,
+            ))
+            .contains(&"no_effective_detection_candidates")
+        );
+    }
+
+    #[test]
+    fn discovery_error_categories_are_stable_and_do_not_use_error_text() {
+        assert_eq!(
+            discovery_error_category(&DiscoveryError::InvalidRoot {
+                root: PathBuf::from("private-root"),
+            }),
+            "invalid_root"
+        );
+        assert_eq!(
+            discovery_error_category(&DiscoveryError::Traversal {
+                root: PathBuf::from("private-root"),
+                source_id: "private-source".to_string(),
+            }),
+            "traversal"
+        );
+    }
+
+    #[test]
+    fn checked_traversal_uses_fallback_without_serializing_error_details() {
+        let fallback_source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "fallback-source-sentinel".to_string(),
+            path: PathBuf::from("fallback-path-sentinel.jsonl"),
+        };
+        let resolution = resolve_discovery_result(
+            Err(DiscoveryError::Traversal {
+                root: PathBuf::from("private-root-sentinel"),
+                source_id: "private-source-sentinel".to_string(),
+            }),
+            || vec![fallback_source],
+        );
+        assert_eq!(resolution.checked_status, "first_error");
+        assert_eq!(resolution.first_error_category, Some("traversal"));
+        assert!(resolution.best_effort_fallback_used);
+        assert_eq!(resolution.sources.len(), 1);
+
+        let accounting = SourceDiscoveryAccounting {
+            checked_status: resolution.checked_status,
+            first_error_category: resolution.first_error_category,
+            best_effort_fallback_used: resolution.best_effort_fallback_used,
+            returned_source_count: resolution.sources.len(),
+            operational_source_count: resolution.sources.len(),
+            project_configuration: ProjectConfigurationAccounting::none(),
+        };
+        let serialized = accounting.json("current_full_scan", true).to_string();
+        assert!(!serialized.contains("private-root-sentinel"));
+        assert!(!serialized.contains("private-source-sentinel"));
+        assert!(!serialized.contains("fallback-source-sentinel"));
+        assert!(!serialized.contains("fallback-path-sentinel"));
+        let serialized_value: serde_json::Value =
+            serde_json::from_str(&serialized).expect("discovery accounting json");
+        assert!(serialized_value.get("root").is_none());
+        assert!(serialized_value.get("source_id").is_none());
+        assert!(serialized_value.get("error").is_none());
+    }
+
+    #[test]
+    fn parsed_empty_result_is_a_parse_success() {
+        let source = watch_test_source("empty-success.jsonl");
+        let parsed = ParsedScanSource {
+            source: source.clone(),
+            records: Ok(Vec::new()),
+            sqlite_part_max_time_updated: None,
+        };
+        let accounting = source_processing_accounting(&[source], &[parsed]);
+        assert_eq!(accounting.selected_source_count, 1);
+        assert_eq!(accounting.parse_success_source_count, 1);
+        assert_eq!(accounting.empty_source_count, 0);
+        assert_eq!(accounting.parse_error_source_count, 0);
+        assert_eq!(accounting.parsed_record_count, 0);
+    }
+
+    #[test]
+    fn watch_snapshot_count_matches_canonical_path_index_for_duplicate_projects() {
+        let path = PathBuf::from("duplicate-project/.codex-worktree/session.jsonl");
+        let first = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "project-one".to_string(),
+            path: path.clone(),
+        };
+        let second = Source {
+            source_id: "project-two".to_string(),
+            ..first.clone()
+        };
+        let discovery = SourceDiscoveryAccounting {
+            checked_status: "succeeded",
+            first_error_category: None,
+            best_effort_fallback_used: false,
+            returned_source_count: 2,
+            operational_source_count: 2,
+            project_configuration: ProjectConfigurationAccounting::none(),
+        };
+        let (index, snapshot) = watch_index_from_sources(vec![first, second], discovery);
+        assert_eq!(index.len(), 1);
+        assert_eq!(snapshot.operational_source_count, index.len());
+    }
+
     #[test]
     fn collect_watch_events_coalesces_within_min_interval() {
         // Pre-queue two modify events for the same source path, then drop the
@@ -1841,10 +2353,13 @@ mod tests {
                 .join("session.jsonl"),
         };
         let mut sources = vec![legacy.clone(), sqlite.clone(), codex.clone()];
+        let returned_source_count = sources.len();
 
         prefer_opencode_sqlite_over_legacy_json(&mut sources);
 
         assert_eq!(sources, vec![sqlite, codex]);
+        assert_eq!(returned_source_count, 3);
+        assert_eq!(sources.len(), 2);
     }
 
     #[test]

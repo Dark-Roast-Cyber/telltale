@@ -42,7 +42,7 @@ that follows [schemas/event.schema.json](../schemas/event.schema.json).
 
 Every scan also prints one JSON summary to stdout. This local diagnostic is not
 an Event 2.0 payload and is not appended to JSONL or wrapped for HEC. In
-addition to the existing delivery and event totals, two sections explain an
+addition to the existing delivery and event totals, diagnostic sections explain an
 otherwise ambiguous zero-detection result without exposing session content:
 
 - `source_processing` reports selected sources, successful parses, empty and
@@ -63,10 +63,40 @@ otherwise ambiguous zero-detection result without exposing session content:
   selection/origin, JSONL destination hashes, secret/TLS posture, and delivery
   posture; endpoints, credentials, credential references, hosts, indices,
   sourcetypes, and CA paths are excluded.
+- `source_discovery` reports privacy-safe discovery accounting. A full scan uses
+  `basis=current_full_scan` and performs checked discovery for that scan. A
+  targeted watch scan uses the retained
+  `basis=watch_source_index_snapshot` and sets
+  `performed_for_current_scan=false`; a full watch reconciliation refreshes the
+  current discovery result. `returned_source_count` is before selection, while
+  `operational_source_count` is after client filtering, OpenCode SQLite-over-
+  legacy preference, and `max_sources` for a full scan (or is the canonical
+  path-keyed watch index size). Selection order is unchanged.
+- Checked discovery reports only the first error category (`invalid_root`,
+  `traversal`, or `other`). On that error, the CLI uses the best-effort partial
+  result and marks `best_effort_fallback_used`; this is first-error status, not
+  a total failure count. Project configuration reports the mode
+  (`default_roots`, `configured_documents`, or `none`) and attempted,
+  successful, failed-document, and loaded-project counts. A failed configured
+  document contributes no projects.
+- `diagnostic_warnings` contains constant-only `{code, classification, basis}`
+  observations. Failure codes are `project_config_load_failed`,
+  `source_discovery_degraded`, and `source_parse_error_observed`. Suspicious
+  zero codes are `no_sources_selected`,
+  `selected_sources_produced_no_records`,
+  `all_selected_sources_parse_failed_or_empty`, `no_tool_records_observed`,
+  and `no_effective_detection_candidates`. `Ok([])` is a parse success;
+  empty sources do not imply parse failure when another source is productive,
+  and repeated state-deduplicated positives do not imply zero candidates.
+  These are observations only: they are not health verdicts, security alerts,
+  Event 2.0 fields, sink payloads, persisted state, or exit-status changes.
+  Discovery and project-load diagnostics never include roots, paths, source IDs,
+  loader errors, or operating-system error text.
 
 The existing top-level `log_path` field remains raw for compatibility and is a
-local diagnostic caveat. Newly added path fields use hashes. Both sections are
-stdout-only: they are not Event 2.0 fields and are not written to JSONL or HEC.
+local diagnostic caveat. Newly added path fields use hashes. These diagnostic
+sections are stdout-only: they are not Event 2.0 fields and are not written to
+JSONL or HEC.
 
 Allowlisting marks a detection informational and does not necessarily prevent
 emission. Scanner-error events remain visible through the existing scan totals
