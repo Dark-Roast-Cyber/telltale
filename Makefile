@@ -287,8 +287,8 @@ release-public-docs-check:
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:
-	cargo run $(CARGO_LOCKED) --bin telltale -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
-	cargo run $(CARGO_LOCKED) --bin telltale -- rules validate
+	cargo run $(CARGO_LOCKED) --bin telltale -- scan --once --dry-run --no-local-config --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
+	cargo run $(CARGO_LOCKED) --bin telltale -- rules validate --no-local-config
 
 ## Public release preflight
 release-preflight: release-context-check release-tag-review release-crate-manifest package-verify release-public-docs-check check release-fixture-smoke

@@ -972,12 +972,12 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            "cargo run --locked --bin telltale -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores"
+            "cargo run --locked --bin telltale -- scan --once --dry-run --no-local-config --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores"
         ),
         "fixture scan must stay dry-run, fixture-rooted, and summary-enabled: {stdout}"
     );
     assert!(
-        stdout.contains("cargo run --locked --bin telltale -- rules validate"),
+        stdout.contains("cargo run --locked --bin telltale -- rules validate --no-local-config"),
         "bundled rule validation missing from fixture smoke target: {stdout}"
     );
 }

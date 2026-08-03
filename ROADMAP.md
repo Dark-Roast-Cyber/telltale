@@ -8,37 +8,34 @@ category.
 This roadmap is a stable public summary of project direction. Detailed
 execution planning is maintained internally.
 
-## Current Focus: 0.4.0 Maturity
+## Current Focus: 0.5.0 Telltale Maturation
 
-The unpublished 0.4.0 line builds on the v0.3.0 release to make Telltale safe,
-understandable, and practical to run.
+The approved 0.5.0 milestone folds in the unpublished 0.4.0 API and parser work
+and completes the breaking technical migration from the former product identity.
+The objective is a reliable, testable path from installation through source
+discovery, parsing, deterministic detection, state handling, and SIEM delivery.
 Priorities, in order:
 
-1. **Ordered rule packs** — bundled < organization < deployment < local/UI
-   precedence, with provenance and conflict diagnostics. *(shipped)*
-2. **Rename internal `adr` references to `telltale`** — the product is
-   Telltale; "ADR" remains the category name. Cross-repo refactor (CLI, crates,
-   config, docs) shipped on the new product identity in `v0.2.0`, with the
-   compatibility command retained. *(shipped; hosted installer and release
-   checks complete)*
-3. **Crates.io package preparation** — package the six functional Cargo
-   packages with clean metadata, package boundaries, and dependency-ordered
-   publication. The embedding facade is `telltale-core`; crates.io `telltale`
-   is an unrelated package. Versioning follows the conservative `0.x` policy in
-   [Versioning and Releases](docs/versioning.md), with `0.3.x` maintenance
-   while the 0.4.0 line remains in preparation. A future `0.5.x` line is
-   reserved for a significant, coherent milestone rather than a round of
-   maintenance tasks. *(0.4.0 packaging prepared; crates.io publication
-   pending)*
-4. **Configuration consolidation** — one shared scan/watch configuration path
-   to remove a high-risk duplication seam. *(shipped)*
-5. **Explicit delivery semantics** — honest local JSONL + best-effort remote
-   sinks, with documented retry, loss, and replay behavior. *(shipped)*
-6. **Maintainability cleanup** — split large test files, remove unused
-   placeholders, deduplicate documentation. *(shipped)*
-7. **Claims and evidence** — public support claims match measured evidence;
-   unknowns are labeled preview rather than converted into broad claims.
-   *(shipped)*
+1. **Establish a measured baseline** — prove known-positive synthetic detection
+   and canonical JSONL/HEC event parity before changing contracts.
+2. **Make runtime provenance explainable** — expose the exact build,
+   configuration, rule origins, source selection, normalized record counts,
+   matches, emitted detections, and suppression reasons without transcript
+   inspection.
+3. **Complete the technical rename** — Telltale becomes the sole new runtime,
+   environment, filesystem, event, service, release-asset, and SIEM product
+   identity. ADR remains the category term. Historical state and events receive
+   explicit migration/import handling rather than permanent runtime aliases.
+4. **Remove embedded LLM triage** — deterministic detection remains the core
+   contract; any future AI enrichment is a separately designed capability.
+5. **Harden detection and state reliability** — positive and benign fixture
+   coverage, exact risk contribution accounting, cursor boundaries, and
+   replay-safe deduplication.
+6. **Prove install and upgrade behavior** — functional post-install checks,
+   atomic state/service migration, rollback, and no duplicate schedules.
+7. **Pass host, SIEM, and cross-platform release gates** — native Linux, macOS,
+   and Windows archives must execute a positive fixture and validate emitted
+   schema before release.
 
 For future tagged releases: installer integrity checks, CI preflight, archive
 verification, and cross-platform smoke tests.
@@ -55,11 +52,11 @@ verification, and cross-platform smoke tests.
 - **Agentic development framework** — research and adopt a structured framework
   (e.g., spec-driven development) for how Telltale is built by AI agents.
 
-## Future 0.5.x Direction
+## Beyond 0.5.0
 
-The following are candidates for a future significant `0.5.x` milestone. They
-are not individual `0.4.x` maintenance tasks and require separate scope,
-compatibility review, and release planning:
+The following remain outside the approved 0.5.0 reliability and migration
+milestone and require separate scope, compatibility review, and release
+planning:
 
 - New agent sources and third-party parser/plugin APIs
 - Sequence/data-flow detection syntax and new rule-language features
@@ -75,13 +72,14 @@ compatibility review, and release planning:
   trustworthy local telemetry from agent logs. Then make detections
   understandable. Only consider active blocking after the data model is stable.
 - **Batch first, real-time later.** Log review before live hooks.
-- **Regex/static scoring first, LLM triage only after thresholds.**
+- **Deterministic detection is authoritative.** AI enrichment is optional future
+  work outside the embedded 0.5.0 runtime.
 - **Detection separate from action.** Telltale emits visibility and alerts;
   blocking is a future policy layer.
 - **Privacy by default.** No raw secrets, API keys, full transcript bodies, or
   unnecessary command output in emitted telemetry.
 - **Agent-agnostic by design.** Each supported agent is a source adapter behind
-  a stable interface: discover, parse, normalize, detect, score, triage, emit.
+  a stable interface: discover, parse, normalize, detect, score, emit.
 
 ## License
 

@@ -10,14 +10,12 @@ format.
 - `v0.1.0` is the first public binary release.
 - `0.2.0` is the prior maturity release.
 - `0.3.0` is the current released line for the event and scoring contract.
-- `0.4.0` is the unpublished breaking API-hardening line; its packages remain
-  unpublished pending separate approval.
-- `0.3.x` is the current released maintenance line. After `0.4.0` is released,
-  compatible follow-up fixes will use its `0.4.x` patch line.
-- `0.5.0` is reserved for the next significant, coherent product milestone. It
-  must represent substantial architecture, public API/schema/configuration,
-  compatibility, or capability work; it is not a label for a round of routine
-  tasks. Follow-up fixes after that milestone use `0.5.x`.
+- `0.4.0` is an unpublished API-hardening line and will not be released
+  separately. Its completed work is folded into `0.5.0`.
+- `0.3.x` remains the current released maintenance line until `0.5.0` ships.
+- `0.5.0` is the approved coherent breaking milestone for the hard Telltale
+  technical migration, embedded-triage removal, schema/configuration changes,
+  and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
@@ -27,9 +25,9 @@ format.
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
 - `telltale` is the canonical executable and `telltale-*` is the canonical
-  release asset naming. The compiled `adr` compatibility command and exact-copy
-  `adr-*` archive aliases remain part of the current release contract. This
-  migration does not schedule their removal.
+  release asset naming. The currently released `adr` compatibility command and
+  `adr-*` aliases are removed by the breaking 0.5.0 migration; migration tooling
+  handles supported historical state rather than retaining runtime aliases.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.
 
@@ -46,17 +44,16 @@ allowance for `0.y.z` versions:
 
 | Change | Version | Examples |
 | --- | --- | --- |
-| Compatible fix | Patch (`0.3.x`; `0.4.x` after the 0.4.0 release) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
+| Compatible fix | Patch (`0.3.x`; `0.5.x` after the 0.5.0 release) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
 | Additive maturity work | Next planned minor line | New compatible capability or API that does not invalidate existing consumers |
-| Breaking change | Next minor (`0.4.0`, then `0.5.0` if needed) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
+| Breaking change | Next planned minor (`0.5.0` for the approved migration) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
 | Stable compatibility commitment | Major (`1.0.0`) | Public interfaces are sufficiently settled for documented compatibility guarantees |
 
 The `0.3.x` line is the compatibility path for post-`0.3.0` fixes. The
-unpublished `0.4.0` line is the next breaking API-hardening line; after it is
-released, its `0.4.x` series will serve as the compatibility path. Do not
-accumulate unrelated maintenance tasks and call the result `0.5.0`. Starting a
-`0.5.0` milestone requires explicit scope, user-visible rationale, compatibility
-impact, migration notes where needed, acceptance criteria, and release review.
+unpublished `0.4.0` API-hardening work is incorporated into the explicitly
+approved 0.5.0 milestone and will not create a separate release line. The 0.5.0
+scope, compatibility impact, migration requirements, acceptance criteria, and
+release review are maintained in the internal execution plan.
 
 ## Versioned Surfaces
 
@@ -72,7 +69,7 @@ The Cargo/package version is not the version of every data contract:
   their own migration rules. A package release does not automatically change a
   configuration version.
 - **Rule language and bundled rules:** compatible detections and rule updates
-  remain on the current `0.3.x` line, then `0.4.x` after the 0.4.0 release.
+  remain on the current `0.3.x` line, then `0.5.x` after the 0.5.0 release.
   Removing syntax, changing evaluation meaning incompatibly, or invalidating
   existing rule documents belongs in the next planned minor milestone, not in a
   routine patch batch.
@@ -86,8 +83,8 @@ The Cargo/package version is not the version of every data contract:
    and operator impact. Internal planning history stays out of public notes.
 4. Run `make release-preflight` and review the staged/public file boundary.
 5. Create the matching `v<version>` tag. For example, a compatible maintenance
-   release `0.3.1` requires tag `v0.3.1`; the unpublished breaking line requires
-   `v0.4.0` only after its release approval.
+   release `0.3.1` requires tag `v0.3.1`; the approved breaking milestone
+   requires `v0.5.0` only after all migration and reliability gates pass.
 6. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
@@ -117,13 +114,14 @@ Publish schema → rules → sources → detect → core → cli, waiting after 
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.4.0` registry dependencies. Do not declare publication complete before
-those unpatched checks pass, and do not publish credentials or local release
-state.
+`=0.4.0` registry dependencies while that remains the workspace package
+version. Advance this pin with the lockstep package version before 0.5.0
+publication. Do not declare publication complete before those unpatched checks
+pass, and do not publish credentials or local release state.
 
 ## Pre-Releases
 
-Use Cargo-compatible pre-release versions such as `0.4.0-alpha.1`,
-`0.4.0-beta.1`, or `0.4.0-rc.1` only when external validation is useful. A
+Use Cargo-compatible pre-release versions such as `0.5.0-alpha.1`,
+`0.5.0-beta.1`, or `0.5.0-rc.1` only when external validation is useful. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees.
