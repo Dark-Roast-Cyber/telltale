@@ -33,7 +33,7 @@ for Linux, macOS, and Windows. Download the canonical archive that matches your
 platform, extract both binaries, and use `telltale` (`telltale.exe` on Windows)
 for new integrations.
 
-The v0.2.0 release archives and CI smoke checks establish binary packaging and
+The v0.3.0 release archives and CI smoke checks establish binary packaging and
 execution support for Linux, macOS, and Windows. They do not establish broad
 live validation of agent source stores on those platforms; source-store support
 claims remain bounded by the [Source Validation Matrix](source-validation-matrix.md).
@@ -94,7 +94,7 @@ does not enable anything beyond the binary install unless you opt in:
 ./scripts/install-telltale --with-timer
 ```
 
-The v0.2.0 release records establish that the hosted one-line installer at
+The v0.3.0 release records establish that the hosted one-line installer at
 `agentarchaeology.ai/telltale_install.sh` is synchronized with the repository
 installer and validated end-to-end. It downloads the latest release, verifies
 `SHA256SUMS`, and installs both binaries. To build from source instead of

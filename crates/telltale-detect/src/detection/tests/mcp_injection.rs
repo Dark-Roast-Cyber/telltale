@@ -74,7 +74,7 @@ fn detects_uc001_positive_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-positive".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-positive.jsonl",
         )),
@@ -138,7 +138,7 @@ fn ignores_benign_mcp_user_text_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-mcp-user-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-mcp-user-text.jsonl",
         )),
@@ -166,7 +166,7 @@ fn ignores_benign_normal_mcp_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-normal-mcp".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-normal-mcp.jsonl",
         )),
@@ -182,7 +182,7 @@ fn ignores_benign_tools_list_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-tools-list".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-tools-list.jsonl",
         )),
@@ -198,7 +198,7 @@ fn detects_mcp_server_enumeration_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "mcp-server-enumeration".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/mcp-server-enumeration.jsonl",
         )),
@@ -236,7 +236,7 @@ fn ignores_benign_normal_mcp_tool_result_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "normal-mcp-tool-result".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/normal-mcp-tool-result.jsonl",
         )),
@@ -264,7 +264,7 @@ fn ignores_benign_server_instructions_session_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-server-instructions".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-server-instructions.jsonl",
         )),
@@ -280,7 +280,7 @@ fn detects_uc001_positive_server_instructions_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-positive-server-instructions".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-positive-server-instructions.jsonl",
         )),
@@ -318,7 +318,7 @@ fn detects_uc001_positive_tool_description_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-positive-tool-description".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-positive-tool-description.jsonl",
         )),
@@ -368,7 +368,7 @@ fn detects_uc001_positive_parameter_description_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-positive-parameter-description".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-positive-parameter-description.jsonl",
         )),
@@ -406,7 +406,7 @@ fn detects_uc001_positive_reversed_injection_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-positive-reversed-injection".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-positive-reversed-injection.jsonl",
         )),
@@ -449,7 +449,7 @@ fn detects_mcp_injection_in_nested_codex_tool_call_arguments() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "codex-payload-arguments-injection".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/codex-payload-arguments-injection.jsonl",
         )),
@@ -495,7 +495,7 @@ fn detects_uc001_positive_compliance_tool_name_variant() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-positive-compliance-tool".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-positive-compliance-tool.jsonl",
         )),
@@ -540,7 +540,7 @@ fn ignores_controlled_domain_mentions_in_isolated_user_text_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "controlled-domain-user-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/controlled-domain-user-text.jsonl",
         )),
@@ -556,7 +556,7 @@ fn ignores_benign_controlled_domain_mentions_in_session_store_user_text() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "controlled-domain-user-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/controlled-domain-user-text.jsonl",
         )),
@@ -572,7 +572,7 @@ fn ignores_benign_controlled_domain_mentions_in_negative_domain_user_text_sessio
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-domain-user-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-domain-user-text.jsonl",
         )),
@@ -588,7 +588,7 @@ fn ignores_benign_controlled_domain_mentions_in_session_store_assistant_text() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "controlled-domain-assistant-text".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/controlled-domain-assistant-text.jsonl",
         )),
@@ -616,7 +616,7 @@ fn ignores_benign_controlled_domain_mentions_in_session_store_tool_result_fixtur
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-domain-tool-result".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-domain-tool-result.jsonl",
         )),
@@ -632,7 +632,7 @@ fn detects_uc001_positive_tool_result_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "tool-result-injection".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/tool-result-injection.jsonl",
         )),
@@ -684,7 +684,7 @@ fn ignores_benign_mcp_tool_results_without_injection_language() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "normal-mcp-tool-result".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/normal-mcp-tool-result.jsonl",
         )),
@@ -700,7 +700,7 @@ fn ignores_benign_mcp_server_instructions_without_injection_language() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-server-instructions".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-server-instructions.jsonl",
         )),
@@ -716,7 +716,7 @@ fn ignores_benign_mcp_tool_metadata_without_injection_language() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc001-negative-normal-mcp".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc001-negative-normal-mcp.jsonl",
         )),

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -47,9 +48,13 @@ pub fn load_project_configs(paths: &[PathBuf]) -> Vec<ProjectDef> {
 }
 
 pub fn project_config_paths_from_env() -> Vec<PathBuf> {
-    std::env::var("ADR_PROJECT_CONFIG")
-        .ok()
-        .map(|v| v.split(':').map(PathBuf::from).collect())
+    project_config_paths_from_value(std::env::var_os("ADR_PROJECT_CONFIG"))
+}
+
+fn project_config_paths_from_value(value: Option<OsString>) -> Vec<PathBuf> {
+    value
+        .filter(|value| !value.is_empty())
+        .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default()
 }
 
@@ -159,13 +164,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_env_var() {
-        unsafe { std::env::set_var("ADR_PROJECT_CONFIG", "/a/b.yaml:/c/d.yaml") };
-        let paths = project_config_paths_from_env();
+    fn parses_platform_native_path_list() {
+        let joined = std::env::join_paths([PathBuf::from("a.yaml"), PathBuf::from("b.yaml")])
+            .expect("join paths");
+        let paths = project_config_paths_from_value(Some(joined));
         assert_eq!(
             paths,
-            vec![PathBuf::from("/a/b.yaml"), PathBuf::from("/c/d.yaml")]
+            vec![PathBuf::from("a.yaml"), PathBuf::from("b.yaml")]
         );
+        assert!(project_config_paths_from_value(None).is_empty());
+        assert!(project_config_paths_from_value(Some(OsString::new())).is_empty());
     }
 
     #[test]

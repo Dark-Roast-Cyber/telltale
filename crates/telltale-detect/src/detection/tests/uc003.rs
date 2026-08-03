@@ -5,7 +5,7 @@ fn detects_uc003_dns_exfiltration_chain_in_codex_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc003-positive-dns-exfil".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc003-positive-dns-exfil.jsonl",
         )),
@@ -51,7 +51,7 @@ fn ignores_uc003_negative_dns_troubleshooting_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "uc003-negative-dns-troubleshooting".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/uc003-negative-dns-troubleshooting.jsonl",
         )),
@@ -67,7 +67,7 @@ fn detects_encoded_http_exfiltration_in_codex_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "encoded-http-exfil".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/encoded-http-exfil.jsonl",
         )),
@@ -102,7 +102,7 @@ fn detects_outbound_upload_exfiltration_in_codex_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "outbound-upload-exfil".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/outbound-upload-exfil.jsonl",
         )),

@@ -314,7 +314,7 @@ fn preview_rules_request(
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "rules.serve.preview".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: fixture_path.clone(),
     };
     let detections = detect_sources_with_rules(&[source], &rule_set);

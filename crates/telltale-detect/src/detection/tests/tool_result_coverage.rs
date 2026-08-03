@@ -115,7 +115,7 @@ fn detects_gemini_secret_file_reads_as_secret_access() {
     let source = Source {
         client: ClientId::Gemini,
         kind: SourceKind::Json,
-        source_id: "gemini-secret-file-read".to_string(),
+        source_id: "gemini.tmp".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/gemini-secret-file-read.json",
         )),

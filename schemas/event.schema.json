@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://adr.local/schemas/event.schema.json",
+  "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/event.schema.json",
   "title": "Telltale SIEM Event",
   "$defs": {
     "canonicalRuleId": {

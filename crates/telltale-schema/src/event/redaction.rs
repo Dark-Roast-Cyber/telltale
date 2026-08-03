@@ -92,7 +92,11 @@ pub(crate) fn redact_error_message(msg: &str) -> String {
         .replace_all(&redacted, "[redacted-secret]")
         .into_owned();
     if redacted.len() > 200 {
-        format!("{}...", &redacted[..197])
+        let mut prefix_len = 197;
+        while !redacted.is_char_boundary(prefix_len) {
+            prefix_len -= 1;
+        }
+        format!("{}...", &redacted[..prefix_len])
     } else {
         redacted
     }
@@ -262,6 +266,15 @@ mod tests {
     fn redact_error_message_truncates_long_messages() {
         let long_msg = "x".repeat(300);
         let redacted = redact_error_message(&long_msg);
+        assert!(redacted.len() <= 200);
+        assert!(redacted.ends_with("..."));
+    }
+
+    #[test]
+    fn redact_error_message_truncates_long_multibyte_messages_safely() {
+        let long_msg = "界".repeat(100);
+        let redacted = redact_error_message(&long_msg);
+
         assert!(redacted.len() <= 200);
         assert!(redacted.ends_with("..."));
     }

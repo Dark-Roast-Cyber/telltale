@@ -1,0 +1,3 @@
+{"type":"future_tool_variant","content":[{"type":"tool_use","name":"future_tool","input":{"value":"synthetic"}}]}
+{"type":"future_result_variant","content":[{"type":"tool_result","content":"Synthetic future result."}]}
+{"type":"future_session_meta_variant","session_meta":{"payload":{"agent_nickname":"future-agent"}}}

@@ -930,7 +930,7 @@ mod tests {
         let sources = vec![Source {
             client: ClientId::Claude,
             kind: SourceKind::Jsonl,
-            source_id: "claude.fixture".to_string(),
+            source_id: "claude.projects".to_string(),
             path: session_path,
         }];
 
@@ -981,7 +981,7 @@ mod tests {
         let sources = vec![Source {
             client: ClientId::Claude,
             kind: SourceKind::Jsonl,
-            source_id: "claude.fixture".to_string(),
+            source_id: "claude.projects".to_string(),
             path: session_path,
         }];
 

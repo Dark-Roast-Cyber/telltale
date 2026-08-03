@@ -962,6 +962,103 @@ mod tests {
     }
 
     #[test]
+    fn discovers_and_parses_codex_and_opencode_project_identities_portably() {
+        let temp = tempdir().expect("tempdir");
+        let discovery_root = temp.path().join("discovery-root");
+        let project = temp.path().join("project-root");
+        fs::create_dir_all(&discovery_root).expect("discovery root");
+
+        let codex_path = project
+            .join(".codex-worktree")
+            .join("project-session.jsonl");
+        fs::create_dir_all(codex_path.parent().expect("codex parent")).expect("codex dir");
+        fs::write(
+            &codex_path,
+            b"{\"type\":\"session_meta\",\"payload\":{\"agent_nickname\":\"fixture-agent\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"assistant_message\",\"message\":\"project response\"}}\n",
+        )
+        .expect("codex project fixture");
+
+        let opencode_path = project.join(".opencode").join("project-message.json");
+        fs::create_dir_all(opencode_path.parent().expect("opencode parent")).expect("opencode dir");
+        fs::write(
+            &opencode_path,
+            b"{\"sessionID\":\"opencode-project\",\"role\":\"assistant\",\"agent\":\"build\",\"content\":\"project response\"}",
+        )
+        .expect("opencode project fixture");
+
+        let projects = vec![crate::projects::ProjectDef {
+            name: "project-root".to_string(),
+            path: project,
+        }];
+        let sources =
+            discover_sources_with_projects(&discovery_root, &projects).expect("discovery");
+
+        let codex = sources
+            .iter()
+            .find(|source| source.source_id == "codex.project_sessions")
+            .expect("codex project source");
+        assert_eq!(codex.client, ClientId::Codex);
+        assert_eq!(codex.kind, SourceKind::Jsonl);
+        assert_eq!(
+            codex.path.file_name().and_then(|name| name.to_str()),
+            Some("project-session.jsonl")
+        );
+        assert!(
+            codex
+                .path
+                .ends_with(PathBuf::from(".codex-worktree").join("project-session.jsonl"))
+        );
+        assert!(
+            codex
+                .path
+                .components()
+                .any(|component| component.as_os_str() == "project-root")
+        );
+        let codex_records = crate::parser::parse_source_records(codex).expect("codex records");
+        assert_eq!(codex_records.len(), 2);
+        assert_eq!(
+            codex_records[0].kind,
+            telltale_schema::record::RecordKind::SessionMeta
+        );
+        assert_eq!(
+            codex_records[1].kind,
+            telltale_schema::record::RecordKind::AssistantMessage
+        );
+        assert_eq!(codex_records[0].agent.as_deref(), Some("fixture-agent"));
+
+        let opencode = sources
+            .iter()
+            .find(|source| source.source_id == "opencode.project_json")
+            .expect("opencode project source");
+        assert_eq!(opencode.client, ClientId::OpenCode);
+        assert_eq!(opencode.kind, SourceKind::LegacyJson);
+        assert_eq!(
+            opencode.path.file_name().and_then(|name| name.to_str()),
+            Some("project-message.json")
+        );
+        assert!(
+            opencode
+                .path
+                .ends_with(PathBuf::from(".opencode").join("project-message.json"))
+        );
+        assert!(
+            opencode
+                .path
+                .components()
+                .any(|component| component.as_os_str() == "project-root")
+        );
+        let opencode_records =
+            crate::parser::parse_source_records(opencode).expect("opencode records");
+        assert_eq!(opencode_records.len(), 1);
+        assert_eq!(
+            opencode_records[0].kind,
+            telltale_schema::record::RecordKind::AssistantMessage
+        );
+        assert_eq!(opencode_records[0].session_id, "opencode-project");
+        assert_eq!(opencode_records[0].agent.as_deref(), Some("build"));
+    }
+
+    #[test]
     fn discovers_all_nested_project_local_watch_roots() {
         let temp = tempdir().expect("tempdir");
         let workspace = temp.path().join("workspace");

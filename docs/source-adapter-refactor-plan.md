@@ -1,311 +1,132 @@
-# Source Adapter Refactor Plan
+# Source Adapter Architecture and Migration Record
 
-This is the implementation plan for moving Telltale from centralized,
-`SourceKind`-driven semantic parser dispatch toward explicit parser registration
-for each `(ClientId, source_id)` source identity. The goal is to make built-in
-agents easier to maintain without guessing a source's schema from its container
-format.
+This document records the implemented explicit per-source parser architecture.
+It replaces the former plan to infer semantic parsing from `SourceKind`.
 
-This document is a post-0.2.0 planning handoff. It does not change runtime
-behavior by itself and does not propose a trait, plugin, or parser framework.
-
-## Why Refactor
-
-Today, adding or changing one agent touches several files, with semantic
-dispatch still centralized:
-
-- `crates/telltale-schema/src/clients.rs` for `ClientId` and `SourceKind`, plus
-  `crates/telltale-sources/src/sources/<agent>/mod.rs` for most static source
-  definitions and adjacent per-agent install modules.
-- `crates/telltale-sources/src/discovery.rs` for OS root resolution, project-local search behavior,
-  fixture source discovery, and watch roots.
-- `crates/telltale-sources/src/parser.rs` for `SourceKind` dispatch, shared
-  extraction, and normalization, with selected source-specific parser helpers
-  under `crates/telltale-sources/src/sources/<agent>/parser.rs`.
-- `crates/telltale-sources/src/install_inventory.rs` for installed-agent inventory evidence.
-- `tests/fixtures/session_stores/<client>/` for synthetic source fixtures.
-- Public docs for session sources, capability matrices, validation status, and
-  adding-agent guidance.
-
-That layout is understandable with a small source list, but it scales poorly.
-Codex, OpenCode, Copilot, RooCode, KiloCode, Gemini, Claude, Qwen, and OpenClaw
-already have different source shapes. Antigravity or customer-specific agents
-would add more branches to the same central files.
-
-The migration should keep the public pipeline stable:
+The public pipeline is unchanged:
 
 ```text
 discover -> parse -> normalize -> detect -> score -> triage -> emit
 ```
 
-Only the internal organization and parser registration should change. Discovery,
-normalization, detection, scoring, triage, emission, and install inventory keep
-their current contracts.
+Discovery, normalization, detection, scoring, triage, emission, install
+inventory, Event 2.0, state, and public parser signatures retain their existing
+contracts.
 
-## What We Learned From The Current Code
+## Implemented architecture
 
-### Source registry
+### Source definitions and ordering
 
-`crates/telltale-schema/src/clients.rs` owns the canonical `ClientId` and
-`SourceKind` types. `crates/telltale-sources/src/clients.rs` owns discovery
-configuration types such as `PathRoot` and `SourcePattern`, plus the
-`supported_clients()` compatibility wrapper; `sources/registry.rs` owns the
-static client registry:
+The canonical `ClientId` and `SourceKind` types live in
+`crates/telltale-schema/src/clients.rs`. Agent source modules under
+`crates/telltale-sources/src/sources/<agent>/` own static source definitions,
+install hints, parsers, and focused tests where practical.
 
-- `ClientId` variants and `ClientId::as_str()` values.
-- `PathRoot` variants: `CodexHome`, `Home`, `ConfigHome`, `DataHome`, and
-  `ProjectLocal`.
-- `SourceKind` variants: JSON, JSONL, archived JSONL, headless JSONL, SQLite,
-  legacy JSON, UI messages JSON, and Copilot process logs.
-- `SourcePattern` for extension, exact file, and filename-contains matching.
-- `ClientSourceDef` and `ClientDef`.
-- Static per-client arrays such as `codex::SOURCES`, `opencode::SOURCES`, and
-  `copilot::SOURCES`, collected by the source registry.
-- `supported_clients()` returning the static registry.
+`crates/telltale-sources/src/sources/registry.rs` collects static source
+definitions and install ordering. It does not own parser registration and
+`ClientSourceDef` does not contain a parser field. Discovery continues to use
+the source definitions, OS-aware root helpers, and project-local paths.
 
-The registry is already a useful discovery contract. The per-agent source arrays
-and install definitions have moved into source modules, while the shape of
-`ClientDef` and `ClientSourceDef` remains stable. The next step is to register
-the parser for each source identity rather than infer it from `SourceKind`.
+The private exact registration table is centralized in
+`crates/telltale-sources/src/parser.rs`. Lookup is case-sensitive by the pair
+`(ClientId, source_id)`. `SourceKind` is checked only as expected container and
+reporting metadata after identity lookup; it never selects semantic parsing.
 
-### Discovery
-
-`crates/telltale-sources/src/discovery.rs` depends on `supported_clients()` and is mostly generic. It
-does not need to know Codex or OpenCode internals except through source
-definitions. It should stay mostly unchanged during the first phase.
-
-Discovery responsibilities to preserve:
-
-- fixture roots use each source's `fixture_relative_path`;
-- host roots resolve via `PathRoot` and OS-specific environment variables;
-- project-local sources search bounded nested workspaces;
-- watch roots can be filtered by client id;
-- fixture scans remain deterministic and do not depend on host session stores.
-
-### Parser
-
-`crates/telltale-sources/src/parser.rs` is the primary coupling point. It currently dispatches by
-`SourceKind`, not by the registered `(ClientId, source_id)` identity. That makes
-generic source shapes easy, but it permits source-specific details for Codex,
-Gemini, OpenCode SQLite, Copilot logs, Claude tool blocks, and VS Code UI
-message files to be treated as one format family.
-
-Important parser contracts to preserve:
-
-- public `parse_source_records()` and `parse_source_records_with_options()`
-  signatures;
-- `ParseOptions` and `ParsedSourceRecords`, including OpenCode SQLite cursor
-  metadata;
-- `NormalizedRecord` fields and `RecordKind` values;
-- source-specific parsing must not contain detection logic;
-- parser errors must not print raw transcript bodies or secrets.
-
-The target is explicit source registration. `SourceKind` remains container and
-reporting metadata. Shared JSON, JSONL, and SQLite readers may remain shared,
-but semantic extraction and classification belong to the registered source
-parser. A generic parser is used only when a source explicitly opts into it
-because it is not yet modeled. A known parser failure reports schema drift or
-the parse error through the existing path; it never silently retries with a
-different parser. Unknown record variants become `Other` records or explicit
-diagnostics rather than guessed kinds.
-
-### Install inventory
-
-`crates/telltale-sources/src/install_inventory.rs` is separate from session-source discovery. That is the
-right conceptual boundary. Install evidence definitions now live in per-agent
-source modules and are collected by the static registry. Parser migration must
-not change metadata-only behavior or hashed path signals.
-
-### Fixtures and docs
-
-Fixture-backed support is the source of truth for public support. The current
-validation matrix requires discovery, benign parse, tool-call parse, tool-result
-parse, positive detection, negative behavior, and capability documentation.
-
-The source-module design should make those requirements easier to satisfy by
-keeping fixtures and source-specific tests discoverable from the agent module
-docs.
-
-## Target Layout
-
-Move built-in source support toward this structure:
+Modeled parsers use the internal uniform function shape:
 
 ```text
-src/
-  sources/
-    mod.rs
-    registry.rs
-    common/
-      mod.rs
-      json.rs
-      jsonl.rs
-      sqlite.rs
-      vscode.rs
-    codex/
-      mod.rs
-      parser.rs
-      install.rs
-      tests.rs
-    claude/
-      mod.rs
-      parser.rs
-      install.rs
-      tests.rs
-    gemini/
-      mod.rs
-      parser.rs
-      install.rs
-      tests.rs
-    opencode/
-      mod.rs
-      parser.rs
-      install.rs
-      tests.rs
-    copilot/
-      mod.rs
-      parser.rs
-      install.rs
-      tests.rs
+fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, ParseError>
 ```
 
-`mod.rs` may continue to own static `SOURCES` and `INSTALL` declarations. The
-registry should additionally map each `(ClientId, source_id)` to its explicit
-parser. The first implementation should not move every agent at once: establish
-parity fixtures, then migrate the prioritized source families one at a time.
+The public `parse_source_records()` and
+`parse_source_records_with_options()` interfaces remain unchanged. Generic
+parsing is opt-in per exact registration. The only deliberate generic
+registrations are `roocode.tasks` and `kilocode.tasks` using the JSON-document
+fallback. There is no generic JSONL fallback.
 
-## Parser Registration Contract
+Neutral JSON decoding remains shared through `read_jsonl_values()` and
+`read_json_document()`. Source modules own semantic extraction and
+classification. A `sources/common/` directory is not required by the current
+implementation and should not be invented for a single helper.
 
-Keep registration compiled in, static, and direct. Do not introduce an adapter
-trait, dynamic plugin boundary, or generic manager for this migration.
+### Failure and privacy boundaries
 
-The conceptual registration shape is:
+A known parser or schema failure is terminal. It is returned through the normal
+scanner diagnostic path and is never retried with generic or another
+source-specific parsing. Explicit unknown record variants become
+`RecordKind::Other` or a source-contract diagnostic; a known kind is never
+guessed from coincidental fields in an explicitly unknown variant.
 
-```rust
-type SourceParser = fn(&Source, ParseOptions) -> Result<ParsedSourceRecords, ParseError>;
+Errors and evidence must not expose raw transcript bodies, credentials,
+encrypted content, or sensitive paths. Synthetic tests use portable
+`Path`/`PathBuf` joins and temporary directories rather than separator or Unix
+assumptions.
 
-// Keyed by (source.client, source.source_id), not SourceKind.
-fn parser_for(source: &Source) -> Option<SourceParser>;
-```
+## Migration results
 
-The exact Rust representation may differ to preserve existing visibility and
-public signatures. The contract is:
+The source-maturity work was completed as bounded identity batches while
+preserving normalized and emitted-event parity:
 
-- one source identity has one named semantic parser;
-- shared low-level readers live under `src/sources/common/` only when their
-  behavior is format-level and source-neutral;
-- a generic parser is selected only by an explicit registration for an
-  unmodeled source;
-- parser errors are returned unchanged to the existing scanner error path;
-- source definitions and install evidence remain compatible with discovery and
-  inventory callers.
+| Batch | Exact identities | Result |
+| --- | --- | --- |
+| Claude | `claude.projects` | Modeled parser; structural JSONL drift is terminal; unknown explicit variants are `Other`. |
+| Codex | `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`, `codex.project_sessions` | Modeled JSONL parser with metadata inheritance, project-local parity, and terminal schema/unknown boundaries. |
+| OpenCode JSON | `opencode.legacy_json`, `opencode.project_json` | Modeled JSON-document parser; object/array order and failure boundaries preserved. |
+| OpenCode SQLite | `opencode.sqlite` | Modeled existing SQLite parser; queries, 5-second busy timeout, locks, cursors, high-water marks, limits, state, and SQLite-over-legacy preference preserved. |
+| OpenClaw | `openclaw.agents` | Modeled JSONL parser; filename and `.jsonl.deleted` discovery preserved. |
+| Qwen | `qwen.projects` | Modeled JSONL parser with terminal schema and unknown boundaries. |
+| Copilot | `copilot.process_log` | Modeled tolerant process-log parser; truncated logs remain recoverable, reasoning/message items remain ignored, and unknown future items produce safe `Other` summaries. |
+| Gemini | `gemini.tmp` | Modeled JSON parser; missing `messages` remains the established `Empty` behavior. |
+| RooCode/KiloCode | `roocode.tasks`, `kilocode.tasks` | Deliberate exact JSON-document fallbacks; their verified UI-message document shape is identical and does not yet require source-specific semantics. |
 
-Keep compatibility wrappers during migration:
+Final parser maturity is 12 modeled identities and exactly two deliberate
+generic JSON-document fallbacks. All 14 registered identities, including the
+project-local Codex and OpenCode candidates, have parser/parity fixture
+coverage. That fact is separate from the public support matrix and from live
+host validation.
 
-- `clients::supported_clients()` should continue to exist.
-- `discovery` should continue to consume `ClientDef` / `ClientSourceDef`.
-- `parser::parse_source_records_with_options()` should continue to exist.
-- `install_inventory::collect_install_inventory()` should continue to emit the
-  same event shape.
+## Compatibility preserved during migration
 
-## Migration Principles
+- `ClientSourceDef`, `ClientId`, source discovery, install metadata, and public
+  parser signatures remain stable.
+- Normalized fields, record order, source/event tuple identity, and Event 2.0
+  output remain parity-tested.
+- Gemini's established missing-`messages` `Empty` result remains unchanged.
+- Copilot retains plain-line tolerance, standalone JSON-array handling,
+  workspace session boundaries, function-call results, and recoverable
+  truncated JSON behavior.
+- OpenCode SQLite retains its query shapes, selected-row order, part filters,
+  limits, min-cursor overlap, maximum timestamp calculation, busy/lock error
+  mapping, scan-state behavior, fingerprinting, and preference over legacy JSON.
+- No trait, plugin ABI, dynamic/runtime registration, external parser
+  configuration, factory, manager, or public parser extension API was added.
 
-1. **Characterize before routing.** Add parity fixtures for records, events,
-   ordering, errors, and state before changing dispatch.
-2. **One source family at a time.** Migrate Claude, Codex, and OpenCode in the
-   stated order; keep OpenCode legacy/project JSON separate from SQLite.
-3. **No silent fallback.** A known source parser failure is a failure. Only an
-   explicitly registered unmodeled source may use generic parsing.
-4. **Keep detections untouched.** Source parsers produce normalized records;
-   detection rules remain data-driven in `config/rules/`.
-5. **Keep privacy and public interfaces unchanged.** No raw transcript emission,
-   real session fixtures, raw install paths, CLI example renames, or public
-   parser signature changes.
-6. **Stop on parity loss.** Do not continue to the next source if normalized
-   output, event ordering, deduplication, cursor/state behavior, or failure
-   reporting changes without an intentional, separately reviewed decision.
+## Community addition shape
 
-## Proposed Phases
+Future coding-agent or harness additions should follow this small compiled-in
+sequence:
 
-### Phase 0 — Characterization and parity fixtures
+1. For a new client, add a canonical `ClientId` and its `ClientId::as_str()`
+   arm; reuse both for an additional source from an existing client. Add stable
+   source IDs in either case.
+2. For a new client, create the agent module and declare it in `sources/mod.rs`;
+   for another identity, extend the existing module with its paths and patterns.
+3. Add a source-owned parser module for a new modeled client, or extend the
+   existing client parser for another modeled identity.
+4. For a new client, import the module and add its `ClientDef` to
+   `sources/registry.rs`, preserving public client/install order; discovered
+   `Source` results are sorted separately.
+5. For a new client, define the per-client `AgentInstallDef`/`INSTALL`, even
+   with empty signal lists, and add it to `INSTALL_DEFS` in matching order.
+6. Add one exact private parser registration per identity and update hard-coded
+   registry, parser-maturity, and client-count snapshots.
+7. Reuse only neutral shared readers; keep semantic mapping source-owned.
+8. Add synthetic discovered fixtures at registered paths and mirror them under
+   a crate's `tests/fixtures` boundary when packaged unit tests reference them.
+9. Add registry/integrity, positive/benign, drift/unknown/failure/no-fallback,
+   event/source-order, and portable path tests.
+10. Update support/capability documentation, then run focused and full Rust
+    tests, package verification when applicable, and Linux/Windows/macOS CI.
 
-Inventory every registered `(ClientId, source_id)` identity and capture
-synthetic parity for normalized records, event streams, ordering, diagnostics,
-and source metadata. Add fixtures for known schema drift, unknown record
-variants, and the explicit generic-fallback boundary. Do not change dispatch in
-this phase.
-
-Stop if the characterization fixtures depend on real transcripts, expose
-secrets, or cannot distinguish a known-parser failure from an explicit generic
-fallback.
-
-### Phase 1 — Claude Code
-
-Register and migrate `claude.projects` to an explicit parser. Preserve the
-existing public parser signatures and JSONL behavior, then run focused fixture,
-schema, detection, and bounded live-validation checks where safe.
-
-### Phase 2 — Codex
-
-Migrate `codex.sessions`, `codex.archived_sessions`,
-`codex.headless_sessions`, and `codex.project_sessions` as one source family,
-with parity for ordering, session metadata, and source provenance. Keep generic
-readers shared only where they are format-level helpers.
-
-### Phase 3 — OpenCode legacy and project JSON
-
-Migrate `opencode.legacy_json` and `opencode.project_json` separately from the
-database path. Preserve source preference and all existing normalized output.
-
-### Phase 4 — OpenCode SQLite
-
-Migrate `opencode.sqlite` last. Preserve `ParseOptions`, part limits,
-`sqlite_part_max_time_updated`, lock errors, scan-unit behavior, cursor/state
-writes, and the host preference for SQLite over legacy JSON. Stop before moving
-on if parser, state, scan-unit, CLI cursor, lock, or fixture tests fail.
-
-### Phase 5 — Lower-priority sources
-
-Migrate OpenClaw, Qwen, and Copilot in separate bounded batches after the first
-tranche is stable. Their current support remains unchanged while they wait.
-
-### Phase 6 — Remaining supported sources
-
-Assess Gemini, RooCode, and KiloCode after the priority tranche. They remain
-supported; being outside the first tranche does not imply removal. New agents
-such as Antigravity are a separate support decision, not a prerequisite for
-this parser migration.
-
-For every phase, run the focused source/parser/discovery/schema tests and a
-client-scoped fixture dry run before proceeding. Run the full Rust quality gate
-after each coherent source-family batch.
-
-## Risks And Mitigations
-
-| Risk | Mitigation |
-| --- | --- |
-| Behavior changes during mechanical moves | Preserve compatibility functions and add source-registry snapshot tests. |
-| Parser refactor accidentally changes normalized output | Run schema conformance, focused parser tests, and fixture scans per client. |
-| OpenCode SQLite cursor behavior regresses | Move OpenCode last; keep dedicated state/scan cursor tests. |
-| Install inventory hash/order changes | Sort by stable agent id before hashing and assert snapshot behavior. |
-| Public docs overstate support | Keep support claims tied to source validation matrix gates. |
-| Generic fallback hides source schema drift | Register known source identities explicitly and test that parser errors do not retry through generic extraction. |
-
-## Done Criteria For The Refactor
-
-The explicit per-source parser refactor is complete when:
-
-- built-in agents have source definitions under `src/sources/<agent>/`;
-- each registered `(ClientId, source_id)` resolves to its named semantic parser;
-- agent-specific parser code lives under the same source module, with shared
-  low-level readers kept separate;
-- shared parser helpers live under `src/sources/common/` or another clearly named
-  shared module;
-- install inventory definitions come from the existing static per-agent registry;
-- `clients::supported_clients()` and the stable parser public APIs remain
-  unchanged;
-- known parser failures never silently fall back, and unknown record variants
-  remain explicit `Other` records or diagnostics;
-- all fixture-backed discovery, parser, schema, detection, scan, and install
-  inventory tests pass;
-- `docs/adding-agent-source.md` describes explicit parser registration for new
-  contributors.
+Do not introduce runtime registration, external parser configuration, a public
+extension API, or a parser trait/framework as part of a source addition.

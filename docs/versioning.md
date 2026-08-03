@@ -10,10 +10,14 @@ format.
 - `v0.1.0` is the first public binary release.
 - `0.2.0` is the prior maturity release.
 - `0.3.0` is the current released line for the event and scoring contract.
-- `0.4.0` is the unpublished breaking API-hardening line; publication is not
-  authorized by this repository's development workflow.
-- The project does not skip the documented `0.4.0` breaking line for a later
-  minor. Compatible follow-up releases use the patch line of the current minor.
+- `0.4.0` is the unpublished breaking API-hardening line; its packages remain
+  unpublished pending separate approval.
+- `0.3.x` is the current released maintenance line. After `0.4.0` is released,
+  compatible follow-up fixes will use its `0.4.x` patch line.
+- `0.5.0` is reserved for the next significant, coherent product milestone. It
+  must represent substantial architecture, public API/schema/configuration,
+  compatibility, or capability work; it is not a label for a round of routine
+  tasks. Follow-up fixes after that milestone use `0.5.x`.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
@@ -42,15 +46,17 @@ allowance for `0.y.z` versions:
 
 | Change | Version | Examples |
 | --- | --- | --- |
-| Compatible fix | Patch (for example, `0.3.x` or `0.4.x`) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
-| Additive maturity work | Minor (`0.4.0` after `0.3.0`, then a later planned minor line) | New compatible capability or API that does not invalidate existing consumers |
+| Compatible fix | Patch (`0.3.x`; `0.4.x` after the 0.4.0 release) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
+| Additive maturity work | Next planned minor line | New compatible capability or API that does not invalidate existing consumers |
 | Breaking change | Next minor (`0.4.0`, then `0.5.0` if needed) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
 | Stable compatibility commitment | Major (`1.0.0`) | Public interfaces are sufficiently settled for documented compatibility guarantees |
 
-The `0.3.x` line is the compatibility path for post-`0.3.0` fixes; after the
-`0.4.0` line is released, its `0.4.x` series will serve the same role. A later
-`0.x` minor line requires a documented reason; it is not a destination for
-routine progress or accumulated patch releases.
+The `0.3.x` line is the compatibility path for post-`0.3.0` fixes. The
+unpublished `0.4.0` line is the next breaking API-hardening line; after it is
+released, its `0.4.x` series will serve as the compatibility path. Do not
+accumulate unrelated maintenance tasks and call the result `0.5.0`. Starting a
+`0.5.0` milestone requires explicit scope, user-visible rationale, compatibility
+impact, migration notes where needed, acceptance criteria, and release review.
 
 ## Versioned Surfaces
 
@@ -65,10 +71,11 @@ The Cargo/package version is not the version of every data contract:
 - **Configuration version:** configuration documents such as `version: 1` have
   their own migration rules. A package release does not automatically change a
   configuration version.
-- **Rule language and bundled rules:** additive detections and compatible rule
-  updates follow the package patch or minor release. Removing syntax, changing
-  evaluation meaning incompatibly, or invalidating existing rule documents is
-  a breaking change and requires the next planned `0.x` minor line.
+- **Rule language and bundled rules:** compatible detections and rule updates
+  remain on the current `0.3.x` line, then `0.4.x` after the 0.4.0 release.
+  Removing syntax, changing evaluation meaning incompatibly, or invalidating
+  existing rule documents belongs in the next planned minor milestone, not in a
+  routine patch batch.
 
 ## Release Process
 
@@ -78,8 +85,9 @@ The Cargo/package version is not the version of every data contract:
 3. Update public release notes with capabilities, fixes, compatibility impact,
    and operator impact. Internal planning history stays out of public notes.
 4. Run `make release-preflight` and review the staged/public file boundary.
-5. Create the matching `v<version>` tag. For example, package version `0.2.1`
-   requires tag `v0.2.1`.
+5. Create the matching `v<version>` tag. For example, a compatible maintenance
+   release `0.3.1` requires tag `v0.3.1`; the unpublished breaking line requires
+   `v0.4.0` only after its release approval.
 6. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
@@ -115,7 +123,7 @@ state.
 
 ## Pre-Releases
 
-Use Cargo-compatible pre-release versions such as `0.2.0-alpha.1`,
-`0.2.0-beta.1`, or `0.2.0-rc.1` only when external validation is useful. A
+Use Cargo-compatible pre-release versions such as `0.4.0-alpha.1`,
+`0.4.0-beta.1`, or `0.4.0-rc.1` only when external validation is useful. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees.

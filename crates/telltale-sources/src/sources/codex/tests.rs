@@ -82,7 +82,7 @@ fn parses_nested_codex_tool_call_payload_fields() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "codex-payload-arguments-injection".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: crate::test_fixture_path("rule_samples/codex-payload-arguments-injection.jsonl")
             .to_path_buf(),
     };

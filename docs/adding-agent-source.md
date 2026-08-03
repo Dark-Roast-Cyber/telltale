@@ -1,366 +1,202 @@
 # Adding an Agent Source
 
-This guide lists every project surface that normally changes when Telltale adds
-support for a new coding agent or a new session source for an existing agent.
-Use it as the checklist for agents such as Antigravity, new OpenCode storage
-formats, or customer-contributed parsers.
+This guide is the repository-native checklist for adding a bundled coding-agent
+source. Telltale discovers source files or databases, parses them into
+normalized records, and then uses the existing detection, scoring, triage, and
+event pipeline. New source support must not add source-specific detection logic
+unless a rule genuinely cannot use normalized fields.
 
-Telltale's contract is: discover source files or databases, parse them into the
-normalized record model, and let the existing detection/rule pipeline run
-unchanged. Do not add source-specific detection logic unless a rule truly cannot
-be expressed over normalized fields.
+This is not a runtime extension contract. Public parse entry points exist, and
+operators can select scan roots and project roots through the CLI and project
+configuration. Telltale does not support runtime source/client/parser
+registration or a parser extension API through plugins, external parser
+configuration, dynamic loading, or a trait ABI. New source support is a
+compiled-in registry and parser change.
 
-This is a maintainer implementation checklist, not a runtime plugin contract.
-The released crates do not support registering custom clients, discovery roots,
-or parsers at runtime; an arbitrary `NormalizedRecord.client` string only labels
-a caller-supplied record. New source support is a bundled registry/parser change.
+## Current architecture
 
-## Current Code Layout
+- `crates/telltale-schema/src/clients.rs` owns the canonical `ClientId` and
+  `SourceKind` types.
+- `crates/telltale-sources/src/sources/<agent>/mod.rs` owns that agent's static
+  `ClientSourceDef` values and install metadata. The static
+  source registry in `sources/registry.rs` collects source definitions and
+  preserves static client/install registration order; it does not own parser
+  registration. Registry order is significant for public client/install
+  snapshot stability, while discovered `Source` results are explicitly sorted
+  for deterministic scans.
+- `crates/telltale-sources/src/parser.rs` owns the private, exact,
+  case-sensitive `(ClientId, source_id)` parser registration table. `SourceKind`
+  is checked as expected container/reporting metadata after identity lookup; it
+  never selects semantic parsing.
+- Each modeled source parser uses the internal uniform shape
+  `fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, ParseError>`.
+  Public `parse_source_records()` and
+  `parse_source_records_with_options()` signatures remain unchanged.
+- `read_jsonl_values()` and `read_json_document()` are neutral shared readers.
+  Semantic extraction and record classification stay in the source module.
+  There is currently no `sources/common/` directory; do not create one just to
+  house a single helper.
+- A known parser or schema failure is terminal. It must not retry through a
+  generic parser. Explicit unknown variants become `RecordKind::Other` or the
+  source's documented diagnostic. There is no secondary fallback after failure.
 
-The current implementation is intentionally simple, but it is centralized:
+The current table has 14 exact identities: 12 modeled parsers and two deliberate
+exact generic JSON-document fallbacks, `roocode.tasks` and `kilocode.tasks`.
+Parser maturity is not the same claim as live validation or full public support;
+use the [validation matrix](source-validation-matrix.md) for that distinction.
 
-- `crates/telltale-sources/src/clients.rs` owns path roots, source patterns, and the
-  `supported_clients()` compatibility wrapper; the static registry and per-agent
-  source definitions live under `crates/telltale-sources/src/sources/`. The
-  canonical `ClientId` and `SourceKind` enums are owned by
-  `crates/telltale-schema/src/clients.rs`; sources consumes them without a
-  duplicate public path.
-- `crates/telltale-sources/src/discovery.rs` resolves OS-specific roots, project-local roots, watch
-  roots, and fixture paths for every registered source.
-- `crates/telltale-sources/src/parser.rs` currently dispatches by `SourceKind` and converts raw
-  records into `NormalizedRecord`; explicit parser registration by `(ClientId, source_id)` is
-  the planned source-adapter migration.
-- `crates/telltale-sources/src/install_inventory.rs` separately answers "does this agent appear
-  installed?" using metadata-only executable, package, extension, and
-  globalStorage checks.
+## Support levels
 
-This is workable while the supported source list is small. As support expands,
-the better target is a source-module layout that keeps each agent's source
-registry, explicit parser, install inventory hints, fixtures, and focused tests
-near each other. The target migration is deferred until after 0.2.0.
-See [Recommended Source Module Layout](#recommended-source-module-layout) below and the
-[Source Adapter Refactor Plan](source-adapter-refactor-plan.md) for the detailed
-migration plan.
+- **Research**: format or paths are being investigated; do not claim support.
+- **Experimental**: registered and fixture-tested, but live validation or
+  capability documentation is incomplete.
+- **Supported**: discovery, benign parse, tool-call parse, tool-result parse,
+  positive detection, benign/negative behavior, and public capability notes all
+  pass their gates.
 
-## Support Levels
+Project-local candidates may have complete parser/parity coverage while still
+remaining candidates in the support matrix. Do not promote them without the
+existing support gates.
 
-Use explicit support language while adding a source:
+For a new source belonging to an existing `ClientId`, reuse that client's
+module, registry entry, and install definition. Add only the new source
+definition, parser registration, fixtures, tests, snapshots, and documentation
+that the source requires. The client-level wiring below applies when adding an
+entirely new coding agent or harness.
 
-- **Research**: upstream format and paths are being investigated. No public
-  support claim.
-- **Experimental**: source is registered and parses synthetic fixtures, but live
-  validation or capability docs are incomplete.
-- **Supported**: fixture discovery, benign parse, tool-call parse, tool-result
-  parse, at least one positive detection, at least one benign/negative scan, and
-  documentation are complete.
+## Community source checklist
 
-Live host validation is helpful but is not required for public support. It must
-remain bounded, redacted, and summarized; fixtures are the required support gate.
+### 1. Add the identity and client wiring
 
-## Checklist
+- For a new client, add the canonical `ClientId` variant and matching
+  `ClientId::as_str()` arm. Reuse the existing variant for another source from
+  an already registered client.
+- Add stable, case-sensitive source IDs.
+- Keep IDs specific to a source identity, such as `agent.sessions` and
+  `agent.sqlite`; do not add aliases.
+- Record the expected `SourceKind`, but do not use it as semantic dispatch.
 
-### 1. Research source and install signals
+### 2. Declare source definitions and the source module
 
-Record, in notes or docs, the difference between these two questions:
+- For a new client, create `crates/telltale-sources/src/sources/<agent>/` and
+  declare it in `sources/mod.rs`. For another identity from an existing client,
+  extend that client's module.
+- Add the required `ClientSourceDef` entries to the client module.
+- Set `root`, `relative_path`, `fixture_relative_path`, `pattern`,
+  `recursive`, and `project_relative_path` where applicable.
+- Use existing OS-aware root helpers and `Path`/`PathBuf` joins. Do not encode
+  separators, Unix permissions, `/tmp`, symlinks, or verbatim Windows prefixes.
 
-1. **Session-store discovery**: where can Telltale parse activity from?
-2. **Installed-agent inventory**: what metadata-only evidence indicates the
-   tool is installed?
+### 3. Wire the static registry and install metadata
 
-For a new agent, identify:
+- For a new client, import the source module in `sources/registry.rs` and add
+  its `ClientDef` in matching public client order.
+- For a new client, define the per-client `AgentInstallDef`/`INSTALL` in the
+  source module, even when signal lists are empty, and add it to `INSTALL_DEFS`
+  in the matching order.
+- Registry order is part of the public client/install snapshot contract; keep
+  it stable. Discovery sorts returned `Source` values independently.
 
-- OS-specific session roots for Linux, macOS, and Windows.
-- Whether sources are home-relative, config-relative, data-relative, or
-  project-local.
-- File/database format: JSONL, JSON array, SQLite, process log, or another
-  bounded format.
-- Stable source identifiers, for example `antigravity.sessions` or
-  `antigravity.sqlite`.
-- Install inventory signals: executable names, package IDs, VS Code-compatible
-  extension IDs, globalStorage IDs, application support roots, or other
-  metadata-only markers.
-- Known privacy risks in the raw format, especially secrets, full prompts,
-  credential files, or command output.
+### 4. Add the parser module
 
-Do not read or publish real transcript content while researching. Prefer
-metadata, file names, schema excerpts, synthetic examples, hashes, and redacted
-summaries.
+- For modeled semantics, add `sources/<agent>/parser.rs` for a new client or
+  extend the existing client parser module for another source identity.
+- Implement the internal uniform Source/ParseOptions/ExtractedSourceRecords
+  function shape.
+- Keep semantic mapping and classification in the source module.
+- Preserve public parse signatures and normalized fields.
+- Treat malformed input and known schema failures as terminal; never retry with
+  another parser.
+- Define the source contract for missing or unknown discriminators. Do not infer
+  a known kind from an explicit unknown variant.
 
-### 2. Update the source registry and parser registration
+### 5. Add exact private registration
 
-Current files:
+- Add one obvious exact `(ClientId, source_id)` entry to the private table in
+  `crates/telltale-sources/src/parser.rs`.
+- Point modeled identities at their source-owned parser.
+- Use `GenericFallback(JsonDocument)` only when the source is intentionally
+  unmodeled and its generic shape is verified. There is no generic JSONL
+  fallback in the current table.
+- Do not add a parser field to public `ClientSourceDef`.
+- Update hard-coded registry, parser-maturity, and client-count snapshots.
 
-- `crates/telltale-sources/src/sources/<agent>/mod.rs` for existing per-agent
-  source definitions and its adjacent `install.rs` metadata;
-- `crates/telltale-sources/src/sources/registry.rs` for the built-in static
-  registry;
-- `crates/telltale-schema/src/clients.rs` for `ClientId` and `SourceKind`;
-- `crates/telltale-sources/src/discovery.rs` only if a new root or discovery behavior is needed
+### 6. Use shared readers only
 
-Required registry updates:
+- Reuse `read_jsonl_values()` or `read_json_document()` for neutral I/O and
+  JSON decoding.
+- Do not create traits, factories, managers, plugin boundaries, runtime
+  registration, external parser configuration, or a speculative common
+  framework.
 
-- Add a `ClientId` variant.
-- Add the lowercase stable id in `ClientId::as_str()`.
-- Add or reuse a `SourceKind`; in the current implementation it selects the
-  shared semantic parser branch. The planned migration will make it container
-  and reporting metadata only, with semantic parsing selected by source identity.
-- Add one or more `ClientSourceDef` entries with:
-  - stable `id`, such as `antigravity.sessions`;
-  - `kind`;
-  - `root`;
-  - `relative_path` for host discovery;
-  - `fixture_relative_path` under `tests/fixtures/session_stores/<client>/`;
-  - `pattern`;
-  - `recursive`;
-  - `project_relative_path` when `PathRoot::ProjectLocal` is used.
-- Add the client/source definitions to the static source registry.
-- Extend the current `SourceKind` dispatch in `crates/telltale-sources/src/parser.rs`,
-  or reuse an existing branch when the semantics match, and document that choice.
-  Do not present this current path as explicit `(ClientId, source_id)` registration;
-  that is the planned source-adapter migration.
-- Update registry and parser characterization tests in the same change.
+### 7. Add synthetic fixtures
 
-Only edit `crates/telltale-sources/src/discovery.rs` when the source needs a new cross-platform root,
-new bounded search behavior, or source matching that cannot be represented with
-`SourcePattern`.
+- Put discovered source fixtures under
+  `tests/fixtures/session_stores/<client>/...` at the registered relative path.
+- Keep non-discovered drift/unknown/failure fixtures outside discovered roots.
+- If packaged unit tests resolve fixtures under a crate boundary, mirror the
+  exact synthetic files under `crates/<crate>/tests/fixtures/...`.
+- Cover benign user/assistant records, tool calls, tool results, positive
+  deterministic detections, and a quiet negative. UC-001 is the required
+  cross-client conformance fixture for a new `ClientId`. Never use real
+  transcripts, credentials, auth files, private paths, or customer data.
 
-### 3. Add or extend the source parser
+### 8. Add focused tests
 
-For the current implementation, extend the matching `SourceKind` branch in
-`crates/telltale-sources/src/parser.rs` or its existing source-specific helper.
-Exercise it through `parse_source_records` and add focused tests. The explicit
-`(ClientId, source_id)` parser module layout below is the migration target, not
-the current registration mechanism.
+Cover, as applicable:
 
-Target files:
+- source-definition and bidirectional registry/integrity checks;
+- exact identity, wrong-client, wrong-kind, and unknown-identity behavior;
+- positive and benign normalized records, field inheritance, and order;
+- schema drift, malformed input, empty input, explicit unknown variants, and
+  no-fallback behavior;
+- emitted source/event tuple identity and ordering;
+- portable discovery, project-local paths, and suffix matching;
+- state, cursor, lock, or source-preference behavior for database sources;
+- detection fixtures proving normalized records reach existing rules.
+- registry/install order and all hard-coded count snapshots;
 
-- `crates/telltale-sources/src/sources/<agent>/parser.rs` for semantic extraction
-  and source-specific record classification;
-- `crates/telltale-sources/src/sources/registry.rs` for source-identity parser
-  registration;
-- shared low-level readers may live under `crates/telltale-sources/src/sources/common/`.
+Use `tempfile` and portable `Path`/`PathBuf` joins for synthetic path tests.
+Avoid exact separators and Unix-only assumptions.
 
-Parser requirements:
+### 9. Update support documentation
 
-- Produce `NormalizedRecord` values with stable `session_id`, `client`, `kind`,
-  and safe content fields.
-- Preserve `agent`, `model`, `provider`, and `timestamp` when the raw source
-  exposes them.
-- Normalize user messages, assistant messages, tool calls, tool results, and
-  session metadata when present.
-- Keep source-specific parsing separate from detection. Rules should operate on
-  the normalized output.
-- Avoid logging raw transcripts or secrets in errors, tests, or debug output.
-- For SQLite or append-only databases, consider state/cursor needs before
-  scanning the entire database repeatedly.
-- Current code selects the parser by `SourceKind`; follow that dispatch until the
-  planned migration. The target implementation will select it by
-  `(source.client, source.source_id)`.
-- A known source parser error or schema-drift result must fail through the
-  existing parse-error/scanner-diagnostic path. Do not silently retry with a
-  generic or different parser.
-- Represent an unknown record variant as `RecordKind::Other` or an explicit
-  diagnostic according to the source contract; do not infer a kind from a
-  coincidental field shape.
+- Update `docs/session-sources.md` and `docs/source-validation-matrix.md`.
+- Update `docs/client-capability-matrix.md` and
+  `docs/agent-capability-profiles.md` for user-visible field availability.
+- Update telemetry or schema documentation only if a separately justified
+  cross-agent contract changes. Do not fork normalized or event schemas for one
+  source.
+- Advertise support in `README.md` only after the fixture and capability gates
+  pass.
 
-If the new source can use an existing `SourceKind` parser branch, document why
-that is safe. This is a dispatch choice, not post-failure recovery for a known
-source. Add focused unit tests next to the source parser for successful
-extraction, schema drift, unknown variants, and the dispatch boundary.
+### 10. Validate in repository order and on supported platforms
 
-### 4. Add install inventory support
-
-Current file:
-
-- `crates/telltale-sources/src/install_inventory.rs`
-
-Add an install definition when the agent should appear in the metadata-only
-installed-agent inventory:
-
-- executable names on `PATH`;
-- package IDs, such as Node package names;
-- editor extension IDs;
-- globalStorage IDs;
-- any other safe metadata-only install roots.
-
-Inventory events must not expose raw local paths. Use the existing hashed-path
-signal model and confidence rules. Do not read session contents as part of
-install inventory.
-
-### 5. Add synthetic fixtures
-
-Primary fixture root:
-
-- `tests/fixtures/session_stores/<client>/...`
-
-Every supported source needs fixtures for:
-
-- benign user/assistant conversation records;
-- at least one tool call;
-- at least one tool result;
-- at least one positive deterministic detection, preferably UC-001 when the
-  source can represent it;
-- at least one benign or negative fixture that stays quiet.
-
-Fixture rules:
-
-- Use synthetic prompts, file names, domains, tokens, and command output.
-- Never copy real transcripts, `.env` values, auth files, session IDs, API keys,
-  private paths, or customer data.
-- Keep fixtures small enough that a reviewer can understand the parser behavior
-  without opening a real agent store.
-
-### 6. Update tests
-
-At minimum, add or update tests covering:
-
-- source registry entries in `crates/telltale-sources/src/sources/registry.rs` and
-  the relevant `sources/<agent>/mod.rs`;
-- discovery for fixture paths and any new OS/path-root behavior in
-  `crates/telltale-sources/src/discovery.rs`;
-- parser extraction for benign records, tool calls, and tool results;
-- the schema conformance test that discovers every fixture source and converts
-  records into `NormalizedRecordV1`;
-- a positive detection fixture proving bundled rules apply after normalization;
-- a benign/negative fixture proving normal activity does not fire noisy rules;
-- install inventory signal tests if new install evidence was added;
-- CLI scan behavior when event counts, client filters, or source counts change.
-
-Recommended verification order:
+Run the narrowest relevant tests first, then the source and detection suites:
 
 ```sh
-cargo test clients::tests
-cargo test discovery::tests
-cargo test parser::tests
-cargo test schema::tests::converts_all_fixture_sources_to_v1_contract
-cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores --client <client-id>
+cargo test -p telltale-sources <agent-or-parser-filter>
+cargo test -p telltale-sources
+cargo test -p telltale-detect
+cargo test --test cli parser_maturity
+cargo run --bin telltale -- scan --once --dry-run --no-local-config \
+  --root tests/fixtures/session_stores --client <client-id>
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+./scripts/package-verify
 ```
 
-Use the narrowest relevant commands first; run the full suite before calling the
-source supported.
+Package verification currently runs on Linux and macOS. Keep fixture scans
+read-only or use an explicit development sink.
 
-### 7. Update public docs
+Run or retain Linux, Windows, and macOS CI coverage for path roots, discovery,
+fixture parsing, and relevant source tests. Do not claim live source-store
+support merely because a parser maturity test passes.
 
-Usually update:
+## Definition of done
 
-- `docs/session-sources.md` — source paths, confidence, parser notes.
-- `docs/source-validation-matrix.md` — fixture gates and live-validation status.
-- `docs/client-capability-matrix.md` — normalized-field support and known gaps.
-- `docs/agent-capability-profiles.md` — per-source raw field availability.
-- `docs/telemetry-output.md` — only if emitted event shape or inventory behavior
-  changes.
-- `docs/CHANGELOG.md` — user-visible support or behavior changes.
-- `README.md` — only after support is fixture-backed and ready to advertise.
-
-Keep public docs clear about experimental status. Do not advertise Windows,
-live-host, or source-format support beyond what fixtures and validation prove.
-
-### 8. Update schemas/state only when required
-
-Most new agents should not require schema changes. Update schema or state only
-when the source reveals a genuinely cross-agent concept.
-
-Examples that may require additional work:
-
-- a new normalized field shared across multiple agents;
-- invocation lineage, sub-agent role, or action lifecycle metadata;
-- database cursors or per-table high-water marks;
-- source-specific de-duplication beyond path fingerprints;
-- new event types.
-
-When adding normalized fields, make them additive and optional. Do not fork the
-schema for one agent.
-
-## Recommended Source Module Layout
-
-The current centralized parser dispatch is not the best long-term shape. It is
-easy to start with but makes source-specific schema handling depend on a shared
-`SourceKind` branch. The step-by-step migration plan lives in [Source Adapter
-Refactor Plan](source-adapter-refactor-plan.md).
-
-A better internal organization is compiled-in source modules with direct parser
-registration:
-
-```text
-src/
-  sources/
-    mod.rs
-    registry.rs         # source definitions and (ClientId, source_id) parsers
-    common/              # optional low-level JSON/JSONL/SQLite readers
-    codex/
-      mod.rs            # client id, source definitions, install hints
-      parser.rs
-      install.rs
-      tests.rs
-    opencode/
-      mod.rs
-      parser.rs
-      install.rs
-      tests.rs
-    antigravity/
-      mod.rs
-      parser.rs
-      install.rs
-      tests.rs
-```
-
-The source registration contract should provide:
-
-- a client id and stable source IDs;
-- source definitions and optional metadata-only install hints;
-- one semantic parser for each `(ClientId, source_id)`;
-- fixture roots, focused tests, and capability metadata;
-- an explicit generic-parser registration only when the source is not yet
-  modeled.
-
-`SourceKind` describes the source container and reporting metadata; it is not a
-parser selection mechanism. A known parser error must remain an error and must
-not fall through to generic extraction. Unknown records must be represented as
-`Other` or an explicit diagnostic rather than guessed from fields.
-
-The rest of the pipeline should continue to depend on stable interfaces:
-
-```text
-discover -> parse -> normalize -> detect -> score -> triage -> emit
-```
-
-This keeps `codex` code in `crates/telltale-sources/src/sources/codex/`, future
-`antigravity` code in `crates/telltale-sources/src/sources/antigravity/`, and
-shared JSON/JSONL/SQLite helpers in common modules. Trait-based adapters and
-external parser plugins are outside this workstream; revisit them only through
-a separate security and architecture decision.
-
-## Antigravity Example Checklist
-
-When adding Antigravity, keep it experimental until each item is complete:
-
-- Confirm official product name and stable client id, likely `antigravity`.
-- Identify session-store roots for Linux, macOS, and Windows without publishing
-  private local paths or transcript contents.
-- Decide whether sources are global, project-local, or both.
-- Add `ClientId::Antigravity`, `antigravity.*` source definitions, and fixtures.
-- Add parser support for benign messages, tool calls, tool results, and metadata.
-- Add install inventory signals using metadata-only checks.
-- Add synthetic positive and negative fixtures.
-- Update validation and capability docs.
-- Run focused tests and then the full quality gate.
-
-Do not add Antigravity to public supported-client lists until fixture-backed
-coverage passes and known gaps are documented.
-
-## Definition of Done
-
-A new agent source is done when:
-
-- source discovery is deterministic and cross-platform behavior is documented;
-- parsing produces normalized records without source-specific detection logic;
-- fixtures cover benign records, tool calls, tool results, positive detection,
-  and negative behavior;
-- schema conformance passes for the fixture source;
-- install inventory is added or explicitly marked not applicable;
-- support level and known gaps are documented;
-- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
-  `cargo test` pass.
+A source is ready for its stated support level when discovery is deterministic,
+the exact private parser registration is covered, normalized output and order
+are characterized, known failures cannot fall through, fixtures are synthetic,
+and the relevant install, detection, documentation, and platform gates pass.

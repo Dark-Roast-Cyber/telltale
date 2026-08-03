@@ -5,7 +5,7 @@ fn detects_download_execute_chain_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "download-execute-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/download-execute-chain.jsonl",
         )),
@@ -39,7 +39,7 @@ fn detects_download_then_execute_chain_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "download-execute-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/download-execute-chain.jsonl",
         )),
@@ -80,7 +80,7 @@ fn detects_encoded_payload_chain_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "encoded-payload-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/encoded-payload-chain.jsonl",
         )),
@@ -124,7 +124,7 @@ fn detects_install_then_persistence_chain_in_session_store_fixture() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "install-persistence-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/install-persistence-chain.jsonl",
         )),
@@ -173,7 +173,7 @@ fn detects_download_then_execute_chain_in_tool_calls() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "download-execute-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "rule_samples/download-execute-chain.jsonl",
         )),
@@ -200,7 +200,7 @@ fn detects_encoded_payload_chain_in_tool_calls() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "encoded-payload-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/encoded-payload-chain.jsonl",
         )),
@@ -231,7 +231,7 @@ fn detects_install_then_persistence_chain_in_tool_calls() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
-        source_id: "install-persistence-chain".to_string(),
+        source_id: "codex.sessions".to_string(),
         path: PathBuf::from(crate::test_fixture_path(
             "session_stores/codex/sessions/2026/04/install-persistence-chain.jsonl",
         )),
