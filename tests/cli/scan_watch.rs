@@ -86,6 +86,54 @@ fn assert_detection_flow_accounting(summary: &Value, emitted: u64, deduplicated:
     }
 }
 
+fn assert_runtime_snapshot(summary: &Value) {
+    let executable = Path::new(env!("CARGO_BIN_EXE_adr"));
+    let mut file = fs::File::open(executable).expect("open invoked executable");
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .expect("read invoked executable");
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&bytes);
+    assert_eq!(
+        summary["runtime"]["package_version"],
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(summary["runtime"]["build_git_hash"], env!("ADR_GIT_HASH"));
+    assert_eq!(
+        summary["runtime"]["executable"]["observation_status"],
+        "complete"
+    );
+    assert_eq!(
+        summary["runtime"]["executable"]["path_hash"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(
+        summary["runtime"]["executable"]["path_hash"],
+        path_hash(executable)
+    );
+    assert_eq!(
+        summary["runtime"]["executable"]["sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert!(
+        summary["runtime"]["executable"]["sha256"]
+            .as_str()
+            .unwrap()
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
+    assert_eq!(
+        summary["runtime"]["executable"]["sha256"],
+        format!("{:x}", hasher.finalize())
+    );
+}
+
 fn start_mock_llm_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     start_mock_llm_server_with_content(
         "{\"verdict\":\"malicious\",\"severity\":\"critical\",\"confidence\":0.97,\"reason\":\"mock triage confirmed MCP injection\"}",
@@ -193,6 +241,30 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
     assert_eq!(summary["detection_count"], 36);
+    assert_runtime_snapshot(&summary);
+    assert_eq!(
+        summary["effective_configuration"]["local_config"]["mode"],
+        "disabled"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["outputs"]["mode"],
+        "legacy_default"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["outputs"]["sinks"][0]["origin_kind"],
+        "legacy_default"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["rules"]["default_enabled"],
+        true
+    );
+    assert_eq!(
+        summary["effective_configuration"]["rules"]["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_source_processing_accounting(&summary);
     assert_detection_flow_accounting(&summary, 36, 0);
     assert_eq!(summary["source_processing"]["selected_source_count"], 69);
@@ -235,7 +307,10 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         .collect::<Vec<_>>();
     assert_eq!(events.len(), 38);
     assert!(events.iter().all(|event| {
-        event.get("source_processing").is_none() && event.get("detection_flow").is_none()
+        event.get("source_processing").is_none()
+            && event.get("detection_flow").is_none()
+            && event.get("runtime").is_none()
+            && event.get("effective_configuration").is_none()
     }));
     assert!(events.iter().any(|event| {
         event["event_type"] == "activity"
@@ -1457,6 +1532,103 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert!(
         events.iter().any(|event| event["event_type"] == "detection"
             && event["session_id"] == "secret-network-chain")
+    );
+}
+
+#[test]
+fn scan_summary_reports_log_and_state_path_precedence() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let env_log = temp.path().join("env-events.jsonl");
+    let env_state = temp.path().join("env-state.json");
+
+    let profile = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--dry-run",
+            "--no-local-config",
+            "--path-profile",
+            "project",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--install-inventory-disabled")
+        .env("ADR_LOG_PATH", "")
+        .env("ADR_STATE_PATH", "")
+        .output()
+        .expect("run profile scan");
+    assert!(profile.status.success());
+    let profile_summary: Value = serde_json::from_slice(&profile.stdout).expect("summary json");
+    assert_eq!(
+        profile_summary["effective_configuration"]["paths"]["log"]["origin"],
+        "path_profile"
+    );
+    assert_eq!(
+        profile_summary["effective_configuration"]["paths"]["state"]["origin"],
+        "path_profile"
+    );
+    assert_eq!(
+        profile_summary["effective_configuration"]["paths"]["log"]["path_hash"],
+        path_hash(Path::new("logs/adr-events.jsonl"))
+    );
+    assert_eq!(
+        profile_summary["effective_configuration"]["paths"]["state"]["path_hash"],
+        path_hash(Path::new("state/adr-state.json"))
+    );
+
+    let environment = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
+        .arg(&root)
+        .arg("--install-inventory-disabled")
+        .env("ADR_LOG_PATH", &env_log)
+        .env("ADR_STATE_PATH", &env_state)
+        .output()
+        .expect("run environment scan");
+    assert!(environment.status.success());
+    let environment_summary: Value =
+        serde_json::from_slice(&environment.stdout).expect("summary json");
+    assert_eq!(
+        environment_summary["effective_configuration"]["paths"]["log"]["origin"],
+        "environment"
+    );
+    assert_eq!(
+        environment_summary["effective_configuration"]["paths"]["state"]["origin"],
+        "environment"
+    );
+    assert_eq!(
+        environment_summary["effective_configuration"]["paths"]["log"]["path_hash"],
+        path_hash(&env_log)
+    );
+
+    let cli_log = temp.path().join("cli-events.jsonl");
+    let cli_state = temp.path().join("cli-state.json");
+    let cli = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
+        .arg(&root)
+        .args(["--log-path"])
+        .arg(&cli_log)
+        .args(["--state-path"])
+        .arg(&cli_state)
+        .arg("--install-inventory-disabled")
+        .env("ADR_LOG_PATH", &env_log)
+        .env("ADR_STATE_PATH", &env_state)
+        .output()
+        .expect("run cli scan");
+    assert!(cli.status.success());
+    let cli_summary: Value = serde_json::from_slice(&cli.stdout).expect("summary json");
+    assert_eq!(
+        cli_summary["effective_configuration"]["paths"]["log"]["origin"],
+        "cli"
+    );
+    assert_eq!(
+        cli_summary["effective_configuration"]["paths"]["state"]["origin"],
+        "cli"
+    );
+    assert_eq!(
+        cli_summary["effective_configuration"]["paths"]["state"]["path_hash"],
+        path_hash(&cli_state)
     );
 }
 
@@ -3257,6 +3429,48 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn wait_for_watch_ready(pid: u32) {
+    let fd_path = format!("/proc/{pid}/fd");
+    let fdinfo_path = format!("/proc/{pid}/fdinfo");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let ready = fs::read_dir(&fd_path)
+            .expect("read child file descriptors")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                let Ok(target) = fs::read_link(entry.path()) else {
+                    return false;
+                };
+                if !target.to_string_lossy().contains("inotify") {
+                    return false;
+                }
+                let Ok(fd) = entry.file_name().into_string() else {
+                    return false;
+                };
+                fs::read_to_string(format!("{fdinfo_path}/{fd}"))
+                    .map(|fdinfo| {
+                        fdinfo
+                            .lines()
+                            .any(|line| line.trim_start().starts_with("inotify wd:"))
+                    })
+                    .unwrap_or(false)
+            });
+        if ready {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("watch did not establish an inotify watch");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wait_for_watch_ready(_pid: u32) {
+    thread::sleep(Duration::from_secs(2));
+}
+
 #[test]
 fn watch_scans_changed_source_and_exits_after_iterations() {
     let temp = tempdir().expect("tempdir");
@@ -3322,6 +3536,11 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         .expect("watch scan summary line");
     let summary: Value = serde_json::from_str(summary_line).expect("scan summary json");
     assert_eq!(summary["event_type"], "health");
+    assert_runtime_snapshot(&summary);
+    assert_eq!(
+        summary["effective_configuration"]["local_config"]["mode"],
+        "disabled"
+    );
     assert!(
         log_path.exists(),
         "watch scan should write events to the log path"
@@ -3342,7 +3561,6 @@ fn watch_skips_no_op_state_save() {
     );
     let log_path = temp.path().join("adr-events.jsonl");
     let state_path = temp.path().join("adr-state.json");
-    let session_path = root.join("codex/sessions/2026/04/session-a.jsonl");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
@@ -3366,43 +3584,38 @@ fn watch_skips_no_op_state_save() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn adr watch");
-
-    // Trigger the first scan by rewriting the watched file. The watcher
-    // blocks until a filesystem event arrives, so we must poke the file
-    // to start the first iteration. Retry until the state file appears,
-    // which signals the first scan completed and persisted state.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if child.try_wait().expect("poll adr watch").is_some() {
-            panic!("adr watch exited before first scan completed");
+    let stdout = child.stdout.take().expect("watch stdout");
+    let (summary_tx, summary_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if summary_tx.send(line).is_err() {
+                break;
+            }
         }
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("adr watch did not persist state within timeout");
-        }
-        let contents = fs::read(&session_path).expect("read watched fixture");
-        fs::write(&session_path, contents).expect("rewrite watched fixture");
-        if state_path.exists() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(200));
-    }
+    });
 
-    // Give the first scan a moment to finish writing state and re-block on
-    // the next event before we snapshot mtime and trigger the second scan.
-    thread::sleep(Duration::from_millis(300));
+    // Allow the watcher to finish initialization, then issue exactly one
+    // unrelated change. An unknown path forces a full reconciliation, and
+    // waiting for its summary prevents that first trigger from accidentally
+    // satisfying the second iteration.
+    wait_for_watch_ready(child.id());
+    let first_trigger = root.join("codex/sessions/first-trigger.txt");
+    fs::write(&first_trigger, b"watch first trigger\n").expect("write first trigger");
+    let first_summary = summary_rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("first watch summary");
 
-    let mtime_after_first_scan = fs::metadata(&state_path)
+    let state_before = fs::read(&state_path).expect("read first state snapshot");
+    let mtime_before = fs::metadata(&state_path)
         .expect("state metadata")
         .modified()
         .expect("state mtime");
 
-    // Trigger the second scan with identical content. No new records means
-    // no emitted events and no durable state changes, so the state-save
+    // Trigger a full reconciliation with an unrelated path. No new records
+    // means no emitted events and no durable state changes, so the state-save
     // should be skipped.
-    let contents = fs::read(&session_path).expect("read watched fixture");
-    fs::write(&session_path, contents).expect("rewrite watched fixture");
+    let noop_trigger = root.join("codex/sessions/noop-trigger.txt");
+    fs::write(&noop_trigger, b"watch test trigger\n").expect("write no-op trigger");
 
     // Wait for the second iteration to finish and the process to exit.
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -3425,12 +3638,32 @@ fn watch_skips_no_op_state_save() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let mtime_after_second_scan = fs::metadata(&state_path)
+    let mut summaries =
+        vec![serde_json::from_str::<Value>(&first_summary).expect("first watch summary json")];
+    summaries.extend(
+        summary_rx
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(&line).expect("watch summary json")),
+    );
+    assert_eq!(summaries.len(), 2);
+    assert_runtime_snapshot(&summaries[0]);
+    assert_eq!(summaries[0]["runtime"], summaries[1]["runtime"]);
+    assert_eq!(
+        summaries[0]["effective_configuration"],
+        summaries[1]["effective_configuration"]
+    );
+
+    let state_after = fs::read(&state_path).expect("read second state snapshot");
+    let mtime_after = fs::metadata(&state_path)
         .expect("state metadata")
         .modified()
         .expect("state mtime");
     assert_eq!(
-        mtime_after_first_scan, mtime_after_second_scan,
+        state_before, state_after,
+        "no-op watch scan should not rewrite state bytes"
+    );
+    assert_eq!(
+        mtime_before, mtime_after,
         "no-op watch scan should not rewrite state file"
     );
 }
@@ -3914,6 +4147,7 @@ fn watch_exits_cleanly_on_sigterm() {
 
     // Give the process time to install the signal handler and watcher.
     thread::sleep(Duration::from_secs(2));
+    wait_for_watch_ready(child.id());
     let kill = Command::new("kill")
         .arg(child.id().to_string())
         .status()

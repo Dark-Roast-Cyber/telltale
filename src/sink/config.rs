@@ -26,6 +26,7 @@ pub struct SinkSpec {
     pub name: String,
     pub enabled: bool,
     pub kind: SinkKind,
+    pub(crate) origin_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -263,8 +264,9 @@ pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn s
         }
         let mut names_in_file = BTreeSet::new();
         for sink_value in doc.sinks {
-            let spec = parse_sink_spec(sink_value)
+            let mut spec = parse_sink_spec(sink_value)
                 .map_err(|err| format!("outputs config {}: {err}", path.display()))?;
+            spec.origin_path = Some(path.clone());
             if !names_in_file.insert(spec.name.clone()) {
                 return Err(format!(
                     "outputs config {}: duplicate sink name '{}'",
@@ -327,6 +329,7 @@ fn parse_sink_spec(value: serde_yaml::Value) -> Result<SinkSpec, String> {
         name,
         enabled,
         kind,
+        origin_path: None,
     })
 }
 

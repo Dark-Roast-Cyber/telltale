@@ -328,13 +328,14 @@ fn scan_once_uses_outputs_config_sinks() {
     let cli_log_path = temp.path().join("cli-events.jsonl");
     let config_log_path = temp.path().join("policy-events.jsonl");
     let state_path = temp.path().join("adr-state.json");
+    let project_config = temp.path().join("projects.yaml");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
 
     let config_dir = temp.path().join("conf");
     let outputs_dir = config_dir.join("outputs.d");
     fs::create_dir_all(&outputs_dir).expect("outputs.d");
     fs::write(
-        outputs_dir.join("outputs.yaml"),
+        outputs_dir.join("10-base.yaml"),
         format!(
             r#"
 version: 1
@@ -347,12 +348,46 @@ sinks:
     endpoint: {}
     token: {{ env: ADR_TEST_OUTPUTS_HEC_TOKEN }}
     source: telltale:outputs-test
+  - name: disabled-sensitive
+    type: splunk_hec
+    enabled: false
+    endpoint: https://sensitive.example.invalid/services/collector
+    token: sentinel-inline-secret
+    tls:
+      insecure_skip_verify: true
+  - name: disabled-file-sensitive
+    type: splunk_hec
+    enabled: false
+    endpoint: https://credential-endpoint.example.invalid/services/collector
+    token: {{ file: /sentinel/credential-file.txt }}
+    host: sentinel-output-host
+    index: sentinel-output-index
+    source: sentinel-output-source
+    sourcetype: sentinel-output-sourcetype
+    tls:
+      ca_file: /sentinel/tls-ca.pem
 "#,
             config_log_path.display(),
             hec_endpoint
         ),
     )
     .expect("write outputs yaml");
+    fs::write(
+        outputs_dir.join("20-override.yaml"),
+        format!(
+            "version: 1\nsinks:\n  - name: local\n    type: jsonl\n    path: {}\n",
+            config_log_path.display()
+        ),
+    )
+    .expect("write later outputs yaml");
+    fs::write(
+        &project_config,
+        format!(
+            "projects:\n  - name: harmless\n    path: '{}'\n",
+            root.display()
+        ),
+    )
+    .expect("write project config");
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["scan", "--once", "--root"])
@@ -363,6 +398,8 @@ sinks:
         .arg(&cli_log_path)
         .args(["--state-path"])
         .arg(&state_path)
+        .args(["--project-config"])
+        .arg(&project_config)
         .arg("--install-inventory-disabled")
         .env("ADR_TEST_OUTPUTS_HEC_TOKEN", "env-secret-token")
         .output()
@@ -391,6 +428,81 @@ sinks:
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["source"], "telltale:outputs-test");
     assert_eq!(envelope["event"]["event_type"], "health");
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    let sinks = summary["effective_configuration"]["outputs"]["sinks"]
+        .as_array()
+        .expect("output projections");
+    let local = sinks
+        .iter()
+        .find(|sink| sink["name"] == "local")
+        .expect("local projection");
+    assert_eq!(local["selection"], "selected");
+    assert_eq!(local["origin_kind"], "outputs_document");
+    assert_eq!(
+        local["winning_path_hash"],
+        path_hash(&outputs_dir.join("20-override.yaml"))
+    );
+    assert_eq!(
+        local["resolved_destination_path_hash"],
+        path_hash(&config_log_path)
+    );
+    assert_eq!(local["has_inline_secret"], false);
+    assert_eq!(local["insecure_skip_verify"], false);
+    let disabled = sinks
+        .iter()
+        .find(|sink| sink["name"] == "disabled-sensitive")
+        .expect("disabled projection");
+    assert_eq!(disabled["selection"], "disabled");
+    assert_eq!(disabled["has_inline_secret"], true);
+    assert_eq!(disabled["insecure_skip_verify"], true);
+    let disabled_file = sinks
+        .iter()
+        .find(|sink| sink["name"] == "disabled-file-sensitive")
+        .expect("disabled file projection");
+    assert_eq!(disabled_file["selection"], "disabled");
+    assert_eq!(disabled_file["has_inline_secret"], false);
+    assert_eq!(disabled_file["insecure_skip_verify"], false);
+    assert_eq!(
+        summary["effective_configuration"]["local_config"]["explicit_root_path_hashes"],
+        serde_json::json!([path_hash(&config_dir)])
+    );
+    assert_eq!(
+        summary["effective_configuration"]["outputs"]["document_path_hashes"],
+        serde_json::json!([
+            path_hash(&outputs_dir.join("10-base.yaml")),
+            path_hash(&outputs_dir.join("20-override.yaml")),
+        ])
+    );
+    assert_eq!(
+        summary["effective_configuration"]["project_config_path_hashes"],
+        serde_json::json!([path_hash(&project_config)])
+    );
+    assert_eq!(
+        summary["effective_configuration"]["outputs"]["delivery"],
+        serde_json::json!({
+            "posture": "durable_first_write",
+            "durable_first_write": true,
+            "built_in_persistent_replay": false,
+            "enabled_sink_count": 2,
+            "durable_sink_count": 1,
+            "remote_sink_count": 1,
+            "source": "outputs_config",
+        })
+    );
+    let output_projection = summary["effective_configuration"]["outputs"].to_string();
+    assert!(!output_projection.contains(&hec_endpoint));
+    assert!(!output_projection.contains("ADR_TEST_OUTPUTS_HEC_TOKEN"));
+    assert!(!output_projection.contains("env-secret-token"));
+    assert!(!output_projection.contains("sensitive.example.invalid"));
+    assert!(!output_projection.contains("sentinel-inline-secret"));
+    assert!(!output_projection.contains("credential-endpoint.example.invalid"));
+    assert!(!output_projection.contains("/sentinel/credential-file.txt"));
+    assert!(!output_projection.contains("/sentinel/tls-ca.pem"));
+    assert!(!output_projection.contains("sentinel-output-host"));
+    assert!(!output_projection.contains("sentinel-output-index"));
+    assert!(!output_projection.contains("sentinel-output-source"));
+    assert!(!output_projection.contains("sentinel-output-sourcetype"));
 }
 
 #[test]
@@ -500,6 +612,75 @@ fn scan_once_explicit_empty_outputs_has_no_legacy_local_sink() {
 }
 
 #[test]
+fn scan_once_explicit_empty_outputs_uses_only_cli_hec_overlay() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let log_path = temp.path().join("should-not-exist.jsonl");
+    let state_path = temp.path().join("adr-state.json");
+    let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(outputs_dir.join("outputs.yaml"), "version: 1\nsinks: []\n")
+        .expect("write empty outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .args(["--splunk-hec-endpoint", &hec_endpoint])
+        .args(["--splunk-hec-token", "test-token"])
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run adr");
+
+    let request = requests
+        .recv_timeout(Duration::from_secs(2))
+        .expect("hec request");
+    shutdown.send(()).expect("stop mock hec server");
+    handle.join().expect("mock hec thread");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !log_path.exists(),
+        "explicit empty outputs must not add JSONL"
+    );
+
+    let body = request.split_once("\r\n\r\n").expect("body split").1;
+    let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
+    assert_eq!(envelope["event"]["event_type"], "health");
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    assert_eq!(
+        summary["effective_configuration"]["outputs"]["mode"],
+        "outputs_config"
+    );
+    let outputs = &summary["effective_configuration"]["outputs"];
+    let sinks = outputs["sinks"].as_array().expect("output projections");
+    assert_eq!(sinks.len(), 1);
+    assert_eq!(sinks[0]["name"], "cli-splunk-hec");
+    assert_eq!(sinks[0]["type"], "splunk_hec");
+    assert_eq!(sinks[0]["enabled"], true);
+    assert_eq!(sinks[0]["selection"], "selected");
+    assert_eq!(sinks[0]["origin_kind"], "cli_overlay");
+    assert_eq!(sinks[0]["winning_path_hash"], Value::Null);
+    assert_eq!(outputs["delivery"]["source"], "outputs_config");
+    assert_eq!(outputs["delivery"]["enabled_sink_count"], 1);
+    assert_eq!(outputs["delivery"]["durable_sink_count"], 0);
+    assert_eq!(outputs["delivery"]["remote_sink_count"], 1);
+    assert_eq!(outputs["delivery"]["posture"], "best_effort_no_replay");
+}
+
+#[test]
 fn scan_once_all_disabled_outputs_have_no_local_sink() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
@@ -536,10 +717,17 @@ fn scan_once_all_disabled_outputs_have_no_local_sink() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["delivery"]["posture"], "no_enabled_sinks");
     assert_eq!(summary["delivery"]["status"], "not_delivered");
+    let disabled = summary["effective_configuration"]["outputs"]["sinks"]
+        .as_array()
+        .unwrap()
+        .first()
+        .unwrap();
+    assert_eq!(disabled["selection"], "disabled");
+    assert_eq!(disabled["origin_kind"], "outputs_document");
 }
 
 #[test]
-fn scan_once_explicit_empty_outputs_keeps_cli_hec_overlay_only() {
+fn scan_once_outputs_reserved_name_is_replaced_by_cli_hec_overlay() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
@@ -549,8 +737,11 @@ fn scan_once_explicit_empty_outputs_keeps_cli_hec_overlay_only() {
     let config_dir = temp.path().join("conf");
     let outputs_dir = config_dir.join("outputs.d");
     fs::create_dir_all(&outputs_dir).expect("outputs.d");
-    fs::write(outputs_dir.join("outputs.yaml"), "version: 1\nsinks: []\n")
-        .expect("write empty outputs yaml");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        "version: 1\nsinks:\n  - name: cli-splunk-hec\n    type: splunk_hec\n    endpoint: https://config.example.invalid/collector\n    token: { env: MISSING_CONFIG_TOKEN }\n",
+    )
+    .expect("write outputs yaml");
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["scan", "--once", "--root"])
@@ -573,16 +764,35 @@ fn scan_once_explicit_empty_outputs_keeps_cli_hec_overlay_only() {
     shutdown.send(()).expect("stop mock hec server");
     handle.join().expect("mock hec thread");
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
-    assert!(
-        !log_path.exists(),
-        "explicit empty outputs must not add JSONL"
-    );
+    assert!(!log_path.exists(), "remote-only outputs must not add JSONL");
     let body = request.split_once("\r\n\r\n").expect("body split").1;
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["event"]["event_type"], "health");
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["delivery"]["posture"], "best_effort_no_replay");
     assert_eq!(summary["delivery"]["status"], "delivered");
+    let overlay = summary["effective_configuration"]["outputs"]["sinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|sink| sink["origin_kind"] == "cli_overlay")
+        .expect("cli overlay projection");
+    assert_eq!(overlay["selection"], "selected");
+    assert_eq!(overlay["has_inline_secret"], true);
+    assert_eq!(overlay["winning_path_hash"], Value::Null);
+    let replaced = summary["effective_configuration"]["outputs"]["sinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|sink| sink["origin_kind"] == "outputs_document")
+        .expect("replaced config projection");
+    assert_eq!(replaced["name"], "cli-splunk-hec");
+    assert_eq!(replaced["selection"], "replaced_by_cli");
+    assert!(
+        !summary["effective_configuration"]["outputs"]
+            .to_string()
+            .contains("config.example.invalid")
+    );
 }
 
 #[test]

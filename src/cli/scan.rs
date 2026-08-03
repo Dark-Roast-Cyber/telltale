@@ -70,6 +70,8 @@ pub(crate) struct ScanExecutionConfig<'a> {
     pub(crate) clients: &'a [ClientId],
     pub(crate) project_config_paths: &'a [PathBuf],
     pub(crate) install_inventory_interval_seconds: Option<u64>,
+    pub(crate) runtime: &'a serde_json::Value,
+    pub(crate) effective_configuration: &'a serde_json::Value,
 }
 
 /// A shared scan plus the options only `scan` accepts.
@@ -463,15 +465,23 @@ fn run_scan(
     if let Some(max_sources) = config.max_sources {
         sources.truncate(max_sources);
     }
-    let rule_set = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
         config.execution.rule_pack_paths,
         config.execution.rule_paths,
         config.execution.policy_path,
         config.execution.rule_load_mode,
         config.execution.override_paths,
         &[],
-    )?
-    .rule_set;
+    )?;
+    let diagnostics = super::rule_diagnostics_value(&resolution.diagnostics);
+    let rule_set = resolution.rule_set;
+    let mut effective_configuration = config.execution.effective_configuration.clone();
+    effective_configuration["rules"] = {
+        let mut rules = effective_configuration["rules"].clone();
+        rules["sources"] = diagnostics["sources"].clone();
+        rules["provenance"] = diagnostics["provenance"].clone();
+        rules
+    };
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let policy_active = config.execution.policy_path.is_some();
@@ -758,6 +768,8 @@ fn run_scan(
         source_processing: &source_processing,
         detection_flow: &detection_flow,
         policy_active,
+        runtime: config.execution.runtime,
+        effective_configuration: &effective_configuration,
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
@@ -1256,6 +1268,8 @@ struct ScanSummaryInput<'a> {
     source_processing: &'a SourceProcessingAccounting,
     detection_flow: &'a DetectionFlowAccounting,
     policy_active: bool,
+    runtime: &'a serde_json::Value,
+    effective_configuration: &'a serde_json::Value,
 }
 
 struct DetectionFlowAccounting {
@@ -1367,6 +1381,8 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         "sink_failures": sink_failures,
         "source_processing": summary.source_processing.json(),
         "detection_flow": summary.detection_flow.json(summary.policy_active),
+        "runtime": summary.runtime,
+        "effective_configuration": summary.effective_configuration,
     })
 }
 
@@ -1453,6 +1469,11 @@ mod tests {
             left.install_inventory_interval_seconds, right.install_inventory_interval_seconds,
             "install_inventory_interval_seconds"
         );
+        assert!(std::ptr::eq(left.runtime, right.runtime), "runtime");
+        assert!(
+            std::ptr::eq(left.effective_configuration, right.effective_configuration),
+            "effective_configuration"
+        );
     }
 
     /// Equivalent options must resolve identically whether they arrive through
@@ -1471,6 +1492,8 @@ mod tests {
         let override_paths = vec![PathBuf::from("/tmp/overrides.d")];
         let clients = vec![ClientId::Claude, ClientId::OpenCode];
         let project_config_paths = vec![PathBuf::from("/tmp/projects.yaml")];
+        let runtime = serde_json::json!({});
+        let effective_configuration = serde_json::json!({});
 
         let execution = ScanExecutionConfig {
             root: &root,
@@ -1491,6 +1514,8 @@ mod tests {
             clients: &clients,
             project_config_paths: &project_config_paths,
             install_inventory_interval_seconds: Some(3_600),
+            runtime: &runtime,
+            effective_configuration: &effective_configuration,
         };
 
         let scan = ScanConfig {

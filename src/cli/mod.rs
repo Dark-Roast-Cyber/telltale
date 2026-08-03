@@ -1,15 +1,18 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::detection::detect_sources_with_rules;
 use crate::paths::{self, PathProfile};
 use crate::rules::{
-    RuleLoadMode, RulePackPaths,
+    RuleLoadMode, RulePackPaths, RuleResolutionDiagnostics,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::sink::config as sink_config;
 use clap::{Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use sha2::Digest;
 use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::event::path_hash;
 use telltale_schema::source::Source;
 use telltale_sources::clients::supported_clients;
 
@@ -538,8 +541,275 @@ struct ResolvedScanConfig {
     rule_pack_paths: RulePackPaths,
     override_paths: Vec<PathBuf>,
     policy_path: Option<PathBuf>,
+    policy_origin: Option<&'static str>,
     allowlist_path: Option<PathBuf>,
+    allowlist_origin: Option<&'static str>,
     discovered: crate::config::LocalConfigFiles,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeSnapshot {
+    value: serde_json::Value,
+    executable_path: Option<PathBuf>,
+}
+
+fn observe_runtime() -> RuntimeSnapshot {
+    let current_exe = std::env::current_exe();
+    let executable_path = current_exe.as_ref().ok().cloned();
+    let observation = observe_executable(current_exe, |path| {
+        File::open(path).map(|file| Box::new(file) as Box<dyn Read>)
+    });
+    RuntimeSnapshot {
+        value: serde_json::json!({
+            "package_version": env!("CARGO_PKG_VERSION"),
+            "build_git_hash": env!("ADR_GIT_HASH"),
+            "executable": {
+                "observation_status": observation.status,
+                "path_hash": observation.path_hash,
+                "sha256": observation.sha256,
+            },
+        }),
+        executable_path,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ExecutableObservation {
+    status: &'static str,
+    path_hash: Option<String>,
+    sha256: Option<String>,
+}
+
+fn observe_executable<F>(current_exe: io::Result<PathBuf>, open: F) -> ExecutableObservation
+where
+    F: FnOnce(&Path) -> io::Result<Box<dyn Read>>,
+{
+    let Ok(path) = current_exe else {
+        return ExecutableObservation {
+            status: "current_exe_unavailable",
+            path_hash: None,
+            sha256: None,
+        };
+    };
+    let hash = path_hash(&path);
+    let Ok(mut reader) = open(&path) else {
+        return ExecutableObservation {
+            status: "executable_read_failed",
+            path_hash: Some(hash),
+            sha256: None,
+        };
+    };
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(_) => {
+                return ExecutableObservation {
+                    status: "executable_read_failed",
+                    path_hash: Some(hash),
+                    sha256: None,
+                };
+            }
+        }
+    }
+    ExecutableObservation {
+        status: "complete",
+        path_hash: Some(hash),
+        sha256: Some(format!("{:x}", hasher.finalize())),
+    }
+}
+
+fn path_hashes(paths: &[PathBuf]) -> Vec<String> {
+    paths.iter().map(|path| path_hash(path)).collect()
+}
+
+fn path_origin(explicit: Option<&Path>, environment_name: &str) -> &'static str {
+    if explicit.is_some() {
+        "cli"
+    } else if std::env::var_os(environment_name).is_some_and(|value| !value.is_empty()) {
+        "environment"
+    } else {
+        "path_profile"
+    }
+}
+
+fn path_profile_name(profile: PathProfile) -> &'static str {
+    match profile {
+        PathProfile::User => "user",
+        PathProfile::System => "system",
+        PathProfile::Project => "project",
+    }
+}
+
+fn config_path_value(path: Option<&Path>, origin: &'static str) -> serde_json::Value {
+    serde_json::json!({
+        "origin": origin,
+        "path_hash": path.map(path_hash),
+    })
+}
+
+fn source_identity_hash(source: &str) -> String {
+    telltale_schema::event::evidence_hash(source)
+}
+
+fn rule_diagnostics_value(diagnostics: &RuleResolutionDiagnostics) -> serde_json::Value {
+    serde_json::json!({
+        "sources": diagnostics
+            .sources
+            .iter()
+            .map(|source| source_identity_hash(source))
+            .collect::<Vec<_>>(),
+        "provenance": diagnostics
+            .provenance
+            .iter()
+            .map(|entry| serde_json::json!({
+                "id": entry.id,
+                "kind": entry.kind,
+                "winner": source_identity_hash(&entry.winner),
+                "replaced_sources": entry
+                    .replaced_sources
+                    .iter()
+                    .map(|source| source_identity_hash(source))
+                    .collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn output_snapshot_value(
+    specs: &[sink_config::SinkSpec],
+    output_paths: &[PathBuf],
+    outputs_config_present: bool,
+    log_path: &Path,
+    splunk_hec_endpoint: Option<&str>,
+    splunk_hec_token: Option<&str>,
+    sink_set: &crate::sink::SinkSet,
+) -> serde_json::Value {
+    let cli_hec = splunk_hec_endpoint.is_some() && splunk_hec_token.is_some();
+    let mut sinks = Vec::new();
+    if !outputs_config_present {
+        sinks.push(serde_json::json!({
+            "name": "jsonl",
+            "type": "jsonl",
+            "enabled": true,
+            "selection": "selected",
+            "origin_kind": "legacy_default",
+            "winning_path_hash": serde_json::Value::Null,
+            "resolved_destination_path_hash": path_hash(log_path),
+            "has_inline_secret": false,
+            "insecure_skip_verify": false,
+        }));
+    } else {
+        for spec in specs {
+            let replaced_by_cli =
+                cli_hec && spec.enabled && spec.name == sink_config::CLI_SPLUNK_HEC_SINK_NAME;
+            let resolved_destination_path_hash = match &spec.kind {
+                sink_config::SinkKind::Jsonl(jsonl) => {
+                    Some(path_hash(jsonl.path.as_deref().unwrap_or(log_path)))
+                }
+                _ => None,
+            };
+            sinks.push(serde_json::json!({
+                "name": spec.name,
+                "type": spec.kind.type_name(),
+                "enabled": spec.enabled,
+                "selection": if replaced_by_cli { "replaced_by_cli" } else if spec.enabled { "selected" } else { "disabled" },
+                "origin_kind": "outputs_document",
+                "winning_path_hash": spec.origin_path.as_deref().map(path_hash),
+                "resolved_destination_path_hash": resolved_destination_path_hash,
+                "has_inline_secret": spec.has_inline_secret(),
+                "insecure_skip_verify": spec.has_insecure_tls(),
+            }));
+        }
+    }
+    if cli_hec {
+        sinks.push(serde_json::json!({
+            "name": sink_config::CLI_SPLUNK_HEC_SINK_NAME,
+            "type": "splunk_hec",
+            "enabled": true,
+            "selection": "selected",
+            "origin_kind": "cli_overlay",
+            "winning_path_hash": serde_json::Value::Null,
+            "resolved_destination_path_hash": serde_json::Value::Null,
+            "has_inline_secret": true,
+            "insecure_skip_verify": false,
+        }));
+    }
+    let selected = sinks
+        .iter()
+        .filter(|sink| sink["selection"] == "selected")
+        .collect::<Vec<_>>();
+    let durable_sink_count = selected
+        .iter()
+        .filter(|sink| sink["type"] == "jsonl")
+        .count();
+    let enabled_sink_count = selected.len();
+    serde_json::json!({
+        "mode": if outputs_config_present { "outputs_config" } else { "legacy_default" },
+        "document_path_hashes": path_hashes(output_paths),
+        "sinks": sinks,
+        "delivery": {
+            "posture": sink_set.delivery_posture().as_str(),
+            "durable_first_write": sink_set.delivery_posture().has_durable_first_write(),
+            "built_in_persistent_replay": false,
+            "enabled_sink_count": enabled_sink_count,
+            "durable_sink_count": durable_sink_count,
+            "remote_sink_count": enabled_sink_count.saturating_sub(durable_sink_count),
+            "source": if outputs_config_present { "outputs_config" } else { "legacy_default" },
+        },
+    })
+}
+
+struct EffectiveConfigurationPaths<'a> {
+    profile: PathProfile,
+    log_path: &'a Path,
+    state_path: &'a Path,
+    log_origin: &'static str,
+    state_origin: &'static str,
+}
+
+fn effective_configuration_base(
+    local_config: &LocalConfigCliArgs,
+    paths: EffectiveConfigurationPaths<'_>,
+    resolved_config: &ResolvedScanConfig,
+    no_default_rules: bool,
+    project_config_paths: &[PathBuf],
+    outputs: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "local_config": {
+            "mode": if local_config.no_local_config { "disabled" } else if local_config.config_dirs.is_empty() { "default_roots" } else { "explicit_roots" },
+            "explicit_root_path_hashes": if local_config.no_local_config { Vec::<String>::new() } else { path_hashes(&local_config.config_dirs) },
+        },
+        "paths": {
+            "profile": path_profile_name(paths.profile),
+            "log": config_path_value(Some(paths.log_path), paths.log_origin),
+            "state": config_path_value(Some(paths.state_path), paths.state_origin),
+        },
+        "rules": {
+            "default_enabled": !no_default_rules,
+            "path_hashes": path_hashes(&resolved_config.rule_paths),
+            "sources": Vec::<String>::new(),
+            "provenance": Vec::<serde_json::Value>::new(),
+        },
+        "overrides": {
+            "path_hashes": path_hashes(&resolved_config.override_paths),
+        },
+        "policy": {
+            "configured": resolved_config.policy_path.is_some(),
+            "origin": resolved_config.policy_origin,
+            "path_hash": resolved_config.policy_path.as_deref().map(path_hash),
+        },
+        "allowlist": {
+            "configured": resolved_config.allowlist_path.is_some(),
+            "origin": resolved_config.allowlist_origin,
+            "path_hash": resolved_config.allowlist_path.as_deref().map(path_hash),
+        },
+        "project_config_path_hashes": path_hashes(project_config_paths),
+        "outputs": outputs,
+    })
 }
 
 fn parse_client_id(value: &str) -> Result<ClientId, String> {
@@ -610,6 +880,28 @@ fn resolve_scan_config(
     let policy_path = crate::config::resolve_policy_path(policy, &discovered.policy_paths)?;
     let allowlist_path =
         crate::config::resolve_allowlist_path(allowlist, &discovered.allowlist_paths)?;
+    let policy_origin = policy.map(|_| "cli").or_else(|| {
+        policy_path
+            .as_ref()
+            .filter(|path| {
+                discovered
+                    .policy_paths
+                    .iter()
+                    .any(|candidate| candidate == *path)
+            })
+            .map(|_| "local_config")
+    });
+    let allowlist_origin = allowlist.map(|_| "cli").or_else(|| {
+        allowlist_path
+            .as_ref()
+            .filter(|path| {
+                discovered
+                    .allowlist_paths
+                    .iter()
+                    .any(|candidate| candidate == *path)
+            })
+            .map(|_| "local_config")
+    });
 
     Ok(ResolvedScanConfig {
         rule_paths: effective_rule_paths,
@@ -617,7 +909,9 @@ fn resolve_scan_config(
         rule_pack_paths,
         override_paths: discovered.override_paths.clone(),
         policy_path,
+        policy_origin,
         allowlist_path,
+        allowlist_origin,
         discovered,
     })
 }
@@ -880,12 +1174,12 @@ fn resolve_install_inventory_interval_seconds(
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let is_adr_alias = std::env::current_exe()
-        .ok()
-        .and_then(|path| {
-            path.file_stem()
-                .and_then(|name| name.to_str().map(|name| name == "adr"))
-        })
+    let runtime = observe_runtime();
+    let is_adr_alias = runtime
+        .executable_path
+        .as_deref()
+        .and_then(|path| path.file_stem())
+        .and_then(|name| name.to_str().map(|name| name == "adr"))
         .unwrap_or(false);
     let binary_name = if is_adr_alias { "adr" } else { "telltale" };
     let command = Args::command().name(binary_name);
@@ -924,6 +1218,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             install_inventory_disabled,
         } => {
             let path_profile = path_profile.into();
+            let log_origin = path_origin(log_path.as_deref(), paths::LOG_PATH_ENV);
+            let state_origin = path_origin(state_path.as_deref(), paths::STATE_PATH_ENV);
             let log_path = paths::resolve_log_path(path_profile, log_path);
             let state_path = paths::resolve_state_path(path_profile, state_path);
             let rotation =
@@ -955,6 +1251,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 true,
             )?;
+            let outputs = output_snapshot_value(
+                &output_specs,
+                &resolved_config.discovered.output_paths,
+                !resolved_config.discovered.output_paths.is_empty(),
+                &log_path,
+                splunk_hec_endpoint.as_deref(),
+                splunk_hec_token.as_deref(),
+                &sink_set,
+            );
+            let effective_configuration = effective_configuration_base(
+                &local_config,
+                EffectiveConfigurationPaths {
+                    profile: path_profile,
+                    log_path: &log_path,
+                    state_path: &state_path,
+                    log_origin,
+                    state_origin,
+                },
+                &resolved_config,
+                no_default_rules,
+                &project_paths,
+                outputs,
+            );
             let scan_config = scan::ScanConfig {
                 execution: scan::ScanExecutionConfig {
                     root: &root,
@@ -975,6 +1294,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     clients: &clients,
                     project_config_paths: &project_paths,
                     install_inventory_interval_seconds,
+                    runtime: &runtime.value,
+                    effective_configuration: &effective_configuration,
                 },
                 backfill,
                 rebuild_baselines,
@@ -1218,6 +1539,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             install_inventory_disabled,
         } => {
             let path_profile = path_profile.into();
+            let log_origin = path_origin(log_path.as_deref(), paths::LOG_PATH_ENV);
+            let state_origin = path_origin(state_path.as_deref(), paths::STATE_PATH_ENV);
             let log_path = paths::resolve_log_path(path_profile, log_path);
             let state_path = paths::resolve_state_path(path_profile, state_path);
             let rotation =
@@ -1249,6 +1572,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 true,
             )?;
+            let outputs = output_snapshot_value(
+                &output_specs,
+                &resolved_config.discovered.output_paths,
+                !resolved_config.discovered.output_paths.is_empty(),
+                &log_path,
+                None,
+                None,
+                &sink_set,
+            );
+            let effective_configuration = effective_configuration_base(
+                &local_config,
+                EffectiveConfigurationPaths {
+                    profile: path_profile,
+                    log_path: &log_path,
+                    state_path: &state_path,
+                    log_origin,
+                    state_origin,
+                },
+                &resolved_config,
+                no_default_rules,
+                &project_paths,
+                outputs,
+            );
             let watch_config = scan::WatchConfig {
                 execution: scan::ScanExecutionConfig {
                     root: &root,
@@ -1269,6 +1615,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     clients: &clients,
                     project_config_paths: &project_paths,
                     install_inventory_interval_seconds,
+                    runtime: &runtime.value,
+                    effective_configuration: &effective_configuration,
                 },
                 trigger: scan::WatchTriggerConfig {
                     iterations,
@@ -1320,4 +1668,42 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::observe_executable;
+
+    #[test]
+    fn executable_observation_streams_a_sha256_digest() {
+        let observation = observe_executable(Ok(std::path::PathBuf::from("/tmp/telltale")), |_| {
+            Ok(Box::new(Cursor::new(b"telltale-test".to_vec())))
+        });
+
+        assert_eq!(observation.status, "complete");
+        assert_eq!(observation.path_hash.as_deref().unwrap().len(), 64);
+        assert_eq!(
+            observation.sha256.as_deref(),
+            Some("95b5d3baf14cb332b2b1c62ca30438787685666fd1be1817bd469a845f4425c7")
+        );
+    }
+
+    #[test]
+    fn executable_observation_degrades_without_error_text() {
+        let unavailable = observe_executable(
+            Err(std::io::Error::other("private failure detail")),
+            |_| unreachable!(),
+        );
+        assert_eq!(unavailable.status, "current_exe_unavailable");
+        assert_eq!(unavailable.path_hash, None);
+        assert_eq!(unavailable.sha256, None);
+
+        let unreadable = observe_executable(Ok(std::path::PathBuf::from("/tmp/telltale")), |_| {
+            Err(std::io::Error::other("private failure detail"))
+        });
+        assert_eq!(unreadable.status, "executable_read_failed");
+        assert_eq!(unreadable.sha256, None);
+    }
 }

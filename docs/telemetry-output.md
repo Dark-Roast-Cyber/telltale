@@ -52,6 +52,21 @@ otherwise ambiguous zero-detection result without exposing session content:
   deduplication, matched rule-ID references, allowlist-marked candidates,
   state-deduplicated candidates, and emitted detections. Effective candidates
   equal emitted plus state-deduplicated detections.
+- `runtime` reports the package version, embedded build hash, and best-effort
+  executable observation. The executable path is represented by a path hash and
+  its bytes by a streaming SHA-256 digest; unavailable executable observations
+  degrade to a bounded status without aborting the scan.
+- `effective_configuration` reports hashed path provenance for local config,
+  log/state resolution, rules and overrides, policy/allowlist selection,
+  project config, and startup output selection. Rule sources and replacement
+  winners are identity-hashed. Output projections expose only sink name/type,
+  selection/origin, JSONL destination hashes, secret/TLS posture, and delivery
+  posture; endpoints, credentials, credential references, hosts, indices,
+  sourcetypes, and CA paths are excluded.
+
+The existing top-level `log_path` field remains raw for compatibility and is a
+local diagnostic caveat. Newly added path fields use hashes. Both sections are
+stdout-only: they are not Event 2.0 fields and are not written to JSONL or HEC.
 
 Allowlisting marks a detection informational and does not necessarily prevent
 emission. Scanner-error events remain visible through the existing scan totals

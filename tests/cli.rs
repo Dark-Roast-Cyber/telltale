@@ -11,6 +11,8 @@ use jsonschema::validator_for;
 #[cfg(target_os = "linux")]
 use rusqlite::Connection;
 use serde_json::Value;
+use sha2::Digest;
+use telltale_schema::event::{evidence_hash, path_hash};
 use tempfile::tempdir;
 
 #[path = "cli/export.rs"]

@@ -144,6 +144,75 @@ fn rules_serve_uses_ordered_managed_pack_for_summary() {
 }
 
 #[test]
+fn scan_reports_consistent_hashed_rule_sources_and_replacements() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let validation = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "rules",
+            "validate",
+            "--config-dir",
+            "tests/fixtures/rule_packs/ordered",
+        ])
+        .output()
+        .expect("validate ordered pack");
+    assert!(
+        validation.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&validation.stderr)
+    );
+    let validation: Value = serde_json::from_slice(&validation.stdout).expect("validation json");
+    let expected_sources = validation["sources"]
+        .as_array()
+        .expect("validation sources")
+        .iter()
+        .map(|source| Value::String(evidence_hash(source.as_str().expect("raw source"))))
+        .collect::<Vec<_>>();
+    let expected_provenance = validation["provenance"]
+        .as_array()
+        .expect("validation provenance")
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "id": entry["id"],
+                "kind": entry["kind"],
+                "winner": evidence_hash(entry["winner"].as_str().expect("raw winner")),
+                "replaced_sources": entry["replaced_sources"]
+                    .as_array()
+                    .expect("raw replacements")
+                    .iter()
+                    .map(|source| evidence_hash(source.as_str().expect("raw replacement")))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--dry-run", "--root"])
+        .arg(&root)
+        .args([
+            "--config-dir",
+            "tests/fixtures/rule_packs/ordered",
+            "--install-inventory-disabled",
+        ])
+        .output()
+        .expect("run ordered pack scan");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    let rules = &summary["effective_configuration"]["rules"];
+    let sources = rules["sources"].as_array().expect("hashed sources");
+    assert_eq!(sources, &expected_sources);
+    let provenance = rules["provenance"].as_array().expect("provenance");
+    assert_eq!(provenance, &expected_provenance);
+}
+
+#[test]
 fn rules_serve_validates_submitted_rule_yaml_without_writing() {
     let rules_yaml =
         fs::read_to_string("tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml")
@@ -1185,6 +1254,27 @@ overrides:
         ignored_summary["rule_count"].as_u64(),
         Some(default_rule_count)
     );
+
+    let empty_root = temp.path().join("empty-root");
+    fs::create_dir_all(&empty_root).expect("empty root");
+    let scan = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--dry-run", "--root"])
+        .arg(&empty_root)
+        .args(["--config-dir"])
+        .arg(&config_root)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run scan with local override");
+    assert!(
+        scan.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&scan.stderr)
+    );
+    let scan_summary: Value = serde_json::from_slice(&scan.stdout).expect("scan summary");
+    assert_eq!(
+        scan_summary["effective_configuration"]["overrides"]["path_hashes"],
+        serde_json::json!([path_hash(&override_path)])
+    );
 }
 
 #[test]
@@ -2207,6 +2297,7 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     let config_root = temp.path().join("config");
     fs::create_dir_all(config_root.join("rules.d")).expect("rules dir");
     fs::create_dir_all(config_root.join("policies.d")).expect("policies dir");
+    fs::create_dir_all(config_root.join("allowlists.d")).expect("allowlists dir");
     fs::write(
         config_root.join("rules.d/custom-agent-behavior.yaml"),
         include_str!("../../tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml"),
@@ -2217,6 +2308,11 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
         include_str!("../../tests/fixtures/custom_rules/disable-custom-category.yaml"),
     )
     .expect("write local policy");
+    fs::write(
+        config_root.join("allowlists.d/known-benign.yaml"),
+        "version: 1\nsuppressions: []\n",
+    )
+    .expect("write local allowlist");
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["scan", "--once", "--dry-run", "--root"])
@@ -2234,6 +2330,22 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     assert_eq!(summary["detection_count"], 0);
     assert_eq!(summary["rule_count"], 0);
     assert_eq!(summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["origin"],
+        "local_config"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["path_hash"],
+        path_hash(&config_root.join("policies.d/disable-custom-category.yml"))
+    );
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["origin"],
+        "local_config"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["path_hash"],
+        path_hash(&config_root.join("allowlists.d/known-benign.yaml"))
+    );
 }
 
 #[test]
@@ -2290,6 +2402,14 @@ fn scan_explicit_policy_wins_over_discovered_policy_ambiguity() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 0);
     assert_eq!(summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["origin"],
+        "cli"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["path_hash"],
+        path_hash(&explicit_policy)
+    );
 }
 
 #[test]
@@ -2348,6 +2468,14 @@ suppressions:
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 1);
     assert_eq!(summary["suppressed_count"], 1);
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["origin"],
+        "cli"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["path_hash"],
+        path_hash(&allowlist_path)
+    );
     assert_eq!(
         summary["detection_flow"]["effective_detection_candidate_count"],
         1
