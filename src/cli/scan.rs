@@ -38,7 +38,7 @@ use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, source_fingerprint};
 use crate::triage::maybe_triage;
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::record::NormalizedRecord;
+use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::source::Source;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
@@ -474,6 +474,7 @@ fn run_scan(
     .rule_set;
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
+    let policy_active = config.execution.policy_path.is_some();
     let allowlist = load_allowlist(config.execution.allowlist_path)?;
     let mut state = ScanState::load(config.execution.state_path)?;
     let state_probe = match save_policy {
@@ -486,6 +487,7 @@ fn run_scan(
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
     let parsed_sources =
         parse_scan_sources(&sources, &state, config.backfill, config.execution.dry_run);
+    let source_processing = source_processing_accounting(&sources, &parsed_sources);
     update_baseline_snapshots(&mut state, &parsed_sources, config.rebuild_baselines);
     let mut install_inventory_event = None;
     if config.execution.clients.is_empty()
@@ -548,11 +550,16 @@ fn run_scan(
             )],
         })
         .collect::<Vec<_>>();
+    let mut detection_flow = detection_flow_accounting(&detections);
     let mut suppressed_count = 0_usize;
     for (source, detection) in &mut detections {
+        let is_detection = detection.event_type == "detection";
         if let Some(suppression_match) = allowlist.suppression_for(source, detection) {
             suppress_detection(detection, &suppression_match);
             suppressed_count += 1;
+            if is_detection {
+                detection_flow.allowlist_marked_detection_count += 1;
+            }
         }
     }
     for (_, detection) in &mut detections {
@@ -654,7 +661,16 @@ fn run_scan(
     }
     let mut scanner_error_emitted = false;
     for (source, detection) in detections {
-        if config.backfill || state.should_emit(&source, &detection) {
+        let is_detection = detection.event_type == "detection";
+        let should_emit = config.backfill || state.should_emit(&source, &detection);
+        if is_detection {
+            if should_emit {
+                detection_flow.emitted_detection_count += 1;
+            } else {
+                detection_flow.state_deduplicated_detection_count += 1;
+            }
+        }
+        if should_emit {
             scanner_error_emitted |= detection.event_type == "scanner_error";
             emitted_events.push(detection);
         }
@@ -739,6 +755,9 @@ fn run_scan(
         log_path: config.execution.log_path,
         delivery_posture,
         sink_failures: &sink_failures,
+        source_processing: &source_processing,
+        detection_flow: &detection_flow,
+        policy_active,
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(())
@@ -812,6 +831,67 @@ struct ParsedScanSource {
     source: Source,
     records: Result<Vec<NormalizedRecord>, ParseError>,
     sqlite_part_max_time_updated: Option<i64>,
+}
+
+struct SourceProcessingAccounting {
+    selected_source_count: usize,
+    parse_success_source_count: usize,
+    empty_source_count: usize,
+    parse_error_source_count: usize,
+    parsed_record_count: usize,
+    record_kind_counts: BTreeMap<String, usize>,
+}
+
+fn source_processing_accounting(
+    sources: &[Source],
+    parsed_sources: &[ParsedScanSource],
+) -> SourceProcessingAccounting {
+    let mut accounting = SourceProcessingAccounting {
+        selected_source_count: sources.len(),
+        parse_success_source_count: 0,
+        empty_source_count: 0,
+        parse_error_source_count: 0,
+        parsed_record_count: 0,
+        record_kind_counts: [
+            "user_message",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "session_meta",
+            "other",
+        ]
+        .into_iter()
+        .map(|kind| (kind.to_string(), 0))
+        .collect(),
+    };
+
+    for parsed_source in parsed_sources {
+        match &parsed_source.records {
+            Ok(records) => {
+                accounting.parse_success_source_count += 1;
+                accounting.parsed_record_count += records.len();
+                for record in records {
+                    let kind = match record.kind {
+                        RecordKind::UserMessage => "user_message",
+                        RecordKind::AssistantMessage => "assistant_message",
+                        RecordKind::ToolCall => "tool_call",
+                        RecordKind::ToolResult => "tool_result",
+                        RecordKind::SessionMeta => "session_meta",
+                        RecordKind::Other => "other",
+                        _ => "other",
+                    };
+                    *accounting
+                        .record_kind_counts
+                        .get_mut(kind)
+                        .expect("record kind accounting key") += 1;
+                }
+            }
+            Err(ParseError::Empty) => accounting.empty_source_count += 1,
+            Err(_) => accounting.parse_error_source_count += 1,
+        }
+    }
+
+    accounting
 }
 
 fn parse_scan_sources(
@@ -1173,6 +1253,75 @@ struct ScanSummaryInput<'a> {
     log_path: &'a Path,
     delivery_posture: crate::sink::DeliveryPosture,
     sink_failures: &'a [SinkFailure],
+    source_processing: &'a SourceProcessingAccounting,
+    detection_flow: &'a DetectionFlowAccounting,
+    policy_active: bool,
+}
+
+struct DetectionFlowAccounting {
+    effective_detection_candidate_count: usize,
+    matched_rule_id_count: usize,
+    allowlist_marked_detection_count: usize,
+    state_deduplicated_detection_count: usize,
+    emitted_detection_count: usize,
+}
+
+fn detection_flow_accounting(detections: &[(Source, Event)]) -> DetectionFlowAccounting {
+    let mut accounting = DetectionFlowAccounting {
+        effective_detection_candidate_count: 0,
+        matched_rule_id_count: 0,
+        allowlist_marked_detection_count: 0,
+        state_deduplicated_detection_count: 0,
+        emitted_detection_count: 0,
+    };
+    for (_, event) in detections {
+        if event.event_type == "detection" {
+            accounting.effective_detection_candidate_count += 1;
+            accounting.matched_rule_id_count += event.rule_ids.len();
+        }
+    }
+    accounting
+}
+
+impl SourceProcessingAccounting {
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "selected_source_count": self.selected_source_count,
+            "parse_success_source_count": self.parse_success_source_count,
+            "empty_source_count": self.empty_source_count,
+            "parse_error_source_count": self.parse_error_source_count,
+            "parsed_record_count": self.parsed_record_count,
+            "record_kind_counts": self.record_kind_counts,
+        })
+    }
+}
+
+impl DetectionFlowAccounting {
+    fn json(&self, policy_active: bool) -> serde_json::Value {
+        let policy_match_accounting = if policy_active {
+            serde_json::json!({
+                "status": "unavailable_effective_rules_only",
+                "pre_policy_detection_candidate_count": null,
+                "fully_filtered_detection_candidate_count": null,
+                "filtered_rule_id_count": null,
+            })
+        } else {
+            serde_json::json!({
+                "status": "not_applicable",
+                "pre_policy_detection_candidate_count": null,
+                "fully_filtered_detection_candidate_count": null,
+                "filtered_rule_id_count": null,
+            })
+        };
+        serde_json::json!({
+            "effective_detection_candidate_count": self.effective_detection_candidate_count,
+            "matched_rule_id_count": self.matched_rule_id_count,
+            "allowlist_marked_detection_count": self.allowlist_marked_detection_count,
+            "state_deduplicated_detection_count": self.state_deduplicated_detection_count,
+            "emitted_detection_count": self.emitted_detection_count,
+            "policy_match_accounting": policy_match_accounting,
+        })
+    }
 }
 
 fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
@@ -1216,6 +1365,8 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         },
         "source_counts": summary.health_event.source_counts.clone().unwrap_or_default(),
         "sink_failures": sink_failures,
+        "source_processing": summary.source_processing.json(),
+        "detection_flow": summary.detection_flow.json(summary.policy_active),
     })
 }
 

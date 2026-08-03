@@ -38,6 +38,27 @@ cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests
 The JSONL sink is the stable interchange point. Each line is a complete event
 that follows [schemas/event.schema.json](../schemas/event.schema.json).
 
+## Scan Diagnostics
+
+Every scan also prints one JSON summary to stdout. This local diagnostic is not
+an Event 2.0 payload and is not appended to JSONL or wrapped for HEC. In
+addition to the existing delivery and event totals, two sections explain an
+otherwise ambiguous zero-detection result without exposing session content:
+
+- `source_processing` reports selected sources, successful parses, empty and
+  failed parses, the number of normalized records, and fixed counts for user,
+  assistant, tool-call, tool-result, session-metadata, and other records.
+- `detection_flow` reports effective detection candidates before state
+  deduplication, matched rule-ID references, allowlist-marked candidates,
+  state-deduplicated candidates, and emitted detections. Effective candidates
+  equal emitted plus state-deduplicated detections.
+
+Allowlisting marks a detection informational and does not necessarily prevent
+emission. Scanner-error events remain visible through the existing scan totals
+but do not inflate the detection-only flow. When a rule policy is active, the
+summary explicitly reports pre-policy match accounting as unavailable; policy
+filtering occurs before effective rule evaluation and is not inferred.
+
 ## Event Families
 
 Common event types include:

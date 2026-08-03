@@ -11,6 +11,81 @@ fn source_inventory_change_value(event: &Value) -> &str {
         .expect("source inventory change value")
 }
 
+fn assert_source_processing_accounting(summary: &Value) {
+    let source_processing = &summary["source_processing"];
+    assert_eq!(
+        source_processing["selected_source_count"].as_u64().unwrap(),
+        source_processing["parse_success_source_count"]
+            .as_u64()
+            .unwrap()
+            + source_processing["empty_source_count"].as_u64().unwrap()
+            + source_processing["parse_error_source_count"]
+                .as_u64()
+                .unwrap()
+    );
+    let record_kind_counts = source_processing["record_kind_counts"]
+        .as_object()
+        .expect("record kind counts");
+    let mut keys = record_kind_counts
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec![
+            "assistant_message",
+            "other",
+            "session_meta",
+            "tool_call",
+            "tool_result",
+            "user_message",
+        ]
+    );
+    let parsed_record_count = source_processing["parsed_record_count"].as_u64().unwrap();
+    assert_eq!(
+        parsed_record_count,
+        record_kind_counts
+            .values()
+            .map(|count| count.as_u64().unwrap())
+            .sum::<u64>()
+    );
+    assert!(record_kind_counts["user_message"].as_u64().unwrap() > 0);
+    assert!(record_kind_counts["tool_call"].as_u64().unwrap() > 0);
+}
+
+fn assert_detection_flow_accounting(summary: &Value, emitted: u64, deduplicated: u64) {
+    let detection_flow = &summary["detection_flow"];
+    assert_eq!(
+        detection_flow["effective_detection_candidate_count"],
+        Value::from(emitted + deduplicated)
+    );
+    assert_eq!(
+        detection_flow["state_deduplicated_detection_count"],
+        Value::from(deduplicated)
+    );
+    assert_eq!(
+        detection_flow["emitted_detection_count"],
+        Value::from(emitted)
+    );
+    assert!(detection_flow["matched_rule_id_count"].as_u64().unwrap() > 0);
+    assert_eq!(detection_flow["allowlist_marked_detection_count"], 0);
+    assert_eq!(
+        detection_flow["policy_match_accounting"]["status"],
+        "not_applicable"
+    );
+    for field in [
+        "pre_policy_detection_candidate_count",
+        "fully_filtered_detection_candidate_count",
+        "filtered_rule_id_count",
+    ] {
+        assert!(
+            detection_flow["policy_match_accounting"][field].is_null(),
+            "{field} should be unavailable"
+        );
+    }
+}
+
 fn start_mock_llm_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     start_mock_llm_server_with_content(
         "{\"verdict\":\"malicious\",\"severity\":\"critical\",\"confidence\":0.97,\"reason\":\"mock triage confirmed MCP injection\"}",
@@ -118,6 +193,28 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
     assert_eq!(summary["detection_count"], 36);
+    assert_source_processing_accounting(&summary);
+    assert_detection_flow_accounting(&summary, 36, 0);
+    assert_eq!(summary["source_processing"]["selected_source_count"], 69);
+    assert_eq!(
+        summary["source_processing"]["parse_success_source_count"],
+        68
+    );
+    assert_eq!(summary["source_processing"]["empty_source_count"], 1);
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 147);
+    assert_eq!(
+        summary["source_processing"]["record_kind_counts"],
+        serde_json::json!({
+            "user_message": 25,
+            "assistant_message": 27,
+            "tool_call": 31,
+            "tool_result": 20,
+            "session_meta": 44,
+            "other": 0,
+        })
+    );
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 124);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -137,6 +234,9 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
         .collect::<Vec<_>>();
     assert_eq!(events.len(), 38);
+    assert!(events.iter().all(|event| {
+        event.get("source_processing").is_none() && event.get("detection_flow").is_none()
+    }));
     assert!(events.iter().any(|event| {
         event["event_type"] == "activity"
             && event["check_name"] == "install_inventory"
@@ -1664,6 +1764,8 @@ fn repeated_scans_suppress_duplicate_detections() {
     let first_summary: Value = serde_json::from_slice(&first.stdout).expect("summary json");
     assert_eq!(first_summary["detection_count"], 36);
     assert_eq!(first_summary["emitted_count"], 37);
+    assert_source_processing_accounting(&first_summary);
+    assert_detection_flow_accounting(&first_summary, 36, 0);
 
     let second = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
@@ -1688,6 +1790,61 @@ fn repeated_scans_suppress_duplicate_detections() {
     let second_summary: Value = serde_json::from_slice(&second.stdout).expect("summary json");
     assert_eq!(second_summary["detection_count"], 36);
     assert_eq!(second_summary["emitted_count"], 0);
+    assert_source_processing_accounting(&second_summary);
+    assert_detection_flow_accounting(&second_summary, 0, 36);
+    assert_eq!(
+        second_summary["detection_flow"]["matched_rule_id_count"],
+        124
+    );
+
+    let lines_before_backfill = fs::read_to_string(&log_path)
+        .expect("log file before backfill")
+        .lines()
+        .count();
+    let backfill = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--dry-run",
+            "--backfill",
+            "--no-local-config",
+            "--root",
+            "tests/fixtures/session_stores",
+            "--log-path",
+        ])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run backfill scan");
+    assert!(
+        backfill.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&backfill.stderr)
+    );
+    let backfill_summary: Value =
+        serde_json::from_slice(&backfill.stdout).expect("backfill summary json");
+    assert_eq!(backfill_summary["detection_count"], 36);
+    assert_eq!(
+        backfill_summary["detection_flow"]["effective_detection_candidate_count"],
+        36
+    );
+    assert_eq!(
+        backfill_summary["detection_flow"]["emitted_detection_count"],
+        36
+    );
+    assert_eq!(
+        backfill_summary["detection_flow"]["state_deduplicated_detection_count"],
+        0
+    );
+    assert_eq!(
+        fs::read_to_string(&log_path)
+            .expect("log file after backfill")
+            .lines()
+            .count(),
+        lines_before_backfill
+    );
 
     let lines = fs::read_to_string(log_path).expect("log file");
     assert_eq!(lines.lines().count(), 38);
@@ -2979,6 +3136,14 @@ fn scan_once_continues_after_malformed_source() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 2);
     assert_eq!(summary["emitted_count"], 2);
+    assert_eq!(summary["source_processing"]["selected_source_count"], 2);
+    assert_eq!(
+        summary["source_processing"]["parse_success_source_count"],
+        1
+    );
+    assert_eq!(summary["source_processing"]["empty_source_count"], 0);
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
+    assert_detection_flow_accounting(&summary, 1, 0);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 2);
 
     let lines = fs::read_to_string(log_path).expect("log file");

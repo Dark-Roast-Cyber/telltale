@@ -2130,6 +2130,10 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     let enabled_summary: Value = serde_json::from_slice(&enabled.stdout).expect("summary json");
     assert_eq!(enabled_summary["detection_count"], 1);
     assert_eq!(enabled_summary["rule_count"], 1);
+    assert_eq!(
+        enabled_summary["detection_flow"]["policy_match_accounting"]["status"],
+        "not_applicable"
+    );
 
     let disabled = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
@@ -2152,6 +2156,40 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     assert_eq!(disabled_summary["detection_count"], 0);
     assert_eq!(disabled_summary["rule_count"], 0);
     assert_eq!(disabled_summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["status"],
+        "unavailable_effective_rules_only"
+    );
+
+    let unnamed_policy = temp.path().join("unnamed-policy.yaml");
+    fs::write(
+        &unnamed_policy,
+        "disabled_categories:\n  - custom_agent_behavior\n",
+    )
+    .expect("write unnamed policy");
+    let unnamed = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
+        .arg(&root)
+        .args([
+            "--no-default-rules",
+            "--rules",
+            "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+            "--policy",
+        ])
+        .arg(&unnamed_policy)
+        .output()
+        .expect("run unnamed-policy scan");
+    assert!(
+        unnamed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&unnamed.stderr)
+    );
+    let unnamed_summary: Value = serde_json::from_slice(&unnamed.stdout).expect("summary json");
+    assert!(unnamed_summary["policy"].is_null());
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["status"],
+        "unavailable_effective_rules_only"
+    );
 }
 
 #[test]
@@ -2310,6 +2348,19 @@ suppressions:
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 1);
     assert_eq!(summary["suppressed_count"], 1);
+    assert_eq!(
+        summary["detection_flow"]["effective_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        summary["detection_flow"]["allowlist_marked_detection_count"],
+        1
+    );
+    assert_eq!(
+        summary["detection_flow"]["state_deduplicated_detection_count"],
+        0
+    );
+    assert_eq!(summary["detection_flow"]["emitted_detection_count"], 1);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
