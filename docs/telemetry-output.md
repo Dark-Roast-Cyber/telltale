@@ -100,9 +100,16 @@ JSONL or HEC.
 
 Allowlisting marks a detection informational and does not necessarily prevent
 emission. Scanner-error events remain visible through the existing scan totals
-but do not inflate the detection-only flow. When a rule policy is active, the
-summary explicitly reports pre-policy match accounting as unavailable; policy
-filtering occurs before effective rule evaluation and is not inferred.
+but do not inflate the detection-only flow. With an active rule policy, the
+stdout-only summary reports `policy_match_accounting` with `status=available`,
+the source/session-scoped pre-policy candidate count, fully filtered candidate
+count, and filtered matched rule-ID reference count. These counts are computed
+from the in-memory post-override rule set and the existing session projection;
+they are not Event 2.0 fields and are not written to JSONL or HEC. If diagnostic
+compilation, evaluation, snapshot integrity, monotonicity, or aggregation
+fails, status is `unavailable` and all three counters are null. Without a
+configured policy, status remains `not_applicable` and no diagnostic matching
+work is performed.
 
 ## Event Families
 

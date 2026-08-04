@@ -1,5 +1,86 @@
 use super::*;
 
+fn assert_diagnostic_only_scan(
+    output: &std::process::Output,
+    log_path: &Path,
+    sentinel: &str,
+) -> Value {
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for text in [&stdout, &stderr] {
+        for marker in [
+            sentinel,
+            "policy match accounting unavailable",
+            "invalid regex",
+            "unsupported detection_class",
+            "RiskAccountingError",
+            "Overflow",
+        ] {
+            assert!(!text.contains(marker), "diagnostic leaked: {marker}");
+        }
+    }
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    let accounting = &summary["detection_flow"]["policy_match_accounting"];
+    assert_eq!(accounting["status"], "unavailable");
+    for field in [
+        "pre_policy_detection_candidate_count",
+        "fully_filtered_detection_candidate_count",
+        "filtered_rule_id_count",
+    ] {
+        assert!(accounting[field].is_null(), "{field} should be null");
+    }
+    assert_eq!(summary["detection_count"], 1);
+    assert_eq!(summary["emitted_count"], 1);
+    assert_eq!(summary["rule_count"], 1);
+    assert_eq!(
+        summary["detection_flow"]["effective_detection_candidate_count"],
+        1
+    );
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 1);
+    assert_eq!(
+        summary["detection_flow"]["state_deduplicated_detection_count"],
+        0
+    );
+
+    let events = fs::read_to_string(log_path)
+        .expect("event log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect::<Vec<_>>();
+    let event_types = events
+        .iter()
+        .map(|event| event["event_type"].as_str().expect("event type"))
+        .collect::<Vec<_>>();
+    assert_eq!(event_types, vec!["health", "detection"]);
+    assert_eq!(events[0]["scanner_error_count"], 0);
+    assert!(!events.iter().any(|event| {
+        matches!(
+            event["event_type"].as_str(),
+            Some("scanner_error" | "operational_alert")
+        )
+    }));
+    let serialized_events = serde_json::to_string(&events).expect("serialize events");
+    for marker in [
+        sentinel,
+        "policy match accounting unavailable",
+        "invalid regex",
+        "unsupported detection_class",
+        "RiskAccountingError",
+        "Overflow",
+    ] {
+        assert!(
+            !serialized_events.contains(marker),
+            "event diagnostic leaked: {marker}"
+        );
+    }
+    summary
+}
+
 #[test]
 fn rules_list_and_validate_default_rules() {
     let list = Command::new(env!("CARGO_BIN_EXE_adr"))
@@ -2248,7 +2329,19 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     assert_eq!(disabled_summary["policy"], "no-custom-agent-behavior");
     assert_eq!(
         disabled_summary["detection_flow"]["policy_match_accounting"]["status"],
-        "unavailable_effective_rules_only"
+        "available"
+    );
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["pre_policy_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["fully_filtered_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["filtered_rule_id_count"],
+        1
     );
 
     let unnamed_policy = temp.path().join("unnamed-policy.yaml");
@@ -2278,8 +2371,299 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     assert!(unnamed_summary["policy"].is_null());
     assert_eq!(
         unnamed_summary["detection_flow"]["policy_match_accounting"]["status"],
-        "unavailable_effective_rules_only"
+        "available"
     );
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["pre_policy_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["fully_filtered_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["filtered_rule_id_count"],
+        1
+    );
+}
+
+#[test]
+fn policy_filtered_invalid_rules_only_degrade_diagnostics() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("diagnostic.jsonl"),
+        include_str!("../../tests/fixtures/custom_rules/custom-agent-behavior.jsonl"),
+    )
+    .expect("diagnostic fixture");
+
+    for (case, invalid_rule, sentinel) in [
+        (
+            "regex",
+            r#"    - id: test.invalid.regex
+      category: test
+      severity: medium
+      score: 1
+      targets: [assistant_context]
+      regex: '[DIAGNOSTIC_REGEX_SENTINEL'
+      tags: []
+      explanation: invalid regex fixture
+"#,
+            "DIAGNOSTIC_REGEX_SENTINEL",
+        ),
+        (
+            "metadata",
+            r#"    - id: test.invalid.metadata
+      category: test
+      detection_class: DIAGNOSTIC_METADATA_SENTINEL
+      severity: medium
+      score: 1
+      targets: [assistant_context]
+      regex: 'never-matches'
+      tags: []
+      explanation: invalid metadata fixture
+"#,
+            "DIAGNOSTIC_METADATA_SENTINEL",
+        ),
+    ] {
+        let rules_path = temp.path().join(format!("invalid-{case}.yaml"));
+        let invalid_id = format!("test.invalid.{case}");
+        fs::write(
+            &rules_path,
+            format!(
+                "version: 1\ndescription: diagnostic fixture\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n    - id: test.valid\n      category: test\n      severity: medium\n      score: 1\n      targets: [assistant_context]\n      regex: 'exfiltrate project secrets'\n      tags: []\n      explanation: valid fixture\n{invalid_rule}modifiers: []\n"
+            ),
+        )
+        .expect("invalid rules fixture");
+        let policy_path = temp.path().join(format!("invalid-{case}-policy.yaml"));
+        fs::write(
+            &policy_path,
+            format!("name: diagnostic-policy\ndisabled_rules: [{invalid_id}]\n"),
+        )
+        .expect("invalid policy fixture");
+        let log_path = temp.path().join(format!("invalid-{case}.jsonl"));
+        let state_path = temp.path().join(format!("invalid-{case}-state.json"));
+
+        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--root",
+            ])
+            .arg(&root)
+            .args(["--client", "codex", "--no-default-rules", "--rules"])
+            .arg(&rules_path)
+            .args(["--policy"])
+            .arg(&policy_path)
+            .args(["--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run invalid diagnostic scan");
+        assert_diagnostic_only_scan(&output, &log_path, sentinel);
+    }
+}
+
+#[test]
+fn policy_filtered_pre_policy_overflow_only_degrades_diagnostics() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("overflow.jsonl"),
+        include_str!("../../tests/fixtures/custom_rules/custom-agent-behavior.jsonl")
+            .replace("exfiltrate project secrets", "overflow diagnostic match"),
+    )
+    .expect("overflow fixture");
+    let rules_path = temp.path().join("overflow.yaml");
+    fs::write(
+        &rules_path,
+        r#"version: 1
+description: overflow diagnostic fixture
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: test.overflow.first
+    category: test
+    severity: medium
+    score: 18446744073709551615
+    targets: [assistant_context]
+    regex: 'overflow diagnostic match'
+    tags: []
+    explanation: first overflow fixture
+  - id: test.overflow.second
+    category: test
+    severity: medium
+    score: 18446744073709551615
+    targets: [assistant_context]
+    regex: 'overflow diagnostic match'
+    tags: []
+    explanation: second overflow fixture
+modifiers: []
+"#,
+    )
+    .expect("overflow rules fixture");
+    let policy_path = temp.path().join("overflow-policy.yaml");
+    fs::write(
+        &policy_path,
+        "name: overflow-policy\ndisabled_rules: [test.overflow.second]\n",
+    )
+    .expect("overflow policy fixture");
+    let log_path = temp.path().join("overflow.jsonl");
+    let state_path = temp.path().join("overflow-state.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--root",
+        ])
+        .arg(&root)
+        .args(["--client", "codex", "--no-default-rules", "--rules"])
+        .arg(&rules_path)
+        .args(["--policy"])
+        .arg(&policy_path)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run overflow diagnostic scan");
+    assert_diagnostic_only_scan(&output, &log_path, "risk contribution total overflowed u64");
+}
+
+#[test]
+fn partial_policy_repeated_state_preserves_events_and_accounting() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("partial.jsonl"),
+        include_str!("../../tests/fixtures/custom_rules/custom-agent-behavior.jsonl"),
+    )
+    .expect("partial fixture");
+    let rules_path = temp.path().join("partial.yaml");
+    fs::write(
+        &rules_path,
+        r#"version: 1
+description: partial policy fixture
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: test.partial.first
+    category: test
+    severity: medium
+    score: 1
+    targets: [assistant_context]
+    regex: 'exfiltrate project secrets'
+    tags: []
+    explanation: first partial fixture
+  - id: test.partial.second
+    category: test
+    severity: medium
+    score: 1
+    targets: [assistant_context]
+    regex: 'exfiltrate project secrets'
+    tags: []
+    explanation: second partial fixture
+modifiers: []
+"#,
+    )
+    .expect("partial rules fixture");
+    let policy_path = temp.path().join("partial-policy.yaml");
+    fs::write(
+        &policy_path,
+        "name: partial-policy\ndisabled_rules: [test.partial.second]\n",
+    )
+    .expect("partial policy fixture");
+    let log_path = temp.path().join("partial.jsonl");
+    let state_path = temp.path().join("partial-state.json");
+
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_adr"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--root",
+            ])
+            .arg(&root)
+            .args(["--client", "codex", "--no-default-rules", "--rules"])
+            .arg(&rules_path)
+            .args(["--policy"])
+            .arg(&policy_path)
+            .args(["--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run partial policy scan")
+    };
+    let first = run();
+    assert!(
+        first.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_summary: Value = serde_json::from_slice(&first.stdout).expect("first summary");
+    let first_log = fs::read_to_string(&log_path).expect("partial event log");
+    assert_eq!(first_log.lines().count(), 2);
+    let second = run();
+    assert!(
+        second.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_summary: Value = serde_json::from_slice(&second.stdout).expect("second summary");
+    for summary in [&first_summary, &second_summary] {
+        assert_eq!(summary["detection_count"], 1);
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["status"],
+            "available"
+        );
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["pre_policy_detection_candidate_count"],
+            1
+        );
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["fully_filtered_detection_candidate_count"],
+            0
+        );
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["filtered_rule_id_count"],
+            1
+        );
+    }
+    assert_eq!(
+        first_summary["detection_flow"]["emitted_detection_count"],
+        1
+    );
+    assert_eq!(
+        first_summary["detection_flow"]["state_deduplicated_detection_count"],
+        0
+    );
+    assert_eq!(
+        second_summary["detection_flow"]["emitted_detection_count"],
+        0
+    );
+    assert_eq!(
+        second_summary["detection_flow"]["state_deduplicated_detection_count"],
+        1
+    );
+    let second_log = fs::read_to_string(&log_path).expect("partial event log after repeat");
+    assert_eq!(second_log, first_log);
 }
 
 #[test]

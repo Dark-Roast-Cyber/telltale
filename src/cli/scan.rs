@@ -14,7 +14,11 @@ use time::OffsetDateTime;
 
 use crate::allowlist::{load_allowlist, suppress_detection};
 use crate::baseline::{BaselineDeviationConfig, build_baseline_summaries};
-use crate::detection::{detect_parsed_source_records, summarize_parsed_source_activity};
+use crate::detection::{
+    EffectiveMatchSnapshot, PolicyMatchAccounting, account_policy_matches,
+    detect_parsed_source_records, detect_parsed_source_records_with_snapshot,
+    summarize_parsed_source_activity,
+};
 use crate::discovery::{
     DiscoveryError, discover_sources_with_projects, discover_sources_with_projects_best_effort,
     discover_watch_roots_with_projects, is_fixture_root,
@@ -656,7 +660,9 @@ fn run_scan(
         &[],
     )?;
     let diagnostics = super::rule_diagnostics_value(&resolution.diagnostics);
+    let policy_active = config.execution.policy_path.is_some();
     let rule_set = resolution.rule_set;
+    let merged_rule_set = resolution.merged_rule_set;
     let mut effective_configuration = config.execution.effective_configuration.clone();
     effective_configuration["rules"] = {
         let mut rules = effective_configuration["rules"].clone();
@@ -666,7 +672,6 @@ fn run_scan(
     };
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
-    let policy_active = config.execution.policy_path.is_some();
     let allowlist = load_allowlist(config.execution.allowlist_path)?;
     let mut state = ScanState::load(config.execution.state_path)?;
     let state_probe = match save_policy {
@@ -728,20 +733,35 @@ fn run_scan(
     } else {
         Vec::new()
     };
-    let mut detections = parsed_sources
-        .iter()
-        .flat_map(|parsed_source| match &parsed_source.records {
-            Ok(records) => detect_parsed_source_records(&parsed_source.source, &rule_set, records)
-                .into_iter()
-                .map(|event| (parsed_source.source.clone(), event))
-                .collect::<Vec<_>>(),
-            Err(ParseError::Empty) => Vec::new(),
-            Err(error) => vec![(
+    let mut effective_match_snapshots = Vec::new();
+    let mut detections = Vec::new();
+    for parsed_source in &parsed_sources {
+        match &parsed_source.records {
+            Ok(records) if policy_active => {
+                let (events, snapshot) = detect_parsed_source_records_with_snapshot(
+                    &parsed_source.source,
+                    &rule_set,
+                    records,
+                );
+                detections.extend(
+                    events
+                        .into_iter()
+                        .map(|event| (parsed_source.source.clone(), event)),
+                );
+                effective_match_snapshots.push(snapshot);
+            }
+            Ok(records) => detections.extend(
+                detect_parsed_source_records(&parsed_source.source, &rule_set, records)
+                    .into_iter()
+                    .map(|event| (parsed_source.source.clone(), event)),
+            ),
+            Err(ParseError::Empty) => {}
+            Err(error) => detections.push((
                 parsed_source.source.clone(),
                 scanner_error_event(&parsed_source.source, error),
-            )],
-        })
-        .collect::<Vec<_>>();
+            )),
+        }
+    }
     let mut detection_flow = detection_flow_accounting(&detections);
     let mut suppressed_count = 0_usize;
     for (source, detection) in &mut detections {
@@ -823,6 +843,17 @@ fn run_scan(
         }));
     }
     let has_operational_alerts = !operational_alerts.is_empty();
+
+    let pre_policy_rule_set = if policy_active {
+        Some(merged_rule_set.compile(None))
+    } else {
+        None
+    };
+    detection_flow.policy_match_accounting = compute_policy_match_accounting(
+        policy_active,
+        pre_policy_rule_set.as_ref(),
+        &effective_match_snapshots,
+    );
 
     let inventory_health_change = source_inventory_change
         .as_ref()
@@ -1477,6 +1508,13 @@ struct DetectionFlowAccounting {
     allowlist_marked_detection_count: usize,
     state_deduplicated_detection_count: usize,
     emitted_detection_count: usize,
+    policy_match_accounting: PolicyMatchAccountingState,
+}
+
+enum PolicyMatchAccountingState {
+    NotApplicable,
+    Available(PolicyMatchAccounting),
+    Unavailable,
 }
 
 fn detection_flow_accounting(detections: &[(Source, Event)]) -> DetectionFlowAccounting {
@@ -1486,6 +1524,7 @@ fn detection_flow_accounting(detections: &[(Source, Event)]) -> DetectionFlowAcc
         allowlist_marked_detection_count: 0,
         state_deduplicated_detection_count: 0,
         emitted_detection_count: 0,
+        policy_match_accounting: PolicyMatchAccountingState::NotApplicable,
     };
     for (_, event) in detections {
         if event.event_type == "detection" {
@@ -1494,6 +1533,54 @@ fn detection_flow_accounting(detections: &[(Source, Event)]) -> DetectionFlowAcc
         }
     }
     accounting
+}
+
+fn compute_policy_match_accounting(
+    policy_active: bool,
+    pre_policy_rule_set: Option<
+        &Result<telltale_rules::CompiledRuleSet, Box<dyn std::error::Error>>,
+    >,
+    snapshots: &[EffectiveMatchSnapshot],
+) -> PolicyMatchAccountingState {
+    if !policy_active {
+        return PolicyMatchAccountingState::NotApplicable;
+    }
+    let Some(Ok(pre_policy_rule_set)) = pre_policy_rule_set else {
+        return PolicyMatchAccountingState::Unavailable;
+    };
+
+    let mut total = PolicyMatchAccounting {
+        pre_policy_detection_candidate_count: 0,
+        fully_filtered_detection_candidate_count: 0,
+        filtered_rule_id_count: 0,
+    };
+    for snapshot in snapshots {
+        let Ok(accounting) = account_policy_matches(snapshot, pre_policy_rule_set) else {
+            return PolicyMatchAccountingState::Unavailable;
+        };
+        let Some(value) = total
+            .pre_policy_detection_candidate_count
+            .checked_add(accounting.pre_policy_detection_candidate_count)
+        else {
+            return PolicyMatchAccountingState::Unavailable;
+        };
+        total.pre_policy_detection_candidate_count = value;
+        let Some(value) = total
+            .fully_filtered_detection_candidate_count
+            .checked_add(accounting.fully_filtered_detection_candidate_count)
+        else {
+            return PolicyMatchAccountingState::Unavailable;
+        };
+        total.fully_filtered_detection_candidate_count = value;
+        let Some(value) = total
+            .filtered_rule_id_count
+            .checked_add(accounting.filtered_rule_id_count)
+        else {
+            return PolicyMatchAccountingState::Unavailable;
+        };
+        total.filtered_rule_id_count = value;
+    }
+    PolicyMatchAccountingState::Available(total)
 }
 
 impl SourceProcessingAccounting {
@@ -1510,21 +1597,26 @@ impl SourceProcessingAccounting {
 }
 
 impl DetectionFlowAccounting {
-    fn json(&self, policy_active: bool) -> serde_json::Value {
-        let policy_match_accounting = if policy_active {
-            serde_json::json!({
-                "status": "unavailable_effective_rules_only",
-                "pre_policy_detection_candidate_count": null,
-                "fully_filtered_detection_candidate_count": null,
-                "filtered_rule_id_count": null,
-            })
-        } else {
-            serde_json::json!({
+    fn json(&self, _policy_active: bool) -> serde_json::Value {
+        let policy_match_accounting = match &self.policy_match_accounting {
+            PolicyMatchAccountingState::NotApplicable => serde_json::json!({
                 "status": "not_applicable",
                 "pre_policy_detection_candidate_count": null,
                 "fully_filtered_detection_candidate_count": null,
                 "filtered_rule_id_count": null,
-            })
+            }),
+            PolicyMatchAccountingState::Available(accounting) => serde_json::json!({
+                "status": "available",
+                "pre_policy_detection_candidate_count": accounting.pre_policy_detection_candidate_count,
+                "fully_filtered_detection_candidate_count": accounting.fully_filtered_detection_candidate_count,
+                "filtered_rule_id_count": accounting.filtered_rule_id_count,
+            }),
+            PolicyMatchAccountingState::Unavailable => serde_json::json!({
+                "status": "unavailable",
+                "pre_policy_detection_candidate_count": null,
+                "fully_filtered_detection_candidate_count": null,
+                "filtered_rule_id_count": null,
+            }),
         };
         serde_json::json!({
             "effective_detection_candidate_count": self.effective_detection_candidate_count,
@@ -2096,6 +2188,27 @@ mod tests {
     }
 
     #[test]
+    fn policy_accounting_compile_failure_is_bounded_and_private() {
+        let failed: Result<telltale_rules::CompiledRuleSet, Box<dyn std::error::Error>> =
+            Err("synthetic diagnostic compile failure".into());
+        let state = compute_policy_match_accounting(true, Some(&failed), &[]);
+        let flow = DetectionFlowAccounting {
+            effective_detection_candidate_count: 0,
+            matched_rule_id_count: 0,
+            allowlist_marked_detection_count: 0,
+            state_deduplicated_detection_count: 0,
+            emitted_detection_count: 0,
+            policy_match_accounting: state,
+        };
+        let accounting = flow.json(true)["policy_match_accounting"].clone();
+        assert_eq!(accounting["status"], "unavailable");
+        assert!(accounting["pre_policy_detection_candidate_count"].is_null());
+        assert!(accounting["fully_filtered_detection_candidate_count"].is_null());
+        assert!(accounting["filtered_rule_id_count"].is_null());
+        assert!(!accounting.to_string().contains("synthetic"));
+    }
+
+    #[test]
     fn suspicious_zero_warning_predicates_keep_empty_and_dedup_cases_distinct() {
         let discovery = test_discovery_accounting();
         let flow = DetectionFlowAccounting {
@@ -2104,6 +2217,7 @@ mod tests {
             allowlist_marked_detection_count: 0,
             state_deduplicated_detection_count: 0,
             emitted_detection_count: 0,
+            policy_match_accounting: PolicyMatchAccountingState::NotApplicable,
         };
         let no_sources = SourceProcessingAccounting {
             selected_source_count: 0,
