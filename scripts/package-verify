@@ -76,6 +76,15 @@ run_package telltale-sources telltale-schema
 run_package telltale-detect telltale-schema telltale-rules telltale-sources
 run_package telltale-core telltale-schema telltale-rules telltale-sources telltale-detect
 run_package telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect
+for historical_path in \
+    schemas/historical/README.md \
+    schemas/historical/event-1.0.schema.json \
+    schemas/historical/event-2.0.schema.json; do
+    test -f "$(package_path telltale-cli)/$historical_path" || {
+        echo "packaged CLI is missing $historical_path" >&2
+        exit 1
+    }
+done
 
 run_normalized_test() {
     package=$1

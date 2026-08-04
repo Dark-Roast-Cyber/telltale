@@ -18,6 +18,8 @@ use telltale_sources::clients::supported_clients;
 
 mod coverage;
 mod export;
+#[allow(dead_code)]
+pub mod historical;
 mod rules_server;
 mod scan;
 

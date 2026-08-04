@@ -98,6 +98,8 @@ fn package_boundaries_and_bundled_rules_are_explicit() {
         "build.rs",
         "benches/benchmarks.rs",
         "src/**",
+        "schemas/historical/*.json",
+        "schemas/historical/README.md",
         "config/rules/tool-call-regex.yaml",
         "tests/fixtures/**",
     ] {

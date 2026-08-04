@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-04-01T12:01:00.000Z",
+  "observed_at": "2026-04-01T12:01:00.000Z",
+  "ingested_at": "2026-04-01T12:01:00.000Z",
+  "time_source": "observed",
+  "time_confidence": "low",
+  "time_override_reason": "missing_source_timestamp",
+  "schema_version": "1.0",
+  "event_id": "adr-00000000-0000-4000-8000-000000000003",
+  "event_type": "health",
+  "severity": "informational",
+  "risk_score": 0,
+  "client": "codex",
+  "session_id": "scanner",
+  "tags": ["scanner", "discovery"],
+  "evidence": [
+    {
+      "field": "source_inventory",
+      "redacted_value": "sources=1; client_source_kinds=1",
+      "hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "source_counts": {
+    "codex.jsonl": 1
+  },
+  "component": "scanner",
+  "check_name": "source_discovery",
+  "status": "ok",
+  "adr_version": "0.1.0 (72e04e545938)",
+  "scan_duration_ms": 17,
+  "rule_count": 18,
+  "threshold_config": {
+    "low": 20,
+    "medium": 50,
+    "triage": 70,
+    "alert": 90
+  },
+  "emitted_count": 1,
+  "suppressed_count": 0,
+  "scanner_error_count": 0,
+  "unknown_extension": {
+    "nested": [true, null, 7]
+  }
+}

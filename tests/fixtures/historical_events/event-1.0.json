@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-04-01T12:00:00.000Z",
+  "event_time": "2026-04-01T12:00:00.000Z",
+  "observed_at": "2026-04-01T12:00:01.000Z",
+  "ingested_at": "2026-04-01T12:00:01.000Z",
+  "time_source": "source",
+  "time_confidence": "high",
+  "schema_version": "1.0",
+  "event_id": "adr-00000000-0000-4000-8000-000000000001",
+  "event_type": "detection",
+  "severity": "critical",
+  "risk_score": 90,
+  "client": "codex",
+  "agent": "codex",
+  "model": "o3",
+  "provider": "openai",
+  "session_id": "fixture-session-1",
+  "source_path_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "tool_name": "shell",
+  "rule_ids": ["secret.env.read"],
+  "categories": ["secret_access"],
+  "detection_classes": ["security_detection"],
+  "signal_types": ["atomic"],
+  "analytic_intents": ["alert"],
+  "atlas_tags": ["atlas:AML.T0051"],
+  "tags": ["historical", "fixture"],
+  "evidence": [
+    {
+      "field": "command",
+      "redacted_value": "cat [REDACTED]",
+      "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "rule_id": "secret.env.read"
+    }
+  ],
+  "triage": {
+    "required": true,
+    "verdict": "malicious",
+    "confidence": 0.97,
+    "reason": "synthetic historical fixture"
+  },
+  "response": {
+    "recommended_action": "investigate_immediately",
+    "response_playbook": "adr-playbook-credential-access",
+    "investigation_summary": "critical ADR detection matched secret.env.read in secret_access; review redacted evidence, timeline anchors when present, and the local source session before containment.",
+    "escalation": "security_review_required"
+  },
+  "unknown_extension": {
+    "nested": [true, null, 7]
+  }
+}

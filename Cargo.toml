@@ -58,6 +58,8 @@ include = [
     "/build.rs",
     "/benches/benchmarks.rs",
     "/src/**",
+    "/schemas/historical/*.json",
+    "/schemas/historical/README.md",
     "/config/rules/tool-call-regex.yaml",
     "/tests/fixtures/**",
 ]
@@ -81,10 +83,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 ctrlc = { version = "3.5.2", features = ["termination"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 base64 = "0.22"
+jsonschema = { version = "0.29", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-jsonschema = "0.29"
 tempfile = "3.14"
 
 [[bench]]

@@ -396,6 +396,8 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
 mod tests {
     use std::path::Path;
 
+    use serde_json::Value;
+
     use crate::baseline::{
         BASELINE_HOST_HASH_PREFIX, BaselineKey, BaselineObservationTotals, BaselineSummary,
         PathClass, baseline_host_identity,
@@ -537,6 +539,67 @@ mod tests {
         );
         assert!(state.baseline_snapshots.snapshots.is_empty());
         assert!(state.baseline_source_contributions.is_empty());
+    }
+
+    #[test]
+    fn legacy_scan_state_golden_covers_all_serialized_families_semantically() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/state/legacy-scan-state.json"
+        )))
+        .expect("legacy state fixture");
+        for field in [
+            "seen_source_fingerprints",
+            "seen_detection_fingerprints",
+            "baseline_snapshots",
+            "baseline_source_contributions",
+            "source_observations",
+            "sqlite_ingestion_cursors",
+            "install_inventory",
+        ] {
+            assert!(fixture.get(field).is_some(), "missing state family {field}");
+        }
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("legacy-scan-state.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("fixture JSON"),
+        )
+        .expect("write state fixture");
+
+        let state = ScanState::load(&path).expect("load state fixture");
+        let normalized = serde_json::to_value(&state).expect("state value");
+        assert_ne!(
+            normalized, fixture,
+            "raw baseline host is normalized on load"
+        );
+        assert_eq!(
+            normalized["baseline_source_contributions"]
+                .as_object()
+                .expect("source contributions")
+                .values()
+                .next()
+                .expect("source contribution")["snapshots"]
+                .as_object()
+                .expect("contribution snapshots")
+                .values()
+                .next()
+                .expect("contribution snapshot")["network_host_counts"]
+                [baseline_host_identity("internal.example.test")],
+            1
+        );
+        assert!(
+            !serde_json::to_string(&normalized)
+                .expect("normalized state JSON")
+                .contains("internal.example.test")
+        );
+
+        state.save(&path).expect("save state fixture");
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("saved state"))
+                .expect("saved state JSON");
+        assert_eq!(saved, normalized);
     }
 
     #[test]
