@@ -68,7 +68,7 @@
     "event_id": { "type": "string" },
     "event_type": {
       "type": "string",
-      "enum": ["activity", "detection", "triage", "scanner_error", "health", "correlation", "operational_alert", "session_risk_summary"]
+      "enum": ["activity", "detection", "triage", "scanner_error", "health", "correlation", "operational_alert", "session_risk_summary", "process_chain"]
     },
     "timestamp": { "type": "string", "format": "date-time" },
     "severity": {
@@ -255,7 +255,53 @@
     "active_policy_name": { "type": ["string", "null"] },
     "emitted_count": { "type": ["integer", "null"], "minimum": 0 },
     "suppressed_count": { "type": ["integer", "null"], "minimum": 0 },
-    "scanner_error_count": { "type": ["integer", "null"], "minimum": 0 }
+    "scanner_error_count": { "type": ["integer", "null"], "minimum": 0 },
+    "informational": { "type": ["boolean", "null"] },
+    "confidence": { "type": ["string", "null"], "enum": ["low", "medium", "high", null] },
+    "detection_reason": { "type": ["string", "null"] },
+    "mitre_attack_techniques": { "type": "array", "items": { "type": "string" } },
+    "risk_entity_type": { "type": ["string", "null"] },
+    "risk_entity_value": { "type": ["string", "null"] },
+    "process": {
+      "type": ["object", "null"],
+      "required": [
+        "source_process_name",
+        "target_process_name",
+        "source_process_inferred",
+        "rule_name",
+        "dedup_key",
+        "suppression_window_seconds",
+        "rule_severity"
+      ],
+      "properties": {
+        "host": { "type": ["string", "null"] },
+        "user": { "type": ["string", "null"] },
+        "source_process_name": { "type": "string" },
+        "source_process_path": { "type": ["string", "null"] },
+        "source_process_id": { "type": ["integer", "null"], "minimum": 0 },
+        "source_process_command_line": { "type": ["string", "null"] },
+        "target_process_name": { "type": "string" },
+        "target_process_path": { "type": ["string", "null"] },
+        "target_process_id": { "type": ["integer", "null"], "minimum": 0 },
+        "target_process_command_line": { "type": ["string", "null"] },
+        "parent_process_name": { "type": ["string", "null"] },
+        "parent_process_path": { "type": ["string", "null"] },
+        "source_event_id": { "type": ["string", "null"] },
+        "source_process_inferred": { "type": "boolean" },
+        "rule_name": { "type": "string" },
+        "secondary_rule_ids": { "type": "array", "items": { "type": "string" } },
+        "investigation_fields": { "type": "array", "items": { "type": "string" } },
+        "falsepositives": { "type": "array", "items": { "type": "string" } },
+        "dedup_key": { "type": "string" },
+        "suppression_window_seconds": { "type": "integer", "minimum": 0 },
+        "rule_severity": {
+          "type": "string",
+          "enum": ["informational", "low", "medium", "high", "critical"]
+        },
+        "risk_adjustment": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": true
 }

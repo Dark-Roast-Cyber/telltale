@@ -1046,6 +1046,15 @@ fn event_from_json_value(
         scanner_error_count: event
             .get("scanner_error_count")
             .and_then(|value| value.as_u64()),
+        informational: event.get("informational").and_then(|value| value.as_bool()),
+        confidence: optional_string(event, "confidence"),
+        detection_reason: optional_string(event, "detection_reason"),
+        mitre_attack_techniques: string_array(event, "mitre_attack_techniques"),
+        risk_entity_type: optional_string(event, "risk_entity_type"),
+        risk_entity_value: optional_string(event, "risk_entity_value"),
+        // Export replays events for summarisation and never re-serialises the
+        // process block, so it is dropped rather than partially rebuilt.
+        process: None,
     }))
 }
 

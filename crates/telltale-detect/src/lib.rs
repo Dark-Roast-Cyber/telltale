@@ -11,6 +11,7 @@ pub mod correlation;
 pub mod detection;
 #[cfg(feature = "source-io")]
 pub mod mcp;
+pub mod process_chain;
 pub mod timeline;
 
 #[cfg(all(test, feature = "source-io"))]

@@ -49,6 +49,23 @@ Default thresholds are configured by `ADR_RISK_THRESHOLD_LOW`, `ADR_RISK_THRESHO
 
 See [threat-taxonomy.md](threat-taxonomy.md) for the ADR category contract, current bundled rule mapping, and optional offline MITRE ATLAS tagging guidance.
 
+## Process-Chain Detections
+
+A second rule vocabulary evaluates parent/child process relationships and
+standalone process indicators, and emits its own `process_chain` events. It runs
+alongside the regex engine and does not change regex rule evaluation, regex
+scoring, or the session `detection` event.
+
+Process-chain rules add the `defense_evasion`, `command_and_control`,
+`discovery`, `credential_access`, `lateral_movement`, `impact`, and `collection`
+categories, and they emit informational events with `risk_score: 0` rather than
+staying silent, so weak steps can still anchor a correlated finding.
+
+See [process-chain-detections.md](process-chain-detections.md) for the scoring
+model, deduplication, correlation windows, false-positive controls, and the
+`process_chain` event schema. Set `ADR_PROCESS_CHAIN_DETECTIONS=0` to disable
+the pack for a scan.
+
 ## Configurable Rules And Policies
 
 ADR loads bundled default rules from the binary by default. Repeated `--rules`

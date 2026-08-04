@@ -96,6 +96,25 @@ Every rule should have a documented rationale for its severity level. This ratio
 - What is the blast radius if this behavior is malicious?
 - Does this rule fire alone or primarily as part of a chain?
 
+## Process-Chain Rules
+
+Process-chain rules use a different schema and a different pack
+(`crates/telltale-rules/data/process-chain.yaml`). They reuse the score bands in
+the table above — the compiler rejects a rule whose `score` falls outside its
+declared `severity` — and they add two obligations the regex pack does not have:
+
+- **Every match emits.** A rule may score `0`; it still produces an event,
+  marked `informational`. Never delete a rule to silence it; score it `0`.
+- **Overlapping interpretations are split by command line, not by severity.**
+  When one parent/child pair covers both routine administration and intrusion
+  activity, write two rules gated on `child_command_line_any` /
+  `child_command_line_none` rather than one rule with an averaged score.
+
+The pack is generated. Edit `scripts/dev/generate-process-chain-rules.py` and
+re-run it; do not hand-edit the YAML. Full authoring guidance, including the
+scoring derivation and deduplication contract, is in
+[process-chain-detections.md](process-chain-detections.md).
+
 ## Chain Modifiers
 
 Chain modifiers in the `modifiers:` section must include:

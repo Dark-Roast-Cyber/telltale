@@ -95,6 +95,79 @@ pub struct Event {
     pub suppressed_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scanner_error_count: Option<u64>,
+    /// Present on detections that scored `0`. An informational event still
+    /// carries full rule context; it simply contributes no risk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub informational: Option<bool>,
+    /// Fidelity of the match: `low`, `medium`, or `high`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
+    /// Redaction-safe sentence explaining why the rule fired.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detection_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mitre_attack_techniques: Vec<String>,
+    /// Entity that should accumulate this event's risk (`host`, `user`, or
+    /// `session`). Informational events name the entity but add no risk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_entity_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_entity_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessContext>,
+}
+
+/// Process-chain context for `process_chain` detections.
+///
+/// `source_process_*` is the parent, `target_process_*` is the child, and
+/// `parent_process_*` is the grandparent when a source reports one. Paths and
+/// command lines are preserved as observed, after redaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProcessContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    pub source_process_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_process_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_process_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_process_command_line: Option<String>,
+    pub target_process_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_process_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_process_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_process_command_line: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_process_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_process_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_event_id: Option<String>,
+    /// True when the parent was derived from command-line shape rather than
+    /// reported by the source.
+    pub source_process_inferred: bool,
+    pub rule_name: String,
+    /// Rules that described the same behaviour and lost deduplication.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub secondary_rule_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub investigation_fields: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub falsepositives: Vec<String>,
+    pub dedup_key: String,
+    pub suppression_window_seconds: u64,
+    /// Severity declared by the rule. The top-level `severity` stays
+    /// threshold-derived so that process-chain events band identically to every
+    /// other Telltale event; this field preserves the rule author's intent.
+    pub rule_severity: String,
+    /// Set when a false-positive control lowered the score.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_adjustment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -331,6 +404,15 @@ impl EventBuilder {
             emitted_count: self.emitted_count,
             suppressed_count: self.suppressed_count,
             scanner_error_count: self.scanner_error_count,
+            // Detection-detail fields are attached by the constructors that
+            // have them; every other event type leaves them unset.
+            informational: None,
+            confidence: None,
+            detection_reason: None,
+            mitre_attack_techniques: Vec::new(),
+            risk_entity_type: None,
+            risk_entity_value: None,
+            process: None,
         }
     }
 }
@@ -513,6 +595,128 @@ pub fn detection_event(
         scanner_error_count: None,
     }
     .build())
+}
+
+#[derive(Debug)]
+pub struct ProcessChainEventInput {
+    pub client: ClientId,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub session_id: String,
+    pub source_path_hash: String,
+    pub tool_name: Option<String>,
+    pub rule_ids: Vec<String>,
+    pub categories: Vec<String>,
+    pub detection_classes: Vec<String>,
+    pub signal_types: Vec<String>,
+    pub analytic_intents: Vec<String>,
+    pub tags: Vec<String>,
+    pub evidence: Vec<Evidence>,
+    pub risk_contributions: Vec<RiskContribution>,
+    pub event_time: Option<String>,
+    pub confidence: String,
+    pub detection_reason: String,
+    pub mitre_attack_techniques: Vec<String>,
+    pub risk_entity_type: String,
+    pub risk_entity_value: Option<String>,
+    pub process: ProcessContext,
+}
+
+/// Builds a `process_chain` event.
+///
+/// Emission and risk are independent: an input with no risk contributions still
+/// produces an event, marked `informational` with `risk_score: 0`. Command
+/// lines and paths in `process` are redacted before they reach the event.
+pub fn process_chain_event(
+    input: ProcessChainEventInput,
+) -> Result<Event, crate::scoring::RiskAccountingError> {
+    validate_schema_two_rule_ids(&input.rule_ids)?;
+    let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
+    // Process-chain risk must be attributable to a rule ID, exactly like a
+    // regular detection.
+    validate_risk_accounting_scope("detection", &input.rule_ids, &risk_contributions)?;
+    let risk_score = score_for_contributions(&risk_contributions)?;
+    let thresholds = load_thresholds();
+    let assessment = assess_risk_with_thresholds(risk_score, thresholds);
+    let response = time::response_metadata(
+        assessment.severity.as_str(),
+        &input.rule_ids,
+        &input.categories,
+        assessment.triage_required,
+    );
+
+    let mut event = EventBuilder {
+        event_time: input.event_time,
+        event_type: "process_chain",
+        severity: assessment.severity.as_str(),
+        risk_score,
+        risk_contributions,
+        client: input.client.as_str().to_string(),
+        agent: input.agent,
+        model: input.model,
+        provider: input.provider,
+        session_id: input.session_id,
+        workspace: None,
+        source_path_hash: Some(input.source_path_hash),
+        tool_name: input.tool_name,
+        rule_ids: input.rule_ids,
+        categories: input.categories,
+        detection_classes: input.detection_classes,
+        signal_types: input.signal_types,
+        analytic_intents: input.analytic_intents,
+        atlas_tags: Vec::new(),
+        tags: input.tags,
+        evidence: input.evidence,
+        triage: None,
+        response: Some(response),
+        source_counts: None,
+        component: None,
+        check_name: None,
+        status: None,
+        adr_version: None,
+        scan_duration_ms: None,
+        rule_count: None,
+        threshold_config: None,
+        active_policy_name: None,
+        emitted_count: None,
+        suppressed_count: None,
+        scanner_error_count: None,
+    }
+    .build();
+
+    event.informational = Some(risk_score == 0);
+    event.confidence = Some(input.confidence);
+    event.detection_reason = Some(redact_sensitive_text(&input.detection_reason));
+    event.mitre_attack_techniques = input.mitre_attack_techniques;
+    event.risk_entity_type = Some(input.risk_entity_type);
+    event.risk_entity_value = input.risk_entity_value;
+    event.process = Some(redact_process_context(input.process));
+    Ok(event)
+}
+
+fn redact_process_context(mut process: ProcessContext) -> ProcessContext {
+    process.source_process_command_line = process
+        .source_process_command_line
+        .as_deref()
+        .map(redact_sensitive_text);
+    process.target_process_command_line = process
+        .target_process_command_line
+        .as_deref()
+        .map(redact_sensitive_text);
+    process.source_process_path = process
+        .source_process_path
+        .as_deref()
+        .map(redact_sensitive_text);
+    process.target_process_path = process
+        .target_process_path
+        .as_deref()
+        .map(redact_sensitive_text);
+    process.parent_process_path = process
+        .parent_process_path
+        .as_deref()
+        .map(redact_sensitive_text);
+    process
 }
 
 pub fn activity_event(

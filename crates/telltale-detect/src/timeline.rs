@@ -444,6 +444,13 @@ mod tests {
             emitted_count: None,
             suppressed_count: None,
             scanner_error_count: None,
+            informational: None,
+            confidence: None,
+            detection_reason: None,
+            mitre_attack_techniques: Vec::new(),
+            risk_entity_type: None,
+            risk_entity_value: None,
+            process: None,
         }
     }
 

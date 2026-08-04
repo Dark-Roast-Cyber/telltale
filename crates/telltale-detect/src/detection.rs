@@ -687,6 +687,8 @@ mod tests {
     mod mcp_injection;
     #[path = "policy_accounting.rs"]
     mod policy_accounting;
+    #[path = "process_chain.rs"]
+    mod process_chain;
     #[path = "resilience.rs"]
     mod resilience;
     #[path = "secret_access.rs"]

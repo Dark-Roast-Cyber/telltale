@@ -73,6 +73,13 @@ When authoring or reviewing detection content:
 | `credential_harvesting` | The agent targeted local, cloud, container, or orchestration credential stores. | `.aws/credentials`, `.kube/config`, Docker config, service-account files. | `credential.cloud_harvest` |
 | `supply_chain` | The agent attempted package publishing or release actions. | `npm publish`, `cargo publish`, `twine upload`, `gem push`. | `supply_chain.publish` |
 | `mcp_enumeration` | The agent probed MCP servers, tools, or capabilities. | Repeated `tools/list`, MCP server probing, enumeration language. | `mcp.server_enumeration` |
+| `defense_evasion` | LOLBin proxy execution, log or recovery tampering, or interference with security tooling. | `rundll32`, `mshta`, `regsvr32`, `wevtutil cl`, `fltmc unload`. | `procchain.evasion.*` |
+| `command_and_control` | Download cradles, remote-management abuse, or tunnelling. | `certutil -urlcache`, RMM agents spawning shells, `ngrok`, `chisel`. | `procchain.c2.*` |
+| `discovery` | Host, account, network, service, or directory enumeration. | `whoami`, `net user`, `nltest`, `adfind`, `sharphound`. | `procchain.discovery.*` |
+| `credential_access` | Access to credential stores, LSASS memory, registry hives, or the AD database. | `mimikatz`, `procdump lsass`, `reg save hklm\\sam`, `ntdsutil ifm`. | `procchain.credaccess.*` |
+| `lateral_movement` | Remote execution against other hosts. | PsExec, WinRM, DCOM, `sshd`, GPO deployment. | `procchain.lateral.*` |
+| `impact` | Destruction of recovery data or availability. | `vssadmin delete shadows`, `wbadmin delete catalog`, `bcdedit recoveryenabled no`. | `procchain.impact.*` |
+| `collection` | Local data staged for transfer. | `rar`/`7z` archive creation, especially password-protected. | `procchain.collection.*` |
 
 ## Derived Chain Modifiers
 
@@ -88,6 +95,11 @@ Chain modifiers add score and derived rule IDs when multiple categories or rules
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | Credential harvesting appeared near package publishing. |
 | `chain.harvest_then_exfil` | `credential_harvesting` + `exfiltration` | Credential harvesting appeared near data theft behavior. |
 | `chain.mcp_enumeration_then_injection` | `mcp_enumeration` + `mcp_prompt_injection` | MCP probing appeared near prompt-injection behavior. |
+
+Process-chain correlations are separate from these modifiers: they require an
+ordered sequence within a time window and entity boundary rather than
+co-occurrence within a session. See
+[process-chain-detections.md](process-chain-detections.md).
 
 ## ATLAS Alignment Guidance
 

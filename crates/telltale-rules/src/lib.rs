@@ -6,6 +6,8 @@
 //! normalized fields as in-memory values, which keeps the engine reusable for
 //! batch session scanning and future inline inference-proxy evaluation alike.
 
+pub mod process_chain;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

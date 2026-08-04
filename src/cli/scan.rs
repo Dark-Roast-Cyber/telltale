@@ -33,6 +33,7 @@ use crate::install_inventory::{
 };
 use crate::mcp::{discover_mcp_inventory, discover_mcp_usage};
 use crate::parser::{ParseError, ParseOptions, parse_source_records_with_options};
+use crate::process_chain::{ProcessChainConfig, detect_process_chains};
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
@@ -735,7 +736,26 @@ fn run_scan(
     };
     let mut effective_match_snapshots = Vec::new();
     let mut detections = Vec::new();
+    let process_chain_rules = load_process_chain_rules_if_enabled();
     for parsed_source in &parsed_sources {
+        if let (Some(rules), Ok(records)) = (process_chain_rules.as_ref(), &parsed_source.records) {
+            match detect_process_chains(
+                &parsed_source.source,
+                rules,
+                records,
+                &ProcessChainConfig::default(),
+            ) {
+                Ok(events) => detections.extend(
+                    events
+                        .into_iter()
+                        .map(|event| (parsed_source.source.clone(), event)),
+                ),
+                Err(error) => detections.push((
+                    parsed_source.source.clone(),
+                    scanner_error_event(&parsed_source.source, &error),
+                )),
+            }
+        }
         match &parsed_source.records {
             Ok(records) if policy_active => {
                 let (events, snapshot) = detect_parsed_source_records_with_snapshot(
@@ -1515,6 +1535,23 @@ enum PolicyMatchAccountingState {
     NotApplicable,
     Available(PolicyMatchAccounting),
     Unavailable,
+}
+
+/// Compiles the bundled process-chain pack unless the operator disabled it.
+///
+/// Process-chain detections emit their own `process_chain` events and never
+/// alter the session `detection` event, so this stays a load-or-skip decision
+/// rather than another axis on the scan config. Set
+/// `ADR_PROCESS_CHAIN_DETECTIONS=0` to turn them off.
+fn load_process_chain_rules_if_enabled()
+-> Option<telltale_rules::process_chain::CompiledProcessChainRules> {
+    let enabled = std::env::var("ADR_PROCESS_CHAIN_DETECTIONS")
+        .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
+        .unwrap_or(true);
+    if !enabled {
+        return None;
+    }
+    telltale_rules::process_chain::load_default_process_chain_rules().ok()
 }
 
 fn detection_flow_accounting(detections: &[(Source, Event)]) -> DetectionFlowAccounting {
