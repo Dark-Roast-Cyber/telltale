@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod event;
+mod file_lock;
 mod rules;
 mod schema;
 mod sink;

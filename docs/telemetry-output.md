@@ -143,7 +143,15 @@ never receives its own failure alert, so delivery problems cannot cascade.
 These alerts bypass duplicate suppression and are not counted in the health
 event's `emitted_count`; the scan's stdout summary also lists failures under
 `sink_failures`. A failure writing the local JSONL sink itself still aborts
-the scan, because that file is the durable record.
+the scan, because that file is the durable record. Local JSONL serializes the
+complete batch before opening the file, holds a permanent sidecar lock across
+rotation and append, flushes and synchronizes the file before returning, and
+therefore before scanner state commit. Empty batches return before lock,
+rotation, or file creation. A trailing partial record is refused
+rather than silently concatenated or discarded; repair or replace that file
+before retrying. On Unix, file creation and rotation also sync the parent
+directory. On Windows, writable file handles are flushed and renames use
+write-through semantics; parent-directory durability is not asserted.
 
 ## Delivery Guarantees
 
@@ -161,7 +169,13 @@ exhaustion, or process exit/restart while the endpoint is unavailable, events
 may be lost. Elastic uses `_id = event_id`, so a redelivery overwrites the same
 document rather than duplicating it, but this is not an exactly-once guarantee.
 Elastic item-level Bulk API errors are observable failures and are not retried by
-the current sink.
+the current sink. These are at-least-once-oriented handoff semantics, not an
+exactly-once guarantee: crashes around delivery, retries, and external rotation
+can still require downstream deduplication.
+
+These local durability statements cover flushed file contents and the
+platform-specific parent-directory behavior above; they are not a claim of
+crash-proof delivery across every filesystem or operating-system failure.
 
 `telltale config validate` reports the `outputs.d` delivery posture, while each
 scan summary reports its effective posture and delivery status, including

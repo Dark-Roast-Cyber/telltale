@@ -68,6 +68,10 @@ The Cargo/package version is not the version of every data contract:
 - **Configuration version:** configuration documents such as `version: 1` have
   their own migration rules. A package release does not automatically change a
   configuration version.
+- **Native scanner state version:** standalone persisted state declares
+  `state_schema_version: "1.0"`. Legacy unversioned state is not loaded by
+  normal scanning; use `telltale migrate state --from <OLD> --to <NEW>`.
+  State migration is explicit and does not migrate historical events.
 - **Rule language and bundled rules:** compatible detections and rule updates
   remain on the current `0.3.x` line, then `0.5.x` after the 0.5.0 release.
   Removing syntax, changing evaluation meaning incompatibly, or invalidating

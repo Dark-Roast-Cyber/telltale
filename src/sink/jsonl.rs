@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::{Event, append_jsonl_events};
+use crate::event::{Event, append_jsonl_bytes, ensure_jsonl_tail, serialize_jsonl_events};
+use crate::file_lock::{RotationNamespace, SidecarLock, atomic_rename_no_replace, sync_parent};
 use crate::sink::EventSink;
 
 /// Built-in size-based log rotation configuration.
@@ -70,6 +71,18 @@ impl LocalJsonlSink {
         self.name = name.into();
         self
     }
+
+    pub(crate) fn rotation_namespace(
+        &self,
+    ) -> Result<Option<RotationNamespace>, Box<dyn std::error::Error>> {
+        if !self.rotation.is_enabled() {
+            return Ok(None);
+        }
+        let (stem, extension) = rotation_components(&self.path)?;
+        Ok(Some(RotationNamespace::from_active_path(
+            &self.path, &stem, &extension,
+        )))
+    }
 }
 
 impl EventSink for LocalJsonlSink {
@@ -78,74 +91,92 @@ impl EventSink for LocalJsonlSink {
     }
 
     fn emit(&self, events: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
-        if self.rotation.is_enabled() {
-            maybe_rotate(&self.path, &self.rotation)?;
+        let bytes = serialize_jsonl_events(events)?;
+        if bytes.is_empty() {
+            return Ok(());
         }
-        append_jsonl_events(&self.path, events)
+        if self.rotation.is_enabled() {
+            rotation_components(&self.path)?;
+        }
+        let lock = SidecarLock::acquire(&self.path)?;
+        ensure_jsonl_tail(&self.path)?;
+        let rotated = if self.rotation.is_enabled() {
+            maybe_rotate(&self.path, &self.rotation)?
+        } else {
+            false
+        };
+        let created = append_jsonl_bytes(&self.path, &bytes)?;
+        if rotated || created {
+            sync_parent(&self.path)?;
+        }
+        lock.verify_lock()?;
+        Ok(())
     }
 }
 
 /// Check if the active file exceeds the rotation threshold and rotate if so.
-fn maybe_rotate(path: &Path, config: &RotationConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn maybe_rotate(path: &Path, config: &RotationConfig) -> Result<bool, Box<dyn std::error::Error>> {
     let size = match fs::metadata(path) {
         Ok(meta) => meta.len(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => return Err(err.into()),
     };
 
     if size < config.max_size_bytes {
-        return Ok(());
+        return Ok(false);
     }
 
     rotate_file(path, config)
 }
 
 /// Rename the active file to a date-stamped rotated file and clean up old rotations.
-fn rotate_file(path: &Path, config: &RotationConfig) -> Result<(), Box<dyn std::error::Error>> {
+fn rotate_file(path: &Path, config: &RotationConfig) -> Result<bool, Box<dyn std::error::Error>> {
     let date = current_date_utc();
-    let rotated = rotated_path(path, &date);
+    let rotated = rotated_path(path, &date)?;
 
     // If the date-stamped file already exists (same-day rotation), append a counter.
     let mut final_path = rotated.clone();
     let mut counter = 1;
     while final_path.exists() {
-        final_path = rotated_with_counter(path, &date, counter);
+        final_path = rotated_with_counter(path, &date, counter)?;
         counter += 1;
     }
 
-    fs::rename(path, &final_path)?;
+    atomic_rename_no_replace(path, &final_path)?;
 
     cleanup_rotated_files(path, config.keep)?;
-
-    Ok(())
+    sync_parent(path)?;
+    Ok(true)
 }
 
 /// Generate the rotated file path: `adr-events-2026-06-21.jsonl`
-fn rotated_path(active: &Path, date: &str) -> PathBuf {
-    let stem = active
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .unwrap_or("adr-events");
-    let ext = active
-        .extension()
-        .and_then(OsStr::to_str)
-        .unwrap_or("jsonl");
+fn rotated_path(active: &Path, date: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let (stem, ext) = rotation_components(active)?;
     let parent = active.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{stem}-{date}.{ext}"))
+    Ok(parent.join(format!("{stem}-{date}.{ext}")))
 }
 
 /// Generate a counter-suffixed rotated path: `adr-events-2026-06-21.1.jsonl`
-fn rotated_with_counter(active: &Path, date: &str, counter: usize) -> PathBuf {
+fn rotated_with_counter(
+    active: &Path,
+    date: &str,
+    counter: usize,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let (stem, ext) = rotation_components(active)?;
+    let parent = active.parent().unwrap_or_else(|| Path::new("."));
+    Ok(parent.join(format!("{stem}-{date}.{counter}.{ext}")))
+}
+
+fn rotation_components(active: &Path) -> Result<(String, String), Box<dyn std::error::Error>> {
     let stem = active
         .file_stem()
         .and_then(OsStr::to_str)
-        .unwrap_or("adr-events");
+        .ok_or("built-in rotation requires a UTF-8 active filename")?;
     let ext = active
         .extension()
         .and_then(OsStr::to_str)
-        .unwrap_or("jsonl");
-    let parent = active.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{stem}-{date}.{counter}.{ext}"))
+        .ok_or("built-in rotation requires a UTF-8 active filename")?;
+    Ok((stem.to_string(), ext.to_string()))
 }
 
 /// A parsed rotated file name, e.g. `adr-events-2026-06-21.3.jsonl` → (date, counter).
@@ -211,26 +242,20 @@ fn is_valid_date(s: &str) -> bool {
 /// externally-managed files (e.g., logrotate's `adr-events-20260621.jsonl`).
 fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::error::Error>> {
     let parent = active.parent().unwrap_or_else(|| Path::new("."));
-    let stem = active
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .unwrap_or("adr-events");
-    let ext = active
-        .extension()
-        .and_then(OsStr::to_str)
-        .unwrap_or("jsonl");
+    let (stem, ext) = rotation_components(active)?;
 
-    let mut rotated: Vec<RotatedFileEntry> = fs::read_dir(parent)?
-        .filter_map(Result::ok)
+    let entries: Vec<_> = fs::read_dir(parent)?.collect::<Result<_, _>>()?;
+    let mut rotated: Vec<RotatedFileEntry> = entries
+        .into_iter()
         .filter_map(|entry| {
             let name = entry.file_name();
-            let name = name.to_string_lossy();
+            let name = name.to_str()?;
             // Skip directories and symlinks — only manage regular files.
             let file_type = entry.file_type().ok()?;
             if !file_type.is_file() {
                 return None;
             }
-            let (date, counter) = parse_rotated_name(&name, stem, ext)?;
+            let (date, counter) = parse_rotated_name(name, &stem, &ext)?;
             Some(RotatedFileEntry {
                 date,
                 counter,
@@ -292,6 +317,7 @@ fn date_from_days_since_epoch(days: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
 
     use tempfile::tempdir;
@@ -301,7 +327,7 @@ mod tests {
         maybe_rotate, parse_rotated_name, rotated_path,
     };
     use crate::event::health_event_with_metadata;
-    use crate::sink::emit_events;
+    use crate::sink::{EventSink, emit_events};
 
     fn make_health_event() -> crate::event::Event {
         health_event_with_metadata(crate::event::HealthEventInput {
@@ -405,9 +431,84 @@ mod tests {
     }
 
     #[test]
+    fn trailing_partial_jsonl_record_is_refused() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("logs/adr-events.jsonl");
+        std::fs::create_dir_all(log_path.parent().expect("parent")).expect("parent");
+        std::fs::write(&log_path, b"{\"event_type\":\"partial\"").expect("partial log");
+
+        let error = LocalJsonlSink::new(&log_path)
+            .emit(&[make_health_event()])
+            .expect_err("partial record must fail closed");
+        assert!(error.to_string().contains("partial record"));
+    }
+
+    #[test]
+    fn empty_batch_does_not_create_or_rotate_jsonl() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("logs/adr-events.jsonl");
+        LocalJsonlSink::with_rotation(
+            &log_path,
+            RotationConfig {
+                max_size_bytes: 1,
+                keep: 1,
+            },
+        )
+        .emit(&[])
+        .expect("empty batch");
+        assert!(!log_path.exists());
+        assert!(
+            !log_path
+                .with_file_name("adr-events-2026-01-01.jsonl")
+                .exists()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_active_name_fails_before_rotation() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp = tempdir().expect("tempdir");
+        let name = std::ffi::OsString::from_vec(b"events-\xff.jsonl".to_vec());
+        let path = temp.path().join(name);
+        fs::write(&path, b"{}\n").expect("active log");
+        let error = LocalJsonlSink::with_rotation(
+            &path,
+            RotationConfig {
+                max_size_bytes: 1,
+                keep: 1,
+            },
+        )
+        .emit(&[make_health_event()])
+        .expect_err("non-UTF-8 rotation must fail closed");
+        assert!(error.to_string().contains("UTF-8"));
+        assert_eq!(fs::read(&path).expect("active log"), b"{}\n");
+        assert_eq!(fs::read_dir(temp.path()).expect("directory").count(), 1);
+
+        let valid = temp.path().join("events.jsonl");
+        fs::write(&valid, b"{}\n").expect("valid active log");
+        let unrelated = temp
+            .path()
+            .join(std::ffi::OsString::from_vec(b"unrelated-\xff".to_vec()));
+        fs::write(&unrelated, b"unrelated").expect("unrelated file");
+        LocalJsonlSink::with_rotation(
+            &valid,
+            RotationConfig {
+                max_size_bytes: 1,
+                keep: 1,
+            },
+        )
+        .emit(&[make_health_event()])
+        .expect("unrelated non-UTF-8 name must be ignored");
+        assert!(fs::read(&valid).expect("valid active log").ends_with(b"\n"));
+        assert!(unrelated.exists(), "unrelated non-UTF-8 file must remain");
+    }
+
+    #[test]
     fn rotated_path_uses_date_and_extension() {
         let active = Path::new("/tmp/logs/adr-events.jsonl");
-        let rotated = rotated_path(active, "2026-06-21");
+        let rotated = rotated_path(active, "2026-06-21").expect("rotated path");
         assert_eq!(rotated, Path::new("/tmp/logs/adr-events-2026-06-21.jsonl"));
     }
 

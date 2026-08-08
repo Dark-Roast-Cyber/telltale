@@ -9,6 +9,7 @@ pub(crate) use jsonl::{LocalJsonlSink, RotationConfig};
 pub(crate) use splunk_hec::{SplunkHecConfig, SplunkHecHttpSink};
 
 use crate::event::Event;
+use crate::file_lock::RotationNamespace;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum DeliveryPosture {
@@ -71,6 +72,8 @@ impl std::error::Error for SinkDeliveryError {}
 struct SinkEntry {
     sink: Box<dyn EventSink + Send + Sync>,
     kind: &'static str,
+    persistence_path: Option<std::path::PathBuf>,
+    rotation_namespace: Option<RotationNamespace>,
     /// Durable sinks (the local JSONL file) are the durable first-write and
     /// bounded handoff: a write failure there aborts the scan. Non-durable
     /// (remote) sink failures are collected and reported instead.
@@ -88,10 +91,29 @@ impl SinkSet {
         Self::default()
     }
 
+    #[allow(dead_code)]
     pub fn add_durable(&mut self, kind: &'static str, sink: Box<dyn EventSink + Send + Sync>) {
         self.entries.push(SinkEntry {
             sink,
             kind,
+            persistence_path: None,
+            rotation_namespace: None,
+            durable: true,
+        });
+    }
+
+    pub(crate) fn add_durable_path_with_rotation(
+        &mut self,
+        kind: &'static str,
+        sink: Box<dyn EventSink + Send + Sync>,
+        path: impl Into<std::path::PathBuf>,
+        rotation_namespace: Option<RotationNamespace>,
+    ) {
+        self.entries.push(SinkEntry {
+            sink,
+            kind,
+            persistence_path: Some(path.into()),
+            rotation_namespace,
             durable: true,
         });
     }
@@ -100,8 +122,24 @@ impl SinkSet {
         self.entries.push(SinkEntry {
             sink,
             kind,
+            persistence_path: None,
+            rotation_namespace: None,
             durable: false,
         });
+    }
+
+    pub(crate) fn local_persistence_paths(&self) -> Vec<std::path::PathBuf> {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.persistence_path.clone())
+            .collect()
+    }
+
+    pub(crate) fn local_rotation_namespaces(&self) -> Vec<RotationNamespace> {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.rotation_namespace.clone())
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {

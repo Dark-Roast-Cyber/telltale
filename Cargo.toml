@@ -76,6 +76,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
+fs4 = "0.13"
 time.workspace = true
 uuid.workspace = true
 walkdir = "2.5"
@@ -88,6 +89,17 @@ jsonschema = { version = "0.29", default-features = false }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.14"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
 
 [[bench]]
 name = "benchmarks"

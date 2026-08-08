@@ -287,8 +287,11 @@ release-public-docs-check:
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:
-	cargo run $(CARGO_LOCKED) --bin telltale -- scan --once --dry-run --no-local-config --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
-	cargo run $(CARGO_LOCKED) --bin telltale -- rules validate --no-local-config
+	@set -eu; \
+	 smoke_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/telltale-fixture-smoke.XXXXXX")"; \
+	 trap 'rm -rf "$$smoke_dir"' EXIT INT TERM; \
+		 cargo run $(CARGO_LOCKED) --bin telltale -- scan --once --dry-run --no-local-config --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores --state-path "$$smoke_dir/state.json" --log-path "$$smoke_dir/events.jsonl"; \
+	 cargo run $(CARGO_LOCKED) --bin telltale -- rules validate --no-local-config
 
 ## Public release preflight
 release-preflight: release-context-check release-tag-review release-crate-manifest package-verify release-public-docs-check check release-fixture-smoke

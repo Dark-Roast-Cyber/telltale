@@ -6,6 +6,11 @@ embedded pipeline returns detection events as values; the host application
 decides where they go. Nothing in the library crates writes JSONL, talks to a
 SIEM, or exits the process.
 
+The versioned state file, sidecar locking, platform-qualified local JSONL
+durability, and the `migrate state` command described in the migration contract
+belong to the standalone CLI runtime. Embedding hosts retain ownership of
+persistence and delivery while using the same analytic and event semantics.
+
 ## Which crate to depend on
 
 | Integrator profile | Dependency | What you get |

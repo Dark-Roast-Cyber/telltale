@@ -371,12 +371,13 @@ pub(crate) fn build_sink_set_with_presence(
 
     let mut sinks = SinkSet::new();
     if !outputs_config_present {
-        sinks.add_durable(
+        let sink = LocalJsonlSink::with_rotation(cli.log_path, cli.rotation.clone());
+        let rotation_namespace = sink.rotation_namespace()?;
+        sinks.add_durable_path_with_rotation(
             "jsonl",
-            Box::new(LocalJsonlSink::with_rotation(
-                cli.log_path,
-                cli.rotation.clone(),
-            )),
+            Box::new(sink),
+            cli.log_path,
+            rotation_namespace,
         );
     } else {
         for spec in specs.iter().filter(|spec| spec.enabled) {
@@ -400,11 +401,14 @@ pub(crate) fn build_sink_set_with_presence(
                             keep: rotation.keep.unwrap_or(cli.rotation.keep),
                         },
                     };
-                    sinks.add_durable(
+                    let sink =
+                        LocalJsonlSink::with_rotation(path.clone(), rotation).with_name(&spec.name);
+                    let rotation_namespace = sink.rotation_namespace()?;
+                    sinks.add_durable_path_with_rotation(
                         "jsonl",
-                        Box::new(
-                            LocalJsonlSink::with_rotation(path, rotation).with_name(&spec.name),
-                        ),
+                        Box::new(sink),
+                        path,
+                        rotation_namespace,
                     );
                 }
                 SinkKind::SplunkHec(hec) => {

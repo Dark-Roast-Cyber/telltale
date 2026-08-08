@@ -72,9 +72,9 @@ ADR uses five evidence classes, ordered from safest to most sensitive:
 
 **Current event behavior**: ADR does not currently emit a separate local-only context field. The bounded excerpt approach (80 tokens + redaction) serves as the default compromise for SIEM events.
 
-**Baseline state behavior**: Model behavioral baselines are persisted in local scanner state so deviation scoring can compare new observations with prior local activity. Baseline summaries track network host labels observed in parsed tool arguments or results, but persisted scanner state stores those labels as deterministic `sha256:` hashes. Host labels can reveal internal services, customer domains, repository infrastructure, or other environment-specific destinations, so raw labels remain local-only sensitive context and must not be copied into public reports, committed, or exported as telemetry by default.
+**Baseline state behavior**: Model behavioral baselines are persisted in local scanner state so deviation scoring can compare new observations with prior local activity. Baseline summaries track network host labels observed in parsed tool arguments or results, but persisted scanner state stores those labels as deterministic `sha256:` hashes. Host labels can reveal internal services, customer domains, repository infrastructure, or other environment-specific destinations, so raw labels remain local-only sensitive context and must not be copied into public reports, committed, or exported as telemetry by default. Native state also requires an explicit `state_schema_version` and rejects raw host labels; legacy state is accepted only by the explicit state migration command.
 
-When `--baseline-deviation-scoring` is enabled, emitted activity evidence reports deviation counts such as `new_network_hosts`; it does not emit raw baseline host labels. Existing state files from earlier builds are migrated on load by hashing raw baseline host labels in memory; the next successful state save writes only hashed labels.
+When `--baseline-deviation-scoring` is enabled, emitted activity evidence reports deviation counts such as `new_network_hosts`; it does not emit raw baseline host labels. Existing unversioned state files from earlier builds must be explicitly migrated; migration hashes raw baseline host labels and the next native state save contains only hashed labels.
 
 **Future work**:
 - Add an optional `local_context` field to events that is populated only when `--emit-local-context` is set.
@@ -144,7 +144,7 @@ Scanner error events (`event_type: scanner_error`) apply additional privacy:
 | --- | --- | --- |
 | Source file path | SHA-256 (`path_hash()`) | Always, for `source_path_hash` and evidence |
 | Evidence original value | SHA-256 (`evidence_hash()`) | Always, for `evidence[].hash` |
-| Baseline network host label | SHA-256 with `sha256:` prefix | Persisted scanner state stores hashed host identities; legacy raw labels are hashed on state load and written hashed on the next save |
+| Baseline network host label | SHA-256 with `sha256:` prefix | Persisted native scanner state stores hashed host identities; legacy raw labels are accepted only by the explicit state migration command and are hashed in its canonical output |
 | Session ID | None | Session IDs are opaque identifiers, not secrets |
 | Event ID | SHA-256 | In correlation events for cross-reference |
 

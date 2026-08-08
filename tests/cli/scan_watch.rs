@@ -1573,6 +1573,7 @@ fn scan_summary_reports_log_and_state_path_precedence() {
     let env_state = temp.path().join("env-state.json");
 
     let profile = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .current_dir(temp.path())
         .args([
             "scan",
             "--once",
@@ -1716,6 +1717,8 @@ fn scan_once_client_filter_limits_discovered_sources() {
 
 #[test]
 fn scan_once_accepts_repeated_client_filters() {
+    let temp = tempdir().expect("tempdir");
+    let state_path = temp.path().join("adr-state.json");
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
             "scan",
@@ -1729,6 +1732,8 @@ fn scan_once_accepts_repeated_client_filters() {
             "--client",
             "gemini",
         ])
+        .arg("--state-path")
+        .arg(&state_path)
         .output()
         .expect("run adr");
 
@@ -1893,6 +1898,8 @@ fn scan_once_max_sources_rejects_zero() {
 
 #[test]
 fn scan_once_max_sources_is_deterministic() {
+    let temp = tempdir().expect("tempdir");
+    let state_path = temp.path().join("scan-state.json");
     let run_scan = || {
         Command::new(env!("CARGO_BIN_EXE_adr"))
             .args([
@@ -1905,7 +1912,9 @@ fn scan_once_max_sources_is_deterministic() {
                 "codex",
                 "--max-sources",
                 "3",
+                "--state-path",
             ])
+            .arg(&state_path)
             .output()
             .expect("run adr")
     };
@@ -2872,6 +2881,7 @@ fn scan_once_can_emit_session_risk_summary_events() {
 fn scan_dry_run_session_risk_summary_does_not_write_log() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");
+    let state_path = temp.path().join("scan-state.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
@@ -2886,6 +2896,8 @@ fn scan_dry_run_session_risk_summary_does_not_write_log() {
             "--log-path",
         ])
         .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
         .output()
         .expect("run adr");
 
@@ -3063,6 +3075,7 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
             "3",
             "--max-sources",
             "1",
+            "--emit-activity",
         ])
         .output()
         .expect("run adr");
@@ -3094,6 +3107,8 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
             "3",
             "--max-sources",
             "1",
+            "--emit-activity",
+            "--backfill",
         ])
         .output()
         .expect("run adr");
@@ -3307,9 +3322,12 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
 fn scan_invalid_root_reports_privacy_safe_fallback_diagnostics() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("invalid-root-sentinel");
+    let state_path = temp.path().join("adr-state.json");
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
         .arg(&root)
+        .arg("--state-path")
+        .arg(&state_path)
         .output()
         .expect("run adr");
 

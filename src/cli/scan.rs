@@ -28,6 +28,7 @@ use crate::event::{
     evidence_hash, health_event_with_metadata, load_operational_alert_config,
     operational_alert_event, scanner_error_event, session_risk_summary_event,
 };
+use crate::file_lock::validate_runtime_paths;
 use crate::install_inventory::{
     collect_install_inventory, install_inventory_due, snapshot_to_event,
 };
@@ -41,7 +42,7 @@ use crate::rules::{
 use crate::scoring::load_thresholds;
 use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
 use crate::sink::{SinkFailure, SinkSet};
-use crate::state::{ScanState, SqliteIngestionCursor, source_fingerprint};
+use crate::state::{ScanState, SqliteIngestionCursor, StateLock, source_fingerprint};
 use crate::triage::maybe_triage;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::record::{NormalizedRecord, RecordKind};
@@ -620,6 +621,11 @@ fn run_scan(
     save_policy: StateSavePolicy,
 ) -> Result<ScanRunResult, Box<dyn std::error::Error>> {
     let scan_started = Instant::now();
+    validate_runtime_paths(
+        config.execution.state_path,
+        &config.execution.sinks.local_persistence_paths(),
+        &config.execution.sinks.local_rotation_namespaces(),
+    )?;
     let fixture_root = is_fixture_root(config.execution.root);
     if !config.execution.dry_run && !config.execution.allow_fixtures && fixture_root {
         return Err(
@@ -652,6 +658,11 @@ fn run_scan(
     } else {
         Some((sources.clone(), source_discovery.clone()))
     };
+    let state_lock = if config.execution.dry_run {
+        None
+    } else {
+        Some(StateLock::acquire(config.execution.state_path)?)
+    };
     let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
         config.execution.rule_pack_paths,
         config.execution.rule_paths,
@@ -674,7 +685,11 @@ fn run_scan(
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let allowlist = load_allowlist(config.execution.allowlist_path)?;
-    let mut state = ScanState::load(config.execution.state_path)?;
+    let mut state = if config.execution.dry_run {
+        ScanState::load_snapshot(config.execution.state_path)?
+    } else {
+        ScanState::load_unlocked(config.execution.state_path)?
+    };
     let state_probe = match save_policy {
         StateSavePolicy::Always => None,
         StateSavePolicy::OnChange => Some(StateChangeProbe::capture(&state)),
@@ -956,7 +971,24 @@ fn run_scan(
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
     let delivery_posture = config.execution.sinks.delivery_posture();
+    let should_save = if config.execution.dry_run {
+        false
+    } else {
+        match &state_probe {
+            None => true,
+            Some(probe) => !emitted_events.is_empty() || probe.changed(&state),
+        }
+    };
+    let prepared_state = if should_save {
+        Some(state.prepare_atomic_save(config.execution.state_path)?)
+    } else {
+        None
+    };
     if !config.execution.dry_run {
+        state_lock
+            .as_ref()
+            .ok_or("state lock missing before durable delivery")?
+            .verify()?;
         sink_failures = config.execution.sinks.deliver(&emitted_events)?;
         if !sink_failures.is_empty() {
             if config.execution.sinks.has_durable() {
@@ -975,12 +1007,12 @@ fn run_scan(
                 .sinks
                 .deliver_alerts(&alerts, &failed_names);
         }
-        let should_save = match &state_probe {
-            None => true,
-            Some(probe) => !emitted_events.is_empty() || probe.changed(&state),
-        };
-        if should_save {
-            state.save(config.execution.state_path)?;
+        if let Some(prepared_state) = prepared_state {
+            state_lock
+                .as_ref()
+                .ok_or("state lock missing for durable scan")?
+                .verify()?;
+            prepared_state.install_replace(config.execution.state_path)?;
         }
     }
 

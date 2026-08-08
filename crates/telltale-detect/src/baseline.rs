@@ -244,12 +244,22 @@ fn merge_counts<K: Ord>(target: &mut BTreeMap<K, u64>, source: BTreeMap<K, u64>)
 }
 
 pub fn baseline_host_identity(host: &str) -> String {
-    if host.starts_with(BASELINE_HOST_HASH_PREFIX) {
+    if is_canonical_host_hash(host) {
         return host.to_string();
     }
     let mut hasher = Sha256::new();
     hasher.update(host.trim().to_ascii_lowercase().as_bytes());
     format!("{BASELINE_HOST_HASH_PREFIX}{:x}", hasher.finalize())
+}
+
+fn is_canonical_host_hash(host: &str) -> bool {
+    let Some(hex) = host.strip_prefix(BASELINE_HOST_HASH_PREFIX) else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn baseline_host_identity_counts(summary: &BaselineSummary) -> BTreeMap<String, u64> {
@@ -502,6 +512,20 @@ mod tests {
     use telltale_sources::parser::parse_source_records;
 
     use super::*;
+
+    #[test]
+    fn only_exact_lowercase_host_hashes_bypass_normalization() {
+        let canonical = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(baseline_host_identity(&canonical), canonical);
+        assert_ne!(
+            baseline_host_identity("sha256:ABC"),
+            "sha256:ABC".to_string()
+        );
+        assert_ne!(
+            baseline_host_identity(&format!("sha256:{}", "A".repeat(64))),
+            format!("sha256:{}", "A".repeat(64))
+        );
+    }
 
     fn record(
         client: &str,

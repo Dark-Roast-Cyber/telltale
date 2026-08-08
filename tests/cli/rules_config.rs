@@ -228,6 +228,7 @@ fn rules_serve_uses_ordered_managed_pack_for_summary() {
 fn scan_reports_consistent_hashed_rule_sources_and_replacements() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
+    let state_path = temp.path().join("scan-state.json");
     fs::create_dir_all(&root).expect("empty root");
     let validation = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
@@ -276,7 +277,9 @@ fn scan_reports_consistent_hashed_rule_sources_and_replacements() {
             "--config-dir",
             "tests/fixtures/rule_packs/ordered",
             "--install-inventory-disabled",
+            "--state-path",
         ])
+        .arg(&state_path)
         .output()
         .expect("run ordered pack scan");
     assert!(
@@ -1274,6 +1277,7 @@ fn rules_validate_rejects_equal_tier_duplicates_across_config_roots() {
 fn rules_validate_discovers_local_overrides_and_can_disable_local_config() {
     let temp = tempdir().expect("tempdir");
     let config_root = temp.path().join("config");
+    let state_path = temp.path().join("scan-state.json");
     let override_path = config_root.join("overrides.d/disable-download.yaml");
     fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
     fs::write(
@@ -1344,6 +1348,8 @@ overrides:
         .args(["--config-dir"])
         .arg(&config_root)
         .arg("--install-inventory-disabled")
+        .args(["--state-path"])
+        .arg(&state_path)
         .output()
         .expect("run scan with local override");
     assert!(
@@ -2275,6 +2281,7 @@ fn rules_test_classifies_gemini_secret_file_reads_as_secret_access() {
 fn scan_uses_custom_rules_and_policy_category_filters() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
+    let state_path = temp.path().join("scan-state.json");
     let codex_sessions = root.join("codex/sessions");
     fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
     fs::write(
@@ -2290,7 +2297,9 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
             "--no-default-rules",
             "--rules",
             "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+            "--state-path",
         ])
+        .arg(&state_path)
         .output()
         .expect("run adr scan");
     assert!(
@@ -2315,7 +2324,9 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
             "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
             "--policy",
             "tests/fixtures/custom_rules/disable-custom-category.yaml",
+            "--state-path",
         ])
+        .arg(&state_path)
         .output()
         .expect("run adr scan");
     assert!(
@@ -2360,6 +2371,8 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
             "--policy",
         ])
         .arg(&unnamed_policy)
+        .args(["--state-path"])
+        .arg(&state_path)
         .output()
         .expect("run unnamed-policy scan");
     assert!(
@@ -2670,6 +2683,7 @@ modifiers: []
 fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
+    let state_path = temp.path().join("scan-state.json");
     let codex_sessions = root.join("codex/sessions");
     fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
     fs::write(
@@ -2703,6 +2717,8 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
         .arg(&root)
         .args(["--no-default-rules", "--config-dir"])
         .arg(&config_root)
+        .args(["--state-path"])
+        .arg(&state_path)
         .output()
         .expect("run adr scan");
     assert!(
@@ -2736,6 +2752,7 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
 fn scan_explicit_policy_wins_over_discovered_policy_ambiguity() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
+    let state_path = temp.path().join("scan-state.json");
     let codex_sessions = root.join("codex/sessions");
     fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
     fs::write(
@@ -2776,6 +2793,8 @@ fn scan_explicit_policy_wins_over_discovered_policy_ambiguity() {
         .arg(&config_root)
         .args(["--policy"])
         .arg(&explicit_policy)
+        .args(["--state-path"])
+        .arg(&state_path)
         .output()
         .expect("run adr scan");
     assert!(

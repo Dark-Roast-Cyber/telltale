@@ -20,6 +20,7 @@ mod coverage;
 mod export;
 #[allow(dead_code)]
 pub mod historical;
+mod migrate;
 mod rules_server;
 mod scan;
 
@@ -275,6 +276,12 @@ enum Command {
         command: ConfigCommand,
     },
 
+    /// Explicitly migrate standalone scanner state between paths.
+    Migrate {
+        #[command(subcommand)]
+        command: MigrateCommand,
+    },
+
     /// Show scanner status from the most recent health event.
     Status {
         /// Default path profile used when --log-path or --state-path is not set.
@@ -341,6 +348,20 @@ enum Command {
         /// Read session stores from this root for --timeline instead of building from JSONL events.
         #[arg(long)]
         source_root: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MigrateCommand {
+    /// Convert legacy unversioned state or relocate native 1.0 state.
+    State {
+        /// Existing legacy or native state file.
+        #[arg(long = "from")]
+        from: PathBuf,
+
+        /// Destination native state file.
+        #[arg(long = "to")]
+        to: PathBuf,
     },
 }
 
@@ -1315,6 +1336,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
         }
+        Command::Migrate { command } => match command {
+            MigrateCommand::State { from, to } => migrate::run_state_migration(&from, &to)?,
+        },
         Command::Rules { command } => match command {
             RulesCommand::List {
                 verbose,
