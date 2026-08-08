@@ -2,7 +2,7 @@
 
 This guide is the repository-native checklist for adding a bundled coding-agent
 source. Telltale discovers source files or databases, parses them into
-normalized records, and then uses the existing detection, scoring, triage, and
+normalized records, and then uses the existing detection, scoring, review metadata, and
 event pipeline. New source support must not add source-specific detection logic
 unless a rule genuinely cannot use normalized fields.
 

@@ -6,7 +6,6 @@ mod rules;
 mod schema;
 mod sink;
 mod state;
-mod triage;
 
 use telltale_detect::{allowlist, baseline, correlation, detection, mcp, process_chain, timeline};
 use telltale_schema::scoring;

@@ -134,82 +134,6 @@ fn assert_runtime_snapshot(summary: &Value) {
     );
 }
 
-fn start_mock_llm_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
-    start_mock_llm_server_with_content(
-        "{\"verdict\":\"malicious\",\"severity\":\"critical\",\"confidence\":0.97,\"reason\":\"mock triage confirmed MCP injection\"}",
-    )
-}
-
-fn start_mock_llm_server_with_content(
-    content: &'static str,
-) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock llm server");
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking listener");
-    let addr = listener.local_addr().expect("listener addr");
-    let (tx, rx) = mpsc::channel();
-    let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let response_body = serde_json::json!({
-            "id": "mock",
-            "choices": [{
-                "message": {
-                    "content": content
-                }
-            }]
-        })
-        .to_string();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            response_body.len(),
-            response_body
-        );
-        let mut handled = 0_usize;
-        while handled < 2 && Instant::now() < deadline {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    stream.set_nonblocking(false).expect("blocking stream");
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .expect("read timeout");
-                    let mut request = Vec::new();
-                    let mut buf = [0_u8; 1024];
-                    while let Ok(read) = stream.read(&mut buf) {
-                        if read == 0 {
-                            break;
-                        }
-                        request.extend_from_slice(&buf[..read]);
-                        // Header matching is case-insensitive: the ureq
-                        // transport sends lowercase header names.
-                        let text = String::from_utf8_lossy(&request).to_lowercase();
-                        if let Some((headers, body)) = text.split_once("\r\n\r\n") {
-                            let content_length = headers
-                                .lines()
-                                .find_map(|line| line.strip_prefix("content-length: "))
-                                .and_then(|value| value.trim().parse::<usize>().ok())
-                                .unwrap_or(0);
-                            if body.len() >= content_length {
-                                break;
-                            }
-                        }
-                    }
-                    let _ = tx.send(String::from_utf8_lossy(&request).to_string());
-                    stream
-                        .write_all(response.as_bytes())
-                        .expect("write mock response");
-                    handled += 1;
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    (format!("http://{}", addr), rx, handle)
-}
-
 #[test]
 fn scan_once_writes_schema_shaped_health_jsonl() {
     let temp = tempdir().expect("tempdir");
@@ -4437,7 +4361,7 @@ fn watch_rejects_unknown_client_filter() {
 }
 
 #[test]
-fn scan_once_attaches_mock_llm_triage_to_detection_event() {
+fn scan_once_marks_high_risk_detection_config_missing_without_network() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions/2026/04");
@@ -4451,7 +4375,11 @@ fn scan_once_attaches_mock_llm_triage_to_detection_event() {
     .expect("uc001 fixture");
     let log_path = temp.path().join("adr-events.jsonl");
     let state_path = temp.path().join("adr-state.json");
-    let (api_base, requests, handle) = start_mock_llm_server();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind no-network probe");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking no-network probe");
+    let api_base = format!("http://{}", listener.local_addr().expect("probe address"));
     let rule_path = std::env::current_dir()
         .expect("repo cwd")
         .join("config/rules/tool-call-regex.yaml");
@@ -4488,11 +4416,10 @@ fn scan_once_attaches_mock_llm_triage_to_detection_event() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    handle.join().expect("mock server thread");
-    let captured_requests = requests.try_iter().collect::<Vec<_>>();
-    assert_eq!(captured_requests.len(), 2);
-    assert!(captured_requests[0].contains("\"model\":\"guard-model\""));
-    assert!(captured_requests[1].contains("\"model\":\"triage-model\""));
+    assert!(matches!(
+        listener.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 1);
@@ -4507,16 +4434,19 @@ fn scan_once_attaches_mock_llm_triage_to_detection_event() {
         .find(|event| event["event_type"] == "detection")
         .expect("detection event");
     assert_eq!(detection["triage"]["required"], true);
-    assert_eq!(detection["triage"]["verdict"], "malicious");
-    assert_eq!(detection["triage"]["confidence"], 0.97);
-    assert_eq!(
-        detection["triage"]["reason"],
-        "mock triage confirmed MCP injection"
+    assert_eq!(detection["triage"]["verdict"], "config_missing");
+    assert!(
+        !detection["triage"]["timeline_anchors"]
+            .as_array()
+            .expect("timeline anchors")
+            .is_empty()
     );
+    assert!(detection["triage"].get("confidence").is_none());
+    assert!(detection["triage"].get("reason").is_none());
 }
 
 #[test]
-fn scan_once_preserves_schema_valid_benign_triage_verdict() {
+fn scan_once_ignores_unconfigured_legacy_triage_variables() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions/2026/04");
@@ -4530,20 +4460,9 @@ fn scan_once_preserves_schema_valid_benign_triage_verdict() {
     .expect("uc001 fixture");
     let log_path = temp.path().join("adr-events.jsonl");
     let state_path = temp.path().join("adr-state.json");
-    let (api_base, _requests, handle) = start_mock_llm_server_with_content(
-        "{\"verdict\":\"benign\",\"severity\":\"low\",\"confidence\":0.88,\"reason\":\"mock triage treated fixture as explained developer workflow\"}",
-    );
     let rule_path = std::env::current_dir()
         .expect("repo cwd")
         .join("config/rules/tool-call-regex.yaml");
-    fs::write(
-        temp.path().join(".env"),
-        format!(
-            "LITELLM_API_BASE={api_base}\nLITELLM_API_KEY=test-key\nMODEL=triage-model\nLLAMA_GUARD_MODEL=guard-model\n"
-        ),
-    )
-    .expect("mock env");
-
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
             "scan",
@@ -4560,6 +4479,12 @@ fn scan_once_preserves_schema_valid_benign_triage_verdict() {
         .args(["--state-path"])
         .arg(&state_path)
         .env("ADR_RISK_THRESHOLD_TRIAGE", "1")
+        .env_remove("LITELLM_API_BASE")
+        .env_remove("LITELLM_API_KEY")
+        .env_remove("MODEL")
+        .env_remove("LLAMA_GUARD_MODEL")
+        .env_remove("ADR_TRIAGE_TIMEOUT_MS")
+        .env_remove("ADR_TRIAGE_MAX_RETRIES")
         .current_dir(temp.path())
         .output()
         .expect("run adr scan");
@@ -4569,8 +4494,6 @@ fn scan_once_preserves_schema_valid_benign_triage_verdict() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    handle.join().expect("mock server thread");
-
     let lines = fs::read_to_string(log_path).expect("log file");
     let detection = lines
         .lines()
@@ -4578,15 +4501,14 @@ fn scan_once_preserves_schema_valid_benign_triage_verdict() {
         .find(|event| event["event_type"] == "detection")
         .expect("detection event");
     assert_eq!(detection["triage"]["required"], true);
-    assert_eq!(detection["triage"]["verdict"], "benign");
-    assert_eq!(detection["triage"]["confidence"], 0.88);
+    assert_eq!(detection["triage"]["verdict"], "config_missing");
 
     let schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
     let validator = validator_for(&schema).expect("schema validator");
     assert!(
         validator.is_valid(&detection),
-        "benign triage event failed schema validation"
+        "config-missing event failed schema validation"
     );
 }
 

@@ -28,8 +28,8 @@ would not preserve the canonical `u64` contract.
 | 0-19 | informational | Log notable activity only. |
 | 20-49 | low | Log detection with matched rule details. |
 | 50-69 | medium | Log detection and include expanded context fields. |
-| 70-89 | high | Run Llama Guard and triage model, emit triage result. |
-| 90+ | critical | Run triage and emit alert-ready event. |
+| 70-89 | high | Emit a `config_missing` review marker and deterministic response metadata. |
+| 90+ | critical | Emit a `config_missing` review marker and deterministic response metadata. |
 
 Default thresholds are configured by `ADR_RISK_THRESHOLD_LOW`, `ADR_RISK_THRESHOLD_MEDIUM`,
 `ADR_RISK_THRESHOLD_TRIAGE`, and `ADR_RISK_THRESHOLD_ALERT`.
@@ -214,7 +214,8 @@ Rule modifiers may key off categories or exact rule ids. Exact rule-id modifiers
 
 ## Source Capability Awareness
 
-Not all agent sources expose the same fields. Detection rules and triage prompts should account for source-level gaps documented in [agent-capability-profiles.md](agent-capability-profiles.md). Key constraints:
+Not all agent sources expose the same fields. Detection and analyst review context
+should account for source-level gaps documented in [agent-capability-profiles.md](agent-capability-profiles.md). Key constraints:
 
 - **User intent context** is unavailable for Copilot process logs. Rules targeting `user_context` silently skip Copilot records.
 - **Model/provider attribution** is weaker for Copilot and Claude. Cross-session correlation by model/provider is unreliable for these sources.
@@ -227,9 +228,9 @@ Model behavioral baselines are maintained in scanner state and can be used by `-
 
 Baseline network host identities are hashed with deterministic `sha256:` labels before they are persisted in scanner state. Existing raw labels from older state files are hashed only by the explicit migration command; normal scanning rejects unversioned state. See [privacy-model.md](privacy-model.md#4-local-only-sensitive-context) for handling guidance.
 
-## Triage Prompt Contract
+## Analyst Review Context
 
-The triage prompt should answer:
+The emitted event context supports analyst review of:
 
 - Did the user clearly request this tool action? (Note: user intent is unavailable for some sources — see [agent-capability-profiles.md](agent-capability-profiles.md))
 - Is the action proportional to the task?
@@ -237,9 +238,9 @@ The triage prompt should answer:
 - Is there evidence of model/provider tool injection?
 - What severity and confidence should be assigned?
 
-Triage output must be structured JSON with `verdict`, `severity`, `confidence`, `reason`, `matched_risks`, and `recommended_action`. Valid verdicts are `malicious`, `suspicious`, `benign`, or `unknown`; emitted ADR telemetry also uses scanner-state verdicts such as `pending`, `not_required`, and `config_missing`.
-
-Triage HTTP calls default to a 10 second connect/read/write timeout and 2 retries with exponential backoff. Set `ADR_TRIAGE_TIMEOUT_MS` and `ADR_TRIAGE_MAX_RETRIES` in `.env` to tune those limits for a local LiteLLM or OpenAI-compatible endpoint.
+Event 2.0 retains `triage.required` and the scanner-state verdicts
+`not_required` and `config_missing`. Above-threshold native detections use the
+terminal `config_missing` compatibility verdict; they never remain `pending`.
 
 ## Response Contract
 
@@ -250,4 +251,5 @@ Detection events include a top-level `response` object that is safe for SIEM ind
 - `investigation_summary`: a short redaction-safe summary of the matched rules/categories and next investigation step.
 - `escalation`: `routine_review` or `security_review_required`.
 
-The response object does not include raw transcript bodies or secrets. Optional LLM triage may update `triage`, but the response object remains stable event metadata.
+The response object does not include raw transcript bodies or secrets. It remains
+deterministic event metadata and is available to downstream analyst workflows.

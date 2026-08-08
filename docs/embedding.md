@@ -116,8 +116,8 @@ keeps the rule engine usable in processes with no filesystem access.
   around the pipeline — that would defeat the privacy model documented in
   `privacy-model.md`.
 - **Deterministic, offline evaluation.** No network access at scan time; rules
-  are regex/static scoring. LLM triage is a CLI-side layer and is not part of
-  the embedded pipeline.
+  and scoring are static and the Event 2.0 review markers are compatibility
+  metadata. Downstream analyst review is outside the embedded pipeline.
 - **Vendor-neutral events.** The event body is SIEM-agnostic; envelope
   formatting (Splunk HEC, Elastic bulk) belongs at the transport boundary in
   the host.

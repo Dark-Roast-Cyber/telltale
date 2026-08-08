@@ -77,7 +77,7 @@ ATLAS mappings live in rule `atlas_tags` and in [../MITRE_ATLAS_COVERAGE.md](../
 | `informational` | 0–19 | Activity worth logging but not alarming. |
 | `low` | 20–39 | Suspicious in context but common in normal work. |
 | `medium` | 40–49 | Warrants analyst attention when combined with other signals. |
-| `high` | 50–79 | Strong indicator of risk; triggers triage at threshold. |
+| `high` | 50–79 | Strong indicator of risk; carries a security-review marker at threshold. |
 | `critical` | 80–100 | Near-certain malicious or extremely high-risk behavior. |
 
 Scores are additive across rules and chain modifiers. The emitted `risk_score` is

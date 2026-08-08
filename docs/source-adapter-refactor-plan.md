@@ -6,12 +6,12 @@ It replaces the former plan to infer semantic parsing from `SourceKind`.
 The public pipeline is unchanged:
 
 ```text
-discover -> parse -> normalize -> detect -> score -> triage -> emit
+discover -> parse -> normalize -> detect -> score -> emit
 ```
 
-Discovery, normalization, detection, scoring, triage, emission, install
-inventory, Event 2.0, state, and public parser signatures retain their existing
-contracts.
+Discovery, normalization, detection, scoring, emission, install inventory, Event
+2.0 compatibility fields, state, and public parser signatures retain their
+existing contracts.
 
 ## Implemented architecture
 

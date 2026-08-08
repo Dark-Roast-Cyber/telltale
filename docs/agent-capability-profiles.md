@@ -1,10 +1,10 @@
 # Agent Capability Profiles
 
-This document tracks what each validated agent source can expose from its raw logs. Detection and triage logic should reference these profiles instead of assuming every source has the same visibility into user intent, tool calls, model metadata, and session context.
+This document tracks what each validated agent source can expose from its raw logs. Detection and analyst review context should reference these profiles instead of assuming every source has the same visibility into user intent, tool calls, model metadata, and session context.
 
 ## Why This Matters
 
-ADR's detection engine operates on normalized records, but the quality of those records depends on what the source logs actually contain. A rule that matches on `user_context` is only useful when the source preserves user messages. A triage prompt that asks "what did the user request?" can only answer when user intent is available in the log.
+ADR's detection engine operates on normalized records, but the quality of those records depends on what the source logs actually contain. A rule that matches on `user_context` is only useful when the source preserves user messages. An analyst review that asks "what did the user request?" can only answer when user intent is available in the log.
 
 These profiles document the gap between what ADR would ideally see and what each source actually provides.
 
@@ -297,11 +297,11 @@ These profiles document the gap between what ADR would ideally see and what each
 - **Error detection**: `is_error` is universally lossy through the legacy conversion. Error-based detection rules need a future schema upgrade to be effective.
 - **Call ID linking**: Only Copilot preserves `call_id` natively. Tool-call/tool-result pairing for other sources relies on ordering and tool name matching.
 
-## Implications for Triage
+## Implications for Analyst Review
 
-- Triage prompts should check source capabilities before asking about user intent.
-- For Copilot sessions, triage should note that user intent is unavailable and rely on tool-call patterns only.
-- Model/provider fields should be marked as "unavailable" in triage context when the source cannot provide them.
+- Review workflows should check source capabilities before relying on user intent.
+- For Copilot sessions, review should note that user intent is unavailable and rely on tool-call patterns only.
+- Model/provider fields should be marked as "unavailable" when the source cannot provide them.
 
 ## Related Documents
 

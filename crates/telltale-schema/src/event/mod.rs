@@ -549,7 +549,7 @@ pub fn detection_event(
     let triage = if assessment.triage_required {
         serde_json::json!({
             "required": true,
-            "verdict": "pending"
+            "verdict": "config_missing"
         })
     } else {
         serde_json::json!({
@@ -1550,7 +1550,7 @@ mod tests {
     }
 
     #[test]
-    fn detection_event_serializes_alert_severity_for_high_scores() {
+    fn detection_event_serializes_config_missing_for_high_scores() {
         let event = detection_event(DetectionEventInput {
             client: ClientId::Codex,
             agent: None,
@@ -1582,7 +1582,7 @@ mod tests {
         assert_eq!(event.time_confidence, "high");
         let triage = event.triage.expect("triage metadata");
         assert_eq!(triage["required"], true);
-        assert_eq!(triage["verdict"], "pending");
+        assert_eq!(triage["verdict"], "config_missing");
     }
 
     #[test]

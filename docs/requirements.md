@@ -9,13 +9,14 @@
 - Detect tool calls and suspicious context with static regex rules.
 - Support multiple simultaneous rule matches and cumulative scoring.
 - Log informational events for notable activity such as file reads, downloads, installs, and command execution.
-- Trigger Llama Guard and triage-model review when risk exceeds thresholds.
+- Mark above-threshold detections for analyst review without making outbound model
+  requests.
 - Emit append-only JSONL events suitable for local review or downstream log shippers.
 - Preserve enough evidence for investigation without logging raw secrets by default.
 
 ## Security Requirements
 
-- Redact credential-like strings before logs or LLM calls.
+- Redact credential-like strings before logs and sink delivery.
 - Hash raw evidence when exact values are not needed.
 - Avoid scanning outside configured session locations unless explicitly configured.
 - Keep `.env`, state, and logs out of version control.
@@ -49,4 +50,5 @@
 - Rule fields: id, category, severity, score, target fields, regex, explanation, tags, enabled.
 - Rule targets include tool name, command, arguments, file path, URL, user context, assistant context, and tool result.
 - Context modifiers can increase risk for chained behaviors: read secret + network call, download + execute, install + persistence, shell + encoded payload.
-- Triage output must include verdict, confidence, reason, and recommended severity.
+- High-risk Event 2.0 detections must retain the terminal `config_missing` triage
+  compatibility verdict and deterministic response metadata.

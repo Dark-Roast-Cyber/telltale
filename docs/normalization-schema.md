@@ -2,7 +2,7 @@
 
 > **Website:** For an approachable overview of schemas and normalization, see [AgentArchaeology.ai/resources/schemas](https://agentarchaeology.ai/resources/schemas/).
 
-ADR's internal normalization contract is `NormalizedRecordV1` in `crates/telltale-schema/src/canonical.rs`. It sits between source-specific parsers and downstream detection, triage, and export code.
+ADR's internal normalization contract is `NormalizedRecordV1` in `crates/telltale-schema/src/canonical.rs`. It sits between source-specific parsers and downstream detection, deterministic review metadata, and export code.
 
 This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
 

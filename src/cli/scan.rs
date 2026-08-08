@@ -43,7 +43,6 @@ use crate::scoring::load_thresholds;
 use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
 use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, StateLock, source_fingerprint};
-use crate::triage::maybe_triage;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::source::Source;
@@ -810,28 +809,19 @@ fn run_scan(
         }
     }
     for (_, detection) in &mut detections {
-        if let Some(triage_value) = &detection.triage
-            && triage_value
-                .get("required")
-                .and_then(|v| v.as_bool())
-                .is_some_and(|v| v)
+        let Some(triage) = detection
+            .triage
+            .as_mut()
+            .and_then(|triage| triage.as_object_mut())
+        else {
+            continue;
+        };
+        if triage
+            .get("required")
+            .and_then(|required| required.as_bool())
+            .is_some_and(|required| required)
         {
-            match maybe_triage(detection)? {
-                Some(outcome) => {
-                    detection.triage = Some(serde_json::json!({
-                        "required": true,
-                        "verdict": outcome.verdict,
-                        "confidence": outcome.confidence,
-                        "reason": outcome.reason,
-                    }));
-                }
-                None => {
-                    detection.triage = Some(serde_json::json!({
-                        "required": true,
-                        "verdict": "config_missing"
-                    }));
-                }
-            }
+            triage.insert("verdict".to_string(), serde_json::json!("config_missing"));
         }
     }
     let activity_count = activities.len();

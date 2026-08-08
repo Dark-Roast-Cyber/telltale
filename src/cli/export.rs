@@ -675,7 +675,12 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
             .filter_map(|e| e.get("severity").and_then(|v| v.as_str()))
             .max_by_key(|s| severity_rank(s))
             .unwrap_or("informational");
-        let has_triage = session_events.iter().any(|e| e.get("triage").is_some());
+        // Event 2.0 compatibility markers are present on every detection, but
+        // they do not prove that embedded model triage ran. Historical events
+        // with a terminal model verdict still count as actual triage.
+        let has_triage = session_events
+            .iter()
+            .any(|event| triage_ran_from_event(event));
         let risk_summary = build_session_risk_summary(&session_events);
 
         let timeline = serde_json::json!({

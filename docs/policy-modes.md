@@ -4,20 +4,20 @@ ADR operates in named policy modes that control what the scanner does with detec
 
 ## Current Phase: Log-Review
 
-ADR is a batch log-review system. It discovers agent session stores, parses transcripts, applies detection rules, optionally calls triage models, and emits JSONL events for SIEM ingestion. It does not hook into agent processes, intercept tool calls, or terminate sessions.
+ADR is a batch log-review system. It discovers agent session stores, parses transcripts, applies deterministic detection rules, and emits JSONL events for SIEM ingestion. It does not hook into agent processes, intercept tool calls, make outbound review requests, or terminate sessions.
 
 Three policy modes are available in the current phase:
 
 ### `observe`
 
-Emit activity and health telemetry only. No detections, no triage, no alerts.
+Emit activity and health telemetry only. No detections, review markers, or alerts.
 
 | Behavior | Setting |
 | --- | --- |
 | Activity events | emitted |
 | Health events | emitted |
 | Detection events | suppressed |
-| Triage calls | skipped |
+| Review marker | not required |
 | Operational alerts | emitted |
 
 Use `observe` when onboarding a new host or agent source and you want to confirm discovery, parsing, and schema compliance without generating security noise.
@@ -42,25 +42,25 @@ disabled_categories:
 
 ### `alert`
 
-Emit detections with optional triage. This is the default and recommended mode for production log-review deployments.
+Emit detections with deterministic response metadata and analyst-review markers. This is the default and recommended mode for production log-review deployments.
 
 | Behavior | Setting |
 | --- | --- |
 | Activity events | emitted (with `--emit-activity`) |
 | Health events | emitted |
 | Detection events | emitted |
-| Triage calls | fired above `ADR_RISK_THRESHOLD_TRIAGE` |
+| Review marker | `config_missing` above `ADR_RISK_THRESHOLD_TRIAGE`; `not_required` below it |
 | Operational alerts | emitted |
 
 Detections follow the standard severity-to-behavior mapping:
 
-| Score | Severity | Triage | Emission |
+| Score | Severity | Review marker | Emission |
 | ---: | --- | --- | --- |
 | 0–19 | informational | skipped | activity event only |
 | 20–49 | low | skipped | detection event |
 | 50–69 | medium | skipped | detection event with expanded context |
-| 70–89 | high | triage called | detection event with triage result |
-| 90+ | critical | triage called | detection event with triage result |
+| 70–89 | high | `config_missing` | detection event with deterministic response metadata |
+| 90+ | critical | `config_missing` | detection event with deterministic response metadata |
 
 This is the mode ADR uses when `--policy` is omitted or when the loaded policy does not suppress all detection categories.
 
@@ -73,7 +73,7 @@ Mark detections that *would* have been blocked without actually blocking anythin
 | Activity events | emitted |
 | Health events | emitted |
 | Detection events | emitted with `policy_mode: simulate-block` |
-| Triage calls | fired above threshold |
+| Review marker | deterministic Event 2.0 compatibility marker |
 | Operational alerts | emitted |
 | Session termination | never |
 
@@ -90,7 +90,7 @@ Require a human to approve containment before ADR takes action.
 | Behavior | Setting |
 | --- | --- |
 | Detection events | emitted |
-| Triage calls | fired above threshold |
+| Review marker | deterministic Event 2.0 compatibility marker |
 | Containment action | queued for human approval |
 | Session termination | only after explicit approval |
 
@@ -103,13 +103,13 @@ Automatically deny or terminate sessions for high-confidence detections that mat
 | Behavior | Setting |
 | --- | --- |
 | Detection events | emitted |
-| Triage calls | fired above threshold |
+| Triage calls | none; downstream analyst review remains outside the scanner |
 | Containment action | automatic for configured rules |
 | Session termination | on match, without human approval |
 
 `block` is the most aggressive mode. It requires:
 - a mature detection corpus with documented false-positive rates below 5%;
-- triage confidence thresholds tuned per rule category;
+- analyst review procedures tuned per rule category;
 - explicit per-rule opt-in for automatic containment;
 - audit logging of every containment action;
 - a kill switch to revert to `alert` or `simulate-block`.
@@ -143,7 +143,7 @@ The policy YAML controls *which rules fire*. The policy mode controls *what happ
 | Feature | Policy Mode Interaction |
 | --- | --- |
 | Allowlists | Suppressed detections are logged at `informational` with `suppressed` tag regardless of mode. |
-| Triage | Triage calls fire in `alert` and `simulate-block` above `ADR_RISK_THRESHOLD_TRIAGE`. Suppressed detections skip triage. |
+| Analyst review | Above-threshold events carry `config_missing`; suppressed detections remain informational with `not_required`. |
 | Response contract | `recommended_action` and `response_playbook` are emitted in all modes. `simulate-block` may add a `would_block` flag in the future. |
 | Operational alerts | Emitted in all modes. Not affected by detection policy mode. |
 | Correlation | Cross-session correlation operates on emitted detection events, so it works in `alert` and `simulate-block`. |

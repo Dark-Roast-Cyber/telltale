@@ -15,7 +15,7 @@ build, test, configure, and operate it:
 - The command-line workflows for scan, watch, export, status, and rules
   management.
 - Client discovery, parser, normalization, scoring, redaction, evidence,
-  event, baseline, correlation, timeline, and triage integration code that
+  event, baseline, correlation, timeline, and deterministic review metadata code that
   ships in the core crate.
 - JSON event schemas under `schemas/`.
 - Bundled detection rules, ad-hoc examples, policy-violation examples,
@@ -39,7 +39,7 @@ clear packaging boundary. Candidate separate-license areas include:
 - AI-assisted rule and policy authoring.
 - Managed or signed detection feeds.
 - Continuous policy monitoring services.
-- Local AI review or endpoint elevation features beyond the core triage client.
+- Local AI review or endpoint elevation features beyond the deterministic core.
 - EDR, SOAR, case-management, or containment integrations.
 - Enterprise dashboards, compliance packs, fleet management, and hosted
   management services.
