@@ -149,14 +149,14 @@ fn rotate_file(path: &Path, config: &RotationConfig) -> Result<bool, Box<dyn std
     Ok(true)
 }
 
-/// Generate the rotated file path: `adr-events-2026-06-21.jsonl`
+/// Generate the rotated file path: `telltale-events-2026-06-21.jsonl`
 fn rotated_path(active: &Path, date: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let (stem, ext) = rotation_components(active)?;
     let parent = active.parent().unwrap_or_else(|| Path::new("."));
     Ok(parent.join(format!("{stem}-{date}.{ext}")))
 }
 
-/// Generate a counter-suffixed rotated path: `adr-events-2026-06-21.1.jsonl`
+/// Generate a counter-suffixed rotated path: `telltale-events-2026-06-21.1.jsonl`
 fn rotated_with_counter(
     active: &Path,
     date: &str,
@@ -179,8 +179,8 @@ fn rotation_components(active: &Path) -> Result<(String, String), Box<dyn std::e
     Ok((stem.to_string(), ext.to_string()))
 }
 
-/// A parsed rotated file name, e.g. `adr-events-2026-06-21.3.jsonl` → (date, counter).
-/// The base date-stamped file (`adr-events-2026-06-21.jsonl`) has counter 0.
+/// A parsed rotated file name, e.g. `telltale-events-2026-06-21.3.jsonl` → (date, counter).
+/// The base date-stamped file (`telltale-events-2026-06-21.jsonl`) has counter 0.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct RotatedFileEntry {
     date: String,
@@ -239,7 +239,7 @@ fn is_valid_date(s: &str) -> bool {
 
 /// Delete rotated files beyond `keep`, oldest-first.
 /// Only matches the exact built-in rotation pattern to avoid deleting
-/// externally-managed files (e.g., logrotate's `adr-events-20260621.jsonl`).
+/// externally-managed files (e.g., logrotate's `telltale-events-20260621.jsonl`).
 fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::error::Error>> {
     let parent = active.parent().unwrap_or_else(|| Path::new("."));
     let (stem, ext) = rotation_components(active)?;
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn local_jsonl_sink_appends_canonical_events() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("logs/adr-events.jsonl");
+        let log_path = temp.path().join("logs/telltale-events.jsonl");
         let sink = LocalJsonlSink::new(&log_path);
         let event = make_health_event();
 
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn rotation_rotates_when_file_exceeds_max_size() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("logs/adr-events.jsonl");
+        let log_path = temp.path().join("logs/telltale-events.jsonl");
 
         // Write enough data to exceed 100 bytes.
         let big_event = make_health_event();
@@ -374,7 +374,7 @@ mod tests {
         emit_events(&sink, std::slice::from_ref(&big_event)).expect("first emit");
         // First emit should not rotate (file is new, under threshold).
         assert!(log_path.exists());
-        assert!(!log_path.with_file_name("adr-events-").exists());
+        assert!(!log_path.with_file_name("telltale-events-").exists());
 
         // Write more events to exceed 100 bytes.
         emit_events(&sink, std::slice::from_ref(&big_event)).expect("second emit");
@@ -392,7 +392,7 @@ mod tests {
             .filter(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+                name.starts_with("telltale-events-") && name.ends_with(".jsonl")
             })
             .collect();
         assert!(
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn rotation_disabled_does_not_rotate() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("logs/adr-events.jsonl");
+        let log_path = temp.path().join("logs/telltale-events.jsonl");
         let sink = LocalJsonlSink::with_rotation(&log_path, RotationConfig::disabled());
 
         let event = make_health_event();
@@ -424,7 +424,7 @@ mod tests {
             .filter(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+                name.starts_with("telltale-events-") && name.ends_with(".jsonl")
             })
             .collect();
         assert!(rotated.is_empty(), "no rotated files when disabled");
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn trailing_partial_jsonl_record_is_refused() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("logs/adr-events.jsonl");
+        let log_path = temp.path().join("logs/telltale-events.jsonl");
         std::fs::create_dir_all(log_path.parent().expect("parent")).expect("parent");
         std::fs::write(&log_path, b"{\"event_type\":\"partial\"").expect("partial log");
 
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn empty_batch_does_not_create_or_rotate_jsonl() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("logs/adr-events.jsonl");
+        let log_path = temp.path().join("logs/telltale-events.jsonl");
         LocalJsonlSink::with_rotation(
             &log_path,
             RotationConfig {
@@ -459,7 +459,7 @@ mod tests {
         assert!(!log_path.exists());
         assert!(
             !log_path
-                .with_file_name("adr-events-2026-01-01.jsonl")
+                .with_file_name("telltale-events-2026-01-01.jsonl")
                 .exists()
         );
     }
@@ -507,15 +507,18 @@ mod tests {
 
     #[test]
     fn rotated_path_uses_date_and_extension() {
-        let active = Path::new("/tmp/logs/adr-events.jsonl");
+        let active = Path::new("/tmp/logs/telltale-events.jsonl");
         let rotated = rotated_path(active, "2026-06-21").expect("rotated path");
-        assert_eq!(rotated, Path::new("/tmp/logs/adr-events-2026-06-21.jsonl"));
+        assert_eq!(
+            rotated,
+            Path::new("/tmp/logs/telltale-events-2026-06-21.jsonl")
+        );
     }
 
     #[test]
     fn cleanup_deletes_oldest_beyond_keep() {
         let temp = tempdir().expect("tempdir");
-        let active = temp.path().join("adr-events.jsonl");
+        let active = temp.path().join("telltale-events.jsonl");
         // Create 5 rotated files with different dates.
         for date in [
             "2026-06-17",
@@ -524,7 +527,7 @@ mod tests {
             "2026-06-20",
             "2026-06-21",
         ] {
-            let path = temp.path().join(format!("adr-events-{date}.jsonl"));
+            let path = temp.path().join(format!("telltale-events-{date}.jsonl"));
             std::fs::write(&path, b"old").expect("write");
         }
 
@@ -537,7 +540,7 @@ mod tests {
             .filter(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+                name.starts_with("telltale-events-") && name.ends_with(".jsonl")
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
@@ -553,49 +556,70 @@ mod tests {
     #[test]
     fn cleanup_ignores_externally_managed_files() {
         let temp = tempdir().expect("tempdir");
-        let active = temp.path().join("adr-events.jsonl");
+        let active = temp.path().join("telltale-events.jsonl");
 
         // Built-in rotated file (should be managed).
-        std::fs::write(temp.path().join("adr-events-2026-06-21.jsonl"), b"builtin").expect("write");
+        std::fs::write(
+            temp.path().join("telltale-events-2026-06-21.jsonl"),
+            b"builtin",
+        )
+        .expect("write");
 
         // External logrotate file with different date format (should be ignored).
-        std::fs::write(temp.path().join("adr-events-20260621.jsonl"), b"external").expect("write");
+        std::fs::write(
+            temp.path().join("telltale-events-20260621.jsonl"),
+            b"external",
+        )
+        .expect("write");
 
         // Manual backup file (should be ignored).
         std::fs::write(
-            temp.path().join("adr-events-manual-backup.jsonl"),
+            temp.path().join("telltale-events-manual-backup.jsonl"),
             b"manual",
         )
         .expect("write");
 
         // Non-matching extension (should be ignored).
-        std::fs::write(temp.path().join("adr-events-2026-06-21.log"), b"log").expect("write");
+        std::fs::write(temp.path().join("telltale-events-2026-06-21.log"), b"log").expect("write");
 
         cleanup_rotated_files(&active, 0).expect("cleanup with keep=0");
 
         // Built-in file should be deleted.
-        assert!(!temp.path().join("adr-events-2026-06-21.jsonl").exists());
+        assert!(
+            !temp
+                .path()
+                .join("telltale-events-2026-06-21.jsonl")
+                .exists()
+        );
 
         // External/manual files should be untouched.
-        assert!(temp.path().join("adr-events-20260621.jsonl").exists());
-        assert!(temp.path().join("adr-events-manual-backup.jsonl").exists());
-        assert!(temp.path().join("adr-events-2026-06-21.log").exists());
+        assert!(temp.path().join("telltale-events-20260621.jsonl").exists());
+        assert!(
+            temp.path()
+                .join("telltale-events-manual-backup.jsonl")
+                .exists()
+        );
+        assert!(temp.path().join("telltale-events-2026-06-21.log").exists());
     }
 
     #[test]
     fn cleanup_orders_same_day_rotations_numerically() {
         let temp = tempdir().expect("tempdir");
-        let active = temp.path().join("adr-events.jsonl");
+        let active = temp.path().join("telltale-events.jsonl");
 
         // Create same-day files with counters that would sort wrong lexicographically.
         for counter in [1, 2, 10, 3] {
             let path = temp
                 .path()
-                .join(format!("adr-events-2026-06-21.{counter}.jsonl"));
+                .join(format!("telltale-events-2026-06-21.{counter}.jsonl"));
             std::fs::write(&path, b"old").expect("write");
         }
         // Also the base file (counter 0).
-        std::fs::write(temp.path().join("adr-events-2026-06-21.jsonl"), b"base").expect("write");
+        std::fs::write(
+            temp.path().join("telltale-events-2026-06-21.jsonl"),
+            b"base",
+        )
+        .expect("write");
 
         // Keep 3: should keep the 3 newest by (date, counter).
         // Order: (2026-06-21, 0), (2026-06-21, 1), (2026-06-21, 2), (2026-06-21, 3), (2026-06-21, 10)
@@ -608,7 +632,7 @@ mod tests {
             .filter(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                name.starts_with("adr-events-") && name.ends_with(".jsonl")
+                name.starts_with("telltale-events-") && name.ends_with(".jsonl")
             })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
@@ -619,7 +643,11 @@ mod tests {
         assert!(remaining.iter().any(|n| n.contains(".3.")));
         assert!(remaining.iter().any(|n| n.contains(".10.")));
         // Should delete base (counter 0) and .1.
-        assert!(!remaining.iter().any(|n| n == "adr-events-2026-06-21.jsonl"));
+        assert!(
+            !remaining
+                .iter()
+                .any(|n| n == "telltale-events-2026-06-21.jsonl")
+        );
         assert!(!remaining.iter().any(|n| n.contains(".1.")));
     }
 
@@ -627,37 +655,49 @@ mod tests {
     fn parse_rotated_name_matches_builtin_patterns() {
         // Base date-stamped file.
         assert_eq!(
-            parse_rotated_name("adr-events-2026-06-21.jsonl", "adr-events", "jsonl"),
+            parse_rotated_name(
+                "telltale-events-2026-06-21.jsonl",
+                "telltale-events",
+                "jsonl"
+            ),
             Some(("2026-06-21".to_string(), 0))
         );
 
         // Counter file.
         assert_eq!(
-            parse_rotated_name("adr-events-2026-06-21.3.jsonl", "adr-events", "jsonl"),
+            parse_rotated_name(
+                "telltale-events-2026-06-21.3.jsonl",
+                "telltale-events",
+                "jsonl"
+            ),
             Some(("2026-06-21".to_string(), 3))
         );
 
         // External logrotate format (YYYYMMDD, no hyphens) should NOT match.
         assert_eq!(
-            parse_rotated_name("adr-events-20260621.jsonl", "adr-events", "jsonl"),
+            parse_rotated_name("telltale-events-20260621.jsonl", "telltale-events", "jsonl"),
             None
         );
 
         // Manual backup should NOT match.
         assert_eq!(
-            parse_rotated_name("adr-events-manual.jsonl", "adr-events", "jsonl"),
+            parse_rotated_name("telltale-events-manual.jsonl", "telltale-events", "jsonl"),
             None
         );
 
         // Non-matching extension should NOT match.
         assert_eq!(
-            parse_rotated_name("adr-events-2026-06-21.log", "adr-events", "jsonl"),
+            parse_rotated_name("telltale-events-2026-06-21.log", "telltale-events", "jsonl"),
             None
         );
 
         // Invalid date should NOT match.
         assert_eq!(
-            parse_rotated_name("adr-events-2026-13-45.jsonl", "adr-events", "jsonl"),
+            parse_rotated_name(
+                "telltale-events-2026-13-45.jsonl",
+                "telltale-events",
+                "jsonl"
+            ),
             None
         );
     }
@@ -665,7 +705,7 @@ mod tests {
     #[test]
     fn maybe_rotate_does_nothing_when_file_under_threshold() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
         std::fs::write(&log_path, b"small").expect("write");
 
         let config = RotationConfig {

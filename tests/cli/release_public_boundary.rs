@@ -1105,6 +1105,102 @@ fn release_readiness_documents_public_docs_check_commands() {
     );
 }
 
+#[test]
+fn public_docs_runtime_identity_guidance_is_canonical() {
+    let readme = fs::read_to_string("README.md").expect("read README");
+    let windows = text_between(&readme, "### Windows", "Before pushing public history");
+    let source_build = text_between(windows, "Or build from source:", "For periodic scans");
+    assert!(source_build.contains("target\\release\\telltale.exe"));
+    assert!(source_build.contains("telltale-events.jsonl"));
+    assert!(source_build.contains("telltale-state.json"));
+    assert!(!source_build.contains("adr.exe"));
+    assert!(
+        text_between(
+            windows,
+            "Download the canonical release archive",
+            "Or build from source:"
+        )
+        .contains("adr.exe"),
+        "deferred archive compatibility text should remain explicit"
+    );
+
+    let readiness =
+        fs::read_to_string("docs/release-readiness.md").expect("read release readiness docs");
+    let package_verify = text_between(
+        &readiness,
+        "`make package-verify` performs",
+        "For the actual publication pass",
+    );
+    assert!(package_verify.contains("the `telltale` install"));
+    assert!(package_verify.contains("telltale --version"));
+    assert!(package_verify.contains("rejects the retired `adr`"));
+    assert!(package_verify.contains("executable if it is installed"));
+    assert!(!package_verify.contains("adr --version"));
+    let readiness_baseline =
+        text_between(&readiness, "# Release Readiness", "## Artifact Boundary");
+    assert!(readiness_baseline.contains("telltale --version"));
+    assert!(!readiness_baseline.contains("adr-events.jsonl"));
+    for retired in [
+        "ADR_LOG_PATH",
+        "ADR_STATE_PATH",
+        "ADR_SCAN_ROOT",
+        "adr-events.jsonl",
+        "adr-state.json",
+    ] {
+        assert!(!source_build.contains(retired));
+        assert!(!readiness_baseline.contains(retired));
+    }
+
+    let siem = fs::read_to_string("docs/siem-logging.md").expect("read SIEM logging docs");
+    let active_siem = text_between(
+        &siem,
+        "# SIEM Logging",
+        "## Deferred Logging Service Follow-Up",
+    );
+    for canonical in [
+        "TELLTALE_LOG_PATH",
+        "TELLTALE_STATE_PATH",
+        "telltale-events.jsonl",
+        "telltale-state.json",
+        "/var/log/telltale/telltale-events.jsonl",
+    ] {
+        assert!(
+            active_siem.contains(canonical),
+            "active SIEM guidance lacks {canonical}"
+        );
+    }
+    for retired in [
+        "ADR_LOG_PATH",
+        "ADR_STATE_PATH",
+        "ADR_SCAN_ROOT",
+        "adr-events.jsonl",
+        "adr-state.json",
+    ] {
+        assert!(
+            !active_siem.contains(retired),
+            "active SIEM guidance contains retired identity {retired}"
+        );
+    }
+    let deferred_siem = text_between(
+        &siem,
+        "## Deferred Logging Service Follow-Up",
+        "## Operational Status",
+    );
+    assert!(deferred_siem.contains("TELLTALE_SCAN_ROOT"));
+}
+
+fn text_between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
+    let start = text
+        .find(start)
+        .unwrap_or_else(|| panic!("missing section marker {start:?}"))
+        + start.len();
+    let end = text[start..]
+        .find(end)
+        .unwrap_or_else(|| panic!("missing section marker {end:?}"))
+        + start;
+    &text[start..end]
+}
+
 #[cfg(unix)]
 fn release_public_docs_check_dry_run_stdout() -> String {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");

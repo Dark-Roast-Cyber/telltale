@@ -29,7 +29,7 @@ The helper reads only the local file:
 ```sh
 scripts/atlas-lookup "prompt injection"
 scripts/atlas-lookup AML.T0051 --description
-ADR_ATLAS_PATH=/path/to/ATLAS.yaml scripts/atlas-lookup exfiltration --json
+TELLTALE_ATLAS_PATH=/path/to/ATLAS.yaml scripts/atlas-lookup exfiltration --json
 ```
 
 If the local file is absent, the helper prints setup instructions and exits without network access.

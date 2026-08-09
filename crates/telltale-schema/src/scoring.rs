@@ -424,10 +424,10 @@ pub fn load_thresholds() -> RiskThresholds {
 
 fn load_thresholds_with(get: impl Fn(&str) -> Option<String>) -> RiskThresholds {
     RiskThresholds {
-        low: read_threshold("ADR_RISK_THRESHOLD_LOW", 20, &get),
-        medium: read_threshold("ADR_RISK_THRESHOLD_MEDIUM", 50, &get),
-        high: read_threshold("ADR_RISK_THRESHOLD_TRIAGE", 70, &get),
-        critical: read_threshold("ADR_RISK_THRESHOLD_ALERT", 90, &get),
+        low: read_threshold("TELLTALE_RISK_THRESHOLD_LOW", 20, &get),
+        medium: read_threshold("TELLTALE_RISK_THRESHOLD_MEDIUM", 50, &get),
+        high: read_threshold("TELLTALE_RISK_THRESHOLD_HIGH", 70, &get),
+        critical: read_threshold("TELLTALE_RISK_THRESHOLD_CRITICAL", 90, &get),
     }
 }
 
@@ -495,33 +495,33 @@ mod tests {
     }
 
     #[test]
-    fn only_deferred_adr_threshold_names_control_native_scores() {
-        let ignored_telltale_names =
+    fn only_canonical_threshold_names_control_native_scores() {
+        let canonical_names =
             load_thresholds_with(|name| name.starts_with("TELLTALE_").then(|| "1".to_string()));
         assert_eq!(
-            ignored_telltale_names,
+            canonical_names,
             RiskThresholds {
-                low: 20,
-                medium: 50,
-                high: 70,
-                critical: 90,
+                low: 1,
+                medium: 1,
+                high: 1,
+                critical: 1,
             }
         );
 
-        let custom_adr_names = load_thresholds_with(|name| {
+        let custom_telltale_names = load_thresholds_with(|name| {
             Some(
                 match name {
-                    "ADR_RISK_THRESHOLD_LOW" => "11",
-                    "ADR_RISK_THRESHOLD_MEDIUM" => "22",
-                    "ADR_RISK_THRESHOLD_TRIAGE" => "33",
-                    "ADR_RISK_THRESHOLD_ALERT" => "44",
+                    "TELLTALE_RISK_THRESHOLD_LOW" => "11",
+                    "TELLTALE_RISK_THRESHOLD_MEDIUM" => "22",
+                    "TELLTALE_RISK_THRESHOLD_HIGH" => "33",
+                    "TELLTALE_RISK_THRESHOLD_CRITICAL" => "44",
                     _ => return None,
                 }
                 .to_string(),
             )
         });
         assert_eq!(
-            custom_adr_names,
+            custom_telltale_names,
             RiskThresholds {
                 low: 11,
                 medium: 22,

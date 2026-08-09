@@ -1579,10 +1579,10 @@ enum PolicyMatchAccountingState {
 /// Process-chain detections emit their own `process_chain` events and never
 /// alter the session `detection` event, so this stays a load-or-skip decision
 /// rather than another axis on the scan config. Set
-/// `ADR_PROCESS_CHAIN_DETECTIONS=0` to turn them off.
+/// `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn them off.
 fn load_process_chain_rules_if_enabled()
 -> Option<telltale_rules::process_chain::CompiledProcessChainRules> {
-    let enabled = std::env::var("ADR_PROCESS_CHAIN_DETECTIONS")
+    let enabled = std::env::var("TELLTALE_PROCESS_CHAIN_DETECTIONS")
         .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
         .unwrap_or(true);
     if !enabled {

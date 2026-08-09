@@ -71,5 +71,5 @@ fn main() {
             .unwrap_or_else(|| "unknown".to_string()),
     };
 
-    println!("cargo:rustc-env=ADR_GIT_HASH={sha}");
+    println!("cargo:rustc-env=TELLTALE_GIT_HASH={sha}");
 }

@@ -26,11 +26,49 @@ mod migrate;
 mod rules_server;
 mod scan;
 
+const RETIRED_RUNTIME_ENV_NAMES: &[&str] = &[
+    "ADR_GIT_HASH",
+    "ADR_INSTALL_INVENTORY_INTERVAL_SECONDS",
+    "ADR_LOG_PATH",
+    "ADR_LOG_ROTATE_KEEP",
+    "ADR_LOG_ROTATE_MAX_SIZE",
+    "ADR_OP_ALERT_MAX_SCAN_DURATION_MS",
+    "ADR_OP_ALERT_MAX_SCANNER_ERRORS",
+    "ADR_PROCESS_CHAIN_DETECTIONS",
+    "ADR_PROJECT_CONFIG",
+    "ADR_RISK_THRESHOLD_ALERT",
+    "ADR_RISK_THRESHOLD_LOW",
+    "ADR_RISK_THRESHOLD_MEDIUM",
+    "ADR_RISK_THRESHOLD_TRIAGE",
+    "ADR_SCAN_ROOT",
+    "ADR_STATE_PATH",
+    "ADR_TRIAGE_MAX_RETRIES",
+    "ADR_TRIAGE_TIMEOUT_MS",
+];
+
+fn reject_retired_environment_variables() -> Result<(), Box<dyn std::error::Error>> {
+    let mut present = RETIRED_RUNTIME_ENV_NAMES
+        .iter()
+        .copied()
+        .filter(|name| std::env::var_os(name).is_some())
+        .collect::<Vec<_>>();
+    if present.is_empty() {
+        return Ok(());
+    }
+
+    present.sort_unstable();
+    Err(format!(
+        "retired environment variables are set: {}; remediation: unset these variables and use canonical TELLTALE_* variables or explicit migration commands",
+        present.join(", ")
+    )
+    .into())
+}
+
 #[derive(Parser)]
 #[command(
-    name = "adr",
+    name = "telltale",
     about = "Telltale detection layer for AI coding agent sessions",
-    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("ADR_GIT_HASH"), ")")
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("TELLTALE_GIT_HASH"), ")")
 )]
 struct Args {
     #[command(subcommand)]
@@ -61,7 +99,7 @@ enum Command {
         #[arg(long, value_enum, default_value = "user")]
         path_profile: CliPathProfile,
 
-        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        /// Append-only JSONL event path. Defaults to TELLTALE_LOG_PATH or the selected path profile.
         #[arg(long)]
         log_path: Option<PathBuf>,
 
@@ -73,7 +111,7 @@ enum Command {
         #[arg(long)]
         splunk_hec_token: Option<String>,
 
-        /// JSON state path for duplicate suppression. Defaults to ADR_STATE_PATH or the selected path profile.
+        /// JSON state path for duplicate suppression. Defaults to TELLTALE_STATE_PATH or the selected path profile.
         #[arg(long)]
         state_path: Option<PathBuf>,
 
@@ -142,11 +180,11 @@ enum Command {
         project_config_paths: Vec<PathBuf>,
 
         /// Maximum size in bytes before the active JSONL file is rotated.
-        /// Defaults to ADR_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
+        /// Defaults to TELLTALE_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
         #[arg(long)]
         log_rotate_max_size: Option<u64>,
 
-        /// Number of rotated files to keep. Defaults to ADR_LOG_ROTATE_KEEP or 5.
+        /// Number of rotated files to keep. Defaults to TELLTALE_LOG_ROTATE_KEEP or 5.
         #[arg(long)]
         log_rotate_keep: Option<usize>,
 
@@ -155,7 +193,7 @@ enum Command {
         log_rotate_disabled: bool,
 
         /// Seconds between metadata-only installed-agent inventory observations.
-        /// Defaults to ADR_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
+        /// Defaults to TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
         #[arg(long)]
         install_inventory_interval_seconds: Option<u64>,
 
@@ -174,11 +212,11 @@ enum Command {
         #[arg(long, value_enum, default_value = "user")]
         path_profile: CliPathProfile,
 
-        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        /// Append-only JSONL event path. Defaults to TELLTALE_LOG_PATH or the selected path profile.
         #[arg(long)]
         log_path: Option<PathBuf>,
 
-        /// JSON state path for duplicate suppression. Defaults to ADR_STATE_PATH or the selected path profile.
+        /// JSON state path for duplicate suppression. Defaults to TELLTALE_STATE_PATH or the selected path profile.
         #[arg(long)]
         state_path: Option<PathBuf>,
 
@@ -244,11 +282,11 @@ enum Command {
         project_config_paths: Vec<PathBuf>,
 
         /// Maximum size in bytes before the active JSONL file is rotated.
-        /// Defaults to ADR_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
+        /// Defaults to TELLTALE_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
         #[arg(long)]
         log_rotate_max_size: Option<u64>,
 
-        /// Number of rotated files to keep. Defaults to ADR_LOG_ROTATE_KEEP or 5.
+        /// Number of rotated files to keep. Defaults to TELLTALE_LOG_ROTATE_KEEP or 5.
         #[arg(long)]
         log_rotate_keep: Option<usize>,
 
@@ -257,7 +295,7 @@ enum Command {
         log_rotate_disabled: bool,
 
         /// Seconds between metadata-only installed-agent inventory observations.
-        /// Defaults to ADR_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
+        /// Defaults to TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
         #[arg(long)]
         install_inventory_interval_seconds: Option<u64>,
 
@@ -290,11 +328,11 @@ enum Command {
         #[arg(long, value_enum, default_value = "user")]
         path_profile: CliPathProfile,
 
-        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        /// Append-only JSONL event path. Defaults to TELLTALE_LOG_PATH or the selected path profile.
         #[arg(long)]
         log_path: Option<PathBuf>,
 
-        /// JSON state path for duplicate suppression. Defaults to ADR_STATE_PATH or the selected path profile.
+        /// JSON state path for duplicate suppression. Defaults to TELLTALE_STATE_PATH or the selected path profile.
         #[arg(long)]
         state_path: Option<PathBuf>,
     },
@@ -305,7 +343,7 @@ enum Command {
         #[arg(long, value_enum, default_value = "user")]
         path_profile: CliPathProfile,
 
-        /// Append-only JSONL event path. Defaults to ADR_LOG_PATH or the selected path profile.
+        /// Append-only JSONL event path. Defaults to TELLTALE_LOG_PATH or the selected path profile.
         #[arg(long)]
         log_path: Option<PathBuf>,
 
@@ -602,26 +640,23 @@ struct ResolvedScanConfig {
 #[derive(Debug, Clone)]
 struct RuntimeSnapshot {
     value: serde_json::Value,
-    executable_path: Option<PathBuf>,
 }
 
 fn observe_runtime() -> RuntimeSnapshot {
     let current_exe = std::env::current_exe();
-    let executable_path = current_exe.as_ref().ok().cloned();
     let observation = observe_executable(current_exe, |path| {
         File::open(path).map(|file| Box::new(file) as Box<dyn Read>)
     });
     RuntimeSnapshot {
         value: serde_json::json!({
             "package_version": env!("CARGO_PKG_VERSION"),
-            "build_git_hash": env!("ADR_GIT_HASH"),
+            "build_git_hash": env!("TELLTALE_GIT_HASH"),
             "executable": {
                 "observation_status": observation.status,
                 "path_hash": observation.path_hash,
                 "sha256": observation.sha256,
             },
         }),
-        executable_path,
     }
 }
 
@@ -1003,7 +1038,7 @@ fn run_config_validate(
         &output_specs,
         outputs_config_present,
         &sink_config::CliSinkOverrides {
-            log_path: Path::new("adr-events.jsonl"),
+            log_path: Path::new("telltale-events.jsonl"),
             rotation: crate::sink::RotationConfig::default(),
             splunk_hec_endpoint: None,
             splunk_hec_token: None,
@@ -1167,8 +1202,8 @@ pub(crate) fn read_jsonl_events(
 
 /// Resolve rotation config from CLI flags and environment variables.
 ///
-/// Precedence: `--log-rotate-disabled` > `--log-rotate-max-size`/`ADR_LOG_ROTATE_MAX_SIZE` >
-/// `--log-rotate-keep`/`ADR_LOG_ROTATE_KEEP` > defaults (100 MB, keep 5).
+/// Precedence: `--log-rotate-disabled` > `--log-rotate-max-size`/`TELLTALE_LOG_ROTATE_MAX_SIZE` >
+/// `--log-rotate-keep`/`TELLTALE_LOG_ROTATE_KEEP` > defaults (100 MB, keep 5).
 fn resolve_rotation_config(
     max_size: Option<u64>,
     keep: Option<usize>,
@@ -1179,14 +1214,14 @@ fn resolve_rotation_config(
     }
 
     let max_size_bytes = max_size.unwrap_or_else(|| {
-        std::env::var("ADR_LOG_ROTATE_MAX_SIZE")
+        std::env::var("TELLTALE_LOG_ROTATE_MAX_SIZE")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(100 * 1024 * 1024)
     });
 
     let keep_count = keep.unwrap_or_else(|| {
-        std::env::var("ADR_LOG_ROTATE_KEEP")
+        std::env::var("TELLTALE_LOG_ROTATE_KEEP")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(5)
@@ -1206,7 +1241,7 @@ fn resolve_install_inventory_interval_seconds(
         return None;
     }
     Some(interval_seconds.unwrap_or_else(|| {
-        std::env::var("ADR_INSTALL_INVENTORY_INTERVAL_SECONDS")
+        std::env::var("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(scan::DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS)
@@ -1214,15 +1249,9 @@ fn resolve_install_inventory_interval_seconds(
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    reject_retired_environment_variables()?;
     let runtime = observe_runtime();
-    let is_adr_alias = runtime
-        .executable_path
-        .as_deref()
-        .and_then(|path| path.file_stem())
-        .and_then(|name| name.to_str().map(|name| name == "adr"))
-        .unwrap_or(false);
-    let binary_name = if is_adr_alias { "adr" } else { "telltale" };
-    let command = Args::command().name(binary_name);
+    let command = Args::command();
     let args = Args::from_arg_matches(&command.get_matches())?;
 
     match args.command {

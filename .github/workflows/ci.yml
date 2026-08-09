@@ -91,11 +91,10 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Build staged native binaries
-        run: cargo build --release --bin telltale --bin adr
+        run: cargo build --release --bin telltale
       - name: Smoke-test staged native binaries
         run: |
           ./target/release/telltale --version
-          ./target/release/adr --version
           ./target/release/telltale rules validate
           ./target/release/telltale scan --once --dry-run \
             --emit-activity --emit-session-risk-summary \

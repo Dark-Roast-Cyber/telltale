@@ -18,7 +18,7 @@ takes the parent/child pairs, ATT&CK mappings, and analyst reasons from that
 library. Scores, categories, command-line conditions, deduplication, and
 correlation are Telltale's own.
 
-Set `ADR_PROCESS_CHAIN_DETECTIONS=0` to turn the pack off for a scan.
+Set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn the pack off for a scan.
 
 ## The core rule: emission and risk are separate decisions
 

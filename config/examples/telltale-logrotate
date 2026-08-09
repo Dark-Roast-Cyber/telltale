@@ -1,4 +1,4 @@
-/var/log/telltale/adr-events.jsonl {
+/var/log/telltale/telltale-events.jsonl {
     daily
     rotate 14
     missingok

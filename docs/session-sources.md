@@ -68,7 +68,7 @@ telltale scan --once --root "$HOME" --project-config projects.yaml
 
 Project-local discovery is additive: home-relative sources are still discovered from `--root`. The source definition in `crates/telltale-sources/src/sources/<agent>/mod.rs`, collected by `sources/registry.rs`, defines the per-client subpath for each project (for example, `logs/copilot` for Copilot, `.opencode` for OpenCode, and `.codex-worktree` for Codex). If a project has a non-standard subpath, rename the directory to match the registry subpath rather than overriding per-project paths in the YAML.
 
-The `ADR_PROJECT_CONFIG` environment variable accepts a platform-native path
+The `TELLTALE_PROJECT_CONFIG` environment variable accepts a platform-native path
 list when no `--project-config` flag is given. When neither is provided,
 Telltale uses the default paths (`~/github` and `~/projects`). Repeat
 `--project-config` when that is clearer or when scripts should avoid path-list

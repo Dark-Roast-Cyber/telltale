@@ -23,10 +23,19 @@ crates.io yet. After publication, install the CLI with:
 cargo install telltale-cli
 ```
 
-This installs both `telltale` and the `adr` compatibility binary. The supported
+This installs the sole `telltale` binary. The supported
 Rust embedding surface is the separate `telltale-core` package.
 
+> **Deferred archive/installer surface:** the release archive, installer, and
+> service/task examples below are intentionally not cut over in this bounded
+> runtime slice. They retain their existing deployment contract until the
+> separate installer transaction lands.
+
 ## Install From A Release Archive
+
+> **Deferred archive surface:** this section retains the historical archive and
+> compatibility-binary contract until the separate archive/installer
+> transaction lands. It is not the active source-build or runtime contract.
 
 Tagged GitHub releases publish platform-specific `telltale-*` binary archives
 for Linux, macOS, and Windows. Download the canonical archive that matches your
@@ -112,17 +121,18 @@ installs. See [telemetry-output.md](telemetry-output.md#built-in-rotation) for
 configuration details.
 
 The release archive does not include the Linux installer script itself. The
-installer downloads and checksum-verifies the platform archive, then installs
-both `telltale` and `adr`; `--with-timer` additionally installs the user-level
-timer.
+installer/archive and service cutover remains a deferred migration surface in
+this runtime slice; current source builds and the canonical runtime provide
+only `telltale`. Do not treat legacy `adr` assets or units as runtime aliases.
 
 ### Windows Scheduled Task example
 
-The Windows archive includes
+The deferred Windows archive/task migration example includes
 [`config/examples/adr-scan-task.xml`](../config/examples/adr-scan-task.xml).
 Replace both `YOUR_WINDOWS_USERNAME` values with the account that should run the
-task, then import it from PowerShell after extracting `telltale.exe` and
-`adr.exe`:
+task, then import it from PowerShell only as part of an explicitly managed
+legacy migration; the canonical runtime executable is `telltale.exe` and no
+`adr.exe` compatibility binary is produced by the source build:
 
 ```powershell
 $xml = Get-Content .\config\examples\adr-scan-task.xml -Raw
@@ -139,8 +149,7 @@ cd telltale
 cargo build --release
 ```
 
-The primary release binary will be available at `target/release/telltale`; the
-compiled compatibility binary is `target/release/adr`.
+The sole release binary will be available at `target/release/telltale`.
 
 ## Verify The Install Safely
 
@@ -184,16 +193,18 @@ cargo run --bin telltale -- scan --once --dry-run --root "$HOME" --client codex 
 Telltale writes append-only JSONL by default so the output can be reviewed
 locally or shipped to a SIEM. The default `user` path profile writes telemetry
 under the operating-system-standard per-user location, such as
-`$XDG_STATE_HOME/telltale/logs/adr-events.jsonl` or
-`~/.local/state/telltale/logs/adr-events.jsonl` on Linux,
-`~/Library/Logs/Telltale/adr-events.jsonl` on macOS, and
-`%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` on Windows. Use
+`$XDG_STATE_HOME/telltale/logs/telltale-events.jsonl` or
+`~/.local/state/telltale/logs/telltale-events.jsonl` on Linux,
+`~/Library/Logs/Telltale/telltale-events.jsonl` on macOS, and
+`%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` on Windows. Use
 `--path-profile system` for managed service deployments and
 `--path-profile project` when you intentionally want repo-relative development
 paths.
 
-Explicit `--log-path` and `--state-path` flags override profile defaults. Service
-managers can also set `ADR_LOG_PATH` and `ADR_STATE_PATH`.
+Explicit `--log-path` and `--state-path` flags override profile defaults. The
+canonical environment overrides are `TELLTALE_LOG_PATH` and
+`TELLTALE_STATE_PATH`; precedence is explicit CLI, environment, then profile
+default. Retired ADR path variables fail closed before command parsing.
 
 ## Local Rule, Policy, And Allowlist Config
 
@@ -287,7 +298,7 @@ Pass the config to scans or watch mode:
 cargo run --bin telltale -- scan --once --root "$HOME" --project-config projects.yaml
 ```
 
-You can also set the colon-separated `ADR_PROJECT_CONFIG` environment variable
+You can also set the colon-separated `TELLTALE_PROJECT_CONFIG` environment variable
 instead of repeating the flag. When neither is provided, Telltale uses the
 default paths (`~/github` and `~/projects`).
 
@@ -318,6 +329,11 @@ that SIEM dashboards can group by as `component`, `check_name`, and `status`.
 
 ## Optional Service Setup (Advanced)
 
+> **Deferred service surface:** the checked-in systemd/task templates and their
+> deployment-specific names are intentionally unchanged in this bounded slice.
+> Do not use those legacy environment names with the current runtime; the
+> separate service transaction will cut them over together.
+
 The repository and release archives include Linux-oriented systemd examples in
 `config/examples/adr-scan.service` and `config/examples/adr-scan.timer` for
 managed deployments that use the `system` path profile with a dedicated service
@@ -325,12 +341,15 @@ account. This is an advanced path for shared scan servers or fleet-managed
 hosts where the scanned session stores are explicitly made readable by the scan
 account.
 
-The example service assumes a managed Linux deployment with `/usr/local/bin/telltale`,
-`/var/log/telltale/adr-events.jsonl`, and `/var/lib/telltale/adr-state.json`.
+The eventual canonical service will use `/usr/local/bin/telltale`,
+`/var/log/telltale/telltale-events.jsonl`, and
+`/var/lib/telltale/telltale-state.json`.
 Create the service account and directories with permissions that let Telltale
 append telemetry while granting your shipper read-only access to the log file.
 Use `config/examples/telltale-logrotate` as a starter Linux rotation policy so
-the active shipper target remains `/var/log/telltale/adr-events.jsonl`.
+the active shipper target remains `/var/log/telltale/telltale-events.jsonl`.
+These legacy values belong to the deferred service transaction and are not
+consumed by the current runtime.
 
 For the common workstation case, the quick installer above sets up a user-level
 timer that runs as your user with no sudo and no service account.
@@ -344,8 +363,9 @@ vendor-neutral event-output model and forwarding boundary.
 
 Configure file monitors for the active path profile. Workstation installs write
 to the `user` profile path by default, such as
-`~/.local/state/telltale/logs/adr-events.jsonl` on Linux. Managed Splunk/Filebeat
+`~/.local/state/telltale/logs/telltale-events.jsonl` on Linux. Managed Splunk/Filebeat
 deployments should run scans with `--path-profile system` or explicit
-`ADR_LOG_PATH`/`ADR_STATE_PATH` values and monitor
-`/var/log/telltale/adr-events.jsonl`. Do not monitor legacy repo-local
-`logs/adr-events.jsonl` unless scans intentionally use `--path-profile project`.
+`TELLTALE_LOG_PATH`/`TELLTALE_STATE_PATH` values and monitor
+`/var/log/telltale/telltale-events.jsonl`. Do not monitor the legacy repo-local
+ADR-named path; the current project profile uses
+`logs/telltale-events.jsonl` unless an explicit path selects otherwise.

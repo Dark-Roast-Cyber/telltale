@@ -2,7 +2,7 @@ filebeat.inputs:
   - type: filestream
     id: telltale-jsonl
     paths:
-      - /var/log/telltale/adr-events.jsonl
+      - /var/log/telltale/telltale-events.jsonl
     parsers:
       - ndjson:
           target: ""

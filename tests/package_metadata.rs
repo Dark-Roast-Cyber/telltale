@@ -77,7 +77,7 @@ fn publication_order_and_binary_targets_are_explicit() {
     let cli = fs::read_to_string(root.join("Cargo.toml")).expect("cli manifest");
     let cli = cli.replace("\r\n", "\n");
     assert!(cli.contains("name = \"telltale\"\npath = \"src/main.rs\""));
-    assert!(cli.contains("name = \"adr\"\npath = \"src/bin/adr.rs\""));
+    assert!(!cli.contains("src/bin/adr.rs"));
 }
 
 #[test]
@@ -175,6 +175,7 @@ fn package_verification_is_local_and_ordered() {
     assert!(script.contains("--version"));
     assert!(script.contains("PACKAGED_SHA_FULL"));
     assert!(script.contains("PACKAGED_SHA_PREFIX"));
+    assert!(script.contains("packaged install must not include retired adr executable"));
     assert!(!script.contains("cargo publish"));
 
     let mut previous = 0;

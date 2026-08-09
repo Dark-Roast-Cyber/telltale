@@ -9,7 +9,16 @@ telltale migrate state --from <OLD> --to <NEW>
 Native scans emit and consume Event 3.0. Historical Event 1.0 and 2.0 records
 remain explicit read/import inputs; they are validated against their immutable
 schemas and are never rewritten as native events. Normal runtime paths and
-environment names remain unchanged in this slice.
+environment names use the canonical `TELLTALE_*` contract in this slice.
+Retired `ADR_*` runtime variables fail closed before command parsing or any
+configuration, filesystem, or network activity. The explicit migration commands
+below remain the only supported way to transform legacy files.
+
+Legacy default files such as `adr-events.jsonl` and `adr-state.json` are not
+probed, rewritten, or adopted by the canonical runtime. They remain byte-for-byte
+untouched until an operator performs an explicit migration. Consequently, an
+unmigrated first run starts with fresh canonical state and may re-emit detections
+that were already represented in the legacy state or log.
 
 Historical event files and environment files have separate explicit commands:
 

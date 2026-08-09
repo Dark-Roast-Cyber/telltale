@@ -48,7 +48,7 @@ pub fn load_project_configs(paths: &[PathBuf]) -> Vec<ProjectDef> {
 }
 
 pub fn project_config_paths_from_env() -> Vec<PathBuf> {
-    project_config_paths_from_value(std::env::var_os("ADR_PROJECT_CONFIG"))
+    project_config_paths_from_value(std::env::var_os("TELLTALE_PROJECT_CONFIG"))
 }
 
 fn project_config_paths_from_value(value: Option<OsString>) -> Vec<PathBuf> {
@@ -65,7 +65,7 @@ pub fn default_project_paths() -> Vec<PathBuf> {
 }
 
 /// Loads default project paths, filtering to only those that exist.
-/// Used when no --project-config or ADR_PROJECT_CONFIG is provided.
+/// Used when no --project-config or TELLTALE_PROJECT_CONFIG is provided.
 pub fn load_default_projects() -> Vec<ProjectDef> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     load_default_projects_with_home(home.as_deref())

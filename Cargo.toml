@@ -111,7 +111,3 @@ harness = false
 [[bin]]
 name = "telltale"
 path = "src/main.rs"
-
-[[bin]]
-name = "adr"
-path = "src/bin/adr.rs"

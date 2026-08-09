@@ -1,8 +1,8 @@
 use std::env;
 use std::path::PathBuf;
 
-pub const LOG_PATH_ENV: &str = "ADR_LOG_PATH";
-pub const STATE_PATH_ENV: &str = "ADR_STATE_PATH";
+pub const LOG_PATH_ENV: &str = "TELLTALE_LOG_PATH";
+pub const STATE_PATH_ENV: &str = "TELLTALE_STATE_PATH";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PathProfile {
@@ -89,19 +89,19 @@ fn default_log_path(
     env: &PathEnvironment,
 ) -> PathBuf {
     match profile {
-        PathProfile::Project => PathBuf::from("logs/adr-events.jsonl"),
+        PathProfile::Project => PathBuf::from("logs/telltale-events.jsonl"),
         PathProfile::System => match platform {
-            HostPlatform::Linux => PathBuf::from("/var/log/telltale/adr-events.jsonl"),
-            HostPlatform::MacOs => PathBuf::from("/Library/Logs/Telltale/adr-events.jsonl"),
-            HostPlatform::Windows => program_data(env).join("Telltale/Logs/adr-events.jsonl"),
+            HostPlatform::Linux => PathBuf::from("/var/log/telltale/telltale-events.jsonl"),
+            HostPlatform::MacOs => PathBuf::from("/Library/Logs/Telltale/telltale-events.jsonl"),
+            HostPlatform::Windows => program_data(env).join("Telltale/Logs/telltale-events.jsonl"),
         },
         PathProfile::User => match platform {
             HostPlatform::Linux => {
-                linux_user_state_root(env).join("telltale/logs/adr-events.jsonl")
+                linux_user_state_root(env).join("telltale/logs/telltale-events.jsonl")
             }
-            HostPlatform::MacOs => home(env).join("Library/Logs/Telltale/adr-events.jsonl"),
+            HostPlatform::MacOs => home(env).join("Library/Logs/Telltale/telltale-events.jsonl"),
             HostPlatform::Windows => {
-                windows_user_data_root(env).join("Telltale/Logs/adr-events.jsonl")
+                windows_user_data_root(env).join("Telltale/Logs/telltale-events.jsonl")
             }
         },
     }
@@ -113,21 +113,21 @@ fn default_state_path(
     env: &PathEnvironment,
 ) -> PathBuf {
     match profile {
-        PathProfile::Project => PathBuf::from("state/adr-state.json"),
+        PathProfile::Project => PathBuf::from("state/telltale-state.json"),
         PathProfile::System => match platform {
-            HostPlatform::Linux => PathBuf::from("/var/lib/telltale/adr-state.json"),
+            HostPlatform::Linux => PathBuf::from("/var/lib/telltale/telltale-state.json"),
             HostPlatform::MacOs => {
-                PathBuf::from("/Library/Application Support/Telltale/adr-state.json")
+                PathBuf::from("/Library/Application Support/Telltale/telltale-state.json")
             }
-            HostPlatform::Windows => program_data(env).join("Telltale/State/adr-state.json"),
+            HostPlatform::Windows => program_data(env).join("Telltale/State/telltale-state.json"),
         },
         PathProfile::User => match platform {
-            HostPlatform::Linux => linux_user_state_root(env).join("telltale/adr-state.json"),
+            HostPlatform::Linux => linux_user_state_root(env).join("telltale/telltale-state.json"),
             HostPlatform::MacOs => {
-                home(env).join("Library/Application Support/Telltale/adr-state.json")
+                home(env).join("Library/Application Support/Telltale/telltale-state.json")
             }
             HostPlatform::Windows => {
-                windows_user_data_root(env).join("Telltale/State/adr-state.json")
+                windows_user_data_root(env).join("Telltale/State/telltale-state.json")
             }
         },
     }
@@ -189,19 +189,19 @@ mod tests {
 
         assert_eq!(
             resolve_log_path_with_env(PathProfile::Project, None, HostPlatform::Linux, &env),
-            PathBuf::from("logs/adr-events.jsonl")
+            PathBuf::from("logs/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::Project, None, HostPlatform::Linux, &env),
-            PathBuf::from("state/adr-state.json")
+            PathBuf::from("state/telltale-state.json")
         );
     }
 
     #[test]
     fn explicit_paths_override_environment_and_profile_defaults() {
         let mut env = env_with_home("/home/alice");
-        env.log_path = Some(PathBuf::from("/env/adr-events.jsonl"));
-        env.state_path = Some(PathBuf::from("/env/adr-state.json"));
+        env.log_path = Some(PathBuf::from("/env/telltale-events.jsonl"));
+        env.state_path = Some(PathBuf::from("/env/telltale-state.json"));
 
         assert_eq!(
             resolve_log_path_with_env(
@@ -226,16 +226,16 @@ mod tests {
     #[test]
     fn environment_paths_override_profile_defaults() {
         let mut env = env_with_home("/home/alice");
-        env.log_path = Some(PathBuf::from("/env/adr-events.jsonl"));
-        env.state_path = Some(PathBuf::from("/env/adr-state.json"));
+        env.log_path = Some(PathBuf::from("/env/telltale-events.jsonl"));
+        env.state_path = Some(PathBuf::from("/env/telltale-state.json"));
 
         assert_eq!(
             resolve_log_path_with_env(PathProfile::User, None, HostPlatform::Linux, &env),
-            PathBuf::from("/env/adr-events.jsonl")
+            PathBuf::from("/env/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::User, None, HostPlatform::Linux, &env),
-            PathBuf::from("/env/adr-state.json")
+            PathBuf::from("/env/telltale-state.json")
         );
     }
 
@@ -246,11 +246,11 @@ mod tests {
 
         assert_eq!(
             resolve_log_path_with_env(PathProfile::User, None, HostPlatform::Linux, &env),
-            PathBuf::from("/home/alice/.state/telltale/logs/adr-events.jsonl")
+            PathBuf::from("/home/alice/.state/telltale/logs/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::User, None, HostPlatform::Linux, &env),
-            PathBuf::from("/home/alice/.state/telltale/adr-state.json")
+            PathBuf::from("/home/alice/.state/telltale/telltale-state.json")
         );
     }
 
@@ -260,11 +260,11 @@ mod tests {
 
         assert_eq!(
             resolve_log_path_with_env(PathProfile::System, None, HostPlatform::Linux, &env),
-            PathBuf::from("/var/log/telltale/adr-events.jsonl")
+            PathBuf::from("/var/log/telltale/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::System, None, HostPlatform::Linux, &env),
-            PathBuf::from("/var/lib/telltale/adr-state.json")
+            PathBuf::from("/var/lib/telltale/telltale-state.json")
         );
     }
 
@@ -274,19 +274,19 @@ mod tests {
 
         assert_eq!(
             resolve_log_path_with_env(PathProfile::User, None, HostPlatform::MacOs, &env),
-            PathBuf::from("/Users/alice/Library/Logs/Telltale/adr-events.jsonl")
+            PathBuf::from("/Users/alice/Library/Logs/Telltale/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::User, None, HostPlatform::MacOs, &env),
-            PathBuf::from("/Users/alice/Library/Application Support/Telltale/adr-state.json")
+            PathBuf::from("/Users/alice/Library/Application Support/Telltale/telltale-state.json")
         );
         assert_eq!(
             resolve_log_path_with_env(PathProfile::System, None, HostPlatform::MacOs, &env),
-            PathBuf::from("/Library/Logs/Telltale/adr-events.jsonl")
+            PathBuf::from("/Library/Logs/Telltale/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::System, None, HostPlatform::MacOs, &env),
-            PathBuf::from("/Library/Application Support/Telltale/adr-state.json")
+            PathBuf::from("/Library/Application Support/Telltale/telltale-state.json")
         );
     }
 
@@ -298,19 +298,19 @@ mod tests {
 
         assert_eq!(
             resolve_log_path_with_env(PathProfile::User, None, HostPlatform::Windows, &env),
-            PathBuf::from("C:/Users/Alice/AppData/Local/Telltale/Logs/adr-events.jsonl")
+            PathBuf::from("C:/Users/Alice/AppData/Local/Telltale/Logs/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::User, None, HostPlatform::Windows, &env),
-            PathBuf::from("C:/Users/Alice/AppData/Local/Telltale/State/adr-state.json")
+            PathBuf::from("C:/Users/Alice/AppData/Local/Telltale/State/telltale-state.json")
         );
         assert_eq!(
             resolve_log_path_with_env(PathProfile::System, None, HostPlatform::Windows, &env),
-            PathBuf::from("C:/ProgramData/Telltale/Logs/adr-events.jsonl")
+            PathBuf::from("C:/ProgramData/Telltale/Logs/telltale-events.jsonl")
         );
         assert_eq!(
             resolve_state_path_with_env(PathProfile::System, None, HostPlatform::Windows, &env),
-            PathBuf::from("C:/ProgramData/Telltale/State/adr-state.json")
+            PathBuf::from("C:/ProgramData/Telltale/State/telltale-state.json")
         );
     }
 }

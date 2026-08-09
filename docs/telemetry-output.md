@@ -14,9 +14,9 @@ By default, `telltale scan` uses the `user` path profile and appends native Even
 
 | OS | Default user telemetry path |
 | --- | --- |
-| Linux | `$XDG_STATE_HOME/telltale/logs/adr-events.jsonl` or `~/.local/state/telltale/logs/adr-events.jsonl` |
-| macOS | `~/Library/Logs/Telltale/adr-events.jsonl` |
-| Windows | `%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` |
+| Linux | `$XDG_STATE_HOME/telltale/logs/telltale-events.jsonl` or `~/.local/state/telltale/logs/telltale-events.jsonl` |
+| macOS | `~/Library/Logs/Telltale/telltale-events.jsonl` |
+| Windows | `%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` |
 
 ```sh
 cargo run --bin telltale -- scan --once --emit-activity
@@ -24,9 +24,11 @@ cargo run --bin telltale -- scan --once --emit-activity
 
 Use `--path-profile system` for managed service deployments, or
 `--path-profile project` when you intentionally want repo-relative development
-paths such as `logs/adr-events.jsonl` and `state/adr-state.json`. Explicit
-`--log-path` and `--state-path` flags still override profile defaults. Service
-managers can set `ADR_LOG_PATH` and `ADR_STATE_PATH` instead of repeating flags.
+paths such as `logs/telltale-events.jsonl` and `state/telltale-state.json`.
+Explicit `--log-path` and `--state-path` flags still override profile defaults.
+Service managers can set `TELLTALE_LOG_PATH` and `TELLTALE_STATE_PATH` instead
+of repeating flags. Retired ADR path variables fail closed before command
+parsing.
 
 Use `--dry-run` when validating fixtures or command behavior without writing
 events:
@@ -197,7 +199,7 @@ and globalStorage presence to identify installed tooling even when no sessions
 exist. By default, scans collect and emit this inventory at most once every 24
 hours according to the state file. Tune the cadence with
 `--install-inventory-interval-seconds` or
-`ADR_INSTALL_INVENTORY_INTERVAL_SECONDS`; use `0` to collect every scan, or
+`TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS`; use `0` to collect every scan, or
 `--install-inventory-disabled` to suppress inventory for a run.
 
 ## Privacy Boundary
@@ -228,7 +230,7 @@ boundary checks.
 Forward the active JSONL file for the path profile your deployment actually
 uses. A safe starter pattern is:
 
-1. Write events locally with the default path profile, `ADR_LOG_PATH`, or an
+1. Write events locally with the default path profile, `TELLTALE_LOG_PATH`, or an
    explicit `--log-path`.
 2. Validate the event shape against the schema.
 3. Configure the shipper to read only that active JSONL event path.
@@ -236,13 +238,13 @@ uses. A safe starter pattern is:
    session stores outside the forwarded telemetry path.
 
 For default workstation installs, that active file is the `user` profile path,
-such as `~/.local/state/telltale/logs/adr-events.jsonl` on Linux. For managed
-service deployments, run scans with `--path-profile system` or explicit
-`ADR_LOG_PATH`/`ADR_STATE_PATH` values and point shippers at the system path,
-such as `/var/log/telltale/adr-events.jsonl` on Linux. Do not keep monitoring
-legacy repo-local `logs/adr-events.jsonl` unless the scanner is intentionally
-running with `--path-profile project` or an explicit `ADR_LOG_PATH` that writes
-there.
+such as `~/.local/state/telltale/logs/telltale-events.jsonl` on Linux. For
+managed service deployments, run scans with `--path-profile system` or
+explicit `TELLTALE_LOG_PATH`/`TELLTALE_STATE_PATH` values and point shippers at
+the system path, such as `/var/log/telltale/telltale-events.jsonl` on Linux. Do
+not keep monitoring the legacy ADR-named repo-local path unless the scanner is
+intentionally running with `--path-profile project` or an explicit custom path
+writes there.
 
 Use explicit file paths instead of broad log directory monitors so diagnostic
 logs or source logs do not get indexed as Telltale events. For Splunk Universal
@@ -253,7 +255,7 @@ parser expects Telltale's canonical `timestamp` field to remain the first JSON
 field.
 
 For managed deployments, prefer OS-native rotation first. Keep the active file
-name stable, such as `/var/log/telltale/adr-events.jsonl` on Linux, and configure
+name stable, such as `/var/log/telltale/telltale-events.jsonl` on Linux, and configure
 `logrotate`, `newsyslog`, a Windows scheduled task, or your endpoint collector to
 rotate completed files without changing the active shipper target. The Linux
 starter example is `config/examples/telltale-logrotate`.
@@ -266,8 +268,8 @@ Scheduled Tasks) is required.
 
 When the active JSONL file exceeds the configured max size, Telltale renames it
 to a date-stamped rotated file and starts a fresh active file. The active file
-name is always stable (`adr-events.jsonl`) so shippers can monitor a single
-path. Rotated files are named `adr-events-YYYY-MM-DD.jsonl`, with a counter
+name is always stable (`telltale-events.jsonl`) so shippers can monitor a single
+path. Rotated files are named `telltale-events-YYYY-MM-DD.jsonl`, with a counter
 suffix (`.1`, `.2`) for same-day rotations. Files beyond the keep count are
 deleted oldest-first.
 
@@ -275,8 +277,8 @@ Defaults:
 
 | Setting | Default | Env var |
 | --- | --- | --- |
-| Max size | 100 MB (104_857_600 bytes) | `ADR_LOG_ROTATE_MAX_SIZE` |
-| Keep count | 5 | `ADR_LOG_ROTATE_KEEP` |
+| Max size | 100 MB (104_857_600 bytes) | `TELLTALE_LOG_ROTATE_MAX_SIZE` |
+| Keep count | 5 | `TELLTALE_LOG_ROTATE_KEEP` |
 
 CLI flags override env vars:
 

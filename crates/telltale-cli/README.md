@@ -12,22 +12,22 @@ cargo install telltale-cli
 Do not use `cargo install telltale`: that crates.io package is an unrelated
 session-types crate. The Telltale CLI package is `telltale-cli`.
 
-The package installs both binaries:
+The package installs one binary:
 
-- `telltale` is the canonical CLI.
-- `adr` is the deprecated compatibility command retained by the current release
-  contract. Matching `adr-*` release archives remain exact copies of the
-  canonical `telltale-*` archives; this migration does not schedule its removal.
+- `telltale` is the sole CLI and Cargo binary identity.
 
 The supported Rust embedding surface is [`telltale-core`](https://crates.io/crates/telltale-core),
 imported as `telltale_core`; the CLI package is not the embedding API.
 
-The Event 3.0 cut does not rename local paths, services, executables, or
-environment variables. Keep `ADR_*`, `adr-events.jsonl`, `adr-state.json`, and
-`/etc/telltale/adr.env` for this transition. Native events use
+The runtime cutover uses canonical paths and `TELLTALE_*` environment variables.
+Retired product `ADR_*` variables are exact tombstones; use the explicit
+environment migration command when converting a file. Native events use
 `telltale_version`, `telltale-<UUIDv4>` IDs, and Splunk `index=telltale`,
-`sourcetype=telltale:json`, `source=telltale`; `adr_version`, old IDs, and old
-SIEM identities remain historical-only values.
+`sourcetype=telltale:json`, `source=telltale`; historical schemas and records
+remain immutable.
+
+Installer, service, archive, and release-workflow examples are intentionally
+deferred and retain their prior names until the later cutover slice.
 
 ## Explicit Migration
 

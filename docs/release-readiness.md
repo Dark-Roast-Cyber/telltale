@@ -123,8 +123,9 @@ crate or tagged source release.
 dependency order using temporary local crates.io patches for unpublished
 workspace packages. It then compiles a registry-style external consumer and
 installs the normalized `telltale-cli` package into a temporary root, checking
-both `telltale --version` and `adr --version`. The target supports Linux and
-macOS and cleans its temporary workspace on exit.
+the `telltale` install and `telltale --version`, and rejects the retired `adr`
+executable if it is installed. The target supports Linux and macOS and cleans
+its temporary workspace on exit.
 
 For the actual publication pass, first recheck crates.io ownership and name
 availability. Publish in dependency order, waiting for each prerequisite to
@@ -140,7 +141,7 @@ Before publishing release artifacts, verify that the staged or tagged content
 does not contain:
 
 - local scanner state or baseline files;
-- telemetry output such as `logs/adr-events.jsonl`;
+- telemetry output such as `logs/telltale-events.jsonl`;
 - raw agent session stores or copied transcripts;
 - credentials, API keys, tokens, or `.env` values;
 - host-specific filesystem paths, IP addresses, or SIEM endpoints;

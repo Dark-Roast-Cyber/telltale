@@ -202,7 +202,6 @@ package-manifest:
 			done; \
 			case "$$manifest" in *"crates/telltale-cli/README.md"*) ;; *) echo "$$package is missing its package README"; exit 1 ;; esac; \
 			case "$$manifest" in *"src/main.rs"*) ;; *) echo "$$package is missing the telltale binary source"; exit 1 ;; esac; \
-			case "$$manifest" in *"src/bin/adr.rs"*) ;; *) echo "$$package is missing the adr compatibility binary source"; exit 1 ;; esac; \
 			case "$$manifest" in *"benches/benchmarks.rs"*) ;; *) echo "$$package is missing the declared benchmark source"; exit 1 ;; esac; \
 			case "$$manifest" in *"config/rules/tool-call-regex.yaml"*) ;; *) echo "$$package is missing canonical rules"; exit 1 ;; esac ;; \
 		esac; \

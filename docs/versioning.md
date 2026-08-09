@@ -24,10 +24,13 @@ format.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
-- `telltale` is the canonical executable and `telltale-*` is the canonical
-  release asset naming. The `adr` compatibility command and local ADR paths,
-  services, and environment variables remain transitional in this Event 3.0
-  slice; a later environment cut handles any removal explicitly.
+- `telltale` is the sole runtime executable and `telltale-*` is the canonical
+  release asset naming. Runtime paths use `telltale-events.jsonl` and
+  `telltale-state.json`; runtime configuration uses `TELLTALE_*` names only.
+  Retired product `ADR_*` names fail as exact tombstones, while explicit
+  migration commands preserve source data and file semantics. Installer,
+  service, archive, and release-workflow cutover remains a separate deferred
+  surface.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.
 

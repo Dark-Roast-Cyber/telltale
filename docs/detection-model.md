@@ -31,10 +31,12 @@ would not preserve the canonical `u64` contract.
 | 70-89 | high | Emit deterministic response metadata for security review. |
 | 90+ | critical | Emit deterministic response metadata for immediate investigation. |
 
-Default thresholds are configured by `ADR_RISK_THRESHOLD_LOW`, `ADR_RISK_THRESHOLD_MEDIUM`,
-`ADR_RISK_THRESHOLD_TRIAGE`, and `ADR_RISK_THRESHOLD_ALERT`.
-The native field names `TELLTALE_RISK_THRESHOLD_*` are not configuration inputs;
-the existing `ADR_*` names remain the deferred runtime compatibility surface.
+Default thresholds are configured by `TELLTALE_RISK_THRESHOLD_LOW`,
+`TELLTALE_RISK_THRESHOLD_MEDIUM`, `TELLTALE_RISK_THRESHOLD_HIGH`, and
+`TELLTALE_RISK_THRESHOLD_CRITICAL`. Retired ADR threshold names are rejected by
+the runtime tombstone preflight; `telltale migrate env` maps the old triage and
+alert terminology to the canonical high and critical names in an explicit file
+migration.
 
 ## Rule Categories
 
@@ -65,7 +67,7 @@ staying silent, so weak steps can still anchor a correlated finding.
 
 See [process-chain-detections.md](process-chain-detections.md) for the scoring
 model, deduplication, correlation windows, false-positive controls, and the
-`process_chain` event schema. Set `ADR_PROCESS_CHAIN_DETECTIONS=0` to disable
+`process_chain` event schema. Set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to disable
 the pack for a scan.
 
 ## Configurable Rules And Policies

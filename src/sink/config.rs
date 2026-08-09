@@ -560,7 +560,7 @@ version: 1
 sinks:
   - name: local
     type: jsonl
-    path: /var/log/telltale/adr-events.jsonl
+    path: /var/log/telltale/telltale-events.jsonl
     rotation:
       max_size_bytes: 1048576
       keep: 3
@@ -703,7 +703,7 @@ sinks:
     #[test]
     fn elastic_bulk_rejects_conflicting_auth() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
         let path = write_outputs(
             temp.path(),
             "outputs.yaml",
@@ -786,7 +786,7 @@ sinks:
     #[test]
     fn empty_specs_reproduce_legacy_default_sinks() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
 
         let sinks = build_sink_set(&[], &cli_defaults(&log_path)).expect("build");
         assert!(sinks.has_durable());
@@ -806,7 +806,7 @@ sinks:
     #[test]
     fn build_resolves_env_secret_and_honors_disabled_sinks() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
         let path = write_outputs(
             temp.path(),
             "outputs.yaml",
@@ -832,7 +832,7 @@ sinks:
     #[test]
     fn build_fails_fast_on_missing_env_secret_for_enabled_sink() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
         let path = write_outputs(
             temp.path(),
             "outputs.yaml",

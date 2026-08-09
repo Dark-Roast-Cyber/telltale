@@ -283,11 +283,11 @@ impl Default for OperationalAlertConfig {
 
 pub fn load_operational_alert_config() -> OperationalAlertConfig {
     OperationalAlertConfig {
-        max_scanner_errors: std::env::var("ADR_OP_ALERT_MAX_SCANNER_ERRORS")
+        max_scanner_errors: std::env::var("TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(3),
-        max_scan_duration_ms: std::env::var("ADR_OP_ALERT_MAX_SCAN_DURATION_MS")
+        max_scan_duration_ms: std::env::var("TELLTALE_OP_ALERT_MAX_SCAN_DURATION_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(300_000),

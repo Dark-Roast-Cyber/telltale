@@ -6,6 +6,13 @@
 
 ## Unreleased
 
+**Telltale-only runtime identity**
+- Breaking 0.5.0 runtime cut: the sole executable is `telltale`, active runtime
+  configuration uses canonical `TELLTALE_*` names and `telltale-*` paths, and
+  exact retired ADR runtime variables fail closed without value disclosure.
+  Explicit event/environment/state migration remains source-preserving; the
+  installer, service, archive, and release-workflow cutover remains deferred.
+
 **Migration hardening**
 - Bound historical event migration to 64 explicit pairs and 32 unique
   destinations before path or filesystem activity; recovery fault injection is
@@ -20,7 +27,7 @@
 - Deduplication keeps the strongest interpretation and preserves losing rule IDs and every ATT&CK mapping; repeats collapse within a suppression window with a `repeat_count`.
 - Correlation is bounded by entity, time window, ordered sequence, per-rule throttle, and a per-entity risk cap; capped correlations emit informational rather than being dropped.
 - False-positive controls reduce risk and mark events informational; they never delete an event, never soften a rule that fired on a command-line condition, and never demote critical rules.
-- Docs: `docs/process-chain-detections.md`; `docs/detection-model.md`, `docs/threat-taxonomy.md`, and `docs/detection-content-standard.md` updated. Disable with `ADR_PROCESS_CHAIN_DETECTIONS=0`.
+- Docs: `docs/process-chain-detections.md`; `docs/detection-model.md`, `docs/threat-taxonomy.md`, and `docs/detection-content-standard.md` updated. Disable with `TELLTALE_PROCESS_CHAIN_DETECTIONS=0`.
 
 ---
 

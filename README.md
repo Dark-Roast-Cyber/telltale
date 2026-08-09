@@ -18,21 +18,22 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
-> **Executable and compatibility contract:** Use `telltale` (`telltale.exe`) and
-> `telltale-*` release assets for new integrations. `adr` (`adr.exe`) is the
-> compiled deprecated compatibility command and remains part of the current
-> release contract. Each `adr-*` release archive is an exact byte-for-byte copy
-> of its matching `telltale-*` archive, and both archives contain both binaries.
-> This migration does not schedule removal of the compatibility command.
+> **Runtime contract:** `telltale` (`telltale.exe`) is the sole Cargo binary and
+> CLI identity. Runtime configuration uses `TELLTALE_*` names only; retired
+> product `ADR_*` variables are exact tombstones and fail before parsing or
+> filesystem activity. Use `telltale migrate env` for an explicit environment
+> file migration. Native paths are `telltale-events.jsonl` and
+> `telltale-state.json`, with profile-specific directories documented in the
+> install and telemetry guides.
 >
-> The Event 3.0 cut does not rename local paths, services, executables, or
-> environment variables. Keep `ADR_*`, `adr-events.jsonl`, `adr-state.json`,
-> and `/etc/telltale/adr.env` for this transition. Native events use
-> `telltale_version`, `telltale-<UUIDv4>` IDs, and Splunk `index=telltale`,
-> `sourcetype=telltale:json`, `source=telltale`; `adr_version`, old IDs, and
-> old SIEM identities remain historical-only values. Keep uppercase ADR
-> category terminology and unrelated architecture decision records and
-> fixtures unchanged.
+> Installer, service, archive, and release-workflow examples are intentionally
+> deferred to the next migration slice. Their legacy names remain in those
+> clearly bounded examples only and must not be treated as current runtime
+> configuration. Event 3.0/SIEM identities remain `telltale_version`,
+> `telltale-<UUIDv4>`, Splunk `index=telltale`, `sourcetype=telltale:json`, and
+> `source=telltale`; historical schemas and records remain immutable. Keep
+> uppercase ADR category terminology and unrelated architecture decision
+> records and fixtures unchanged.
 
 ## Why Telltale exists
 
@@ -113,8 +114,7 @@ Install the CLI from crates.io after publication with:
 cargo install telltale-cli
 ```
 
-That package installs both the canonical `telltale` binary and the `adr`
-compatibility binary.
+That package installs the canonical `telltale` binary only.
 
 > **Crates.io name warning:** The package named `telltale` is an unrelated
 > active session-types crate, not this project. Telltale uses `telltale-core`
@@ -152,7 +152,7 @@ precedence, trust-boundary guidance, override YAML format, and flag behavior.
 Some clients (Copilot, OpenCode-in-project, Codex per-project) store data inside
 project directories. By default, Telltale scans `~/github` and `~/projects` if
 they exist. To customize, declare project roots in a YAML file and pass it with
-`--project-config` (or set `ADR_PROJECT_CONFIG`). Project-local discovery is
+`--project-config` (or set `TELLTALE_PROJECT_CONFIG`). Project-local discovery is
 additive — home-relative sources are still discovered from `--root`.
 
 See [Install](docs/install.md) for the YAML format and `--project-config` usage.
@@ -160,9 +160,13 @@ See [Install](docs/install.md) for the YAML format and `--project-config` usage.
 - Install and setup guide: [docs/install.md](docs/install.md)
 
 Tagged GitHub releases publish platform-specific `telltale-*` binary archives
-when available, with matching exact-copy `adr-*` compatibility aliases. Source
-builds remain supported; the install guide covers both paths and the
+when available. Source builds remain supported; the install guide covers the
 fixture-safe verification step.
+
+> **Deferred release/install surface:** archive aliases, installer behavior, and
+> service/task examples are not cut over in this bounded runtime slice. The
+> platform-specific examples below retain their existing deployment contract
+> until that separate transaction is implemented and validated.
 
 ### Linux
 
@@ -197,7 +201,6 @@ Download the release archive for your architecture and extract the binary:
 curl -fsSLO https://github.com/Dark-Roast-Cyber/telltale/releases/latest/download/telltale-$(curl -fsSL https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')-aarch64-apple-darwin.tar.gz
 tar xzf telltale-*-aarch64-apple-darwin.tar.gz
 sudo mv telltale /usr/local/bin/telltale
-sudo mv adr /usr/local/bin/adr
 ```
 
 Or build from source:
@@ -207,12 +210,11 @@ git clone https://github.com/Dark-Roast-Cyber/telltale.git
 cd telltale
 cargo build --release
 sudo cp target/release/telltale /usr/local/bin/telltale
-sudo cp target/release/adr /usr/local/bin/adr
 ```
 
 The default `user` path profile writes telemetry to
-`~/Library/Logs/Telltale/adr-events.jsonl` and state to
-`~/Library/Application Support/Telltale/adr-state.json`. No sudo is needed
+`~/Library/Logs/Telltale/telltale-events.jsonl` and state to
+`~/Library/Application Support/Telltale/telltale-state.json`. No sudo is needed
 for scans — run as your user.
 
 For periodic scans, create a user LaunchAgent at
@@ -268,13 +270,12 @@ git clone https://github.com/Dark-Roast-Cyber/telltale.git
 cd telltale
 cargo build --release
 Copy-Item target\release\telltale.exe $env:LOCALAPPDATA\Telltale\telltale.exe
-Copy-Item target\release\adr.exe $env:LOCALAPPDATA\Telltale\adr.exe
 ```
 
 Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `telltale` from any
 terminal. The default `user` path profile writes telemetry to
-`%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` and state to
-`%LOCALAPPDATA%\Telltale\State\adr-state.json`. No elevation is needed for
+`%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` and state to
+`%LOCALAPPDATA%\Telltale\State\telltale-state.json`. No elevation is needed for
 scans — run as your user.
 
 For periodic scans, create a Scheduled Task at user logon:

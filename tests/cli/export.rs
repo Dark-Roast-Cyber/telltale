@@ -2,12 +2,99 @@ use super::*;
 
 use telltale_detect::allowlist::{SuppressionMatch, suppress_detection};
 
+const RETIRED_RUNTIME_ENV_NAMES: &[&str] = &[
+    "ADR_GIT_HASH",
+    "ADR_INSTALL_INVENTORY_INTERVAL_SECONDS",
+    "ADR_LOG_PATH",
+    "ADR_LOG_ROTATE_KEEP",
+    "ADR_LOG_ROTATE_MAX_SIZE",
+    "ADR_OP_ALERT_MAX_SCAN_DURATION_MS",
+    "ADR_OP_ALERT_MAX_SCANNER_ERRORS",
+    "ADR_PROCESS_CHAIN_DETECTIONS",
+    "ADR_PROJECT_CONFIG",
+    "ADR_RISK_THRESHOLD_ALERT",
+    "ADR_RISK_THRESHOLD_LOW",
+    "ADR_RISK_THRESHOLD_MEDIUM",
+    "ADR_RISK_THRESHOLD_TRIAGE",
+    "ADR_SCAN_ROOT",
+    "ADR_STATE_PATH",
+    "ADR_TRIAGE_MAX_RETRIES",
+    "ADR_TRIAGE_TIMEOUT_MS",
+];
+
+fn clean_telltale_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    for name in RETIRED_RUNTIME_ENV_NAMES {
+        command.env_remove(name);
+    }
+    command
+}
+
+#[test]
+fn retired_runtime_environment_tombstones_are_sorted_and_private() {
+    let mut command = clean_telltale_command();
+    command.arg("--help");
+    for (index, name) in RETIRED_RUNTIME_ENV_NAMES.iter().enumerate() {
+        command.env(name, format!("tombstone-canary-{index}"));
+    }
+    let output = command.output().expect("run tombstoned help");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut names = RETIRED_RUNTIME_ENV_NAMES.to_vec();
+    names.sort_unstable();
+    let expected = format!(
+        "retired environment variables are set: {}; remediation: unset these variables and use canonical TELLTALE_* variables or explicit migration commands",
+        names.join(", ")
+    );
+    assert_eq!(stderr.trim(), expected);
+    assert!(!stderr.contains("tombstone-canary"));
+}
+
+#[test]
+fn retired_runtime_environment_presence_includes_empty_and_old_new_conflicts() {
+    let mut empty = clean_telltale_command();
+    empty.arg("--version").env("ADR_LOG_PATH", "");
+    let output = empty.output().expect("run empty tombstone");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ADR_LOG_PATH"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("tombstone-secret"));
+
+    let mut conflict = clean_telltale_command();
+    conflict
+        .arg("--version")
+        .env("ADR_LOG_PATH", "old-tombstone-secret")
+        .env("TELLTALE_LOG_PATH", "new-path");
+    let output = conflict.output().expect("run old/new conflict");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("ADR_LOG_PATH"));
+    assert!(!stderr.contains("old-tombstone-secret"));
+    assert!(!stderr.contains("new-path"));
+}
+
+#[test]
+fn unrelated_adr_environment_names_are_not_tombstoned() {
+    let mut command = clean_telltale_command();
+    command
+        .arg("--help")
+        .env("ADR_TEST_UNRELATED", "third-party-canary")
+        .env("ADR_VENDOR_MODE", "third-party-mode");
+    let output = command.output().expect("run unrelated ADR environment");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("retired environment"));
+}
+
 #[test]
 fn export_help_mentions_client_for_ambiguous_timeline_session_ids() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--help"])
         .output()
-        .expect("run adr export help");
+        .expect("run telltale export help");
 
     assert!(
         output.status.success(),
@@ -20,108 +107,92 @@ fn export_help_mentions_client_for_ambiguous_timeline_session_ids() {
 }
 
 #[test]
-fn top_level_version_prints_package_version_for_both_aliases() {
-    for (name, path) in [
-        ("telltale", env!("CARGO_BIN_EXE_telltale")),
-        ("adr", env!("CARGO_BIN_EXE_adr")),
-    ] {
-        let output = Command::new(path)
-            .arg("--version")
-            .output()
-            .unwrap_or_else(|error| panic!("run {name} --version: {error}"));
-        assert!(
-            output.status.success(),
-            "{name} stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert_eq!(
-            stdout.trim(),
-            format!(
-                "{name} {} ({})",
-                env!("CARGO_PKG_VERSION"),
-                env!("ADR_GIT_HASH")
-            )
-        );
-        assert!(
-            output.stderr.is_empty(),
-            "{name} --version should not write stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+fn top_level_version_prints_canonical_package_version() {
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .arg("--version")
+        .output()
+        .expect("run telltale --version");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        format!(
+            "telltale {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            env!("TELLTALE_GIT_HASH")
+        )
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "telltale --version should not write stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
-fn top_level_help_uses_invocation_name_for_both_aliases() {
-    for (name, path) in [
-        ("telltale", env!("CARGO_BIN_EXE_telltale")),
-        ("adr", env!("CARGO_BIN_EXE_adr")),
-    ] {
-        let output = Command::new(path)
-            .arg("--help")
-            .output()
-            .unwrap_or_else(|error| panic!("run {name} --help: {error}"));
-        assert!(
-            output.status.success(),
-            "{name} stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.starts_with(&format!(
-            "Telltale detection layer for AI coding agent sessions\n\nUsage: {name}"
-        )));
-        assert!(output.stderr.is_empty());
-    }
+fn top_level_help_uses_canonical_invocation_name() {
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .arg("--help")
+        .output()
+        .expect("run telltale --help");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with(
+            "Telltale detection layer for AI coding agent sessions\n\nUsage: telltale"
+        )
+    );
+    assert!(output.stderr.is_empty());
 }
 
 #[test]
-fn parse_errors_use_invocation_name_without_deprecation_warning() {
-    for (name, path) in [
-        ("telltale", env!("CARGO_BIN_EXE_telltale")),
-        ("adr", env!("CARGO_BIN_EXE_adr")),
-    ] {
-        let output = Command::new(path)
-            .arg("--not-a-real-option")
-            .output()
-            .unwrap_or_else(|error| panic!("run {name} with invalid option: {error}"));
-        assert!(!output.status.success());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(&format!("Usage: {name}")),
-            "stderr: {stderr}"
-        );
-        assert!(
-            !stderr.to_lowercase().contains("deprecat"),
-            "stderr: {stderr}"
-        );
-        assert!(output.stdout.is_empty());
-    }
+fn parse_errors_use_canonical_invocation_name_without_deprecation_warning() {
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .arg("--not-a-real-option")
+        .output()
+        .expect("run telltale with invalid option");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Usage: telltale"), "stderr: {stderr}");
+    assert!(
+        !stderr.to_lowercase().contains("deprecat"),
+        "stderr: {stderr}"
+    );
+    assert!(output.stdout.is_empty());
 }
 
 #[test]
-fn executable_aliases_have_identical_safe_rule_listing_behavior() {
+fn executable_has_deterministic_safe_rule_listing_behavior() {
     let args = ["rules", "list", "--no-local-config"];
-    let telltale = Command::new(env!("CARGO_BIN_EXE_telltale"))
+    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(args)
         .output()
         .expect("run telltale rules list");
-    let adr = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(args)
         .output()
-        .expect("run adr rules list");
+        .expect("run telltale rules list");
 
-    assert_eq!(telltale.status, adr.status);
-    assert_eq!(telltale.stdout, adr.stdout);
-    assert_eq!(telltale.stderr, adr.stderr);
+    assert_eq!(first.status, second.status);
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(first.stderr, second.stderr);
 }
 
 #[test]
 fn status_reports_latest_health_event() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let scan = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -135,21 +206,21 @@ fn status_reports_latest_health_event() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
     assert!(
         scan.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&scan.stderr)
     );
 
-    let status = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let status = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("status")
         .arg("--log-path")
         .arg(&log_path)
         .arg("--state-path")
         .arg(&state_path)
         .output()
-        .expect("run adr status");
+        .expect("run telltale status");
     assert!(
         status.status.success(),
         "stderr: {}",
@@ -239,7 +310,7 @@ fn status_distinguishes_empty_historical_native_and_mixed_logs() {
         let log_path = temp.path().join("events.jsonl");
         let state_path = temp.path().join("state.json");
         fs::write(&log_path, contents).expect("write status fixture");
-        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args(["status", "--log-path"])
             .arg(&log_path)
             .args(["--state-path"])
@@ -296,7 +367,7 @@ fn status_dispatch_rejects_unknown_schema_versions_strictly() {
     )
     .expect("write unknown-version log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["status", "--log-path"])
         .arg(&log_path)
         .args(["--state-path"])
@@ -310,8 +381,8 @@ fn status_dispatch_rejects_unknown_schema_versions_strictly() {
 #[test]
 fn status_rejects_invalid_jsonl() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     fs::write(
         &log_path,
         [
@@ -331,14 +402,14 @@ fn status_rejects_invalid_jsonl() {
     )
     .expect("write log");
 
-    let status = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let status = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("status")
         .arg("--log-path")
         .arg(&log_path)
         .arg("--state-path")
         .arg(&state_path)
         .output()
-        .expect("run adr status");
+        .expect("run telltale status");
 
     assert!(!status.status.success());
     assert!(
@@ -351,7 +422,7 @@ fn status_rejects_invalid_jsonl() {
 #[test]
 fn export_rejects_invalid_jsonl() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -371,12 +442,12 @@ fn export_rejects_invalid_jsonl() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .output()
-        .expect("run adr export");
+        .expect("run telltale export");
 
     assert!(!output.status.success());
     assert!(
@@ -389,7 +460,7 @@ fn export_rejects_invalid_jsonl() {
 #[test]
 fn export_filters_jsonl_by_event_fields() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -418,7 +489,7 @@ fn export_filters_jsonl_by_event_fields() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -437,7 +508,7 @@ fn export_filters_jsonl_by_event_fields() {
             "2026-05-01T00:00:00Z",
         ])
         .output()
-        .expect("run adr export");
+        .expect("run telltale export");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -456,7 +527,7 @@ fn export_filters_jsonl_by_event_fields() {
 #[test]
 fn export_time_filters_accept_canonical_millisecond_timestamps() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         native_test_event(
@@ -472,14 +543,14 @@ fn export_time_filters_accept_canonical_millisecond_timestamps() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--since", "2026-05-01T00:00:00Z"])
         .args(["--until", "2026-05-01T00:00:00Z"])
         .output()
-        .expect("run adr export with canonical timestamp filters");
+        .expect("run telltale export with canonical timestamp filters");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -498,7 +569,7 @@ fn export_time_filters_accept_canonical_millisecond_timestamps() {
 #[test]
 fn export_time_filters_accept_offset_rfc3339_inputs() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         native_test_event(
@@ -514,14 +585,14 @@ fn export_time_filters_accept_offset_rfc3339_inputs() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--since", "2026-05-01T12:00:00+02:00"])
         .args(["--until", "2026-05-01T12:00:00+02:00"])
         .output()
-        .expect("run adr export with offset timestamp filters");
+        .expect("run telltale export with offset timestamp filters");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -540,29 +611,29 @@ fn export_time_filters_accept_offset_rfc3339_inputs() {
 #[test]
 fn export_rejects_invalid_time_filters() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let since_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let since_output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--since", "not-a-timestamp"])
         .output()
-        .expect("run adr export with invalid since");
+        .expect("run telltale export with invalid since");
     assert!(!since_output.status.success());
     assert!(
         String::from_utf8_lossy(&since_output.stderr)
             .contains("--since requires a valid RFC3339 timestamp")
     );
 
-    let until_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let until_output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--until", "still-not-a-timestamp"])
         .output()
-        .expect("run adr export with invalid until");
+        .expect("run telltale export with invalid until");
     assert!(!until_output.status.success());
     assert!(
         String::from_utf8_lossy(&until_output.stderr)
@@ -573,17 +644,17 @@ fn export_rejects_invalid_time_filters() {
 #[test]
 fn export_rejects_inverted_time_filter_window() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--since", "2026-05-01T00:01:00Z"])
         .args(["--until", "2026-05-01T00:00:00Z"])
         .output()
-        .expect("run adr export with inverted time window");
+        .expect("run telltale export with inverted time window");
 
     assert!(!output.status.success());
     assert!(
@@ -595,7 +666,7 @@ fn export_rejects_inverted_time_filter_window() {
 #[test]
 fn export_summary_reports_filtered_counts() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -624,13 +695,13 @@ fn export_summary_reports_filtered_counts() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--client", "codex", "--format", "summary"])
         .output()
-        .expect("run adr export summary");
+        .expect("run telltale export summary");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -649,7 +720,7 @@ fn export_summary_reports_filtered_counts() {
 #[test]
 fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -678,13 +749,13 @@ fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--severity", "critical", "--format", "elastic-bulk"])
         .output()
-        .expect("run adr elastic bulk export");
+        .expect("run telltale elastic bulk export");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -714,7 +785,7 @@ fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
 #[test]
 fn export_correlate_emits_cross_session_event() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -759,13 +830,13 @@ fn export_correlate_emits_cross_session_event() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .arg("--correlate")
         .output()
-        .expect("run adr export correlate");
+        .expect("run telltale export correlate");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -804,7 +875,7 @@ fn export_correlate_emits_cross_session_event() {
 #[test]
 fn export_timeline_produces_redacted_session_timeline() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -925,13 +996,13 @@ fn export_timeline_produces_redacted_session_timeline() {
     .expect("write log");
 
     // Test 1: --timeline requires --session-id.
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .arg("--timeline")
         .output()
-        .expect("run adr export timeline without session-id");
+        .expect("run telltale export timeline without session-id");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -940,14 +1011,14 @@ fn export_timeline_produces_redacted_session_timeline() {
     );
 
     // Test 2: ambiguous cross-client session ids require --client disambiguation.
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .arg("--timeline")
         .args(["--session-id", "session-a"])
         .output()
-        .expect("run adr export timeline");
+        .expect("run telltale export timeline");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -956,7 +1027,7 @@ fn export_timeline_produces_redacted_session_timeline() {
     );
 
     // Test 3: adding --client selects a single timeline.
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -964,7 +1035,7 @@ fn export_timeline_produces_redacted_session_timeline() {
         .args(["--session-id", "session-a"])
         .args(["--client", "codex"])
         .output()
-        .expect("run adr export timeline with client filter");
+        .expect("run telltale export timeline with client filter");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -1061,16 +1132,16 @@ fn export_timeline_produces_redacted_session_timeline() {
 #[test]
 fn export_timeline_requires_session_id() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .arg("--timeline")
         .output()
-        .expect("run adr export timeline");
+        .expect("run telltale export timeline");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--timeline requires --session-id"));
@@ -1079,16 +1150,16 @@ fn export_timeline_requires_session_id() {
 #[test]
 fn export_timeline_text_requires_timeline() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .args(["--format", "timeline-text"])
         .output()
-        .expect("run adr export timeline text without timeline");
+        .expect("run telltale export timeline text without timeline");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--format timeline-text requires --timeline"));
@@ -1097,10 +1168,10 @@ fn export_timeline_text_requires_timeline() {
 #[test]
 fn export_timeline_rejects_multiple_session_ids() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1108,7 +1179,7 @@ fn export_timeline_rejects_multiple_session_ids() {
         .args(["--session-id", "session-a"])
         .args(["--session-id", "session-b"])
         .output()
-        .expect("run adr export timeline with multiple session ids");
+        .expect("run telltale export timeline with multiple session ids");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--timeline requires exactly one --session-id"));
@@ -1117,7 +1188,7 @@ fn export_timeline_rejects_multiple_session_ids() {
 #[test]
 fn export_timeline_rejects_summary_format() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         serde_json::json!({
@@ -1134,7 +1205,7 @@ fn export_timeline_rejects_summary_format() {
     )
     .expect("write log event");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1142,7 +1213,7 @@ fn export_timeline_rejects_summary_format() {
         .args(["--session-id", "timeline-summary-session"])
         .args(["--format", "summary"])
         .output()
-        .expect("run adr export timeline summary");
+        .expect("run telltale export timeline summary");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--format summary does not support --timeline"));
@@ -1345,7 +1416,7 @@ fn native_schema_is_closed_and_historical_schemas_remain_separate() {
 #[test]
 fn export_rejects_schema_two_overflowing_contribution_ledger() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         serde_json::json!({
@@ -1366,7 +1437,7 @@ fn export_rejects_schema_two_overflowing_contribution_ledger() {
     )
     .expect("write overflow event");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
         .output()
@@ -1378,7 +1449,7 @@ fn export_rejects_schema_two_overflowing_contribution_ledger() {
 #[test]
 fn export_rejects_schema_two_contribution_outside_event_scope() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         serde_json::json!({
@@ -1398,7 +1469,7 @@ fn export_rejects_schema_two_contribution_outside_event_scope() {
     )
     .expect("write invalid scope event");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
         .output()
@@ -1410,7 +1481,7 @@ fn export_rejects_schema_two_contribution_outside_event_scope() {
 #[test]
 fn export_rejects_schema_two_invalid_rule_ids_even_with_empty_ledger() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         serde_json::json!({
@@ -1429,7 +1500,7 @@ fn export_rejects_schema_two_invalid_rule_ids_even_with_empty_ledger() {
     )
     .expect("write invalid rule-id event");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
         .output()
@@ -1441,7 +1512,7 @@ fn export_rejects_schema_two_invalid_rule_ids_even_with_empty_ledger() {
 #[test]
 fn export_fails_when_legacy_invalid_rule_ids_are_promoted_to_correlation() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -1485,7 +1556,7 @@ fn export_fails_when_legacy_invalid_rule_ids_are_promoted_to_correlation() {
     )
     .expect("write legacy events");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["export", "--log-path"])
         .arg(&log_path)
         .arg("--correlate")
@@ -1498,10 +1569,10 @@ fn export_fails_when_legacy_invalid_rule_ids_are_promoted_to_correlation() {
 #[test]
 fn export_timeline_rejects_elastic_bulk_format() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1509,7 +1580,7 @@ fn export_timeline_rejects_elastic_bulk_format() {
         .args(["--session-id", "timeline-elastic-session"])
         .args(["--format", "elastic-bulk"])
         .output()
-        .expect("run adr export timeline elastic bulk");
+        .expect("run telltale export timeline elastic bulk");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--format elastic-bulk does not support --timeline"));
@@ -1518,7 +1589,7 @@ fn export_timeline_rejects_elastic_bulk_format() {
 #[test]
 fn export_timeline_rejects_correlate() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         serde_json::json!({
@@ -1538,7 +1609,7 @@ fn export_timeline_rejects_correlate() {
     )
     .expect("write log event");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1546,7 +1617,7 @@ fn export_timeline_rejects_correlate() {
         .args(["--session-id", "timeline-correlate-session"])
         .arg("--correlate")
         .output()
-        .expect("run adr export timeline correlate");
+        .expect("run telltale export timeline correlate");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--correlate does not support --timeline"));
@@ -1555,17 +1626,17 @@ fn export_timeline_rejects_correlate() {
 #[test]
 fn export_source_root_requires_timeline() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
         .arg("--source-root")
         .arg(temp.path())
         .output()
-        .expect("run adr export source-root without timeline");
+        .expect("run telltale export source-root without timeline");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--source-root requires --timeline"));
@@ -1591,7 +1662,7 @@ fn export_source_root_rejects_summary_format() {
     )
     .expect("write source fixture");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--timeline")
         .arg("--source-root")
@@ -1599,7 +1670,7 @@ fn export_source_root_rejects_summary_format() {
         .args(["--session-id", "source-summary-session"])
         .args(["--format", "summary"])
         .output()
-        .expect("run adr export source-root timeline summary");
+        .expect("run telltale export source-root timeline summary");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--format summary does not support --timeline"));
@@ -1608,10 +1679,10 @@ fn export_source_root_rejects_summary_format() {
 #[test]
 fn export_source_root_rejects_jsonl_only_filters() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let severity_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let severity_output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1621,14 +1692,14 @@ fn export_source_root_rejects_jsonl_only_filters() {
         .args(["--session-id", "source-session"])
         .args(["--severity", "critical"])
         .output()
-        .expect("run adr export source-root with severity filter");
+        .expect("run telltale export source-root with severity filter");
     assert!(!severity_output.status.success());
     assert!(
         String::from_utf8_lossy(&severity_output.stderr)
             .contains("--source-root does not support --severity filters")
     );
 
-    let rule_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let rule_output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1638,14 +1709,14 @@ fn export_source_root_rejects_jsonl_only_filters() {
         .args(["--session-id", "source-session"])
         .args(["--rule-id", "secret.env.read"])
         .output()
-        .expect("run adr export source-root with rule filter");
+        .expect("run telltale export source-root with rule filter");
     assert!(!rule_output.status.success());
     assert!(
         String::from_utf8_lossy(&rule_output.stderr)
             .contains("--source-root does not support --rule-id filters")
     );
 
-    let time_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let time_output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1655,14 +1726,14 @@ fn export_source_root_rejects_jsonl_only_filters() {
         .args(["--session-id", "source-session"])
         .args(["--since", "2026-05-01T00:00:00Z"])
         .output()
-        .expect("run adr export source-root with time filter");
+        .expect("run telltale export source-root with time filter");
     assert!(!time_output.status.success());
     assert!(
         String::from_utf8_lossy(&time_output.stderr)
             .contains("--source-root does not support --since/--until filters")
     );
 
-    let correlate_output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let correlate_output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1672,7 +1743,7 @@ fn export_source_root_rejects_jsonl_only_filters() {
         .args(["--session-id", "source-session"])
         .arg("--correlate")
         .output()
-        .expect("run adr export source-root with correlate");
+        .expect("run telltale export source-root with correlate");
     assert!(!correlate_output.status.success());
     assert!(
         String::from_utf8_lossy(&correlate_output.stderr)
@@ -1683,10 +1754,10 @@ fn export_source_root_rejects_jsonl_only_filters() {
 #[test]
 fn export_source_root_rejects_unknown_client_filter() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1696,7 +1767,7 @@ fn export_source_root_rejects_unknown_client_filter() {
         .args(["--session-id", "source-session"])
         .args(["--client", "unknown-agent"])
         .output()
-        .expect("run adr export source-root with unknown client");
+        .expect("run telltale export source-root with unknown client");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1709,7 +1780,7 @@ fn export_source_root_rejects_unknown_client_filter() {
 #[test]
 fn export_timeline_text_produces_human_readable_session_timeline() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(
         &log_path,
         [
@@ -1779,7 +1850,7 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
     )
     .expect("write log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--log-path")
         .arg(&log_path)
@@ -1787,7 +1858,7 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
         .args(["--session-id", "text-session"])
         .args(["--format", "timeline-text"])
         .output()
-        .expect("run adr export timeline text");
+        .expect("run telltale export timeline text");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -1888,14 +1959,14 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
     )
     .expect("write opencode source fixture");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--timeline")
         .arg("--source-root")
         .arg(temp.path())
         .args(["--session-id", "source-session"])
         .output()
-        .expect("run adr source-backed timeline export");
+        .expect("run telltale source-backed timeline export");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1903,7 +1974,7 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         "expected ambiguity error, got: {stderr}"
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--timeline")
         .arg("--source-root")
@@ -1911,7 +1982,7 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         .args(["--session-id", "source-session"])
         .args(["--client", "codex"])
         .output()
-        .expect("run adr source-backed timeline export with client filter");
+        .expect("run telltale source-backed timeline export with client filter");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2018,7 +2089,7 @@ fn export_timeline_text_from_source_root_includes_risk_summary() {
     )
     .expect("write source fixture");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
         .arg("--timeline")
         .arg("--source-root")

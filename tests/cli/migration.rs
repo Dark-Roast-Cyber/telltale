@@ -45,7 +45,7 @@ fn migration_and_scan_reject_real_cross_process_state_contention() {
     .expect("legacy state");
 
     let mut holder = hold_lock_child(&state);
-    let migration = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let migration = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "state", "--from"])
         .arg(&state)
         .args(["--to"])
@@ -59,7 +59,7 @@ fn migration_and_scan_reject_real_cross_process_state_contention() {
 
     let log = temp.path().join("events.jsonl");
     let mut holder = hold_lock_child(&state);
-    let scan = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -82,7 +82,7 @@ fn migration_and_scan_reject_real_cross_process_state_contention() {
     let log2 = temp.path().join("events-locked.jsonl");
     let state2 = temp.path().join("state-locked.json");
     let mut holder = hold_lock_child(&log2);
-    let log_scan = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let log_scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -117,7 +117,7 @@ fn migration_manifest_lock_fails_without_installing_or_mutating_state() {
     fs::write(&source, source_bytes).expect("legacy state");
 
     let mut holder = hold_lock_child(&manifest);
-    let migration = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let migration = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "state", "--from"])
         .arg(&source)
         .args(["--to"])
@@ -170,7 +170,7 @@ fn dry_run_does_not_create_state_or_log_targets() {
     let temp = tempdir().expect("tempdir");
     let state = temp.path().join("nested/state.json");
     let log = temp.path().join("nested/events.jsonl");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .current_dir(temp.path())
         .args([
             "scan",
@@ -198,6 +198,75 @@ fn dry_run_does_not_create_state_or_log_targets() {
 }
 
 #[test]
+fn retired_runtime_environment_blocks_migration_before_path_activity() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("not-created/source.env");
+    let destination = temp.path().join("not-created/destination.env");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env("ADR_LOG_PATH", "/retired/runtime/canary")
+        .current_dir(temp.path())
+        .args(["migrate", "env", "--from"])
+        .arg(&source)
+        .args(["--to"])
+        .arg(&destination)
+        .output()
+        .expect("migration");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("ADR_LOG_PATH"), "stderr: {stderr}");
+    assert!(!source.exists());
+    assert!(!destination.exists());
+    assert!(!temp.path().join("not-created").exists());
+}
+
+#[test]
+fn canonical_runtime_ignores_preseeded_legacy_default_log_and_state_files() {
+    let temp = tempdir().expect("tempdir");
+    let old_log = temp.path().join("logs/adr-events.jsonl");
+    let old_state = temp.path().join("state/adr-state.json");
+    fs::create_dir_all(old_log.parent().expect("old log parent")).expect("old log parent");
+    fs::create_dir_all(old_state.parent().expect("old state parent")).expect("old state parent");
+    let old_log_bytes = b"legacy-log-canary\n";
+    let old_state_bytes = b"legacy-state-canary\n";
+    fs::write(&old_log, old_log_bytes).expect("old log");
+    fs::write(&old_state, old_state_bytes).expect("old state");
+
+    let fixture_root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session_stores");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--path-profile",
+            "project",
+            "--client",
+            "codex",
+            "--root",
+        ])
+        .arg(&fixture_root)
+        .output()
+        .expect("scan");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(fs::read(&old_log).expect("old log bytes"), old_log_bytes);
+    assert_eq!(
+        fs::read(&old_state).expect("old state bytes"),
+        old_state_bytes
+    );
+    assert!(temp.path().join("logs/telltale-events.jsonl").exists());
+    assert!(temp.path().join("state/telltale-state.json").exists());
+}
+
+#[test]
 fn configured_local_output_namespace_is_validated_before_scan() {
     let temp = tempdir().expect("tempdir");
     let config_dir = temp.path().join("config");
@@ -212,7 +281,7 @@ fn configured_local_output_namespace_is_validated_before_scan() {
         ),
     )
     .expect("outputs config");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--config-dir"])
         .arg(&config_dir)
         .args(["--root", "empty-root", "--state-path"])
@@ -245,7 +314,7 @@ fn rotation_namespace_collision_is_rejected_before_log_mutation() {
     )
     .expect("outputs config");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -288,7 +357,7 @@ fn migrated_state_preserves_detection_deduplication() {
     let fixture_root =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session_stores");
 
-    let first = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -321,7 +390,7 @@ fn migrated_state_preserves_detection_deduplication() {
     .expect("legacy source");
     run_migration(&legacy_source, &migrated_state);
 
-    let second = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -368,7 +437,7 @@ fn native_migration_manifest_counts_malformed_host_normalization() {
         .replace("internal.example.test", "sha256:ABC");
     fs::write(&source, bytes.as_bytes()).expect("native source");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "state", "--from"])
         .arg(&source)
         .args(["--to"])
@@ -578,7 +647,7 @@ fn insert_sqlite_part_row(
 
 #[cfg(target_os = "linux")]
 fn scan_opencode(root: &std::path::Path, state: &std::path::Path, log: &std::path::Path) -> Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -628,7 +697,7 @@ fn two_scan_processes_contend_on_the_same_state_lock() {
     }
     let state = temp.path().join("shared-state.json");
     let log = temp.path().join("shared-events.jsonl");
-    let first = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -655,7 +724,7 @@ fn two_scan_processes_contend_on_the_same_state_lock() {
         );
         thread::sleep(Duration::from_millis(5));
     }
-    let second = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -700,7 +769,7 @@ fn concurrent_scans_produce_parseable_jsonl_with_rotation() {
         fs::copy(&fixture, sessions.join(format!("session-{index}.jsonl"))).expect("fixture copy");
     }
     let log = temp.path().join("shared-events.jsonl");
-    let first = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -725,7 +794,7 @@ fn concurrent_scans_produce_parseable_jsonl_with_rotation() {
         assert!(Instant::now() < deadline, "first scan did not start");
         thread::sleep(Duration::from_millis(5));
     }
-    let second = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1146,7 +1215,7 @@ fn event_migration_accepts_framing_only_duplicate_differences() {
 
 #[test]
 fn migration_cli_exposes_only_explicit_event_and_environment_inputs() {
-    let help = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let help = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "events", "--help"])
         .output()
         .expect("events help");
@@ -1157,14 +1226,14 @@ fn migration_cli_exposes_only_explicit_event_and_environment_inputs() {
     assert!(help_text.contains("32 unique destinations"));
     assert!(!help_text.contains("fail-after-destination-install"));
 
-    let no_pair = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let no_pair = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "events"])
         .output()
         .expect("empty event migration");
     assert!(!no_pair.status.success());
     assert!(String::from_utf8_lossy(&no_pair.stderr).contains("at least one pair"));
 
-    let env_help = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let env_help = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "env", "--help"])
         .output()
         .expect("environment help");
@@ -1698,7 +1767,7 @@ fn manifest_path_for(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn run_event_pairs(pairs: &[(&std::path::Path, &std::path::Path)]) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_adr"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
     command.args(["migrate", "events"]);
     for (source, destination) in pairs {
         command.args(["--pair"]).arg(source).arg(destination);
@@ -1710,7 +1779,7 @@ fn run_env_migration(
     source: &std::path::Path,
     destination: &std::path::Path,
 ) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_adr"))
+    Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "env", "--from"])
         .arg(source)
         .args(["--to"])
@@ -1735,7 +1804,7 @@ fn set_mode(path: &std::path::Path, mode: u32) {
 }
 
 fn run_migration(source: &std::path::Path, destination: &std::path::Path) {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "state", "--from"])
         .arg(source)
         .args(["--to"])

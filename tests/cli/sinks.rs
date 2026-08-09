@@ -90,11 +90,11 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--no-local-config", "--root"])
         .arg(&root)
         .args(["--log-path"])
@@ -105,7 +105,7 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         .args(["--splunk-hec-token", "test-token"])
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     shutdown.send(()).expect("stop mock hec server");
     handle.join().expect("mock hec thread");
@@ -140,8 +140,8 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
 #[test]
 fn scan_once_emits_identical_events_to_jsonl_hec_and_elastic() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
     let (elastic_endpoint, elastic_requests, elastic_shutdown, elastic_handle) =
         start_mock_elastic_server();
@@ -156,7 +156,7 @@ fn scan_once_emits_identical_events_to_jsonl_hec_and_elastic() {
     )
     .expect("write outputs config");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -175,7 +175,7 @@ fn scan_once_emits_identical_events_to_jsonl_hec_and_elastic() {
         .arg("--install-inventory-disabled")
         .env("TEST_ELASTIC_API_KEY", "elastic-test-key")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     shutdown.send(()).expect("stop mock hec server");
     handle.join().expect("mock hec thread");
@@ -257,10 +257,10 @@ fn scan_once_requires_splunk_hec_endpoint_and_token_together() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--no-local-config", "--root"])
         .arg(&root)
         .args(["--log-path"])
@@ -272,7 +272,7 @@ fn scan_once_requires_splunk_hec_endpoint_and_token_together() {
             "http://127.0.0.1:8088/services/collector",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -286,8 +286,8 @@ fn scan_once_continues_and_alerts_when_splunk_hec_is_unreachable() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     // Bind and immediately drop a listener so the port is closed: connection refused.
     let unreachable_endpoint = {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("probe listener");
@@ -296,7 +296,7 @@ fn scan_once_continues_and_alerts_when_splunk_hec_is_unreachable() {
         format!("http://{addr}/services/collector")
     };
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--no-local-config", "--root"])
         .arg(&root)
         .args(["--log-path"])
@@ -307,7 +307,7 @@ fn scan_once_continues_and_alerts_when_splunk_hec_is_unreachable() {
         .args(["--splunk-hec-token", "test-token"])
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -365,7 +365,7 @@ fn scan_once_uses_outputs_config_sinks() {
     fs::create_dir_all(&root).expect("empty root");
     let cli_log_path = temp.path().join("cli-events.jsonl");
     let config_log_path = temp.path().join("policy-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let state_path = temp.path().join("telltale-state.json");
     let project_config = temp.path().join("projects.yaml");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
 
@@ -427,7 +427,7 @@ sinks:
     )
     .expect("write project config");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -441,7 +441,7 @@ sinks:
         .arg("--install-inventory-disabled")
         .env("ADR_TEST_OUTPUTS_HEC_TOKEN", "env-secret-token")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     shutdown.send(()).expect("stop mock hec server");
     handle.join().expect("mock hec thread");
@@ -549,7 +549,7 @@ fn scan_once_remote_only_delivers_without_creating_local_log() {
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
     let log_path = temp.path().join("should-not-exist.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let state_path = temp.path().join("telltale-state.json");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
 
     let config_dir = temp.path().join("conf");
@@ -571,7 +571,7 @@ sinks:
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -582,7 +582,7 @@ sinks:
         .arg(&state_path)
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     let request = requests
         .recv_timeout(Duration::from_secs(2))
@@ -619,14 +619,14 @@ fn scan_once_explicit_empty_outputs_has_no_legacy_local_sink() {
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
     let log_path = temp.path().join("should-not-exist.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let state_path = temp.path().join("telltale-state.json");
     let config_dir = temp.path().join("conf");
     let outputs_dir = config_dir.join("outputs.d");
     fs::create_dir_all(&outputs_dir).expect("outputs.d");
     fs::write(outputs_dir.join("outputs.yaml"), "version: 1\nsinks: []\n")
         .expect("write empty outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -637,7 +637,7 @@ fn scan_once_explicit_empty_outputs_has_no_legacy_local_sink() {
         .arg(&state_path)
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     assert!(
@@ -655,7 +655,7 @@ fn scan_once_explicit_empty_outputs_uses_only_cli_hec_overlay() {
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
     let log_path = temp.path().join("should-not-exist.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let state_path = temp.path().join("telltale-state.json");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
     let config_dir = temp.path().join("conf");
     let outputs_dir = config_dir.join("outputs.d");
@@ -663,7 +663,7 @@ fn scan_once_explicit_empty_outputs_uses_only_cli_hec_overlay() {
     fs::write(outputs_dir.join("outputs.yaml"), "version: 1\nsinks: []\n")
         .expect("write empty outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -676,7 +676,7 @@ fn scan_once_explicit_empty_outputs_uses_only_cli_hec_overlay() {
         .args(["--splunk-hec-token", "test-token"])
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     let request = requests
         .recv_timeout(Duration::from_secs(2))
@@ -724,7 +724,7 @@ fn scan_once_all_disabled_outputs_have_no_local_sink() {
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
     let log_path = temp.path().join("should-not-exist.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let state_path = temp.path().join("telltale-state.json");
     let config_dir = temp.path().join("conf");
     let outputs_dir = config_dir.join("outputs.d");
     fs::create_dir_all(&outputs_dir).expect("outputs.d");
@@ -734,7 +734,7 @@ fn scan_once_all_disabled_outputs_have_no_local_sink() {
     )
     .expect("write disabled outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -745,7 +745,7 @@ fn scan_once_all_disabled_outputs_have_no_local_sink() {
         .arg(&state_path)
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(output.status.success(), "stderr: {:?}", output.stderr);
     assert!(
@@ -770,7 +770,7 @@ fn scan_once_outputs_reserved_name_is_replaced_by_cli_hec_overlay() {
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
     let log_path = temp.path().join("should-not-exist.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let state_path = temp.path().join("telltale-state.json");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
     let config_dir = temp.path().join("conf");
     let outputs_dir = config_dir.join("outputs.d");
@@ -781,7 +781,7 @@ fn scan_once_outputs_reserved_name_is_replaced_by_cli_hec_overlay() {
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -794,7 +794,7 @@ fn scan_once_outputs_reserved_name_is_replaced_by_cli_hec_overlay() {
         .args(["--splunk-hec-token", "test-token"])
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     let request = requests
         .recv_timeout(Duration::from_secs(2))
@@ -839,7 +839,7 @@ fn scan_once_exhausted_remote_only_delivery_is_failed_without_replay_claim() {
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
     let log_path = temp.path().join("should-not-exist.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let state_path = temp.path().join("telltale-state.json");
     let unreachable_endpoint = {
         let listener = TcpListener::bind("127.0.0.1:0").expect("probe listener");
         let addr = listener.local_addr().expect("probe addr");
@@ -866,7 +866,7 @@ sinks:
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -877,7 +877,7 @@ sinks:
         .arg(&state_path)
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -985,8 +985,8 @@ fn scan_once_ships_events_to_elastic_bulk_sink() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     let (elastic_endpoint, requests, shutdown, handle) = start_mock_elastic_server();
 
     let config_dir = temp.path().join("conf");
@@ -1011,7 +1011,7 @@ sinks:
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -1023,7 +1023,7 @@ sinks:
         .arg("--install-inventory-disabled")
         .env("ADR_TEST_ELASTIC_API_KEY", "test-api-key")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     shutdown.send(()).expect("stop mock elastic server");
     handle.join().expect("mock elastic thread");
@@ -1067,8 +1067,8 @@ fn scan_once_fails_fast_on_invalid_outputs_config() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("empty-root");
     fs::create_dir_all(&root).expect("empty root");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     let config_dir = temp.path().join("conf");
     let outputs_dir = config_dir.join("outputs.d");
@@ -1079,7 +1079,7 @@ fn scan_once_fails_fast_on_invalid_outputs_config() {
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--root"])
         .arg(&root)
         .args(["--config-dir"])
@@ -1090,7 +1090,7 @@ fn scan_once_fails_fast_on_invalid_outputs_config() {
         .arg(&state_path)
         .arg("--install-inventory-disabled")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(!output.status.success(), "typo config must fail fast");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1120,11 +1120,11 @@ sinks:
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_dir)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -1175,11 +1175,11 @@ sinks:
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_dir)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -1230,12 +1230,12 @@ sinks:
     )
     .expect("write outputs yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_dir)
         .env_remove("ADR_TEST_MISSING_VALIDATE_TOKEN")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

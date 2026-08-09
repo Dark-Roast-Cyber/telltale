@@ -8,11 +8,11 @@ version: 1
 sinks:
   # Durable first-write JSONL handoff, which a Splunk Universal Forwarder or
   # Filebeat can tail. The central platform becomes canonical after ingestion.
-  # Omit `path`/`rotation` to inherit the resolved --log-path / ADR_LOG_PATH /
+  # Omit `path`/`rotation` to inherit the resolved --log-path / TELLTALE_LOG_PATH /
   # path-profile defaults.
   - name: local
     type: jsonl
-    # path: /var/log/telltale/adr-events.jsonl
+    # path: /var/log/telltale/telltale-events.jsonl
     # rotation:
     #   max_size_bytes: 104857600   # 100 MB
     #   keep: 5

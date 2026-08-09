@@ -482,7 +482,7 @@ done
 echo "== packaged telltale-cli install =="
 CARGO_TARGET_DIR="$TARGET_DIR/install" "$@"
 
-for binary in telltale adr; do
+for binary in telltale; do
     test -x "$INSTALL_ROOT/bin/$binary" || {
         echo "packaged install omitted $binary" >&2
         exit 1
@@ -496,6 +496,10 @@ for binary in telltale adr; do
             ;;
     esac
 done
+test ! -e "$INSTALL_ROOT/bin/adr" || {
+    echo "packaged install must not include retired adr executable" >&2
+    exit 1
+}
 
 elapsed=$(( $(date +%s) - START_TIME ))
 echo "Package verification passed in ${elapsed}s."

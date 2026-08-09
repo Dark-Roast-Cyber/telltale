@@ -87,7 +87,7 @@ fn assert_detection_flow_accounting(summary: &Value, emitted: u64, deduplicated:
 }
 
 fn assert_runtime_snapshot(summary: &Value) {
-    let executable = Path::new(env!("CARGO_BIN_EXE_adr"));
+    let executable = Path::new(env!("CARGO_BIN_EXE_telltale"));
     let mut file = fs::File::open(executable).expect("open invoked executable");
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
@@ -98,7 +98,10 @@ fn assert_runtime_snapshot(summary: &Value) {
         summary["runtime"]["package_version"],
         env!("CARGO_PKG_VERSION")
     );
-    assert_eq!(summary["runtime"]["build_git_hash"], env!("ADR_GIT_HASH"));
+    assert_eq!(
+        summary["runtime"]["build_git_hash"],
+        env!("TELLTALE_GIT_HASH")
+    );
     assert_eq!(
         summary["runtime"]["executable"]["observation_status"],
         "complete"
@@ -137,10 +140,10 @@ fn assert_runtime_snapshot(summary: &Value) {
 #[test]
 fn scan_once_writes_schema_shaped_health_jsonl() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -154,7 +157,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -1493,7 +1496,7 @@ fn scan_summary_reports_log_and_state_path_precedence() {
     let env_log = temp.path().join("env-events.jsonl");
     let env_state = temp.path().join("env-state.json");
 
-    let profile = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let profile = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .current_dir(temp.path())
         .args([
             "scan",
@@ -1506,8 +1509,8 @@ fn scan_summary_reports_log_and_state_path_precedence() {
         ])
         .arg(&root)
         .arg("--install-inventory-disabled")
-        .env("ADR_LOG_PATH", "")
-        .env("ADR_STATE_PATH", "")
+        .env("TELLTALE_LOG_PATH", "")
+        .env("TELLTALE_STATE_PATH", "")
         .output()
         .expect("run profile scan");
     assert!(profile.status.success());
@@ -1522,19 +1525,19 @@ fn scan_summary_reports_log_and_state_path_precedence() {
     );
     assert_eq!(
         profile_summary["effective_configuration"]["paths"]["log"]["path_hash"],
-        path_hash(Path::new("logs/adr-events.jsonl"))
+        path_hash(Path::new("logs/telltale-events.jsonl"))
     );
     assert_eq!(
         profile_summary["effective_configuration"]["paths"]["state"]["path_hash"],
-        path_hash(Path::new("state/adr-state.json"))
+        path_hash(Path::new("state/telltale-state.json"))
     );
 
-    let environment = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let environment = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
         .arg(&root)
         .arg("--install-inventory-disabled")
-        .env("ADR_LOG_PATH", &env_log)
-        .env("ADR_STATE_PATH", &env_state)
+        .env("TELLTALE_LOG_PATH", &env_log)
+        .env("TELLTALE_STATE_PATH", &env_state)
         .output()
         .expect("run environment scan");
     assert!(environment.status.success());
@@ -1555,7 +1558,7 @@ fn scan_summary_reports_log_and_state_path_precedence() {
 
     let cli_log = temp.path().join("cli-events.jsonl");
     let cli_state = temp.path().join("cli-state.json");
-    let cli = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let cli = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
         .arg(&root)
         .args(["--log-path"])
@@ -1563,8 +1566,8 @@ fn scan_summary_reports_log_and_state_path_precedence() {
         .args(["--state-path"])
         .arg(&cli_state)
         .arg("--install-inventory-disabled")
-        .env("ADR_LOG_PATH", &env_log)
-        .env("ADR_STATE_PATH", &env_state)
+        .env("TELLTALE_LOG_PATH", &env_log)
+        .env("TELLTALE_STATE_PATH", &env_state)
         .output()
         .expect("run cli scan");
     assert!(cli.status.success());
@@ -1586,10 +1589,10 @@ fn scan_summary_reports_log_and_state_path_precedence() {
 #[test]
 fn scan_once_client_filter_limits_discovered_sources() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1606,7 +1609,7 @@ fn scan_once_client_filter_limits_discovered_sources() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -1639,8 +1642,8 @@ fn scan_once_client_filter_limits_discovered_sources() {
 #[test]
 fn scan_once_accepts_repeated_client_filters() {
     let temp = tempdir().expect("tempdir");
-    let state_path = temp.path().join("adr-state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let state_path = temp.path().join("telltale-state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1656,7 +1659,7 @@ fn scan_once_accepts_repeated_client_filters() {
         .arg("--state-path")
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -1677,7 +1680,7 @@ fn scan_once_accepts_repeated_client_filters() {
 
 #[test]
 fn scan_once_rejects_unknown_client_filter() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1688,7 +1691,7 @@ fn scan_once_rejects_unknown_client_filter() {
             "unknown-agent",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1700,10 +1703,10 @@ fn scan_once_rejects_unknown_client_filter() {
 #[test]
 fn scan_once_max_sources_limits_discovered_sources() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1722,7 +1725,7 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -1754,11 +1757,11 @@ fn scan_once_max_sources_limits_discovered_sources() {
 #[test]
 fn scan_once_health_reports_unchanged_source_inventory() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     for _ in 0..2 {
-        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args([
                 "scan",
                 "--once",
@@ -1773,7 +1776,7 @@ fn scan_once_health_reports_unchanged_source_inventory() {
             .args(["--state-path"])
             .arg(&state_path)
             .output()
-            .expect("run adr");
+            .expect("run telltale");
 
         assert!(
             output.status.success(),
@@ -1798,7 +1801,7 @@ fn scan_once_health_reports_unchanged_source_inventory() {
 
 #[test]
 fn scan_once_max_sources_rejects_zero() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1810,7 +1813,7 @@ fn scan_once_max_sources_rejects_zero() {
             "0",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1822,7 +1825,7 @@ fn scan_once_max_sources_is_deterministic() {
     let temp = tempdir().expect("tempdir");
     let state_path = temp.path().join("scan-state.json");
     let run_scan = || {
-        Command::new(env!("CARGO_BIN_EXE_adr"))
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args([
                 "scan",
                 "--once",
@@ -1837,7 +1840,7 @@ fn scan_once_max_sources_is_deterministic() {
             ])
             .arg(&state_path)
             .output()
-            .expect("run adr")
+            .expect("run telltale")
     };
 
     let first = run_scan();
@@ -1873,10 +1876,10 @@ fn scan_once_max_sources_is_deterministic() {
 #[test]
 fn repeated_scans_suppress_duplicate_detections() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let first = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1890,7 +1893,7 @@ fn repeated_scans_suppress_duplicate_detections() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
     assert!(
         first.status.success(),
         "stderr: {}",
@@ -1902,7 +1905,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_source_processing_accounting(&first_summary);
     assert_detection_flow_accounting(&first_summary, 36, 0);
 
-    let second = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1916,7 +1919,7 @@ fn repeated_scans_suppress_duplicate_detections() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
     assert!(
         second.status.success(),
         "stderr: {}",
@@ -1943,7 +1946,7 @@ fn repeated_scans_suppress_duplicate_detections() {
         .expect("log file before backfill")
         .lines()
         .count();
-    let backfill = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let backfill = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -1993,158 +1996,143 @@ fn repeated_scans_suppress_duplicate_detections() {
 }
 
 #[test]
-fn cross_alias_scans_share_state_and_deduplicate_in_both_directions() {
-    for (first_name, first_path, second_name, second_path) in [
-        (
-            "telltale",
-            env!("CARGO_BIN_EXE_telltale"),
-            "adr",
-            env!("CARGO_BIN_EXE_adr"),
-        ),
-        (
-            "adr",
-            env!("CARGO_BIN_EXE_adr"),
-            "telltale",
-            env!("CARGO_BIN_EXE_telltale"),
-        ),
-    ] {
-        let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
-        let state_path = temp.path().join("adr-state.json");
-        let run_scan = |path: &str| {
-            Command::new(path)
-                .args([
-                    "scan",
-                    "--once",
-                    "--allow-fixtures",
-                    "--emit-activity",
-                    "--install-inventory-disabled",
-                    "--no-local-config",
-                    "--root",
-                    "tests/fixtures/session_stores",
-                    "--log-path",
-                ])
-                .arg(&log_path)
-                .args(["--state-path"])
-                .arg(&state_path)
-                .output()
-                .unwrap_or_else(|error| panic!("run {path}: {error}"))
-        };
-
-        let first = run_scan(first_path);
-        assert!(
-            first.status.success(),
-            "{first_name} stderr: {}",
-            String::from_utf8_lossy(&first.stderr)
-        );
-        let first_summary: Value = serde_json::from_slice(&first.stdout).expect("first summary");
-        assert!(
-            first_summary["detection_count"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
-        );
-        assert!(
-            first_summary["activity_count"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
-        );
-        assert!(
-            first_summary["emitted_count"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
-        );
-        let first_log = fs::read_to_string(&log_path).expect("first log");
-        let first_state: Value =
-            serde_json::from_str(&fs::read_to_string(&state_path).expect("first state"))
-                .expect("first state json");
-        let first_events = first_log
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).expect("first event json"))
-            .collect::<Vec<_>>();
-        assert!(
-            first_events
-                .iter()
-                .any(|event| event["event_type"] == "detection")
-        );
-        assert!(
-            first_events
-                .iter()
-                .any(|event| event["event_type"] == "activity")
-        );
-
-        let status = Command::new(second_path)
-            .args(["status", "--log-path"])
+fn repeated_telltale_scans_share_state_and_deduplicate() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
+    let run_scan = || {
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--emit-activity",
+                "--install-inventory-disabled",
+                "--no-local-config",
+                "--root",
+                "tests/fixtures/session_stores",
+                "--log-path",
+            ])
             .arg(&log_path)
             .args(["--state-path"])
             .arg(&state_path)
             .output()
-            .unwrap_or_else(|error| panic!("run {second_name} status: {error}"));
-        assert!(
-            status.status.success(),
-            "{second_name} status stderr: {}",
-            String::from_utf8_lossy(&status.stderr)
-        );
-        let status_summary: Value = serde_json::from_slice(&status.stdout).expect("status json");
-        assert_eq!(status_summary["status"], "ok");
-        assert_eq!(status_summary["log_path"], log_path.display().to_string());
-        assert_eq!(
-            status_summary["state_path"],
-            state_path.display().to_string()
-        );
-        assert!(
-            status_summary["detection_count"]
-                .as_u64()
-                .is_some_and(|count| count > 0)
-        );
+            .expect("run telltale")
+    };
 
-        let second = run_scan(second_path);
-        assert!(
-            second.status.success(),
-            "{second_name} stderr: {}",
-            String::from_utf8_lossy(&second.stderr)
-        );
-        let second_summary: Value = serde_json::from_slice(&second.stdout).expect("second summary");
+    let first = run_scan();
+    assert!(
+        first.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_summary: Value = serde_json::from_slice(&first.stdout).expect("first summary");
+    assert!(
+        first_summary["detection_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    assert!(
+        first_summary["activity_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    assert!(
+        first_summary["emitted_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    let first_log = fs::read_to_string(&log_path).expect("first log");
+    let first_state: Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).expect("first state"))
+            .expect("first state json");
+    let first_events = first_log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("first event json"))
+        .collect::<Vec<_>>();
+    assert!(
+        first_events
+            .iter()
+            .any(|event| event["event_type"] == "detection")
+    );
+    assert!(
+        first_events
+            .iter()
+            .any(|event| event["event_type"] == "activity")
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["status", "--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run telltale status");
+    assert!(
+        status.status.success(),
+        "status stderr: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_summary: Value = serde_json::from_slice(&status.stdout).expect("status json");
+    assert_eq!(status_summary["status"], "ok");
+    assert_eq!(status_summary["log_path"], log_path.display().to_string());
+    assert_eq!(
+        status_summary["state_path"],
+        state_path.display().to_string()
+    );
+    assert!(
+        status_summary["detection_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+
+    let second = run_scan();
+    assert!(
+        second.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_summary: Value = serde_json::from_slice(&second.stdout).expect("second summary");
+    assert_eq!(
+        second_summary["detection_count"],
+        first_summary["detection_count"]
+    );
+    assert_eq!(
+        second_summary["activity_count"],
+        first_summary["activity_count"]
+    );
+    assert_eq!(second_summary["emitted_count"], 0);
+    assert_eq!(
+        fs::read_to_string(&log_path).expect("second log"),
+        first_log,
+        "telltale must not duplicate first-scan telemetry"
+    );
+    let second_state: Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).expect("second state"))
+            .expect("second state json");
+    for field in [
+        "seen_source_fingerprints",
+        "seen_detection_fingerprints",
+        "baseline_source_contributions",
+        "baseline_snapshots",
+        "sqlite_ingestion_cursors",
+        "install_inventory",
+    ] {
         assert_eq!(
-            second_summary["detection_count"],
-            first_summary["detection_count"]
+            second_state[field], first_state[field],
+            "telltale must preserve dedup state field {field}"
         );
-        assert_eq!(
-            second_summary["activity_count"],
-            first_summary["activity_count"]
-        );
-        assert_eq!(second_summary["emitted_count"], 0);
-        assert_eq!(
-            fs::read_to_string(&log_path).expect("second log"),
-            first_log,
-            "{second_name} must not duplicate first-scan telemetry"
-        );
-        let second_state: Value =
-            serde_json::from_str(&fs::read_to_string(&state_path).expect("second state"))
-                .expect("second state json");
-        for field in [
-            "seen_source_fingerprints",
-            "seen_detection_fingerprints",
-            "baseline_source_contributions",
-            "baseline_snapshots",
-            "sqlite_ingestion_cursors",
-            "install_inventory",
-        ] {
-            assert_eq!(
-                second_state[field], first_state[field],
-                "{second_name} must preserve shared dedup state field {field}"
-            );
-        }
     }
 }
 
 #[test]
 fn scan_once_persists_incremental_baseline_snapshots() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     let run_scan = || {
-        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args([
                 "scan",
                 "--once",
@@ -2157,7 +2145,7 @@ fn scan_once_persists_incremental_baseline_snapshots() {
             .args(["--state-path"])
             .arg(&state_path)
             .output()
-            .expect("run adr");
+            .expect("run telltale");
         assert!(
             output.status.success(),
             "stderr: {}",
@@ -2201,8 +2189,8 @@ fn scan_once_replaces_changed_source_baseline_contribution() {
     let source_dir = root.join("codex/sessions");
     fs::create_dir_all(&source_dir).expect("source dir");
     let source_path = source_dir.join("append-only.jsonl");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     let write_source = |tool_calls: &[(&str, &str)]| {
         let mut lines = vec![
@@ -2221,7 +2209,7 @@ fn scan_once_replaces_changed_source_baseline_contribution() {
     };
 
     let run_scan = || {
-        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args([
                 "scan",
                 "--once",
@@ -2235,7 +2223,7 @@ fn scan_once_replaces_changed_source_baseline_contribution() {
             .args(["--state-path"])
             .arg(&state_path)
             .output()
-            .expect("run adr");
+            .expect("run telltale");
         assert!(
             output.status.success(),
             "stderr: {}",
@@ -2282,8 +2270,8 @@ fn scan_once_persists_distinct_source_contributions_for_same_bucket() {
     let root = temp.path().join("session_store");
     let source_dir = root.join("codex/sessions/2026/05");
     fs::create_dir_all(&source_dir).expect("source dir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     for (name, command) in [
         ("session-a.jsonl", "ls src"),
@@ -2311,7 +2299,7 @@ fn scan_once_persists_distinct_source_contributions_for_same_bucket() {
         .expect("write source");
     }
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -2325,7 +2313,7 @@ fn scan_once_persists_distinct_source_contributions_for_same_bucket() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2347,8 +2335,8 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     let source_dir = root.join("codex/sessions/2026/05");
     fs::create_dir_all(&source_dir).expect("source dir");
     let source_path = source_dir.join("session-a.jsonl");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     fs::write(
         &source_path,
@@ -2364,7 +2352,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     .expect("write source");
 
     let run_scan = |rebuild_baselines: bool| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_adr"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
         command
             .args([
                 "scan",
@@ -2387,7 +2375,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
         if rebuild_baselines {
             command.arg("--rebuild-baselines");
         }
-        command.output().expect("run adr")
+        command.output().expect("run telltale")
     };
 
     let first = run_scan(false);
@@ -2448,10 +2436,10 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
 #[test]
 fn scan_once_can_emit_activity_events() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -2466,7 +2454,7 @@ fn scan_once_can_emit_activity_events() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -2544,9 +2532,9 @@ fn scan_once_persists_opencode_sqlite_part_cursor() {
     .expect("insert part");
     drop(conn);
 
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -2561,7 +2549,7 @@ fn scan_once_persists_opencode_sqlite_part_cursor() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -2586,8 +2574,8 @@ fn scan_once_persists_opencode_sqlite_part_cursor() {
 fn scan_once_activity_includes_static_mcp_inventory_events() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("home");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     fs::create_dir_all(&root).expect("root dir");
     fs::write(
         root.join(".mcp.json"),
@@ -2607,7 +2595,7 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
     )
     .expect("mcp config");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -2621,7 +2609,7 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -2700,10 +2688,10 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
 #[test]
 fn scan_once_can_emit_session_risk_summary_events() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -2719,7 +2707,7 @@ fn scan_once_can_emit_session_risk_summary_events() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -2801,10 +2789,10 @@ fn scan_once_can_emit_session_risk_summary_events() {
 #[test]
 fn scan_dry_run_session_risk_summary_does_not_write_log() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("scan-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -2820,7 +2808,7 @@ fn scan_dry_run_session_risk_summary_does_not_write_log() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -2842,12 +2830,12 @@ fn scan_dry_run_session_risk_summary_does_not_write_log() {
 #[test]
 fn shipper_examples_target_default_jsonl_path() {
     let filebeat = include_str!("../../config/examples/filebeat-filestream.yml");
-    assert!(filebeat.contains("/var/log/telltale/adr-events.jsonl"));
+    assert!(filebeat.contains("/var/log/telltale/telltale-events.jsonl"));
     assert!(filebeat.contains("filestream"));
     assert!(filebeat.contains("ndjson"));
 
     let logrotate = include_str!("../../config/examples/telltale-logrotate");
-    assert!(logrotate.contains("/var/log/telltale/adr-events.jsonl"));
+    assert!(logrotate.contains("/var/log/telltale/telltale-events.jsonl"));
     assert!(logrotate.contains("daily"));
     assert!(logrotate.contains("rotate 14"));
     assert!(logrotate.contains("extension .jsonl"));
@@ -2865,7 +2853,7 @@ fn shipper_examples_target_default_jsonl_path() {
     let splunk_uf_setup = include_str!("../../scripts/slunk_uf_set_up");
     assert!(
         splunk_uf_setup.contains("ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl"),
-        "splunk UF helper must default ADR_LOG_PATH to the system-profile JSONL path"
+        "deferred Splunk UF helper must retain its pre-cutover system-profile path"
     );
     assert!(splunk_uf_setup.contains("ADR_INDEX:-telltale"));
     assert!(splunk_uf_setup.contains("ADR_SOURCETYPE:-telltale:json"));
@@ -3023,10 +3011,10 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
     let fixture_root = std::env::current_dir()
         .expect("current dir")
         .join("tests/fixtures/session_stores");
-    let log_path = temp.path().join("logs/adr-events.jsonl");
+    let log_path = temp.path().join("logs/telltale-events.jsonl");
 
     // First scan creates the file (no rotation since file doesn't exist yet).
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .current_dir(temp.path())
         .args([
             "scan",
@@ -3045,7 +3033,7 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
             "--emit-activity",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3058,7 +3046,7 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
     );
 
     // Second scan should trigger rotation (file exists and exceeds 1 byte).
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .current_dir(temp.path())
         .args([
             "scan",
@@ -3078,7 +3066,7 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
             "--backfill",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3100,7 +3088,7 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
-            name.starts_with("adr-events-") && name.ends_with(".jsonl")
+            name.starts_with("telltale-events-") && name.ends_with(".jsonl")
         })
         .collect();
     assert!(
@@ -3111,7 +3099,7 @@ fn scan_rotates_jsonl_when_max_size_exceeded() {
     // Rotated file should have a date in the name.
     let rotated_name = rotated[0].file_name().to_string_lossy().to_string();
     assert!(
-        rotated_name.contains("adr-events-2"),
+        rotated_name.contains("telltale-events-2"),
         "rotated file should be date-stamped: {rotated_name}"
     );
 }
@@ -3122,9 +3110,9 @@ fn scan_with_log_rotate_disabled_does_not_rotate() {
     let fixture_root = std::env::current_dir()
         .expect("current dir")
         .join("tests/fixtures/session_stores");
-    let log_path = temp.path().join("logs/adr-events.jsonl");
+    let log_path = temp.path().join("logs/telltale-events.jsonl");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .current_dir(temp.path())
         .args([
             "scan",
@@ -3139,7 +3127,7 @@ fn scan_with_log_rotate_disabled_does_not_rotate() {
             "1",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3157,7 +3145,7 @@ fn scan_with_log_rotate_disabled_does_not_rotate() {
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
-            name.starts_with("adr-events-") && name.ends_with(".jsonl")
+            name.starts_with("telltale-events-") && name.ends_with(".jsonl")
         })
         .collect();
     assert!(
@@ -3173,7 +3161,7 @@ fn scan_project_path_profile_separates_jsonl_telemetry_from_state() {
         .expect("current dir")
         .join("tests/fixtures/session_stores");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .current_dir(temp.path())
         .args([
             "scan",
@@ -3187,7 +3175,7 @@ fn scan_project_path_profile_separates_jsonl_telemetry_from_state() {
             "1",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3196,10 +3184,10 @@ fn scan_project_path_profile_separates_jsonl_telemetry_from_state() {
     );
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
-    assert_eq!(summary["log_path"], "logs/adr-events.jsonl");
-    assert!(temp.path().join("logs/adr-events.jsonl").is_file());
-    assert!(temp.path().join("state/adr-state.json").is_file());
-    assert!(!temp.path().join("logs/adr-state.json").exists());
+    assert_eq!(summary["log_path"], "logs/telltale-events.jsonl");
+    assert!(temp.path().join("logs/telltale-events.jsonl").is_file());
+    assert!(temp.path().join("state/telltale-state.json").is_file());
+    assert!(!temp.path().join("logs/telltale-state.json").exists());
 }
 
 #[test]
@@ -3208,13 +3196,13 @@ fn scan_uses_env_log_and_state_defaults() {
     let fixture_root = std::env::current_dir()
         .expect("current dir")
         .join("tests/fixtures/session_stores");
-    let log_path = temp.path().join("env-logs/adr-events.jsonl");
-    let state_path = temp.path().join("env-state/adr-state.json");
+    let log_path = temp.path().join("env-logs/telltale-events.jsonl");
+    let state_path = temp.path().join("env-state/telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .current_dir(temp.path())
-        .env("ADR_LOG_PATH", &log_path)
-        .env("ADR_STATE_PATH", &state_path)
+        .env("TELLTALE_LOG_PATH", &log_path)
+        .env("TELLTALE_STATE_PATH", &state_path)
         .args([
             "scan",
             "--once",
@@ -3225,7 +3213,7 @@ fn scan_uses_env_log_and_state_defaults() {
             "1",
         ])
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3237,8 +3225,8 @@ fn scan_uses_env_log_and_state_defaults() {
     assert_eq!(summary["log_path"], log_path.display().to_string());
     assert!(log_path.is_file());
     assert!(state_path.is_file());
-    assert!(!temp.path().join("logs/adr-events.jsonl").exists());
-    assert!(!temp.path().join("state/adr-state.json").exists());
+    assert!(!temp.path().join("logs/telltale-events.jsonl").exists());
+    assert!(!temp.path().join("state/telltale-state.json").exists());
 }
 
 #[test]
@@ -3289,14 +3277,14 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
 fn scan_invalid_root_reports_privacy_safe_fallback_diagnostics() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("invalid-root-sentinel");
-    let state_path = temp.path().join("adr-state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let state_path = temp.path().join("telltale-state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
         .arg(&root)
         .arg("--state-path")
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3360,7 +3348,7 @@ fn project_config_failures_are_aggregated_without_path_or_error_leakage() {
     fs::write(&bad_config, "projects: [not valid yaml").expect("bad project config");
     let log_path = temp.path().join("events.jsonl");
     let state_path = temp.path().join("state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--no-local-config", "--root"])
         .arg(&root)
         .args(["--project-config"])
@@ -3372,7 +3360,7 @@ fn project_config_failures_are_aggregated_without_path_or_error_leakage() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3449,9 +3437,9 @@ fn scan_once_continues_after_malformed_source() {
     )
     .expect("positive fixture");
 
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -3465,7 +3453,7 @@ fn scan_once_continues_after_malformed_source() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3523,10 +3511,10 @@ fn scan_once_continues_after_malformed_source() {
 #[test]
 fn scan_once_refuses_fixture_root_without_allow_fixtures() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -3538,7 +3526,7 @@ fn scan_once_refuses_fixture_root_without_allow_fixtures() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -3549,10 +3537,10 @@ fn scan_once_refuses_fixture_root_without_allow_fixtures() {
 #[test]
 fn scan_once_allows_fixture_root_with_dry_run() {
     let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -3566,7 +3554,7 @@ fn scan_once_allows_fixture_root_with_dry_run() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -3580,10 +3568,10 @@ fn scan_once_allows_fixture_root_with_dry_run() {
 
 #[test]
 fn watch_command_is_available_for_realtime_scans() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["watch", "--help"])
         .output()
-        .expect("run adr watch help");
+        .expect("run telltale watch help");
 
     assert!(
         output.status.success(),
@@ -3661,11 +3649,11 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         Path::new("tests/fixtures/session_stores/codex"),
         &root.join("codex"),
     );
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     let session_path = root.join("codex/sessions/2026/04/session-a.jsonl");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "watch",
             "--allow-fixtures",
@@ -3686,26 +3674,28 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr watch");
+        .expect("spawn telltale watch");
 
     // Rewrite a watched fixture until the watcher notices; the watcher may
     // still be initializing on the first writes.
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if child.try_wait().expect("poll adr watch").is_some() {
+        if child.try_wait().expect("poll telltale watch").is_some() {
             break;
         }
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("adr watch did not exit within timeout");
+            panic!("telltale watch did not exit within timeout");
         }
         let contents = fs::read(&session_path).expect("read watched fixture");
         fs::write(&session_path, contents).expect("rewrite watched fixture");
         thread::sleep(Duration::from_millis(200));
     }
 
-    let output = child.wait_with_output().expect("collect adr watch output");
+    let output = child
+        .wait_with_output()
+        .expect("collect telltale watch output");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -3757,10 +3747,10 @@ fn watch_skips_no_op_state_save() {
         Path::new("tests/fixtures/session_stores/codex"),
         &root.join("codex"),
     );
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "watch",
             "--allow-fixtures",
@@ -3781,7 +3771,7 @@ fn watch_skips_no_op_state_save() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr watch");
+        .expect("spawn telltale watch");
     let stdout = child.stdout.take().expect("watch stdout");
     let (summary_tx, summary_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -3818,18 +3808,20 @@ fn watch_skips_no_op_state_save() {
     // Wait for the second iteration to finish and the process to exit.
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if child.try_wait().expect("poll adr watch").is_some() {
+        if child.try_wait().expect("poll telltale watch").is_some() {
             break;
         }
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("adr watch did not exit after second scan within timeout");
+            panic!("telltale watch did not exit after second scan within timeout");
         }
         thread::sleep(Duration::from_millis(100));
     }
 
-    let output = child.wait_with_output().expect("collect adr watch output");
+    let output = child
+        .wait_with_output()
+        .expect("collect telltale watch output");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -3944,10 +3936,10 @@ fn watch_synthetic_multi_cycle_soak() {
         fs::write(path, b"").expect("pre-create valid source");
     }
 
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     let mut child = WatchChildGuard::new(
-        Command::new(env!("CARGO_BIN_EXE_adr"))
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args([
                 "watch",
                 "--allow-fixtures",
@@ -3975,7 +3967,7 @@ fn watch_synthetic_multi_cycle_soak() {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("spawn adr watch soak"),
+            .expect("spawn telltale watch soak"),
     );
 
     let (summary_tx, summary_rx) = mpsc::channel();
@@ -4073,13 +4065,13 @@ fn watch_synthetic_multi_cycle_soak() {
                     panic!("watch summary reader disconnected before scan completed")
                 }
             }
-            if let Some(status) = child.try_wait().expect("poll adr watch") {
-                panic!("adr watch exited before scan completed: {status:?}")
+            if let Some(status) = child.try_wait().expect("poll telltale watch") {
+                panic!("telltale watch exited before scan completed: {status:?}")
             }
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("adr watch did not complete the single triggered scan within timeout")
+                panic!("telltale watch did not complete the single triggered scan within timeout")
             }
         };
         let quiet_deadline = Instant::now() + Duration::from_millis(150);
@@ -4098,11 +4090,11 @@ fn watch_synthetic_multi_cycle_soak() {
             }
             if child
                 .try_wait()
-                .expect("poll adr watch quiet period")
+                .expect("poll telltale watch quiet period")
                 .is_some()
                 && !allow_exit_during_quiet
             {
-                panic!("adr watch exited unexpectedly during quiet period")
+                panic!("telltale watch exited unexpectedly during quiet period")
             }
         }
         summary
@@ -4115,8 +4107,8 @@ fn watch_synthetic_multi_cycle_soak() {
                 path.file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| {
-                        name == "adr-events.jsonl"
-                            || (name.starts_with("adr-events-") && name.ends_with(".jsonl"))
+                        name == "telltale-events.jsonl"
+                            || (name.starts_with("telltale-events-") && name.ends_with(".jsonl"))
                     })
             })
             .collect::<Vec<_>>()
@@ -4272,13 +4264,17 @@ fn watch_synthetic_multi_cycle_soak() {
 
     let exit_deadline = Instant::now() + Duration::from_secs(20);
     let final_status = loop {
-        if let Some(status) = child.child_mut().try_wait().expect("poll final adr watch") {
+        if let Some(status) = child
+            .child_mut()
+            .try_wait()
+            .expect("poll final telltale watch")
+        {
             break status;
         }
         if Instant::now() >= exit_deadline {
             let _ = child.child_mut().kill();
             let _ = child.child_mut().wait();
-            panic!("adr watch did not exit after finite soak iterations")
+            panic!("telltale watch did not exit after finite soak iterations")
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -4289,7 +4285,7 @@ fn watch_synthetic_multi_cycle_soak() {
     let exited_child = child.disarm();
     let output = exited_child
         .wait_with_output()
-        .expect("collect adr watch output");
+        .expect("collect telltale watch output");
     stdout_reader.join().expect("join watch summary reader");
     assert!(!Path::new(&proc_fd_path).exists());
 
@@ -4347,13 +4343,13 @@ fn watch_exits_cleanly_on_sigterm() {
         &root.join("codex"),
     );
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["watch", "--dry-run", "--no-local-config", "--root"])
         .arg(&root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr watch");
+        .expect("spawn telltale watch");
 
     // Give the process time to install the signal handler and watcher.
     thread::sleep(Duration::from_secs(2));
@@ -4366,7 +4362,7 @@ fn watch_exits_cleanly_on_sigterm() {
 
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if let Some(status) = child.try_wait().expect("poll adr watch") {
+        if let Some(status) = child.try_wait().expect("poll telltale watch") {
             assert!(
                 status.success(),
                 "watch should exit cleanly on SIGTERM, got {status:?}"
@@ -4376,7 +4372,7 @@ fn watch_exits_cleanly_on_sigterm() {
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("adr watch did not exit after SIGTERM");
+            panic!("telltale watch did not exit after SIGTERM");
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -4384,7 +4380,7 @@ fn watch_exits_cleanly_on_sigterm() {
 
 #[test]
 fn watch_rejects_unknown_client_filter() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "watch",
             "--dry-run",
@@ -4394,7 +4390,7 @@ fn watch_rejects_unknown_client_filter() {
             "unknown-agent",
         ])
         .output()
-        .expect("run adr watch");
+        .expect("run telltale watch");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -4416,8 +4412,8 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
         ),
     )
     .expect("uc001 fixture");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind no-network probe");
     listener
         .set_nonblocking(true)
@@ -4434,7 +4430,7 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
     )
     .expect("mock env");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -4449,10 +4445,10 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
-        .env("ADR_RISK_THRESHOLD_TRIAGE", "1")
+        .env("TELLTALE_RISK_THRESHOLD_HIGH", "1")
         .current_dir(temp.path())
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
 
     assert!(
         output.status.success(),
@@ -4487,7 +4483,7 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
 }
 
 #[test]
-fn scan_once_ignores_legacy_triage_configuration_variables() {
+fn scan_once_uses_canonical_threshold_without_network() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions/2026/04");
@@ -4499,12 +4495,12 @@ fn scan_once_ignores_legacy_triage_configuration_variables() {
         ),
     )
     .expect("uc001 fixture");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
     let rule_path = std::env::current_dir()
         .expect("repo cwd")
         .join("config/rules/tool-call-regex.yaml");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -4519,16 +4515,14 @@ fn scan_once_ignores_legacy_triage_configuration_variables() {
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
-        .env("ADR_RISK_THRESHOLD_TRIAGE", "1")
+        .env("TELLTALE_RISK_THRESHOLD_HIGH", "1")
         .env_remove("LITELLM_API_BASE")
         .env_remove("LITELLM_API_KEY")
         .env_remove("MODEL")
         .env_remove("LLAMA_GUARD_MODEL")
-        .env_remove("ADR_TRIAGE_TIMEOUT_MS")
-        .env_remove("ADR_TRIAGE_MAX_RETRIES")
         .current_dir(temp.path())
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
 
     assert!(
         output.status.success(),
@@ -4566,9 +4560,9 @@ fn operational_alert_emitted_when_scanner_errors_exceed_threshold() {
     )
     .expect("malformed fixture");
 
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -4581,9 +4575,9 @@ fn operational_alert_emitted_when_scanner_errors_exceed_threshold() {
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
-        .env("ADR_OP_ALERT_MAX_SCANNER_ERRORS", "0")
+        .env("TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS", "0")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -4659,9 +4653,9 @@ fn operational_alert_not_emitted_when_scanner_errors_below_threshold() {
     )
     .expect("malformed fixture");
 
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -4674,9 +4668,9 @@ fn operational_alert_not_emitted_when_scanner_errors_below_threshold() {
         .arg(&log_path)
         .args(["--state-path"])
         .arg(&state_path)
-        .env("ADR_OP_ALERT_MAX_SCANNER_ERRORS", "5")
+        .env("TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS", "5")
         .output()
-        .expect("run adr");
+        .expect("run telltale");
 
     assert!(
         output.status.success(),
@@ -4710,11 +4704,11 @@ fn scanner_error_events_dedup_on_subsequent_scans() {
     )
     .expect("malformed fixture");
 
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     let run_scan = || {
-        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
             .args([
                 "scan",
                 "--once",
@@ -4727,9 +4721,9 @@ fn scanner_error_events_dedup_on_subsequent_scans() {
             .arg(&log_path)
             .args(["--state-path"])
             .arg(&state_path)
-            .env("ADR_OP_ALERT_MAX_SCANNER_ERRORS", "5")
+            .env("TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS", "5")
             .output()
-            .expect("run adr");
+            .expect("run telltale");
 
         assert!(
             output.status.success(),
