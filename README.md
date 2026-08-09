@@ -89,7 +89,8 @@ The fixture tree in `tests/fixtures/` is synthetic and safe for local verificati
 Use `--dry-run` for fixture checks. Reserve `--allow-fixtures` for intentional
 synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
-real-session-store setup.
+real-session-store setup. Explicit state, historical-event, and environment
+migration guidance is in the [migration contract](docs/migration-contract.md).
 
 ## Cargo packages
 

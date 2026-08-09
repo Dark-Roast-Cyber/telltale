@@ -4,6 +4,9 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use flate2::Compression;
+use flate2::read::MultiGzDecoder;
+use flate2::write::GzEncoder;
 use fs4::fs_std::FileExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -769,6 +772,966 @@ fn concurrent_scans_produce_parseable_jsonl_with_rotation() {
         }
     }
     assert_eq!(actual_records, expected_records);
+}
+
+#[test]
+fn event_migration_cli_preserves_mixed_versions_framing_and_manifest_repair() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("legacy-events.jsonl");
+    let destination = temp.path().join("telltale-events.jsonl");
+    let first = compact_historical_fixture("event-1.0.json");
+    let second = compact_historical_fixture("event-2.0.json");
+    let third = serde_json::to_vec(&super::native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000003",
+        "2026-05-01T00:00:00.000Z",
+        "low",
+        "codex",
+        "migration-session",
+        &[],
+    ))
+    .expect("native event");
+    let mut source_bytes = first.clone();
+    source_bytes.extend_from_slice(b"\r\n\r\n");
+    source_bytes.extend_from_slice(&second);
+    source_bytes.push(b'\n');
+    source_bytes.extend_from_slice(&third);
+    fs::write(&source, &source_bytes).expect("source");
+
+    let output = run_event_pairs(&[(&source, &destination)]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(&destination).expect("destination"), source_bytes);
+    let manifest_path = destination.with_file_name("telltale-events.jsonl.migration.json");
+    let manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).expect("manifest"))
+        .expect("manifest JSON");
+    assert_eq!(manifest["record_count"], 3);
+    assert_eq!(manifest["blank_frame_count"], 1);
+    assert_eq!(manifest["schema_versions"]["1.0"], 1);
+    assert_eq!(manifest["schema_versions"]["2.0"], 1);
+    assert_eq!(manifest["schema_versions"]["3.0"], 1);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout)
+            .contains("telltale-00000000-0000-4000-8000-000000000003")
+    );
+
+    let first_manifest = fs::read(&manifest_path).expect("manifest bytes");
+    let rerun = run_event_pairs(&[(&source, &destination)]);
+    assert!(rerun.status.success());
+    assert_eq!(
+        fs::read(&manifest_path).expect("manifest bytes"),
+        first_manifest
+    );
+    fs::remove_file(&manifest_path).expect("remove manifest");
+    let repair = run_event_pairs(&[(&source, &destination)]);
+    assert!(repair.status.success());
+    assert_eq!(
+        fs::read(&manifest_path).expect("repaired manifest"),
+        first_manifest
+    );
+
+    fs::write(&manifest_path, b"manifest-conflict\n").expect("manifest conflict");
+    let conflict = run_event_pairs(&[(&source, &destination)]);
+    assert!(!conflict.status.success());
+    assert_eq!(
+        fs::read(&destination).expect("destination bytes"),
+        source_bytes
+    );
+}
+
+#[test]
+fn event_migration_rejects_same_id_byte_collision_before_destination_mutation() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("collision.jsonl");
+    let destination = temp.path().join("destination.jsonl");
+    let first = compact_historical_fixture("event-1.0.json");
+    let mut source_bytes = first.clone();
+    source_bytes.push(b'\n');
+    source_bytes.extend_from_slice(&first);
+    source_bytes.insert(first.len() + 1 + first.len(), b' ');
+    fs::write(&source, &source_bytes).expect("collision source");
+    fs::write(&destination, b"destination-sentinel\n").expect("destination sentinel");
+    set_mode(&destination, 0o640);
+
+    let output = run_event_pairs(&[(&source, &destination)]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("event_id collision"));
+    assert_eq!(
+        fs::read(&destination).expect("destination bytes"),
+        b"destination-sentinel\n"
+    );
+    assert!(
+        !destination
+            .with_file_name("destination.jsonl.migration.json")
+            .exists()
+    );
+}
+
+#[test]
+fn event_migration_preserves_exact_duplicate_records_in_order() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("duplicates.jsonl");
+    let destination = temp.path().join("duplicates-new.jsonl");
+    let record = compact_historical_fixture("event-1.0.json");
+    let mut source_bytes = record.clone();
+    source_bytes.push(b'\n');
+    source_bytes.extend_from_slice(&record);
+    source_bytes.extend_from_slice(b"\n");
+    fs::write(&source, &source_bytes).expect("duplicate source");
+
+    let output = run_event_pairs(&[(&source, &destination)]);
+    assert!(output.status.success());
+    assert_eq!(fs::read(&destination).expect("destination"), source_bytes);
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(destination.with_file_name("duplicates-new.jsonl.migration.json"))
+            .expect("manifest"),
+    )
+    .expect("manifest JSON");
+    assert_eq!(manifest["record_count"], 2);
+
+    fs::write(&destination, b"destination-conflict\n").expect("destination conflict");
+    let conflict = run_event_pairs(&[(&source, &destination)]);
+    assert!(!conflict.status.success());
+    assert_eq!(
+        fs::read(&destination).expect("destination"),
+        b"destination-conflict\n"
+    );
+}
+
+#[test]
+fn event_migration_rejects_malformed_versions_duplicate_keys_and_partial_records_without_values() {
+    let cases = [
+        (
+            "{\"event_id\":\"missing-canary\"}\n",
+            "missing schema version",
+        ),
+        (
+            "{\"schema_version\":\"unknown-canary\"}\n",
+            "unknown schema version",
+        ),
+        (
+            "{\"schema_version\":7,\"event_id\":\"type-canary\"}\n",
+            "schema version type invalid",
+        ),
+        (
+            "{\"schema_version\":\"1.0\",\"schema_version\":\"1.0\"}\n",
+            "duplicate JSON key",
+        ),
+        (
+            "{\"schema_version\":\"1.0\",\"event_id\":\"partial-canary\"",
+            "invalid JSON",
+        ),
+    ];
+    for (index, (contents, expected_error)) in cases.into_iter().enumerate() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join(format!("invalid-{index}.jsonl"));
+        let destination = temp.path().join(format!("destination-{index}.jsonl"));
+        fs::write(&source, contents.as_bytes()).expect("invalid source");
+        fs::write(&destination, b"untouched\n").expect("destination");
+        set_mode(&destination, 0o640);
+        let output = run_event_pairs(&[(&source, &destination)]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(stderr.contains(expected_error), "stderr: {stderr}");
+        assert!(!stderr.contains("canary"), "stderr leaked input: {stderr}");
+        assert_eq!(fs::read(&destination).expect("destination"), b"untouched\n");
+    }
+}
+
+#[test]
+fn event_migration_supports_multiple_explicit_destination_mappings() {
+    let temp = tempdir().expect("tempdir");
+    let source_one = temp.path().join("old-one.jsonl");
+    let source_two = temp.path().join("old-two.jsonl");
+    let destination_one = temp.path().join("new-one.jsonl");
+    let destination_two = temp.path().join("new-two.jsonl");
+    let first = compact_historical_fixture("event-1.0.json");
+    let second = compact_historical_fixture("event-2.0.json");
+    let mut first_with_newline = first.clone();
+    first_with_newline.push(b'\n');
+    fs::write(&source_one, &first_with_newline).expect("source one");
+    fs::write(&source_two, &second).expect("source two");
+
+    let output = run_event_pairs(&[
+        (&source_one, &destination_one),
+        (&source_two, &destination_two),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(&destination_one).expect("destination one"),
+        first_with_newline
+    );
+    assert_eq!(fs::read(&destination_two).expect("destination two"), second);
+    assert!(
+        destination_one
+            .with_file_name("new-one.jsonl.migration.json")
+            .exists()
+    );
+    assert!(
+        !destination_two
+            .with_file_name("new-two.jsonl.migration.json")
+            .exists()
+    );
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(destination_one.with_file_name("new-one.jsonl.migration.json"))
+            .expect("canonical manifest"),
+    )
+    .expect("canonical manifest JSON");
+    assert_eq!(manifest["destinations"].as_array().map(Vec::len), Some(2));
+    let manifest_text = serde_json::to_string(&manifest).expect("manifest text");
+    assert!(!manifest_text.contains(&destination_one.display().to_string()));
+    assert!(!manifest_text.contains(&destination_two.display().to_string()));
+
+    fs::remove_file(&destination_two).expect("remove secondary destination");
+    let repaired = run_event_pairs(&[
+        (&source_one, &destination_one),
+        (&source_two, &destination_two),
+    ]);
+    assert!(repaired.status.success());
+    assert_eq!(
+        fs::read(&destination_two).expect("repaired destination"),
+        second
+    );
+
+    fs::write(&destination_two, b"secondary-conflict\n").expect("secondary conflict");
+    set_mode(&destination_two, 0o640);
+    let conflict = run_event_pairs(&[
+        (&source_one, &destination_one),
+        (&source_two, &destination_two),
+    ]);
+    assert!(!conflict.status.success());
+    assert_eq!(
+        fs::read(&destination_two).expect("secondary conflict bytes"),
+        b"secondary-conflict\n"
+    );
+}
+
+#[test]
+fn event_migration_validates_same_destination_lf_boundaries_and_gzip_members() {
+    let temp = tempdir().expect("tempdir");
+    let first = compact_historical_fixture("event-1.0.json");
+    let second = compact_historical_fixture("event-2.0.json");
+
+    let source_one = temp.path().join("join-one.jsonl");
+    let source_two = temp.path().join("join-two.jsonl");
+    let destination = temp.path().join("joined.jsonl");
+    let mut first_with_lf = first.clone();
+    first_with_lf.push(b'\n');
+    fs::write(&source_one, &first_with_lf).expect("first source");
+    fs::write(&source_two, &second).expect("second source");
+    let output = run_event_pairs(&[(&source_one, &destination), (&source_two, &destination)]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut expected = first_with_lf.clone();
+    expected.extend_from_slice(&second);
+    assert_eq!(
+        fs::read(&destination).expect("joined destination"),
+        expected
+    );
+
+    let invalid_source_one = temp.path().join("invalid-join-one.jsonl");
+    let invalid_source_two = temp.path().join("invalid-join-two.jsonl");
+    let invalid_destination = temp.path().join("invalid-joined.jsonl");
+    fs::write(&invalid_source_one, &first).expect("invalid first source");
+    fs::write(&invalid_source_two, &second).expect("invalid second source");
+    let output = run_event_pairs(&[
+        (&invalid_source_one, &invalid_destination),
+        (&invalid_source_two, &invalid_destination),
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("LF boundary"));
+    assert!(!invalid_destination.exists());
+    assert!(
+        !invalid_destination
+            .with_file_name("invalid-joined.jsonl.migration.json")
+            .exists()
+    );
+
+    let gzip_source_one = temp.path().join("gzip-one.jsonl.gz");
+    let gzip_source_two = temp.path().join("gzip-two.jsonl.gz");
+    let gzip_destination = temp.path().join("gzip-joined.jsonl.gz");
+    let mut first_gzip_plain = first.clone();
+    first_gzip_plain.push(b'\n');
+    fs::write(&gzip_source_one, gzip_bytes(&first_gzip_plain)).expect("gzip first source");
+    fs::write(&gzip_source_two, gzip_bytes(&second)).expect("gzip second source");
+    let output = run_event_pairs(&[
+        (&gzip_source_one, &gzip_destination),
+        (&gzip_source_two, &gzip_destination),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut expected_plain = first_gzip_plain;
+    expected_plain.extend_from_slice(&second);
+    assert_eq!(
+        decompress_gzip(&fs::read(&gzip_destination).expect("gzip destination")),
+        expected_plain
+    );
+
+    let concatenated_source = temp.path().join("gzip-concatenated.jsonl.gz");
+    let concatenated_destination = temp.path().join("gzip-concatenated-new.jsonl.gz");
+    let split = first.len() / 2;
+    let mut second_member_plain = first[split..].to_vec();
+    second_member_plain.push(b'\n');
+    let mut concatenated = gzip_bytes(&first[..split]);
+    concatenated.extend_from_slice(&gzip_bytes(&second_member_plain));
+    fs::write(&concatenated_source, &concatenated).expect("concatenated gzip source");
+    let output = run_event_pairs(&[(&concatenated_source, &concatenated_destination)]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut concatenated_expected = first[0..split].to_vec();
+    concatenated_expected.extend_from_slice(&second_member_plain);
+    assert_eq!(
+        fs::read(&concatenated_destination).expect("concatenated gzip destination"),
+        concatenated
+    );
+    assert_eq!(
+        decompress_gzip(&concatenated),
+        concatenated_expected,
+        "concatenated members are one explicit source contribution"
+    );
+
+    let gzip_invalid_one = temp.path().join("gzip-invalid-one.jsonl.gz");
+    let gzip_invalid_two = temp.path().join("gzip-invalid-two.jsonl.gz");
+    let gzip_invalid_destination = temp.path().join("gzip-invalid-joined.jsonl.gz");
+    fs::write(&gzip_invalid_one, gzip_bytes(&first)).expect("gzip invalid first");
+    fs::write(&gzip_invalid_two, gzip_bytes(&second)).expect("gzip invalid second");
+    let output = run_event_pairs(&[
+        (&gzip_invalid_one, &gzip_invalid_destination),
+        (&gzip_invalid_two, &gzip_invalid_destination),
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("LF boundary"));
+    assert!(!gzip_invalid_destination.exists());
+}
+
+#[test]
+fn event_migration_accepts_framing_only_duplicate_differences() {
+    let first = compact_historical_fixture("event-1.0.json");
+    for first_ending in [b"\n".as_slice(), b"\r\n".as_slice()] {
+        for second_ending in [b"\n".as_slice(), b"\r\n".as_slice(), b"".as_slice()] {
+            let temp = tempdir().expect("tempdir");
+            let source = temp.path().join("framed-duplicates.jsonl");
+            let destination = temp.path().join("framed-destination.jsonl");
+            let mut bytes = first.clone();
+            bytes.extend_from_slice(first_ending);
+            bytes.extend_from_slice(&first);
+            bytes.extend_from_slice(second_ending);
+            fs::write(&source, &bytes).expect("framed duplicate source");
+            let output = run_event_pairs(&[(&source, &destination)]);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(fs::read(&destination).expect("framed destination"), bytes);
+        }
+    }
+}
+
+#[test]
+fn migration_cli_exposes_only_explicit_event_and_environment_inputs() {
+    let help = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["migrate", "events", "--help"])
+        .output()
+        .expect("events help");
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(help.status.success());
+    assert!(help_text.contains("--pair <OLD> <NEW>"));
+    assert!(help_text.contains("64 pairs"));
+    assert!(help_text.contains("32 unique destinations"));
+    assert!(!help_text.contains("fail-after-destination-install"));
+
+    let no_pair = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["migrate", "events"])
+        .output()
+        .expect("empty event migration");
+    assert!(!no_pair.status.success());
+    assert!(String::from_utf8_lossy(&no_pair.stderr).contains("at least one pair"));
+
+    let env_help = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["migrate", "env", "--help"])
+        .output()
+        .expect("environment help");
+    let env_help_text = String::from_utf8_lossy(&env_help.stdout);
+    assert!(env_help.status.success());
+    assert!(env_help_text.contains("--from <FROM>"));
+    assert!(env_help_text.contains("--to <TO>"));
+}
+
+#[test]
+fn event_migration_preserves_explicit_gzip_bytes_and_validates_decompressed_records() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("old-events.jsonl.gz");
+    let destination = temp.path().join("new-events.jsonl.gz");
+    let record = compact_historical_fixture("event-1.0.json");
+    let mut plain = record;
+    plain.extend_from_slice(b"\r\n\r\n");
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&plain).expect("gzip input");
+    let compressed = encoder.finish().expect("gzip bytes");
+    fs::write(&source, &compressed).expect("compressed source");
+
+    let output = run_event_pairs(&[(&source, &destination)]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(&destination).expect("compressed destination"),
+        compressed
+    );
+    let mut decoder = MultiGzDecoder::new(&compressed[..]);
+    let mut decompressed = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut decompressed).expect("decompress destination");
+    assert_eq!(decompressed, plain);
+}
+
+#[test]
+fn event_migration_rejects_gzip_trailing_garbage_truncation_and_crc_corruption() {
+    let record = compact_historical_fixture("event-1.0.json");
+    let valid = gzip_bytes(&[record.as_slice(), b"\n"].concat());
+    let mut trailing_garbage = valid.clone();
+    trailing_garbage.extend_from_slice(b"trailing-garbage");
+    let mut truncated = valid.clone();
+    truncated.truncate(truncated.len().saturating_sub(2));
+    let mut crc_corrupt = valid.clone();
+    let last = crc_corrupt.last_mut().expect("gzip trailer");
+    *last ^= 0x01;
+
+    for (index, bytes) in [trailing_garbage, truncated, crc_corrupt]
+        .into_iter()
+        .enumerate()
+    {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join(format!("invalid-{index}.jsonl.gz"));
+        let destination = temp.path().join(format!("invalid-{index}-new.jsonl.gz"));
+        fs::write(&source, bytes).expect("invalid gzip source");
+        #[cfg(unix)]
+        {
+            fs::write(&destination, b"destination-sentinel\n").expect("destination sentinel");
+            set_mode(&destination, 0o640);
+        }
+        let output = run_event_pairs(&[(&source, &destination)]);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("invalid gzip"),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fs::read(&destination).expect("destination bytes"),
+            b"destination-sentinel\n"
+        );
+        #[cfg(not(unix))]
+        assert!(!destination.exists());
+        assert!(!manifest_path_for(&destination).exists());
+    }
+}
+
+#[test]
+fn event_migration_rejects_frame_and_blank_frame_budgets_before_destination_mutation() {
+    let cases = [
+        (
+            "oversize.jsonl",
+            vec![b'x'; 16 * 1024 * 1024 + 1],
+            "record exceeds bounded frame limit",
+        ),
+        (
+            "many-blank.jsonl",
+            vec![b'\n'; 100_001],
+            "blank frame budget exceeded",
+        ),
+    ];
+    for (name, bytes, expected_error) in cases {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join(name);
+        let destination = temp.path().join(format!("{name}-new"));
+        fs::write(&source, bytes).expect("budget source");
+        #[cfg(unix)]
+        {
+            fs::write(&destination, b"destination-sentinel\n").expect("destination sentinel");
+            set_mode(&destination, 0o640);
+        }
+        let output = run_event_pairs(&[(&source, &destination)]);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected_error),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            fs::read(&destination).expect("destination bytes"),
+            b"destination-sentinel\n"
+        );
+        #[cfg(not(unix))]
+        assert!(!destination.exists());
+        assert!(!manifest_path_for(&destination).exists());
+    }
+}
+
+#[test]
+fn environment_migration_maps_exact_keys_and_preserves_opaque_bytes_and_framing() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("adr.env");
+    let destination = temp.path().join("telltale.env");
+    let canary = "opaque-rhs-canary";
+    let source_bytes = format!(
+        "# keep this\r\n\r\nADR_LOG_PATH={canary}\r\nADR_STATE_PATH=/old/state\nADR_RISK_THRESHOLD_TRIAGE= 70 \r\nADR_RISK_THRESHOLD_ALERT='90'\r\nADR_TEST_VENDOR=third-party\r\nUNRELATED=keep\n"
+    )
+    .into_bytes();
+    fs::write(&source, &source_bytes).expect("environment source");
+
+    let output = run_env_migration(&source, &destination);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected = format!(
+        "# keep this\r\n\r\nTELLTALE_LOG_PATH={canary}\r\nTELLTALE_STATE_PATH=/old/state\nTELLTALE_RISK_THRESHOLD_HIGH= 70 \r\nTELLTALE_RISK_THRESHOLD_CRITICAL='90'\r\nADR_TEST_VENDOR=third-party\r\nUNRELATED=keep\n"
+    )
+    .into_bytes();
+    assert_eq!(fs::read(&source).expect("source bytes"), source_bytes);
+    assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(canary));
+    let manifest_path = destination.with_file_name("telltale.env.migration.json");
+    let first_manifest = fs::read(&manifest_path).expect("manifest bytes");
+    let rerun = run_env_migration(&source, &destination);
+    assert!(rerun.status.success());
+    assert_eq!(
+        fs::read(&manifest_path).expect("manifest bytes"),
+        first_manifest
+    );
+    fs::remove_file(&manifest_path).expect("remove manifest");
+    let repair = run_env_migration(&source, &destination);
+    assert!(repair.status.success());
+    assert_eq!(
+        fs::read(&manifest_path).expect("repaired manifest"),
+        first_manifest
+    );
+    fs::write(&manifest_path, b"manifest-conflict\n").expect("manifest conflict");
+    let conflict = run_env_migration(&source, &destination);
+    assert!(!conflict.status.success());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&destination)
+                .expect("destination metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(&manifest_path)
+                .expect("manifest metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn environment_migration_covers_the_complete_audited_inventory_without_canary_leaks() {
+    let mappings = [
+        ("ADR_LOG_PATH", "TELLTALE_LOG_PATH"),
+        ("ADR_STATE_PATH", "TELLTALE_STATE_PATH"),
+        ("ADR_SCAN_ROOT", "TELLTALE_SCAN_ROOT"),
+        ("ADR_PROJECT_CONFIG", "TELLTALE_PROJECT_CONFIG"),
+        ("ADR_LOG_ROTATE_MAX_SIZE", "TELLTALE_LOG_ROTATE_MAX_SIZE"),
+        ("ADR_LOG_ROTATE_KEEP", "TELLTALE_LOG_ROTATE_KEEP"),
+        (
+            "ADR_INSTALL_INVENTORY_INTERVAL_SECONDS",
+            "TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS",
+        ),
+        (
+            "ADR_PROCESS_CHAIN_DETECTIONS",
+            "TELLTALE_PROCESS_CHAIN_DETECTIONS",
+        ),
+        (
+            "ADR_OP_ALERT_MAX_SCANNER_ERRORS",
+            "TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS",
+        ),
+        (
+            "ADR_OP_ALERT_MAX_SCAN_DURATION_MS",
+            "TELLTALE_OP_ALERT_MAX_SCAN_DURATION_MS",
+        ),
+        ("ADR_RISK_THRESHOLD_LOW", "TELLTALE_RISK_THRESHOLD_LOW"),
+        (
+            "ADR_RISK_THRESHOLD_MEDIUM",
+            "TELLTALE_RISK_THRESHOLD_MEDIUM",
+        ),
+        ("ADR_RISK_THRESHOLD_TRIAGE", "TELLTALE_RISK_THRESHOLD_HIGH"),
+        (
+            "ADR_RISK_THRESHOLD_ALERT",
+            "TELLTALE_RISK_THRESHOLD_CRITICAL",
+        ),
+        ("ADR_INDEX", "TELLTALE_INDEX"),
+        ("ADR_SOURCETYPE", "TELLTALE_SOURCETYPE"),
+        ("ADR_ATLAS_PATH", "TELLTALE_ATLAS_PATH"),
+        ("ADR_GIT_HASH", "TELLTALE_GIT_HASH"),
+        (
+            "ADR_LIVETEST_ES_CONTAINER",
+            "TELLTALE_LIVETEST_ES_CONTAINER",
+        ),
+        (
+            "ADR_LIVETEST_SPLUNK_CONTAINER",
+            "TELLTALE_LIVETEST_SPLUNK_CONTAINER",
+        ),
+        ("ADR_LIVETEST_ES_INDEX", "TELLTALE_LIVETEST_ES_INDEX"),
+        ("ADR_LIVETEST_ES_PASSWORD", "TELLTALE_LIVETEST_ES_PASSWORD"),
+        ("ADR_LIVETEST_HEC_TOKEN", "TELLTALE_LIVETEST_HEC_TOKEN"),
+    ];
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("inventory.env");
+    let destination = temp.path().join("inventory-telltale.env");
+    let mut source_text = String::new();
+    let mut expected_text = String::new();
+    for (index, (old, new)) in mappings.iter().enumerate() {
+        let value = format!("migration-inventory-canary-{index}");
+        source_text.push_str(&format!("{old}={value}\n"));
+        expected_text.push_str(&format!("{new}={value}\n"));
+    }
+    source_text.push_str(
+        "ADR_TEST_UNRELATED=preserve\nADR_LOGISTICS_PATH=preserve\nADR_VENDOR_MODE=preserve\nADR_LOG_CUSTOM=preserve\nADR_TRIAGE_OTHER=preserve\n",
+    );
+    expected_text.push_str(
+        "ADR_TEST_UNRELATED=preserve\nADR_LOGISTICS_PATH=preserve\nADR_VENDOR_MODE=preserve\nADR_LOG_CUSTOM=preserve\nADR_TRIAGE_OTHER=preserve\n",
+    );
+    fs::write(&source, source_text.as_bytes()).expect("inventory source");
+    let output = run_env_migration(&source, &destination);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(&destination).expect("inventory destination"),
+        expected_text.as_bytes()
+    );
+    let output_text = String::from_utf8_lossy(&output.stdout);
+    let error_text = String::from_utf8_lossy(&output.stderr);
+    assert!(!output_text.contains("migration-inventory-canary"));
+    assert!(!error_text.contains("migration-inventory-canary"));
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_rerun_rejects_broader_existing_event_env_and_manifest_modes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().expect("tempdir");
+    let event_source = temp.path().join("mode-events.jsonl");
+    let event_destination = temp.path().join("mode-events-new.jsonl");
+    fs::write(&event_source, compact_historical_fixture("event-1.0.json")).expect("event source");
+    assert!(
+        run_event_pairs(&[(&event_source, &event_destination)])
+            .status
+            .success()
+    );
+    let event_manifest = event_destination.with_file_name("mode-events-new.jsonl.migration.json");
+    set_mode(&event_destination, 0o644);
+    let event_conflict = run_event_pairs(&[(&event_source, &event_destination)]);
+    assert!(!event_conflict.status.success());
+    assert_eq!(
+        fs::metadata(&event_destination)
+            .expect("event mode")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o644
+    );
+    set_mode(&event_destination, 0o640);
+    set_mode(&event_manifest, 0o644);
+    let manifest_conflict = run_event_pairs(&[(&event_source, &event_destination)]);
+    assert!(!manifest_conflict.status.success());
+    assert_eq!(
+        fs::metadata(&event_manifest)
+            .expect("event manifest mode")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o644
+    );
+
+    let env_source = temp.path().join("mode.env");
+    let env_destination = temp.path().join("mode-telltale.env");
+    fs::write(&env_source, b"ADR_LOG_PATH=/old\n").expect("env source");
+    assert!(
+        run_env_migration(&env_source, &env_destination)
+            .status
+            .success()
+    );
+    let env_manifest = env_destination.with_file_name("mode-telltale.env.migration.json");
+    set_mode(&env_destination, 0o640);
+    let env_conflict = run_env_migration(&env_source, &env_destination);
+    assert!(!env_conflict.status.success());
+    assert_eq!(
+        fs::metadata(&env_destination)
+            .expect("env mode")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o640
+    );
+    set_mode(&env_destination, 0o600);
+    set_mode(&env_manifest, 0o644);
+    let env_manifest_conflict = run_env_migration(&env_source, &env_destination);
+    assert!(!env_manifest_conflict.status.success());
+    assert_eq!(
+        fs::metadata(&env_manifest)
+            .expect("env manifest mode")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o644
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_rejects_foreign_owned_existing_event_env_and_manifest_targets() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    fn make_foreign(path: &std::path::Path) -> bool {
+        let current = unsafe { libc::geteuid() };
+        let foreign = if current == 0 {
+            1000
+        } else {
+            current.saturating_add(1)
+        };
+        let path = CString::new(path.as_os_str().as_bytes()).expect("path");
+        unsafe { libc::chown(path.as_ptr(), foreign, u32::MAX) == 0 }
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let event_source = temp.path().join("foreign-events.jsonl");
+    let event_destination = temp.path().join("foreign-events-new.jsonl");
+    fs::write(&event_source, compact_historical_fixture("event-1.0.json")).expect("source");
+    fs::write(&event_destination, b"event-destination-sentinel\n").expect("destination");
+    if !make_foreign(&event_destination) {
+        return;
+    }
+    let event_output = run_event_pairs(&[(&event_source, &event_destination)]);
+    assert!(!event_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&event_output.stderr).contains("not owned by the effective user")
+    );
+    assert_eq!(
+        fs::read(&event_destination).expect("event destination"),
+        b"event-destination-sentinel\n"
+    );
+
+    let env_source = temp.path().join("foreign.env");
+    let env_destination = temp.path().join("foreign-telltale.env");
+    fs::write(&env_source, b"ADR_LOG_PATH=/old\n").expect("environment source");
+    fs::write(&env_destination, b"env-destination-sentinel\n").expect("environment destination");
+    assert!(make_foreign(&env_destination));
+    let env_output = run_env_migration(&env_source, &env_destination);
+    assert!(!env_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&env_output.stderr).contains("not owned by the effective user")
+    );
+    assert_eq!(
+        fs::read(&env_destination).expect("environment destination"),
+        b"env-destination-sentinel\n"
+    );
+
+    let owned_destination = temp.path().join("owned-telltale.env");
+    assert!(
+        run_env_migration(&env_source, &owned_destination)
+            .status
+            .success()
+    );
+    let manifest = manifest_path_for(&owned_destination);
+    assert!(make_foreign(&manifest));
+    let manifest_output = run_env_migration(&env_source, &owned_destination);
+    assert!(!manifest_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&manifest_output.stderr)
+            .contains("not owned by the effective user")
+    );
+}
+
+#[test]
+fn environment_migration_rejects_duplicates_coexistence_unmapped_and_malformed_inputs() {
+    let cases = [
+        "ADR_LOG_PATH=one\nADR_LOG_PATH=two\n",
+        "ADR_LOG_PATH=one\nTELLTALE_LOG_PATH=two\n",
+        "ADR_TRIAGE_TIMEOUT_MS=secret-canary\n",
+        "ADR_TRIAGE_MAX_RETRIES=secret-canary\n",
+        "ADR_LOG_PATH=one\\\ncontinued\n",
+        "not-an-assignment\n",
+    ];
+    for (index, contents) in cases.into_iter().enumerate() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join(format!("source-{index}.env"));
+        let destination = temp.path().join(format!("destination-{index}.env"));
+        fs::write(&source, contents.as_bytes()).expect("source");
+        fs::write(&destination, b"destination-sentinel\n").expect("destination");
+        let output = run_env_migration(&source, &destination);
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-canary"));
+        assert_eq!(
+            fs::read(&destination).expect("destination"),
+            b"destination-sentinel\n"
+        );
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("nul.env");
+    let destination = temp.path().join("nul-destination.env");
+    fs::write(&source, b"ADR_LOG_PATH=before\0after\n").expect("NUL source");
+    let output = run_env_migration(&source, &destination);
+    assert!(!output.status.success());
+    assert!(!destination.exists());
+
+    let alias = run_env_migration(&source, &source);
+    assert!(!alias.status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn environment_migration_refuses_symlink_hardlink_and_nonregular_paths() {
+    use std::fs::{hard_link, read_link};
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("source.env");
+    fs::write(&source, b"ADR_LOG_PATH=/old\n").expect("source");
+
+    let symlink_destination = temp.path().join("symlink.env");
+    let symlink_target = temp.path().join("symlink-target.env");
+    fs::write(&symlink_target, b"target\n").expect("symlink target");
+    symlink(&symlink_target, &symlink_destination).expect("symlink");
+    let output = run_env_migration(&source, &symlink_destination);
+    assert!(!output.status.success());
+    assert_eq!(
+        read_link(&symlink_destination).expect("symlink remains"),
+        symlink_target
+    );
+
+    let hardlink_source = temp.path().join("hardlink-source.env");
+    hard_link(&source, &hardlink_source).expect("hardlink source");
+    let hardlink_destination = temp.path().join("hardlink-destination.env");
+    let output = run_env_migration(&hardlink_source, &hardlink_destination);
+    assert!(!output.status.success());
+    assert!(!hardlink_destination.exists());
+
+    let hardlink_destination = temp.path().join("hardlink-existing.env");
+    fs::write(&hardlink_destination, b"target\n").expect("hardlink target");
+    let hardlink_alias = temp.path().join("hardlink-alias.env");
+    hard_link(&hardlink_destination, &hardlink_alias).expect("hardlink destination");
+    let output = run_env_migration(&source, &hardlink_destination);
+    assert!(!output.status.success());
+
+    let directory_destination = temp.path().join("directory.env");
+    fs::create_dir(&directory_destination).expect("directory destination");
+    let output = run_env_migration(&source, &directory_destination);
+    assert!(!output.status.success());
+
+    let alias = run_env_migration(&source, &source);
+    assert!(!alias.status.success());
+}
+
+fn compact_historical_fixture(name: &str) -> Vec<u8> {
+    serde_json::to_vec(
+        &serde_json::from_slice::<Value>(match name {
+            "event-1.0.json" => include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/historical_events/event-1.0.json"
+            )),
+            "event-2.0.json" => include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/historical_events/event-2.0.json"
+            )),
+            _ => panic!("unknown fixture {name}"),
+        })
+        .expect("historical fixture"),
+    )
+    .expect("compact fixture")
+}
+
+fn gzip_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).expect("gzip bytes");
+    encoder.finish().expect("finish gzip")
+}
+
+fn decompress_gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut decoder = MultiGzDecoder::new(bytes);
+    let mut decompressed = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut decompressed).expect("decompress gzip");
+    decompressed
+}
+
+fn manifest_path_for(path: &std::path::Path) -> std::path::PathBuf {
+    path.with_file_name(format!(
+        "{}.migration.json",
+        path.file_name()
+            .expect("migration target filename")
+            .to_string_lossy()
+    ))
+}
+
+fn run_event_pairs(pairs: &[(&std::path::Path, &std::path::Path)]) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_adr"));
+    command.args(["migrate", "events"]);
+    for (source, destination) in pairs {
+        command.args(["--pair"]).arg(source).arg(destination);
+    }
+    command.output().expect("event migration")
+}
+
+fn run_env_migration(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["migrate", "env", "--from"])
+        .arg(source)
+        .args(["--to"])
+        .arg(destination)
+        .output()
+        .expect("environment migration")
+}
+
+fn set_mode(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).expect("mode metadata").permissions();
+        permissions.set_mode(mode);
+        fs::set_permissions(path, permissions).expect("set mode");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+    }
 }
 
 fn run_migration(source: &std::path::Path, destination: &std::path::Path) {

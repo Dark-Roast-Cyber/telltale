@@ -192,11 +192,11 @@ pub fn read_jsonl_records(
                 .ok_or("validated event is missing event_id")?
                 .to_string();
             if let Some(previous) = seen_ids.get(&event_id)
-                && previous != &raw_bytes
+                && previous != &object_bytes
             {
                 return Err("event_id_collision".into());
             }
-            seen_ids.insert(event_id.clone(), raw_bytes.clone());
+            seen_ids.insert(event_id.clone(), object_bytes.clone());
             records.push(JsonlEventRecord {
                 value,
                 schema_version,
@@ -404,5 +404,22 @@ mod tests {
 
         let error = read_jsonl_records(&path).expect_err("same-id collision");
         assert!(error.to_string().contains("event_id_collision"));
+    }
+
+    #[test]
+    fn jsonl_reader_ignores_line_framing_when_comparing_same_id_bodies() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("events.jsonl");
+        let line = serde_json::to_string(&fixture(EVENT_1_DETECTION)).expect("compact event");
+        for ending in [b"\n".as_slice(), b"\r\n".as_slice(), b"".as_slice()] {
+            let mut bytes = line.as_bytes().to_vec();
+            bytes.extend_from_slice(b"\n");
+            bytes.extend_from_slice(line.as_bytes());
+            bytes.extend_from_slice(ending);
+            fs::write(&path, bytes).expect("write JSONL");
+            let records = read_jsonl_records(&path).expect("same object body");
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0].object_bytes, records[1].object_bytes);
+        }
     }
 }

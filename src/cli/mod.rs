@@ -9,7 +9,9 @@ use crate::rules::{
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use crate::sink::config as sink_config;
-use clap::{Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{
+    ArgAction, Args as ClapArgs, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
+};
 use sha2::Digest;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::event::path_hash;
@@ -276,7 +278,7 @@ enum Command {
         command: ConfigCommand,
     },
 
-    /// Explicitly migrate standalone scanner state between paths.
+    /// Explicitly migrate state, historical event JSONL, or environment files.
     Migrate {
         #[command(subcommand)]
         command: MigrateCommand,
@@ -360,6 +362,33 @@ enum MigrateCommand {
         from: PathBuf,
 
         /// Destination native state file.
+        #[arg(long = "to")]
+        to: PathBuf,
+    },
+
+    /// Validate and relocate explicit historical event-set files without rewriting bytes.
+    /// Repeated destinations are joined only across LF boundaries; the first
+    /// pair owns the recovery manifest.
+    Events {
+        /// Explicit source and destination pair. Repeat for multiple mappings.
+        /// At most 64 pairs and 32 unique destinations are accepted.
+        #[arg(
+            long = "pair",
+            value_names = ["OLD", "NEW"],
+            num_args = 2,
+            action = ArgAction::Append
+        )]
+        pairs: Vec<PathBuf>,
+    },
+
+    /// Map an explicit legacy environment file to a canonical environment file
+    /// using the audited ADR product-key inventory.
+    Env {
+        /// Existing legacy environment file.
+        #[arg(long = "from")]
+        from: PathBuf,
+
+        /// Destination canonical environment file.
         #[arg(long = "to")]
         to: PathBuf,
     },
@@ -1326,6 +1355,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Migrate { command } => match command {
             MigrateCommand::State { from, to } => migrate::run_state_migration(&from, &to)?,
+            MigrateCommand::Events { pairs } => {
+                if pairs.len() % 2 != 0 {
+                    return Err("event migration requires OLD and NEW for every --pair".into());
+                }
+                let pairs = pairs
+                    .chunks_exact(2)
+                    .map(|pair| (pair[0].clone(), pair[1].clone()))
+                    .collect::<Vec<_>>();
+                migrate::run_event_migration(&pairs)?;
+            }
+            MigrateCommand::Env { from, to } => migrate::run_env_migration(&from, &to)?,
         },
         Command::Rules { command } => match command {
             RulesCommand::List {

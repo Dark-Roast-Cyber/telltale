@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const LOCK_BUSY: &str = "resource busy; retry later";
+pub(crate) const FILE_STREAM_BUFFER_SIZE: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FileIdentity {
@@ -157,22 +158,55 @@ impl PinnedFile {
     }
 
     pub(crate) fn verify_unchanged(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let expected = self
+            .digest
+            .ok_or("source was not streamed before stability verification")?;
+        let actual = self.stream_impl(|_| Ok(()), false)?;
+        if actual != expected {
+            return Err("source changed during migration; retry".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn stream_to(
+        &mut self,
+        consumer: impl FnMut(&[u8]) -> Result<(), Box<dyn std::error::Error>>,
+    ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+        self.stream_impl(consumer, true)
+    }
+
+    fn stream_impl(
+        &mut self,
+        mut consumer: impl FnMut(&[u8]) -> Result<(), Box<dyn std::error::Error>>,
+        remember_digest: bool,
+    ) -> Result<[u8; 32], Box<dyn std::error::Error>> {
         let before = safe_file_info(&self.file, false)?;
         if before != self.info || safe_path_info(&self.path)? != Some(self.info) {
             return Err("source changed during migration; retry".into());
         }
         self.file.seek(SeekFrom::Start(0))?;
-        let mut bytes = Vec::new();
-        self.file.read_to_end(&mut bytes)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; FILE_STREAM_BUFFER_SIZE];
+        loop {
+            let read = self.file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            consumer(&buffer[..read])?;
+        }
         let after = safe_file_info(&self.file, false)?;
         if after != before
-            || after.length != bytes.len() as u64
-            || self.digest != Some(Sha256::digest(&bytes).into())
+            || after.length != before.length
             || safe_path_info(&self.path)? != Some(self.info)
         {
             return Err("source changed during migration; retry".into());
         }
-        Ok(())
+        let digest: [u8; 32] = hasher.finalize().into();
+        if remember_digest {
+            self.digest = Some(digest);
+        }
+        Ok(digest)
     }
 }
 
@@ -215,6 +249,49 @@ pub(crate) fn validate_target(path: &Path) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+pub(crate) fn validate_existing_mode(
+    path: &Path,
+    allowed_mode: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if safe_path_info(path)?.is_none() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let file = open_read(path)?;
+        let metadata = file.metadata()?;
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("existing migration target is not owned by the effective user".into());
+        }
+        let mode = metadata.permissions().mode() & 0o7777;
+        if mode & !allowed_mode != 0 {
+            return Err("existing migration target permissions are too broad".into());
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = (path, allowed_mode);
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "existing migration target ownership is unsupported on Windows",
+        )
+        .into());
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (path, allowed_mode);
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "existing migration target ownership is unsupported on this platform",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_runtime_paths(
     state: &Path,
     local_logs: &[PathBuf],
@@ -239,17 +316,15 @@ pub(crate) fn validate_migration_paths(
     destination: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let manifest = manifest_path(destination);
-    validate_path_set(
-        &[
-            source.to_path_buf(),
-            destination.to_path_buf(),
-            sidecar_path(source),
-            sidecar_path(destination),
-            manifest.clone(),
-            sidecar_path(&manifest),
-        ],
-        &[],
-    )
+    validate_migration_targets(&[source.to_path_buf(), destination.to_path_buf(), manifest])
+}
+
+pub(crate) fn validate_migration_targets(
+    targets: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut paths = targets.to_vec();
+    paths.extend(targets.iter().map(|target| sidecar_path(target)));
+    validate_path_set(&paths, &[])
 }
 
 fn validate_path_set(
@@ -299,11 +374,7 @@ pub(crate) struct TempFile {
 }
 
 impl TempFile {
-    pub(crate) fn write_and_sync(
-        target: &Path,
-        bytes: &[u8],
-        mode: u32,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub(crate) fn create(target: &Path, mode: u32) -> Result<Self, Box<dyn std::error::Error>> {
         let parent = target.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
         let name = target
@@ -317,17 +388,7 @@ impl TempFile {
             candidate.push(Uuid::new_v4().simple().to_string());
             let path = parent.join(candidate);
             match open_temp(&path, mode) {
-                Ok(mut file) => {
-                    let result = (|| {
-                        file.write_all(bytes)?;
-                        file.flush()?;
-                        file.sync_all()?;
-                        Ok::<(), Box<dyn std::error::Error>>(())
-                    })();
-                    if let Err(error) = result {
-                        let _ = fs::remove_file(&path);
-                        return Err(error);
-                    }
+                Ok(file) => {
                     return Ok(Self {
                         path,
                         file: Some(file),
@@ -338,6 +399,44 @@ impl TempFile {
             }
         }
         Err("could not allocate a unique temporary file".into())
+    }
+
+    pub(crate) fn write_and_sync(
+        target: &Path,
+        bytes: &[u8],
+        mode: u32,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut temporary = Self::create(target, mode)?;
+        temporary.write_all(bytes)?;
+        temporary.sync()?;
+        Ok(temporary)
+    }
+
+    pub(crate) fn write_all(&mut self, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        self.file
+            .as_mut()
+            .ok_or("temporary file is closed")?
+            .write_all(bytes)?;
+        Ok(())
+    }
+
+    pub(crate) fn sync(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let file = self.file.as_mut().ok_or("temporary file is closed")?;
+        file.flush()?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    pub(crate) fn position(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
+        Ok(self
+            .file
+            .as_mut()
+            .ok_or("temporary file is closed")?
+            .stream_position()?)
+    }
+
+    pub(crate) fn open_reader(&self) -> Result<File, Box<dyn std::error::Error>> {
+        open_read(&self.path)
     }
 
     fn close(&mut self) {

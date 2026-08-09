@@ -11,8 +11,9 @@ it is being validated against.
 The historical files are separate from `schemas/event.schema.json`, which is
 the native current-event schema. They are validation references, not migration
 targets. Historical records retain their original event ID, version, fields,
-and unknown JSON values. A later migration must preserve the untouched source
-record and must not rewrite historical records as Event 3.0.
+and unknown JSON values. The explicit `telltale migrate events` command
+preserves the untouched source record and does not rewrite historical records as
+Event 3.0.
 
 The copied schema byte hashes are `396065acda07468b0d30cd0759fa55b60280b070aa24ccabe89bd6a868509f03`
 for the 1.0 artifact (the v0.1.0/v0.2.0 blob) and
