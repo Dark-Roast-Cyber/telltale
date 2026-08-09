@@ -22,10 +22,12 @@ The package installs both binaries:
 The supported Rust embedding surface is [`telltale-core`](https://crates.io/crates/telltale-core),
 imported as `telltale_core`; the CLI package is not the embedding API.
 
-The executable rename does not rename data or configuration namespaces. Keep
-`ADR_*`, `adr-events.jsonl`, `adr-state.json`, `/etc/telltale/adr.env`,
-`adr_version`, `adr-` event IDs, Splunk `index=adr` and `sourcetype=adr:json`,
-and the existing `telltale:adr` / `telltale:adr-events` source identities.
+The Event 3.0 cut does not rename local paths, services, executables, or
+environment variables. Keep `ADR_*`, `adr-events.jsonl`, `adr-state.json`, and
+`/etc/telltale/adr.env` for this transition. Native events use
+`telltale_version`, `telltale-<UUIDv4>` IDs, and Splunk `index=telltale`,
+`sourcetype=telltale:json`, `source=telltale`; `adr_version`, old IDs, and old
+SIEM identities remain historical-only values.
 
 - [Repository](https://github.com/Dark-Roast-Cyber/telltale)
 - [Install and verification guide](https://github.com/Dark-Roast-Cyber/telltale/blob/main/docs/install.md)

@@ -1,15 +1,15 @@
 //! Canonical normalized transcript schema v1.
 //!
-//! This module defines ADR's internal normalization contract, separate from the
-//! emitted SIEM event schema. The V1 schema preserves structured data (typed
-//! tool arguments, tool results, provenance) that the flat `NormalizedRecord`
-//! currently discards too early.
+//! This module defines Telltale's internal normalization contract, separate from
+//! the emitted SIEM event schema. The V1 schema preserves structured data (typed
+//! tool arguments, tool results, and provenance) that the legacy flat
+//! `NormalizedRecord` cannot represent directly.
 //!
-//! The existing `NormalizedRecord` and parser pipeline remain unchanged.
-//! Conversion from `NormalizedRecord` → `NormalizedRecordV1` will be added
-//! in a follow-up iteration.
+//! The current parser pipeline still produces `NormalizedRecord` for compatibility;
+//! [`NormalizedRecordV1::from_legacy`] provides the explicit, loss-aware adapter
+//! into the canonical shape.
 
-#![allow(dead_code)] // Types consumed incrementally as the pipeline migrates.
+#![allow(dead_code)] // The canonical adapter is available while sources migrate.
 
 use serde_json::Value;
 use std::collections::BTreeMap;

@@ -48,7 +48,7 @@ impl SinkKind {
 
 impl SinkSpec {
     /// True when the sink carries a secret written inline in the YAML.
-    /// `adr config validate` flags these; env/file references are preferred.
+    /// `telltale config validate` flags these; env/file references are preferred.
     pub fn has_inline_secret(&self) -> bool {
         match &self.kind {
             SinkKind::Jsonl(_) => false,
@@ -255,7 +255,7 @@ pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn s
             .map_err(|err| format!("invalid outputs config {}: {err}", path.display()))?;
         if doc.version != SUPPORTED_OUTPUTS_VERSION {
             return Err(format!(
-                "outputs config {}: version {} is not supported by this adr build (expected {})",
+                "outputs config {}: version {} is not supported by this Telltale build (expected {})",
                 path.display(),
                 doc.version,
                 SUPPORTED_OUTPUTS_VERSION
@@ -568,8 +568,8 @@ sinks:
     type: splunk_hec
     endpoint: http://splunk.example.com:8088/services/collector
     token: { env: SPLUNK_HEC_TOKEN }
-    index: adr
-    sourcetype: adr:json
+    index: telltale
+    sourcetype: telltale:json
     timeout_ms: 5000
   - name: disabled-splunk
     type: splunk_hec
@@ -685,7 +685,7 @@ sinks:
   - name: corp-elastic
     type: elastic_bulk
     endpoint: https://elastic.example.com:9243
-    index: adr-events
+    index: telltale-events
     api_key: inline-key
     max_batch_bytes: 1048576
     retry: { max_attempts: 5, base_delay_ms: 250 }

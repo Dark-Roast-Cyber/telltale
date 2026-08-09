@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-const VERSION: &str = "0.4.0";
+const VERSION: &str = "0.5.0";
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),
@@ -43,7 +43,7 @@ fn registry_consumer_docs_follow_current_package_version() {
     for relative in ["docs/versioning.md", "docs/release-readiness.md"] {
         let document = fs::read_to_string(root.join(relative)).expect("versioning document");
         assert!(
-            document.contains("`=0.4.0`"),
+            document.contains("`=0.5.0`"),
             "{relative} does not name the current registry pin"
         );
         assert!(
@@ -98,6 +98,7 @@ fn package_boundaries_and_bundled_rules_are_explicit() {
         "build.rs",
         "benches/benchmarks.rs",
         "src/**",
+        "schemas/event.schema.json",
         "schemas/historical/*.json",
         "schemas/historical/README.md",
         "config/rules/tool-call-regex.yaml",

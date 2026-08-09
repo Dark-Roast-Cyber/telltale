@@ -89,7 +89,7 @@ host validation.
 
 - `ClientSourceDef`, `ClientId`, source discovery, install metadata, and public
   parser signatures remain stable.
-- Normalized fields, record order, source/event tuple identity, and Event 2.0
+- Normalized fields, record order, source/event tuple identity, and native Event 3.0
   output remain parity-tested.
 - Gemini's established missing-`messages` `Empty` result remains unchanged.
 - Copilot retains plain-line tolerance, standalone JSON-array handling,

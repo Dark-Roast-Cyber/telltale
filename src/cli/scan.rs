@@ -711,7 +711,7 @@ fn run_scan(
         )
     {
         let snapshot = collect_install_inventory(observed_at_unix_ms);
-        install_inventory_event = Some((snapshot_to_event(&snapshot), snapshot));
+        install_inventory_event = Some((snapshot_to_event(&snapshot)?, snapshot));
     }
     let activities = if config.execution.emit_activity {
         let baseline_deviation_config = BaselineDeviationConfig {
@@ -800,28 +800,12 @@ fn run_scan(
     let mut suppressed_count = 0_usize;
     for (source, detection) in &mut detections {
         let is_detection = detection.event_type == "detection";
-        if let Some(suppression_match) = allowlist.suppression_for(source, detection) {
+        if is_detection
+            && let Some(suppression_match) = allowlist.suppression_for(source, detection)
+        {
             suppress_detection(detection, &suppression_match);
             suppressed_count += 1;
-            if is_detection {
-                detection_flow.allowlist_marked_detection_count += 1;
-            }
-        }
-    }
-    for (_, detection) in &mut detections {
-        let Some(triage) = detection
-            .triage
-            .as_mut()
-            .and_then(|triage| triage.as_object_mut())
-        else {
-            continue;
-        };
-        if triage
-            .get("required")
-            .and_then(|required| required.as_bool())
-            .is_some_and(|required| required)
-        {
-            triage.insert("verdict".to_string(), serde_json::json!("config_missing"));
+            detection_flow.allowlist_marked_detection_count += 1;
         }
     }
     let activity_count = activities.len();
@@ -1265,7 +1249,6 @@ struct SessionRiskSummaryAccumulator {
     event_counts: BTreeMap<String, u32>,
     tool_call_count: Option<u64>,
     detection_count: u32,
-    triage_ran: bool,
     rule_ids: BTreeSet<String>,
     categories: BTreeSet<String>,
     detection_classes: BTreeSet<String>,
@@ -1317,7 +1300,6 @@ fn summarize_session_risk_events(
                 event_counts: BTreeMap::new(),
                 tool_call_count: None,
                 detection_count: 0,
-                triage_ran: false,
                 rule_ids: BTreeSet::new(),
                 categories: BTreeSet::new(),
                 detection_classes: BTreeSet::new(),
@@ -1357,7 +1339,6 @@ fn summarize_session_risk_events(
         }
         if event.event_type == "detection" {
             summary.detection_count += 1;
-            summary.triage_ran |= triage_ran_from_typed_event(event);
             extend_set(&mut summary.rule_ids, &event.rule_ids);
             extend_set(&mut summary.categories, &event.categories);
             extend_set(&mut summary.detection_classes, &event.detection_classes);
@@ -1413,15 +1394,6 @@ fn extract_tool_call_count_from_evidence(evidence: &[Evidence]) -> Option<u64> {
     counts.get("tool_call").and_then(|value| value.as_u64())
 }
 
-fn triage_ran_from_typed_event(event: &Event) -> bool {
-    event
-        .triage
-        .as_ref()
-        .and_then(|value| value.get("verdict"))
-        .and_then(|value| value.as_str())
-        .is_some_and(|verdict| !matches!(verdict, "pending" | "not_required" | "config_missing"))
-}
-
 fn session_risk_summary_tags(summary: &SessionRiskSummaryAccumulator) -> Vec<String> {
     let mut tags = vec!["risk_summary".to_string(), "session".to_string()];
     if summary.detection_count > 0 {
@@ -1458,12 +1430,6 @@ fn session_risk_summary_evidence(summary: &SessionRiskSummaryAccumulator) -> Vec
             rule_id: None,
         });
     }
-    evidence.push(Evidence {
-        field: "triage_ran".to_string(),
-        redacted_value: summary.triage_ran.to_string(),
-        hash: None,
-        rule_id: None,
-    });
     evidence
 }
 
@@ -1496,22 +1462,71 @@ pub(crate) fn run_status(
     log_path: &Path,
     state_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let events = super::read_jsonl_events(log_path)?;
-    let health_index = events
+    if !log_path.exists() {
+        return Err("no_native_health".into());
+    }
+    let records = crate::cli::historical::read_jsonl_records(log_path)?;
+    if records.is_empty() {
+        return Err("no_native_health".into());
+    }
+    let native_health_index = records.iter().rposition(|record| {
+        record.kind == crate::cli::historical::EventRecordKind::Native
+            && record
+                .value
+                .get("event_type")
+                .and_then(|value| value.as_str())
+                == Some("health")
+    });
+    let status = if let Some(health_index) = native_health_index {
+        let detection_count = records[health_index + 1..]
+            .iter()
+            .filter(|record| {
+                record.kind == crate::cli::historical::EventRecordKind::Native
+                    && record
+                        .value
+                        .get("event_type")
+                        .and_then(|value| value.as_str())
+                        == Some("detection")
+            })
+            .count();
+        status_json(
+            "ok",
+            Some(&records[health_index].value),
+            detection_count,
+            log_path,
+            state_path,
+        )
+    } else if records
         .iter()
-        .rposition(|event| {
-            event.get("event_type").and_then(|value| value.as_str()) == Some("health")
-        })
-        .ok_or_else(|| format!("no health event found in {}", log_path.display()))?;
-    let health = &events[health_index];
-    let detection_count = events[health_index + 1..]
-        .iter()
-        .filter(|event| {
-            event.get("event_type").and_then(|value| value.as_str()) == Some("detection")
-        })
-        .count();
-
-    let status = status_json(health, detection_count, log_path, state_path);
+        .all(|record| record.kind == crate::cli::historical::EventRecordKind::Historical)
+    {
+        let health = records.iter().rev().find(|record| {
+            record
+                .value
+                .get("event_type")
+                .and_then(|value| value.as_str())
+                == Some("health")
+        });
+        let detection_count = records
+            .iter()
+            .filter(|record| {
+                record
+                    .value
+                    .get("event_type")
+                    .and_then(|value| value.as_str())
+                    == Some("detection")
+            })
+            .count();
+        status_json(
+            "historical_only",
+            health.map(|record| &record.value),
+            detection_count,
+            log_path,
+            state_path,
+        )
+    } else {
+        return Err("no_native_health".into());
+    };
     println!("{}", serde_json::to_string(&status)?);
     Ok(())
 }
@@ -1841,27 +1856,38 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
 }
 
 fn status_json(
-    health: &serde_json::Value,
+    status: &str,
+    health: Option<&serde_json::Value>,
     detection_count: usize,
     log_path: &Path,
     state_path: &Path,
 ) -> serde_json::Value {
+    let field_or_null = |key: &str| {
+        health
+            .map(|health| json_field_or_null(health, key))
+            .unwrap_or(serde_json::Value::Null)
+    };
+    let field_or_empty_object = |key: &str| {
+        health
+            .map(|health| json_field_or_empty_object(health, key))
+            .unwrap_or_else(|| serde_json::json!({}))
+    };
     serde_json::json!({
-        "status": "ok",
-        "last_scan_time": json_field_or_null(health, "timestamp"),
+        "status": status,
+        "last_scan_time": field_or_null("timestamp"),
         "log_path": log_path.display().to_string(),
         "state_path": state_path.display().to_string(),
-        "health_component": json_field_or_null(health, "component"),
-        "health_check_name": json_field_or_null(health, "check_name"),
-        "health_check_status": json_field_or_null(health, "status"),
-        "active_policy_name": json_field_or_null(health, "active_policy_name"),
-        "rule_count": json_field_or_null(health, "rule_count"),
+        "health_component": field_or_null("component"),
+        "health_check_name": field_or_null("check_name"),
+        "health_check_status": field_or_null("status"),
+        "active_policy_name": field_or_null("active_policy_name"),
+        "rule_count": field_or_null("rule_count"),
         "detection_count": detection_count,
-        "threshold_config": json_field_or_null(health, "threshold_config"),
-        "source_counts": json_field_or_empty_object(health, "source_counts"),
-        "emitted_count": json_field_or_null(health, "emitted_count"),
-        "suppressed_count": json_field_or_null(health, "suppressed_count"),
-        "scanner_error_count": json_field_or_null(health, "scanner_error_count"),
+        "threshold_config": field_or_null("threshold_config"),
+        "source_counts": field_or_empty_object("source_counts"),
+        "emitted_count": field_or_null("emitted_count"),
+        "suppressed_count": field_or_null("suppressed_count"),
+        "scanner_error_count": field_or_null("scanner_error_count"),
     })
 }
 

@@ -76,12 +76,13 @@ run_package telltale-sources telltale-schema
 run_package telltale-detect telltale-schema telltale-rules telltale-sources
 run_package telltale-core telltale-schema telltale-rules telltale-sources telltale-detect
 run_package telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect
-for historical_path in \
+for schema_path in \
+    schemas/event.schema.json \
     schemas/historical/README.md \
     schemas/historical/event-1.0.schema.json \
     schemas/historical/event-2.0.schema.json; do
-    test -f "$(package_path telltale-cli)/$historical_path" || {
-        echo "packaged CLI is missing $historical_path" >&2
+    test -f "$(package_path telltale-cli)/$schema_path" || {
+        echo "packaged CLI is missing $schema_path" >&2
         exit 1
     }
 done
@@ -288,15 +289,15 @@ fn main() {
         threshold_config: RiskThresholds {
             low: 20,
             medium: 40,
-            triage: 60,
-            alert: 80,
+            high: 60,
+            critical: 80,
         },
         active_policy_name: None,
         emitted_count: 0,
         suppressed_count: 0,
         scanner_error_count: 0,
     });
-    println!("{}", event.adr_version.expect("schema provenance"));
+    println!("{}", event.telltale_version);
 }
 EOF
 
@@ -391,7 +392,7 @@ set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path tell
 echo "== registry-style schema consumer =="
 schema_version=$(CARGO_TARGET_DIR="$TARGET_DIR/schema-consumer" "$@")
 case "$schema_version" in
-    "$VERSION ($PACKAGED_SHA_PREFIX)") ;;
+    "$VERSION") ;;
     *) echo "unexpected schema provenance: $schema_version" >&2; exit 1 ;;
 esac
 

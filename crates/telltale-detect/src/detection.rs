@@ -360,19 +360,8 @@ fn attach_timeline_anchors(event: &mut Event, timeline_anchors: &[TimelineRuleAn
     if timeline_anchors.is_empty() {
         return;
     }
-
-    let Some(triage) = event
-        .triage
-        .as_mut()
-        .and_then(|value| value.as_object_mut())
-    else {
-        return;
-    };
-
-    triage.insert(
-        "timeline_anchors".to_string(),
-        serde_json::to_value(timeline_anchors).expect("timeline anchors serialize"),
-    );
+    event.timeline_anchors =
+        telltale_schema::event::canonicalize_timeline_anchors(timeline_anchors.to_vec());
 }
 
 fn detect_records_with_timeline(

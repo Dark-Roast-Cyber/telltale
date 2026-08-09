@@ -6,9 +6,10 @@ The standalone state migration command is explicit and state-only:
 telltale migrate state --from <OLD> --to <NEW>
 ```
 
-Event migration is not wired. The scanner continues to emit and consume Event
-2.0, and normal runtime paths and environment names are unchanged in this
-slice.
+Native scans emit and consume Event 3.0. Historical Event 1.0 and 2.0 records
+remain explicit read/import inputs; they are validated against their immutable
+schemas and are never rewritten as native events. Normal runtime paths and
+environment names remain unchanged in this slice.
 
 ## Scanner state
 

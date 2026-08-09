@@ -1,8 +1,8 @@
 //! Cross-session correlation helpers for detection events.
 //!
 //! This module is intentionally side-effect free. It gives the scan/export
-//! layers a tested way to find repeated suspicious patterns before ADR starts
-//! emitting dedicated correlation events.
+//! layers a tested way to find repeated suspicious patterns and emit dedicated
+//! correlation events without changing the input detections.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -271,6 +271,9 @@ mod tests {
         model: Option<&str>,
         risk_score: u64,
     ) -> Event {
+        let event_number = session_id.bytes().fold(0_u64, |total, byte| {
+            total.wrapping_mul(31).wrapping_add(u64::from(byte))
+        });
         Event {
             timestamp: timestamp.to_string(),
             event_time: Some(timestamp.to_string()),
@@ -279,8 +282,9 @@ mod tests {
             time_source: "source".to_string(),
             time_confidence: "high".to_string(),
             time_override_reason: None,
-            schema_version: "1.0".to_string(),
-            event_id: format!("event-{session_id}"),
+            schema_version: "3.0".to_string(),
+            event_id: format!("telltale-00000000-0000-4000-8000-{event_number:012x}"),
+            telltale_version: env!("CARGO_PKG_VERSION").to_string(),
             event_type: "detection".to_string(),
             severity: "high".to_string(),
             risk_score,
@@ -304,13 +308,12 @@ mod tests {
             atlas_tags: vec!["atlas:AML.T0051".to_string()],
             tags: vec!["mcp".to_string()],
             evidence: Vec::new(),
-            triage: None,
+            timeline_anchors: Vec::new(),
             response: None,
             source_counts: None,
             component: None,
             check_name: None,
             status: None,
-            adr_version: None,
             scan_duration_ms: None,
             rule_count: None,
             threshold_config: None,

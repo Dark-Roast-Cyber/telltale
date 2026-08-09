@@ -124,8 +124,8 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
     assert_http_header(&request, "Authorization", "Splunk test-token");
     let body = request.split_once("\r\n\r\n").expect("body split").1;
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
-    assert_eq!(envelope["index"], "adr");
-    assert_eq!(envelope["sourcetype"], "adr:json");
+    assert_eq!(envelope["index"], "telltale");
+    assert_eq!(envelope["sourcetype"], "telltale:json");
     assert_eq!(envelope["event"]["event_type"], "health");
     assert_eq!(
         envelope["event"]["source_counts"]
@@ -138,33 +138,49 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
 }
 
 #[test]
-fn scan_once_emits_identical_events_to_jsonl_and_splunk_hec() {
+fn scan_once_emits_identical_events_to_jsonl_hec_and_elastic() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("adr-events.jsonl");
     let state_path = temp.path().join("adr-state.json");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
+    let (elastic_endpoint, elastic_requests, elastic_shutdown, elastic_handle) =
+        start_mock_elastic_server();
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\nsinks:\n  - name: local\n    type: jsonl\n  - name: elastic\n    type: elastic_bulk\n    endpoint: {elastic_endpoint}\n    index: telltale-events\n    api_key: {{ env: TEST_ELASTIC_API_KEY }}\n"
+        ),
+    )
+    .expect("write outputs config");
 
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
         .args([
             "scan",
             "--once",
             "--allow-fixtures",
-            "--no-local-config",
             "--root",
             "tests/fixtures/session_stores",
             "--log-path",
         ])
         .arg(&log_path)
+        .args(["--config-dir"])
+        .arg(&config_dir)
         .args(["--state-path"])
         .arg(&state_path)
         .args(["--splunk-hec-endpoint", &hec_endpoint])
         .args(["--splunk-hec-token", "test-token"])
         .arg("--install-inventory-disabled")
+        .env("TEST_ELASTIC_API_KEY", "elastic-test-key")
         .output()
         .expect("run adr");
 
     shutdown.send(()).expect("stop mock hec server");
     handle.join().expect("mock hec thread");
+    elastic_shutdown.send(()).expect("stop mock elastic server");
+    elastic_handle.join().expect("mock elastic thread");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -188,8 +204,8 @@ fn scan_once_emits_identical_events_to_jsonl_and_splunk_hec() {
                 .filter(|line| !line.trim().is_empty())
                 .map(|line| {
                     let envelope: Value = serde_json::from_str(line).expect("hec envelope");
-                    assert_eq!(envelope["index"], "adr");
-                    assert_eq!(envelope["sourcetype"], "adr:json");
+                    assert_eq!(envelope["index"], "telltale");
+                    assert_eq!(envelope["sourcetype"], "telltale:json");
                     envelope["event"].clone()
                 })
                 .collect::<Vec<_>>()
@@ -198,6 +214,25 @@ fn scan_once_emits_identical_events_to_jsonl_and_splunk_hec() {
 
     assert_eq!(hec_events.len(), jsonl_events.len());
     assert_eq!(hec_events, jsonl_events);
+
+    let elastic_events = elastic_requests
+        .iter()
+        .flat_map(|request| {
+            assert!(request.starts_with("POST /_bulk HTTP/1.1"));
+            let body = request.split_once("\r\n\r\n").expect("bulk body").1;
+            let lines = body
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect::<Vec<_>>();
+            assert_eq!(lines.len() % 2, 0);
+            lines
+                .chunks(2)
+                .map(|pair| serde_json::from_str::<Value>(pair[1]).expect("elastic event"))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(elastic_events.len(), jsonl_events.len());
+    assert_eq!(elastic_events, jsonl_events);
     assert!(jsonl_events.iter().all(|event| {
         event.get("source_discovery").is_none() && event.get("diagnostic_warnings").is_none()
     }));
@@ -567,7 +602,7 @@ sinks:
     let body = request.split_once("\r\n\r\n").expect("body split").1;
     let envelope: Value = serde_json::from_str(body.trim()).expect("hec envelope");
     assert_eq!(envelope["event"]["event_type"], "health");
-    assert_eq!(envelope["event"]["schema_version"], "2.0");
+    assert_eq!(envelope["event"]["schema_version"], "3.0");
     assert!(envelope["event"]["event_id"].is_string());
     assert!(envelope["event"].get("index").is_none());
 
@@ -968,7 +1003,7 @@ sinks:
   - name: corp-elastic
     type: elastic_bulk
     endpoint: {}
-    index: adr-events
+    index: telltale-events
     api_key: {{ env: ADR_TEST_ELASTIC_API_KEY }}
 "#,
             elastic_endpoint
@@ -1022,7 +1057,7 @@ sinks:
     assert_eq!(lines.len(), 2, "one action/source pair");
     let action: Value = serde_json::from_str(lines[0]).expect("action line");
     let source: Value = serde_json::from_str(lines[1]).expect("source line");
-    assert_eq!(action["index"]["_index"], "adr-events");
+    assert_eq!(action["index"]["_index"], "telltale-events");
     assert_eq!(action["index"]["_id"], jsonl_events[0]["event_id"]);
     assert_eq!(source, jsonl_events[0]);
 }

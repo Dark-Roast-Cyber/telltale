@@ -46,14 +46,9 @@ fn detection_analysis_builds_timeline_anchors_from_canonical_records() {
     );
 
     let event = analysis.into_event();
-    let anchors = event
-        .triage
-        .as_ref()
-        .and_then(|triage| triage.get("timeline_anchors"))
-        .and_then(|anchors| anchors.as_array())
-        .expect("triage timeline anchors");
+    let anchors = &event.timeline_anchors;
     assert_eq!(anchors.len(), 1);
-    assert_eq!(anchors[0]["entry_index"], 1);
+    assert_eq!(anchors[0].entry_index, 1);
 }
 
 fn test_record(

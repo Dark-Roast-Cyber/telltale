@@ -11,7 +11,8 @@ execution planning is maintained internally.
 ## Current Focus: 0.5.0 Telltale Maturation
 
 The approved 0.5.0 milestone folds in the unpublished 0.4.0 API and parser work
-and completes the breaking technical migration from the former product identity.
+and completes the breaking native Event 3.0 and SIEM identity migration from the
+former product identity.
 The objective is a reliable, testable path from installation through source
 discovery, parsing, deterministic detection, state handling, and SIEM delivery.
 Priorities, in order:
@@ -22,12 +23,13 @@ Priorities, in order:
    configuration, rule origins, source selection, normalized record counts,
    matches, emitted detections, and suppression reasons without transcript
    inspection.
-3. **Complete the technical rename** — Telltale becomes the sole new runtime,
-   environment, filesystem, event, service, release-asset, and SIEM product
-   identity. ADR remains the category term. Historical state and events receive
-   explicit migration/import handling rather than permanent runtime aliases.
-4. **Remove embedded LLM triage** — deterministic detection remains the core
-   contract; any future AI enrichment is a separately designed capability.
+3. **Complete the native identity cut** — native events use Event 3.0,
+   `telltale-*` IDs, package-only `telltale_version`, and canonical Telltale SIEM
+   identities. ADR remains the category term. Historical events retain explicit
+   read/import handling and their original legacy fields.
+4. **Keep embedded review out of the scanner** — deterministic detection,
+   response metadata, and timeline anchors remain the core contract; any future
+   AI enrichment is a separately designed capability.
 5. **Harden detection and state reliability** — positive and benign fixture
    coverage, exact risk contribution accounting, cursor boundaries, and
    replay-safe deduplication.

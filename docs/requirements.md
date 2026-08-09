@@ -50,5 +50,6 @@
 - Rule fields: id, category, severity, score, target fields, regex, explanation, tags, enabled.
 - Rule targets include tool name, command, arguments, file path, URL, user context, assistant context, and tool result.
 - Context modifiers can increase risk for chained behaviors: read secret + network call, download + execute, install + persistence, shell + encoded payload.
-- High-risk Event 2.0 detections must retain the terminal `config_missing` triage
-  compatibility verdict and deterministic response metadata.
+- Native Event 3.0 high-risk detections must retain deterministic response
+  metadata and any applicable top-level timeline anchors without embedded triage
+  verdicts. Historical Event 1.0/2.0 records remain lossless read/import inputs.

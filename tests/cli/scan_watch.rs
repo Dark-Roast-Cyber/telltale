@@ -383,7 +383,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         validator.is_valid(event),
         "health event failed schema validation"
     );
-    assert_eq!(event["schema_version"], "2.0");
+    assert_eq!(event["schema_version"], "3.0");
     assert_eq!(event["event_type"], "health");
     assert_eq!(event["severity"], "informational");
     assert_eq!(event["risk_score"], 0);
@@ -391,10 +391,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["component"], "scanner");
     assert_eq!(event["check_name"], "source_discovery");
     assert_eq!(event["status"], "ok");
-    assert_eq!(
-        event["adr_version"],
-        format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("ADR_GIT_HASH"))
-    );
+    assert_eq!(event["telltale_version"], env!("CARGO_PKG_VERSION"));
     assert!(event["scan_duration_ms"].as_u64().is_some());
     assert_eq!(event["rule_count"], 18);
     assert_eq!(event["emitted_count"], 37);
@@ -402,8 +399,8 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["scanner_error_count"], 0);
     assert_eq!(event["threshold_config"]["low"], 20);
     assert_eq!(event["threshold_config"]["medium"], 50);
-    assert_eq!(event["threshold_config"]["triage"], 70);
-    assert_eq!(event["threshold_config"]["alert"], 90);
+    assert_eq!(event["threshold_config"]["high"], 70);
+    assert_eq!(event["threshold_config"]["critical"], 90);
     assert!(event.get("active_policy_name").is_none());
     assert!(
         event["evidence"]
@@ -2863,15 +2860,19 @@ fn shipper_examples_target_default_jsonl_path() {
 
     // The Splunk UF helper ships as a tracked, portable example. Its defaults
     // must target the Linux `system` path profile used by managed/Splunk-forwarded
-    // deployments, not stale repo-local or host-absolute paths. The matching
-    // `config/examples/splunk-*.conf` and `splunk-*.xml` examples are host-only and
-    // intentionally not tracked, so they are verified on disk instead of via
-    // include_str!.
+    // deployments, not stale repo-local or host-absolute paths. The generated
+    // stanzas are compared byte-for-byte in the rendering test below.
     let splunk_uf_setup = include_str!("../../scripts/slunk_uf_set_up");
     assert!(
         splunk_uf_setup.contains("ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl"),
         "splunk UF helper must default ADR_LOG_PATH to the system-profile JSONL path"
     );
+    assert!(splunk_uf_setup.contains("ADR_INDEX:-telltale"));
+    assert!(splunk_uf_setup.contains("ADR_SOURCETYPE:-telltale:json"));
+    assert!(splunk_uf_setup.contains("[telltale:json]"));
+    assert!(splunk_uf_setup.contains("source = telltale"));
+    let splunk_inputs = include_str!("../../config/examples/splunk-inputs.conf");
+    assert!(splunk_inputs.contains("source = telltale"));
     assert!(
         splunk_uf_setup.contains("COPILOT_LOG_DIR:-/var/log/telltale/copilot"),
         "splunk UF helper must default COPILOT_LOG_DIR to the system-profile copilot path"
@@ -2883,9 +2884,42 @@ fn shipper_examples_target_default_jsonl_path() {
 }
 
 #[test]
-fn elastic_template_preserves_schema_two_u64_risk_fields() {
-    const DEFAULT_ELASTIC_INDEX: &str = "adr-events";
+fn splunk_uf_helper_renders_canonical_checked_in_stanzas() {
+    let temp = tempdir().expect("tempdir");
+    let uf_home = temp.path().join("splunkforwarder");
+    fs::create_dir_all(&uf_home).expect("UF home");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/slunk_uf_set_up");
+    let output = Command::new("bash")
+        .arg(script)
+        .env("UF_HOME", &uf_home)
+        .env("INDEXER_IPS", "127.0.0.1:9997")
+        .env("RESTART_FORWARDER", "0")
+        .env("ENABLE_COPILOT_MONITOR", "1")
+        .output()
+        .expect("run Splunk UF helper");
+    assert!(
+        output.status.success(),
+        "UF helper failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
+    let local = uf_home.join("etc/system/local");
+    assert_eq!(
+        fs::read_to_string(local.join("inputs.conf")).expect("rendered inputs"),
+        include_str!("../../config/examples/splunk-inputs.conf")
+    );
+    assert_eq!(
+        fs::read_to_string(local.join("props.conf")).expect("rendered props"),
+        include_str!("../../config/examples/splunk-props.conf")
+    );
+    assert_eq!(
+        fs::read_to_string(local.join("outputs.conf")).expect("rendered outputs"),
+        "[tcpout]\ndefaultGroup = telltale_indexers\n\n[tcpout:telltale_indexers]\nserver = 127.0.0.1:9997\nforceTimebasedAutoLB = true\nautoLBFrequency = 30\n"
+    );
+}
+
+#[test]
+fn elastic_template_preserves_native_u64_risk_fields() {
     let template: Value = serde_json::from_str(include_str!(
         "../../config/examples/elastic-telltale-index-template.json"
     ))
@@ -2893,16 +2927,25 @@ fn elastic_template_preserves_schema_two_u64_risk_fields() {
     let patterns = template["index_patterns"]
         .as_array()
         .expect("elastic index patterns");
-    assert!(
+    assert_eq!(
         patterns
             .iter()
-            .any(|pattern| { pattern.as_str() == Some(DEFAULT_ELASTIC_INDEX) })
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>(),
+        ["telltale-events", "telltale-events-*"]
     );
-    let rollover_pattern = format!("{DEFAULT_ELASTIC_INDEX}-*");
-    assert!(
-        patterns
-            .iter()
-            .any(|pattern| pattern.as_str() == Some(rollover_pattern.as_str()))
+    let role: Value = serde_json::from_str(include_str!(
+        "../../config/examples/elastic-telltale-role.json"
+    ))
+    .expect("elastic role json");
+    assert_eq!(
+        role["indices"][0]["names"],
+        serde_json::json!(["telltale-events", "telltale-events-*"])
+    );
+    assert_eq!(role["cluster"], serde_json::json!([]));
+    assert_eq!(
+        role["indices"][0]["privileges"],
+        serde_json::json!(["auto_configure", "index"])
     );
     let properties = &template["template"]["mappings"]["properties"];
     assert_eq!(properties["risk_score"]["type"], "unsigned_long");
@@ -4361,7 +4404,7 @@ fn watch_rejects_unknown_client_filter() {
 }
 
 #[test]
-fn scan_once_marks_high_risk_detection_config_missing_without_network() {
+fn scan_once_emits_native_high_risk_detection_without_network() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions/2026/04");
@@ -4433,20 +4476,18 @@ fn scan_once_marks_high_risk_detection_config_missing_without_network() {
         .iter()
         .find(|event| event["event_type"] == "detection")
         .expect("detection event");
-    assert_eq!(detection["triage"]["required"], true);
-    assert_eq!(detection["triage"]["verdict"], "config_missing");
+    assert!(detection.get("triage").is_none());
     assert!(
-        !detection["triage"]["timeline_anchors"]
+        !detection["timeline_anchors"]
             .as_array()
             .expect("timeline anchors")
             .is_empty()
     );
-    assert!(detection["triage"].get("confidence").is_none());
-    assert!(detection["triage"].get("reason").is_none());
+    assert!(detection["response"].is_object());
 }
 
 #[test]
-fn scan_once_ignores_unconfigured_legacy_triage_variables() {
+fn scan_once_ignores_legacy_triage_configuration_variables() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let codex_sessions = root.join("codex/sessions/2026/04");
@@ -4500,15 +4541,15 @@ fn scan_once_ignores_unconfigured_legacy_triage_variables() {
         .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
         .find(|event| event["event_type"] == "detection")
         .expect("detection event");
-    assert_eq!(detection["triage"]["required"], true);
-    assert_eq!(detection["triage"]["verdict"], "config_missing");
+    assert!(detection.get("triage").is_none());
+    assert!(detection["response"].is_object());
 
     let schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
     let validator = validator_for(&schema).expect("schema validator");
     assert!(
         validator.is_valid(&detection),
-        "config-missing event failed schema validation"
+        "native detection event failed schema validation"
     );
 }
 
@@ -4582,7 +4623,7 @@ fn operational_alert_emitted_when_scanner_errors_exceed_threshold() {
             .contains(&Value::String("scanner_health".to_string()))
     );
     assert_eq!(alert["risk_score"], 0);
-    assert!(alert["adr_version"].is_string());
+    assert_eq!(alert["telltale_version"], env!("CARGO_PKG_VERSION"));
 
     // Verify the alert_type evidence field.
     let alert_type_evidence = alert["evidence"]

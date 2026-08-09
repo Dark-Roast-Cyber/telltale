@@ -14,7 +14,7 @@
 # Overrides:
 #   ADR_LIVETEST_ES_CONTAINER      Elasticsearch container name
 #   ADR_LIVETEST_SPLUNK_CONTAINER  Splunk container name
-#   ADR_LIVETEST_ES_INDEX          target ES index (default adr-events-livetest)
+#   ADR_LIVETEST_ES_INDEX          target ES index (default telltale-events-livetest)
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -24,7 +24,7 @@ LOG_PATH="$LOCAL_DIR/live-events.jsonl"
 STATE_PATH="$LOCAL_DIR/live-state.json"
 ES_CONTAINER="${ADR_LIVETEST_ES_CONTAINER:-docker-elk-elasticsearch-1}"
 SPLUNK_CONTAINER="${ADR_LIVETEST_SPLUNK_CONTAINER:-splunk}"
-ES_INDEX="${ADR_LIVETEST_ES_INDEX:-adr-events-livetest}"
+ES_INDEX="${ADR_LIVETEST_ES_INDEX:-telltale-events-livetest}"
 HEC_TOKEN_NAME="telltale-livetest"
 
 note() { printf '\n== %s\n' "$*"; }
@@ -90,17 +90,17 @@ if docker inspect "$SPLUNK_CONTAINER" >/dev/null 2>&1; then
         HEC_ADDR=$(host_port "$SPLUNK_CONTAINER" 8088/tcp) || true
         if [ -n "$SPLUNK_PASSWORD" ] && [ -n "${MGMT_ADDR:-}" ] && [ -n "${HEC_ADDR:-}" ]; then
             mgmt() { curl -sk -m 20 -u "admin:$SPLUNK_PASSWORD" "$@"; }
-            # Ensure the adr index exists (the sink's default HEC index).
-            if ! mgmt "https://$MGMT_ADDR/services/data/indexes/adr?output_mode=json" -o /dev/null -w '%{http_code}' | grep -q 200; then
-                mgmt -X POST "https://$MGMT_ADDR/services/data/indexes" -d name=adr >/dev/null \
-                    && echo "Created Splunk index 'adr'"
+            # Ensure the telltale index exists (the sink's default HEC index).
+            if ! mgmt "https://$MGMT_ADDR/services/data/indexes/telltale?output_mode=json" -o /dev/null -w '%{http_code}' | grep -q 200; then
+                mgmt -X POST "https://$MGMT_ADDR/services/data/indexes" -d name=telltale >/dev/null \
+                    && echo "Created Splunk index 'telltale'"
             fi
             # Ensure HEC is enabled and a named test token exists.
             mgmt -X POST "https://$MGMT_ADDR/services/data/inputs/http/http" -d disabled=0 >/dev/null || true
             token_json=$(mgmt "https://$MGMT_ADDR/services/data/inputs/http/$HEC_TOKEN_NAME?output_mode=json" || true)
             if ! printf '%s' "$token_json" | grep -q '"token"'; then
                 token_json=$(mgmt -X POST "https://$MGMT_ADDR/services/data/inputs/http?output_mode=json" \
-                    -d name="$HEC_TOKEN_NAME" -d index=adr -d sourcetype=adr:json)
+                    -d name="$HEC_TOKEN_NAME" -d index=telltale -d sourcetype=telltale:json)
             fi
             ADR_LIVETEST_HEC_TOKEN=$(printf '%s' "$token_json" \
                 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["entry"][0]["content"]["token"])' 2>/dev/null || true)
@@ -151,8 +151,8 @@ EOF
     type: splunk_hec
     endpoint: $HEC_URL
     token: { env: ADR_LIVETEST_HEC_TOKEN }
-    index: adr
-    sourcetype: adr:json
+    index: telltale
+    sourcetype: telltale:json
     retry: { max_attempts: 3, base_delay_ms: 250 }
 EOF
         if [ "$HEC_SCHEME" = https ]; then
@@ -208,7 +208,7 @@ PYEOF
     for _ in $(seq 1 20); do
         SPLUNK_COUNT=$(mgmt "https://$MGMT_ADDR/services/search/jobs/export" \
             -d output_mode=json -d earliest_time=-10m \
-            --data-urlencode "search=search index=adr \"$HEALTH_ID\" | stats count" \
+            --data-urlencode "search=search index=telltale \"$HEALTH_ID\" | stats count" \
             | python3 -c 'import json,sys
 count = 0
 for line in sys.stdin:
@@ -223,7 +223,7 @@ print(count)' || echo 0)
         sleep 3
     done
     echo "Splunk events matching this run's health event_id: $SPLUNK_COUNT"
-    [ "${SPLUNK_COUNT:-0}" -ge 1 ] 2>/dev/null || fail "health event not found in Splunk index=adr"
+    [ "${SPLUNK_COUNT:-0}" -ge 1 ] 2>/dev/null || fail "health event not found in Splunk index=telltale"
     echo "PASS: Splunk HEC sink"
 fi
 

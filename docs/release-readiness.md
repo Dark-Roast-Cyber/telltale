@@ -25,11 +25,11 @@ families, schema checks, or aggregate results without exposing workstation
 paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
-[Versioning and Releases](versioning.md). Compatible maintenance releases
-remain on the current `0.3.x` line while the unpublished `0.4.0` line is
-prepared. Do not create `0.5.x` for a round of small tasks; a `0.5.0` release
-requires an approved significant milestone with its own compatibility,
-migration, and release-readiness review.
+[Versioning and Releases](versioning.md). The workspace is currently preparing
+the approved `0.5.0` Event 3.0 migration; compatible maintenance fixes remain
+on the prior `0.3.x` line until that release is published. Do not create
+`0.5.x` for a round of small tasks; follow-up fixes belong there only after the
+reviewed `0.5.0` milestone ships.
 
 ## Pre-Release Checks
 
@@ -132,7 +132,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-pinned `=0.4.0` registry packages before publication is declared complete.
+`=0.5.0` registry packages before publication is declared complete.
 
 ## Artifact Boundary
 

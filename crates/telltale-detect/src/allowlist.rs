@@ -51,6 +51,9 @@ pub fn load_allowlist(path: Option<&Path>) -> Result<Allowlist, Box<dyn std::err
 
 impl Allowlist {
     pub fn suppression_for(&self, source: &Source, event: &Event) -> Option<SuppressionMatch> {
+        if event.event_type != "detection" {
+            return None;
+        }
         self.suppressions
             .iter()
             .find(|suppression| suppression.matches(source, event))
@@ -93,9 +96,13 @@ impl Suppression {
 }
 
 pub fn suppress_detection(event: &mut Event, suppression_match: &SuppressionMatch) {
+    if event.event_type != "detection" {
+        return;
+    }
     event.severity = "informational".to_string();
     event.risk_score = 0;
     event.risk_contributions.clear();
+    event.timeline_anchors.clear();
     push_tag(&mut event.tags, "suppressed");
     push_tag(
         &mut event.tags,
@@ -107,10 +114,6 @@ pub fn suppress_detection(event: &mut Event, suppression_match: &SuppressionMatc
         hash: None,
         rule_id: None,
     });
-    event.triage = Some(serde_json::json!({
-        "required": false,
-        "verdict": "not_required"
-    }));
     event.response = None;
 }
 
@@ -166,9 +169,9 @@ mod tests {
             tool_name: Some("shell".to_string()),
             rule_ids: vec!["secret.env.read".to_string()],
             categories: vec!["secret_access".to_string()],
-            detection_classes: Vec::new(),
-            signal_types: Vec::new(),
-            analytic_intents: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
             atlas_tags: Vec::new(),
             tags: vec!["secret".to_string()],
             evidence: Vec::new(),
@@ -211,6 +214,12 @@ mod tests {
     #[test]
     fn suppressed_detection_remains_a_detection_but_drops_risk() {
         let mut event = event();
+        event.timeline_anchors = vec![telltale_schema::event::TimelineAnchor {
+            entry_index: 3,
+            rule_ids: vec!["secret.env.read".to_string()],
+            categories: vec!["secret_access".to_string()],
+            evidence_fields: vec!["tool_result".to_string()],
+        }];
         let suppression_match = super::SuppressionMatch {
             name: "known-fixture".to_string(),
         };
@@ -223,9 +232,23 @@ mod tests {
         assert!(event.risk_contributions.is_empty());
         assert!(event.tags.iter().any(|tag| tag == "suppressed"));
         assert!(event.response.is_none());
-        assert_eq!(
-            event.triage.as_ref().expect("triage")["verdict"],
-            "not_required"
+        assert!(event.timeline_anchors.is_empty());
+    }
+
+    #[test]
+    fn allowlist_does_not_mutate_non_detection_events() {
+        let mut event = event();
+        event.event_type = "process_chain".to_string();
+        let original = event.clone();
+        suppress_detection(
+            &mut event,
+            &super::SuppressionMatch {
+                name: "not-applicable".to_string(),
+            },
         );
+        assert_eq!(event.event_type, original.event_type);
+        assert_eq!(event.risk_score, original.risk_score);
+        assert_eq!(event.tags, original.tags);
+        assert_eq!(event.response, original.response);
     }
 }

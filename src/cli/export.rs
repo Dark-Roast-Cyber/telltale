@@ -5,8 +5,7 @@ use time::OffsetDateTime;
 
 use crate::correlation::{CorrelationConfig, correlation_events_from_detections};
 use crate::event::{
-    Event, evidence_hash, parse_event_timestamp, validate_risk_accounting_scope,
-    validate_schema_two_rule_ids,
+    Event, evidence_hash, parse_event_timestamp, validate_risk_accounting_scope, validate_rule_ids,
 };
 use crate::rules::{CompiledRuleSet, load_default_rule_set};
 use crate::schema::{NormalizedRecordV1, Provenance};
@@ -194,28 +193,28 @@ fn validate_imported_event_accounting(
         let schema_version = event
             .get("schema_version")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("1.0");
+            .ok_or("event is missing schema_version")?;
         let event_type = event
             .get("event_type")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        if schema_version != "2.0"
+        if schema_version != "2.0" && schema_version != "3.0"
             || !matches!(
                 event_type,
-                "activity" | "detection" | "session_risk_summary"
+                "activity" | "detection" | "session_risk_summary" | "process_chain"
             )
         {
-            if schema_version == "2.0" {
+            if schema_version == "2.0" || schema_version == "3.0" {
                 let rule_ids = imported_rule_ids(event)?;
-                validate_schema_two_rule_ids(&rule_ids)?;
+                validate_rule_ids(&rule_ids)?;
             }
             continue;
         }
         let rule_ids = imported_rule_ids(event)?;
-        validate_schema_two_rule_ids(&rule_ids)?;
+        validate_rule_ids(&rule_ids)?;
         let raw = event
             .get("risk_contributions")
-            .ok_or("schema 2 risk-bearing event is missing risk_contributions")?
+            .ok_or("risk-bearing event is missing risk_contributions")?
             .clone();
         let contributions: Vec<telltale_schema::scoring::RiskContribution> =
             serde_json::from_value(raw)?;
@@ -223,11 +222,20 @@ fn validate_imported_event_accounting(
         if contributions != canonical {
             return Err(RiskAccountingError::NonCanonicalContributions.into());
         }
-        validate_risk_accounting_scope(event_type, &string_array(event, "rule_ids"), &canonical)?;
+        let accounting_event_type = if schema_version == "3.0" && event_type == "process_chain" {
+            "detection"
+        } else {
+            event_type
+        };
+        validate_risk_accounting_scope(
+            accounting_event_type,
+            &string_array(event, "rule_ids"),
+            &canonical,
+        )?;
         let declared = event
             .get("risk_score")
             .and_then(serde_json::Value::as_u64)
-            .ok_or("schema 2 risk-bearing event has an invalid risk_score")?;
+            .ok_or("risk-bearing event has an invalid risk_score")?;
         let computed = crate::scoring::checked_risk_sum(&canonical)?;
         if declared != computed {
             return Err(RiskAccountingError::ScoreMismatch { declared, computed }.into());
@@ -242,14 +250,14 @@ fn imported_rule_ids(event: &serde_json::Value) -> Result<Vec<String>, Box<dyn s
     };
     let values = value
         .as_array()
-        .ok_or("schema 2 event has an invalid rule_ids array")?;
+        .ok_or("imported event has an invalid rule_ids array")?;
     values
         .iter()
         .map(|value| {
             value
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| "schema 2 event has a non-string rule_id".into())
+                .ok_or_else(|| "imported event has a non-string rule_id".into())
         })
         .collect()
 }
@@ -613,7 +621,8 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
                     })
                     .unwrap_or_default();
 
-                // Triage summary (redacted).
+                // Historical triage is retained only as a derived export view;
+                // native 3.0 events never carry this field.
                 let triage = event.get("triage").map(|t| {
                     serde_json::json!({
                         "verdict": t.get("verdict").and_then(|v| v.as_str()),
@@ -647,6 +656,13 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
                 if !categories.is_empty() {
                     entry["categories"] = serde_json::json!(categories);
                 }
+                if let Some(anchors) = event
+                    .get("timeline_anchors")
+                    .filter(|value| value.is_array())
+                    .filter(|value| !value.as_array().is_some_and(Vec::is_empty))
+                {
+                    entry["timeline_anchors"] = anchors.clone();
+                }
                 if !evidence_summary.is_empty() {
                     entry["evidence"] = serde_json::json!(evidence_summary);
                 }
@@ -675,13 +691,27 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
             .filter_map(|e| e.get("severity").and_then(|v| v.as_str()))
             .max_by_key(|s| severity_rank(s))
             .unwrap_or("informational");
-        // Event 2.0 compatibility markers are present on every detection, but
-        // they do not prove that embedded model triage ran. Historical events
-        // with a terminal model verdict still count as actual triage.
+        // Native events have no triage field. Historical records may retain a
+        // terminal model verdict, which is shown only in this derived view.
         let has_triage = session_events
             .iter()
             .any(|event| triage_ran_from_event(event));
         let risk_summary = build_session_risk_summary(&session_events);
+        let record_status = session_events
+            .iter()
+            .map(|event| {
+                if event.get("schema_version").and_then(|value| value.as_str()) == Some("3.0") {
+                    "native"
+                } else {
+                    "historical"
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        let record_status = match record_status.len() {
+            1 if record_status.contains("native") => "native",
+            1 => "historical",
+            _ => "mixed",
+        };
 
         let timeline = serde_json::json!({
             "event_type": "timeline",
@@ -694,6 +724,7 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
             "detection_count": detection_count,
             "max_severity": max_severity,
             "has_triage": has_triage,
+            "record_status": record_status,
             "risk_summary": risk_summary,
             "entries": entries,
         });
@@ -799,6 +830,7 @@ fn build_source_backed_timeline_value(
     timeline["detection_count"] = serde_json::Value::from(detection_count);
     timeline["max_severity"] = serde_json::Value::String(max_severity.to_string());
     timeline["has_triage"] = serde_json::Value::Bool(has_triage);
+    timeline["record_status"] = serde_json::Value::String("source_derived".to_string());
     timeline["risk_summary"] = summary;
     Ok(Some(timeline))
 }
@@ -1005,9 +1037,11 @@ fn event_from_json_value(
         schema_version: event
             .get("schema_version")
             .and_then(|value| value.as_str())
-            .unwrap_or("1.0")
+            .ok_or("event is missing schema_version")?
             .to_string(),
         event_id: event_id.to_string(),
+        telltale_version: optional_string(event, "telltale_version")
+            .unwrap_or_else(|| "historical".to_string()),
         event_type: event_type.to_string(),
         severity: severity.to_string(),
         risk_score,
@@ -1028,13 +1062,12 @@ fn event_from_json_value(
         atlas_tags: string_array(event, "atlas_tags"),
         tags: string_array(event, "tags"),
         evidence: Vec::new(),
-        triage: event.get("triage").cloned(),
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: None,
         component: optional_string(event, "component"),
         check_name: optional_string(event, "check_name"),
         status: optional_string(event, "status"),
-        adr_version: optional_string(event, "adr_version"),
         scan_duration_ms: event
             .get("scan_duration_ms")
             .and_then(|value| value.as_u64()),
@@ -1057,8 +1090,6 @@ fn event_from_json_value(
         mitre_attack_techniques: string_array(event, "mitre_attack_techniques"),
         risk_entity_type: optional_string(event, "risk_entity_type"),
         risk_entity_value: optional_string(event, "risk_entity_value"),
-        // Export replays events for summarisation and never re-serialises the
-        // process block, so it is dropped rather than partially rebuilt.
         process: None,
     }))
 }

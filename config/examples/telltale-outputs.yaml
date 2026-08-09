@@ -26,9 +26,9 @@ sinks:
     endpoint: https://splunk.example.com:8088/services/collector
     # Secrets: prefer {env: NAME} or {file: PATH}; inline strings are for labs.
     token: { env: SPLUNK_HEC_TOKEN }
-    index: adr
-    sourcetype: adr:json
-    source: telltale:adr
+    index: telltale
+    sourcetype: telltale:json
+    source: telltale
     timeout_ms: 10000
     max_batch_bytes: 1048576          # Splunk's conservative max_content_length
     retry:
@@ -44,7 +44,7 @@ sinks:
     type: elastic_bulk
     enabled: false
     endpoint: https://elastic.example.com:9243
-    index: adr-events
+    index: telltale-events
     api_key: { file: /etc/telltale/secrets/elastic-api-key }
     # or basic auth instead of api_key:
     # username: telltale

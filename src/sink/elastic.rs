@@ -7,7 +7,7 @@ use crate::event::Event;
 use crate::sink::http::{HttpClient, RetryConfig, TlsOptions, chunk_segments};
 use crate::sink::{EventSink, SinkDeliveryError};
 
-pub const DEFAULT_ELASTIC_INDEX: &str = "adr-events";
+pub const DEFAULT_ELASTIC_INDEX: &str = "telltale-events";
 /// Elasticsearch's default `http.max_content_length` is 100 MB; 5 MiB per
 /// request keeps bulk bodies well under typical proxy limits.
 pub const DEFAULT_ELASTIC_MAX_BATCH_BYTES: usize = 5 * 1024 * 1024;
@@ -150,7 +150,7 @@ impl EventSink for ElasticBulkSink {
     }
 }
 
-/// The Bulk API action line for one event. Shared with `adr export
+/// The Bulk API action line for one event. Shared with `telltale export
 /// --format elastic-bulk` so the offline and live formats cannot drift.
 pub fn elastic_bulk_action_json(index: &str, event_id: Option<&str>) -> serde_json::Value {
     let mut metadata = serde_json::Map::new();
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn emits_bulk_action_and_source_pairs_with_event_id() {
         let (endpoint, handle) = start_mock_elastic(r#"{"took":1,"errors":false,"items":[]}"#);
-        let sink = ElasticBulkSink::new(&endpoint, "adr-events").with_api_key("test-key");
+        let sink = ElasticBulkSink::new(&endpoint, "telltale-events").with_api_key("test-key");
 
         let events = [make_health_event(), make_health_event()];
         emit_events(&sink, &events).expect("emit bulk events");
@@ -303,7 +303,7 @@ mod tests {
         for pair in lines.chunks(2) {
             let action: serde_json::Value = serde_json::from_str(pair[0]).expect("action line");
             let source: serde_json::Value = serde_json::from_str(pair[1]).expect("source line");
-            assert_eq!(action["index"]["_index"], "adr-events");
+            assert_eq!(action["index"]["_index"], "telltale-events");
             assert_eq!(action["index"]["_id"], source["event_id"]);
             assert_eq!(source["event_type"], "health");
             // Transport metadata stays out of the canonical event body.
@@ -316,7 +316,7 @@ mod tests {
         let (endpoint, handle) = start_mock_elastic(
             r#"{"took":1,"errors":true,"items":[{"index":{"_id":"a","status":403,"error":{"type":"security_exception","reason":"credential-marker=do-not-leak"}}},{"index":{"_id":"b","status":201}}]}"#,
         );
-        let sink = ElasticBulkSink::new(&endpoint, "adr-events");
+        let sink = ElasticBulkSink::new(&endpoint, "telltale-events");
 
         let err = emit_events(&sink, &[make_health_event()]).expect_err("item errors");
         handle.join().expect("mock join");
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn malformed_bulk_response_fails_without_body_or_losing_attempt_count() {
         let (endpoint, handle) = start_mock_elastic("credential-marker=malformed-body");
-        let sink = ElasticBulkSink::new(&endpoint, "adr-events");
+        let sink = ElasticBulkSink::new(&endpoint, "telltale-events");
 
         let err = emit_events(&sink, &[make_health_event()]).expect_err("malformed response");
         handle.join().expect("mock join");
@@ -347,8 +347,8 @@ mod tests {
     #[test]
     fn basic_auth_sets_encoded_authorization_header() {
         let (endpoint, handle) = start_mock_elastic(r#"{"errors":false}"#);
-        let sink =
-            ElasticBulkSink::new(&endpoint, "adr-events").with_basic_auth("telltale", "s3cret");
+        let sink = ElasticBulkSink::new(&endpoint, "telltale-events")
+            .with_basic_auth("telltale", "s3cret");
 
         emit_events(&sink, &[make_health_event()]).expect("emit");
         let request = handle.join().expect("mock join").to_lowercase();
@@ -394,15 +394,18 @@ mod tests {
 
     #[test]
     fn action_json_matches_export_format() {
-        let action = elastic_bulk_action_json("adr-events", Some("adr-1234"));
+        let action = elastic_bulk_action_json(
+            "telltale-events",
+            Some("telltale-00000000-0000-4000-8000-000000000001"),
+        );
         assert_eq!(
             serde_json::to_string(&action).expect("serialize"),
-            r#"{"index":{"_id":"adr-1234","_index":"adr-events"}}"#
+            r#"{"index":{"_id":"telltale-00000000-0000-4000-8000-000000000001","_index":"telltale-events"}}"#
         );
-        let without_id = elastic_bulk_action_json("adr-events", None);
+        let without_id = elastic_bulk_action_json("telltale-events", None);
         assert_eq!(
             serde_json::to_string(&without_id).expect("serialize"),
-            r#"{"index":{"_index":"adr-events"}}"#
+            r#"{"index":{"_index":"telltale-events"}}"#
         );
     }
 }

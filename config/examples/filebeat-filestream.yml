@@ -1,6 +1,6 @@
 filebeat.inputs:
   - type: filestream
-    id: adr-jsonl
+    id: telltale-jsonl
     paths:
       - /var/log/telltale/adr-events.jsonl
     parsers:
@@ -9,6 +9,6 @@ filebeat.inputs:
           add_error_key: true
 
 fields:
-  service.name: adr
+  service.name: telltale
   event.module: agentic_detection_response
 fields_under_root: true

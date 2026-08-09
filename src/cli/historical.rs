@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
 use std::sync::LazyLock;
 
 use jsonschema::{Validator, validator_for};
@@ -12,11 +14,38 @@ const EVENT_2_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/schemas/historical/event-2.0.schema.json"
 ));
+const EVENT_3_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/schemas/historical/event-3.0.schema.json"
+));
+const CURRENT_EVENT_3_SCHEMA: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/schemas/event.schema.json"
+));
 
 static EVENT_1_VALIDATOR: LazyLock<Result<Validator, HistoricalEventValidationError>> =
     LazyLock::new(|| compile_validator(EVENT_1_SCHEMA));
 static EVENT_2_VALIDATOR: LazyLock<Result<Validator, HistoricalEventValidationError>> =
     LazyLock::new(|| compile_validator(EVENT_2_SCHEMA));
+static EVENT_3_VALIDATOR: LazyLock<Result<Validator, HistoricalEventValidationError>> =
+    LazyLock::new(|| compile_validator(EVENT_3_SCHEMA));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventRecordKind {
+    Historical,
+    Native,
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonlEventRecord {
+    pub value: Value,
+    pub schema_version: String,
+    pub event_id: String,
+    pub object_bytes: Vec<u8>,
+    pub raw_bytes: Vec<u8>,
+    pub line_ending: Vec<u8>,
+    pub kind: EventRecordKind,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoricalEventValidationError {
@@ -57,6 +86,9 @@ pub fn validate_historical_event(
         "2.0" => EVENT_2_VALIDATOR
             .as_ref()
             .map_err(|_| HistoricalEventValidationError::SchemaUnavailable)?,
+        "3.0" => EVENT_3_VALIDATOR
+            .as_ref()
+            .map_err(|_| HistoricalEventValidationError::SchemaUnavailable)?,
         _ => {
             return Err(HistoricalEventValidationError::UnknownRequestedSchemaVersion);
         }
@@ -71,7 +103,7 @@ pub fn validate_historical_event(
         Some(_) => return Err(HistoricalEventValidationError::InvalidSchemaVersionType),
     };
 
-    if !matches!(actual_schema_version.as_str(), "1.0" | "2.0") {
+    if !matches!(actual_schema_version.as_str(), "1.0" | "2.0" | "3.0") {
         return Err(HistoricalEventValidationError::UnknownActualSchemaVersion);
     }
     if actual_schema_version != expected_schema_version {
@@ -85,6 +117,102 @@ pub fn validate_historical_event(
     Ok(value)
 }
 
+pub fn validate_event_record(
+    value: Value,
+) -> Result<(Value, EventRecordKind), HistoricalEventValidationError> {
+    let object = value
+        .as_object()
+        .ok_or(HistoricalEventValidationError::InvalidSchemaVersionType)?;
+    let version = object
+        .get("schema_version")
+        .ok_or(HistoricalEventValidationError::MissingSchemaVersion)?
+        .as_str()
+        .ok_or(HistoricalEventValidationError::InvalidSchemaVersionType)?
+        .to_string();
+    let kind = if version == "3.0" {
+        EventRecordKind::Native
+    } else {
+        EventRecordKind::Historical
+    };
+    let validated = validate_historical_event(value, &version)?;
+    Ok((validated, kind))
+}
+
+/// Read strict event records without converting historical values into `Event`.
+/// Raw object bytes and line framing remain available to lossless import code.
+pub fn read_jsonl_records(
+    path: &std::path::Path,
+) -> Result<Vec<JsonlEventRecord>, Box<dyn std::error::Error>> {
+    let bytes = fs::read(path)?;
+    let mut records = Vec::new();
+    let mut seen_ids: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut start = 0;
+
+    while start < bytes.len() {
+        let end = bytes[start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|offset| start + offset + 1)
+            .unwrap_or(bytes.len());
+        let raw_bytes = bytes[start..end].to_vec();
+        let (object_end, line_ending) = if raw_bytes.ends_with(b"\r\n") {
+            (raw_bytes.len() - 2, b"\r\n".to_vec())
+        } else if raw_bytes.ends_with(b"\n") {
+            (raw_bytes.len() - 1, b"\n".to_vec())
+        } else {
+            (raw_bytes.len(), Vec::new())
+        };
+        let object_bytes = raw_bytes[..object_end].to_vec();
+        if !object_bytes.iter().all(u8::is_ascii_whitespace) {
+            let value = serde_json::from_slice::<Value>(&object_bytes).map_err(|error| {
+                format!(
+                    "invalid JSONL at {}:{}: {error}",
+                    path.display(),
+                    records.len() + 1
+                )
+            })?;
+            let (value, kind) = validate_event_record(value).map_err(|error| {
+                format!(
+                    "invalid event at {}:{}: {error}",
+                    path.display(),
+                    records.len() + 1
+                )
+            })?;
+            let object = value
+                .as_object()
+                .ok_or("validated event is not an object")?;
+            let schema_version = object
+                .get("schema_version")
+                .and_then(Value::as_str)
+                .ok_or("validated event is missing schema_version")?
+                .to_string();
+            let event_id = object
+                .get("event_id")
+                .and_then(Value::as_str)
+                .ok_or("validated event is missing event_id")?
+                .to_string();
+            if let Some(previous) = seen_ids.get(&event_id)
+                && previous != &raw_bytes
+            {
+                return Err("event_id_collision".into());
+            }
+            seen_ids.insert(event_id.clone(), raw_bytes.clone());
+            records.push(JsonlEventRecord {
+                value,
+                schema_version,
+                event_id,
+                object_bytes,
+                raw_bytes,
+                line_ending,
+                kind,
+            });
+        }
+        start = end;
+    }
+
+    Ok(records)
+}
+
 fn compile_validator(schema_text: &str) -> Result<Validator, HistoricalEventValidationError> {
     let schema: Value = serde_json::from_str(schema_text)
         .map_err(|_| HistoricalEventValidationError::SchemaUnavailable)?;
@@ -93,11 +221,15 @@ fn compile_validator(schema_text: &str) -> Result<Validator, HistoricalEventVali
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
+    use tempfile::tempdir;
 
     use super::{
-        EVENT_1_SCHEMA, EVENT_2_SCHEMA, HistoricalEventValidationError, compile_validator,
+        CURRENT_EVENT_3_SCHEMA, EVENT_1_SCHEMA, EVENT_2_SCHEMA, EVENT_3_SCHEMA,
+        HistoricalEventValidationError, compile_validator, read_jsonl_records,
         validate_historical_event,
     };
 
@@ -227,6 +359,11 @@ mod tests {
             sha256_hex(EVENT_2_SCHEMA.as_bytes()),
             "4b41c09e2663ead7049ccdc90737f5536942da6b6247af74f43215f29cfa00a5"
         );
+        assert_eq!(
+            sha256_hex(EVENT_3_SCHEMA.as_bytes()),
+            "9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754"
+        );
+        assert_eq!(EVENT_3_SCHEMA, CURRENT_EVENT_3_SCHEMA);
     }
 
     #[test]
@@ -235,5 +372,37 @@ mod tests {
             compile_validator("{not-json"),
             Err(HistoricalEventValidationError::SchemaUnavailable)
         ));
+    }
+
+    #[test]
+    fn jsonl_reader_preserves_order_bytes_and_exact_duplicates() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("events.jsonl");
+        let line = serde_json::to_string(&fixture(EVENT_1_DETECTION)).expect("compact event");
+        let raw = format!("{line}\n{line}\n");
+        fs::write(&path, raw.as_bytes()).expect("write JSONL");
+
+        let records = read_jsonl_records(&path).expect("read JSONL");
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].event_id, records[1].event_id);
+        assert_eq!(records[0].object_bytes, records[1].object_bytes);
+        assert_eq!(records[0].raw_bytes, records[1].raw_bytes);
+        assert_eq!(records[0].schema_version, "1.0");
+        assert_eq!(records[0].kind, super::EventRecordKind::Historical);
+    }
+
+    #[test]
+    fn jsonl_reader_rejects_same_id_with_different_bytes() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("events.jsonl");
+        let first = fixture(EVENT_1_DETECTION);
+        let mut second = first.clone();
+        second["risk_score"] = json!(91);
+        let first = serde_json::to_string(&first).expect("compact event");
+        let second = serde_json::to_string(&second).expect("compact event");
+        fs::write(&path, format!("{first}\n{second}\n")).expect("write JSONL");
+
+        let error = read_jsonl_records(&path).expect_err("same-id collision");
+        assert!(error.to_string().contains("event_id_collision"));
     }
 }

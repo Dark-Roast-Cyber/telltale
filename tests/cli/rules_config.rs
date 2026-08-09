@@ -2398,6 +2398,61 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
         unnamed_summary["detection_flow"]["policy_match_accounting"]["filtered_rule_id_count"],
         1
     );
+
+    let blank_policy = temp.path().join("blank-policy.yaml");
+    fs::write(
+        &blank_policy,
+        "name: \"   \"\ndisabled_categories:\n  - custom_agent_behavior\n",
+    )
+    .expect("write blank policy");
+    let log_path = temp.path().join("blank-policy-events.jsonl");
+    let blank = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args([
+            "scan",
+            "--once",
+            "--backfill",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--root",
+        ])
+        .arg(&root)
+        .args([
+            "--no-default-rules",
+            "--rules",
+            "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+            "--policy",
+        ])
+        .arg(&blank_policy)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run blank-policy scan");
+    assert!(
+        blank.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&blank.stderr)
+    );
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
+    let validator = validator_for(&schema).expect("schema validator");
+    let events = fs::read_to_string(&log_path)
+        .expect("blank-policy event log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect::<Vec<_>>();
+    let health = events
+        .iter()
+        .find(|event| event["event_type"] == "health")
+        .expect("health event");
+    assert!(health.get("active_policy_name").is_none());
+    for event in &events {
+        assert!(
+            validator.is_valid(event),
+            "native event failed schema: {event}"
+        );
+    }
 }
 
 #[test]
@@ -2918,8 +2973,8 @@ suppressions:
             .iter()
             .any(|tag| tag == "allowlist:fixture-custom-agent")
     );
-    assert_eq!(detection["triage"]["required"], false);
-    assert!(detection["response"].is_null());
+    assert!(detection.get("triage").is_none());
+    assert!(detection.get("response").is_none());
 }
 
 #[test]

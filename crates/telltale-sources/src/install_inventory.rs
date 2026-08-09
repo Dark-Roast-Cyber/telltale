@@ -110,7 +110,9 @@ pub fn install_inventory_due(
     observed_at_unix_ms.saturating_sub(previous.observed_at_unix_ms) >= interval_ms
 }
 
-pub fn snapshot_to_event(snapshot: &InstallInventorySnapshot) -> Event {
+pub fn snapshot_to_event(
+    snapshot: &InstallInventorySnapshot,
+) -> Result<Event, telltale_schema::scoring::RiskAccountingError> {
     let installed = snapshot
         .agents
         .iter()

@@ -23,7 +23,7 @@ ADR uses five evidence classes, ordered from safest to most sensitive:
 - `session_id` (opaque identifier, not raw transcript path)
 - `tool_name` (bash, write, curl, ...)
 - `timestamp` (RFC3339)
-- `adr_version`, `scan_duration_ms`, `rule_count`
+- `telltale_version`, `scan_duration_ms`, `rule_count`
 
 **Current behavior**: These fields appear as top-level event fields. No redaction needed because they are identifiers, not content.
 
@@ -125,7 +125,7 @@ The `Event` struct in `src/event.rs` maps evidence classes to fields:
 | `evidence[].field` | Safe metadata | Identifies which source field the evidence came from |
 | `evidence[].rule_id` | Safe metadata | Links evidence to the rule that matched it |
 | `source_path_hash` | Hashed value | SHA-256 of the source file path |
-| `triage.*` | Safe metadata + redacted excerpt | Triage verdict, confidence, reason, timeline anchors |
+| `timeline_anchors` | Safe metadata | Deterministic entry indexes, rule IDs, categories, and evidence fields |
 | `response.*` | Safe metadata | Recommended action, playbook, summary, escalation |
 
 Baseline snapshots and per-source baseline contributions live in scanner state, not the event schema. Their network host labels are stored as deterministic `sha256:` hashes so deviation scoring can compare identities without persisting raw destinations.

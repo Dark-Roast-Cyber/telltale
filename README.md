@@ -25,13 +25,14 @@ Telltale is an open-source detection layer for AI coding agents, built as the fo
 > of its matching `telltale-*` archive, and both archives contain both binaries.
 > This migration does not schedule removal of the compatibility command.
 >
-> The executable rename does not rename compatibility data or configuration:
-> preserve `ADR_*`, `adr-events.jsonl`, `adr-state.json`,
-> `/etc/telltale/adr.env`, `adr_version`, `adr-` event IDs, and the Splunk
-> `index=adr`, `sourcetype=adr:json`, and existing `telltale:adr` /
-> `telltale:adr-events` source identities. Keep uppercase ADR category
-> terminology and unrelated architecture decision records and fixtures
-> unchanged.
+> The Event 3.0 cut does not rename local paths, services, executables, or
+> environment variables. Keep `ADR_*`, `adr-events.jsonl`, `adr-state.json`,
+> and `/etc/telltale/adr.env` for this transition. Native events use
+> `telltale_version`, `telltale-<UUIDv4>` IDs, and Splunk `index=telltale`,
+> `sourcetype=telltale:json`, `source=telltale`; `adr_version`, old IDs, and
+> old SIEM identities remain historical-only values. Keep uppercase ADR
+> category terminology and unrelated architecture decision records and
+> fixtures unchanged.
 
 ## Why Telltale exists
 

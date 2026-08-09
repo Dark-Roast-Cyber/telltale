@@ -4,7 +4,7 @@
 
 ## Pipeline
 
-ADR runs a repeatable batch pipeline:
+Telltale runs a repeatable batch pipeline:
 
 1. **Discover**: enumerate known session stores for enabled clients.
 2. **Ingest**: read new or changed files/databases using offsets, mtimes, or content fingerprints.
@@ -12,8 +12,8 @@ ADR runs a repeatable batch pipeline:
 4. **Context Window**: attach bounded preceding user/assistant messages to each tool call.
 5. **Detect**: run static regex filters over tool names, command strings, arguments, paths, URLs, and adjacent messages.
 6. **Score**: aggregate rule scores and modifiers into a risk result.
-7. **Review metadata**: preserve deterministic triage markers and response guidance
-   for downstream analyst review when configured thresholds are crossed.
+7. **Review metadata**: preserve deterministic response guidance and top-level
+   timeline anchors for downstream analyst review when thresholds are crossed.
 8. **Emit**: send canonical events through an event sink. The default sink appends
    local JSONL for SIEM shippers; optional delivery paths wrap the same event
    payload for Splunk HEC or Elastic-compatible export.
@@ -37,17 +37,18 @@ ADR runs a repeatable batch pipeline:
 - `conversation.message`: user, assistant, system, developer, or tool-result content.
 - `tool.call`: tool name plus normalized arguments and raw evidence hash.
 - `tool.result`: exit status, stdout/stderr summary, file metadata, or error.
-- `detection.event`: rule matches, deterministic score, review marker, and response metadata.
+- `detection.event`: rule matches, deterministic score, timeline anchors, and response metadata.
 
 ## Analyst Review Context
 
 Detection events retain bounded context for downstream analyst review:
 
-- client, agent, model, provider, workspace, session id, and timestamps;
+- client, agent, model, provider, session id, and timestamps;
 - matched tool call details;
 - matched rule ids and explanations;
 - redacted file paths, command lines, URLs, and tool results;
 - timeline anchors and prior related detections from the same scan window.
 
-No outbound model or guard request is made by the scanner. Event 2.0 retains
-`triage.required` and terminal `triage.verdict` compatibility fields.
+No outbound model or guard request is made by the scanner. Native Event 3.0
+contains no embedded triage fields or legacy `adr_version` marker; historical
+Event 1.0 and 2.0 imports retain their original review fields when read.

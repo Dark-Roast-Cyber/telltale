@@ -82,28 +82,28 @@ fn parser_maturity_fixture_events_preserve_source_tuple_and_order() {
                 Some("health"),
                 Some("codex,opencode"),
                 Some("scanner"),
-                Some("2.0"),
+                Some("3.0"),
             ),
             (
                 None,
                 Some("activity"),
                 Some("install_inventory"),
                 Some("scanner"),
-                Some("2.0"),
+                Some("3.0"),
             ),
             (
                 Some(("codex.project_sessions", "codex")),
                 Some("activity"),
                 Some("codex"),
                 Some("project-session"),
-                Some("2.0"),
+                Some("3.0"),
             ),
             (
                 Some(("opencode.project_json", "opencode")),
                 Some("activity"),
                 Some("opencode"),
                 Some("opencode-project-session"),
-                Some("2.0"),
+                Some("3.0"),
             ),
         ]
     );

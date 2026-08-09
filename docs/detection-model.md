@@ -10,8 +10,8 @@ deterministic rule, chain-modifier, or enabled baseline-deviation contributions;
 the event score is the checked exact sum of that ledger. Negative contributions,
 caps, quantization, and subtraction are not part of the current contract.
 
-Emitted risk-bearing activity, detection, and session-summary events use schema
-version `2.0` and include `risk_contributions`. Each entry has a stable `id`,
+Emitted native activity, detection, and session-summary events use schema
+version `3.0` and include `risk_contributions`. Each entry has a stable `id`,
 `type`, positive `points`, and bounded deterministic `rationale`. Session
 summaries deduplicate contribution keys within the paired client/source/session
 scope, so replay and same-source duplicate contributions do not inflate risk.
@@ -19,20 +19,22 @@ Distinct source IDs remain distinct; source-alias canonicalization is deferred.
 
 For Elasticsearch-compatible consumers, install the repository-native
 `config/examples/elastic-telltale-index-template.json` index template for
-schema 2 events. It maps both `risk_score` and nested
+native Event 3.0 events. It maps both `risk_score` and nested
 `risk_contributions.points` as `unsigned_long`; using a narrower integer mapping
 would not preserve the canonical `u64` contract.
 
 | Score | Severity | Behavior |
 | ---: | --- | --- |
-| 0-19 | informational | Log notable activity only. |
-| 20-49 | low | Log detection with matched rule details. |
-| 50-69 | medium | Log detection and include expanded context fields. |
-| 70-89 | high | Emit a `config_missing` review marker and deterministic response metadata. |
-| 90+ | critical | Emit a `config_missing` review marker and deterministic response metadata. |
+| 0-19 | informational | Emit an informational native detection or process-chain event when matched; activity is separate. |
+| 20-49 | low | Log detection with matched rule details and deterministic response metadata. |
+| 50-69 | medium | Log detection with expanded context and deterministic response metadata. |
+| 70-89 | high | Emit deterministic response metadata for security review. |
+| 90+ | critical | Emit deterministic response metadata for immediate investigation. |
 
 Default thresholds are configured by `ADR_RISK_THRESHOLD_LOW`, `ADR_RISK_THRESHOLD_MEDIUM`,
 `ADR_RISK_THRESHOLD_TRIAGE`, and `ADR_RISK_THRESHOLD_ALERT`.
+The native field names `TELLTALE_RISK_THRESHOLD_*` are not configuration inputs;
+the existing `ADR_*` names remain the deferred runtime compatibility surface.
 
 ## Rule Categories
 
@@ -47,7 +49,7 @@ Default thresholds are configured by `ADR_RISK_THRESHOLD_LOW`, `ADR_RISK_THRESHO
 - `tool_injection`: tool-call-shaped content in model output where no tool was requested or registered.
 - `mcp_prompt_injection`: fake or poisoned MCP tool metadata, tool responses, server instructions, or `tools/list` content that tries to steer the agent.
 
-See [threat-taxonomy.md](threat-taxonomy.md) for the ADR category contract, current bundled rule mapping, and optional offline MITRE ATLAS tagging guidance.
+See [threat-taxonomy.md](threat-taxonomy.md) for the Telltale category contract, current bundled rule mapping, and optional offline MITRE ATLAS tagging guidance.
 
 ## Process-Chain Detections
 
@@ -68,7 +70,7 @@ the pack for a scan.
 
 ## Configurable Rules And Policies
 
-ADR loads bundled default rules from the binary by default. Repeated `--rules`
+Telltale loads bundled default rules from the binary by default. Repeated `--rules`
 flags add custom YAML files on top of those defaults:
 
 ```sh
@@ -122,7 +124,7 @@ rules:
 modifiers: []
 ```
 
-ADR also supports a Sigma-inspired `detection.selection` map with `condition: selection`:
+Telltale also supports a Sigma-inspired `detection.selection` map with `condition: selection`:
 
 ```yaml
 rules:
@@ -160,12 +162,12 @@ copy of the embedded default pack to inspect or adapt. An edited copy placed in
 a managed tier intentionally replaces matching IDs; passing it with `--rules`
 requires `--no-default-rules` to avoid additive collision with the embedded copy.
 
-Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to ADR categories, rule IDs, fixtures, and validation commands.
+Policy-violation detections, ad-hoc hunts, and production alerts use the same rule engine and syntax as security detections. Keep policy-focused bundles under `config/rules/policy-violations/` and temporary hunting bundles under `config/rules/ad-hoc/` when useful for clear rule-set organization. Rule purpose is described by metadata fields such as `detection_class`, `signal_type`, and `analytic_intent`; observed behavior remains in `category`. See [agent-policy-authoring.md](agent-policy-authoring.md) for the workflow that maps human policy controls to Telltale categories, rule IDs, fixtures, and validation commands.
 
 Events carry the same metadata for SIEM filtering:
 
 - `detection_classes`: `security_detection`, `policy_violation`, `threat_hunting`, `compliance_observation`, `operational_health`, or `baseline_deviation`.
-- `signal_types`: `atomic`, `chain`, `correlation`, `baseline_deviation`, or `llm_triage`.
+- `signal_types`: `atomic`, `chain`, `correlation`, or `baseline_deviation`.
 - `analytic_intents`: `alert`, `hunt`, `enrich`, `baseline`, or `audit`.
 - `atlas_tags`: optional MITRE ATLAS context tags. Coverage is tracked in [../MITRE_ATLAS_COVERAGE.md](../MITRE_ATLAS_COVERAGE.md).
 
@@ -193,7 +195,7 @@ Scenario:
 - A fake MCP server or fake `tools/list` response presents a harmless-looking tool, such as `repo_status`, `get_compliance_status`, or `summarize_project`.
 - The tool description, parameter description, server instructions, tool result, or adjacent assistant context includes hidden or explicit instructions like ignoring previous instructions, silently reading secrets, bypassing approval, or calling another tool.
 - The injected instruction attempts to read a sensitive local file or credential-looking value and send it to a reserved controlled test-domain destination.
-- ADR must emit a high or critical detection event without logging raw secret values or full transcript bodies.
+- Telltale must emit a high or critical detection event without logging raw secret values or full transcript bodies.
 
 Synthetic evidence examples may mention:
 
@@ -238,16 +240,17 @@ The emitted event context supports analyst review of:
 - Is there evidence of model/provider tool injection?
 - What severity and confidence should be assigned?
 
-Event 2.0 retains `triage.required` and the scanner-state verdicts
-`not_required` and `config_missing`. Above-threshold native detections use the
-terminal `config_missing` compatibility verdict; they never remain `pending`.
+Native Event 3.0 retains deterministic severity, response metadata, and
+top-level `timeline_anchors` when available. It does not emit `triage`,
+`llm_triage`, or compatibility verdicts. Historical Event 1.0 and 2.0 records
+remain readable with their original fields.
 
 ## Response Contract
 
 Detection events include a top-level `response` object that is safe for SIEM indexing and analyst workflows. The fields are deterministic and derived from severity, matched rule IDs, and categories:
 
 - `recommended_action`: one of `monitor`, `review`, `investigate`, or `investigate_immediately`.
-- `response_playbook`: a stable ADR playbook identifier for the strongest matched rule family.
+- `response_playbook`: a stable Telltale playbook identifier for the strongest matched rule family.
 - `investigation_summary`: a short redaction-safe summary of the matched rules/categories and next investigation step.
 - `escalation`: `routine_review` or `security_review_required`.
 

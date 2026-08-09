@@ -196,7 +196,7 @@ package-manifest:
 			telltale-cli) \
 			for path in $$manifest; do \
 				case "$$path" in \
-					.cargo_vcs_info.json|Cargo.lock|Cargo.toml|Cargo.toml.orig|crates/telltale-cli/README.md|LICENSE|build.rs|benches/benchmarks.rs|src/*|schemas/historical/*|config/rules/tool-call-regex.yaml|tests/fixtures/*) ;; \
+					.cargo_vcs_info.json|Cargo.lock|Cargo.toml|Cargo.toml.orig|crates/telltale-cli/README.md|LICENSE|build.rs|benches/benchmarks.rs|src/*|schemas/event.schema.json|schemas/historical/*|config/rules/tool-call-regex.yaml|tests/fixtures/*) ;; \
 					*) echo "$$package includes unexpected path: $$path"; exit 1 ;; \
 				 esac; \
 			done; \

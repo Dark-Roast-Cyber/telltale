@@ -1,7 +1,7 @@
 //! Session timeline helpers over the canonical normalized schema.
 //!
 //! The timeline model is intentionally read-only and side-effect free. It gives
-//! detection, triage, and future response code a shared ordered view without
+//! detection and downstream response consumers a shared ordered view without
 //! changing current detection behavior.
 
 #![allow(dead_code)] // Consumed incrementally as P13 wiring lands.
@@ -36,13 +36,7 @@ pub struct TimelineEntry {
     pub linked_entry_index: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TimelineRuleAnchor {
-    pub entry_index: usize,
-    pub rule_ids: Vec<String>,
-    pub categories: Vec<String>,
-    pub evidence_fields: Vec<String>,
-}
+pub type TimelineRuleAnchor = telltale_schema::event::TimelineAnchor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionTimeline {
@@ -403,8 +397,9 @@ mod tests {
             time_source: "source".to_string(),
             time_confidence: "high".to_string(),
             time_override_reason: None,
-            schema_version: "1.0".to_string(),
-            event_id: "adr-test".to_string(),
+            schema_version: "3.0".to_string(),
+            event_id: "telltale-00000000-0000-4000-8000-000000000001".to_string(),
+            telltale_version: env!("CARGO_PKG_VERSION").to_string(),
             event_type: "detection".to_string(),
             severity: "critical".to_string(),
             risk_score: 90,
@@ -430,13 +425,12 @@ mod tests {
                 hash: Some("sha256:evidence".to_string()),
                 rule_id: Some("mcp.tool_metadata.prompt_injection".to_string()),
             }],
-            triage: None,
+            timeline_anchors: Vec::new(),
             response: None,
             source_counts: None,
             component: None,
             check_name: None,
             status: None,
-            adr_version: None,
             scan_duration_ms: None,
             rule_count: None,
             threshold_config: None,

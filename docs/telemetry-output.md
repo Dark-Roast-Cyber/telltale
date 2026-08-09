@@ -9,8 +9,8 @@ specific sink without changing the event schema.
 
 ## Default JSONL Sink
 
-By default, `telltale scan` uses the `user` path profile and appends telemetry to
-an operating-system-standard per-user JSONL path:
+By default, `telltale scan` uses the `user` path profile and appends native Event
+3.0 telemetry to an operating-system-standard per-user JSONL path:
 
 | OS | Default user telemetry path |
 | --- | --- |
@@ -41,7 +41,7 @@ that follows [schemas/event.schema.json](../schemas/event.schema.json).
 ## Scan Diagnostics
 
 Every scan also prints one JSON summary to stdout. This local diagnostic is not
-an Event 2.0 payload and is not appended to JSONL or wrapped for HEC. In
+a native Event 3.0 payload and is not appended to JSONL or wrapped for HEC. In
 addition to the existing delivery and event totals, diagnostic sections explain an
 otherwise ambiguous zero-detection result without exposing session content:
 
@@ -89,13 +89,13 @@ otherwise ambiguous zero-detection result without exposing session content:
   empty sources do not imply parse failure when another source is productive,
   and repeated state-deduplicated positives do not imply zero candidates.
   These are observations only: they are not health verdicts, security alerts,
-  Event 2.0 fields, sink payloads, persisted state, or exit-status changes.
+  Event 3.0 fields, sink payloads, persisted state, or exit-status changes.
   Discovery and project-load diagnostics never include roots, paths, source IDs,
   loader errors, or operating-system error text.
 
 The existing top-level `log_path` field remains raw for compatibility and is a
 local diagnostic caveat. Newly added path fields use hashes. These diagnostic
-sections are stdout-only: they are not Event 2.0 fields and are not written to
+sections are stdout-only: they are not Event 3.0 fields and are not written to
 JSONL or HEC.
 
 Allowlisting marks a detection informational and does not necessarily prevent
@@ -105,7 +105,7 @@ stdout-only summary reports `policy_match_accounting` with `status=available`,
 the source/session-scoped pre-policy candidate count, fully filtered candidate
 count, and filtered matched rule-ID reference count. These counts are computed
 from the in-memory post-override rule set and the existing session projection;
-they are not Event 2.0 fields and are not written to JSONL or HEC. If diagnostic
+they are not Event 3.0 fields and are not written to JSONL or HEC. If diagnostic
 compilation, evaluation, snapshot integrity, monotonicity, or aggregation
 fails, status is `unavailable` and all three counters are null. Without a
 configured policy, status remains `not_applicable` and no diagnostic matching
@@ -122,7 +122,7 @@ Common event types include:
 - `detection`: rule matches, risk scores, categories, and response guidance.
 - `session_risk_summary`: optional per-session rollups from already-redacted
   activity and detection events.
-- `scanner_health`: source-discovery and scanner health status.
+- `health`: source-discovery and scanner health status.
 - `scanner_error`: parser or scan errors that should be visible to operators.
 - `operational_alert`: operator-facing threshold and delivery alerts, including
   `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
@@ -248,7 +248,7 @@ Use explicit file paths instead of broad log directory monitors so diagnostic
 logs or source logs do not get indexed as Telltale events. For Splunk Universal
 Forwarder deployments, install timestamp and JSON parsing props on the tier that
 performs parsing (the indexer or a heavy forwarder; a UF with indexed JSON
-extractions may also apply them before forwarding). The `adr:json` timestamp
+extractions may also apply them before forwarding). The `telltale:json` timestamp
 parser expects Telltale's canonical `timestamp` field to remain the first JSON
 field.
 

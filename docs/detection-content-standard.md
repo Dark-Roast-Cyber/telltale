@@ -49,7 +49,6 @@ Allowed `signal_type` values:
 - `chain`
 - `correlation`
 - `baseline_deviation`
-- `llm_triage`
 
 Allowed `analytic_intent` values:
 

@@ -1,5 +1,7 @@
 use super::*;
 
+use telltale_detect::allowlist::{SuppressionMatch, suppress_detection};
+
 #[test]
 fn export_help_mentions_client_for_ambiguous_timeline_session_ids() {
     let output = Command::new(env!("CARGO_BIN_EXE_adr"))
@@ -171,11 +173,138 @@ fn status_reports_latest_health_event() {
     );
     assert_eq!(summary["threshold_config"]["low"], 20);
     assert_eq!(summary["threshold_config"]["medium"], 50);
-    assert_eq!(summary["threshold_config"]["triage"], 70);
-    assert_eq!(summary["threshold_config"]["alert"], 90);
+    assert_eq!(summary["threshold_config"]["high"], 70);
+    assert_eq!(summary["threshold_config"]["critical"], 90);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["opencode.sqlite"], 1);
     assert_eq!(summary["source_counts"]["copilot.copilot_process_log"], 5);
+}
+
+#[test]
+fn status_distinguishes_empty_historical_native_and_mixed_logs() {
+    let historical = serde_json::json!({
+        "schema_version": "1.0",
+        "event_id": "historical-status",
+        "event_type": "activity",
+        "timestamp": "2026-05-01T00:00:00Z",
+        "severity": "informational",
+        "risk_score": 0,
+        "client": "codex",
+        "session_id": "historical-session"
+    })
+    .to_string();
+    let native_activity = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000012",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "codex",
+        "native-session",
+        &[],
+    )
+    .to_string();
+    let native_health_before = native_test_event(
+        "health",
+        "telltale-00000000-0000-4000-8000-000000000014",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "scanner",
+        "scanner",
+        &[],
+    )
+    .to_string();
+    let native_detection_after_first_health = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000015",
+        "2026-05-01T00:01:00.000Z",
+        "critical",
+        "codex",
+        "native-session",
+        &["rule.status"],
+    )
+    .to_string();
+    let native_health_last = native_test_event(
+        "health",
+        "telltale-00000000-0000-4000-8000-000000000016",
+        "2026-05-01T00:02:00.000Z",
+        "informational",
+        "scanner",
+        "scanner",
+        &[],
+    )
+    .to_string();
+
+    let run_status = |contents: &[u8]| {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("events.jsonl");
+        let state_path = temp.path().join("state.json");
+        fs::write(&log_path, contents).expect("write status fixture");
+        let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+            .args(["status", "--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run status");
+        (temp, output)
+    };
+
+    let (_empty_temp, empty) = run_status(b"");
+    assert!(!empty.status.success());
+    assert!(String::from_utf8_lossy(&empty.stderr).contains("no_native_health"));
+
+    let (_historical_temp, historical_only) = run_status(historical.as_bytes());
+    assert!(historical_only.status.success());
+    let historical_summary: Value =
+        serde_json::from_slice(&historical_only.stdout).expect("historical status JSON");
+    assert_eq!(historical_summary["status"], "historical_only");
+
+    let (_native_temp, native_without_health) = run_status(native_activity.as_bytes());
+    assert!(!native_without_health.status.success());
+    assert!(String::from_utf8_lossy(&native_without_health.stderr).contains("no_native_health"));
+
+    let mixed = format!(
+        "{historical}\r\n{native_health_before}\r\n{native_detection_after_first_health}\r\n{native_health_last}"
+    );
+    let (_mixed_temp, mixed_status) = run_status(mixed.as_bytes());
+    assert!(mixed_status.status.success());
+    let mixed_summary: Value =
+        serde_json::from_slice(&mixed_status.stdout).expect("mixed status JSON");
+    assert_eq!(mixed_summary["status"], "ok");
+    assert_eq!(mixed_summary["last_scan_time"], "2026-05-01T00:02:00.000Z");
+    assert_eq!(mixed_summary["detection_count"], 0);
+}
+
+#[test]
+fn status_dispatch_rejects_unknown_schema_versions_strictly() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "9.0",
+            "event_id": "unknown-version",
+            "event_type": "health",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "severity": "informational",
+            "risk_score": 0,
+            "client": "scanner",
+            "session_id": "scanner"
+        })
+        .to_string(),
+    )
+    .expect("write unknown-version log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+        .args(["status", "--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run status");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown_requested_schema_version"));
 }
 
 #[test]
@@ -186,14 +315,15 @@ fn status_rejects_invalid_jsonl() {
     fs::write(
         &log_path,
         [
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "health",
-                "severity": "informational",
-                "client": "scanner",
-                "session_id": "scanner",
-                "rule_ids": [],
-            })
+            native_test_event(
+                "health",
+                "telltale-00000000-0000-4000-8000-000000000001",
+                "2026-05-01T00:00:00.000Z",
+                "informational",
+                "scanner",
+                "scanner",
+                &[],
+            )
             .to_string(),
             "{not-json".to_string(),
         ]
@@ -225,14 +355,15 @@ fn export_rejects_invalid_jsonl() {
     fs::write(
         &log_path,
         [
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "detection",
-                "severity": "critical",
-                "client": "codex",
-                "session_id": "session-a",
-                "rule_ids": ["mcp.test"],
-            })
+            native_test_event(
+                "detection",
+                "telltale-00000000-0000-4000-8000-000000000002",
+                "2026-05-01T00:00:00.000Z",
+                "critical",
+                "codex",
+                "session-a",
+                &["mcp.test"],
+            )
             .to_string(),
             "{not-json".to_string(),
         ]
@@ -262,23 +393,25 @@ fn export_filters_jsonl_by_event_fields() {
     fs::write(
         &log_path,
         [
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "detection",
-                "severity": "critical",
-                "client": "codex",
-                "session_id": "session-a",
-                "rule_ids": ["mcp.test"],
-            })
+            native_test_event(
+                "detection",
+                "telltale-00000000-0000-4000-8000-000000000013",
+                "2026-05-01T00:00:00.000Z",
+                "critical",
+                "codex",
+                "session-a",
+                &["mcp.test"],
+            )
             .to_string(),
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:10:00Z",
-                "event_type": "detection",
-                "severity": "high",
-                "client": "opencode",
-                "session_id": "session-b",
-                "rule_ids": ["secret.test"],
-            })
+            native_test_event(
+                "detection",
+                "telltale-00000000-0000-4000-8000-000000000003",
+                "2026-05-01T00:10:00.000Z",
+                "high",
+                "opencode",
+                "session-b",
+                &["secret.test"],
+            )
             .to_string(),
         ]
         .join("\n"),
@@ -326,14 +459,15 @@ fn export_time_filters_accept_canonical_millisecond_timestamps() {
     let log_path = temp.path().join("adr-events.jsonl");
     fs::write(
         &log_path,
-        serde_json::json!({
-            "timestamp": "2026-05-01T00:00:00.000Z",
-            "event_type": "detection",
-            "severity": "critical",
-            "client": "codex",
-            "session_id": "session-a",
-            "rule_ids": ["mcp.test"],
-        })
+        native_test_event(
+            "detection",
+            "telltale-00000000-0000-4000-8000-000000000004",
+            "2026-05-01T00:00:00.000Z",
+            "critical",
+            "codex",
+            "session-a",
+            &["mcp.test"],
+        )
         .to_string(),
     )
     .expect("write log");
@@ -367,14 +501,15 @@ fn export_time_filters_accept_offset_rfc3339_inputs() {
     let log_path = temp.path().join("adr-events.jsonl");
     fs::write(
         &log_path,
-        serde_json::json!({
-            "timestamp": "2026-05-01T10:00:00.000Z",
-            "event_type": "detection",
-            "severity": "critical",
-            "client": "codex",
-            "session_id": "session-a",
-            "rule_ids": ["mcp.test"],
-        })
+        native_test_event(
+            "detection",
+            "telltale-00000000-0000-4000-8000-000000000005",
+            "2026-05-01T10:00:00.000Z",
+            "critical",
+            "codex",
+            "session-a",
+            &["mcp.test"],
+        )
         .to_string(),
     )
     .expect("write log");
@@ -464,23 +599,25 @@ fn export_summary_reports_filtered_counts() {
     fs::write(
         &log_path,
         [
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_type": "health",
-                "severity": "informational",
-                "client": "codex,opencode",
-                "session_id": "scanner",
-                "rule_ids": [],
-            })
+            native_test_event(
+                "health",
+                "telltale-00000000-0000-4000-8000-000000000006",
+                "2026-05-01T00:00:00.000Z",
+                "informational",
+                "codex,opencode",
+                "scanner",
+                &[],
+            )
             .to_string(),
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:01:00Z",
-                "event_type": "detection",
-                "severity": "critical",
-                "client": "codex",
-                "session_id": "session-a",
-                "rule_ids": ["mcp.test", "secret.test"],
-            })
+            native_test_event(
+                "detection",
+                "telltale-00000000-0000-4000-8000-000000000007",
+                "2026-05-01T00:01:00.000Z",
+                "critical",
+                "codex",
+                "session-a",
+                &["mcp.test", "secret.test"],
+            )
             .to_string(),
         ]
         .join("\n"),
@@ -516,25 +653,25 @@ fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
     fs::write(
         &log_path,
         [
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:00:00Z",
-                "event_id": "event-a",
-                "event_type": "health",
-                "severity": "informational",
-                "client": "codex",
-                "session_id": "scanner",
-                "rule_ids": [],
-            })
+            native_test_event(
+                "health",
+                "telltale-00000000-0000-4000-8000-000000000008",
+                "2026-05-01T00:00:00.000Z",
+                "informational",
+                "codex",
+                "scanner",
+                &[],
+            )
             .to_string(),
-            serde_json::json!({
-                "timestamp": "2026-05-01T00:01:00Z",
-                "event_id": "event-b",
-                "event_type": "detection",
-                "severity": "critical",
-                "client": "codex",
-                "session_id": "session-a",
-                "rule_ids": ["mcp.test"],
-            })
+            native_test_event(
+                "detection",
+                "telltale-00000000-0000-4000-8000-000000000009",
+                "2026-05-01T00:01:00.000Z",
+                "critical",
+                "codex",
+                "session-a",
+                &["mcp.test"],
+            )
             .to_string(),
         ]
         .join("\n"),
@@ -559,10 +696,16 @@ fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
         .collect::<Vec<_>>();
 
     assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0]["index"]["_index"], "adr-events");
-    assert_eq!(lines[0]["index"]["_id"], "event-b");
+    assert_eq!(lines[0]["index"]["_index"], "telltale-events");
+    assert_eq!(
+        lines[0]["index"]["_id"],
+        "telltale-00000000-0000-4000-8000-000000000009"
+    );
     assert_eq!(lines[1]["event_type"], "detection");
-    assert_eq!(lines[1]["event_id"], "event-b");
+    assert_eq!(
+        lines[1]["event_id"],
+        "telltale-00000000-0000-4000-8000-000000000009"
+    );
     assert_eq!(lines[1]["rule_ids"][0], "mcp.test");
     assert!(lines[1].get("_index").is_none());
     assert!(lines[1].get("index").is_none());
@@ -719,9 +862,10 @@ fn export_timeline_produces_redacted_session_timeline() {
                     "reason": "MCP prompt injection detected"
                 },
                 "response": {
-                    "recommended_action": "investigate_session",
+                    "recommended_action": "investigate",
                     "response_playbook": "mcp_injection",
-                    "investigation_summary": "Agent received injected MCP instructions"
+                    "investigation_summary": "Agent received injected MCP instructions",
+                    "escalation": "security_review_required"
                 }
             })
             .to_string(),
@@ -905,10 +1049,7 @@ fn export_timeline_produces_redacted_session_timeline() {
     // Triage and response are included.
     assert_eq!(entries[2]["triage"]["verdict"], "malicious");
     assert_eq!(entries[2]["triage"]["confidence"], 0.95);
-    assert_eq!(
-        entries[2]["response"]["recommended_action"],
-        "investigate_session"
-    );
+    assert_eq!(entries[2]["response"]["recommended_action"], "investigate");
 
     // Rule ids are preserved.
     assert_eq!(
@@ -1008,10 +1149,153 @@ fn export_timeline_rejects_summary_format() {
 }
 
 #[test]
-fn event_schema_accepts_historical_v1_and_requires_v2_activity_ledger() {
-    let schema: Value =
+fn native_schema_is_closed_and_historical_schemas_remain_separate() {
+    let native_schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
-    let validator = validator_for(&schema).expect("validator");
+    let native_validator = validator_for(&native_schema).expect("native validator");
+
+    let native_activity = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000010",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "codex",
+        "session",
+        &[],
+    );
+    assert!(native_validator.is_valid(&native_activity));
+
+    for (index, (event_type, severity, rule_ids)) in [
+        ("activity", "informational", &[][..]),
+        ("detection", "high", &["rule.test"][..]),
+        ("session_risk_summary", "medium", &["rule.test"][..]),
+        ("health", "informational", &[][..]),
+        ("scanner_error", "informational", &[][..]),
+        ("operational_alert", "warning", &[][..]),
+        ("process_chain", "low", &["rule.test"][..]),
+        ("correlation", "high", &["rule.test"][..]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = native_test_event(
+            event_type,
+            &format!("telltale-00000000-0000-4000-8000-0000000000{index:02}"),
+            "2026-05-01T00:00:00.000Z",
+            severity,
+            "codex",
+            "session",
+            rule_ids,
+        );
+        assert!(
+            native_validator.is_valid(&event),
+            "native {event_type} fixture should validate: {event}"
+        );
+    }
+
+    let mut forbidden_triage = native_activity.clone();
+    forbidden_triage["triage"] = serde_json::json!({"verdict": "pending"});
+    assert!(!native_validator.is_valid(&forbidden_triage));
+
+    let mut activity_with_process = native_activity.clone();
+    activity_with_process["process"] = serde_json::json!({
+        "source_process_name": "parent",
+        "target_process_name": "child",
+        "source_process_inferred": true,
+        "rule_name": "synthetic",
+        "dedup_key": "synthetic",
+        "suppression_window_seconds": 0,
+        "rule_severity": "low"
+    });
+    assert!(!native_validator.is_valid(&activity_with_process));
+
+    let mut activity_with_health_field = native_activity.clone();
+    activity_with_health_field["component"] = serde_json::json!("scanner");
+    assert!(!native_validator.is_valid(&activity_with_health_field));
+
+    let mut nullable_native_optional = native_activity.clone();
+    nullable_native_optional["agent"] = serde_json::Value::Null;
+    assert!(!native_validator.is_valid(&nullable_native_optional));
+
+    let mut unknown_property = native_activity.clone();
+    unknown_property["future_field"] = serde_json::json!(true);
+    assert!(!native_validator.is_valid(&unknown_property));
+
+    let install_inventory = serde_json::to_value(
+        install_inventory_event(vec![telltale_schema::event::Evidence {
+            field: "install_inventory_summary".to_string(),
+            redacted_value: "agents=0; installed=0; partial=0; absent=0".to_string(),
+            hash: Some("0".repeat(64)),
+            rule_id: None,
+        }])
+        .expect("install inventory event"),
+    )
+    .expect("serialize install inventory event");
+    assert!(native_validator.is_valid(&install_inventory));
+
+    let mut install_with_source_hash = install_inventory.clone();
+    install_with_source_hash["source_path_hash"] = serde_json::json!("not-emitted");
+    assert!(!native_validator.is_valid(&install_with_source_hash));
+
+    let mut suppressed = detection_event(DetectionEventInput {
+        client: ClientId::Codex,
+        agent: None,
+        model: None,
+        provider: None,
+        session_id: "suppressed-session".to_string(),
+        source_path_hash: "synthetic-source-hash".to_string(),
+        tool_name: Some("shell".to_string()),
+        rule_ids: vec!["rule.suppressed".to_string()],
+        categories: vec!["synthetic".to_string()],
+        detection_classes: vec!["security_detection".to_string()],
+        signal_types: vec!["atomic".to_string()],
+        analytic_intents: vec!["alert".to_string()],
+        atlas_tags: Vec::new(),
+        tags: vec!["synthetic".to_string()],
+        evidence: vec![telltale_schema::event::Evidence {
+            field: "synthetic".to_string(),
+            redacted_value: "fixture".to_string(),
+            hash: None,
+            rule_id: Some("rule.suppressed".to_string()),
+        }],
+        risk_contributions: Vec::new(),
+        event_time: Some("2026-05-01T00:00:00Z".to_string()),
+    })
+    .expect("suppressed detection");
+    suppressed.timeline_anchors = vec![telltale_schema::event::TimelineAnchor {
+        entry_index: 4,
+        rule_ids: vec!["rule.suppressed".to_string()],
+        categories: vec!["synthetic".to_string()],
+        evidence_fields: vec!["synthetic".to_string()],
+    }];
+    suppress_detection(
+        &mut suppressed,
+        &SuppressionMatch {
+            name: "synthetic-suppression".to_string(),
+        },
+    );
+    let suppressed = serde_json::to_value(suppressed).expect("serialize suppressed detection");
+    assert!(native_validator.is_valid(&suppressed), "{suppressed}");
+    assert!(suppressed["timeline_anchors"].is_null());
+    assert!(suppressed.get("response").is_none());
+
+    let mut legacy_id = native_test_event(
+        "detection",
+        "telltale-00000000-0000-4000-8000-000000000011",
+        "2026-05-01T00:00:00.000Z",
+        "critical",
+        "codex",
+        "session",
+        &["rule.valid"],
+    );
+    legacy_id["event_id"] = serde_json::json!("adr-legacy");
+    assert!(!native_validator.is_valid(&legacy_id));
+
+    let historical_schema: Value = serde_json::from_str(include_str!(
+        "../../schemas/historical/event-1.0.schema.json"
+    ))
+    .expect("historical schema");
+    let historical_validator = validator_for(&historical_schema).expect("historical validator");
     let historical = serde_json::json!({
         "schema_version": "1.0",
         "event_id": "historical",
@@ -1021,8 +1305,16 @@ fn event_schema_accepts_historical_v1_and_requires_v2_activity_ledger() {
         "risk_score": 0,
         "client": "codex",
         "session_id": "session",
-        "rule_ids": ["Legacy Rule ID"],
+        "rule_ids": ["Legacy Rule ID"]
     });
+    assert!(historical_validator.is_valid(&historical));
+    assert!(!native_validator.is_valid(&historical));
+
+    let v2_schema: Value = serde_json::from_str(include_str!(
+        "../../schemas/historical/event-2.0.schema.json"
+    ))
+    .expect("Event 2.0 schema");
+    let v2_validator = validator_for(&v2_schema).expect("Event 2.0 validator");
     let missing_ledger = serde_json::json!({
         "schema_version": "2.0",
         "event_id": "current",
@@ -1031,20 +1323,10 @@ fn event_schema_accepts_historical_v1_and_requires_v2_activity_ledger() {
         "severity": "informational",
         "risk_score": 0,
         "client": "codex",
-        "session_id": "session",
+        "session_id": "session"
     });
-    let invalid_rule_id = serde_json::json!({
-        "schema_version": "2.0",
-        "event_id": "invalid-rule-id",
-        "event_type": "detection",
-        "timestamp": "2026-05-01T00:00:00Z",
-        "severity": "informational",
-        "risk_score": 0,
-        "client": "codex",
-        "session_id": "session",
-        "risk_contributions": [],
-        "rule_ids": ["Invalid.Rule"]
-    });
+    assert!(!v2_validator.is_valid(&missing_ledger));
+
     let valid_rule_id = serde_json::json!({
         "schema_version": "2.0",
         "event_id": "valid-rule-id",
@@ -1057,50 +1339,7 @@ fn event_schema_accepts_historical_v1_and_requires_v2_activity_ledger() {
         "risk_contributions": [],
         "rule_ids": ["rule.valid"]
     });
-    let v1_legacy_anchor = serde_json::json!({
-        "schema_version": "1.0",
-        "event_id": "historical-anchor",
-        "event_type": "detection",
-        "timestamp": "2026-05-01T00:00:00Z",
-        "severity": "informational",
-        "risk_score": 0,
-        "client": "codex",
-        "session_id": "session",
-        "triage": {
-            "timeline_anchors": [{
-                "entry_index": 0,
-                "rule_ids": ["legacy-rule"],
-                "categories": [],
-                "evidence_fields": []
-            }]
-        }
-    });
-    let v2_invalid_nested_rule_id = serde_json::json!({
-        "schema_version": "2.0",
-        "event_id": "invalid-nested-rule-id",
-        "event_type": "detection",
-        "timestamp": "2026-05-01T00:00:00Z",
-        "severity": "informational",
-        "risk_score": 0,
-        "client": "codex",
-        "session_id": "session",
-        "risk_contributions": [],
-        "triage": {
-            "timeline_anchors": [{
-                "entry_index": 0,
-                "rule_ids": ["Legacy.Rule"],
-                "categories": [],
-                "evidence_fields": []
-            }]
-        }
-    });
-
-    assert!(validator.is_valid(&historical));
-    assert!(!validator.is_valid(&missing_ledger));
-    assert!(!validator.is_valid(&invalid_rule_id));
-    assert!(validator.is_valid(&valid_rule_id));
-    assert!(validator.is_valid(&v1_legacy_anchor));
-    assert!(!validator.is_valid(&v2_invalid_nested_rule_id));
+    assert!(v2_validator.is_valid(&valid_rule_id));
 }
 
 #[test]
@@ -1196,7 +1435,7 @@ fn export_rejects_schema_two_invalid_rule_ids_even_with_empty_ledger() {
         .output()
         .expect("run export");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("rule id rule is not canonical"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("historical_schema_violation"));
 }
 
 #[test]
@@ -1528,9 +1767,10 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
                     "reason": "MCP prompt injection detected"
                 },
                 "response": {
-                    "recommended_action": "investigate_session",
+                    "recommended_action": "investigate",
                     "response_playbook": "mcp_injection",
-                    "investigation_summary": "Agent received injected MCP instructions"
+                    "investigation_summary": "Agent received injected MCP instructions",
+                    "escalation": "security_review_required"
                 }
             })
             .to_string(),
@@ -1569,7 +1809,7 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
     assert!(
         stdout.contains("Triage: malicious confidence=0.95 reason=MCP prompt injection detected")
     );
-    assert!(stdout.contains("Recommended action: investigate_session"));
+    assert!(stdout.contains("Recommended action: investigate"));
     assert!(stdout.contains("Playbook: mcp_injection"));
     assert!(stdout.contains("Summary: Agent received injected MCP instructions"));
     assert!(!stdout.contains("\"event_type\""));

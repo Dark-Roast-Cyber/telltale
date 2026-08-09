@@ -20,7 +20,7 @@ pub(crate) use redaction::contains_high_confidence_credential_marker;
 pub use redaction::redact_sensitive_text;
 pub use time::{format_timestamp, parse_event_timestamp};
 
-const SCHEMA_VERSION: &str = "2.0";
+pub const NATIVE_SCHEMA_VERSION: &str = "3.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Event {
@@ -35,6 +35,7 @@ pub struct Event {
     pub time_override_reason: Option<String>,
     pub schema_version: String,
     pub event_id: String,
+    pub telltale_version: String,
     pub event_type: String,
     pub severity: String,
     pub risk_score: u64,
@@ -67,8 +68,8 @@ pub struct Event {
     pub atlas_tags: Vec<String>,
     pub tags: Vec<String>,
     pub evidence: Vec<Evidence>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub triage: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub timeline_anchors: Vec<TimelineAnchor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response: Option<ResponseMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,8 +80,6 @@ pub struct Event {
     pub check_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub adr_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scan_duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,6 +114,20 @@ pub struct Event {
     pub risk_entity_value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TimelineAnchor {
+    pub entry_index: usize,
+    pub rule_ids: Vec<String>,
+    pub categories: Vec<String>,
+    pub evidence_fields: Vec<String>,
+}
+
+pub fn canonicalize_timeline_anchors(mut anchors: Vec<TimelineAnchor>) -> Vec<TimelineAnchor> {
+    anchors.sort_by_key(|anchor| anchor.entry_index);
+    anchors.dedup_by_key(|anchor| anchor.entry_index);
+    anchors
 }
 
 /// Process-chain context for `process_chain` detections.
@@ -339,13 +352,12 @@ struct EventBuilder {
     atlas_tags: Vec<String>,
     tags: Vec<String>,
     evidence: Vec<Evidence>,
-    triage: Option<serde_json::Value>,
+    timeline_anchors: Vec<TimelineAnchor>,
     response: Option<ResponseMetadata>,
     source_counts: Option<BTreeMap<String, u32>>,
     component: Option<String>,
     check_name: Option<String>,
     status: Option<String>,
-    adr_version: Option<String>,
     scan_duration_ms: Option<u64>,
     rule_count: Option<usize>,
     threshold_config: Option<RiskThresholds>,
@@ -368,8 +380,9 @@ impl EventBuilder {
             time_source: resolved_time.time_source,
             time_confidence: resolved_time.time_confidence,
             time_override_reason: resolved_time.time_override_reason,
-            schema_version: SCHEMA_VERSION.to_string(),
-            event_id: format!("adr-{}", Uuid::new_v4()),
+            schema_version: NATIVE_SCHEMA_VERSION.to_string(),
+            event_id: format!("telltale-{}", Uuid::new_v4()),
+            telltale_version: env!("CARGO_PKG_VERSION").to_string(),
             event_type: self.event_type.to_string(),
             severity: self.severity.to_string(),
             risk_score: self.risk_score,
@@ -390,13 +403,12 @@ impl EventBuilder {
             atlas_tags: self.atlas_tags,
             tags: self.tags,
             evidence: self.evidence,
-            triage: self.triage,
+            timeline_anchors: canonicalize_timeline_anchors(self.timeline_anchors),
             response: self.response,
             source_counts: self.source_counts,
             component: self.component,
             check_name: self.check_name,
             status: self.status,
-            adr_version: self.adr_version,
             scan_duration_ms: self.scan_duration_ms,
             rule_count: self.rule_count,
             threshold_config: self.threshold_config,
@@ -415,6 +427,298 @@ impl EventBuilder {
             process: None,
         }
     }
+}
+
+fn require_non_empty(
+    event_type: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), RiskAccountingError> {
+    if value.trim().is_empty() {
+        return Err(RiskAccountingError::EmptyEventField { event_type, field });
+    }
+    Ok(())
+}
+
+fn require_optional_non_empty(
+    event_type: &'static str,
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<(), RiskAccountingError> {
+    if let Some(value) = value {
+        require_non_empty(event_type, field, value)?;
+    }
+    Ok(())
+}
+
+fn require_non_empty_array(
+    event_type: &'static str,
+    field: &'static str,
+    values: &[String],
+) -> Result<(), RiskAccountingError> {
+    if values.is_empty() || values.iter().any(|value| value.trim().is_empty()) {
+        return Err(RiskAccountingError::EmptyEventField { event_type, field });
+    }
+    Ok(())
+}
+
+fn validate_optional_metadata(
+    event_type: &'static str,
+    agent: Option<&str>,
+    model: Option<&str>,
+    provider: Option<&str>,
+) -> Result<(), RiskAccountingError> {
+    require_optional_non_empty(event_type, "agent", agent)?;
+    require_optional_non_empty(event_type, "model", model)?;
+    require_optional_non_empty(event_type, "provider", provider)
+}
+
+fn validate_evidence(
+    event_type: &'static str,
+    evidence: &[Evidence],
+) -> Result<(), RiskAccountingError> {
+    for item in evidence {
+        require_non_empty(event_type, "evidence.field", &item.field)?;
+        require_optional_non_empty(event_type, "evidence.hash", item.hash.as_deref())?;
+        if let Some(rule_id) = item.rule_id.as_deref() {
+            validate_rule_ids(std::slice::from_ref(&rule_id.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_allowed_values(
+    event_type: &'static str,
+    field: &'static str,
+    values: &[String],
+    allowed: &[&str],
+) -> Result<(), RiskAccountingError> {
+    if values
+        .iter()
+        .any(|value| !allowed.iter().any(|candidate| candidate == value))
+    {
+        return Err(RiskAccountingError::InvalidEventValue { event_type, field });
+    }
+    Ok(())
+}
+
+fn validate_optional_array_values(
+    event_type: &'static str,
+    field: &'static str,
+    values: &[String],
+) -> Result<(), RiskAccountingError> {
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return Err(RiskAccountingError::EmptyEventField { event_type, field });
+    }
+    Ok(())
+}
+
+fn validate_detection_dimensions(
+    event_type: &'static str,
+    rule_ids: &[String],
+    categories: &[String],
+    detection_classes: &[String],
+    signal_types: &[String],
+    analytic_intents: &[String],
+) -> Result<(), RiskAccountingError> {
+    require_non_empty_array(event_type, "rule_ids", rule_ids)?;
+    require_non_empty_array(event_type, "categories", categories)?;
+    require_non_empty_array(event_type, "detection_classes", detection_classes)?;
+    require_non_empty_array(event_type, "signal_types", signal_types)?;
+    require_non_empty_array(event_type, "analytic_intents", analytic_intents)?;
+    validate_allowed_values(
+        event_type,
+        "detection_classes",
+        detection_classes,
+        &[
+            "security_detection",
+            "policy_violation",
+            "threat_hunting",
+            "compliance_observation",
+            "operational_health",
+            "baseline_deviation",
+        ],
+    )?;
+    validate_allowed_values(
+        event_type,
+        "signal_types",
+        signal_types,
+        &["atomic", "chain", "correlation", "baseline_deviation"],
+    )?;
+    validate_allowed_values(
+        event_type,
+        "analytic_intents",
+        analytic_intents,
+        &["alert", "hunt", "enrich", "baseline", "audit"],
+    )?;
+    Ok(())
+}
+
+fn validate_process_context(process: &ProcessContext) -> Result<(), RiskAccountingError> {
+    for (field, value) in [
+        ("source_process_name", process.source_process_name.as_str()),
+        ("target_process_name", process.target_process_name.as_str()),
+        ("rule_name", process.rule_name.as_str()),
+        ("dedup_key", process.dedup_key.as_str()),
+        ("rule_severity", process.rule_severity.as_str()),
+    ] {
+        require_non_empty("process_chain", field, value)?;
+    }
+    for (field, values) in [
+        ("secondary_rule_ids", process.secondary_rule_ids.as_slice()),
+        (
+            "investigation_fields",
+            process.investigation_fields.as_slice(),
+        ),
+        ("falsepositives", process.falsepositives.as_slice()),
+    ] {
+        if values.iter().any(|value| value.trim().is_empty()) {
+            return Err(RiskAccountingError::EmptyEventField {
+                event_type: "process_chain",
+                field,
+            });
+        }
+    }
+    require_optional_non_empty("process_chain", "host", process.host.as_deref())?;
+    require_optional_non_empty("process_chain", "user", process.user.as_deref())?;
+    require_optional_non_empty(
+        "process_chain",
+        "source_process_path",
+        process.source_process_path.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "process_chain",
+        "source_process_command_line",
+        process.source_process_command_line.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "process_chain",
+        "target_process_path",
+        process.target_process_path.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "process_chain",
+        "target_process_command_line",
+        process.target_process_command_line.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "process_chain",
+        "parent_process_name",
+        process.parent_process_name.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "process_chain",
+        "parent_process_path",
+        process.parent_process_path.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "process_chain",
+        "source_event_id",
+        process.source_event_id.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "process_chain",
+        "risk_adjustment",
+        process.risk_adjustment.as_deref(),
+    )?;
+    validate_rule_ids(&process.secondary_rule_ids)?;
+    validate_allowed_values(
+        "process_chain",
+        "rule_severity",
+        std::slice::from_ref(&process.rule_severity),
+        &["informational", "low", "medium", "high", "critical"],
+    )?;
+    Ok(())
+}
+
+fn validate_correlation_input(input: &CorrelationEventInput) -> Result<(), RiskAccountingError> {
+    require_non_empty("correlation", "client", &input.client)?;
+    require_non_empty_array("correlation", "shared_rule_ids", &input.shared_rule_ids)?;
+    let shared_rule_ids = input.shared_rule_ids.iter().collect::<BTreeSet<_>>();
+    if shared_rule_ids.len() != input.shared_rule_ids.len() {
+        return Err(RiskAccountingError::DuplicateCorrelationValue {
+            field: "shared_rule_ids",
+        });
+    }
+    require_non_empty("correlation", "window_start", &input.window_start)?;
+    require_non_empty("correlation", "window_end", &input.window_end)?;
+
+    let window_start = parse_event_timestamp(&input.window_start).ok_or(
+        RiskAccountingError::InvalidEventValue {
+            event_type: "correlation",
+            field: "window_start",
+        },
+    )?;
+    let window_end =
+        parse_event_timestamp(&input.window_end).ok_or(RiskAccountingError::InvalidEventValue {
+            event_type: "correlation",
+            field: "window_end",
+        })?;
+    if window_start > window_end {
+        return Err(RiskAccountingError::InvalidEventValue {
+            event_type: "correlation",
+            field: "window",
+        });
+    }
+
+    if input.sessions.len() < 2 {
+        return Err(RiskAccountingError::InvalidCorrelationCardinality {
+            actual: input.sessions.len(),
+        });
+    }
+
+    let mut session_ids = BTreeSet::new();
+    let mut event_ids = BTreeSet::new();
+    for session in &input.sessions {
+        require_non_empty("correlation", "session_id", &session.session_id)?;
+        require_non_empty("correlation", "event_id", &session.event_id)?;
+        require_non_empty("correlation", "timestamp", &session.timestamp)?;
+        let timestamp = parse_event_timestamp(&session.timestamp).ok_or(
+            RiskAccountingError::InvalidEventValue {
+                event_type: "correlation",
+                field: "timestamp",
+            },
+        )?;
+        if timestamp < window_start || timestamp > window_end {
+            return Err(RiskAccountingError::InvalidEventValue {
+                event_type: "correlation",
+                field: "timestamp",
+            });
+        }
+        require_non_empty("correlation", "severity", &session.severity)?;
+        validate_allowed_values(
+            "correlation",
+            "severity",
+            std::slice::from_ref(&session.severity),
+            &["informational", "low", "medium", "high", "critical"],
+        )?;
+        if !session_ids.insert(&session.session_id) {
+            return Err(RiskAccountingError::DuplicateCorrelationValue {
+                field: "session_id",
+            });
+        }
+        if !event_ids.insert(&session.event_id) {
+            return Err(RiskAccountingError::DuplicateCorrelationValue { field: "event_id" });
+        }
+    }
+    if session_ids.len() < 2 {
+        return Err(RiskAccountingError::InvalidCorrelationCardinality {
+            actual: session_ids.len(),
+        });
+    }
+    let expected_max = input
+        .sessions
+        .iter()
+        .map(|session| session.risk_score)
+        .max()
+        .unwrap_or_default();
+    if expected_max != input.max_risk_score {
+        return Err(RiskAccountingError::InvalidEventValue {
+            event_type: "correlation",
+            field: "max_risk_score",
+        });
+    }
+    Ok(())
 }
 
 pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
@@ -454,21 +758,19 @@ pub fn health_event_with_metadata(input: HealthEventInput<'_>) -> Event {
         atlas_tags: Vec::new(),
         tags: vec!["scanner".to_string(), "discovery".to_string()],
         evidence,
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: Some(inventory::source_counts(sources)),
         component: Some("scanner".to_string()),
         check_name: Some("source_discovery".to_string()),
         status: Some("ok".to_string()),
-        adr_version: Some(format!(
-            "{} ({})",
-            env!("CARGO_PKG_VERSION"),
-            env!("ADR_GIT_HASH")
-        )),
         scan_duration_ms: Some(input.scan_duration_ms),
         rule_count: Some(input.rule_count),
         threshold_config: Some(input.threshold_config),
-        active_policy_name: input.active_policy_name.map(str::to_string),
+        active_policy_name: input
+            .active_policy_name
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_string),
         emitted_count: Some(input.emitted_count),
         suppressed_count: Some(input.suppressed_count),
         scanner_error_count: Some(input.scanner_error_count),
@@ -522,7 +824,7 @@ pub fn validate_risk_accounting_scope(
     Ok(())
 }
 
-pub fn validate_schema_two_rule_ids(rule_ids: &[String]) -> Result<(), RiskAccountingError> {
+pub fn validate_rule_ids(rule_ids: &[String]) -> Result<(), RiskAccountingError> {
     for rule_id in rule_ids {
         if !is_canonical_contribution_id(rule_id) {
             return Err(RiskAccountingError::InvalidRuleId(rule_id.clone()));
@@ -534,7 +836,36 @@ pub fn validate_schema_two_rule_ids(rule_ids: &[String]) -> Result<(), RiskAccou
 pub fn detection_event(
     input: DetectionEventInput,
 ) -> Result<Event, crate::scoring::RiskAccountingError> {
-    validate_schema_two_rule_ids(&input.rule_ids)?;
+    require_non_empty("detection", "session_id", &input.session_id)?;
+    require_non_empty("detection", "source_path_hash", &input.source_path_hash)?;
+    validate_optional_metadata(
+        "detection",
+        input.agent.as_deref(),
+        input.model.as_deref(),
+        input.provider.as_deref(),
+    )?;
+    require_optional_non_empty("detection", "tool_name", input.tool_name.as_deref())?;
+    validate_rule_ids(&input.rule_ids)?;
+    validate_detection_dimensions(
+        "detection",
+        &input.rule_ids,
+        &input.categories,
+        &input.detection_classes,
+        &input.signal_types,
+        &input.analytic_intents,
+    )?;
+    validate_optional_array_values("detection", "atlas_tags", &input.atlas_tags)?;
+    if input
+        .atlas_tags
+        .iter()
+        .any(|tag| !tag.starts_with("atlas:"))
+    {
+        return Err(RiskAccountingError::InvalidEventValue {
+            event_type: "detection",
+            field: "atlas_tags",
+        });
+    }
+    validate_evidence("detection", &input.evidence)?;
     let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
     validate_risk_accounting_scope("detection", &input.rule_ids, &risk_contributions)?;
     let risk_score = score_for_contributions(&risk_contributions)?;
@@ -544,19 +875,8 @@ pub fn detection_event(
         assessment.severity.as_str(),
         &input.rule_ids,
         &input.categories,
-        assessment.triage_required,
+        assessment.high_required,
     );
-    let triage = if assessment.triage_required {
-        serde_json::json!({
-            "required": true,
-            "verdict": "config_missing"
-        })
-    } else {
-        serde_json::json!({
-            "required": false,
-            "verdict": "not_required"
-        })
-    };
     Ok(EventBuilder {
         event_time: input.event_time,
         event_type: "detection",
@@ -579,13 +899,12 @@ pub fn detection_event(
         atlas_tags: input.atlas_tags,
         tags: input.tags,
         evidence: input.evidence,
-        triage: Some(triage),
+        timeline_anchors: Vec::new(),
         response: Some(response),
         source_counts: None,
         component: None,
         check_name: None,
         status: None,
-        adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
         threshold_config: None,
@@ -631,7 +950,55 @@ pub struct ProcessChainEventInput {
 pub fn process_chain_event(
     input: ProcessChainEventInput,
 ) -> Result<Event, crate::scoring::RiskAccountingError> {
-    validate_schema_two_rule_ids(&input.rule_ids)?;
+    require_non_empty("process_chain", "session_id", &input.session_id)?;
+    require_non_empty("process_chain", "source_path_hash", &input.source_path_hash)?;
+    validate_optional_metadata(
+        "process_chain",
+        input.agent.as_deref(),
+        input.model.as_deref(),
+        input.provider.as_deref(),
+    )?;
+    require_optional_non_empty("process_chain", "tool_name", input.tool_name.as_deref())?;
+    validate_detection_dimensions(
+        "process_chain",
+        &input.rule_ids,
+        &input.categories,
+        &input.detection_classes,
+        &input.signal_types,
+        &input.analytic_intents,
+    )?;
+    require_non_empty("process_chain", "confidence", &input.confidence)?;
+    validate_allowed_values(
+        "process_chain",
+        "confidence",
+        std::slice::from_ref(&input.confidence),
+        &["low", "medium", "high"],
+    )?;
+    require_non_empty("process_chain", "detection_reason", &input.detection_reason)?;
+    require_non_empty("process_chain", "risk_entity_type", &input.risk_entity_type)?;
+    validate_allowed_values(
+        "process_chain",
+        "risk_entity_type",
+        std::slice::from_ref(&input.risk_entity_type),
+        &["host", "user", "session"],
+    )?;
+    let risk_entity_value =
+        input
+            .risk_entity_value
+            .as_deref()
+            .ok_or(RiskAccountingError::EmptyEventField {
+                event_type: "process_chain",
+                field: "risk_entity_value",
+            })?;
+    require_non_empty("process_chain", "risk_entity_value", risk_entity_value)?;
+    validate_process_context(&input.process)?;
+    validate_evidence("process_chain", &input.evidence)?;
+    validate_optional_array_values(
+        "process_chain",
+        "mitre_attack_techniques",
+        &input.mitre_attack_techniques,
+    )?;
+    validate_rule_ids(&input.rule_ids)?;
     let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
     // Process-chain risk must be attributable to a rule ID, exactly like a
     // regular detection.
@@ -643,7 +1010,7 @@ pub fn process_chain_event(
         assessment.severity.as_str(),
         &input.rule_ids,
         &input.categories,
-        assessment.triage_required,
+        assessment.high_required,
     );
 
     let mut event = EventBuilder {
@@ -668,13 +1035,12 @@ pub fn process_chain_event(
         atlas_tags: Vec::new(),
         tags: input.tags,
         evidence: input.evidence,
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: Some(response),
         source_counts: None,
         component: None,
         check_name: None,
         status: None,
-        adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
         threshold_config: None,
@@ -722,6 +1088,16 @@ fn redact_process_context(mut process: ProcessContext) -> ProcessContext {
 pub fn activity_event(
     input: ActivityEventInput,
 ) -> Result<Event, crate::scoring::RiskAccountingError> {
+    require_non_empty("activity", "session_id", &input.session_id)?;
+    require_non_empty("activity", "source_path_hash", &input.source_path_hash)?;
+    validate_optional_metadata(
+        "activity",
+        input.agent.as_deref(),
+        input.model.as_deref(),
+        input.provider.as_deref(),
+    )?;
+    require_optional_non_empty("activity", "tool_name", input.tool_name.as_deref())?;
+    validate_evidence("activity", &input.evidence)?;
     let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
     validate_risk_accounting_scope("activity", &[], &risk_contributions)?;
     let risk_score = score_for_contributions(&risk_contributions)?;
@@ -749,13 +1125,12 @@ pub fn activity_event(
         atlas_tags: Vec::new(),
         tags: input.tags,
         evidence: input.evidence,
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: None,
         component: None,
         check_name: None,
         status: None,
-        adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
         threshold_config: None,
@@ -767,8 +1142,17 @@ pub fn activity_event(
     .build())
 }
 
-pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
-    EventBuilder {
+pub fn install_inventory_event(
+    evidence: Vec<Evidence>,
+) -> Result<Event, crate::scoring::RiskAccountingError> {
+    if evidence.is_empty() {
+        return Err(RiskAccountingError::EmptyEventField {
+            event_type: "activity",
+            field: "evidence",
+        });
+    }
+    validate_evidence("activity", &evidence)?;
+    Ok(EventBuilder {
         event_time: None,
         event_type: "activity",
         severity: "informational",
@@ -794,13 +1178,12 @@ pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
             "metadata_only".to_string(),
         ],
         evidence,
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: None,
         component: Some("scanner".to_string()),
         check_name: Some("install_inventory".to_string()),
         status: Some("ok".to_string()),
-        adr_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         scan_duration_ms: None,
         rule_count: None,
         threshold_config: None,
@@ -809,13 +1192,75 @@ pub fn install_inventory_event(evidence: Vec<Evidence>) -> Event {
         suppressed_count: None,
         scanner_error_count: None,
     }
-    .build()
+    .build())
 }
 
 pub fn session_risk_summary_event(
     input: SessionRiskSummaryEventInput,
 ) -> Result<Event, crate::scoring::RiskAccountingError> {
-    validate_schema_two_rule_ids(&input.rule_ids)?;
+    require_non_empty("session_risk_summary", "client", &input.client)?;
+    require_non_empty("session_risk_summary", "session_id", &input.session_id)?;
+    validate_optional_metadata(
+        "session_risk_summary",
+        input.agent.as_deref(),
+        input.model.as_deref(),
+        input.provider.as_deref(),
+    )?;
+    require_optional_non_empty(
+        "session_risk_summary",
+        "source_path_hash",
+        input.source_path_hash.as_deref(),
+    )?;
+    validate_rule_ids(&input.rule_ids)?;
+    validate_optional_array_values("session_risk_summary", "categories", &input.categories)?;
+    validate_optional_array_values(
+        "session_risk_summary",
+        "detection_classes",
+        &input.detection_classes,
+    )?;
+    validate_optional_array_values("session_risk_summary", "signal_types", &input.signal_types)?;
+    validate_optional_array_values(
+        "session_risk_summary",
+        "analytic_intents",
+        &input.analytic_intents,
+    )?;
+    validate_allowed_values(
+        "session_risk_summary",
+        "detection_classes",
+        &input.detection_classes,
+        &[
+            "security_detection",
+            "policy_violation",
+            "threat_hunting",
+            "compliance_observation",
+            "operational_health",
+            "baseline_deviation",
+        ],
+    )?;
+    validate_allowed_values(
+        "session_risk_summary",
+        "signal_types",
+        &input.signal_types,
+        &["atomic", "chain", "correlation", "baseline_deviation"],
+    )?;
+    validate_allowed_values(
+        "session_risk_summary",
+        "analytic_intents",
+        &input.analytic_intents,
+        &["alert", "hunt", "enrich", "baseline", "audit"],
+    )?;
+    validate_optional_array_values("session_risk_summary", "atlas_tags", &input.atlas_tags)?;
+    if input
+        .atlas_tags
+        .iter()
+        .any(|tag| !tag.starts_with("atlas:"))
+    {
+        return Err(RiskAccountingError::InvalidEventValue {
+            event_type: "session_risk_summary",
+            field: "atlas_tags",
+        });
+    }
+    validate_evidence("session_risk_summary", &input.evidence)?;
     let risk_contributions = canonicalize_contributions(input.risk_contributions)?;
     validate_risk_accounting_scope("session_risk_summary", &input.rule_ids, &risk_contributions)?;
     let risk_score = score_for_contributions(&risk_contributions)?;
@@ -843,13 +1288,12 @@ pub fn session_risk_summary_event(
         atlas_tags: input.atlas_tags,
         tags: input.tags,
         evidence: input.evidence,
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: None,
         component: None,
         check_name: None,
         status: None,
-        adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
         threshold_config: None,
@@ -864,7 +1308,14 @@ pub fn session_risk_summary_event(
 pub fn correlation_event(
     input: CorrelationEventInput,
 ) -> Result<Event, crate::scoring::RiskAccountingError> {
-    validate_schema_two_rule_ids(&input.shared_rule_ids)?;
+    validate_optional_metadata(
+        "correlation",
+        input.agent.as_deref(),
+        input.model.as_deref(),
+        input.provider.as_deref(),
+    )?;
+    validate_rule_ids(&input.shared_rule_ids)?;
+    validate_correlation_input(&input)?;
     let thresholds = load_thresholds();
     let assessment = assess_risk_with_thresholds(input.max_risk_score, thresholds);
     let mut evidence = vec![
@@ -917,13 +1368,12 @@ pub fn correlation_event(
         atlas_tags: Vec::new(),
         tags: vec!["correlation".to_string(), "cross_session".to_string()],
         evidence,
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: None,
         component: None,
         check_name: None,
         status: None,
-        adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
         threshold_config: None,
@@ -978,13 +1428,12 @@ pub fn scanner_error_event(source: &Source, error: &impl std::fmt::Display) -> E
                 rule_id: None,
             },
         ],
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: None,
         component: Some("scanner".to_string()),
         check_name: Some("source_parse".to_string()),
         status: Some("degraded".to_string()),
-        adr_version: None,
         scan_duration_ms: None,
         rule_count: None,
         threshold_config: None,
@@ -1056,13 +1505,12 @@ pub fn operational_alert_event(input: OperationalAlertInput) -> Event {
         atlas_tags: Vec::new(),
         tags: vec!["operational".to_string(), "scanner_health".to_string()],
         evidence,
-        triage: None,
+        timeline_anchors: Vec::new(),
         response: None,
         source_counts: None,
         component: Some("scanner".to_string()),
         check_name: Some(operational_alert_check_name(&input.alert_type).to_string()),
         status: Some("degraded".to_string()),
-        adr_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         scan_duration_ms: input.scan_duration_ms,
         rule_count: None,
         threshold_config: None,
@@ -1086,10 +1534,11 @@ fn operational_alert_check_name(alert_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActivityEventInput, CorrelationEventInput, DetectionEventInput, Evidence, HealthEventInput,
-        OperationalAlertInput, SessionRiskSummaryEventInput, activity_event, correlation_event,
-        detection_event, health_event_with_metadata, operational_alert_event, scanner_error_event,
-        session_risk_summary_event, validate_risk_accounting_scope,
+        ActivityEventInput, CorrelationEventInput, CorrelationSessionInput, DetectionEventInput,
+        Evidence, HealthEventInput, OperationalAlertInput, ProcessChainEventInput, ProcessContext,
+        SessionRiskSummaryEventInput, activity_event, correlation_event, detection_event,
+        health_event_with_metadata, operational_alert_event, process_chain_event,
+        scanner_error_event, session_risk_summary_event, validate_risk_accounting_scope,
     };
     use crate::clients::ClientId;
     use crate::scoring::{
@@ -1367,6 +1816,142 @@ mod tests {
     }
 
     #[test]
+    fn native_detection_process_and_correlation_inputs_require_dimensions() {
+        let invalid_detection = detection_event(DetectionEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: "hash".to_string(),
+            tool_name: None,
+            rule_ids: vec!["rule.test".to_string()],
+            categories: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
+            atlas_tags: Vec::new(),
+            tags: vec!["test".to_string()],
+            evidence: Vec::new(),
+            risk_contributions: Vec::new(),
+            event_time: None,
+        })
+        .expect_err("empty detection categories");
+        assert!(matches!(
+            invalid_detection,
+            crate::scoring::RiskAccountingError::EmptyEventField {
+                event_type: "detection",
+                field: "categories"
+            }
+        ));
+
+        let invalid_process = process_chain_event(ProcessChainEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "session".to_string(),
+            source_path_hash: "hash".to_string(),
+            tool_name: None,
+            rule_ids: vec!["rule.test".to_string()],
+            categories: vec!["process_chain".to_string()],
+            detection_classes: Vec::new(),
+            signal_types: vec!["chain".to_string()],
+            analytic_intents: vec!["alert".to_string()],
+            tags: vec!["test".to_string()],
+            evidence: Vec::new(),
+            risk_contributions: Vec::new(),
+            event_time: None,
+            confidence: "low".to_string(),
+            detection_reason: "test".to_string(),
+            mitre_attack_techniques: Vec::new(),
+            risk_entity_type: "session".to_string(),
+            risk_entity_value: Some("session".to_string()),
+            process: ProcessContext {
+                host: None,
+                user: None,
+                source_process_name: "parent".to_string(),
+                source_process_path: None,
+                source_process_id: None,
+                source_process_command_line: None,
+                target_process_name: "child".to_string(),
+                target_process_path: None,
+                target_process_id: None,
+                target_process_command_line: None,
+                parent_process_name: None,
+                parent_process_path: None,
+                source_event_id: None,
+                source_process_inferred: true,
+                rule_name: "test".to_string(),
+                secondary_rule_ids: Vec::new(),
+                investigation_fields: Vec::new(),
+                falsepositives: Vec::new(),
+                dedup_key: "test".to_string(),
+                suppression_window_seconds: 0,
+                rule_severity: "low".to_string(),
+                risk_adjustment: None,
+            },
+        })
+        .expect_err("empty process detection classes");
+        assert!(matches!(
+            invalid_process,
+            crate::scoring::RiskAccountingError::EmptyEventField {
+                event_type: "process_chain",
+                field: "detection_classes"
+            }
+        ));
+
+        let invalid_correlation = correlation_event(CorrelationEventInput {
+            client: "codex".to_string(),
+            agent: None,
+            model: None,
+            provider: None,
+            shared_rule_ids: Vec::new(),
+            sessions: vec![CorrelationSessionInput {
+                session_id: "one".to_string(),
+                event_id: "event-one".to_string(),
+                timestamp: "2026-05-01T00:00:00Z".to_string(),
+                severity: "high".to_string(),
+                risk_score: 70,
+            }],
+            window_start: "2026-05-01T00:00:00Z".to_string(),
+            window_end: "2026-05-01T00:00:00Z".to_string(),
+            max_risk_score: 70,
+        })
+        .expect_err("empty correlation shared IDs");
+        assert!(matches!(
+            invalid_correlation,
+            crate::scoring::RiskAccountingError::EmptyEventField {
+                event_type: "correlation",
+                field: "shared_rule_ids"
+            }
+        ));
+
+        let invalid_cardinality = correlation_event(CorrelationEventInput {
+            client: "codex".to_string(),
+            agent: None,
+            model: None,
+            provider: None,
+            shared_rule_ids: vec!["rule.test".to_string()],
+            sessions: vec![CorrelationSessionInput {
+                session_id: "one".to_string(),
+                event_id: "event-one".to_string(),
+                timestamp: "2026-05-01T00:00:00Z".to_string(),
+                severity: "high".to_string(),
+                risk_score: 70,
+            }],
+            window_start: "2026-05-01T00:00:00Z".to_string(),
+            window_end: "2026-05-01T00:00:00Z".to_string(),
+            max_risk_score: 70,
+        })
+        .expect_err("one-session correlation");
+        assert!(matches!(
+            invalid_cardinality,
+            crate::scoring::RiskAccountingError::InvalidCorrelationCardinality { actual: 1 }
+        ));
+    }
+
+    #[test]
     fn detection_event_serialization_omits_unset_optional_fields() {
         let event = serde_json::to_value(
             detection_event(DetectionEventInput {
@@ -1409,7 +1994,15 @@ mod tests {
         assert_eq!(event["atlas_tags"][0], "atlas:AML.T0051");
         assert_eq!(event["evidence"][0]["hash"], "evidence-hash");
         assert_eq!(event["evidence"][0]["rule_id"], "rule.test");
-        assert!(event["triage"].is_object());
+        assert!(event["schema_version"] == "3.0");
+        assert!(
+            event["event_id"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("telltale-"))
+        );
+        assert!(event["telltale_version"].is_string());
+        assert!(event.get("triage").is_none());
+        assert!(event.get("adr_version").is_none());
         assert!(event.get("tool_name").is_none());
         assert!(event.get("source_counts").is_none());
     }
@@ -1451,6 +2044,25 @@ mod tests {
     }
 
     #[test]
+    fn health_event_constructor_omits_blank_policy_names() {
+        for active_policy_name in [Some(""), Some(" \t\n ")] {
+            let event = health_event_with_metadata(HealthEventInput {
+                sources: &[],
+                source_inventory_change: None,
+                scan_duration_ms: 0,
+                rule_count: 0,
+                threshold_config: crate::scoring::load_thresholds(),
+                active_policy_name,
+                emitted_count: 0,
+                suppressed_count: 0,
+                scanner_error_count: 0,
+            });
+
+            assert_eq!(event.active_policy_name, None);
+        }
+    }
+
+    #[test]
     fn detection_event_uses_threshold_based_severity() {
         assert_eq!(
             assess_risk_with_thresholds(
@@ -1458,8 +2070,8 @@ mod tests {
                 RiskThresholds {
                     low: 20,
                     medium: 50,
-                    triage: 70,
-                    alert: 90,
+                    high: 70,
+                    critical: 90,
                 },
             )
             .severity,
@@ -1471,8 +2083,8 @@ mod tests {
                 RiskThresholds {
                     low: 20,
                     medium: 50,
-                    triage: 70,
-                    alert: 90,
+                    high: 70,
+                    critical: 90,
                 },
             )
             .severity,
@@ -1484,8 +2096,8 @@ mod tests {
                 RiskThresholds {
                     low: 20,
                     medium: 50,
-                    triage: 70,
-                    alert: 90,
+                    high: 70,
+                    critical: 90,
                 },
             )
             .severity,
@@ -1550,7 +2162,7 @@ mod tests {
     }
 
     #[test]
-    fn detection_event_serializes_config_missing_for_high_scores() {
+    fn detection_event_has_no_triage_compatibility_fields_for_high_scores() {
         let event = detection_event(DetectionEventInput {
             client: ClientId::Codex,
             agent: None,
@@ -1561,9 +2173,9 @@ mod tests {
             tool_name: None,
             rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
-            detection_classes: Vec::new(),
-            signal_types: Vec::new(),
-            analytic_intents: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
@@ -1580,13 +2192,13 @@ mod tests {
         );
         assert_eq!(event.time_source, "source");
         assert_eq!(event.time_confidence, "high");
-        let triage = event.triage.expect("triage metadata");
-        assert_eq!(triage["required"], true);
-        assert_eq!(triage["verdict"], "config_missing");
+        let serialized = serde_json::to_value(&event).expect("serialized event");
+        assert!(serialized.get("triage").is_none());
+        assert!(serialized.get("adr_version").is_none());
     }
 
     #[test]
-    fn detection_event_populates_triage_for_low_scores() {
+    fn detection_event_has_no_triage_compatibility_fields_for_low_scores() {
         let event = detection_event(DetectionEventInput {
             client: ClientId::Codex,
             agent: None,
@@ -1597,9 +2209,9 @@ mod tests {
             tool_name: None,
             rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
-            detection_classes: Vec::new(),
-            signal_types: Vec::new(),
-            analytic_intents: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
@@ -1609,9 +2221,9 @@ mod tests {
         .expect("build detection event");
 
         assert_eq!(event.severity, "informational");
-        let triage = event.triage.expect("triage metadata");
-        assert_eq!(triage["required"], false);
-        assert_eq!(triage["verdict"], "not_required");
+        let serialized = serde_json::to_value(&event).expect("serialized event");
+        assert!(serialized.get("triage").is_none());
+        assert!(serialized.get("adr_version").is_none());
     }
 
     #[test]
@@ -1649,7 +2261,7 @@ mod tests {
         assert_eq!(response.recommended_action, "investigate_immediately");
         assert_eq!(
             response.response_playbook,
-            "adr-playbook-mcp-prompt-injection"
+            "telltale-playbook-mcp-prompt-injection"
         );
         assert_eq!(response.escalation, "security_review_required");
         assert!(response.investigation_summary.contains("critical"));
@@ -1676,9 +2288,9 @@ mod tests {
             tool_name: Some("null".to_string()),
             rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
-            detection_classes: Vec::new(),
-            signal_types: Vec::new(),
-            analytic_intents: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
@@ -1702,9 +2314,9 @@ mod tests {
             tool_name: None,
             rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
-            detection_classes: Vec::new(),
-            signal_types: Vec::new(),
-            analytic_intents: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
@@ -1739,9 +2351,9 @@ mod tests {
             tool_name: None,
             rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
-            detection_classes: Vec::new(),
-            signal_types: Vec::new(),
-            analytic_intents: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
@@ -1773,9 +2385,9 @@ mod tests {
             tool_name: None,
             rule_ids: vec!["rule.test".to_string()],
             categories: vec!["category".to_string()],
-            detection_classes: Vec::new(),
-            signal_types: Vec::new(),
-            analytic_intents: Vec::new(),
+            detection_classes: vec!["security_detection".to_string()],
+            signal_types: vec!["atomic".to_string()],
+            analytic_intents: vec!["alert".to_string()],
             atlas_tags: Vec::new(),
             tags: vec!["tag".to_string()],
             evidence: Vec::new(),
@@ -1825,7 +2437,7 @@ mod tests {
         assert_eq!(event.evidence[0].field, "error");
         assert_eq!(event.evidence[1].field, "source_path");
         assert!(event.evidence[1].hash.is_some());
-        assert_eq!(event.triage, None);
+        assert!(event.timeline_anchors.is_empty());
         assert_eq!(event.response, None);
         assert_eq!(event.source_counts, None);
         assert_eq!(event.component.as_deref(), Some("scanner"));
@@ -1855,8 +2467,8 @@ mod tests {
         assert!(event.tags.contains(&"operational".to_string()));
         assert!(event.tags.contains(&"scanner_health".to_string()));
         assert_eq!(event.scan_duration_ms, Some(1500));
-        assert!(event.adr_version.is_some());
-        assert_eq!(event.triage, None);
+        assert_eq!(event.telltale_version, env!("CARGO_PKG_VERSION"));
+        assert!(event.timeline_anchors.is_empty());
         assert_eq!(event.response, None);
         assert!(event.source_path_hash.is_none());
 

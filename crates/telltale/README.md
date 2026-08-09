@@ -7,6 +7,10 @@ parsing, and detection while returning events to the host application. It does
 not write JSONL, connect to a SIEM, or exit the process. The source directory
 remains `crates/telltale` for repository compatibility.
 
+Returned native events use the Event 3.0 contract, deterministic `response`
+metadata, and optional top-level `timeline_anchors`; the embedding host owns
+transport and any historical-event handling.
+
 ```rust
 use telltale_core::Pipeline;
 

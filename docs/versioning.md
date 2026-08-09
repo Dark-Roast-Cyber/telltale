@@ -25,9 +25,9 @@ format.
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
 - `telltale` is the canonical executable and `telltale-*` is the canonical
-  release asset naming. The currently released `adr` compatibility command and
-  `adr-*` aliases are removed by the breaking 0.5.0 migration; migration tooling
-  handles supported historical state rather than retaining runtime aliases.
+  release asset naming. The `adr` compatibility command and local ADR paths,
+  services, and environment variables remain transitional in this Event 3.0
+  slice; a later environment cut handles any removal explicitly.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.
 
@@ -92,8 +92,9 @@ The Cargo/package version is not the version of every data contract:
 6. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
-For the exact 0.4.0 Rust API changes, see the
-[0.4.0 migration guide](migrations/0.4.0.md).
+The current 0.5.0 section documents the breaking package and Event 3.0
+changes. The older [0.4.0 migration guide](migrations/0.4.0.md) documents the
+unpublished API hardening work folded into this release.
 
 ## Crates.io Publication
 
@@ -118,7 +119,7 @@ Publish schema → rules → sources → detect → core → cli, waiting after 
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.4.0` registry dependencies while that remains the workspace package
+`=0.5.0` registry dependencies while that remains the workspace package
 version. Advance this pin with the lockstep package version before 0.5.0
 publication. Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.

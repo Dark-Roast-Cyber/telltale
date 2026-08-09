@@ -341,7 +341,7 @@ enum Command {
 
         /// Produce a redacted session timeline from the filtered events.
         /// Requires --session-id to select a single session; add --client when a session id is ambiguous across clients.
-        /// Outputs a structured timeline with detection anchors and triage context.
+        /// Outputs a structured timeline with detection anchors and historical triage context.
         #[arg(long)]
         timeline: bool,
 
@@ -1130,22 +1130,10 @@ fn parse_nonzero_usize(value: &str) -> Result<usize, String> {
 pub(crate) fn read_jsonl_events(
     log_path: &Path,
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
-    let contents = fs::read_to_string(log_path)?;
-    let mut events = Vec::new();
-    for (index, line) in contents.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let event = serde_json::from_str::<serde_json::Value>(line).map_err(|err| {
-            format!(
-                "invalid JSONL at {}:{}: {err}",
-                log_path.display(),
-                index + 1
-            )
-        })?;
-        events.push(event);
-    }
-    Ok(events)
+    Ok(historical::read_jsonl_records(log_path)?
+        .into_iter()
+        .map(|record| record.value)
+        .collect())
 }
 
 /// Resolve rotation config from CLI flags and environment variables.
