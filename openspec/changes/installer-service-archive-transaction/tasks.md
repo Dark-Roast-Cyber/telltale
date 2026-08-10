@@ -79,4 +79,4 @@
 - [x] 7.2 Update `.ai/working-state.md` with completed work, changed files,
   validation, decisions, risks, and the next recommended batch.
 - [x] 7.3 Update `docs/CHANGELOG.md` for the shipped behavior change.
-- [ ] 7.4 Commit the batch; do not start the next major batch.
+- [x] 7.4 Commit the batch; do not start the next major batch.
