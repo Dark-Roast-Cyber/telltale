@@ -1930,6 +1930,7 @@ mod tests {
     };
     use crate::state::ScanState;
 
+    #[cfg(unix)]
     #[test]
     fn migration_preserves_source_and_is_idempotent() {
         let temp = tempdir().expect("tempdir");
@@ -1990,6 +1991,33 @@ mod tests {
         let other_source = temp.path().join("other-legacy.json");
         fs::write(&other_source, source_bytes).expect("other source");
         assert!(run_state_migration(&other_source, &manifest_as_destination).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn migration_existing_target_fails_closed_without_clobbering() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("legacy.json");
+        let destination = temp.path().join("native.json");
+        let source_bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/state/legacy-scan-state.json"
+        ));
+        let destination_bytes = b"existing destination\n";
+        fs::write(&source, source_bytes).expect("source");
+        fs::write(&destination, destination_bytes).expect("destination");
+
+        let error = run_state_migration(&source, &destination)
+            .expect_err("existing Windows migration target must be unsupported");
+        assert_eq!(
+            error.to_string(),
+            "existing migration target ownership is unsupported on Windows"
+        );
+        assert_eq!(fs::read(&source).expect("source bytes"), source_bytes);
+        assert_eq!(
+            fs::read(&destination).expect("destination bytes"),
+            destination_bytes
+        );
     }
 
     #[test]
@@ -2202,6 +2230,7 @@ mod tests {
         assert_eq!(manifest["destination_count"], 3);
     }
 
+    #[cfg(unix)]
     #[test]
     fn event_destination_install_failure_is_recoverable_without_clobbering() {
         let temp = tempdir().expect("tempdir");
@@ -2263,6 +2292,71 @@ mod tests {
             second
         );
         assert!(manifest_path(&destination_one).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn event_existing_destination_recovery_fails_closed_without_clobbering() {
+        let temp = tempdir().expect("tempdir");
+        let source_one = temp.path().join("recover-one.jsonl");
+        let source_two = temp.path().join("recover-two.jsonl");
+        let destination_one = temp.path().join("recover-new-one.jsonl");
+        let destination_two = temp.path().join("recover-new-two.jsonl");
+        let first = serde_json::to_vec(
+            &serde_json::from_slice::<Value>(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/historical_events/event-1.0.json"
+            )))
+            .expect("first fixture"),
+        )
+        .expect("compact first fixture");
+        let second = serde_json::to_vec(
+            &serde_json::from_slice::<Value>(include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/historical_events/event-2.0.json"
+            )))
+            .expect("second fixture"),
+        )
+        .expect("compact second fixture");
+        fs::write(&source_one, &first).expect("source one");
+        fs::write(&source_two, &second).expect("source two");
+
+        let error = run_event_migration_with_failpoint(
+            &[
+                (source_one.clone(), destination_one.clone()),
+                (source_two.clone(), destination_two.clone()),
+            ],
+            Some(1),
+        )
+        .expect_err("destination install failpoint");
+        assert_eq!(
+            error.to_string(),
+            "event migration test failpoint after destination install"
+        );
+        assert_eq!(
+            fs::read(&destination_one).expect("first destination"),
+            first
+        );
+        assert!(!destination_two.exists());
+
+        let existing_destination = fs::read(&destination_one).expect("existing destination");
+        let error = run_event_migration(&[
+            (source_one.clone(), destination_one.clone()),
+            (source_two.clone(), destination_two.clone()),
+        ])
+        .expect_err("existing Windows destination must be unsupported");
+        assert_eq!(
+            error.to_string(),
+            "existing migration target ownership is unsupported on Windows"
+        );
+        assert_eq!(
+            fs::read(&destination_one).expect("destination bytes"),
+            existing_destination
+        );
+        assert!(!destination_two.exists());
+        assert!(!manifest_path(&destination_one).exists());
+        assert_eq!(fs::read(&source_one).expect("source one bytes"), first);
+        assert_eq!(fs::read(&source_two).expect("source two bytes"), second);
     }
 
     #[test]

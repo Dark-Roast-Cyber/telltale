@@ -463,7 +463,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn non_utf8_active_name_fails_before_rotation() {
         use std::fs;

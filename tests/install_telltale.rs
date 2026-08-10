@@ -407,6 +407,8 @@ fn installer_command(
     command
         .arg(script)
         .env("HOME", root.join("home"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("PATH", path)
         .env("FAKE_CURL_METADATA", metadata)
         .env("FAKE_CURL_ASSET_DIR", asset_dir)
@@ -441,6 +443,8 @@ fn piped_installer_command(
         ])
         .arg(script)
         .env("HOME", root.join("home"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("PATH", path)
         .env("FAKE_CURL_METADATA", metadata)
         .env("FAKE_CURL_ASSET_DIR", asset_dir)
