@@ -317,7 +317,6 @@ fn date_from_days_since_epoch(days: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::path::Path;
 
     use tempfile::tempdir;
@@ -467,6 +466,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn non_utf8_active_name_fails_before_rotation() {
+        use std::fs;
         use std::os::unix::ffi::OsStringExt;
 
         let temp = tempdir().expect("tempdir");

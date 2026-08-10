@@ -270,26 +270,26 @@ pub(crate) fn validate_existing_mode(
         if mode & !allowed_mode != 0 {
             return Err("existing migration target permissions are too broad".into());
         }
+        Ok(())
     }
     #[cfg(windows)]
     {
         let _ = (path, allowed_mode);
-        return Err(io::Error::new(
+        Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "existing migration target ownership is unsupported on Windows",
         )
-        .into());
+        .into())
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, allowed_mode);
-        return Err(io::Error::new(
+        Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "existing migration target ownership is unsupported on this platform",
         )
-        .into());
+        .into())
     }
-    Ok(())
 }
 
 pub(crate) fn validate_runtime_paths(
@@ -605,7 +605,7 @@ fn normalized_paths_equal(left: &Path, right: &Path) -> Result<bool, Box<dyn std
     {
         // Windows compares missing path components case-insensitively. Use
         // the native ordinal comparison instead of lossy string conversion.
-        return windows_ordinal_equal(left.as_os_str(), right.as_os_str());
+        windows_ordinal_equal(left.as_os_str(), right.as_os_str())
     }
     #[cfg(target_os = "macos")]
     {
@@ -613,7 +613,7 @@ fn normalized_paths_equal(left: &Path, right: &Path) -> Result<bool, Box<dyn std
         // case-only aliases are therefore treated as equal, while differing
         // non-ASCII spellings fail closed instead of guessing filesystem
         // normalization rules.
-        return macos_case_insensitive_path_equal(&left, &right);
+        macos_case_insensitive_path_equal(&left, &right)
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
@@ -1008,7 +1008,7 @@ fn atomic_no_replace_native(
         {
             return Err(io::Error::last_os_error().into());
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -1076,6 +1076,9 @@ mod tests {
     use std::fs;
 
     use tempfile::tempdir;
+
+    #[cfg(windows)]
+    use super::{sync_directory, windows_file_time};
 
     use super::{
         RotationNamespace, SidecarLock, TempFile, atomic_no_replace, safe_path_info,
