@@ -2848,16 +2848,13 @@ fn shipper_examples_target_default_jsonl_path() {
 
     // The Splunk UF helper ships as a tracked, portable example. Its defaults
     // must target the Linux `system` path profile used by managed/Splunk-forwarded
-    // deployments, not stale repo-local or host-absolute paths. The generated
-    // stanzas are compared byte-for-byte in the rendering test below.
+    // deployments, not stale repo-local or host-absolute paths.
     let splunk_uf_setup = include_str!("../../scripts/slunk_uf_set_up");
     assert!(splunk_uf_setup.contains("TELLTALE_LOG_PATH:-/var/log/telltale/telltale-events.jsonl"));
     assert!(splunk_uf_setup.contains("TELLTALE_INDEX:-telltale"));
     assert!(splunk_uf_setup.contains("TELLTALE_SOURCETYPE:-telltale:json"));
     assert!(splunk_uf_setup.contains("[telltale:json]"));
     assert!(splunk_uf_setup.contains("source = telltale"));
-    let splunk_inputs = include_str!("../../config/examples/splunk-inputs.conf");
-    assert!(splunk_inputs.contains("source = telltale"));
     assert!(
         splunk_uf_setup.contains("COPILOT_LOG_DIR:-/var/log/telltale/copilot"),
         "splunk UF helper must default COPILOT_LOG_DIR to the system-profile copilot path"
@@ -2869,7 +2866,7 @@ fn shipper_examples_target_default_jsonl_path() {
 }
 
 #[test]
-fn splunk_uf_helper_renders_canonical_checked_in_stanzas() {
+fn splunk_uf_helper_renders_canonical_stanzas() {
     let temp = tempdir().expect("tempdir");
     let uf_home = temp.path().join("splunkforwarder");
     fs::create_dir_all(&uf_home).expect("UF home");
@@ -2889,13 +2886,48 @@ fn splunk_uf_helper_renders_canonical_checked_in_stanzas() {
     );
 
     let local = uf_home.join("etc/system/local");
+    let inputs = fs::read_to_string(local.join("inputs.conf")).expect("rendered inputs");
     assert_eq!(
-        fs::read_to_string(local.join("inputs.conf")).expect("rendered inputs"),
-        include_str!("../../config/examples/splunk-inputs.conf")
+        inputs,
+        "[monitor:///var/log/telltale/telltale-events.jsonl]\n\
+disabled = false\n\
+sourcetype = telltale:json\n\
+index = telltale\n\
+source = telltale\n\
+crcSalt = <SOURCE>\n\
+\n\
+[monitor:///var/log/telltale/copilot]\n\
+disabled = false\n\
+sourcetype = copilot:json\n\
+index = main\n\
+source = telltale\n\
+whitelist = \\.log$\n\
+crcSalt = <SOURCE>\n",
+        "rendered inputs.conf must contain the canonical scoped stanzas"
     );
+    let props = fs::read_to_string(local.join("props.conf")).expect("rendered props");
     assert_eq!(
-        fs::read_to_string(local.join("props.conf")).expect("rendered props"),
-        include_str!("../../config/examples/splunk-props.conf")
+        props,
+        "[telltale:json]\n\
+SHOULD_LINEMERGE = false\n\
+LINE_BREAKER = ([\\r\\n]+)\n\
+TIME_PREFIX = ^\\{\"timestamp\":\"\n\
+TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3NZ\n\
+MAX_TIMESTAMP_LOOKAHEAD = 30\n\
+TZ = UTC\n\
+INDEXED_EXTRACTIONS = json\n\
+KV_MODE = none\n\
+TRUNCATE = 0\n\
+\n\
+[copilot:json]\n\
+SHOULD_LINEMERGE = false\n\
+LINE_BREAKER = ([\\r\\n]+)\n\
+TIME_PREFIX = \"timestamp\":\"\n\
+TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3NZ\n\
+MAX_TIMESTAMP_LOOKAHEAD = 30\n\
+KV_MODE = json\n\
+TRUNCATE = 0\n",
+        "rendered props.conf must contain the canonical scoped stanzas"
     );
     assert_eq!(
         fs::read_to_string(local.join("outputs.conf")).expect("rendered outputs"),
