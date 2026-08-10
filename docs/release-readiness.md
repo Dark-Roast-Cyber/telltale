@@ -13,10 +13,9 @@ configuration. It should not include local scanner state, telemetry logs, raw
 agent transcripts, credentials, private planning notes, local agent workflow
 state, or deployment-specific SIEM settings.
 
-Release archives should contain the primary `telltale` command-line binary and
-the compiled `adr` compatibility command, the Apache-2.0 license, a concise
-quick-start README, and reviewed deployment examples generated from checked-in
-public repository contents.
+Release archives should contain only the canonical `telltale` command-line
+binary, the Apache-2.0 license, a concise quick-start README, and reviewed
+deployment examples generated from checked-in public repository contents.
 
 Public release evidence should be reproducible from synthetic fixtures or
 already-redacted telemetry output. Keep live host validation notes local-only;
@@ -151,10 +150,10 @@ Keep environment-specific service files and SIEM shipper configuration outside
 the archive unless they are reviewed public examples with placeholder values.
 
 For generated binary archives, inspect the archive listing before upload. The
-archive should contain both `telltale` and `adr` binaries, `LICENSE`,
-`README.md`, and the curated `config/examples/` deployment files
+archive should contain only the `telltale` binary, `LICENSE`, `README.md`, and
+the curated `config/examples/` deployment files
 (`telltale-outputs.yaml`,
-`adr-scan.service`, `adr-scan.timer`, `adr-scan-task.xml`,
+`telltale-scan.service`, `telltale-scan.timer`, `telltale-scan-task.xml`,
 `elastic-telltale-index-template.json`, `elastic-telltale-role.json`) only. It should not
 contain checked-out working-tree residue, scanner state, telemetry output,
 session stores, local planning notes, local agent workflow state, or
@@ -176,11 +175,11 @@ make release-artifact-manifest
 ```
 
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
-archive contains exactly the expected bundle manifest: both the `telltale` and
-`adr` binaries (or their `.exe` forms), `LICENSE`, `README.md`, and the curated
-`config/examples/` deployment files. It also verifies that every `adr-*` archive
-is an exact copy of its matching `telltale-*` archive. When `SHA256SUMS` is
-present in the same directory, the target also
+archive contains exactly the expected canonical bundle manifest: the `telltale`
+binary (or its `.exe` form), `LICENSE`, `README.md`, and the curated
+`config/examples/` deployment files. It rejects active ADR technical archive
+and member identities. The target requires `SHA256SUMS` in the same directory,
+then
 verifies that its entries match the reviewed archives exactly and that each
 checksum validates. The default `release-downloads/` directory is local review
 residue and is ignored and excluded from source packages; legacy local

@@ -26,10 +26,8 @@ Telltale is an open-source detection layer for AI coding agents, built as the fo
 > `telltale-state.json`, with profile-specific directories documented in the
 > install and telemetry guides.
 >
-> Installer, service, archive, and release-workflow examples are intentionally
-> deferred to the next migration slice. Their legacy names remain in those
-> clearly bounded examples only and must not be treated as current runtime
-> configuration. Event 3.0/SIEM identities remain `telltale_version`,
+> The active installer, service, archive, and release-workflow surfaces use the
+> canonical Telltale identity. Event 3.0/SIEM identities remain `telltale_version`,
 > `telltale-<UUIDv4>`, Splunk `index=telltale`, `sourcetype=telltale:json`, and
 > `source=telltale`; historical schemas and records remain immutable. Keep
 > uppercase ADR category terminology and unrelated architecture decision
@@ -163,34 +161,27 @@ Tagged GitHub releases publish platform-specific `telltale-*` binary archives
 when available. Source builds remain supported; the install guide covers the
 fixture-safe verification step.
 
-> **Deferred release/install surface:** archive aliases, installer behavior, and
-> service/task examples are not cut over in this bounded runtime slice. The
-> platform-specific examples below retain their existing deployment contract
-> until that separate transaction is implemented and validated.
-
 ### Linux
 
-The v0.3.0 release records establish a synchronized hosted copy of the
-repository installer. It downloads the latest release, verifies its published
-`SHA256SUMS`, and installs both binaries to `~/.local/bin` without sudo. Use it
-with:
+The checked-in Linux installer downloads the latest canonical release, verifies
+its published `SHA256SUMS`, and installs only `telltale` to `~/.local/bin`
+without sudo. The hosted one-line installer is not advertised here because its
+hosted-site cutover is outside this repository's release boundary; use the
+checked-in script from a checkout instead:
 
-```sh
-curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
-```
-
-The repository installer provides the same behavior from this checkout and
-installs a user-level systemd timer only when `--with-timer` is provided.
+The installer installs a user-level systemd timer only when `--with-timer` is
+provided. The hosted-site copy is outside this repository's release cutover;
+use the checked-in script for a reviewed install.
 
 ```sh
 ./scripts/install-telltale
 ./scripts/install-telltale --with-timer
 ```
 
-Add `--from-source` to build with cargo instead of downloading a prebuilt
-binary. `--no-timer` is accepted only for legacy compatibility and is normally
-unnecessary. The installer does not create system accounts or configure SIEM
-shippers.
+Add `--from-source` to build with Cargo instead of downloading a prebuilt
+binary. `--no-timer` leaves the canonical timer disabled while safely retiring
+identified legacy schedules. The installer does not create system accounts or
+configure SIEM shippers.
 
 ### macOS
 
@@ -252,7 +243,7 @@ launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
 
 ### Windows
 
-Download the canonical release archive and extract `telltale.exe` and `adr.exe`:
+Download the canonical release archive and extract `telltale.exe`:
 
 ```powershell
 # PowerShell

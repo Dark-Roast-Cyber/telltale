@@ -10,8 +10,11 @@
 - Breaking 0.5.0 runtime cut: the sole executable is `telltale`, active runtime
   configuration uses canonical `TELLTALE_*` names and `telltale-*` paths, and
   exact retired ADR runtime variables fail closed without value disclosure.
-  Explicit event/environment/state migration remains source-preserving; the
-  installer, service, archive, and release-workflow cutover remains deferred.
+  Explicit event/environment/state migration remains source-preserving. The
+  Linux current-user installer, canonical user service/timer, release archive,
+  and release-workflow surfaces now use the Telltale identity; hosted-site
+  cutover remains outside this repository's release boundary, and native
+  Windows/macOS execution remains an unpassed release gate.
 
 **Migration hardening**
 - Bound historical event migration to 64 explicit pairs and 32 unique

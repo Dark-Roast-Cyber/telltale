@@ -1,0 +1,19 @@
+[Unit]
+Description=Telltale one-shot agent session scan
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory="__PROJECT_DIR__"
+Environment="TELLTALE_LOG_PATH=__LOG_PATH__"
+Environment="TELLTALE_STATE_PATH=__STATE_PATH__"
+Environment="TELLTALE_SCAN_ROOT=%h"
+EnvironmentFile=-"__TELLTALE_ENV_PATH__"
+ExecStart=/usr/bin/env -- "__BINDIR__/telltale" scan --once --emit-activity --root "${TELLTALE_SCAN_ROOT}" --path-profile project
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths="__LOG_DIR__" "__STATE_DIR__"
+
+[Install]
+WantedBy=default.target

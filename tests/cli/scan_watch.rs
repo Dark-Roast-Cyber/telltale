@@ -2851,12 +2851,9 @@ fn shipper_examples_target_default_jsonl_path() {
     // deployments, not stale repo-local or host-absolute paths. The generated
     // stanzas are compared byte-for-byte in the rendering test below.
     let splunk_uf_setup = include_str!("../../scripts/slunk_uf_set_up");
-    assert!(
-        splunk_uf_setup.contains("ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl"),
-        "deferred Splunk UF helper must retain its pre-cutover system-profile path"
-    );
-    assert!(splunk_uf_setup.contains("ADR_INDEX:-telltale"));
-    assert!(splunk_uf_setup.contains("ADR_SOURCETYPE:-telltale:json"));
+    assert!(splunk_uf_setup.contains("TELLTALE_LOG_PATH:-/var/log/telltale/telltale-events.jsonl"));
+    assert!(splunk_uf_setup.contains("TELLTALE_INDEX:-telltale"));
+    assert!(splunk_uf_setup.contains("TELLTALE_SOURCETYPE:-telltale:json"));
     assert!(splunk_uf_setup.contains("[telltale:json]"));
     assert!(splunk_uf_setup.contains("source = telltale"));
     let splunk_inputs = include_str!("../../config/examples/splunk-inputs.conf");
@@ -2979,7 +2976,7 @@ fn install_telltale_script_is_user_first_and_sudo_free() {
 
     // User-first defaults.
     assert!(
-        script.contains("~/.local/bin"),
+        script.contains("${HOME:-}/.local/bin"),
         "default install dir should be user-writable"
     );
     assert!(
@@ -3001,8 +2998,8 @@ fn install_telltale_script_is_user_first_and_sudo_free() {
     assert!(script.contains("x86_64-unknown-linux-gnu"));
     assert!(script.contains("aarch64-unknown-linux-gnu"));
 
-    // Curl|bash ready.
-    assert!(script.contains("agentarchaeology.ai/telltale_install.sh"));
+    // Hosted-site cutover is outside this repository's installer boundary.
+    assert!(!script.contains("agentarchaeology.ai/telltale_install.sh"));
 }
 
 #[test]
@@ -3231,23 +3228,25 @@ fn scan_uses_env_log_and_state_defaults() {
 
 #[test]
 fn systemd_examples_run_periodic_scan_with_env_defaults() {
-    let service = include_str!("../../config/examples/adr-scan.service");
+    let service = include_str!("../../config/examples/telltale-scan.service");
     assert!(service.contains("User=telltale"));
     assert!(service.contains("Group=telltale"));
     assert!(service.contains("WorkingDirectory=/var/lib/telltale"));
-    assert!(service.contains("Environment=ADR_LOG_PATH=/var/log/telltale/adr-events.jsonl"));
-    assert!(service.contains("Environment=ADR_STATE_PATH=/var/lib/telltale/adr-state.json"));
-    assert!(service.contains("Environment=ADR_SCAN_ROOT=/home/telltale"));
-    assert!(service.contains("EnvironmentFile=-/etc/telltale/adr.env"));
+    assert!(service.contains("TELLTALE_LOG_PATH=/var/log/telltale/telltale-events.jsonl"));
+    assert!(service.contains("TELLTALE_STATE_PATH=/var/lib/telltale/telltale-state.json"));
+    assert!(service.contains("TELLTALE_SCAN_ROOT=/home/telltale"));
+    assert!(service.contains("EnvironmentFile=-/etc/telltale/telltale.env"));
     assert!(
         service
-            .find("Environment=ADR_SCAN_ROOT=/home/telltale")
+            .find("TELLTALE_SCAN_ROOT=/home/telltale")
             .expect("scan root default")
             < service
-                .find("EnvironmentFile=-/etc/telltale/adr.env")
+                .find("EnvironmentFile=-/etc/telltale/telltale.env")
                 .expect("env file")
     );
-    assert!(service.contains("/usr/local/bin/telltale scan --once"));
+    assert!(service.contains("ExecStart=/usr/bin/env -- \"/usr/local/bin/telltale\""));
+    assert!(service.contains("--root \"${TELLTALE_SCAN_ROOT}\""));
+    assert!(!service.contains("ExecStart=:"));
     assert!(!service.contains("ExecStart=/usr/local/bin/adr "));
     assert!(service.contains("--emit-activity"));
     assert!(service.contains("--path-profile system"));
@@ -3257,17 +3256,28 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
     );
     assert!(service.contains("ReadWritePaths=/var/log/telltale /var/lib/telltale"));
 
-    let timer = include_str!("../../config/examples/adr-scan.timer");
+    let timer = include_str!("../../config/examples/telltale-scan.timer");
+    assert!(timer.contains("OnActiveSec=1min"));
+    assert!(!timer.contains("OnBootSec="));
     assert!(timer.contains("OnUnitActiveSec=5min"));
-    assert!(timer.contains("Unit=adr-scan.service"));
+    assert!(timer.contains("Unit=telltale-scan.service"));
     assert!(timer.contains("WantedBy=timers.target"));
 
-    let timer_template = include_str!("../../config/examples/adr-scan.timer.in");
+    let timer_template = include_str!("../../config/examples/telltale-scan.timer.in");
+    assert!(timer_template.contains("OnActiveSec=1min"));
+    assert!(!timer_template.contains("OnBootSec="));
     assert!(timer_template.contains("OnUnitActiveSec=5min"));
-    assert!(timer_template.contains("Unit=adr-scan.service"));
+    assert!(timer_template.contains("Unit=telltale-scan.service"));
     assert!(timer_template.contains("WantedBy=timers.target"));
 
-    let task = include_str!("../../config/examples/adr-scan-task.xml");
+    let service_template = include_str!("../../config/examples/telltale-scan.service.in");
+    assert!(service_template.contains("Environment=\"TELLTALE_SCAN_ROOT=%h\""));
+    assert!(service_template.contains("EnvironmentFile=-\"__TELLTALE_ENV_PATH__\""));
+    assert!(service_template.contains("ExecStart=/usr/bin/env -- \"__BINDIR__/telltale\""));
+    assert!(service_template.contains("--root \"${TELLTALE_SCAN_ROOT}\""));
+    assert!(!service_template.contains("ExecStart=:"));
+
+    let task = include_str!("../../config/examples/telltale-scan-task.xml");
     assert!(task.contains(r#"<URI>\TelltaleScan</URI>"#));
     assert!(task.contains(r#"<Command>%LOCALAPPDATA%\Telltale\telltale.exe</Command>"#));
     assert!(!task.contains("\\adr.exe"));

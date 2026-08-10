@@ -1,0 +1,21 @@
+[Unit]
+Description=Telltale one-shot agent session scan
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=telltale
+Group=telltale
+WorkingDirectory=/var/lib/telltale
+Environment="TELLTALE_LOG_PATH=/var/log/telltale/telltale-events.jsonl"
+Environment="TELLTALE_STATE_PATH=/var/lib/telltale/telltale-state.json"
+Environment="TELLTALE_SCAN_ROOT=/home/telltale"
+EnvironmentFile=-/etc/telltale/telltale.env
+ExecStart=/usr/bin/env -- "/usr/local/bin/telltale" scan --once --emit-activity --root "${TELLTALE_SCAN_ROOT}" --path-profile system --log-rotate-disabled
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/log/telltale /var/lib/telltale
+
+[Install]
+WantedBy=default.target

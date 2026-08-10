@@ -8,10 +8,10 @@ UF_LOCAL_DIR="${UF_LOCAL_DIR:-$UF_HOME/etc/system/local}"
 UF_BIN="${UF_BIN:-$UF_HOME/bin/splunk}"
 
 # Defaults target the Linux `system` path profile used by managed/Splunk-forwarded
-# deployments. Override ADR_LOG_PATH/COPILOT_LOG_DIR for non-default profiles.
-ADR_LOG_PATH="${ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl}"
-ADR_INDEX="${ADR_INDEX:-telltale}"
-ADR_SOURCETYPE="${ADR_SOURCETYPE:-telltale:json}"
+# deployments. Override TELLTALE_LOG_PATH/COPILOT_LOG_DIR for non-default profiles.
+TELLTALE_LOG_PATH="${TELLTALE_LOG_PATH:-/var/log/telltale/telltale-events.jsonl}"
+TELLTALE_INDEX="${TELLTALE_INDEX:-telltale}"
+TELLTALE_SOURCETYPE="${TELLTALE_SOURCETYPE:-telltale:json}"
 
 ENABLE_COPILOT_MONITOR="${ENABLE_COPILOT_MONITOR:-1}"
 COPILOT_LOG_DIR="${COPILOT_LOG_DIR:-/var/log/telltale/copilot}"
@@ -134,10 +134,10 @@ main() {
     trap "rm -rf \"$temp_dir\"" EXIT
 
     cat > "$temp_dir/inputs.conf" <<EOF
-[monitor://$ADR_LOG_PATH]
+[monitor://$TELLTALE_LOG_PATH]
 disabled = false
-sourcetype = $ADR_SOURCETYPE
-index = $ADR_INDEX
+sourcetype = $TELLTALE_SOURCETYPE
+index = $TELLTALE_INDEX
 source = telltale
 crcSalt = <SOURCE>
 EOF
@@ -197,7 +197,7 @@ EOF
     run_as_root install -m 0644 "$temp_dir/outputs.conf" "$outputs_path"
 
     printf 'Installed Splunk UF configuration in %s\n' "$UF_LOCAL_DIR"
-    printf 'ADR monitor: %s\n' "$ADR_LOG_PATH"
+    printf 'Telltale monitor: %s\n' "$TELLTALE_LOG_PATH"
     if [[ "$ENABLE_COPILOT_MONITOR" == "1" ]]; then
         printf 'Copilot monitor: %s\n' "$COPILOT_LOG_DIR"
     fi

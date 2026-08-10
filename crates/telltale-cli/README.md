@@ -26,8 +26,9 @@ environment migration command when converting a file. Native events use
 `sourcetype=telltale:json`, `source=telltale`; historical schemas and records
 remain immutable.
 
-Installer, service, archive, and release-workflow examples are intentionally
-deferred and retain their prior names until the later cutover slice.
+Installer, service, archive, and release-workflow examples use the canonical
+Telltale identity. The Linux installer is limited to the current user's
+install and user units; managed system paths remain deployment-specific.
 
 ## Explicit Migration
 

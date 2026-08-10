@@ -26,44 +26,29 @@ cargo install telltale-cli
 This installs the sole `telltale` binary. The supported
 Rust embedding surface is the separate `telltale-core` package.
 
-> **Deferred archive/installer surface:** the release archive, installer, and
-> service/task examples below are intentionally not cut over in this bounded
-> runtime slice. They retain their existing deployment contract until the
-> separate installer transaction lands.
-
 ## Install From A Release Archive
-
-> **Deferred archive surface:** this section retains the historical archive and
-> compatibility-binary contract until the separate archive/installer
-> transaction lands. It is not the active source-build or runtime contract.
 
 Tagged GitHub releases publish platform-specific `telltale-*` binary archives
 for Linux, macOS, and Windows. Download the canonical archive that matches your
-platform, extract both binaries, and use `telltale` (`telltale.exe` on Windows)
-for new integrations.
+platform, extract the sole `telltale` binary, and use it (`telltale.exe` on
+Windows).
 
 The v0.3.0 release archives and CI smoke checks establish binary packaging and
 execution support for Linux, macOS, and Windows. They do not establish broad
 live validation of agent source stores on those platforms; source-store support
 claims remain bounded by the [Source Validation Matrix](source-validation-matrix.md).
 
-The compiled `adr` (`adr.exe`) command is a deprecated compatibility command
-that remains part of the current release contract. Each matching `adr-*` archive
-is an exact byte-for-byte copy of the canonical `telltale-*` archive. This
-migration does not schedule removal of the compatibility command.
-
 Each archive contains exactly these file members (with `.exe` on Windows):
 
 ```text
 telltale                    # or telltale.exe
-adr                         # or adr.exe
 LICENSE
 README.md                   # concise release quick start
 config/examples/
   telltale-outputs.yaml
-  adr-scan.service
-  adr-scan.timer
-  adr-scan-task.xml
+  telltale-scan.service
+  telltale-scan.timer
+  telltale-scan-task.xml
   elastic-telltale-index-template.json
   elastic-telltale-role.json
 ```
@@ -76,13 +61,11 @@ configuration.
 ### Verify a release archive
 
 The release workflow publishes a GitHub artifact attestation for every `.tar.gz`
-and `.zip` archive. The existing `v0.1.0` release used the legacy asset name
-below; `0.2.x` and later canonical assets use `telltale-v<version>-...` while
-matching `adr-*` aliases remain exact copies. After downloading an archive,
-verify its provenance before extracting it:
+and `.zip` archive. Release assets use `telltale-v<version>-...` names. After
+downloading an archive, verify its provenance before extracting it:
 
 ```sh
-gh attestation verify adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify telltale-v0.5.0-x86_64-unknown-linux-gnu.tar.gz \
   --repo Dark-Roast-Cyber/telltale
 ```
 
@@ -94,22 +77,22 @@ environment is required. The Linux installer verifies the published
 ### Quick install (Linux)
 
 A repository installer is available for Linux. It downloads the latest release
-binaries, verifies them against the release's published `SHA256SUMS`, and
-installs them to `~/.local/bin/telltale` and `~/.local/bin/adr` (no sudo). It
-does not enable anything beyond the binary install unless you opt in:
+binary, verifies it against the release's published `SHA256SUMS`, and installs
+it to `~/.local/bin/telltale` (no sudo). It does not enable anything beyond the
+binary install unless you opt in:
 
 ```sh
 ./scripts/install-telltale
 ./scripts/install-telltale --with-timer
 ```
 
-The v0.3.0 release records establish that the hosted one-line installer at
-`agentarchaeology.ai/telltale_install.sh` is synchronized with the repository
-installer and validated end-to-end. It downloads the latest release, verifies
-`SHA256SUMS`, and installs both binaries. To build from source instead of
-downloading a prebuilt binary, pass `--from-source`; add `--with-timer` to opt
-into the user-level systemd timer. `--no-timer` is accepted only for legacy
-compatibility and is normally unnecessary.
+The hosted one-line installer is not part of this repository's release cutover;
+use the checked-in script above for a reviewed install. It uses one locked,
+journaled transaction, verifies `SHA256SUMS`, stages the canonical binary, runs
+explicit state/event/environment migration when legacy inputs exist, and
+smoke-tests before activation. To build from source instead of downloading a
+prebuilt binary, pass `--from-source`; add `--with-timer` to install and enable
+the canonical user-level systemd timer.
 
 The installer does not create system users, configure SIEM shippers, or require
 root. For managed Linux deployments with the `system` path profile, use the
@@ -120,26 +103,24 @@ rotated files). No OS-specific rotation tooling is required for user-profile
 installs. See [telemetry-output.md](telemetry-output.md#built-in-rotation) for
 configuration details.
 
-The release archive does not include the Linux installer script itself. The
-installer/archive and service cutover remains a deferred migration surface in
-this runtime slice; current source builds and the canonical runtime provide
-only `telltale`. Do not treat legacy `adr` assets or units as runtime aliases.
+The release archive does not include the Linux installer script itself. Active
+release assets and units use only the canonical identity; historical migration
+files are not runtime aliases.
 
 ### Windows Scheduled Task example
 
-The deferred Windows archive/task migration example includes
-[`config/examples/adr-scan-task.xml`](../config/examples/adr-scan-task.xml).
+The Windows task example is `config/examples/telltale-scan-task.xml`.
 Replace both `YOUR_WINDOWS_USERNAME` values with the account that should run the
-task, then import it from PowerShell only as part of an explicitly managed
-legacy migration; the canonical runtime executable is `telltale.exe` and no
-`adr.exe` compatibility binary is produced by the source build:
+task, then import it from PowerShell; the canonical runtime executable is
+`telltale.exe`:
 
 ```powershell
-$xml = Get-Content .\config\examples\adr-scan-task.xml -Raw
+$xml = Get-Content .\config\examples\telltale-scan-task.xml -Raw
 Register-ScheduledTask -TaskName TelltaleScan -Xml $xml
 ```
 
-This phase does not provide a Windows `install.ps1` installer.
+This phase does not provide a Windows `install.ps1` installer; native task
+migration remains a separate release gate.
 
 ## Build From Source
 
@@ -327,29 +308,29 @@ latest scanner health check is reported separately as `health_component`,
 `health_check_name`, and `health_check_status`, matching the health event fields
 that SIEM dashboards can group by as `component`, `check_name`, and `status`.
 
-## Optional Service Setup (Advanced)
+## Managed Service Setup (Advanced)
 
-> **Deferred service surface:** the checked-in systemd/task templates and their
-> deployment-specific names are intentionally unchanged in this bounded slice.
-> Do not use those legacy environment names with the current runtime; the
-> separate service transaction will cut them over together.
+The checked-in systemd templates use the canonical `telltale-scan` unit names
+and `TELLTALE_*` environment. Use the explicit migration commands in the
+[migration contract](migration-contract.md) for historical environment files;
+do not alias retired runtime names.
 
 The repository and release archives include Linux-oriented systemd examples in
-`config/examples/adr-scan.service` and `config/examples/adr-scan.timer` for
+`config/examples/telltale-scan.service` and `config/examples/telltale-scan.timer` for
 managed deployments that use the `system` path profile with a dedicated service
 account. This is an advanced path for shared scan servers or fleet-managed
 hosts where the scanned session stores are explicitly made readable by the scan
 account.
 
-The eventual canonical service will use `/usr/local/bin/telltale`,
+The canonical service uses `/usr/local/bin/telltale`,
 `/var/log/telltale/telltale-events.jsonl`, and
 `/var/lib/telltale/telltale-state.json`.
 Create the service account and directories with permissions that let Telltale
 append telemetry while granting your shipper read-only access to the log file.
 Use `config/examples/telltale-logrotate` as a starter Linux rotation policy so
 the active shipper target remains `/var/log/telltale/telltale-events.jsonl`.
-These legacy values belong to the deferred service transaction and are not
-consumed by the current runtime.
+The user installer does not create these managed system paths; configure them
+only as part of an explicitly managed system deployment.
 
 For the common workstation case, the quick installer above sets up a user-level
 timer that runs as your user with no sudo and no service account.

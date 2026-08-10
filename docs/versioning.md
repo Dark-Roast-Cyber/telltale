@@ -28,9 +28,9 @@ format.
   release asset naming. Runtime paths use `telltale-events.jsonl` and
   `telltale-state.json`; runtime configuration uses `TELLTALE_*` names only.
   Retired product `ADR_*` names fail as exact tombstones, while explicit
-  migration commands preserve source data and file semantics. Installer,
-  service, archive, and release-workflow cutover remains a separate deferred
-  surface.
+  migration commands preserve source data and file semantics. The Linux
+  installer, canonical user units, release archives, and release workflow use
+  the same Telltale-only identity.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.
 

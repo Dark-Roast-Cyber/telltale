@@ -1,50 +1,23 @@
 #!/usr/bin/env bash
 #
-# Telltale Linux installer — user-first, sudo-free by default.
-#
-# Canonical source:
-#   https://github.com/Dark-Roast-Cyber/telltale/blob/main/scripts/install-telltale
-# Hosted copy:
-#   https://agentarchaeology.ai/telltale_install.sh
+# Telltale Linux installer: one recoverable current-user transaction.
 #
 # Usage:
-#   curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
-#   curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash -s -- --with-timer
-#   ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer] [--skip-checksum]
-#
-# What it does:
-#   1. Downloads the latest telltale release for your Linux arch from GitHub releases.
-#   2. Verifies the archive against the release's published SHA256SUMS.
-#   3. Installs telltale and the adr compatibility command to ~/.local/bin.
-#   4. With --with-timer, installs a user-level systemd timer for periodic scans.
-#   5. Prints the default telemetry path and next steps.
-#
-# What it does NOT do:
-#   - No sudo, no root, no system user/group creation.
-#   - No service or timer setup unless you pass --with-timer.
-#   - No SIEM/shipper configuration (Splunk UF, Filebeat, etc. are separate products).
-#   - No system-profile setup (see config/examples/ for advanced managed deployments).
-#
-# Self-versioning:
-#   The installer prints INSTALLER_VERSION and INSTALLER_COMMIT at startup so
-#   stale hosted copies are easy to detect. When syncing this script to the
-#   hosted copy, update INSTALLER_COMMIT to the public Telltale repo commit it
-#   was synced from. Bump INSTALLER_VERSION when behavior changes.
+#   ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer]
 
 set -euo pipefail
+umask 077
 
 REPO="Dark-Roast-Cyber/telltale"
-INSTALL_DIR="${HOME}/.local/bin"
+INSTALL_DIR="${HOME:-}/.local/bin"
 FROM_SOURCE=0
 WITH_TIMER=0
 SKIP_CHECKSUM=0
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 RELEASE_BASE_URL="https://github.com/${REPO}/releases/download"
 
-# Installer self-identification. Update INSTALLER_COMMIT when syncing to the
-# hosted copy; bump INSTALLER_VERSION when installer behavior changes.
-INSTALLER_VERSION="2026.07.21"
-INSTALLER_COMMIT="b67619045aa6"
+INSTALLER_VERSION="2026.08.09"
+INSTALLER_PROVENANCE="git-blob"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m==>\033[0m %s\n' "$*" >&2; }
@@ -52,67 +25,986 @@ error() { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; }
 die()   { error "$*"; exit 1; }
 
 print_version() {
-    printf 'telltale-installer %s (from %s@%s)\n' \
-        "$INSTALLER_VERSION" "$REPO" "$INSTALLER_COMMIT"
+    printf 'telltale-installer %s (from %s, provenance %s)\n' \
+        "$INSTALLER_VERSION" "$REPO" "$INSTALLER_PROVENANCE"
 }
 
 print_help() {
     cat <<'EOF'
-Telltale Linux installer — user-first, sudo-free by default.
+Telltale Linux installer — current-user, staged, recoverable transaction.
 
 Usage:
-  curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
-  curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash -s -- --with-timer
-  ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer] [--skip-checksum]
+  ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer]
 
 Options:
-  --from-source       Build the exact latest release tag with cargo.
-  --install-dir DIR  Install telltale and adr into DIR.
-  --with-timer        Install and enable the user adr-scan.timer.
-  --no-timer          Do not configure a timer.
+  --from-source       Build the exact validated release tag with locked Cargo dependencies.
+  --install-dir DIR  Install the canonical telltale binary below the current user's home.
+  --with-timer        Install and enable the canonical telltale-scan.timer user schedule.
+  --no-timer          Do not enable the canonical timer; retire identified legacy schedules safely.
   --skip-checksum     Explicitly bypass SHA256SUMS verification.
   --version, -V       Print installer version information.
   --help, -h          Print this help.
 EOF
 }
 
+declare -a RETIRED_RUNTIME_ENV_NAMES=(
+    ADR_GIT_HASH
+    ADR_INSTALL_INVENTORY_INTERVAL_SECONDS
+    ADR_LOG_PATH
+    ADR_LOG_ROTATE_KEEP
+    ADR_LOG_ROTATE_MAX_SIZE
+    ADR_OP_ALERT_MAX_SCAN_DURATION_MS
+    ADR_OP_ALERT_MAX_SCANNER_ERRORS
+    ADR_PROCESS_CHAIN_DETECTIONS
+    ADR_PROJECT_CONFIG
+    ADR_RISK_THRESHOLD_ALERT
+    ADR_RISK_THRESHOLD_LOW
+    ADR_RISK_THRESHOLD_MEDIUM
+    ADR_RISK_THRESHOLD_TRIAGE
+    ADR_SCAN_ROOT
+    ADR_STATE_PATH
+    ADR_TRIAGE_MAX_RETRIES
+    ADR_TRIAGE_TIMEOUT_MS
+)
+
+reject_retired_runtime_environment() {
+    local name
+    local -a present=()
+    for name in "${RETIRED_RUNTIME_ENV_NAMES[@]}"; do
+        if [[ -v "$name" ]]; then
+            present+=("$name")
+        fi
+    done
+    if [[ "${#present[@]}" -gt 0 ]]; then
+        error "retired runtime environment variables are inherited; unset the listed names and use canonical TELLTALE_* variables or explicit migration commands"
+        printf '  %s\n' "${present[@]}" >&2
+        exit 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --from-source)  FROM_SOURCE=1; shift ;;
+        --from-source) FROM_SOURCE=1; shift ;;
         --install-dir)
             [[ $# -ge 2 ]] || die "--install-dir requires a directory"
             INSTALL_DIR="$2"
             shift 2
             ;;
-        --with-timer)   WITH_TIMER=1; shift ;;
-        # Historical default was timer-on; accepted for compatibility.
-        --no-timer)     WITH_TIMER=0; shift ;;
+        --with-timer) WITH_TIMER=1; shift ;;
+        --no-timer) WITH_TIMER=0; shift ;;
         --skip-checksum) SKIP_CHECKSUM=1; shift ;;
-        --version|-V)   print_version; exit 0 ;;
-        --help|-h)
-            print_help
-            exit 0
-            ;;
+        --version|-V) print_version; exit 0 ;;
+        --help|-h) print_help; exit 0 ;;
         *) die "Unknown option: $1" ;;
     esac
 done
 
-if [[ "$WITH_TIMER" -eq 1 && "$INSTALL_DIR" != /* ]]; then
-    die "--with-timer requires an absolute --install-dir"
-fi
+reject_retired_runtime_environment
 
-info "Telltale installer ${INSTALLER_VERSION} (from ${REPO}@${INSTALLER_COMMIT})"
+[[ "$(uname -s)" == "Linux" ]] || die "This installer supports Linux current-user installs only"
+CURRENT_UID="$(id -u)"
+[[ "$CURRENT_UID" != 0 ]] || die "refusing root or managed system scope; run as the target user"
+[[ -n "${HOME:-}" && "$HOME" == /* ]] || die "current user's HOME must be an absolute path"
+[[ -n "$INSTALL_DIR" && "$INSTALL_DIR" == /* ]] || die "--install-dir must be an absolute current-user path"
+command -v realpath >/dev/null 2>&1 || die "realpath is required for current-user path validation"
+command -v timeout >/dev/null 2>&1 || die "bounded installer probes require timeout"
 
-# --- detect architecture -----------------------------------------------------
+run_bounded() {
+    timeout --signal=TERM --kill-after=5s 30s "$@"
+}
 
-arch="$(uname -m)"
-case "$arch" in
-    x86_64|amd64)   target="x86_64-unknown-linux-gnu" ;;
-    aarch64|arm64)  target="aarch64-unknown-linux-gnu" ;;
-    *) die "Unsupported Linux architecture: $arch" ;;
-esac
+stat_value() {
+    local format="$1" path="$2"
+    stat -c "$format" -- "$path" 2>/dev/null
+}
 
-info "Detected Linux ${arch} → ${target}"
+owned_path() {
+    local path="$1" owner
+    owner="$(stat_value '%u' "$path" || true)"
+    [[ "$owner" == "$CURRENT_UID" ]]
+}
+
+safe_directory() {
+    local path="$1" mode links numeric
+    mode="$(stat_value '%a' "$path" || true)"
+    links="$(stat_value '%h' "$path" || true)"
+    [[ -d "$path" && ! -L "$path" && "$links" =~ ^[0-9]+$ && "$links" -ge 1 ]] || return 1
+    [[ "$mode" =~ ^[0-7]+$ ]] || return 1
+    numeric=$((8#$mode))
+    (( (numeric & 0022) == 0 ))
+}
+
+safe_file_mode() {
+    local path="$1" kind="$2" mode links numeric
+    mode="$(stat_value '%a' "$path" || true)"
+    links="$(stat_value '%h' "$path" || true)"
+    [[ -f "$path" && ! -L "$path" && "$links" == 1 ]] || return 1
+    [[ "$mode" =~ ^[0-7]+$ ]] || return 1
+    numeric=$((8#$mode))
+    case "$kind" in
+        private) (( (numeric & 0077) == 0 )) ;;
+        log) (( (numeric & 0037) == 0 )) ;;
+        executable) (( (numeric & 0022) == 0 && (numeric & 0111) != 0 )) ;;
+        unit) (( (numeric & 0022) == 0 )) ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_directory_chain() {
+    local path="$1" cursor=/ component inside_home=0
+    local -a components=()
+    [[ "$path" == /* ]] || return 1
+    IFS='/' read -r -a components <<< "${path#/}"
+    for component in "${components[@]}"; do
+        [[ -n "$component" ]] || continue
+        cursor="${cursor%/}/$component"
+        if [[ -L "$cursor" ]]; then
+            error "refusing symlink directory component: ${cursor}"
+            return 1
+        fi
+        if [[ -e "$cursor" ]]; then
+            if [[ ! -d "$cursor" || -L "$cursor" ]]; then
+                error "refusing unsafe current-user directory component: ${cursor}"
+                return 1
+            fi
+            if [[ "$cursor" == "$home_real" ]]; then
+                inside_home=1
+            fi
+            if [[ "$inside_home" -eq 1 ]] && { ! owned_path "$cursor" || ! safe_directory "$cursor"; }; then
+                error "refusing unsafe current-user directory component: ${cursor}"
+                return 1
+            fi
+        else
+            return 0
+        fi
+    done
+}
+
+reject_symlink_components() {
+    local path="$1" cursor=/ component
+    local -a components=()
+    IFS='/' read -r -a components <<< "${path#/}"
+    for component in "${components[@]}"; do
+        [[ -n "$component" ]] || continue
+        cursor="${cursor%/}/$component"
+        [[ ! -L "$cursor" ]] || die "refusing symlink path component: ${cursor}"
+    done
+}
+
+resolve_under_home() {
+    local path="$1" resolved
+    [[ "$path" == /* ]] || die "current-user paths must be absolute"
+    reject_symlink_components "$path"
+    resolved="$(realpath -m -- "$path")" || die "could not resolve current-user path"
+    case "$resolved" in
+        "$home_real"|"$home_real"/*) printf '%s\n' "$resolved" ;;
+        *) die "refusing unmanaged or system install scope outside the current user's HOME: ${path}" ;;
+    esac
+}
+
+ensure_owned_directory() {
+    local path="$1"
+    validate_directory_chain "$path" || die "refusing unsafe directory path: ${path}"
+    mkdir -p -- "$path"
+    if ! owned_path "$path" || ! safe_directory "$path"; then
+        die "refusing unmanaged or unsafe directory: ${path}"
+    fi
+}
+
+ensure_owned_regular_or_absent() {
+    local path="$1" kind="${2:-private}"
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ ! -L "$path" ]] || die "refusing symlink path: ${path}"
+        [[ -f "$path" ]] || die "refusing non-regular path: ${path}"
+        owned_path "$path" || die "refusing path not owned by the current user: ${path}"
+        safe_file_mode "$path" "$kind" || die "refusing unsafe mode or link count: ${path}"
+    fi
+}
+
+existing_file_is_safe() {
+    local path="$1" kind="${2:-private}"
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ ! -L "$path" && -f "$path" ]] || return 1
+        owned_path "$path" || return 1
+        safe_file_mode "$path" "$kind" || return 1
+    fi
+}
+
+unit_file_is_owned_regular() {
+    local path="$1"
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ ! -L "$path" && -f "$path" ]] || return 1
+        owned_path "$path" || return 1
+        safe_file_mode "$path" unit || return 1
+    fi
+}
+
+require_no_replace_move() {
+    command -v mv >/dev/null 2>&1 || die "GNU/Linux mv is required for no-replace installation"
+    mv --no-clobber --no-target-directory --no-copy --help >/dev/null 2>&1 \
+        || die "GNU/Linux mv with --no-clobber, --no-copy, and --no-target-directory is required"
+}
+
+no_replace_move() {
+    [[ "$#" -eq 2 ]] || return 2
+    local source="$1" destination="$2"
+    [[ -f "$source" && ! -L "$source" ]] || return 1
+    [[ ! -e "$destination" && ! -L "$destination" ]] || return 2
+    mv --no-clobber --no-copy --no-target-directory -- "$source" "$destination" || return 1
+    [[ ! -e "$source" && ! -L "$source" ]] || return 1
+    [[ -f "$destination" && ! -L "$destination" ]] || return 1
+}
+
+lock_directory_is_safe() {
+    local path_stat lock_device lock_inode lock_uid lock_links lock_mode lock_type
+    [[ -d "$lock_path" && ! -L "$lock_path" ]] || return 1
+    path_stat="$(stat -Lc '%d:%i:%u:%h:%a:%F' -- "$lock_path" 2>/dev/null)" || return 1
+    IFS=: read -r lock_device lock_inode lock_uid lock_links lock_mode lock_type <<< "$path_stat"
+    [[ "$lock_uid" == "$CURRENT_UID" && "$lock_type" == directory* ]] || return 1
+    [[ "$lock_links" =~ ^[0-9]+$ && "$lock_links" -ge 2 ]] || return 1
+    [[ "$lock_mode" =~ ^[0-7]+$ ]] || return 1
+    (( (8#$lock_mode & 0077) == 0 && (8#$lock_mode & 07000) == 0 ))
+}
+
+lock_fd_is_safe() {
+    local fd_stat path_stat fd_device fd_inode fd_uid fd_links fd_mode fd_type
+    lock_directory_is_safe || return 1
+    fd_stat="$(stat -Lc '%d:%i:%u:%h:%a:%F' -- /proc/self/fd/9 2>/dev/null)" || return 1
+    path_stat="$(stat -Lc '%d:%i:%u:%h:%a:%F' -- "$lock_path" 2>/dev/null)" || return 1
+    [[ -n "$fd_stat" && "$fd_stat" == "$path_stat" ]] || return 1
+    IFS=: read -r fd_device fd_inode fd_uid fd_links fd_mode fd_type <<< "$fd_stat"
+    [[ "$fd_uid" == "$CURRENT_UID" && "$fd_links" =~ ^[0-9]+$ && "$fd_links" -ge 2 \
+        && "$fd_type" == directory* ]] \
+        || return 1
+    [[ "$fd_mode" =~ ^[0-7]+$ ]] || return 1
+    (( (8#$fd_mode & 0077) == 0 && (8#$fd_mode & 07000) == 0 ))
+}
+
+acquire_installer_lock() {
+    command -v flock >/dev/null 2>&1 || die "cross-process installer locking requires flock"
+
+    # mkdir is the atomic claim for the permanent lock sidecar. An existing
+    # safe directory is reusable after a crash; every other pathname type is
+    # rejected before opening the directory for the advisory lock.
+    if [[ -L "$lock_path" ]]; then
+        die "refusing unsafe installer lock path: ${lock_path}"
+    elif [[ -e "$lock_path" ]]; then
+        [[ -d "$lock_path" ]] || die "refusing unsafe installer lock path: ${lock_path}"
+    elif ! mkdir -m 0700 -- "$lock_path"; then
+        [[ -d "$lock_path" && ! -L "$lock_path" ]] \
+            || die "could not atomically create the installer lock safely"
+    fi
+    lock_directory_is_safe || die "refusing unsafe installer lock path: ${lock_path}"
+
+    # Open the claimed directory read-only, then require the descriptor and
+    # pathname to remain the same private directory before and after flock.
+    exec 9<"$lock_path" || die "could not open the installer lock safely"
+    lock_fd_is_safe || die "installer lock changed or is unsafe during acquisition"
+    if ! flock -n 9; then
+        die "installer busy: another telltale installer transaction holds the lock"
+    fi
+    lock_fd_is_safe || die "installer lock changed or became unsafe during acquisition"
+}
+
+home_real=""
+[[ ! -L "$HOME" && -d "$HOME" ]] || die "current user's HOME must be an owned regular directory"
+home_real="$(realpath -e -- "$HOME")" || die "could not resolve current user's HOME"
+owned_path "$HOME" || die "current user's HOME must be owned by the current user"
+safe_directory "$HOME" || die "current user's HOME has unsafe type, mode, or link count"
+
+# Keep the installer lock outside both overridable XDG roots. HOME already
+# exists and has passed the ownership, mode, and symlink checks, so the lock
+# sidecar is claimed before any other installer-owned directory is created.
+lock_path="$home_real/.telltale-installer.lock"
+acquire_installer_lock
+require_no_replace_move
+
+INSTALL_DIR="$(resolve_under_home "$INSTALL_DIR")"
+state_root="$(resolve_under_home "${XDG_STATE_HOME:-$HOME/.local/state}")"
+config_root="$(resolve_under_home "${XDG_CONFIG_HOME:-$HOME/.config}")"
+unit_dir="$config_root/systemd/user"
+
+journal_path="$state_root/telltale/installer-transaction.json"
+canonical_log="$state_root/telltale/logs/telltale-events.jsonl"
+canonical_state="$state_root/telltale/telltale-state.json"
+canonical_env="$config_root/telltale/telltale.env"
+legacy_log="$state_root/telltale/logs/adr-events.jsonl"
+legacy_state="$state_root/telltale/adr-state.json"
+legacy_env="$config_root/telltale/adr.env"
+
+# Validate every existing ancestor and destination before creating any directory.
+for directory in \
+    "$INSTALL_DIR" "$state_root" "$config_root" "$unit_dir" \
+    "$state_root/telltale" "$config_root/telltale" \
+    "$(dirname -- "$canonical_log")" "$(dirname -- "$canonical_state")"; do
+    validate_directory_chain "$directory" || die "refusing unsafe current-user path: ${directory}"
+done
+
+for private_path in \
+    "$journal_path" "$canonical_state" "$canonical_env" \
+    "$legacy_state" "$legacy_env"; do
+    ensure_owned_regular_or_absent "$private_path" private
+done
+for log_path in "$canonical_log" "$legacy_log"; do
+    ensure_owned_regular_or_absent "$log_path" log
+done
+
+for binary_path in \
+    "$INSTALL_DIR/telltale" "$INSTALL_DIR/adr" "$INSTALL_DIR/adr.exe" "$INSTALL_DIR/telltale.exe"; do
+    ensure_owned_regular_or_absent "$binary_path" executable
+done
+
+ensure_owned_directory "$INSTALL_DIR"
+ensure_owned_directory "$state_root"
+ensure_owned_directory "$config_root"
+ensure_owned_directory "$state_root/telltale"
+ensure_owned_directory "$config_root/telltale"
+
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/telltale-installer.XXXXXX")"
+install_stage_dir=""
+unit_stage_dir=""
+transaction_active=0
+recovery_failed=0
+rollback_verified=0
+journal_read_valid=0
+journal_phase=none
+journal_phase_before_start=none
+journal_transaction_started=0
+schedule_checked=0
+schedule_quiesced=0
+schedule_conflict=0
+units_installed=0
+telltale_replaced=0
+binary_copy_attempted=0
+old_adr=0
+old_adr_moved=0
+
+declare -a schedule_units=(
+    adr-scan.service
+    adr-scan.timer
+    telltale-scan.service
+    telltale-scan.timer
+)
+declare -a canonical_archive_members=(
+    telltale
+    LICENSE
+    README.md
+    config/examples/telltale-outputs.yaml
+    config/examples/telltale-scan.service
+    config/examples/telltale-scan.timer
+    config/examples/telltale-scan-task.xml
+    config/examples/elastic-telltale-index-template.json
+    config/examples/elastic-telltale-role.json
+)
+declare -A unit_file_present=()
+declare -A unit_present=()
+declare -A unit_enabled=()
+declare -A unit_active=()
+
+cleanup_stage() {
+    local failed=0 candidate
+    shopt -s nullglob
+    local -a stage_dirs=()
+    [[ -n "$install_stage_dir" && ( -e "$install_stage_dir" || -L "$install_stage_dir" ) ]] && stage_dirs+=("$install_stage_dir")
+    [[ -n "$unit_stage_dir" && ( -e "$unit_stage_dir" || -L "$unit_stage_dir" ) ]] && stage_dirs+=("$unit_stage_dir")
+    shopt -u nullglob
+
+    # Validate every marker-owned stage before removing any of them. A failed
+    # validation retains all staged bytes for a later, explicit recovery.
+    for candidate in "${stage_dirs[@]}"; do
+        validate_stage_dir "$candidate" || failed=1
+        if [[ "$transaction_active" -eq 0 ]]; then
+            verify_committed_stage_dir "$candidate" || failed=1
+        fi
+    done
+    if [[ "$failed" -eq 0 ]]; then
+        for candidate in "${stage_dirs[@]}"; do
+            remove_verified_stage_dir "$candidate" || failed=1
+        done
+    fi
+    if [[ -e "$tmpdir" || -L "$tmpdir" ]]; then
+        rm -rf -- "$tmpdir" || failed=1
+    fi
+    return "$failed"
+}
+
+write_journal() {
+    local phase="$1" journal_tmp
+    journal_tmp="$(mktemp "${journal_path}.tmp.XXXXXX")" || return 1
+    chmod 0600 "$journal_tmp"
+    printf '{\n  "version": "1.0",\n  "phase": "%s",\n  "identity": "telltale",\n  "schedule": "telltale-scan.timer"\n}\n' \
+        "$phase" > "$journal_tmp"
+    mv -f -- "$journal_tmp" "$journal_path"
+    journal_phase="$phase"
+}
+
+stage_entry_kind() {
+    case "$1" in
+        transaction.marker) printf '%s\n' private ;;
+        telltale.new|telltale.installing|telltale.old|adr.obsolete) printf '%s\n' executable ;;
+        telltale-scan.service.new|telltale-scan.timer.new|\
+        telltale-scan.service.installing|telltale-scan.timer.installing|\
+        telltale-scan.service.old|\
+        telltale-scan.timer.old|adr-scan.service.old|adr-scan.timer.old) printf '%s\n' unit ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_stage_entry() {
+    local path="$1" name kind
+    name="$(basename -- "$path")"
+    kind="$(stage_entry_kind "$name")" || return 1
+    [[ ! -L "$path" && -f "$path" ]] || return 1
+    owned_path "$path" || return 1
+    safe_file_mode "$path" "$kind" || return 1
+}
+
+read_journal_phase() {
+    journal_read_valid=0
+    journal_phase=none
+    if [[ ! -e "$journal_path" && ! -L "$journal_path" ]]; then
+        journal_read_valid=1
+        return 0
+    fi
+    ensure_owned_regular_or_absent "$journal_path" private || return 1
+    local phase
+    # Journals are produced by write_journal; accept only an exact generated
+    # object so unknown, reordered, duplicate, or malformed fields fail closed.
+    for phase in staging schedules migration units smoke activation committed failed recovered; do
+        if cmp -s "$journal_path" <(printf '{\n  "version": "1.0",\n  "phase": "%s",\n  "identity": "telltale",\n  "schedule": "telltale-scan.timer"\n}\n' "$phase"); then
+            journal_phase="$phase"
+            journal_read_valid=1
+            return 0
+        fi
+    done
+    return 1
+}
+
+validate_expected_destination() {
+    local stage_file="$1" destination="$2" kind
+    [[ -e "$stage_file" || -L "$stage_file" ]] || return 1
+    validate_stage_entry "$stage_file" || return 1
+    kind="$(stage_entry_kind "$(basename -- "$stage_file")")" || return 1
+    [[ -e "$destination" || -L "$destination" ]] || return 1
+    existing_file_is_safe "$destination" "$kind" || return 1
+    cmp -s "$stage_file" "$destination" || return 1
+}
+
+recover_stage_pair() {
+    local stage_file="$1" destination="$2" expected_new="${3:-}" kind
+    [[ -e "$stage_file" || -L "$stage_file" ]] || return 0
+    validate_stage_entry "$stage_file" || return 1
+    kind="$(stage_entry_kind "$(basename -- "$stage_file")")" || return 1
+    if [[ -n "$expected_new" ]]; then
+        if [[ -e "$expected_new" || -L "$expected_new" ]]; then
+            validate_stage_entry "$expected_new" || return 1
+        else
+            expected_new=""
+        fi
+    fi
+    if [[ -e "$destination" || -L "$destination" ]]; then
+        if [[ -z "$expected_new" ]] || ! validate_expected_destination "$expected_new" "$destination"; then
+            error "recovery conflict: destination does not match its marker-owned new copy: ${destination}"
+            return 1
+        fi
+        rm -f -- "$destination" || return 1
+        [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+    fi
+    if [[ -n "$expected_new" ]]; then
+        rm -f -- "$expected_new" || return 1
+        [[ ! -e "$expected_new" && ! -L "$expected_new" ]] || return 1
+    fi
+    no_replace_move "$stage_file" "$destination" || return 1
+    [[ ! -L "$destination" && -f "$destination" ]] || return 1
+    owned_path "$destination" || return 1
+    safe_file_mode "$destination" "$kind" || return 1
+}
+
+recover_stage_new() {
+    local stage_file="$1" destination="$2"
+    [[ -e "$stage_file" || -L "$stage_file" ]] || return 0
+    validate_expected_destination "$stage_file" "$destination" 2>/dev/null || {
+        if [[ "$journal_phase" == "committed" ]]; then
+            return 1
+        fi
+        validate_stage_entry "$stage_file" || return 1
+        if [[ -e "$destination" || -L "$destination" ]]; then
+            return 1
+        fi
+        return 0
+    }
+    if [[ "$journal_phase" != "committed" ]]; then
+        rm -f -- "$destination" || return 1
+        [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+    fi
+}
+
+validate_stage_dir() {
+    local stage="$1" marker="$1/transaction.marker" entry name
+    [[ ! -L "$stage" && -d "$stage" ]] || return 1
+    owned_path "$stage" || return 1
+    safe_directory "$stage" || return 1
+    validate_stage_entry "$marker" || return 1
+    [[ "$(tr -d '\n' < "$marker")" == "telltale-installer-transaction-v1" ]] || return 1
+
+    shopt -s nullglob dotglob
+    local -a entries=("$stage"/*)
+    shopt -u dotglob nullglob
+    for entry in "${entries[@]}"; do
+        name="$(basename -- "$entry")"
+        stage_entry_kind "$name" >/dev/null || return 1
+        validate_stage_entry "$entry" || return 1
+    done
+}
+
+remove_verified_stage_dir() {
+    local stage="$1"
+    validate_stage_dir "$stage" || return 1
+    rm -rf -- "$stage"
+}
+
+verify_committed_stage_pair() {
+    local stage_file="$1" destination="$2" expected_new="${3:-}"
+    [[ -e "$stage_file" || -L "$stage_file" ]] || return 0
+    validate_stage_entry "$stage_file" || return 1
+    if [[ -n "$expected_new" ]]; then
+        validate_expected_destination "$expected_new" "$destination" || return 1
+    else
+        [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+    fi
+}
+
+verify_committed_stage_dir() {
+    local stage="$1"
+    local installing_name
+    validate_stage_dir "$stage" || return 1
+    for installing_name in \
+        telltale.installing telltale-scan.service.installing telltale-scan.timer.installing; do
+        [[ ! -e "$stage/$installing_name" && ! -L "$stage/$installing_name" ]] || return 1
+    done
+
+    verify_committed_stage_pair "$stage/telltale.old" "$INSTALL_DIR/telltale" "$stage/telltale.new" || return 1
+    verify_committed_stage_pair "$stage/adr.obsolete" "$INSTALL_DIR/adr" || return 1
+    verify_committed_stage_pair "$stage/telltale-scan.service.old" "$unit_dir/telltale-scan.service" "$stage/telltale-scan.service.new" || return 1
+    verify_committed_stage_pair "$stage/telltale-scan.timer.old" "$unit_dir/telltale-scan.timer" "$stage/telltale-scan.timer.new" || return 1
+    verify_committed_stage_pair "$stage/adr-scan.service.old" "$unit_dir/adr-scan.service" || return 1
+    verify_committed_stage_pair "$stage/adr-scan.timer.old" "$unit_dir/adr-scan.timer" || return 1
+    recover_stage_new "$stage/telltale.new" "$INSTALL_DIR/telltale" || return 1
+    recover_stage_new "$stage/telltale-scan.service.new" "$unit_dir/telltale-scan.service" || return 1
+    recover_stage_new "$stage/telltale-scan.timer.new" "$unit_dir/telltale-scan.timer" || return 1
+}
+
+recover_stage_dir() {
+    local stage="$1"
+    local installing_name candidate_name
+    local installing_present=0
+    local -a installing_names=(
+        telltale.installing
+        telltale-scan.service.installing
+        telltale-scan.timer.installing
+    )
+    validate_stage_dir "$stage" || return 1
+    for installing_name in "${installing_names[@]}"; do
+        if [[ -e "$stage/$installing_name" || -L "$stage/$installing_name" ]]; then
+            validate_stage_entry "$stage/$installing_name" || return 1
+            if [[ "$installing_name" == "telltale.installing" ]]; then
+                [[ -e "$stage/telltale.new" || -L "$stage/telltale.new" || \
+                    -e "$stage/telltale.old" || -L "$stage/telltale.old" ]] || return 1
+            else
+                candidate_name="${installing_name%.installing}.new"
+                [[ -e "$stage/$candidate_name" || -L "$stage/$candidate_name" ]] || return 1
+            fi
+            installing_present=1
+        fi
+    done
+
+    if [[ "$journal_phase" == "committed" ]]; then
+        verify_committed_stage_dir "$stage" || return 1
+        remove_verified_stage_dir "$stage" || return 1
+        return 0
+    fi
+
+    recover_stage_pair "$stage/telltale.old" "$INSTALL_DIR/telltale" "$stage/telltale.new" || return 1
+    recover_stage_pair "$stage/adr.obsolete" "$INSTALL_DIR/adr" || return 1
+    recover_stage_pair "$stage/telltale-scan.service.old" "$unit_dir/telltale-scan.service" "$stage/telltale-scan.service.new" || return 1
+    recover_stage_pair "$stage/telltale-scan.timer.old" "$unit_dir/telltale-scan.timer" "$stage/telltale-scan.timer.new" || return 1
+    recover_stage_pair "$stage/adr-scan.service.old" "$unit_dir/adr-scan.service" || return 1
+    recover_stage_pair "$stage/adr-scan.timer.old" "$unit_dir/adr-scan.timer" || return 1
+
+    recover_stage_new "$stage/telltale.new" "$INSTALL_DIR/telltale" || return 1
+    recover_stage_new "$stage/telltale-scan.service.new" "$unit_dir/telltale-scan.service" || return 1
+    recover_stage_new "$stage/telltale-scan.timer.new" "$unit_dir/telltale-scan.timer" || return 1
+
+    if [[ "$installing_present" -eq 1 ]]; then
+        for installing_name in "${installing_names[@]}"; do
+            if [[ -e "$stage/$installing_name" || -L "$stage/$installing_name" ]]; then
+                rm -f -- "$stage/$installing_name" || return 1
+                [[ ! -e "$stage/$installing_name" && ! -L "$stage/$installing_name" ]] || return 1
+            fi
+        done
+    fi
+
+    # telltale.new and generated .new units were never installed destinations.
+    remove_verified_stage_dir "$stage" || return 1
+}
+
+recover_stale_staging() {
+    local candidate had_staging=0
+    shopt -s nullglob
+    local -a install_stages=("$INSTALL_DIR"/.telltale-install.*)
+    local -a unit_stages=("$unit_dir"/.telltale-units.*)
+    shopt -u nullglob
+
+    if [[ "$schedule_checked" -eq 1 ]]; then
+        all_schedules_disabled || die "could not prove all old and new schedules were disabled before staging recovery"
+    fi
+
+    for candidate in "${install_stages[@]}" "${unit_stages[@]}"; do
+        had_staging=1
+        if ! recover_stage_dir "$candidate"; then
+            recovery_failed=1
+            # A committed journal must remain authoritative if verification fails.
+            if [[ "$transaction_active" -eq 1 && "$journal_phase" != "committed" ]]; then
+                write_journal failed || true
+            fi
+            die "could not safely recover marker-owned installer staging; bytes were retained"
+        fi
+    done
+    if [[ "$had_staging" -eq 1 ]]; then
+        write_journal recovered || true
+    fi
+}
+
+systemctl_user() {
+    run_bounded systemctl --user "$@" >/dev/null 2>&1
+}
+
+systemctl_show() {
+    run_bounded systemctl --user show "$1" "--property=$2" --value 2>/dev/null
+}
+
+systemctl_show_raw() {
+    run_bounded systemctl --user show "$1" "--property=$2" 2>/dev/null
+}
+
+unit_dropin_directory_is_absent() {
+    local unit="$1" dropin_directory="$unit_dir/${unit}.d"
+    case "$unit" in
+        adr-scan.service|adr-scan.timer|telltale-scan.service|telltale-scan.timer)
+            [[ ! -e "$dropin_directory" && ! -L "$dropin_directory" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+unit_has_no_dropins() {
+    local unit="$1" dropin_metadata dropin_paths
+    case "$unit" in
+        adr-scan.service|adr-scan.timer|telltale-scan.service|telltale-scan.timer)
+            dropin_metadata="$(systemctl_show_raw "$unit" DropInPaths)" || return 1
+            [[ "$dropin_metadata" == DropInPaths=* ]] || return 1
+            dropin_paths="${dropin_metadata#DropInPaths=}"
+            [[ -z "$dropin_paths" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+query_unit() {
+    local unit="$1" load_state fragment unit_state active_state local_path
+    local_path="$unit_dir/$unit"
+    unit_file_is_owned_regular "$local_path" || return 1
+    unit_dropin_directory_is_absent "$unit" || return 1
+    # DropInPaths is meaningful even when systemd reports the unit as
+    # not-found, so check the manager-owned namespace before that early exit.
+    unit_has_no_dropins "$unit" || return 1
+
+    load_state="$(systemctl_show "$unit" LoadState)" || return 1
+    case "$load_state" in
+        not-found)
+            QUERY_PRESENT=0
+            QUERY_ENABLED=0
+            QUERY_ACTIVE=0
+            return 0
+            ;;
+        loaded) ;;
+        *) return 1 ;;
+    esac
+
+    fragment="$(systemctl_show "$unit" FragmentPath)" || return 1
+    [[ -n "$fragment" ]] || return 1
+    case "$fragment" in
+        "$unit_dir"/*) ;;
+        *) return 1 ;;
+    esac
+    unit_file_is_owned_regular "$fragment" || return 1
+
+    unit_state="$(systemctl_show "$unit" UnitFileState)" || return 1
+    case "$unit_state" in
+        enabled|enabled-runtime|linked|linked-runtime) QUERY_ENABLED=1 ;;
+        disabled|static|indirect|generated|transient|masked) QUERY_ENABLED=0 ;;
+        *) return 1 ;;
+    esac
+
+    active_state="$(systemctl_show "$unit" ActiveState)" || return 1
+    case "$active_state" in
+        active|activating|reloading|deactivating) QUERY_ACTIVE=1 ;;
+        inactive|failed) QUERY_ACTIVE=0 ;;
+        *) return 1 ;;
+    esac
+    QUERY_PRESENT=1
+}
+
+query_and_store_unit() {
+    local unit="$1"
+    if ! query_unit "$unit"; then
+        die "could not safely query systemd state for ${unit}; refusing to assume inactive"
+    fi
+    unit_present["$unit"]="$QUERY_PRESENT"
+    unit_enabled["$unit"]="$QUERY_ENABLED"
+    unit_active["$unit"]="$QUERY_ACTIVE"
+}
+
+quiesce_unit() {
+    local unit="$1"
+    query_unit "$unit" || return 1
+    [[ "$QUERY_PRESENT" -eq 1 ]] || return 0
+    if [[ "$QUERY_ENABLED" -eq 1 ]]; then
+        systemctl_user disable "$unit" || return 1
+    fi
+    if [[ "$QUERY_ACTIVE" -eq 1 ]]; then
+        systemctl_user stop "$unit" || return 1
+    fi
+}
+
+all_schedules_disabled() {
+    local unit
+    for unit in "${schedule_units[@]}"; do
+        query_unit "$unit" || return 1
+        [[ "$QUERY_ENABLED" -eq 0 && "$QUERY_ACTIVE" -eq 0 ]] || return 1
+    done
+}
+
+schedule_transaction() {
+    command -v systemctl >/dev/null 2>&1 || die "schedule inspection requires systemctl"
+    ensure_owned_directory "$unit_dir"
+    schedule_checked=1
+    systemctl_user daemon-reload || die "could not reload the user systemd manager before schedule inspection"
+
+    local unit
+    for unit in "${schedule_units[@]}"; do
+        unit_file_is_owned_regular "$unit_dir/$unit" || die "refusing unsafe user unit: ${unit}"
+        query_and_store_unit "$unit"
+    done
+
+    if [[ "${unit_enabled[adr-scan.timer]}" -eq 1 || "${unit_active[adr-scan.timer]}" -eq 1 ]] \
+        && [[ "${unit_enabled[telltale-scan.timer]}" -eq 1 || "${unit_active[telltale-scan.timer]}" -eq 1 ]]; then
+        schedule_conflict=1
+    fi
+
+    for unit in "${schedule_units[@]}"; do
+        quiesce_unit "$unit" || die "could not quiesce schedule ${unit}; refusing binary migration"
+    done
+    all_schedules_disabled || die "could not prove all old and new schedules are disabled"
+    schedule_quiesced=1
+    if [[ "$schedule_conflict" -eq 1 ]]; then
+        die "duplicate old/new schedules detected; both schedules were disabled and the transaction failed closed"
+    fi
+}
+
+systemd_escape() {
+    local escaped="$1"
+    [[ "$escaped" != *$'\n'* && "$escaped" != *$'\r'* ]] \
+        || die "path contains a line break and cannot be used in a systemd unit"
+    escaped="${escaped//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    escaped="${escaped//\%/%%}"
+    escaped="${escaped//\$/\$\$}"
+    printf '%s' "$escaped"
+}
+
+stage_units() {
+    local unit path service_path timer_path executable log_value state_value env_value
+    local candidate_path installing_path
+
+    ensure_owned_directory "$unit_dir"
+    if [[ "$schedule_checked" -eq 1 ]]; then
+        all_schedules_disabled || die "could not prove all old and new schedules were disabled immediately before unit mutation"
+    fi
+    unit_stage_dir="$(mktemp -d "${unit_dir}/.telltale-units.XXXXXX")"
+    printf 'telltale-installer-transaction-v1\n' > "$unit_stage_dir/transaction.marker"
+    chmod 0600 "$unit_stage_dir/transaction.marker"
+    units_installed=1
+
+    for unit in adr-scan.service adr-scan.timer; do
+        path="$unit_dir/$unit"
+        unit_file_is_owned_regular "$path" || die "refusing unsafe user unit: ${path}"
+        if [[ -e "$path" ]]; then
+            no_replace_move "$path" "$unit_stage_dir/$unit.old" \
+                || die "could not stage legacy user unit ${unit} without clobbering"
+        fi
+    done
+
+    service_path="$unit_dir/telltale-scan.service"
+    timer_path="$unit_dir/telltale-scan.timer"
+    for path in "$service_path" "$timer_path"; do
+        unit_file_is_owned_regular "$path" || die "refusing unsafe user unit: ${path}"
+    done
+    if [[ -e "$service_path" ]]; then
+        no_replace_move "$service_path" "$unit_stage_dir/telltale-scan.service.old" \
+            || die "could not stage existing canonical service without clobbering"
+    fi
+    if [[ -e "$timer_path" ]]; then
+        no_replace_move "$timer_path" "$unit_stage_dir/telltale-scan.timer.old" \
+            || die "could not stage existing canonical timer without clobbering"
+    fi
+
+    # Literal percent signs become %%; %h below remains the intentional home specifier.
+    executable="$(systemd_escape "$INSTALL_DIR/telltale")"
+    log_value="$(systemd_escape "$canonical_log")"
+    state_value="$(systemd_escape "$canonical_state")"
+    env_value="$(systemd_escape "$canonical_env")"
+    cat > "$unit_stage_dir/telltale-scan.service.new" <<EOF
+[Unit]
+Description=Telltale one-shot agent session scan
+
+[Service]
+Type=oneshot
+Environment="TELLTALE_LOG_PATH=${log_value}"
+Environment="TELLTALE_STATE_PATH=${state_value}"
+Environment="TELLTALE_SCAN_ROOT=%h"
+EnvironmentFile=-"${env_value}"
+ExecStart=/usr/bin/env -- "${executable}" scan --once --emit-activity --root "\${TELLTALE_SCAN_ROOT}" --path-profile user
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
+EOF
+    cat > "$unit_stage_dir/telltale-scan.timer.new" <<'EOF'
+[Unit]
+Description=Run Telltale agent session scans periodically
+
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=5min
+Unit=telltale-scan.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    chmod 0644 "$unit_stage_dir/telltale-scan.service.new" "$unit_stage_dir/telltale-scan.timer.new"
+    for unit in telltale-scan.service telltale-scan.timer; do
+        candidate_path="$unit_stage_dir/$unit.new"
+        installing_path="$unit_stage_dir/$unit.installing"
+        path="$unit_dir/$unit"
+        validate_stage_entry "$candidate_path" || die "generated canonical unit is unsafe: ${unit}"
+        install -m 0644 "$candidate_path" "$installing_path" \
+            || die "could not stage canonical user unit ${unit}"
+        validate_stage_entry "$installing_path" \
+            || die "staged canonical user unit is unsafe: ${unit}"
+        no_replace_move "$installing_path" "$path" \
+            || die "could not atomically install canonical user unit ${unit} without clobbering"
+        unit_file_is_owned_regular "$path" \
+            || die "installed canonical user unit is unsafe: ${unit}"
+    done
+}
+
+restore_units() {
+    local unit path stage_path
+    [[ "$units_installed" -eq 1 ]] || return 0
+    [[ -n "$unit_stage_dir" && -d "$unit_stage_dir" && ! -L "$unit_stage_dir" ]] || return 1
+
+    # A failed copy may leave a marker-owned partial .installing file. Remove
+    # only that validated temporary while its canonical destination is absent,
+    # then continue restoring any staged preexisting unit bytes.
+    for unit in telltale-scan.service telltale-scan.timer; do
+        stage_path="$unit_stage_dir/$unit.installing"
+        path="$unit_dir/$unit"
+        if [[ -e "$stage_path" || -L "$stage_path" ]]; then
+            validate_stage_entry "$stage_path" || return 1
+            [[ ! -e "$path" && ! -L "$path" ]] || return 1
+            rm -f -- "$stage_path" || return 1
+            [[ ! -e "$stage_path" && ! -L "$stage_path" ]] || return 1
+        fi
+    done
+
+    for unit in telltale-scan.service telltale-scan.timer; do
+        stage_path="$unit_stage_dir/$unit.new"
+        path="$unit_dir/$unit"
+        if [[ -e "$stage_path" || -L "$stage_path" ]]; then
+            validate_stage_entry "$stage_path" || return 1
+            if [[ -e "$path" || -L "$path" ]]; then
+                unit_file_is_owned_regular "$path" || return 1
+                cmp -s "$stage_path" "$path" || return 1
+                rm -f -- "$path" || return 1
+            fi
+        fi
+    done
+
+    for unit in telltale-scan.service telltale-scan.timer adr-scan.service adr-scan.timer; do
+        stage_path="$unit_stage_dir/$unit.old"
+        path="$unit_dir/$unit"
+        if [[ -e "$stage_path" || -L "$stage_path" ]]; then
+            validate_stage_entry "$stage_path" || return 1
+            [[ ! -e "$path" && ! -L "$path" ]] || return 1
+            no_replace_move "$stage_path" "$path" || return 1
+            unit_file_is_owned_regular "$path" || return 1
+        fi
+    done
+
+    if [[ "$schedule_checked" -eq 1 ]]; then
+        systemctl_user daemon-reload || return 1
+    fi
+}
+
+validate_binary_file() {
+    local binary="$1"
+    [[ -f "$binary" && ! -L "$binary" && -x "$binary" ]] \
+        || die "required canonical binary is missing or not executable"
+    owned_path "$binary" || die "canonical binary is not owned by the current user"
+    safe_file_mode "$binary" executable || die "canonical binary has unsafe mode or link count"
+}
+
+verify_binary_version() {
+    local binary="$1" version_output
+    validate_binary_file "$binary"
+    version_output="$(run_bounded "$binary" --version 2>/dev/null)" \
+        || die "canonical binary failed bounded version verification"
+    case "$version_output" in
+        "telltale ${expected_version}"|"telltale ${expected_version}"$'\n'|"telltale ${expected_version}"\ *) ;;
+        *) die "binary version does not match telltale ${version_tag}" ;;
+    esac
+}
+
+verify_checksum() {
+    local archive="$1" archive_name="$2" checksum_dir="$3" sums_file expected actual
+    if [[ "$SKIP_CHECKSUM" -eq 1 ]]; then
+        warn "skipping checksum verification (--skip-checksum passed)"
+        return 0
+    fi
+    sums_file="$checksum_dir/SHA256SUMS"
+    download_to "${RELEASE_BASE_URL}/${version_tag}/SHA256SUMS" "$sums_file" \
+        || die "could not fetch SHA256SUMS for ${version_tag}; use --skip-checksum only intentionally"
+    [[ -s "$sums_file" ]] || die "SHA256SUMS for ${version_tag} was empty"
+    expected="$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; found=1; exit } END { if (!found) exit 1 }' "$sums_file")" \
+        || die "no exact SHA256SUMS entry for ${archive_name}"
+    [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || die "invalid SHA256SUMS entry for ${archive_name}"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$archive" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+    else
+        die "neither sha256sum nor shasum is available"
+    fi
+    [[ "$expected" == "$actual" ]] || die "checksum mismatch for ${archive_name}"
+    info "checksum verified: ${archive_name}"
+}
 
 download_to() {
     local url="$1" destination="$2"
@@ -121,7 +1013,7 @@ download_to() {
     elif command -v wget >/dev/null 2>&1; then
         wget -qO "$destination" "$url"
     else
-        die "Neither curl nor wget found. Install one, or use --from-source with a downloader available"
+        die "neither curl nor wget is available"
     fi
 }
 
@@ -132,441 +1024,348 @@ download_stdout() {
     elif command -v wget >/dev/null 2>&1; then
         wget -qO- "$url"
     else
-        die "Neither curl nor wget found. Install one, or use --from-source with a downloader available"
+        die "neither curl nor wget is available"
     fi
 }
 
-release_json=""
-if ! release_json="$(download_stdout "$API_URL")"; then
-    die "Could not fetch latest release metadata"
-fi
-[[ -n "$release_json" ]] || die "Latest release metadata was empty"
-
-version_tag="$(printf '%s' "$release_json" \
-    | tr '\r\n' '  ' \
-    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
-    | sed -n '1s/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/p' || true)"
-[[ -n "$version_tag" ]] || die "Latest release metadata did not contain an exact tag"
-if [[ ! "$version_tag" =~ ^v[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z]+)*$ ]]; then
-    die "Latest release tag is not a supported version tag"
-fi
-expected_version="${version_tag#v}"
-
-tmpdir="$(mktemp -d)"
-install_stage_dir=""
-unit_stage_dir=""
-cleanup() {
-    [[ -z "$install_stage_dir" ]] || rm -rf -- "$install_stage_dir"
-    [[ -z "$unit_stage_dir" ]] || rm -rf -- "$unit_stage_dir"
-    rm -rf -- "$tmpdir"
-}
-trap cleanup EXIT
-
-# --- checksum verification ---------------------------------------------------
-
-verify_checksum() {
-    local archive="$1" archive_name="$2" tmpdir_for_checksums="$3"
-
-    if [[ "$SKIP_CHECKSUM" -eq 1 ]]; then
-        warn "Skipping checksum verification (--skip-checksum passed)."
-        return 0
-    fi
-
-    local sums_url="${RELEASE_BASE_URL}/${version_tag}/SHA256SUMS"
-    local sums_file="${tmpdir_for_checksums}/SHA256SUMS"
-    if ! download_to "$sums_url" "$sums_file"; then
-        die "Could not fetch SHA256SUMS for ${version_tag}; use --skip-checksum only if this is intentional"
-    fi
-    [[ -s "$sums_file" ]] || die "SHA256SUMS for ${version_tag} was empty; use --skip-checksum only if this is intentional"
-
-    local expected
-    if ! expected="$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; found=1; exit } END { if (!found) exit 1 }' "$sums_file")"; then
-        die "No exact SHA256SUMS entry for ${archive_name}; use --skip-checksum only if this is intentional"
-    fi
-    [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || die "Invalid SHA256SUMS entry for ${archive_name}"
-
-    local actual
-    if command -v sha256sum >/dev/null 2>&1; then
-        if ! actual="$(sha256sum "$archive" | awk '{print $1}')"; then
-            die "Could not calculate SHA256 for ${archive_name}"
-        fi
-    elif command -v shasum >/dev/null 2>&1; then
-        if ! actual="$(shasum -a 256 "$archive" | awk '{print $1}')"; then
-            die "Could not calculate SHA256 for ${archive_name}"
-        fi
-    else
-        die "Neither sha256sum nor shasum is available; use --skip-checksum only if this is intentional"
-    fi
-
-    [[ "$expected" == "$actual" ]] || die "Checksum mismatch for ${archive_name}"
-    info "Checksum verified: ${archive_name}"
-}
-
-verify_binary() {
-    local binary="$1" invocation="$2" allow_legacy_adr="${3:-0}"
-    [[ -f "$binary" && ! -L "$binary" ]] || die "Required binary is missing: ${binary}"
-
-    local version_output prefix
-    if ! version_output="$("$binary" --version 2>/dev/null)"; then
-        die "Binary failed version verification: ${binary}"
-    fi
-
-    prefix="${invocation} ${expected_version}"
-    case "$version_output" in
-        "$prefix"|"$prefix "*|"$prefix"$'\n'*) return 0 ;;
-    esac
-    if [[ "$allow_legacy_adr" -eq 1 ]]; then
-        prefix="adr ${expected_version}"
-        case "$version_output" in
-            "$prefix"|"$prefix "*|"$prefix"$'\n'*) return 0 ;;
-        esac
-    fi
-    die "Binary version does not match ${invocation} ${version_tag}: ${binary}"
-}
-
-# --- stage the binaries ------------------------------------------------------
-
-staged_dir="${tmpdir}/staged"
-mkdir -p "$staged_dir"
-legacy_bootstrap=0
-
-if [[ "$FROM_SOURCE" -eq 1 ]]; then
-    info "Building exact release ${version_tag} from source with cargo (requires Rust toolchain)..."
-    command -v cargo >/dev/null 2>&1 || die "cargo not found. Install Rust from https://rustup.rs"
-    source_root="${tmpdir}/cargo-root"
-    if ! cargo install --git "https://github.com/${REPO}" \
-        --tag "$version_tag" --root "$source_root" --force --locked --bins; then
-        die "cargo install failed for release ${version_tag}"
-    fi
-    [[ -f "${source_root}/bin/adr" && ! -L "${source_root}/bin/adr" ]] \
-        || die "Source release ${version_tag} did not produce adr"
-    if [[ -L "${source_root}/bin/telltale" ]]; then
-        die "Source release ${version_tag} produced an invalid telltale link"
-    elif [[ ! -e "${source_root}/bin/telltale" && "$version_tag" == "v0.1.0" ]]; then
-        legacy_bootstrap=1
-        install -m 0755 "${source_root}/bin/adr" "${staged_dir}/adr"
-        install -m 0755 "${source_root}/bin/adr" "${staged_dir}/telltale"
-    else
-        [[ -f "${source_root}/bin/telltale" ]] \
-            || die "Source release ${version_tag} did not produce telltale"
-        install -m 0755 "${source_root}/bin/telltale" "${staged_dir}/telltale"
-        install -m 0755 "${source_root}/bin/adr" "${staged_dir}/adr"
-    fi
-else
-    canonical_name="telltale-${version_tag}-${target}.tar.gz"
-    legacy_name="adr-${version_tag}-${target}.tar.gz"
-    selected_name="$canonical_name"
-    selected_kind="canonical"
-    archive="${tmpdir}/${selected_name}"
-    info "Downloading Telltale ${version_tag} for ${target}..."
-    if ! download_to "${RELEASE_BASE_URL}/${version_tag}/${canonical_name}" "$archive"; then
-        selected_name="$legacy_name"
-        selected_kind="legacy"
-        archive="${tmpdir}/${selected_name}"
-        if ! download_to "${RELEASE_BASE_URL}/${version_tag}/${legacy_name}" "$archive"; then
-            die "No exact release asset for ${target}: expected ${canonical_name} or ${legacy_name}"
-        fi
-    fi
-    [[ -s "$archive" ]] || die "Downloaded release asset ${selected_name} was empty"
-    verify_checksum "$archive" "$selected_name" "$tmpdir"
-
-    archive_members=""
-    if ! archive_members="$(tar tzf "$archive")"; then
-        die "Could not inspect release asset ${selected_name}"
-    fi
-    archive_listing=""
-    if ! archive_listing="$(tar tvzf "$archive")"; then
-        die "Could not inspect release asset types ${selected_name}"
-    fi
+verify_release_archive() {
+    local archive="$1" archive_members archive_listing member expected
+    local member_count=0
+    declare -A seen_members=()
+    archive_members="$(tar tzf "$archive")" || die "could not inspect release archive"
+    archive_listing="$(tar tvzf "$archive")" || die "could not inspect release archive types"
     while IFS= read -r member; do
         [[ -n "$member" ]] || continue
-        [[ "$member" != /* ]] || die "Release asset ${selected_name} contains an absolute path"
-        case "/${member}/" in
-            */../*) die "Release asset ${selected_name} contains path traversal" ;;
+        [[ "$member" != /* ]] || die "release archive contains an absolute path"
+        [[ "$member" != *\\* ]] || die "release archive contains an unsafe path"
+        case "/${member}/" in */../*) die "release archive contains path traversal" ;; esac
+        case "$member" in
+            adr|adr.exe|*/adr|*/adr.exe|*adr-*|*ADR_*)
+                die "release archive contains an active ADR technical identity" ;;
+            telltale|LICENSE|README.md|config/examples/telltale-outputs.yaml|\
+            config/examples/telltale-scan.service|config/examples/telltale-scan.timer|\
+            config/examples/telltale-scan-task.xml|\
+            config/examples/elastic-telltale-index-template.json|\
+            config/examples/elastic-telltale-role.json)
+                ;;
+            *)
+                die "release archive does not match the exact canonical nine-member bundle: unexpected member ${member}"
+                ;;
         esac
+        [[ -z "${seen_members[$member]+present}" ]] \
+            || die "release archive does not match the exact canonical nine-member bundle: duplicate member ${member}"
+        seen_members["$member"]=1
+        member_count=$((member_count + 1))
     done <<< "$archive_members"
-    while IFS= read -r listing_line; do
-        [[ -n "$listing_line" ]] || continue
-        case "${listing_line:0:1}" in
-            l|h) die "Release asset ${selected_name} contains a link" ;;
+    for expected in "${canonical_archive_members[@]}"; do
+        [[ -n "${seen_members[$expected]+present}" ]] \
+            || die "release archive does not match the exact canonical nine-member bundle: missing member ${expected}"
+    done
+    [[ "$member_count" -eq "${#canonical_archive_members[@]}" ]] \
+        || die "release archive does not match the exact canonical nine-member bundle"
+    while IFS= read -r member; do
+        [[ -n "$member" ]] || continue
+        case "${member:0:1}" in
+            -) ;;
+            *) die "release archive contains a non-regular member" ;;
         esac
     done <<< "$archive_listing"
+}
 
-    has_telltale=0
-    has_adr=0
-    while IFS= read -r member; do
-        case "$member" in
-            telltale) has_telltale=1 ;;
-            adr) has_adr=1 ;;
+identify_obsolete_binary() {
+    local path old_adr_version
+    if [[ -e "$INSTALL_DIR/adr.exe" || -L "$INSTALL_DIR/adr.exe" ]]; then
+        die "refusing duplicate or active ADR binary at ${INSTALL_DIR}/adr.exe"
+    fi
+    if [[ -e "$INSTALL_DIR/telltale.exe" || -L "$INSTALL_DIR/telltale.exe" ]]; then
+        die "refusing duplicate canonical binary at ${INSTALL_DIR}/telltale.exe"
+    fi
+    path="$INSTALL_DIR/adr"
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ ! -L "$path" && -f "$path" && -x "$path" ]] \
+            || die "refusing unidentified obsolete compatibility path"
+        owned_path "$path" || die "refusing obsolete compatibility path not owned by the current user"
+        safe_file_mode "$path" executable || die "refusing obsolete compatibility path with unsafe mode or link count"
+        old_adr_version="$(run_bounded "$path" --version 2>/dev/null)" \
+            || die "could not bounded-check the obsolete compatibility binary"
+        case "$old_adr_version" in
+            adr\ *) old_adr=1 ;;
+            *) die "refusing to delete unidentified file at obsolete compatibility path" ;;
         esac
-    done <<< "$archive_members"
-    [[ "$has_adr" -eq 1 ]] || die "Release asset ${selected_name} is missing adr"
-    if [[ "$selected_kind" == "canonical" ]]; then
-        [[ "$has_telltale" -eq 1 ]] || die "Release asset ${selected_name} is missing telltale"
-    elif [[ "$has_telltale" -eq 0 && "$version_tag" != "v0.1.0" ]]; then
-        die "Legacy release asset ${selected_name} without telltale is supported only for v0.1.0"
     fi
-    if [[ "$has_telltale" -eq 1 ]]; then
-        telltale_type="$(printf '%s\n' "$archive_listing" | awk '$NF == "telltale" { type=substr($0, 1, 1); count++ } END { if (count != 1) exit 1; print type }')" \
-            || die "Release asset ${selected_name} has an invalid telltale member"
-        [[ "$telltale_type" == "-" ]] || die "Release asset ${selected_name} has a non-regular telltale member"
-    fi
-    adr_type="$(printf '%s\n' "$archive_listing" | awk '$NF == "adr" { type=substr($0, 1, 1); count++ } END { if (count != 1) exit 1; print type }')" \
-        || die "Release asset ${selected_name} has an invalid adr member"
-    [[ "$adr_type" == "-" ]] || die "Release asset ${selected_name} has a non-regular adr member"
+}
 
-    extract_dir="${tmpdir}/extract"
-    mkdir -p "$extract_dir"
-    extract_members=(adr)
-    if [[ "$has_telltale" -eq 1 ]]; then
-        extract_members+=(telltale)
+run_migrations() {
+    if [[ "$schedule_checked" -eq 1 ]]; then
+        [[ "$schedule_quiesced" -eq 1 ]] \
+            || die "schedule quiescing was not proven before migration"
+        all_schedules_disabled \
+            || die "could not prove all old and new schedules were disabled immediately before migration"
     fi
-    if ! tar xzf "$archive" -C "$extract_dir" --no-same-owner -- "${extract_members[@]}"; then
-        die "Could not extract release asset ${selected_name}"
+    if [[ -e "$legacy_state" || -L "$legacy_state" ]]; then
+        "$install_stage_dir/telltale.new" migrate state --from "$legacy_state" --to "$canonical_state" >/dev/null \
+            || die "state migration failed; legacy state was retained"
     fi
+    if [[ -e "$legacy_log" || -L "$legacy_log" ]]; then
+        "$install_stage_dir/telltale.new" migrate events --pair "$legacy_log" "$canonical_log" >/dev/null \
+            || die "event migration failed; historical event bytes were retained"
+    fi
+    if [[ -e "$legacy_env" || -L "$legacy_env" ]]; then
+        "$install_stage_dir/telltale.new" migrate env --from "$legacy_env" --to "$canonical_env" >/dev/null \
+            || die "environment migration failed; legacy environment was retained"
+    fi
+}
 
-    legacy_bootstrap=0
-    if [[ "$selected_kind" == "legacy" && "$has_telltale" -eq 0 ]]; then
-        # v0.1-style assets contained only adr. Keep this compatibility path
-        # conditional on the legacy asset actually lacking telltale.
-        legacy_bootstrap=1
-        install -m 0755 "${extract_dir}/adr" "${staged_dir}/adr"
-        install -m 0755 "${extract_dir}/adr" "${staged_dir}/telltale"
-    else
-        install -m 0755 "${extract_dir}/telltale" "${staged_dir}/telltale"
-        install -m 0755 "${extract_dir}/adr" "${staged_dir}/adr"
+replace_binary() {
+    local installing_path="$install_stage_dir/telltale.installing"
+    [[ "$schedule_checked" -eq 0 ]] || all_schedules_disabled \
+        || die "a schedule became enabled or active before binary replacement"
+    ensure_owned_regular_or_absent "$INSTALL_DIR/telltale" executable
+    if [[ -e "$INSTALL_DIR/telltale" ]]; then
+        no_replace_move "$INSTALL_DIR/telltale" "$install_stage_dir/telltale.old" \
+            || die "could not stage existing telltale binary without clobbering"
     fi
+    binary_copy_attempted=1
+    install -m 0755 "$install_stage_dir/telltale.new" "$installing_path" \
+        || die "could not stage canonical telltale binary"
+    validate_binary_file "$installing_path"
+    [[ ! -e "$INSTALL_DIR/telltale" && ! -L "$INSTALL_DIR/telltale" ]] \
+        || die "canonical telltale destination appeared during replacement"
+    no_replace_move "$installing_path" "$INSTALL_DIR/telltale" \
+        || die "could not atomically install canonical telltale binary without clobbering"
+    [[ ! -e "$installing_path" && ! -L "$installing_path" ]] \
+        || die "canonical telltale binary replacement was not complete"
+    telltale_replaced=1
+    validate_binary_file "$INSTALL_DIR/telltale"
+
+    if [[ "$old_adr" -eq 1 ]]; then
+        [[ "$schedule_checked" -eq 0 ]] || all_schedules_disabled \
+            || die "an old schedule could still run adr; compatibility binary was retained"
+        no_replace_move "$INSTALL_DIR/adr" "$install_stage_dir/adr.obsolete" \
+            || die "could not stage identified obsolete compatibility binary without clobbering"
+        old_adr_moved=1
+    fi
+}
+
+rollback_binary() {
+    local path="$INSTALL_DIR/telltale"
+    if [[ "$telltale_replaced" -eq 1 ]]; then
+        if [[ -e "$path" || -L "$path" ]]; then
+            [[ ! -L "$path" && -f "$path" ]] || return 1
+            owned_path "$path" || return 1
+            safe_file_mode "$path" executable || return 1
+            cmp -s "$path" "$install_stage_dir/telltale.new" || return 1
+            rm -f -- "$path" || return 1
+        fi
+    fi
+    if [[ -e "$install_stage_dir/telltale.old" || -L "$install_stage_dir/telltale.old" ]]; then
+        [[ ! -e "$path" && ! -L "$path" ]] || return 1
+        recover_stage_pair "$install_stage_dir/telltale.old" "$path" || return 1
+    fi
+    if [[ "$old_adr_moved" -eq 1 ]]; then
+        [[ ! -e "$INSTALL_DIR/adr" && ! -L "$INSTALL_DIR/adr" ]] || return 1
+        recover_stage_pair "$install_stage_dir/adr.obsolete" "$INSTALL_DIR/adr" || return 1
+    fi
+    if [[ "$binary_copy_attempted" -eq 1 && "$telltale_replaced" -eq 0 ]]; then
+        # The copy was attempted but never became the canonical destination.
+        # Keep the marker-owned candidate and journal for an explicit retry.
+        return 1
+    fi
+    if [[ -n "$install_stage_dir" \
+        && ( -e "$install_stage_dir/telltale.installing" || -L "$install_stage_dir/telltale.installing" ) ]]; then
+        # An incomplete copy is marker-owned recovery material, not a safe
+        # canonical destination. Keep it for an explicit retry.
+        return 1
+    fi
+}
+
+rollback_schedules() {
+    local unit
+    [[ "$schedule_checked" -eq 1 ]] || return 0
+    systemctl_user daemon-reload || return 1
+    for unit in "${schedule_units[@]}"; do
+        quiesce_unit "$unit" || return 1
+    done
+    all_schedules_disabled || return 1
+}
+
+rollback_transaction() {
+    # Never restore or enable a schedule until every schedule is known stopped.
+    rollback_schedules || return 1
+    restore_units || return 1
+    rollback_binary || return 1
+    if [[ "$schedule_checked" -eq 1 ]]; then
+        systemctl_user daemon-reload || return 1
+        all_schedules_disabled || return 1
+    fi
+    return 0
+}
+
+on_exit() {
+    local status=$?
+    trap - EXIT
+    if [[ "$status" -ne 0 ]]; then
+        if [[ "$transaction_active" -eq 1 ]]; then
+            if [[ "$journal_read_valid" -eq 1 && "$recovery_failed" -eq 0 ]]; then
+                if rollback_transaction; then
+                    rollback_verified=1
+                fi
+            fi
+            if [[ "$journal_read_valid" -eq 1 \
+                && ( "$journal_transaction_started" -eq 1 || "$journal_phase_before_start" != "committed" ) ]]; then
+                write_journal failed || true
+            fi
+            if [[ "$rollback_verified" -eq 1 ]]; then
+                cleanup_stage || warn "rollback was proven, but installer cleanup was incomplete; staging was retained"
+            else
+                warn "rollback could not be proven; retaining installer staging and journal"
+            fi
+        elif [[ "$journal_read_valid" -eq 1 && "$journal_phase" == "committed" ]]; then
+            # A committed transaction is never rolled back or downgraded by a
+            # later informational output or cleanup failure.
+            cleanup_stage || warn "commit completed, but verified installer cleanup was incomplete; staging was retained"
+        else
+            # Initial journal validation failed; retain its bytes and any stale
+            # staging without attempting recovery or a failed-phase rewrite.
+            :
+        fi
+    elif [[ "$transaction_active" -eq 0 && "$journal_read_valid" -eq 1 && "$journal_phase" == "committed" ]]; then
+        cleanup_stage || warn "commit completed, but installer cleanup was incomplete; staging was retained"
+    fi
+    exit "$status"
+}
+trap on_exit EXIT
+
+read_journal_phase || die "could not safely read the installer journal; refusing transaction start"
+journal_phase_before_start="$journal_phase"
+transaction_active=1
+schedule_transaction
+recover_stale_staging
+write_journal staging
+journal_transaction_started=1
+
+arch="$(uname -m)"
+case "$arch" in
+    x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
+    aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+    *) die "unsupported Linux architecture: ${arch}" ;;
+esac
+
+release_json="$(download_stdout "$API_URL")" || die "could not fetch latest release metadata"
+[[ -n "$release_json" ]] || die "latest release metadata was empty"
+version_tag="$(printf '%s' "$release_json" | tr '\r\n' '  ' \
+    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | sed -n '1s/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/p' || true)"
+[[ "$version_tag" =~ ^v[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z]+)*$ ]] \
+    || die "latest release metadata did not contain a validated release tag"
+expected_version="${version_tag#v}"
+
+staged_dir="$tmpdir/staged"
+mkdir -p -- "$staged_dir"
+archive_name="telltale-${version_tag}-${target}.tar.gz"
+archive="$tmpdir/$archive_name"
+
+if [[ "$FROM_SOURCE" -eq 1 ]]; then
+    command -v cargo >/dev/null 2>&1 || die "cargo is required for --from-source"
+    source_root="$tmpdir/cargo-root"
+    info "building validated release ${version_tag} from source"
+    cargo install --git "https://github.com/${REPO}" --tag "$version_tag" \
+        --root "$source_root" --force --locked --bin telltale \
+        || die "cargo install failed for release ${version_tag}"
+    [[ -f "$source_root/bin/telltale" && ! -L "$source_root/bin/telltale" ]] \
+        || die "validated source release did not produce telltale"
+    [[ ! -e "$source_root/bin/adr" ]] || die "source release produced retired adr executable"
+    install -m 0755 "$source_root/bin/telltale" "$staged_dir/telltale"
+else
+    info "downloading Telltale ${version_tag} for ${target}"
+    download_to "${RELEASE_BASE_URL}/${version_tag}/${archive_name}" "$archive" \
+        || die "no exact canonical release asset for ${target}: ${archive_name}"
+    [[ -s "$archive" ]] || die "downloaded release asset was empty"
+    verify_checksum "$archive" "$archive_name" "$tmpdir"
+    verify_release_archive "$archive"
+    extract_dir="$tmpdir/extract"
+    mkdir -p -- "$extract_dir"
+    tar xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions -- telltale \
+        || die "could not extract canonical release binary"
+    install -m 0755 "$extract_dir/telltale" "$staged_dir/telltale"
 fi
+validate_binary_file "$staged_dir/telltale"
 
-verify_binary "${staged_dir}/telltale" telltale "$legacy_bootstrap"
-verify_binary "${staged_dir}/adr" adr
-
-# --- replace the installation only after staging and validation -------------
-
-[[ ! -L "$INSTALL_DIR" ]] || die "Refusing symlink install directory ${INSTALL_DIR}"
-[[ ! -L "${INSTALL_DIR}/telltale" ]] || die "Refusing to replace symlink ${INSTALL_DIR}/telltale"
-[[ ! -L "${INSTALL_DIR}/adr" ]] || die "Refusing to replace symlink ${INSTALL_DIR}/adr"
-mkdir -p "$INSTALL_DIR"
 install_stage_dir="$(mktemp -d "${INSTALL_DIR}/.telltale-install.XXXXXX")"
-install -m 0755 "${staged_dir}/telltale" "${install_stage_dir}/telltale.new"
-install -m 0755 "${staged_dir}/adr" "${install_stage_dir}/adr.new"
-verify_binary "${install_stage_dir}/telltale.new" telltale "$legacy_bootstrap"
-verify_binary "${install_stage_dir}/adr.new" adr
+printf 'telltale-installer-transaction-v1\n' > "$install_stage_dir/transaction.marker"
+chmod 0600 "$install_stage_dir/transaction.marker"
+install -m 0755 "$staged_dir/telltale" "$install_stage_dir/telltale.new"
+validate_binary_file "$install_stage_dir/telltale.new"
 
-old_telltale=0
-old_adr=0
-telltale_new_attempted=0
-adr_new_attempted=0
-replacement_active=1
-rollback_installation() {
-    if [[ "$old_telltale" -eq 1 && -e "${install_stage_dir}/telltale.old" ]]; then
-        rm -f -- "${INSTALL_DIR}/telltale" || true
-        mv -- "${install_stage_dir}/telltale.old" "${INSTALL_DIR}/telltale" || true
-    elif [[ "$telltale_new_attempted" -eq 1 ]]; then
-        rm -f -- "${INSTALL_DIR}/telltale" || true
-    fi
-    if [[ "$old_adr" -eq 1 && -e "${install_stage_dir}/adr.old" ]]; then
-        rm -f -- "${INSTALL_DIR}/adr" || true
-        mv -- "${install_stage_dir}/adr.old" "${INSTALL_DIR}/adr" || true
-    elif [[ "$adr_new_attempted" -eq 1 ]]; then
-        rm -f -- "${INSTALL_DIR}/adr" || true
-    fi
-}
-trap 'if [[ "$replacement_active" -eq 1 ]]; then rollback_installation; fi; cleanup' EXIT
+write_journal schedules
+verify_binary_version "$install_stage_dir/telltale.new"
+identify_obsolete_binary
 
-if [[ -e "${INSTALL_DIR}/telltale" ]]; then
-    [[ -f "${INSTALL_DIR}/telltale" ]] || die "Existing telltale installation is not a regular file"
-    old_telltale=1
-    if ! mv -- "${INSTALL_DIR}/telltale" "${install_stage_dir}/telltale.old"; then
-        die "Could not move the existing telltale aside"
-    fi
+ensure_owned_directory "$(dirname -- "$canonical_state")"
+ensure_owned_directory "$(dirname -- "$canonical_log")"
+write_journal migration
+run_migrations
+
+stage_units
+write_journal units
+replace_binary
+
+write_journal smoke
+if [[ "$schedule_checked" -eq 1 ]]; then
+    systemctl_user daemon-reload || die "could not reload the user systemd manager"
+    all_schedules_disabled || die "could not prove schedules remained disabled before smoke tests"
 fi
-if [[ -e "${INSTALL_DIR}/adr" ]]; then
-    [[ -f "${INSTALL_DIR}/adr" ]] || die "Existing adr installation is not a regular file"
-    old_adr=1
-    if ! mv -- "${INSTALL_DIR}/adr" "${install_stage_dir}/adr.old"; then
-        die "Could not move the existing adr aside"
-    fi
-fi
-telltale_new_attempted=1
-if ! mv -- "${install_stage_dir}/telltale.new" "${INSTALL_DIR}/telltale"; then
-    die "Could not install ${INSTALL_DIR}/telltale"
-fi
-adr_new_attempted=1
-if ! mv -- "${install_stage_dir}/adr.new" "${INSTALL_DIR}/adr"; then
-    die "Could not install ${INSTALL_DIR}/adr"
-fi
-verify_binary "${INSTALL_DIR}/telltale" telltale "$legacy_bootstrap"
-verify_binary "${INSTALL_DIR}/adr" adr
-replacement_active=0
-trap cleanup EXIT
-
-info "Installed telltale and adr ${version_tag} to ${INSTALL_DIR}"
-
-# --- optional user systemd timer --------------------------------------------
-
-systemd_quote_exec_path() {
-    local escaped="$1"
-    [[ "$escaped" != *$'\n'* && "$escaped" != *$'\r'* ]] \
-        || die "Install directory contains a line break and cannot be used in a systemd unit"
-    escaped="${escaped//\\/\\\\}"
-    escaped="${escaped//\"/\\\"}"
-    escaped="${escaped//%/%%}"
-    printf '"%s"' "$escaped"
-}
-
-setup_timer() {
-    command -v systemctl >/dev/null 2>&1 \
-        || die "--with-timer requires systemctl; install systemd or omit --with-timer"
-
-    local unit_dir="${HOME}/.config/systemd/user"
-    local service_file="${unit_dir}/adr-scan.service"
-    local timer_file="${unit_dir}/adr-scan.timer"
-    local exec_start
-    local previous_enabled=0 previous_active=0
-    if ! mkdir -p "$unit_dir"; then
-        die "Could not create user systemd unit directory ${unit_dir}"
-    fi
-    [[ ! -L "$unit_dir" ]] || die "Refusing symlink user systemd unit directory ${unit_dir}"
-    [[ ! -L "$service_file" ]] || die "Refusing symlink ${service_file}"
-    [[ ! -L "$timer_file" ]] || die "Refusing symlink ${timer_file}"
-    [[ ! -e "$service_file" || -f "$service_file" ]] \
-        || die "Existing ${service_file} is not a regular file"
-    [[ ! -e "$timer_file" || -f "$timer_file" ]] \
-        || die "Existing ${timer_file} is not a regular file"
-
-    if systemctl --user is-enabled adr-scan.timer >/dev/null 2>&1; then
-        previous_enabled=1
-    fi
-    if systemctl --user is-active adr-scan.timer >/dev/null 2>&1; then
-        previous_active=1
-    fi
-
-    exec_start="$(systemd_quote_exec_path "${INSTALL_DIR}/telltale")"
-    unit_stage_dir="$(mktemp -d "${unit_dir}/.telltale-timer.XXXXXX")"
-    local staged_service="${unit_stage_dir}/adr-scan.service.new"
-    local staged_timer="${unit_stage_dir}/adr-scan.timer.new"
-
-    if ! cat > "$staged_service" <<EOF
-[Unit]
-Description=Telltale one-shot agent session scan
-
-[Service]
-Type=oneshot
-ExecStart=:/usr/bin/env -- ${exec_start} scan --once --emit-activity --root %h
+verify_binary_version "$INSTALL_DIR/telltale"
+run_bounded "$INSTALL_DIR/telltale" rules validate --no-local-config >/dev/null \
+    || die "bundled rule validation smoke test failed"
+smoke_root="$tmpdir/fixture-root"
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "$(dirname -- "${BASH_SOURCE[0]}")/../tests/fixtures/session_stores/codex/sessions/2026/04/install-persistence-chain.jsonl" ]]; then
+    smoke_root="$(dirname -- "${BASH_SOURCE[0]}")/../tests/fixtures/session_stores"
+    smoke_source="repository fixture"
+else
+    smoke_source="deterministic synthetic fixture"
+    mkdir -p -- "$smoke_root/codex/sessions/2026/04"
+    cat > "$smoke_root/codex/sessions/2026/04/telltale-installer-smoke.jsonl" <<'EOF'
+{"type":"session_meta","timestamp":"2026-01-01T00:00:00Z","payload":{"source":"installer-smoke","model_provider":"synthetic","agent_nickname":"installer-smoke","model":"synthetic"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:01Z","payload":{"type":"assistant_message","message":"deterministic installer smoke fixture"}}
 EOF
-    then
-        die "Could not stage ${service_file}"
-    fi
-    chmod 0644 "$staged_service"
-
-    if ! cat > "$staged_timer" <<EOF
-[Unit]
-Description=Run Telltale scan periodically
-
-[Timer]
-OnBootSec=5min
-OnUnitActiveSec=30min
-Unit=adr-scan.service
-
-[Install]
-WantedBy=timers.target
-EOF
-    then
-        die "Could not stage ${timer_file}"
-    fi
-    chmod 0644 "$staged_timer"
-
-    local old_service=0 old_timer=0
-    local service_new_attempted=0 timer_new_attempted=0
-    timer_transaction_active=1
-    rollback_timer() {
-        if [[ "$old_service" -eq 1 && -e "${unit_stage_dir}/adr-scan.service.old" ]]; then
-            rm -f -- "$service_file" || true
-            mv -- "${unit_stage_dir}/adr-scan.service.old" "$service_file" || true
-        elif [[ "$service_new_attempted" -eq 1 ]]; then
-            rm -f -- "$service_file" || true
-        fi
-        if [[ "$old_timer" -eq 1 && -e "${unit_stage_dir}/adr-scan.timer.old" ]]; then
-            rm -f -- "$timer_file" || true
-            mv -- "${unit_stage_dir}/adr-scan.timer.old" "$timer_file" || true
-        elif [[ "$timer_new_attempted" -eq 1 ]]; then
-            rm -f -- "$timer_file" || true
-        fi
-        systemctl --user daemon-reload >/dev/null 2>&1 || true
-        if [[ "$previous_enabled" -eq 1 ]]; then
-            systemctl --user enable adr-scan.timer >/dev/null 2>&1 || true
-        else
-            systemctl --user disable adr-scan.timer >/dev/null 2>&1 || true
-        fi
-        if [[ "$previous_active" -eq 1 ]]; then
-            systemctl --user start adr-scan.timer >/dev/null 2>&1 || true
-        else
-            systemctl --user stop adr-scan.timer >/dev/null 2>&1 || true
-        fi
-    }
-    trap 'if [[ "$timer_transaction_active" -eq 1 ]]; then rollback_timer; fi; cleanup' EXIT
-
-    if [[ -e "$service_file" ]]; then
-        old_service=1
-        if ! mv -- "$service_file" "${unit_stage_dir}/adr-scan.service.old"; then
-            die "Could not snapshot ${service_file}"
-        fi
-    fi
-    if [[ -e "$timer_file" ]]; then
-        old_timer=1
-        if ! mv -- "$timer_file" "${unit_stage_dir}/adr-scan.timer.old"; then
-            die "Could not snapshot ${timer_file}"
-        fi
-    fi
-    service_new_attempted=1
-    if ! mv -- "$staged_service" "$service_file"; then
-        die "Could not install ${service_file}"
-    fi
-    timer_new_attempted=1
-    if ! mv -- "$staged_timer" "$timer_file"; then
-        die "Could not install ${timer_file}"
-    fi
-
-    if ! systemctl --user daemon-reload; then
-        die "Could not reload the user systemd manager; binaries were installed, but timer setup failed and previous state restoration was attempted"
-    fi
-    if ! systemctl --user enable --now adr-scan.timer; then
-        die "Could not enable adr-scan.timer; binaries were installed, but timer setup failed and previous state restoration was attempted"
-    fi
-    timer_transaction_active=0
-    trap cleanup EXIT
-    info "Installed user systemd timer (runs every 30 min as your user)"
-    info "  Manage with: systemctl --user status adr-scan.timer"
-    info "  Disable with: systemctl --user disable --now adr-scan.timer"
-}
+fi
+info "running smoke test with ${smoke_source}"
+run_bounded "$INSTALL_DIR/telltale" scan --once --dry-run --no-local-config \
+    --root "$smoke_root" --max-sources 5 --state-path "$tmpdir/smoke-state.json" \
+    --log-path "$tmpdir/smoke-events.jsonl" >/dev/null \
+    || die "fixture dry-run smoke test failed"
 
 if [[ "$WITH_TIMER" -eq 1 ]]; then
-    setup_timer
-fi
-
-# --- PATH check + next steps -------------------------------------------------
-
-info ""
-info "Telltale installed to: ${INSTALL_DIR}/telltale"
-info "Compatibility command installed to: ${INSTALL_DIR}/adr"
-if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
-    warn "${INSTALL_DIR} is not on your PATH."
-    warn "Add this to your shell profile and restart your shell:"
-    warn "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-fi
-
-info ""
-info "Default telemetry path (user profile):"
-if [[ -n "${XDG_STATE_HOME:-}" ]]; then
-    info "  ${XDG_STATE_HOME}/telltale/logs/adr-events.jsonl"
+    write_journal activation
+    all_schedules_disabled \
+        || die "could not prove all old and new schedules were disabled immediately before activation"
+    systemctl_user enable --now telltale-scan.timer \
+        || die "could not enable canonical telltale-scan.timer; rollback was attempted"
+    query_unit telltale-scan.timer || die "could not verify canonical timer activation"
+    [[ "$QUERY_PRESENT" -eq 1 && "$QUERY_ENABLED" -eq 1 && "$QUERY_ACTIVE" -eq 1 ]] \
+        || die "canonical timer activation postcondition failed"
+    for unit in adr-scan.service adr-scan.timer telltale-scan.service; do
+        query_unit "$unit" || die "could not verify schedule postcondition for ${unit}"
+        [[ "$QUERY_ENABLED" -eq 0 && "$QUERY_ACTIVE" -eq 0 ]] \
+            || die "schedule postcondition left ${unit} enabled or active"
+    done
 else
-    info "  ${HOME}/.local/state/telltale/logs/adr-events.jsonl"
+    all_schedules_disabled \
+        || die "final all-schedules-disabled postcondition failed"
 fi
-info ""
-info "Next steps:"
-info "  telltale scan --once --dry-run --root \$HOME  # read-only first check"
-info "  telltale scan --once --emit-activity          # write telemetry"
-info "  telltale status                               # review latest summary"
-info ""
-info "Docs: https://github.com/${REPO}/tree/main/docs"
+
+write_journal committed
+transaction_active=0
+
+info "installed canonical telltale ${version_tag} to ${INSTALL_DIR}/telltale"
+if [[ "$WITH_TIMER" -eq 1 ]]; then
+    info "enabled user timer: telltale-scan.timer"
+    info "  Manage with: systemctl --user status telltale-scan.timer"
+    info "  Disable with: systemctl --user disable --now telltale-scan.timer"
+fi
+info "canonical telemetry path: ${canonical_log}"
+info "canonical state path: ${canonical_state}"
+if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
+    warn "${INSTALL_DIR} is not on your PATH"
+fi

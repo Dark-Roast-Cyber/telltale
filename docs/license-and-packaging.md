@@ -66,14 +66,14 @@ archives. Every archive contains exactly these file members:
 
 ```text
 telltale                    # or telltale.exe on Windows
-adr                         # or adr.exe on Windows
 LICENSE
 README.md                   # release quick start
 config/examples/telltale-outputs.yaml
-config/examples/adr-scan.service
-config/examples/adr-scan.timer
-config/examples/adr-scan-task.xml
+config/examples/telltale-scan.service
+config/examples/telltale-scan.timer
+config/examples/telltale-scan-task.xml
 config/examples/elastic-telltale-index-template.json
+config/examples/elastic-telltale-role.json
 ```
 
 The examples are intentionally curated. Existing `config/examples/splunk-*`
@@ -82,13 +82,12 @@ release members. `SHA256SUMS` is published alongside the archives as a separate
 release asset.
 
 The release workflow also creates a GitHub artifact attestation for each
-archive using the workflow's short-lived GitHub/Sigstore identity. The existing
-`v0.1.0` release used the legacy asset name below; `0.2.x` and later canonical
-assets use `telltale-v<version>-...` while matching `adr-*` aliases remain exact
-copies. Verify a download before extraction with the GitHub CLI:
+archive using the workflow's short-lived GitHub/Sigstore identity. Canonical
+assets use `telltale-v<version>-...`. Verify a download before extraction with
+the GitHub CLI:
 
 ```sh
-gh attestation verify adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify telltale-v0.5.0-x86_64-unknown-linux-gnu.tar.gz \
   --repo Dark-Roast-Cyber/telltale
 ```
 
