@@ -3830,10 +3830,45 @@ fn watch_skips_no_op_state_save() {
     // satisfying the second iteration.
     wait_for_watch_ready(child.id());
     let first_trigger = root.join("codex/sessions/first-trigger.txt");
-    fs::write(&first_trigger, b"watch first trigger\n").expect("write first trigger");
-    let first_summary = summary_rx
-        .recv_timeout(Duration::from_secs(60))
-        .expect("first watch summary");
+    #[cfg(target_os = "linux")]
+    let first_attempt = 1;
+    #[cfg(not(target_os = "linux"))]
+    let mut first_attempt = 1;
+    fs::write(
+        &first_trigger,
+        format!("watch first trigger {first_attempt}\n"),
+    )
+    .expect("write first trigger");
+    #[cfg(not(target_os = "linux"))]
+    let mut next_retry = Instant::now() + Duration::from_secs(5);
+    let first_deadline = Instant::now() + Duration::from_secs(60);
+    let first_summary = loop {
+        match summary_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => break line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("watch summary reader disconnected before first scan completed")
+            }
+        }
+        if let Some(status) = child.try_wait().expect("poll telltale watch") {
+            panic!("telltale watch exited before first scan completed: {status:?}");
+        }
+        if Instant::now() >= first_deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("telltale watch did not complete the first triggered scan within timeout");
+        }
+        #[cfg(not(target_os = "linux"))]
+        if Instant::now() >= next_retry {
+            first_attempt += 1;
+            fs::write(
+                &first_trigger,
+                format!("watch first trigger {first_attempt}\n"),
+            )
+            .expect("retry first trigger");
+            next_retry = Instant::now() + Duration::from_secs(5);
+        }
+    };
 
     let state_before = fs::read(&state_path).expect("read first state snapshot");
     let mtime_before = fs::metadata(&state_path)

@@ -1928,6 +1928,7 @@ mod tests {
         manifest_path, run_env_migration_with_hook, run_event_migration,
         run_event_migration_with_failpoint, run_state_migration,
     };
+    #[cfg(unix)]
     use crate::state::ScanState;
 
     #[cfg(unix)]

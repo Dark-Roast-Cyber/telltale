@@ -733,11 +733,14 @@ fn source_build_is_pinned_and_does_not_produce_retired_binary() {
     let metadata = release_metadata(temp.path(), "v0.5.0");
     let tools = tools(temp.path(), true);
     let cargo_log = temp.path().join("cargo.log");
+    let source_binary = temp.path().join("source-telltale");
+    telltale_binary(&source_binary, "0.5.0", false);
     executable(
         &tools.join("cargo"),
         &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\nroot=''\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--root\" ]; then root=$2; shift 2; else shift; fi; done\nmkdir -p \"$root/bin\"\nprintf '#!/bin/sh\\nprintf \\\"telltale 0.5.0 (synthetic)\\\\n\\\"\\n' > \"$root/bin/telltale\"\nchmod 755 \"$root/bin/telltale\"\n",
-            cargo_log.display()
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}'\nroot=''\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--root\" ]; then root=$2; shift 2; else shift; fi; done\nmkdir -p \"$root/bin\"\ncp '{}' \"$root/bin/telltale\"\n",
+            cargo_log.display(),
+            source_binary.display()
         ),
     );
     let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
