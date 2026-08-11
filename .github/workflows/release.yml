@@ -252,7 +252,7 @@ jobs:
             }
           }
       - name: Attest release archive
-        uses: actions/attest@v4.2.1
+        uses: actions/attest@v4.2.2
         with:
           subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
       - name: Upload artifact
