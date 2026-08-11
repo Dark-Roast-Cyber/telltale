@@ -64,7 +64,7 @@
   then run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
   and `cargo test`; confirm the untracked Tokscale export and preserved stash
   remain untouched.
-- [ ] 5.2 Commit only legitimate evidence/status/OpenSpec changes, push normally
+- [x] 5.2 Commit only legitimate evidence/status/OpenSpec changes, push normally
   to `origin/release/0.5.0-maturation`, confirm PR #9 remains Draft and report
   its current CI state without marking it ready or merging.
 - [ ] 5.3 Archive `resolve-linux-host-validation-gates`, validate that no active

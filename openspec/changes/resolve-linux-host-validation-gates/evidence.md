@@ -144,8 +144,8 @@ no product defect was established and no unrelated service was changed.
 - Fresh coder-quality/Luna Max review: **PASS** after these corrections; the
   OpenCode causal-stage claim, source-selection classifications, systemd cleanup
   scope/restoration wording, and durable status reconciliation findings were
-  resolved. Tasks `4.1`, `4.2`, and `5.1` are complete; tasks `5.2` and `5.3`
-  remain open.
+  resolved. Tasks `4.1`, `4.2`, and `5.1` are complete; task `5.2` is now
+  complete and task `5.3` remains open.
 
 ## Final repository validation
 
@@ -157,3 +157,12 @@ no product defect was established and no unrelated service was changed.
 - `cargo test`: **PASS**; 1 ignored test, no failures.
 - No Rust source, product configuration, fixture, stash, export, HEC, or
   Splunk path was changed or exercised by this follow-up.
+
+## Commit and PR status
+
+- Evidence/status/OpenSpec commit `c54cf80` (`Record Linux host gate resolution
+  evidence`) was pushed normally to
+  `origin/release/0.5.0-maturation`.
+- PR #9 remains open and Draft at the pushed head. After approximately 50
+  seconds, no newly visible workflow run or check conclusion was available;
+  this remains pending/absent, not a product failure.
