@@ -888,15 +888,39 @@ fn event_migration_cli_preserves_mixed_versions_framing_and_manifest_repair() {
     );
 
     let first_manifest = fs::read(&manifest_path).expect("manifest bytes");
+    #[cfg(windows)]
+    let source_before = fs::read(&source).expect("source bytes");
     let rerun = run_event_pairs(&[(&source, &destination)]);
+    #[cfg(unix)]
     assert!(rerun.status.success());
+    #[cfg(windows)]
+    {
+        assert_windows_existing_target_unsupported(&rerun);
+        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
+        assert_eq!(
+            fs::read(&destination).expect("destination bytes"),
+            source_bytes
+        );
+    }
     assert_eq!(
         fs::read(&manifest_path).expect("manifest bytes"),
         first_manifest
     );
     fs::remove_file(&manifest_path).expect("remove manifest");
     let repair = run_event_pairs(&[(&source, &destination)]);
+    #[cfg(unix)]
     assert!(repair.status.success());
+    #[cfg(windows)]
+    {
+        assert_windows_existing_target_unsupported(&repair);
+        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
+        assert_eq!(
+            fs::read(&destination).expect("destination bytes"),
+            source_bytes
+        );
+        assert!(!manifest_path.exists());
+    }
+    #[cfg(unix)]
     assert_eq!(
         fs::read(&manifest_path).expect("repaired manifest"),
         first_manifest
@@ -905,6 +929,19 @@ fn event_migration_cli_preserves_mixed_versions_framing_and_manifest_repair() {
     fs::write(&manifest_path, b"manifest-conflict\n").expect("manifest conflict");
     let conflict = run_event_pairs(&[(&source, &destination)]);
     assert!(!conflict.status.success());
+    #[cfg(windows)]
+    {
+        assert_windows_existing_target_unsupported(&conflict);
+        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
+        assert_eq!(
+            fs::read(&destination).expect("destination bytes"),
+            source_bytes
+        );
+        assert_eq!(
+            fs::read(&manifest_path).expect("manifest bytes"),
+            b"manifest-conflict\n"
+        );
+    }
     assert_eq!(
         fs::read(&destination).expect("destination bytes"),
         source_bytes
@@ -922,16 +959,22 @@ fn event_migration_rejects_same_id_byte_collision_before_destination_mutation() 
     source_bytes.extend_from_slice(&first);
     source_bytes.insert(first.len() + 1 + first.len(), b' ');
     fs::write(&source, &source_bytes).expect("collision source");
-    fs::write(&destination, b"destination-sentinel\n").expect("destination sentinel");
-    set_mode(&destination, 0o640);
+    #[cfg(unix)]
+    {
+        fs::write(&destination, b"destination-sentinel\n").expect("destination sentinel");
+        set_mode(&destination, 0o640);
+    }
 
     let output = run_event_pairs(&[(&source, &destination)]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("event_id collision"));
+    #[cfg(unix)]
     assert_eq!(
         fs::read(&destination).expect("destination bytes"),
         b"destination-sentinel\n"
     );
+    #[cfg(windows)]
+    assert!(!destination.exists());
     assert!(
         !destination
             .with_file_name("destination.jsonl.migration.json")
@@ -999,14 +1042,20 @@ fn event_migration_rejects_malformed_versions_duplicate_keys_and_partial_records
         let source = temp.path().join(format!("invalid-{index}.jsonl"));
         let destination = temp.path().join(format!("destination-{index}.jsonl"));
         fs::write(&source, contents.as_bytes()).expect("invalid source");
-        fs::write(&destination, b"untouched\n").expect("destination");
-        set_mode(&destination, 0o640);
+        #[cfg(unix)]
+        {
+            fs::write(&destination, b"untouched\n").expect("destination");
+            set_mode(&destination, 0o640);
+        }
         let output = run_event_pairs(&[(&source, &destination)]);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success());
         assert!(stderr.contains(expected_error), "stderr: {stderr}");
         assert!(!stderr.contains("canary"), "stderr leaked input: {stderr}");
+        #[cfg(unix)]
         assert_eq!(fs::read(&destination).expect("destination"), b"untouched\n");
+        #[cfg(windows)]
+        assert!(!destination.exists());
     }
 }
 
@@ -1058,28 +1107,89 @@ fn event_migration_supports_multiple_explicit_destination_mappings() {
     assert!(!manifest_text.contains(&destination_one.display().to_string()));
     assert!(!manifest_text.contains(&destination_two.display().to_string()));
 
-    fs::remove_file(&destination_two).expect("remove secondary destination");
-    let repaired = run_event_pairs(&[
-        (&source_one, &destination_one),
-        (&source_two, &destination_two),
-    ]);
-    assert!(repaired.status.success());
-    assert_eq!(
-        fs::read(&destination_two).expect("repaired destination"),
-        second
-    );
+    #[cfg(unix)]
+    {
+        fs::remove_file(&destination_two).expect("remove secondary destination");
+        let repaired = run_event_pairs(&[
+            (&source_one, &destination_one),
+            (&source_two, &destination_two),
+        ]);
+        assert!(repaired.status.success());
+        assert_eq!(
+            fs::read(&destination_two).expect("repaired destination"),
+            second
+        );
 
-    fs::write(&destination_two, b"secondary-conflict\n").expect("secondary conflict");
-    set_mode(&destination_two, 0o640);
-    let conflict = run_event_pairs(&[
-        (&source_one, &destination_one),
-        (&source_two, &destination_two),
-    ]);
-    assert!(!conflict.status.success());
-    assert_eq!(
-        fs::read(&destination_two).expect("secondary conflict bytes"),
-        b"secondary-conflict\n"
-    );
+        fs::write(&destination_two, b"secondary-conflict\n").expect("secondary conflict");
+        set_mode(&destination_two, 0o640);
+        let conflict = run_event_pairs(&[
+            (&source_one, &destination_one),
+            (&source_two, &destination_two),
+        ]);
+        assert!(!conflict.status.success());
+        assert_eq!(
+            fs::read(&destination_two).expect("secondary conflict bytes"),
+            b"secondary-conflict\n"
+        );
+    }
+    #[cfg(windows)]
+    {
+        let source_one_bytes = fs::read(&source_one).expect("source one bytes");
+        let source_two_bytes = fs::read(&source_two).expect("source two bytes");
+        let destination_one_bytes = fs::read(&destination_one).expect("primary destination bytes");
+        let manifest_path = manifest_path_for(&destination_one);
+        let manifest_bytes = fs::read(&manifest_path).expect("manifest bytes");
+        fs::remove_file(&destination_two).expect("remove secondary destination");
+        let repaired = run_event_pairs(&[
+            (&source_one, &destination_one),
+            (&source_two, &destination_two),
+        ]);
+        assert_windows_existing_target_unsupported(&repaired);
+        assert_eq!(
+            fs::read(&source_one).expect("source one bytes"),
+            source_one_bytes
+        );
+        assert_eq!(
+            fs::read(&source_two).expect("source two bytes"),
+            source_two_bytes
+        );
+        assert_eq!(
+            fs::read(&destination_one).expect("primary destination bytes"),
+            destination_one_bytes
+        );
+        assert!(!destination_two.exists());
+        assert_eq!(
+            fs::read(&manifest_path).expect("manifest bytes"),
+            manifest_bytes
+        );
+
+        fs::write(&destination_two, b"secondary-conflict\n").expect("secondary conflict");
+        let conflict = run_event_pairs(&[
+            (&source_one, &destination_one),
+            (&source_two, &destination_two),
+        ]);
+        assert_windows_existing_target_unsupported(&conflict);
+        assert_eq!(
+            fs::read(&source_one).expect("source one bytes"),
+            source_one_bytes
+        );
+        assert_eq!(
+            fs::read(&source_two).expect("source two bytes"),
+            source_two_bytes
+        );
+        assert_eq!(
+            fs::read(&destination_one).expect("primary destination bytes"),
+            destination_one_bytes
+        );
+        assert_eq!(
+            fs::read(&destination_two).expect("secondary conflict bytes"),
+            b"secondary-conflict\n"
+        );
+        assert_eq!(
+            fs::read(&manifest_path).expect("manifest bytes"),
+            manifest_bytes
+        );
+    }
 }
 
 #[test]
@@ -1384,15 +1494,33 @@ fn environment_migration_maps_exact_keys_and_preserves_opaque_bytes_and_framing(
     assert!(!String::from_utf8_lossy(&output.stdout).contains(canary));
     let manifest_path = destination.with_file_name("telltale.env.migration.json");
     let first_manifest = fs::read(&manifest_path).expect("manifest bytes");
+    #[cfg(windows)]
+    let source_before = fs::read(&source).expect("source bytes");
     let rerun = run_env_migration(&source, &destination);
+    #[cfg(unix)]
     assert!(rerun.status.success());
+    #[cfg(windows)]
+    {
+        assert_windows_existing_target_unsupported(&rerun);
+        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
+        assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
+    }
     assert_eq!(
         fs::read(&manifest_path).expect("manifest bytes"),
         first_manifest
     );
     fs::remove_file(&manifest_path).expect("remove manifest");
     let repair = run_env_migration(&source, &destination);
+    #[cfg(unix)]
     assert!(repair.status.success());
+    #[cfg(windows)]
+    {
+        assert_windows_existing_target_unsupported(&repair);
+        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
+        assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
+        assert!(!manifest_path.exists());
+    }
+    #[cfg(unix)]
     assert_eq!(
         fs::read(&manifest_path).expect("repaired manifest"),
         first_manifest
@@ -1400,6 +1528,16 @@ fn environment_migration_maps_exact_keys_and_preserves_opaque_bytes_and_framing(
     fs::write(&manifest_path, b"manifest-conflict\n").expect("manifest conflict");
     let conflict = run_env_migration(&source, &destination);
     assert!(!conflict.status.success());
+    #[cfg(windows)]
+    {
+        assert_windows_existing_target_unsupported(&conflict);
+        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
+        assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
+        assert_eq!(
+            fs::read(&manifest_path).expect("manifest bytes"),
+            b"manifest-conflict\n"
+        );
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1504,6 +1642,28 @@ fn environment_migration_covers_the_complete_audited_inventory_without_canary_le
     let error_text = String::from_utf8_lossy(&output.stderr);
     assert!(!output_text.contains("migration-inventory-canary"));
     assert!(!error_text.contains("migration-inventory-canary"));
+}
+
+#[cfg(windows)]
+#[test]
+fn migration_rejects_existing_manifest_without_destination_without_mutation() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("orphan-source.jsonl");
+    let destination = temp.path().join("orphan-destination.jsonl");
+    let manifest_path = manifest_path_for(&destination);
+    let source_bytes = compact_historical_fixture("event-1.0.json");
+    let manifest_bytes = b"existing-orphan-manifest\n";
+    fs::write(&source, &source_bytes).expect("source");
+    fs::write(&manifest_path, manifest_bytes).expect("orphan manifest");
+
+    let output = run_event_pairs(&[(&source, &destination)]);
+    assert_windows_existing_target_unsupported(&output);
+    assert!(!destination.exists());
+    assert_eq!(fs::read(&source).expect("source bytes"), source_bytes);
+    assert_eq!(
+        fs::read(&manifest_path).expect("manifest bytes"),
+        manifest_bytes
+    );
 }
 
 #[cfg(unix)]
@@ -1660,14 +1820,20 @@ fn environment_migration_rejects_duplicates_coexistence_unmapped_and_malformed_i
         let source = temp.path().join(format!("source-{index}.env"));
         let destination = temp.path().join(format!("destination-{index}.env"));
         fs::write(&source, contents.as_bytes()).expect("source");
-        fs::write(&destination, b"destination-sentinel\n").expect("destination");
+        #[cfg(unix)]
+        {
+            fs::write(&destination, b"destination-sentinel\n").expect("destination");
+        }
         let output = run_env_migration(&source, &destination);
         assert!(!output.status.success());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-canary"));
+        #[cfg(unix)]
         assert_eq!(
             fs::read(&destination).expect("destination"),
             b"destination-sentinel\n"
         );
+        #[cfg(windows)]
+        assert!(!destination.exists());
     }
 
     let temp = tempdir().expect("tempdir");
@@ -1788,19 +1954,22 @@ fn run_env_migration(
         .expect("environment migration")
 }
 
-fn set_mode(path: &std::path::Path, mode: u32) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
+#[cfg(windows)]
+fn assert_windows_existing_target_unsupported(output: &std::process::Output) {
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("existing migration target ownership is unsupported on Windows")
+    );
+}
 
-        let mut permissions = fs::metadata(path).expect("mode metadata").permissions();
-        permissions.set_mode(mode);
-        fs::set_permissions(path, permissions).expect("set mode");
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, mode);
-    }
+#[cfg(unix)]
+fn set_mode(path: &std::path::Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path).expect("mode metadata").permissions();
+    permissions.set_mode(mode);
+    fs::set_permissions(path, permissions).expect("set mode");
 }
 
 fn run_migration(source: &std::path::Path, destination: &std::path::Path) {

