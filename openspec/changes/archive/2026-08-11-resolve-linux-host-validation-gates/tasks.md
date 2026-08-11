@@ -67,6 +67,6 @@
 - [x] 5.2 Commit only legitimate evidence/status/OpenSpec changes, push normally
   to `origin/release/0.5.0-maturation`, confirm PR #9 remains Draft and report
   its current CI state without marking it ready or merging.
-- [ ] 5.3 Archive `resolve-linux-host-validation-gates`, validate that no active
+- [x] 5.3 Archive `resolve-linux-host-validation-gates`, validate that no active
   OpenSpec change remains, update durable state with changed files, validation,
   decisions, risks, and next batch, and stop without beginning HEC/Splunk work.

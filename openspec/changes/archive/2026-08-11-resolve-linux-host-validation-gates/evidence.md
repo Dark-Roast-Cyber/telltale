@@ -160,9 +160,19 @@ no product defect was established and no unrelated service was changed.
 
 ## Commit and PR status
 
-- Evidence/status/OpenSpec commit `c54cf80` (`Record Linux host gate resolution
-  evidence`) was pushed normally to
-  `origin/release/0.5.0-maturation`.
+- Evidence/status/OpenSpec commits `c54cf80` (`Record Linux host gate resolution
+  evidence`) and `fc39c35` (`Record pushed host gate status`) were pushed
+  normally to `origin/release/0.5.0-maturation`.
 - PR #9 remains open and Draft at the pushed head. After approximately 50
-  seconds, no newly visible workflow run or check conclusion was available;
-  this remains pending/absent, not a product failure.
+  seconds after the first push and 90 seconds after the final push, no newly
+  visible workflow run or check conclusion was available; this remains
+  pending/absent, not a product failure.
+
+## Archive completion
+
+- OpenSpec archive: **PASS** — archived as
+  `openspec/changes/archive/2026-08-11-resolve-linux-host-validation-gates/`;
+  no delta specs were created or synchronized.
+- Active OpenSpec changes after archive: **0**.
+- Task `5.3` is complete. No HEC/Splunk validation or subsequent batch was
+  started.
