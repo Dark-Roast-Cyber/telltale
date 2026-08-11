@@ -3734,7 +3734,7 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
 "#;
     #[cfg(windows)]
     fs::write(&unknown_trigger_path, unknown_trigger_contents).expect("write unknown trigger");
-    fs::write(&session_path, changed_contents).expect("change watched fixture");
+    fs::write(&session_path, &changed_contents).expect("change watched fixture");
 
     let deadline = Instant::now() + Duration::from_secs(60);
     #[cfg(not(target_os = "linux"))]
