@@ -133,9 +133,9 @@ pub struct SplunkHecConfig {
 impl Default for SplunkHecConfig {
     fn default() -> Self {
         Self {
-            index: Some("adr".to_string()),
-            sourcetype: "adr:json".to_string(),
-            source: Some("telltale:adr".to_string()),
+            index: Some("telltale".to_string()),
+            sourcetype: "telltale:json".to_string(),
+            source: Some("telltale".to_string()),
             host: None,
         }
     }
@@ -216,9 +216,9 @@ mod tests {
         let mut event = make_health_event();
         event.timestamp = "2026-05-18T02:00:00.000Z".to_string();
         let config = SplunkHecConfig {
-            index: Some("adr".to_string()),
-            sourcetype: "adr:json".to_string(),
-            source: Some("telltale:adr-events".to_string()),
+            index: Some("telltale".to_string()),
+            sourcetype: "telltale:json".to_string(),
+            source: Some("telltale".to_string()),
             host: Some("developer-workstation".to_string()),
         };
 
@@ -226,13 +226,13 @@ mod tests {
         let envelopes = splunk_hec_envelopes(&events, &config);
         let envelope = serde_json::to_value(&envelopes[0]).expect("serialize hec envelope");
 
-        assert_eq!(envelope["index"], "adr");
-        assert_eq!(envelope["sourcetype"], "adr:json");
-        assert_eq!(envelope["source"], "telltale:adr-events");
+        assert_eq!(envelope["index"], "telltale");
+        assert_eq!(envelope["sourcetype"], "telltale:json");
+        assert_eq!(envelope["source"], "telltale");
         assert_eq!(envelope["host"], "developer-workstation");
         assert_eq!(envelope["time"], 1_779_069_600.0);
         assert_eq!(envelope["event"]["event_type"], "health");
-        assert_eq!(envelope["event"]["schema_version"], "2.0");
+        assert_eq!(envelope["event"]["schema_version"], "3.0");
         assert!(envelope["event"].get("index").is_none());
         assert!(envelope["event"].get("sourcetype").is_none());
     }
@@ -327,8 +327,8 @@ mod tests {
             .collect();
         assert_eq!(envelopes.len(), 2);
         for envelope in &envelopes {
-            assert_eq!(envelope["index"], "adr");
-            assert_eq!(envelope["sourcetype"], "adr:json");
+            assert_eq!(envelope["index"], "telltale");
+            assert_eq!(envelope["sourcetype"], "telltale:json");
             assert_eq!(envelope["event"]["event_type"], "health");
         }
     }

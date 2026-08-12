@@ -6,6 +6,11 @@ Canonical Telltale events, normalized records, source identities, redaction,
 and scoring types. This crate owns data contracts only; it does not discover
 session stores or evaluate detection rules.
 
+Native serialized events use Event 3.0, package-only `telltale_version`,
+`telltale-<UUIDv4>` event IDs, and top-level `timeline_anchors`. Legacy Event
+1.0/2.0 fields are historical compatibility data and are read by the CLI's
+strict historical dispatcher rather than emitted by native builders.
+
 ```rust
 use telltale_schema::record::NormalizedRecord;
 

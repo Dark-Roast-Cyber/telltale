@@ -76,13 +76,13 @@ pub(crate) fn response_metadata(
     severity: &str,
     rule_ids: &[String],
     categories: &[String],
-    triage_required: bool,
+    high_required: bool,
 ) -> super::ResponseMetadata {
     super::ResponseMetadata {
         recommended_action: recommended_action(severity).to_string(),
         response_playbook: response_playbook(rule_ids, categories).to_string(),
         investigation_summary: investigation_summary(severity, rule_ids, categories),
-        escalation: if triage_required {
+        escalation: if high_required {
             "security_review_required".to_string()
         } else {
             "routine_review".to_string()
@@ -104,15 +104,15 @@ fn response_playbook(rule_ids: &[String], categories: &[String]) -> &'static str
     let has_category = |needle: &str| categories.iter().any(|category| category.contains(needle));
 
     if has_rule("mcp") || has_category("mcp") {
-        "adr-playbook-mcp-prompt-injection"
+        "telltale-playbook-mcp-prompt-injection"
     } else if has_rule("credential") || has_rule("secret") || has_category("credential") {
-        "adr-playbook-credential-access"
+        "telltale-playbook-credential-access"
     } else if has_rule("exfil") || has_category("network") || has_category("exfil") {
-        "adr-playbook-network-egress"
+        "telltale-playbook-network-egress"
     } else if has_rule("persistence") || has_category("persistence") {
-        "adr-playbook-persistence"
+        "telltale-playbook-persistence"
     } else {
-        "adr-playbook-general-investigation"
+        "telltale-playbook-general-investigation"
     }
 }
 
@@ -128,7 +128,7 @@ fn investigation_summary(severity: &str, rule_ids: &[String], categories: &[Stri
         categories.join(",")
     };
     format!(
-        "{severity} ADR detection matched {rule_summary} in {category_summary}; review redacted evidence, timeline anchors when present, and the local source session before containment."
+        "{severity} Telltale detection matched {rule_summary} in {category_summary}; review redacted evidence, timeline anchors when present, and the local source session before containment."
     )
 }
 

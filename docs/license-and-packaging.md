@@ -15,7 +15,7 @@ build, test, configure, and operate it:
 - The command-line workflows for scan, watch, export, status, and rules
   management.
 - Client discovery, parser, normalization, scoring, redaction, evidence,
-  event, baseline, correlation, timeline, and triage integration code that
+  event, baseline, correlation, timeline, and deterministic review metadata code that
   ships in the core crate.
 - JSON event schemas under `schemas/`.
 - Bundled detection rules, ad-hoc examples, policy-violation examples,
@@ -39,7 +39,7 @@ clear packaging boundary. Candidate separate-license areas include:
 - AI-assisted rule and policy authoring.
 - Managed or signed detection feeds.
 - Continuous policy monitoring services.
-- Local AI review or endpoint elevation features beyond the core triage client.
+- Local AI review or endpoint elevation features beyond the deterministic core.
 - EDR, SOAR, case-management, or containment integrations.
 - Enterprise dashboards, compliance packs, fleet management, and hosted
   management services.
@@ -66,14 +66,14 @@ archives. Every archive contains exactly these file members:
 
 ```text
 telltale                    # or telltale.exe on Windows
-adr                         # or adr.exe on Windows
 LICENSE
 README.md                   # release quick start
 config/examples/telltale-outputs.yaml
-config/examples/adr-scan.service
-config/examples/adr-scan.timer
-config/examples/adr-scan-task.xml
+config/examples/telltale-scan.service
+config/examples/telltale-scan.timer
+config/examples/telltale-scan-task.xml
 config/examples/elastic-telltale-index-template.json
+config/examples/elastic-telltale-role.json
 ```
 
 The examples are intentionally curated. Existing `config/examples/splunk-*`
@@ -82,13 +82,13 @@ release members. `SHA256SUMS` is published alongside the archives as a separate
 release asset.
 
 The release workflow also creates a GitHub artifact attestation for each
-archive using the workflow's short-lived GitHub/Sigstore identity. The existing
-`v0.1.0` release used the legacy asset name below; `0.2.x` and later canonical
-assets use `telltale-v<version>-...` while matching `adr-*` aliases remain exact
-copies. Verify a download before extraction with the GitHub CLI:
+archive using the workflow's short-lived GitHub/Sigstore identity. Canonical
+assets use `telltale-v<version>-...`. Once the candidate or later stable
+release is published, verify a downloaded archive as a separate
+post-publication step with the GitHub CLI. For the current candidate:
 
 ```sh
-gh attestation verify adr-v0.1.0-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify telltale-v0.5.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
   --repo Dark-Roast-Cyber/telltale
 ```
 
@@ -100,4 +100,8 @@ stores, private planning notes, local agent workflow state, machine-specific
 configuration, or credentials. Operational examples can ship as reviewed
 repository files, but environment values such as SIEM endpoints, tokens, host
 paths, and live transcript material belong in deployment-specific
-configuration outside the release package.
+configuration outside the release package. Candidate releases are explicitly
+GitHub prereleases and are immutable: a changed validation-relevant source,
+installer, archive, checksum, or attestation requires a new reviewed RC tag.
+The binary release workflow does not publish crates.io packages; publication is
+a separate stable-release handoff after all required gates pass.

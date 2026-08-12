@@ -3,12 +3,14 @@
 
 PREFIX ?= $(HOME)/.local
 BINDIR = $(PREFIX)/bin
-SYSTEMD_USER_DIR = $(HOME)/.config/systemd/user
+CONFIG_ROOT ?= $(if $(XDG_CONFIG_HOME),$(XDG_CONFIG_HOME),$(HOME)/.config)
+SYSTEMD_USER_DIR = $(CONFIG_ROOT)/systemd/user
+TELLTALE_ENV_PATH = $(CONFIG_ROOT)/telltale/telltale.env
 PROJECT_DIR = $(shell pwd)
 LOG_DIR = $(PROJECT_DIR)/logs
 STATE_DIR = $(PROJECT_DIR)/state
-LOG_PATH = $(LOG_DIR)/adr-events.jsonl
-STATE_PATH = $(STATE_DIR)/adr-state.json
+LOG_PATH = $(LOG_DIR)/telltale-events.jsonl
+STATE_PATH = $(STATE_DIR)/telltale-state.json
 SCAN_ROOT = $(HOME)
 PUBLIC_RELEASE_BRANCH ?= main
 PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
@@ -17,7 +19,7 @@ RELEASE_ARTIFACT_DIR ?= release-downloads
 CARGO_LOCKED ?=
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -29,47 +31,29 @@ help:
 ## Build release binaries
 build:
 	cargo build $(CARGO_LOCKED) --release
-	@echo "Binaries: target/release/telltale target/release/adr"
+	@echo "Binary: target/release/telltale"
 
-## Install binaries + systemd user service + timer
+## Install the canonical developer binary without activating schedules
 install: build
-	@echo "Installing telltale and adr to $(BINDIR)..."
-	mkdir -p $(BINDIR)
-	install -m 0755 target/release/telltale $(BINDIR)/telltale
-	install -m 0755 target/release/adr $(BINDIR)/adr
-	@echo "Installing systemd user units..."
-	mkdir -p $(SYSTEMD_USER_DIR)
-	@sed \
-		-e 's|__PROJECT_DIR__|$(PROJECT_DIR)|g' \
-		-e 's|__LOG_PATH__|$(LOG_PATH)|g' \
-		-e 's|__STATE_PATH__|$(STATE_PATH)|g' \
-		-e 's|__LOG_DIR__|$(LOG_DIR)|g' \
-		-e 's|__STATE_DIR__|$(STATE_DIR)|g' \
-		-e 's|__SCAN_ROOT__|$(SCAN_ROOT)|g' \
-		-e 's|__BINDIR__|$(BINDIR)|g' \
-		config/examples/adr-scan.service.in > $(SYSTEMD_USER_DIR)/adr-scan.service
-	@sed \
-		-e 's|__PROJECT_DIR__|$(PROJECT_DIR)|g' \
-		config/examples/adr-scan.timer.in > $(SYSTEMD_USER_DIR)/adr-scan.timer
-	@echo "Enabling timer..."
-	systemctl --user daemon-reload
-	systemctl --user enable adr-scan.timer
+	@echo "Installing telltale to $(BINDIR)..."
+	mkdir -p "$(BINDIR)"
+	install -m 0755 target/release/telltale "$(BINDIR)/telltale"
 	@echo ""
-	@echo "Installed. To start now:"
-	@echo "  systemctl --user start adr-scan.timer"
-	@echo "  systemctl --user status adr-scan.timer"
+	@echo "Installed canonical developer binary: $(BINDIR)/telltale"
+	@echo "This target does not install or activate a user schedule."
+	@echo "Use scripts/install-telltale --with-timer for transactional schedule migration."
 	@echo ""
 	@echo "To view logs:"
-	@echo "  journalctl --user -u adr-scan.service -f"
+	@echo "  journalctl --user -u telltale-scan.service -f"
 
 ## Uninstall systemd units (binary stays in BINDIR)
 uninstall:
-	-systemctl --user stop adr-scan.timer 2>/dev/null
-	-systemctl --user disable adr-scan.timer 2>/dev/null
-	rm -f $(SYSTEMD_USER_DIR)/adr-scan.service
-	rm -f $(SYSTEMD_USER_DIR)/adr-scan.timer
+	-systemctl --user stop telltale-scan.timer 2>/dev/null
+	-systemctl --user disable telltale-scan.timer 2>/dev/null
+	rm -f $(SYSTEMD_USER_DIR)/telltale-scan.service
+	rm -f $(SYSTEMD_USER_DIR)/telltale-scan.timer
 	systemctl --user daemon-reload
-	@echo "Uninstalled. Binaries still at $(BINDIR)/telltale and $(BINDIR)/adr"
+	@echo "Uninstalled units. Binary remains at $(BINDIR)/telltale"
 
 ## Run tests
 test:
@@ -196,13 +180,12 @@ package-manifest:
 			telltale-cli) \
 			for path in $$manifest; do \
 				case "$$path" in \
-					.cargo_vcs_info.json|Cargo.lock|Cargo.toml|Cargo.toml.orig|crates/telltale-cli/README.md|LICENSE|build.rs|benches/benchmarks.rs|src/*|config/rules/tool-call-regex.yaml|tests/fixtures/*) ;; \
+					.cargo_vcs_info.json|Cargo.lock|Cargo.toml|Cargo.toml.orig|crates/telltale-cli/README.md|LICENSE|build.rs|benches/benchmarks.rs|src/*|schemas/event.schema.json|schemas/historical/*|config/rules/tool-call-regex.yaml|tests/fixtures/*) ;; \
 					*) echo "$$package includes unexpected path: $$path"; exit 1 ;; \
 				 esac; \
 			done; \
 			case "$$manifest" in *"crates/telltale-cli/README.md"*) ;; *) echo "$$package is missing its package README"; exit 1 ;; esac; \
 			case "$$manifest" in *"src/main.rs"*) ;; *) echo "$$package is missing the telltale binary source"; exit 1 ;; esac; \
-			case "$$manifest" in *"src/bin/adr.rs"*) ;; *) echo "$$package is missing the adr compatibility binary source"; exit 1 ;; esac; \
 			case "$$manifest" in *"benches/benchmarks.rs"*) ;; *) echo "$$package is missing the declared benchmark source"; exit 1 ;; esac; \
 			case "$$manifest" in *"config/rules/tool-call-regex.yaml"*) ;; *) echo "$$package is missing canonical rules"; exit 1 ;; esac ;; \
 		esac; \
@@ -214,72 +197,7 @@ package-verify:
 
 ## List and validate downloaded public release archives
 release-artifact-manifest:
-	@test -d "$(RELEASE_ARTIFACT_DIR)" || { echo "Release artifact directory not found: $(RELEASE_ARTIFACT_DIR)"; exit 1; }
-	@archives="$$(find "$(RELEASE_ARTIFACT_DIR)" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | sort)"; \
-	test -n "$$archives" || { echo "No release archives found in $(RELEASE_ARTIFACT_DIR)."; exit 1; }; \
-	for archive in $$archives; do \
-		name="$$(basename "$$archive")"; \
-		case "$$name" in \
-			telltale-*.tar.gz|telltale-*.zip|adr-*.tar.gz|adr-*.zip) ;; \
-			*) echo "Release archive $$archive must use a telltale-* or adr-* filename."; exit 1 ;; \
-		esac; \
-	done; \
-	for canonical in "$(RELEASE_ARTIFACT_DIR)"/telltale-*.tar.gz "$(RELEASE_ARTIFACT_DIR)"/telltale-*.zip; do \
-		test -f "$$canonical" || continue; \
-		name="$$(basename "$$canonical")"; \
-		legacy="$(RELEASE_ARTIFACT_DIR)/adr-$${name#telltale-}"; \
-		test -f "$$legacy" || { echo "Release archive $$canonical is missing matching legacy archive $$legacy."; exit 1; }; \
-		canonical_digest="$$(sha256sum "$$canonical" | awk '{ print $$1 }')"; \
-		legacy_digest="$$(sha256sum "$$legacy" | awk '{ print $$1 }')"; \
-		if [ "$$canonical_digest" != "$$legacy_digest" ]; then \
-			echo "Canonical/legacy release archives have different digests: $$canonical and $$legacy."; \
-			exit 1; \
-		fi; \
-	done; \
-	for legacy in "$(RELEASE_ARTIFACT_DIR)"/adr-*.tar.gz "$(RELEASE_ARTIFACT_DIR)"/adr-*.zip; do \
-		test -f "$$legacy" || continue; \
-		name="$$(basename "$$legacy")"; \
-		canonical="$(RELEASE_ARTIFACT_DIR)/telltale-$${name#adr-}"; \
-		test -f "$$canonical" || { echo "Release archive $$legacy is missing matching canonical archive $$canonical."; exit 1; }; \
-	done; \
-	checksum_file="$(RELEASE_ARTIFACT_DIR)/SHA256SUMS"; \
-	if [ -f "$$checksum_file" ]; then \
-		expected="$$(for archive in $$archives; do basename "$$archive"; done | sort)"; \
-		listed="$$(awk '{ print $$2 }' "$$checksum_file" | sed 's/^\*//' | sort)"; \
-		if [ "$$expected" != "$$listed" ]; then \
-			echo "SHA256SUMS entries must match release archives in $(RELEASE_ARTIFACT_DIR)."; \
-			echo "Expected archives:"; printf '%s\n' "$$expected"; \
-			echo "Checksum entries:"; printf '%s\n' "$$listed"; \
-			exit 1; \
-		fi; \
-		(cd "$(RELEASE_ARTIFACT_DIR)" && sha256sum --check SHA256SUMS); \
-	fi; \
-	for archive in $$archives; do \
-		echo "Archive: $$archive"; \
-		case "$$archive" in \
-			*.tar.gz) entries="$$(tar -tzf "$$archive")" ;; \
-			*.zip) command -v unzip >/dev/null || { echo "unzip is required to inspect $$archive."; exit 1; }; entries="$$(unzip -Z1 "$$archive")" ;; \
-			*) echo "Unsupported release archive: $$archive"; exit 1 ;; \
-		esac; \
-		file_entries="$$(printf '%s\n' "$$entries" | sed '/\/$$/d; /^$$/d')"; \
-		printf '%s\n' "$$file_entries" | sed 's/^/  /'; \
-		case "$$archive" in \
-			*.zip) binaries="adr.exe telltale.exe" ;; \
-			*) binaries="adr telltale" ;; \
-		esac; \
-		expected_sorted="$$(printf '%s\n' $$binaries "LICENSE" "README.md" "config/examples/telltale-outputs.yaml" "config/examples/adr-scan.service" "config/examples/adr-scan.timer" "config/examples/adr-scan-task.xml" "config/examples/elastic-telltale-index-template.json" "config/examples/elastic-telltale-role.json" | sort)"; \
-		actual_sorted="$$(printf '%s\n' "$$file_entries" | sort)"; \
-		if [ "$$expected_sorted" != "$$actual_sorted" ]; then \
-			echo "Release archive $$archive does not match the expected bundle manifest."; \
-			echo "Expected:"; printf '%s\n' "$$expected_sorted" | sed 's/^/  /'; \
-			echo "Actual:"; printf '%s\n' "$$actual_sorted" | sed 's/^/  /'; \
-			missing="$$(printf '%s\n%s\n' "$$expected_sorted" "$$actual_sorted" | sort | uniq -u)"; \
-			extra="$$(printf '%s\n%s\n' "$$actual_sorted" "$$expected_sorted" | sort | uniq -u)"; \
-			if [ -n "$$missing" ]; then echo "Missing entries:"; printf '%s\n' "$$missing" | sed 's/^/  /'; fi; \
-			if [ -n "$$extra" ]; then echo "Unexpected entries:"; printf '%s\n' "$$extra" | sed 's/^/  /'; fi; \
-			exit 1; \
-		fi; \
-	done
+	@RELEASE_ARTIFACT_DIR="$(RELEASE_ARTIFACT_DIR)" python3 scripts/release-artifact-manifest
 
 ## Run focused public documentation boundary checks
 release-public-docs-check:
@@ -287,15 +205,24 @@ release-public-docs-check:
 
 ## Run fixture-safe release smoke checks
 release-fixture-smoke:
-	cargo run $(CARGO_LOCKED) --bin telltale -- scan --once --dry-run --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores
-	cargo run $(CARGO_LOCKED) --bin telltale -- rules validate
+	@set -eu; \
+	 smoke_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/telltale-fixture-smoke.XXXXXX")"; \
+	 trap 'rm -rf "$$smoke_dir"' EXIT INT TERM; \
+		 cargo run $(CARGO_LOCKED) --bin telltale -- scan --once --dry-run --no-local-config --emit-activity --emit-session-risk-summary --root tests/fixtures/session_stores --state-path "$$smoke_dir/state.json" --log-path "$$smoke_dir/events.jsonl"; \
+		 cargo run $(CARGO_LOCKED) --bin telltale -- rules validate --no-local-config
+
+## Verify active release surfaces use only canonical Telltale identities
+release-canonical-identity-check:
+	@test ! -e config/examples/adr-scan.service && test ! -e config/examples/adr-scan.timer && test ! -e config/examples/adr-scan-task.xml
+	@! grep -Eq 'target/.*/release/adr|adr-[^[:space:]]+\.(tar\.gz|zip)|adr-scan\.(service|timer)' .github/workflows/release.yml
+	@grep -q 'telltale-scan.service' .github/workflows/release.yml
 
 ## Public release preflight
-release-preflight: release-context-check release-tag-review release-crate-manifest package-verify release-public-docs-check check release-fixture-smoke
+release-preflight: release-context-check release-tag-review release-crate-manifest release-canonical-identity-check package-verify release-public-docs-check release-artifact-manifest check release-fixture-smoke
 
 ## Show timer status
 status:
-	@systemctl --user status adr-scan.timer 2>/dev/null || echo "Timer not installed"
+	@systemctl --user status telltale-scan.timer 2>/dev/null || echo "Timer not installed"
 	@echo ""
 	@echo "Log: $(LOG_PATH)"
 	@echo "State: $(STATE_PATH)"

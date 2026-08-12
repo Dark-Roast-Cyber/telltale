@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-const VERSION: &str = "0.4.0";
+const VERSION: &str = "0.5.0-rc.1";
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),
@@ -38,12 +38,52 @@ fn official_packages_have_lockstep_metadata() {
 }
 
 #[test]
+fn rc_package_and_lockfile_versions_are_exactly_lockstep() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_manifest =
+        fs::read_to_string(root.join("Cargo.toml")).expect("workspace manifest");
+    for (package, path) in [
+        ("telltale-schema", "crates/telltale-schema"),
+        ("telltale-rules", "crates/telltale-rules"),
+        ("telltale-sources", "crates/telltale-sources"),
+        ("telltale-detect", "crates/telltale-detect"),
+        ("telltale-core", "crates/telltale"),
+    ] {
+        assert!(
+            workspace_manifest.contains(&format!(
+                "{package} = {{ path = \"{path}\", version = \"={VERSION}\" }}"
+            )),
+            "internal workspace requirement for {package} must be exact {VERSION}"
+        );
+    }
+
+    let lockfile = fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock");
+    for package in [
+        "telltale-cli",
+        "telltale-core",
+        "telltale-detect",
+        "telltale-rules",
+        "telltale-schema",
+        "telltale-sources",
+    ] {
+        let package_entry = lockfile
+            .split("[[package]]")
+            .find(|entry| entry.contains(&format!("name = \"{package}\"")))
+            .unwrap_or_else(|| panic!("missing lockfile package {package}"));
+        assert!(
+            package_entry.contains(&format!("version = \"{VERSION}\"")),
+            "lockfile package {package} is not {VERSION}"
+        );
+    }
+}
+
+#[test]
 fn registry_consumer_docs_follow_current_package_version() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for relative in ["docs/versioning.md", "docs/release-readiness.md"] {
         let document = fs::read_to_string(root.join(relative)).expect("versioning document");
         assert!(
-            document.contains("`=0.4.0`"),
+            document.contains("`=0.5.0`"),
             "{relative} does not name the current registry pin"
         );
         assert!(
@@ -77,7 +117,7 @@ fn publication_order_and_binary_targets_are_explicit() {
     let cli = fs::read_to_string(root.join("Cargo.toml")).expect("cli manifest");
     let cli = cli.replace("\r\n", "\n");
     assert!(cli.contains("name = \"telltale\"\npath = \"src/main.rs\""));
-    assert!(cli.contains("name = \"adr\"\npath = \"src/bin/adr.rs\""));
+    assert!(!cli.contains("src/bin/adr.rs"));
 }
 
 #[test]
@@ -98,6 +138,9 @@ fn package_boundaries_and_bundled_rules_are_explicit() {
         "build.rs",
         "benches/benchmarks.rs",
         "src/**",
+        "schemas/event.schema.json",
+        "schemas/historical/*.json",
+        "schemas/historical/README.md",
         "config/rules/tool-call-regex.yaml",
         "tests/fixtures/**",
     ] {
@@ -172,6 +215,7 @@ fn package_verification_is_local_and_ordered() {
     assert!(script.contains("--version"));
     assert!(script.contains("PACKAGED_SHA_FULL"));
     assert!(script.contains("PACKAGED_SHA_PREFIX"));
+    assert!(script.contains("packaged install must not include retired adr executable"));
     assert!(!script.contains("cargo publish"));
 
     let mut previous = 0;

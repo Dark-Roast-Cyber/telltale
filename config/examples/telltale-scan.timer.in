@@ -2,9 +2,9 @@
 Description=Run Telltale agent session scans periodically
 
 [Timer]
-OnBootSec=1min
+OnActiveSec=1min
 OnUnitActiveSec=5min
-Unit=adr-scan.service
+Unit=telltale-scan.service
 Persistent=true
 
 [Install]

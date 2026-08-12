@@ -18,20 +18,20 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
-> **Executable and compatibility contract:** Use `telltale` (`telltale.exe`) and
-> `telltale-*` release assets for new integrations. `adr` (`adr.exe`) is the
-> compiled deprecated compatibility command and remains part of the current
-> release contract. Each `adr-*` release archive is an exact byte-for-byte copy
-> of its matching `telltale-*` archive, and both archives contain both binaries.
-> This migration does not schedule removal of the compatibility command.
+> **Runtime contract:** `telltale` (`telltale.exe`) is the sole Cargo binary and
+> CLI identity. Runtime configuration uses `TELLTALE_*` names only; retired
+> product `ADR_*` variables are exact tombstones and fail before parsing or
+> filesystem activity. Use `telltale migrate env` for an explicit environment
+> file migration. Native paths are `telltale-events.jsonl` and
+> `telltale-state.json`, with profile-specific directories documented in the
+> install and telemetry guides.
 >
-> The executable rename does not rename compatibility data or configuration:
-> preserve `ADR_*`, `adr-events.jsonl`, `adr-state.json`,
-> `/etc/telltale/adr.env`, `adr_version`, `adr-` event IDs, and the Splunk
-> `index=adr`, `sourcetype=adr:json`, and existing `telltale:adr` /
-> `telltale:adr-events` source identities. Keep uppercase ADR category
-> terminology and unrelated architecture decision records and fixtures
-> unchanged.
+> The active installer, service, archive, and release-workflow surfaces use the
+> canonical Telltale identity. Event 3.0/SIEM identities remain `telltale_version`,
+> `telltale-<UUIDv4>`, Splunk `index=telltale`, `sourcetype=telltale:json`, and
+> `source=telltale`; historical schemas and records remain immutable. Keep
+> uppercase ADR category terminology and unrelated architecture decision
+> records and fixtures unchanged.
 
 ## Why Telltale exists
 
@@ -88,7 +88,8 @@ The fixture tree in `tests/fixtures/` is synthetic and safe for local verificati
 Use `--dry-run` for fixture checks. Reserve `--allow-fixtures` for intentional
 synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
-real-session-store setup.
+real-session-store setup. Explicit state, historical-event, and environment
+migration guidance is in the [migration contract](docs/migration-contract.md).
 
 ## Cargo packages
 
@@ -111,8 +112,7 @@ Install the CLI from crates.io after publication with:
 cargo install telltale-cli
 ```
 
-That package installs both the canonical `telltale` binary and the `adr`
-compatibility binary.
+That package installs the canonical `telltale` binary only.
 
 > **Crates.io name warning:** The package named `telltale` is an unrelated
 > active session-types crate, not this project. Telltale uses `telltale-core`
@@ -150,7 +150,7 @@ precedence, trust-boundary guidance, override YAML format, and flag behavior.
 Some clients (Copilot, OpenCode-in-project, Codex per-project) store data inside
 project directories. By default, Telltale scans `~/github` and `~/projects` if
 they exist. To customize, declare project roots in a YAML file and pass it with
-`--project-config` (or set `ADR_PROJECT_CONFIG`). Project-local discovery is
+`--project-config` (or set `TELLTALE_PROJECT_CONFIG`). Project-local discovery is
 additive — home-relative sources are still discovered from `--root`.
 
 See [Install](docs/install.md) for the YAML format and `--project-config` usage.
@@ -158,33 +158,32 @@ See [Install](docs/install.md) for the YAML format and `--project-config` usage.
 - Install and setup guide: [docs/install.md](docs/install.md)
 
 Tagged GitHub releases publish platform-specific `telltale-*` binary archives
-when available, with matching exact-copy `adr-*` compatibility aliases. Source
-builds remain supported; the install guide covers both paths and the
+when available. Source builds remain supported; the install guide covers the
 fixture-safe verification step.
 
 ### Linux
 
-The v0.3.0 release records establish a synchronized hosted copy of the
-repository installer. It downloads the latest release, verifies its published
-`SHA256SUMS`, and installs both binaries to `~/.local/bin` without sudo. Use it
-with:
+The checked-in Linux installer downloads the latest canonical release, verifies
+its published `SHA256SUMS`, and installs only `telltale` to `~/.local/bin`
+without sudo. The hosted one-line installer is not advertised here because its
+hosted-site cutover is outside this repository's release boundary; use the
+checked-in script from a checkout instead:
 
-```sh
-curl -fsSL https://agentarchaeology.ai/telltale_install.sh | bash
-```
-
-The repository installer provides the same behavior from this checkout and
-installs a user-level systemd timer only when `--with-timer` is provided.
+The installer installs a user-level systemd timer only when `--with-timer` is
+provided. The hosted-site copy is outside this repository's release cutover;
+use the checked-in script for a reviewed install.
 
 ```sh
 ./scripts/install-telltale
 ./scripts/install-telltale --with-timer
 ```
 
-Add `--from-source` to build with cargo instead of downloading a prebuilt
-binary. `--no-timer` is accepted only for legacy compatibility and is normally
-unnecessary. The installer does not create system accounts or configure SIEM
-shippers.
+With `--from-source`, the installer still downloads and validates the selected
+release's canonical archive provenance, resolves that tag to an immutable commit,
+and builds that exact source revision with Cargo; it does not skip the prebuilt
+archive download. `--no-timer` leaves the canonical timer disabled while safely
+retiring identified legacy schedules. The installer does not create system
+accounts or configure SIEM shippers.
 
 ### macOS
 
@@ -195,7 +194,6 @@ Download the release archive for your architecture and extract the binary:
 curl -fsSLO https://github.com/Dark-Roast-Cyber/telltale/releases/latest/download/telltale-$(curl -fsSL https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')-aarch64-apple-darwin.tar.gz
 tar xzf telltale-*-aarch64-apple-darwin.tar.gz
 sudo mv telltale /usr/local/bin/telltale
-sudo mv adr /usr/local/bin/adr
 ```
 
 Or build from source:
@@ -205,12 +203,11 @@ git clone https://github.com/Dark-Roast-Cyber/telltale.git
 cd telltale
 cargo build --release
 sudo cp target/release/telltale /usr/local/bin/telltale
-sudo cp target/release/adr /usr/local/bin/adr
 ```
 
 The default `user` path profile writes telemetry to
-`~/Library/Logs/Telltale/adr-events.jsonl` and state to
-`~/Library/Application Support/Telltale/adr-state.json`. No sudo is needed
+`~/Library/Logs/Telltale/telltale-events.jsonl` and state to
+`~/Library/Application Support/Telltale/telltale-state.json`. No sudo is needed
 for scans — run as your user.
 
 For periodic scans, create a user LaunchAgent at
@@ -248,7 +245,7 @@ launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
 
 ### Windows
 
-Download the canonical release archive and extract `telltale.exe` and `adr.exe`:
+Download the canonical release archive and extract `telltale.exe`:
 
 ```powershell
 # PowerShell
@@ -266,13 +263,12 @@ git clone https://github.com/Dark-Roast-Cyber/telltale.git
 cd telltale
 cargo build --release
 Copy-Item target\release\telltale.exe $env:LOCALAPPDATA\Telltale\telltale.exe
-Copy-Item target\release\adr.exe $env:LOCALAPPDATA\Telltale\adr.exe
 ```
 
 Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `telltale` from any
 terminal. The default `user` path profile writes telemetry to
-`%LOCALAPPDATA%\Telltale\Logs\adr-events.jsonl` and state to
-`%LOCALAPPDATA%\Telltale\State\adr-state.json`. No elevation is needed for
+`%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` and state to
+`%LOCALAPPDATA%\Telltale\State\telltale-state.json`. No elevation is needed for
 scans — run as your user.
 
 For periodic scans, create a Scheduled Task at user logon:

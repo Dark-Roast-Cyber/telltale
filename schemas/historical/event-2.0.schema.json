@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adr.local/schemas/event.schema.json",
+  "title": "Telltale SIEM Event",
+  "$defs": {
+    "canonicalRuleId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$"
+    },
+    "canonicalRuleIds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/canonicalRuleId" }
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "timestamp",
+    "severity",
+    "risk_score",
+    "client",
+    "session_id"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": { "const": "2.0" },
+          "event_type": { "enum": ["activity", "detection", "session_risk_summary"] }
+        },
+        "required": ["schema_version", "event_type"]
+      },
+      "then": { "required": ["risk_contributions"] }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "2.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "rule_ids": {
+            "$ref": "#/$defs/canonicalRuleIds"
+          },
+          "triage": {
+            "properties": {
+              "timeline_anchors": {
+                "items": {
+                  "properties": {
+                    "rule_ids": {
+                      "$ref": "#/$defs/canonicalRuleIds"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["1.0", "2.0"] },
+    "event_id": { "type": "string" },
+    "event_type": {
+      "type": "string",
+      "enum": ["activity", "detection", "triage", "scanner_error", "health", "correlation", "operational_alert", "session_risk_summary"]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "severity": {
+      "type": "string",
+      "enum": ["informational", "low", "medium", "high", "critical", "warning"]
+    },
+    "risk_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "risk_contributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "points", "rationale"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96,
+            "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["deterministic_rule", "chain_modifier", "baseline_deviation"]
+          },
+          "points": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18446744073709551615
+          },
+          "rationale": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ,_;:'()_-]*$",
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "client": { "type": "string" },
+    "agent": { "type": ["string", "null"] },
+    "model": { "type": ["string", "null"] },
+    "provider": { "type": ["string", "null"] },
+    "session_id": { "type": "string" },
+    "workspace": { "type": ["string", "null"] },
+    "source_path_hash": { "type": ["string", "null"] },
+    "tool_name": { "type": ["string", "null"] },
+    "rule_ids": { "type": "array", "items": { "type": "string" } },
+    "categories": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "detection_classes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "security_detection",
+          "policy_violation",
+          "threat_hunting",
+          "compliance_observation",
+          "operational_health",
+          "baseline_deviation"
+        ]
+      }
+    },
+    "signal_types": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["atomic", "chain", "correlation", "baseline_deviation", "llm_triage"]
+      }
+    },
+    "analytic_intents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["alert", "hunt", "enrich", "baseline", "audit"]
+      }
+    },
+    "atlas_tags": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^atlas:" }
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "redacted_value"],
+        "properties": {
+          "field": { "type": "string" },
+          "redacted_value": { "type": "string" },
+          "hash": { "type": ["string", "null"] },
+          "rule_id": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "triage": {
+      "type": ["object", "null"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "verdict": { "type": "string", "enum": ["pending", "safe", "benign", "suspicious", "malicious", "not_required", "config_missing"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reason": { "type": "string" },
+        "timeline_anchors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entry_index", "rule_ids", "categories", "evidence_fields"],
+            "properties": {
+              "entry_index": { "type": "integer", "minimum": 0 },
+              "rule_ids": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "categories": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "evidence_fields": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "response": {
+      "type": ["object", "null"],
+      "required": [
+        "recommended_action",
+        "response_playbook",
+        "investigation_summary",
+        "escalation"
+      ],
+      "properties": {
+        "recommended_action": {
+          "type": "string",
+          "enum": ["monitor", "review", "investigate", "investigate_immediately"]
+        },
+        "response_playbook": { "type": "string" },
+        "investigation_summary": { "type": "string" },
+        "escalation": {
+          "type": "string",
+          "enum": ["routine_review", "security_review_required"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "source_counts": {
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "component": { "type": ["string", "null"] },
+    "check_name": { "type": ["string", "null"] },
+    "status": {
+      "type": ["string", "null"],
+      "enum": ["ok", "degraded", "error", "unknown", null]
+    },
+    "adr_version": { "type": ["string", "null"] },
+    "scan_duration_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "rule_count": { "type": ["integer", "null"], "minimum": 0 },
+    "threshold_config": {
+      "type": ["object", "null"],
+      "required": ["low", "medium", "triage", "alert"],
+      "properties": {
+        "low": { "type": "integer", "minimum": 0 },
+        "medium": { "type": "integer", "minimum": 0 },
+        "triage": { "type": "integer", "minimum": 0 },
+        "alert": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "active_policy_name": { "type": ["string", "null"] },
+    "emitted_count": { "type": ["integer", "null"], "minimum": 0 },
+    "suppressed_count": { "type": ["integer", "null"], "minimum": 0 },
+    "scanner_error_count": { "type": ["integer", "null"], "minimum": 0 }
+  },
+  "additionalProperties": true
+}

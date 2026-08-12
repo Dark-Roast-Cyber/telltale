@@ -94,6 +94,20 @@ pub enum RiskAccountingError {
         contribution_type: RiskContributionType,
     },
     ContributionRuleIdMissing(String),
+    EmptyEventField {
+        event_type: &'static str,
+        field: &'static str,
+    },
+    InvalidEventValue {
+        event_type: &'static str,
+        field: &'static str,
+    },
+    InvalidCorrelationCardinality {
+        actual: usize,
+    },
+    DuplicateCorrelationValue {
+        field: &'static str,
+    },
 }
 
 impl std::fmt::Display for RiskAccountingError {
@@ -148,6 +162,25 @@ impl std::fmt::Display for RiskAccountingError {
             ),
             Self::ContributionRuleIdMissing(id) => {
                 write!(formatter, "risk contribution {id} is missing from rule_ids")
+            }
+            Self::EmptyEventField { event_type, field } => {
+                write!(
+                    formatter,
+                    "{event_type} event field {field} must not be empty"
+                )
+            }
+            Self::InvalidEventValue { event_type, field } => {
+                write!(
+                    formatter,
+                    "{event_type} event field {field} has an invalid value"
+                )
+            }
+            Self::InvalidCorrelationCardinality { actual } => write!(
+                formatter,
+                "correlation event requires at least two distinct sessions, got {actual}"
+            ),
+            Self::DuplicateCorrelationValue { field } => {
+                write!(formatter, "correlation event contains duplicate {field}")
             }
         }
     }
@@ -333,8 +366,8 @@ pub fn canonicalize_contributions(
 pub struct RiskThresholds {
     pub low: u32,
     pub medium: u32,
-    pub triage: u32,
-    pub alert: u32,
+    pub high: u32,
+    pub critical: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,14 +394,14 @@ impl RiskSeverity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RiskAssessment {
     pub severity: RiskSeverity,
-    pub triage_required: bool,
-    pub alert_required: bool,
+    pub high_required: bool,
+    pub critical_required: bool,
 }
 
 pub fn assess_risk_with_thresholds(score: u64, thresholds: RiskThresholds) -> RiskAssessment {
-    let severity = if score >= u64::from(thresholds.alert) {
+    let severity = if score >= u64::from(thresholds.critical) {
         RiskSeverity::Critical
-    } else if score >= u64::from(thresholds.triage) {
+    } else if score >= u64::from(thresholds.high) {
         RiskSeverity::High
     } else if score >= u64::from(thresholds.medium) {
         RiskSeverity::Medium
@@ -380,23 +413,26 @@ pub fn assess_risk_with_thresholds(score: u64, thresholds: RiskThresholds) -> Ri
 
     RiskAssessment {
         severity,
-        triage_required: score >= u64::from(thresholds.triage),
-        alert_required: score >= u64::from(thresholds.alert),
+        high_required: score >= u64::from(thresholds.high),
+        critical_required: score >= u64::from(thresholds.critical),
     }
 }
 
 pub fn load_thresholds() -> RiskThresholds {
+    load_thresholds_with(|name| env::var(name).ok())
+}
+
+fn load_thresholds_with(get: impl Fn(&str) -> Option<String>) -> RiskThresholds {
     RiskThresholds {
-        low: read_threshold("ADR_RISK_THRESHOLD_LOW", 20),
-        medium: read_threshold("ADR_RISK_THRESHOLD_MEDIUM", 50),
-        triage: read_threshold("ADR_RISK_THRESHOLD_TRIAGE", 70),
-        alert: read_threshold("ADR_RISK_THRESHOLD_ALERT", 90),
+        low: read_threshold("TELLTALE_RISK_THRESHOLD_LOW", 20, &get),
+        medium: read_threshold("TELLTALE_RISK_THRESHOLD_MEDIUM", 50, &get),
+        high: read_threshold("TELLTALE_RISK_THRESHOLD_HIGH", 70, &get),
+        critical: read_threshold("TELLTALE_RISK_THRESHOLD_CRITICAL", 90, &get),
     }
 }
 
-fn read_threshold(name: &str, default: u32) -> u32 {
-    env::var(name)
-        .ok()
+fn read_threshold(name: &str, default: u32, get: &impl Fn(&str) -> Option<String>) -> u32 {
+    get(name)
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(default)
 }
@@ -406,7 +442,7 @@ mod tests {
     use super::{
         MAX_RISK_RATIONALE_LENGTH, RiskAccountingError, RiskContribution, RiskContributionType,
         RiskSeverity, RiskThresholds, assess_risk_with_thresholds, canonicalize_contributions,
-        checked_risk_sum, is_canonical_contribution_id,
+        checked_risk_sum, is_canonical_contribution_id, load_thresholds_with,
     };
 
     #[test]
@@ -414,30 +450,25 @@ mod tests {
         let thresholds = RiskThresholds {
             low: 20,
             medium: 50,
-            triage: 70,
-            alert: 90,
+            high: 70,
+            critical: 90,
         };
 
-        assert_eq!(
-            assess_risk_with_thresholds(0, thresholds).severity,
-            RiskSeverity::Informational
-        );
-        assert_eq!(
-            assess_risk_with_thresholds(20, thresholds).severity,
-            RiskSeverity::Low
-        );
-        assert_eq!(
-            assess_risk_with_thresholds(50, thresholds).severity,
-            RiskSeverity::Medium
-        );
-        assert_eq!(
-            assess_risk_with_thresholds(70, thresholds).severity,
-            RiskSeverity::High
-        );
-        assert_eq!(
-            assess_risk_with_thresholds(90, thresholds).severity,
-            RiskSeverity::Critical
-        );
+        for (score, expected) in [
+            (19, RiskSeverity::Informational),
+            (20, RiskSeverity::Low),
+            (49, RiskSeverity::Low),
+            (50, RiskSeverity::Medium),
+            (69, RiskSeverity::Medium),
+            (70, RiskSeverity::High),
+            (89, RiskSeverity::High),
+            (90, RiskSeverity::Critical),
+        ] {
+            assert_eq!(
+                assess_risk_with_thresholds(score, thresholds).severity,
+                expected
+            );
+        }
     }
 
     #[test]
@@ -445,8 +476,8 @@ mod tests {
         let thresholds = RiskThresholds {
             low: 10,
             medium: 30,
-            triage: 70,
-            alert: 90,
+            high: 70,
+            critical: 90,
         };
 
         assert_eq!(
@@ -460,6 +491,43 @@ mod tests {
         assert_eq!(
             assess_risk_with_thresholds(30, thresholds).severity,
             RiskSeverity::Medium
+        );
+    }
+
+    #[test]
+    fn only_canonical_threshold_names_control_native_scores() {
+        let canonical_names =
+            load_thresholds_with(|name| name.starts_with("TELLTALE_").then(|| "1".to_string()));
+        assert_eq!(
+            canonical_names,
+            RiskThresholds {
+                low: 1,
+                medium: 1,
+                high: 1,
+                critical: 1,
+            }
+        );
+
+        let custom_telltale_names = load_thresholds_with(|name| {
+            Some(
+                match name {
+                    "TELLTALE_RISK_THRESHOLD_LOW" => "11",
+                    "TELLTALE_RISK_THRESHOLD_MEDIUM" => "22",
+                    "TELLTALE_RISK_THRESHOLD_HIGH" => "33",
+                    "TELLTALE_RISK_THRESHOLD_CRITICAL" => "44",
+                    _ => return None,
+                }
+                .to_string(),
+            )
+        });
+        assert_eq!(
+            custom_telltale_names,
+            RiskThresholds {
+                low: 11,
+                medium: 22,
+                high: 33,
+                critical: 44,
+            }
         );
     }
 

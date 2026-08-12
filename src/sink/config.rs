@@ -26,6 +26,7 @@ pub struct SinkSpec {
     pub name: String,
     pub enabled: bool,
     pub kind: SinkKind,
+    pub(crate) origin_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,7 +48,7 @@ impl SinkKind {
 
 impl SinkSpec {
     /// True when the sink carries a secret written inline in the YAML.
-    /// `adr config validate` flags these; env/file references are preferred.
+    /// `telltale config validate` flags these; env/file references are preferred.
     pub fn has_inline_secret(&self) -> bool {
         match &self.kind {
             SinkKind::Jsonl(_) => false,
@@ -254,7 +255,7 @@ pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn s
             .map_err(|err| format!("invalid outputs config {}: {err}", path.display()))?;
         if doc.version != SUPPORTED_OUTPUTS_VERSION {
             return Err(format!(
-                "outputs config {}: version {} is not supported by this adr build (expected {})",
+                "outputs config {}: version {} is not supported by this Telltale build (expected {})",
                 path.display(),
                 doc.version,
                 SUPPORTED_OUTPUTS_VERSION
@@ -263,8 +264,9 @@ pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn s
         }
         let mut names_in_file = BTreeSet::new();
         for sink_value in doc.sinks {
-            let spec = parse_sink_spec(sink_value)
+            let mut spec = parse_sink_spec(sink_value)
                 .map_err(|err| format!("outputs config {}: {err}", path.display()))?;
+            spec.origin_path = Some(path.clone());
             if !names_in_file.insert(spec.name.clone()) {
                 return Err(format!(
                     "outputs config {}: duplicate sink name '{}'",
@@ -327,6 +329,7 @@ fn parse_sink_spec(value: serde_yaml::Value) -> Result<SinkSpec, String> {
         name,
         enabled,
         kind,
+        origin_path: None,
     })
 }
 
@@ -368,12 +371,13 @@ pub(crate) fn build_sink_set_with_presence(
 
     let mut sinks = SinkSet::new();
     if !outputs_config_present {
-        sinks.add_durable(
+        let sink = LocalJsonlSink::with_rotation(cli.log_path, cli.rotation.clone());
+        let rotation_namespace = sink.rotation_namespace()?;
+        sinks.add_durable_path_with_rotation(
             "jsonl",
-            Box::new(LocalJsonlSink::with_rotation(
-                cli.log_path,
-                cli.rotation.clone(),
-            )),
+            Box::new(sink),
+            cli.log_path,
+            rotation_namespace,
         );
     } else {
         for spec in specs.iter().filter(|spec| spec.enabled) {
@@ -397,11 +401,14 @@ pub(crate) fn build_sink_set_with_presence(
                             keep: rotation.keep.unwrap_or(cli.rotation.keep),
                         },
                     };
-                    sinks.add_durable(
+                    let sink =
+                        LocalJsonlSink::with_rotation(path.clone(), rotation).with_name(&spec.name);
+                    let rotation_namespace = sink.rotation_namespace()?;
+                    sinks.add_durable_path_with_rotation(
                         "jsonl",
-                        Box::new(
-                            LocalJsonlSink::with_rotation(path, rotation).with_name(&spec.name),
-                        ),
+                        Box::new(sink),
+                        path,
+                        rotation_namespace,
                     );
                 }
                 SinkKind::SplunkHec(hec) => {
@@ -553,7 +560,7 @@ version: 1
 sinks:
   - name: local
     type: jsonl
-    path: /var/log/telltale/adr-events.jsonl
+    path: /var/log/telltale/telltale-events.jsonl
     rotation:
       max_size_bytes: 1048576
       keep: 3
@@ -561,8 +568,8 @@ sinks:
     type: splunk_hec
     endpoint: http://splunk.example.com:8088/services/collector
     token: { env: SPLUNK_HEC_TOKEN }
-    index: adr
-    sourcetype: adr:json
+    index: telltale
+    sourcetype: telltale:json
     timeout_ms: 5000
   - name: disabled-splunk
     type: splunk_hec
@@ -678,7 +685,7 @@ sinks:
   - name: corp-elastic
     type: elastic_bulk
     endpoint: https://elastic.example.com:9243
-    index: adr-events
+    index: telltale-events
     api_key: inline-key
     max_batch_bytes: 1048576
     retry: { max_attempts: 5, base_delay_ms: 250 }
@@ -696,7 +703,7 @@ sinks:
     #[test]
     fn elastic_bulk_rejects_conflicting_auth() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
         let path = write_outputs(
             temp.path(),
             "outputs.yaml",
@@ -779,7 +786,7 @@ sinks:
     #[test]
     fn empty_specs_reproduce_legacy_default_sinks() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
 
         let sinks = build_sink_set(&[], &cli_defaults(&log_path)).expect("build");
         assert!(sinks.has_durable());
@@ -799,7 +806,7 @@ sinks:
     #[test]
     fn build_resolves_env_secret_and_honors_disabled_sinks() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
         let path = write_outputs(
             temp.path(),
             "outputs.yaml",
@@ -825,7 +832,7 @@ sinks:
     #[test]
     fn build_fails_fast_on_missing_env_secret_for_enabled_sink() {
         let temp = tempdir().expect("tempdir");
-        let log_path = temp.path().join("adr-events.jsonl");
+        let log_path = temp.path().join("telltale-events.jsonl");
         let path = write_outputs(
             temp.path(),
             "outputs.yaml",

@@ -1,0 +1,126 @@
+{
+  "seen_source_fingerprints": [
+    "2222222222222222222222222222222222222222222222222222222222222222"
+  ],
+  "seen_detection_fingerprints": [
+    "3333333333333333333333333333333333333333333333333333333333333333"
+  ],
+  "baseline_snapshots": {
+    "schema_version": 2,
+    "snapshots": {
+      "codex\u001fcodex-agent\u001fo3\u001fopenai": {
+        "key": {
+          "client": "codex",
+          "agent": "codex-agent",
+          "model": "o3",
+          "provider": "openai"
+        },
+        "observations": {
+          "records": 6,
+          "user_messages": 1,
+          "assistant_messages": 1,
+          "tool_calls": 1,
+          "tool_results": 1,
+          "session_meta": 1,
+          "other": 1
+        },
+        "tool_call_counts": {
+          "shell": 1
+        },
+        "path_class_counts": {
+          "source": 2,
+          "documentation": 1
+        },
+        "network_host_counts": {
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": 1
+        }
+      }
+    }
+  },
+  "baseline_source_contributions": {
+    "codex\u001fcodex.sessions\u001f1111111111111111111111111111111111111111111111111111111111111111": {
+      "client": "codex",
+      "source_id": "codex.sessions",
+      "source_instance_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "source_fingerprint": "2222222222222222222222222222222222222222222222222222222222222222",
+      "snapshots": {
+        "codex\u001fcodex-agent\u001fo3\u001fopenai": {
+          "key": {
+            "client": "codex",
+            "agent": "codex-agent",
+            "model": "o3",
+            "provider": "openai"
+          },
+          "observations": {
+            "records": 2,
+            "user_messages": 1,
+            "assistant_messages": 0,
+            "tool_calls": 1,
+            "tool_results": 0,
+            "session_meta": 0,
+            "other": 0
+          },
+          "tool_call_counts": {
+            "shell": 1
+          },
+          "path_class_counts": {
+            "source": 1
+          },
+          "network_host_counts": {
+            "internal.example.test": 1
+          }
+        }
+      }
+    }
+  },
+  "source_observations": {
+    "codex\u001fcodex.sessions\u001f1111111111111111111111111111111111111111111111111111111111111111": {
+      "client": "codex",
+      "source_id": "codex.sessions",
+      "source_instance_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "last_seen_unix_ms": 1775000000000
+    }
+  },
+  "sqlite_ingestion_cursors": {
+    "opencode\u001fopencode.sqlite\u001f4444444444444444444444444444444444444444444444444444444444444444\u001fmessage": {
+      "client": "opencode",
+      "source_id": "opencode.sqlite",
+      "source_instance_id": "4444444444444444444444444444444444444444444444444444444444444444",
+      "table": "message",
+      "last_time_updated": 1775000001000,
+      "observed_at_unix_ms": 1775000002000
+    }
+  },
+  "install_inventory": {
+    "observed_at_unix_ms": 1775000003000,
+    "hash": "5555555555555555555555555555555555555555555555555555555555555555",
+    "agents": [
+      {
+        "agent": "codex",
+        "installed": true,
+        "confidence": "confirmed",
+        "signals": [
+          {
+            "kind": "executable",
+            "name": "codex",
+            "present": true,
+            "path_hash": "6666666666666666666666666666666666666666666666666666666666666666"
+          }
+        ]
+      },
+      {
+        "agent": "claude",
+        "installed": false,
+        "confidence": "absent",
+        "signals": [
+          {
+            "kind": "executable",
+            "name": "claude",
+            "present": false,
+            "path_hash": null
+          }
+        ]
+      }
+    ]
+  }
+}

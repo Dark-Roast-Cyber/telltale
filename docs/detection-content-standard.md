@@ -49,7 +49,6 @@ Allowed `signal_type` values:
 - `chain`
 - `correlation`
 - `baseline_deviation`
-- `llm_triage`
 
 Allowed `analytic_intent` values:
 
@@ -77,7 +76,7 @@ ATLAS mappings live in rule `atlas_tags` and in [../MITRE_ATLAS_COVERAGE.md](../
 | `informational` | 0–19 | Activity worth logging but not alarming. |
 | `low` | 20–39 | Suspicious in context but common in normal work. |
 | `medium` | 40–49 | Warrants analyst attention when combined with other signals. |
-| `high` | 50–79 | Strong indicator of risk; triggers triage at threshold. |
+| `high` | 50–79 | Strong indicator of risk; carries a security-review marker at threshold. |
 | `critical` | 80–100 | Near-certain malicious or extremely high-risk behavior. |
 
 Scores are additive across rules and chain modifiers. The emitted `risk_score` is
@@ -95,6 +94,25 @@ Every rule should have a documented rationale for its severity level. This ratio
 - How common is this behavior in legitimate developer workflows?
 - What is the blast radius if this behavior is malicious?
 - Does this rule fire alone or primarily as part of a chain?
+
+## Process-Chain Rules
+
+Process-chain rules use a different schema and a different pack
+(`crates/telltale-rules/data/process-chain.yaml`). They reuse the score bands in
+the table above — the compiler rejects a rule whose `score` falls outside its
+declared `severity` — and they add two obligations the regex pack does not have:
+
+- **Every match emits.** A rule may score `0`; it still produces an event,
+  marked `informational`. Never delete a rule to silence it; score it `0`.
+- **Overlapping interpretations are split by command line, not by severity.**
+  When one parent/child pair covers both routine administration and intrusion
+  activity, write two rules gated on `child_command_line_any` /
+  `child_command_line_none` rather than one rule with an averaged score.
+
+The pack is generated. Edit `scripts/dev/generate-process-chain-rules.py` and
+re-run it; do not hand-edit the YAML. Full authoring guidance, including the
+scoring derivation and deduplication contract, is in
+[process-chain-detections.md](process-chain-detections.md).
 
 ## Chain Modifiers
 

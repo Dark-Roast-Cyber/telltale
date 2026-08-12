@@ -84,18 +84,170 @@ pub fn detect_parsed_source_records(
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Vec<Event> {
-    let sessions = group_records_by_session(parsed.to_vec());
+    detect_parsed_source_records_internal(source, rule_set, parsed, false).0
+}
 
-    sessions
-        .iter()
-        .flat_map(
-            |(_, records)| match detect_records(source, rule_set, records) {
-                Ok(Some(event)) => vec![event],
-                Ok(None) => Vec::new(),
-                Err(error) => vec![telltale_schema::event::scanner_error_event(source, &error)],
-            },
-        )
-        .collect()
+#[derive(Clone)]
+pub struct EffectiveMatchSnapshot {
+    sessions: Vec<EffectiveSessionMatchSnapshot>,
+}
+
+#[derive(Clone)]
+struct EffectiveSessionMatchSnapshot {
+    session_id: String,
+    records: Vec<NormalizedRecord>,
+    effective_rule_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PolicyMatchAccounting {
+    pub pre_policy_detection_candidate_count: u64,
+    pub fully_filtered_detection_candidate_count: u64,
+    pub filtered_rule_id_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PolicyMatchAccountingError;
+
+impl std::fmt::Display for PolicyMatchAccountingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("policy match accounting unavailable")
+    }
+}
+
+impl std::error::Error for PolicyMatchAccountingError {}
+
+/// Runs the authoritative detection pass and retains an opaque snapshot for
+/// optional pre-policy accounting. The returned events are identical to
+/// `detect_parsed_source_records`.
+pub fn detect_parsed_source_records_with_snapshot(
+    source: &Source,
+    rule_set: &telltale_rules::CompiledRuleSet,
+    parsed: &[NormalizedRecord],
+) -> (Vec<Event>, EffectiveMatchSnapshot) {
+    let (events, snapshot) = detect_parsed_source_records_internal(source, rule_set, parsed, true);
+    (
+        events,
+        snapshot.expect("snapshot requested from detection pass"),
+    )
+}
+
+fn detect_parsed_source_records_internal(
+    source: &Source,
+    rule_set: &telltale_rules::CompiledRuleSet,
+    parsed: &[NormalizedRecord],
+    capture_snapshot: bool,
+) -> (Vec<Event>, Option<EffectiveMatchSnapshot>) {
+    let sessions = group_records_by_session(parsed.to_vec());
+    let mut snapshot = capture_snapshot.then(|| EffectiveMatchSnapshot {
+        sessions: Vec::with_capacity(sessions.len()),
+    });
+    let mut events = Vec::new();
+
+    for (session_id, records) in sessions {
+        match detect_records(source, rule_set, &records) {
+            Ok(Some(event)) => {
+                if let Some(snapshot) = snapshot.as_mut() {
+                    snapshot.sessions.push(EffectiveSessionMatchSnapshot {
+                        session_id,
+                        records,
+                        effective_rule_ids: Some(event.rule_ids.clone()),
+                    });
+                }
+                events.push(event);
+            }
+            Ok(None) => {
+                if let Some(snapshot) = snapshot.as_mut() {
+                    snapshot.sessions.push(EffectiveSessionMatchSnapshot {
+                        session_id,
+                        records,
+                        effective_rule_ids: Some(Vec::new()),
+                    });
+                }
+            }
+            Err(error) => {
+                if let Some(snapshot) = snapshot.as_mut() {
+                    snapshot.sessions.push(EffectiveSessionMatchSnapshot {
+                        session_id,
+                        records,
+                        effective_rule_ids: None,
+                    });
+                }
+                events.push(telltale_schema::event::scanner_error_event(source, &error));
+            }
+        }
+    }
+
+    (events, snapshot)
+}
+
+/// Evaluates each source-local session once with the pre-policy rule set and
+/// compares those matches with the effective IDs captured by detection.
+pub fn account_policy_matches(
+    snapshot: &EffectiveMatchSnapshot,
+    pre_policy_rule_set: &CompiledRuleSet,
+) -> Result<PolicyMatchAccounting, PolicyMatchAccountingError> {
+    let mut accounting = PolicyMatchAccounting {
+        pre_policy_detection_candidate_count: 0,
+        fully_filtered_detection_candidate_count: 0,
+        filtered_rule_id_count: 0,
+    };
+
+    for session in &snapshot.sessions {
+        if session.records.is_empty()
+            || session
+                .records
+                .iter()
+                .any(|record| record.session_id != session.session_id)
+        {
+            return Err(PolicyMatchAccountingError);
+        }
+        let Some(effective_rule_ids) = &session.effective_rule_ids else {
+            return Err(PolicyMatchAccountingError);
+        };
+        let effective_rule_id_set = effective_rule_ids.iter().collect::<BTreeSet<_>>();
+        if effective_rule_id_set.len() != effective_rule_ids.len() {
+            return Err(PolicyMatchAccountingError);
+        }
+
+        let pre_policy_matches = evaluate_session_matches(pre_policy_rule_set, &session.records)
+            .map_err(|_| PolicyMatchAccountingError)?;
+        let Some(pre_policy_matches) = pre_policy_matches else {
+            if !effective_rule_ids.is_empty() {
+                return Err(PolicyMatchAccountingError);
+            }
+            continue;
+        };
+
+        let pre_policy_rule_id_set = pre_policy_matches.rule_ids.iter().collect::<BTreeSet<_>>();
+        if pre_policy_rule_id_set.len() != pre_policy_matches.rule_ids.len() {
+            return Err(PolicyMatchAccountingError);
+        }
+        accounting.pre_policy_detection_candidate_count = accounting
+            .pre_policy_detection_candidate_count
+            .checked_add(1)
+            .ok_or(PolicyMatchAccountingError)?;
+
+        if !effective_rule_id_set.is_subset(&pre_policy_rule_id_set) {
+            return Err(PolicyMatchAccountingError);
+        }
+        if effective_rule_ids.is_empty() {
+            accounting.fully_filtered_detection_candidate_count = accounting
+                .fully_filtered_detection_candidate_count
+                .checked_add(1)
+                .ok_or(PolicyMatchAccountingError)?;
+        }
+        for rule_id in pre_policy_matches.rule_ids {
+            if !effective_rule_id_set.contains(&rule_id) {
+                accounting.filtered_rule_id_count = accounting
+                    .filtered_rule_id_count
+                    .checked_add(1)
+                    .ok_or(PolicyMatchAccountingError)?;
+            }
+        }
+    }
+
+    Ok(accounting)
 }
 
 #[cfg(feature = "source-io")]
@@ -208,19 +360,8 @@ fn attach_timeline_anchors(event: &mut Event, timeline_anchors: &[TimelineRuleAn
     if timeline_anchors.is_empty() {
         return;
     }
-
-    let Some(triage) = event
-        .triage
-        .as_mut()
-        .and_then(|value| value.as_object_mut())
-    else {
-        return;
-    };
-
-    triage.insert(
-        "timeline_anchors".to_string(),
-        serde_json::to_value(timeline_anchors).expect("timeline anchors serialize"),
-    );
+    event.timeline_anchors =
+        telltale_schema::event::canonicalize_timeline_anchors(timeline_anchors.to_vec());
 }
 
 fn detect_records_with_timeline(
@@ -533,6 +674,10 @@ mod tests {
     mod download_execute;
     #[path = "mcp_injection.rs"]
     mod mcp_injection;
+    #[path = "policy_accounting.rs"]
+    mod policy_accounting;
+    #[path = "process_chain.rs"]
+    mod process_chain;
     #[path = "resilience.rs"]
     mod resilience;
     #[path = "secret_access.rs"]

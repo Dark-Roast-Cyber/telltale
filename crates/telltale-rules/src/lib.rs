@@ -6,6 +6,8 @@
 //! normalized fields as in-memory values, which keeps the engine reusable for
 //! batch session scanning and future inline inference-proxy evaluation alike.
 
+pub mod process_chain;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -420,7 +422,14 @@ impl RuleSet {
         Ok(CompiledRuleSet {
             rules,
             modifiers,
-            policy_name: policy.and_then(|policy| policy.name.clone()),
+            policy_name: policy.and_then(|policy| {
+                policy
+                    .name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+            }),
         })
     }
 }
@@ -673,13 +682,7 @@ fn validate_rule_metadata(
         rule_id,
         "signal_type",
         signal_type,
-        &[
-            "atomic",
-            "chain",
-            "correlation",
-            "baseline_deviation",
-            "llm_triage",
-        ],
+        &["atomic", "chain", "correlation", "baseline_deviation"],
     )?;
     validate_metadata_value(
         rule_id,
@@ -1180,5 +1183,47 @@ mod tests {
         .expect("compile rules");
 
         assert_eq!(rule_set.rule_count(), 0);
+    }
+
+    #[test]
+    fn policy_name_normalizes_blank_names_to_none() {
+        for name in ["", "   ", "\t\n"] {
+            let policy = RulePolicy {
+                name: Some(name.to_string()),
+                ..RulePolicy::default()
+            };
+            let compiled = RuleSet {
+                version: 1,
+                description: "test rules".to_string(),
+                defaults: RuleDefaults {
+                    case_insensitive: false,
+                    enabled: true,
+                },
+                rules: Vec::new(),
+                modifiers: Vec::new(),
+            }
+            .compile(Some(&policy))
+            .expect("compile rules");
+
+            assert_eq!(compiled.policy_name(), None);
+        }
+
+        let policy = RulePolicy {
+            name: Some("  named-policy  ".to_string()),
+            ..RulePolicy::default()
+        };
+        let compiled = RuleSet {
+            version: 1,
+            description: "test rules".to_string(),
+            defaults: RuleDefaults {
+                case_insensitive: false,
+                enabled: true,
+            },
+            rules: Vec::new(),
+            modifiers: Vec::new(),
+        }
+        .compile(Some(&policy))
+        .expect("compile rules");
+        assert_eq!(compiled.policy_name(), Some("named-policy"));
     }
 }

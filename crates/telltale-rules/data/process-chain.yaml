@@ -1,0 +1,4456 @@
+# Telltale process-chain detection pack.
+#
+# GENERATED FILE - edit scripts/dev/generate-process-chain-rules.py and re-run
+#   python3 scripts/dev/generate-process-chain-rules.py
+#
+# Behavioural reference: irflow-timeline process-tree rule library
+#   https://github.com/r3nzsec/irflow-timeline (src/detection-rules.js)
+# Scores are Telltale's own; see docs/process-chain-detections.md.
+version: 1
+description: "Parent/child process-chain and standalone process indicators."
+defaults:
+  enabled: true
+  risk_entity: host
+  suppression_window_seconds: 3600
+categories:
+  execution:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - source_process_command_line
+      - target_process_command_line
+      - target_process_path
+      - user
+      - host
+    falsepositives:
+      - "Software deployment and configuration-management agents legitimately spawn interpreters on managed endpoints."
+      - "Developer tooling and build systems routinely chain shells and script hosts."
+  defense_evasion:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - target_process_path
+      - user
+      - host
+      - parent_process_name
+    falsepositives:
+      - "Patching, imaging, and endpoint-agent maintenance windows can legitimately stop services or adjust security settings."
+      - "LOLBins such as rundll32 and msiexec are used constantly by Windows itself and by installers."
+  command_and_control:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - target_process_path
+      - host
+      - user
+    falsepositives:
+      - "Authorised RMM products spawn shells as part of normal remote support; scope by approved product and management server."
+      - "Developers legitimately use ngrok-style tunnels for local webhook testing."
+  persistence:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - user
+      - host
+      - source_process_command_line
+    falsepositives:
+      - "Installers, scheduled maintenance, and configuration management create tasks, services, and autorun keys routinely."
+  discovery:
+    detection_class: threat_hunting
+    analytic_intent: hunt
+    investigation_fields:
+      - target_process_command_line
+      - user
+      - host
+    falsepositives:
+      - "Discovery commands are the ordinary vocabulary of helpdesk and administration work; they are useful mainly in sequence."
+      - "Inventory and monitoring agents run these commands on a schedule."
+  credential_access:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - target_process_path
+      - user
+      - host
+      - parent_process_name
+    falsepositives:
+      - "Backup software and domain-controller maintenance legitimately touch shadow copies and the AD database."
+      - "Support engineers use ProcDump for genuine crash analysis."
+  lateral_movement:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - user
+      - host
+      - source_process_name
+    falsepositives:
+      - "Remote administration over WinRM, PsExec, and DCOM is normal for server operations teams."
+  impact:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - user
+      - host
+      - source_process_command_line
+    falsepositives:
+      - "Backup and imaging products prune shadow copies and backup catalogues as part of retention policy; verify the invoking account and product."
+  collection:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - user
+      - host
+    falsepositives:
+      - "Archiving is everyday packaging and backup work; only password-protected or unusually large staging archives are meaningful alone."
+  exfiltration:
+    detection_class: security_detection
+    analytic_intent: alert
+    investigation_fields:
+      - target_process_command_line
+      - host
+      - user
+    falsepositives:
+      - "Approved cloud-sync clients and CI artefact uploads use the same utilities; scope by destination and account."
+  download:
+    detection_class: security_detection
+    analytic_intent: enrich
+    investigation_fields:
+      - target_process_command_line
+      - host
+      - user
+    falsepositives:
+      - "Fetching packages, installers, and documentation is routine developer and administrator activity."
+rules:
+  - id: procchain.c2.anydesk_cmd
+    title: "AnyDesk spawned cmd"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: anydesk
+    child: cmd
+    mitre: [T1219]
+    reason: "AnyDesk -> cmd - remote access tool abuse"
+    source_severity: 2
+  - id: procchain.c2.anydesk_powershell
+    title: "AnyDesk spawned PowerShell"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: anydesk
+    child: powershell
+    mitre: [T1219]
+    reason: "AnyDesk -> PowerShell - remote access tool abuse"
+    source_severity: 2
+  - id: procchain.c2.ateraagent_cmd
+    title: "Atera spawned cmd"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: ateraagent
+    child: cmd
+    mitre: [T1219]
+    reason: "Atera -> cmd - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.ateraagent_powershell
+    title: "Atera spawned PowerShell"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: ateraagent
+    child: powershell
+    mitre: [T1219]
+    reason: "Atera -> PowerShell - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.certutil_download_cradle
+    title: "cmd used certutil as a download or decode cradle"
+    category: command_and_control
+    severity: high
+    score: 58
+    confidence: high
+    parent: cmd
+    child: certutil
+    mitre: [T1105]
+    reason: "cmd -> certutil - certutil used as a download or payload-decode cradle rather than for certificate work"
+    child_command_line_any:
+      - "-urlcache"
+      - "-decode"
+      - "-encode"
+      - "-verifyctl"
+      - "-split"
+  - id: procchain.c2.certutil_download_cradle_ps
+    title: "PowerShell used certutil as a download or decode cradle"
+    category: command_and_control
+    severity: high
+    score: 58
+    confidence: high
+    parent: powershell
+    child: certutil
+    mitre: [T1105]
+    reason: "PowerShell -> certutil - certutil used as a download or payload-decode cradle rather than for certificate work"
+    child_command_line_any:
+      - "-urlcache"
+      - "-decode"
+      - "-encode"
+      - "-verifyctl"
+      - "-split"
+  - id: procchain.c2.cmd_bitsadmin
+    title: "cmd spawned bitsadmin"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmd
+    child: bitsadmin
+    mitre: [T1197]
+    reason: "cmd -> bitsadmin - BITS job download"
+    source_severity: 2
+  - id: procchain.c2.cmd_chisel
+    title: "cmd spawned Chisel"
+    category: command_and_control
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: chisel
+    mitre: [T1572]
+    reason: "cmd -> Chisel - SOCKS proxy tunnel"
+    source_severity: 3
+  - id: procchain.c2.cmd_ngrok
+    title: "cmd spawned ngrok"
+    category: command_and_control
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: ngrok
+    mitre: [T1572]
+    reason: "cmd -> ngrok - reverse tunnel for command and control"
+    source_severity: 3
+  - id: procchain.c2.cmd_plink
+    title: "cmd spawned plink"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmd
+    child: plink
+    mitre: [T1572]
+    reason: "cmd -> plink - SSH tunnel"
+    source_severity: 2
+  - id: procchain.c2.cmd_wget
+    title: "cmd spawned wget"
+    category: command_and_control
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: wget
+    mitre: [T1105]
+    reason: "cmd -> wget - file download"
+    source_severity: 1
+  - id: procchain.c2.excel_certutil
+    title: "Excel spawned certutil"
+    category: command_and_control
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: certutil
+    mitre: [T1105]
+    reason: "Excel -> certutil - download cradle"
+    source_severity: 3
+  - id: procchain.c2.powershell_bitsadmin
+    title: "PowerShell spawned bitsadmin"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: powershell
+    child: bitsadmin
+    mitre: [T1197]
+    reason: "PowerShell -> bitsadmin - BITS download"
+    source_severity: 2
+  - id: procchain.c2.powershell_chisel
+    title: "PowerShell spawned Chisel"
+    category: command_and_control
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: chisel
+    mitre: [T1572]
+    reason: "PowerShell -> Chisel - proxy tunnel"
+    source_severity: 3
+  - id: procchain.c2.powershell_ngrok
+    title: "PowerShell spawned ngrok"
+    category: command_and_control
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: ngrok
+    mitre: [T1572]
+    reason: "PowerShell -> ngrok - tunnel establishment"
+    source_severity: 3
+  - id: procchain.c2.powershell_plink
+    title: "PowerShell spawned plink"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: powershell
+    child: plink
+    mitre: [T1572]
+    reason: "PowerShell -> plink - SSH tunnel"
+    source_severity: 2
+  - id: procchain.c2.rundll32_certutil
+    title: "rundll32 spawned certutil"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: rundll32
+    child: certutil
+    mitre: [T1105]
+    reason: "rundll32 -> certutil - staged download"
+    source_severity: 2
+  - id: procchain.c2.screenconnect_clientservice_cmd
+    title: "ScreenConnect spawned cmd"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: screenconnect_clientservice
+    child: cmd
+    mitre: [T1219]
+    reason: "ScreenConnect -> cmd - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.screenconnect_clientservice_powershell
+    title: "ScreenConnect spawned PowerShell"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: screenconnect_clientservice
+    child: powershell
+    mitre: [T1219]
+    reason: "ScreenConnect -> PowerShell - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.screenconnect_windowsclient_cmd
+    title: "ScreenConnect client spawned cmd"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: screenconnect_windowsclient
+    child: cmd
+    mitre: [T1219]
+    reason: "ScreenConnect client -> cmd - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.screenconnect_windowsclient_powershell
+    title: "ScreenConnect client spawned PowerShell"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: screenconnect_windowsclient
+    child: powershell
+    mitre: [T1219]
+    reason: "ScreenConnect client -> PowerShell - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.splashtop_cmd
+    title: "Splashtop spawned cmd"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: splashtop
+    child: cmd
+    mitre: [T1219]
+    reason: "Splashtop -> cmd - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.splashtop_powershell
+    title: "Splashtop spawned PowerShell"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: splashtop
+    child: powershell
+    mitre: [T1219]
+    reason: "Splashtop -> PowerShell - RMM abuse"
+    source_severity: 2
+  - id: procchain.c2.svchost_certutil
+    title: "svchost spawned certutil"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: svchost
+    child: certutil
+    mitre: [T1105]
+    reason: "svchost -> certutil - download via service"
+    source_severity: 2
+  - id: procchain.c2.teamviewer_cmd
+    title: "TeamViewer spawned cmd"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: teamviewer
+    child: cmd
+    mitre: [T1219]
+    reason: "TeamViewer -> cmd - remote access tool abuse"
+    source_severity: 2
+  - id: procchain.c2.teamviewer_powershell
+    title: "TeamViewer spawned PowerShell"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: teamviewer
+    child: powershell
+    mitre: [T1219]
+    reason: "TeamViewer -> PowerShell - remote access tool abuse"
+    source_severity: 2
+  - id: procchain.c2.teamviewer_service_cmd
+    title: "TeamViewer service spawned cmd"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: teamviewer_service
+    child: cmd
+    mitre: [T1219]
+    reason: "TeamViewer service -> cmd - remote access tool abuse"
+    source_severity: 2
+  - id: procchain.c2.teamviewer_service_powershell
+    title: "TeamViewer service spawned PowerShell"
+    category: command_and_control
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: teamviewer_service
+    child: powershell
+    mitre: [T1219]
+    reason: "TeamViewer service -> PowerShell - remote access tool abuse"
+    source_severity: 2
+  - id: procchain.c2.w3wp_certutil
+    title: "IIS worker spawned certutil"
+    category: command_and_control
+    severity: critical
+    score: 85
+    confidence: high
+    parent: w3wp
+    child: certutil
+    mitre: [T1190]
+    reason: "IIS worker -> certutil - web shell download"
+    source_severity: 3
+  - id: procchain.c2.winword_bitsadmin
+    title: "Word spawned bitsadmin"
+    category: command_and_control
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: bitsadmin
+    mitre: [T1197]
+    reason: "Word -> bitsadmin - BITS download"
+    source_severity: 3
+  - id: procchain.c2.winword_certutil
+    title: "Word spawned certutil"
+    category: command_and_control
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: certutil
+    mitre: [T1105]
+    reason: "Word -> certutil - download cradle"
+    source_severity: 3
+  - id: procchain.c2.wmiprvse_certutil
+    title: "WMIPrvSE spawned certutil"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wmiprvse
+    child: certutil
+    mitre: [T1105]
+    reason: "WMIPrvSE -> certutil - WMI-staged download"
+    source_severity: 2
+  - id: procchain.c2.wscript_certutil
+    title: "WScript spawned certutil"
+    category: command_and_control
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wscript
+    child: certutil
+    mitre: [T1105]
+    reason: "WScript -> certutil - download stage"
+    source_severity: 2
+  - id: procchain.collection.archive_password_protected
+    title: "cmd created a password-protected archive"
+    category: collection
+    severity: high
+    score: 58
+    confidence: high
+    parent: cmd
+    child: 7z
+    mitre: [T1560.001]
+    reason: "cmd -> 7z - password-protected archive created, the standard pre-exfiltration staging pattern"
+    child_command_line_any:
+      - "\\s-h?p\\S"
+  - id: procchain.collection.archive_password_protected_ps
+    title: "PowerShell created a password-protected archive"
+    category: collection
+    severity: high
+    score: 58
+    confidence: high
+    parent: powershell
+    child: 7z
+    mitre: [T1560.001]
+    reason: "PowerShell -> 7z - password-protected archive created, the standard pre-exfiltration staging pattern"
+    child_command_line_any:
+      - "\\s-h?p\\S"
+  - id: procchain.collection.archive_password_protected_rar
+    title: "cmd created a password-protected RAR archive"
+    category: collection
+    severity: high
+    score: 58
+    confidence: high
+    parent: cmd
+    child: rar
+    mitre: [T1560.001]
+    reason: "cmd -> rar - password-protected archive created, the standard pre-exfiltration staging pattern"
+    child_command_line_any:
+      - "\\s-h?p\\S"
+  - id: procchain.collection.cmd_7za
+    title: "cmd spawned 7za"
+    category: collection
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmd
+    child: 7za
+    mitre: [T1560.001]
+    reason: "cmd -> 7za - archive creation (common in ransomware toolkits)"
+    source_severity: 2
+  - id: procchain.collection.cmd_makecab
+    title: "cmd spawned makecab"
+    category: collection
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: makecab
+    mitre: [T1560.001]
+    reason: "cmd -> makecab - LOLBin archive creation"
+    source_severity: 1
+  - id: procchain.collection.powershell_makecab
+    title: "PowerShell spawned makecab"
+    category: collection
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: makecab
+    mitre: [T1560.001]
+    reason: "PowerShell -> makecab - LOLBin archive creation"
+    source_severity: 1
+  - id: procchain.credaccess.cmd_diskshadow
+    title: "cmd spawned diskshadow"
+    category: credential_access
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmd
+    child: diskshadow
+    mitre: [T1003.003]
+    reason: "cmd -> diskshadow - NTDS.dit shadow copy"
+    source_severity: 2
+  - id: procchain.credaccess.cmd_esentutl
+    title: "cmd spawned esentutl"
+    category: credential_access
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmd
+    child: esentutl
+    mitre: [T1003.003]
+    reason: "cmd -> esentutl - ESE database extraction"
+    source_severity: 2
+  - id: procchain.credaccess.cmd_klist
+    title: "cmd spawned klist"
+    category: credential_access
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: klist
+    mitre: [T1558]
+    reason: "cmd -> klist - Kerberos ticket inspection"
+    source_severity: 0
+  - id: procchain.credaccess.cmd_lazagne
+    title: "cmd spawned LaZagne"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: lazagne
+    mitre: [T1555]
+    reason: "cmd -> LaZagne - credential recovery from applications"
+    source_severity: 3
+  - id: procchain.credaccess.cmd_mimikatz
+    title: "cmd spawned Mimikatz"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: mimikatz
+    mitre: [T1003.001]
+    reason: "cmd -> Mimikatz - credential dumping"
+    source_severity: 3
+  - id: procchain.credaccess.cmd_ntdsutil
+    title: "cmd spawned ntdsutil"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: ntdsutil
+    mitre: [T1003.003]
+    reason: "cmd -> ntdsutil - Active Directory database extraction"
+    source_severity: 3
+  - id: procchain.credaccess.cmd_procdump
+    title: "cmd spawned ProcDump"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: procdump
+    mitre: [T1003.001]
+    reason: "cmd -> ProcDump - LSASS memory dump"
+    source_severity: 3
+  - id: procchain.credaccess.cmd_rubeus
+    title: "cmd spawned Rubeus"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: rubeus
+    mitre: [T1558.003]
+    reason: "cmd -> Rubeus - Kerberos attack tool"
+    source_severity: 3
+  - id: procchain.credaccess.cmd_sekurlsa
+    title: "cmd spawned sekurlsa"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: sekurlsa
+    mitre: [T1003.001]
+    reason: "cmd -> sekurlsa - credential extraction"
+    source_severity: 3
+  - id: procchain.credaccess.lsass_cmd
+    title: "LSASS spawned cmd"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: lsass
+    child: cmd
+    mitre: [T1003.001]
+    reason: "LSASS -> cmd - credential dumping or injection"
+    source_severity: 3
+  - id: procchain.credaccess.lsass_powershell
+    title: "LSASS spawned PowerShell"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: lsass
+    child: powershell
+    mitre: [T1003.001]
+    reason: "LSASS -> PowerShell - process injection into LSASS"
+    source_severity: 3
+  - id: procchain.credaccess.lsass_rundll32
+    title: "LSASS spawned rundll32"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: lsass
+    child: rundll32
+    mitre: [T1003.001]
+    reason: "LSASS -> rundll32 - skeleton key or SSP injection"
+    source_severity: 3
+  - id: procchain.credaccess.powershell_esentutl
+    title: "PowerShell spawned esentutl"
+    category: credential_access
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: powershell
+    child: esentutl
+    mitre: [T1003.003]
+    reason: "PowerShell -> esentutl - locked file copy"
+    source_severity: 2
+  - id: procchain.credaccess.powershell_klist
+    title: "PowerShell spawned klist"
+    category: credential_access
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: klist
+    mitre: [T1558]
+    reason: "PowerShell -> klist - Kerberos ticket enumeration"
+    source_severity: 0
+  - id: procchain.credaccess.powershell_lazagne
+    title: "PowerShell spawned LaZagne"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: lazagne
+    mitre: [T1555]
+    reason: "PowerShell -> LaZagne - credential harvesting"
+    source_severity: 3
+  - id: procchain.credaccess.powershell_mimikatz
+    title: "PowerShell spawned Mimikatz"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: mimikatz
+    mitre: [T1003.001]
+    reason: "PowerShell -> Mimikatz - credential dumping"
+    source_severity: 3
+  - id: procchain.credaccess.powershell_ntdsutil
+    title: "PowerShell spawned ntdsutil"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: ntdsutil
+    mitre: [T1003.003]
+    reason: "PowerShell -> ntdsutil - NTDS.dit dump"
+    source_severity: 3
+  - id: procchain.credaccess.powershell_procdump
+    title: "PowerShell spawned ProcDump"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: procdump
+    mitre: [T1003.001]
+    reason: "PowerShell -> ProcDump - LSASS memory dump"
+    source_severity: 3
+  - id: procchain.credaccess.powershell_rubeus
+    title: "PowerShell spawned Rubeus"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: rubeus
+    mitre: [T1558.003]
+    reason: "PowerShell -> Rubeus - Kerberos attack tool"
+    source_severity: 3
+  - id: procchain.credaccess.reg_hive_export
+    title: "cmd exported a credential registry hive"
+    category: credential_access
+    severity: high
+    score: 58
+    confidence: high
+    parent: cmd
+    child: reg
+    mitre: [T1003.002]
+    reason: "cmd -> reg - SAM, SECURITY, or SYSTEM hive saved to disk for offline credential extraction"
+    child_command_line_any:
+      - "\\bsave\\b.*\\b(sam|security|system)\\b"
+      - "\\bexport\\b.*\\b(sam|security)\\b"
+  - id: procchain.credaccess.reg_hive_export_ps
+    title: "PowerShell exported a credential registry hive"
+    category: credential_access
+    severity: high
+    score: 58
+    confidence: high
+    parent: powershell
+    child: reg
+    mitre: [T1003.002]
+    reason: "PowerShell -> reg - SAM, SECURITY, or SYSTEM hive saved to disk for offline credential extraction"
+    child_command_line_any:
+      - "\\bsave\\b.*\\b(sam|security|system)\\b"
+      - "\\bexport\\b.*\\b(sam|security)\\b"
+  - id: procchain.credaccess.vssadmin_shadow_access
+    title: "cmd created or listed a Volume Shadow Copy"
+    category: credential_access
+    severity: medium
+    score: 43
+    confidence: high
+    parent: cmd
+    child: vssadmin
+    mitre: [T1003.003]
+    reason: "cmd -> vssadmin - shadow copy created or listed, a precursor to NTDS.dit or SAM extraction"
+    child_command_line_none:
+      - "\\bdelete\\b"
+      - "\\bresize\\b"
+  - id: procchain.credaccess.vssadmin_shadow_access_ps
+    title: "PowerShell created or listed a Volume Shadow Copy"
+    category: credential_access
+    severity: medium
+    score: 43
+    confidence: high
+    parent: powershell
+    child: vssadmin
+    mitre: [T1003.003]
+    reason: "PowerShell -> vssadmin - shadow copy created or listed, a precursor to NTDS.dit or SAM extraction"
+    child_command_line_none:
+      - "\\bdelete\\b"
+      - "\\bresize\\b"
+  - id: procchain.discovery.bcdedit_enumerate
+    title: "cmd inspected boot configuration"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: high
+    parent: cmd
+    child: bcdedit
+    mitre: [T1082]
+    reason: "cmd -> bcdedit - boot configuration inspected"
+    child_command_line_none:
+      - "\\bset\\b"
+      - "\\bdelete\\b"
+      - "/set"
+      - "/delete"
+  - id: procchain.discovery.cmd_accesschk
+    title: "cmd spawned accesschk"
+    category: discovery
+    severity: low
+    score: 25
+    confidence: high
+    parent: cmd
+    child: accesschk
+    mitre: [T1083]
+    reason: "cmd -> accesschk - Sysinternals permission check"
+    source_severity: 1
+  - id: procchain.discovery.cmd_adfind
+    title: "cmd spawned AdFind"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: adfind
+    mitre: [T1018]
+    reason: "cmd -> AdFind - bulk Active Directory enumeration"
+    source_severity: 3
+  - id: procchain.discovery.cmd_arp
+    title: "cmd spawned arp"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: arp
+    mitre: [T1016]
+    reason: "cmd -> arp - ARP table discovery"
+    source_severity: 0
+  - id: procchain.discovery.cmd_csvde
+    title: "cmd spawned csvde"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: csvde
+    mitre: [T1087.002]
+    reason: "cmd -> csvde - bulk Active Directory export"
+    source_severity: 1
+  - id: procchain.discovery.cmd_dsquery
+    title: "cmd spawned dsquery"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: dsquery
+    mitre: [T1018]
+    reason: "cmd -> dsquery - Active Directory enumeration"
+    source_severity: 1
+  - id: procchain.discovery.cmd_hostname
+    title: "cmd spawned hostname"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: hostname
+    mitre: [T1082]
+    reason: "cmd -> hostname - hostname discovery"
+    source_severity: 0
+  - id: procchain.discovery.cmd_icacls
+    title: "cmd spawned icacls"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: icacls
+    mitre: [T1083]
+    reason: "cmd -> icacls - permission enumeration"
+    source_severity: 0
+  - id: procchain.discovery.cmd_ipconfig
+    title: "cmd spawned ipconfig"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: ipconfig
+    mitre: [T1016]
+    reason: "cmd -> ipconfig - network configuration discovery"
+    source_severity: 0
+  - id: procchain.discovery.cmd_net1
+    title: "cmd spawned net1"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: net1
+    mitre: [T1087.002]
+    reason: "cmd -> net1 - net.exe proxy"
+    source_severity: 1
+  - id: procchain.discovery.cmd_netstat
+    title: "cmd spawned netstat"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: netstat
+    mitre: [T1049]
+    reason: "cmd -> netstat - network connection discovery"
+    source_severity: 0
+  - id: procchain.discovery.cmd_nltest
+    title: "cmd spawned nltest"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: nltest
+    mitre: [T1482]
+    reason: "cmd -> nltest - domain trust enumeration"
+    source_severity: 1
+  - id: procchain.discovery.cmd_nslookup
+    title: "cmd spawned nslookup"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: nslookup
+    mitre: [T1018]
+    reason: "cmd -> nslookup - DNS reconnaissance"
+    source_severity: 0
+  - id: procchain.discovery.cmd_pathping
+    title: "cmd spawned pathping"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: pathping
+    mitre: [T1016]
+    reason: "cmd -> pathping - route tracing"
+    source_severity: 0
+  - id: procchain.discovery.cmd_route
+    title: "cmd spawned route"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: route
+    mitre: [T1016]
+    reason: "cmd -> route - routing table discovery"
+    source_severity: 0
+  - id: procchain.discovery.cmd_seatbelt
+    title: "cmd spawned Seatbelt"
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: high
+    parent: cmd
+    child: seatbelt
+    mitre: [T1082]
+    reason: "cmd -> Seatbelt - GhostPack host survey"
+    source_severity: 2
+  - id: procchain.discovery.cmd_sharphound
+    title: "cmd spawned SharpHound"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: sharphound
+    mitre: [T1087.002]
+    reason: "cmd -> SharpHound - BloodHound data collector"
+    source_severity: 3
+  - id: procchain.discovery.cmd_systeminfo
+    title: "cmd spawned systeminfo"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: systeminfo
+    mitre: [T1082]
+    reason: "cmd -> systeminfo - system fingerprinting"
+    source_severity: 1
+  - id: procchain.discovery.cmd_tasklist
+    title: "cmd spawned tasklist"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: tasklist
+    mitre: [T1057]
+    reason: "cmd -> tasklist - process enumeration"
+    source_severity: 0
+  - id: procchain.discovery.cmd_tracert
+    title: "cmd spawned tracert"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: tracert
+    mitre: [T1016]
+    reason: "cmd -> tracert - route tracing"
+    source_severity: 0
+  - id: procchain.discovery.cmd_whoami
+    title: "cmd spawned whoami"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: whoami
+    mitre: [T1033]
+    reason: "cmd -> whoami - user context enumeration"
+    source_severity: 1
+  - id: procchain.discovery.fltmc_enumerate
+    title: "cmd enumerated loaded minifilters"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: high
+    parent: cmd
+    child: fltmc
+    mitre: [T1518.001]
+    reason: "cmd -> fltMC - loaded minifilters enumerated, often used to fingerprint endpoint security"
+    child_command_line_none:
+      - "\\bunload\\b"
+      - "\\bdetach\\b"
+  - id: procchain.discovery.net_account_enum
+    title: "cmd enumerated accounts with net"
+    category: discovery
+    severity: low
+    score: 23
+    confidence: high
+    parent: cmd
+    child: net
+    mitre: [T1087.002]
+    reason: "cmd -> net - local or domain account enumeration"
+    child_command_line_any:
+      - "\\b(user|group|localgroup|accounts)\\b"
+    child_command_line_none:
+      - "/add"
+      - "/delete"
+  - id: procchain.discovery.net_account_enum_ps
+    title: "PowerShell enumerated accounts with net"
+    category: discovery
+    severity: low
+    score: 23
+    confidence: high
+    parent: powershell
+    child: net
+    mitre: [T1087.002]
+    reason: "PowerShell -> net - local or domain account enumeration"
+    child_command_line_any:
+      - "\\b(user|group|localgroup|accounts)\\b"
+    child_command_line_none:
+      - "/add"
+      - "/delete"
+  - id: procchain.discovery.net_share_enum
+    title: "cmd enumerated network shares with net"
+    category: discovery
+    severity: low
+    score: 23
+    confidence: high
+    parent: cmd
+    child: net
+    mitre: [T1135]
+    reason: "cmd -> net - network share discovery"
+    child_command_line_any:
+      - "\\b(view|share|use)\\b"
+  - id: procchain.discovery.net_share_enum_ps
+    title: "PowerShell enumerated network shares with net"
+    category: discovery
+    severity: low
+    score: 23
+    confidence: high
+    parent: powershell
+    child: net
+    mitre: [T1135]
+    reason: "PowerShell -> net - network share discovery"
+    child_command_line_any:
+      - "\\b(view|share|use)\\b"
+  - id: procchain.discovery.powershell_adfind
+    title: "PowerShell spawned AdFind"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: adfind
+    mitre: [T1018]
+    reason: "PowerShell -> AdFind - bulk Active Directory enumeration"
+    source_severity: 3
+  - id: procchain.discovery.powershell_arp
+    title: "PowerShell spawned arp"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: arp
+    mitre: [T1016]
+    reason: "PowerShell -> arp - ARP table discovery"
+    source_severity: 0
+  - id: procchain.discovery.powershell_bloodhound
+    title: "PowerShell spawned BloodHound"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: bloodhound
+    mitre: [T1087.002]
+    reason: "PowerShell -> BloodHound - Active Directory attack path mapping"
+    source_severity: 3
+  - id: procchain.discovery.powershell_csvde
+    title: "PowerShell spawned csvde"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: csvde
+    mitre: [T1087.002]
+    reason: "PowerShell -> csvde - bulk Active Directory export"
+    source_severity: 1
+  - id: procchain.discovery.powershell_dsget
+    title: "PowerShell spawned dsget"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: dsget
+    mitre: [T1087.002]
+    reason: "PowerShell -> dsget - Active Directory attribute query"
+    source_severity: 1
+  - id: procchain.discovery.powershell_dsquery
+    title: "PowerShell spawned dsquery"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: dsquery
+    mitre: [T1018]
+    reason: "PowerShell -> dsquery - Active Directory object enumeration"
+    source_severity: 1
+  - id: procchain.discovery.powershell_hostname
+    title: "PowerShell spawned hostname"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: hostname
+    mitre: [T1082]
+    reason: "PowerShell -> hostname - hostname discovery"
+    source_severity: 0
+  - id: procchain.discovery.powershell_icacls
+    title: "PowerShell spawned icacls"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: icacls
+    mitre: [T1083]
+    reason: "PowerShell -> icacls - permission enumeration"
+    source_severity: 0
+  - id: procchain.discovery.powershell_ipconfig
+    title: "PowerShell spawned ipconfig"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: ipconfig
+    mitre: [T1016]
+    reason: "PowerShell -> ipconfig - network configuration discovery"
+    source_severity: 0
+  - id: procchain.discovery.powershell_ldifde
+    title: "PowerShell spawned ldifde"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: ldifde
+    mitre: [T1087.002]
+    reason: "PowerShell -> ldifde - LDAP data export"
+    source_severity: 1
+  - id: procchain.discovery.powershell_nbtstat
+    title: "PowerShell spawned nbtstat"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: nbtstat
+    mitre: [T1016]
+    reason: "PowerShell -> nbtstat - NetBIOS discovery"
+    source_severity: 0
+  - id: procchain.discovery.powershell_net1
+    title: "PowerShell spawned net1"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: net1
+    mitre: [T1087.002]
+    reason: "PowerShell -> net1 - net.exe proxy"
+    source_severity: 1
+  - id: procchain.discovery.powershell_netstat
+    title: "PowerShell spawned netstat"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: netstat
+    mitre: [T1049]
+    reason: "PowerShell -> netstat - network connection discovery"
+    source_severity: 0
+  - id: procchain.discovery.powershell_nltest
+    title: "PowerShell spawned nltest"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: nltest
+    mitre: [T1482]
+    reason: "PowerShell -> nltest - domain trust enumeration"
+    source_severity: 1
+  - id: procchain.discovery.powershell_nslookup
+    title: "PowerShell spawned nslookup"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: nslookup
+    mitre: [T1018]
+    reason: "PowerShell -> nslookup - DNS reconnaissance"
+    source_severity: 0
+  - id: procchain.discovery.powershell_qprocess
+    title: "PowerShell spawned qprocess"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: qprocess
+    mitre: [T1057]
+    reason: "PowerShell -> qprocess - terminal services process list"
+    source_severity: 0
+  - id: procchain.discovery.powershell_route
+    title: "PowerShell spawned route"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: route
+    mitre: [T1016]
+    reason: "PowerShell -> route - routing table discovery"
+    source_severity: 0
+  - id: procchain.discovery.powershell_seatbelt
+    title: "PowerShell spawned Seatbelt"
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: high
+    parent: powershell
+    child: seatbelt
+    mitre: [T1082]
+    reason: "PowerShell -> Seatbelt - GhostPack host survey"
+    source_severity: 2
+  - id: procchain.discovery.powershell_sharphound
+    title: "PowerShell spawned SharpHound"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: sharphound
+    mitre: [T1087.002]
+    reason: "PowerShell -> SharpHound - Active Directory collector"
+    source_severity: 3
+  - id: procchain.discovery.powershell_systeminfo
+    title: "PowerShell spawned systeminfo"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: systeminfo
+    mitre: [T1082]
+    reason: "PowerShell -> systeminfo - system fingerprinting"
+    source_severity: 1
+  - id: procchain.discovery.powershell_tasklist
+    title: "PowerShell spawned tasklist"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: tasklist
+    mitre: [T1057]
+    reason: "PowerShell -> tasklist - process enumeration"
+    source_severity: 0
+  - id: procchain.discovery.powershell_whoami
+    title: "PowerShell spawned whoami"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: whoami
+    mitre: [T1033]
+    reason: "PowerShell -> whoami - user context enumeration"
+    source_severity: 1
+  - id: procchain.discovery.reg_query
+    title: "cmd queried the registry"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: high
+    parent: cmd
+    child: reg
+    mitre: [T1012]
+    reason: "cmd -> reg - registry queried"
+    child_command_line_any:
+      - "\\bquery\\b"
+  - id: procchain.discovery.reg_query_ps
+    title: "PowerShell queried the registry"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: high
+    parent: powershell
+    child: reg
+    mitre: [T1012]
+    reason: "PowerShell -> reg - registry queried"
+    child_command_line_any:
+      - "\\bquery\\b"
+  - id: procchain.discovery.rundll32_net
+    title: "rundll32 spawned net"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: rundll32
+    child: net
+    mitre: [T1087.002]
+    reason: "rundll32 -> net - post-exploitation reconnaissance"
+    source_severity: 1
+  - id: procchain.discovery.sc_service_query
+    title: "cmd enumerated Windows services"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: high
+    parent: cmd
+    child: sc
+    mitre: [T1007]
+    reason: "cmd -> sc - Windows service enumeration"
+    child_command_line_none:
+      - "\\bcreate\\b"
+      - "\\bconfig\\b"
+      - "\\bdelete\\b"
+  - id: procchain.discovery.sc_service_query_ps
+    title: "PowerShell enumerated Windows services"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: high
+    parent: powershell
+    child: sc
+    mitre: [T1007]
+    reason: "PowerShell -> sc - Windows service enumeration"
+    child_command_line_none:
+      - "\\bcreate\\b"
+      - "\\bconfig\\b"
+      - "\\bdelete\\b"
+  - id: procchain.discovery.svchost_net
+    title: "svchost spawned net"
+    category: discovery
+    severity: low
+    score: 20
+    confidence: low
+    parent: svchost
+    child: net
+    mitre: [T1087.002]
+    reason: "svchost -> net - reconnaissance via service context"
+    source_severity: 1
+  - id: procchain.discovery.svchost_whoami
+    title: "svchost spawned whoami"
+    category: discovery
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: svchost
+    child: whoami
+    mitre: [T1033]
+    reason: "svchost -> whoami - post-exploitation via service"
+    source_severity: 2
+  - id: procchain.discovery.w3wp_net
+    title: "IIS worker spawned net"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    parent: w3wp
+    child: net
+    mitre: [T1190]
+    reason: "IIS worker -> net - web shell enumeration"
+    source_severity: 3
+  - id: procchain.discovery.w3wp_whoami
+    title: "IIS worker spawned whoami"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    parent: w3wp
+    child: whoami
+    mitre: [T1190]
+    reason: "IIS worker -> whoami - web shell reconnaissance"
+    source_severity: 3
+  - id: procchain.discovery.wevtutil_log_query
+    title: "cmd queried a Windows event log"
+    category: discovery
+    severity: informational
+    score: 0
+    confidence: high
+    parent: cmd
+    child: wevtutil
+    mitre: [T1654]
+    reason: "cmd -> wevtutil - event log queried or enumerated"
+    child_command_line_none:
+      - "\\bcl\\b"
+      - "clear-log"
+      - "\\bsl\\b"
+  - id: procchain.discovery.wmic_query
+    title: "cmd queried host inventory via wmic"
+    category: discovery
+    severity: low
+    score: 23
+    confidence: high
+    parent: cmd
+    child: wmic
+    mitre: [T1047]
+    reason: "cmd -> wmic - host inventory query through WMI"
+    child_command_line_none:
+      - "shadowcopy"
+      - "eventfilter"
+      - "eventconsumer"
+      - "process\\s+call\\s+create"
+      - "/node:"
+  - id: procchain.discovery.wmic_query_ps
+    title: "PowerShell queried host inventory via wmic"
+    category: discovery
+    severity: low
+    score: 23
+    confidence: high
+    parent: powershell
+    child: wmic
+    mitre: [T1047]
+    reason: "PowerShell -> wmic - host inventory query through WMI"
+    child_command_line_none:
+      - "shadowcopy"
+      - "eventfilter"
+      - "eventconsumer"
+      - "process\\s+call\\s+create"
+      - "/node:"
+  - id: procchain.download.curl_fetch
+    title: "cmd fetched remote content with curl"
+    category: download
+    severity: low
+    score: 23
+    confidence: high
+    parent: cmd
+    child: curl
+    mitre: [T1105]
+    reason: "cmd -> curl - remote content fetched"
+    child_command_line_none:
+      - "-T\\b"
+      - "--upload-file"
+      - "-F\\b"
+      - "--data-binary"
+      - "-X\\s*(POST|PUT)"
+  - id: procchain.download.curl_fetch_ps
+    title: "PowerShell fetched remote content with curl"
+    category: download
+    severity: low
+    score: 23
+    confidence: high
+    parent: powershell
+    child: curl
+    mitre: [T1105]
+    reason: "PowerShell -> curl - remote content fetched"
+    child_command_line_none:
+      - "-T\\b"
+      - "--upload-file"
+      - "-F\\b"
+      - "--data-binary"
+      - "-X\\s*(POST|PUT)"
+  - id: procchain.evasion.bash_cmd
+    title: "bash spawned cmd"
+    category: defense_evasion
+    severity: informational
+    score: 0
+    confidence: low
+    parent: bash
+    child: cmd
+    mitre: [T1202]
+    reason: "bash -> cmd - cross-subsystem execution"
+    source_severity: 1
+  - id: procchain.evasion.cmd_fsutil
+    title: "cmd spawned fsutil"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: fsutil
+    mitre: [T1070]
+    reason: "cmd -> fsutil - timestomping or USN journal deletion"
+    source_severity: 1
+  - id: procchain.evasion.cmd_mshta
+    title: "cmd spawned mshta"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmd
+    child: mshta
+    mitre: [T1218.005]
+    reason: "cmd -> mshta - HTA execution"
+    source_severity: 2
+  - id: procchain.evasion.cmd_msiexec
+    title: "cmd spawned msiexec"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: msiexec
+    mitre: [T1218.007]
+    reason: "cmd -> msiexec - remote MSI install"
+    source_severity: 1
+  - id: procchain.evasion.cmd_netsh
+    title: "cmd spawned netsh"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: netsh
+    mitre: [T1562.004]
+    reason: "cmd -> netsh - firewall manipulation"
+    source_severity: 1
+  - id: procchain.evasion.cmd_regsvr32
+    title: "cmd spawned regsvr32"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "cmd -> regsvr32 - COM registration"
+    source_severity: 1
+  - id: procchain.evasion.cmd_rundll32
+    title: "cmd spawned rundll32"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "cmd -> rundll32 - DLL execution"
+    source_severity: 1
+  - id: procchain.evasion.cmstp_cmd
+    title: "CMSTP spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmstp
+    child: cmd
+    mitre: [T1218.003]
+    reason: "CMSTP -> cmd - INF-based bypass"
+    source_severity: 2
+  - id: procchain.evasion.cmstp_powershell
+    title: "CMSTP spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cmstp
+    child: powershell
+    mitre: [T1218.003]
+    reason: "CMSTP -> PowerShell - INF-based bypass"
+    source_severity: 2
+  - id: procchain.evasion.cscript_mshta
+    title: "CScript spawned mshta"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cscript
+    child: mshta
+    mitre: [T1218.005]
+    reason: "CScript -> mshta - chained execution"
+    source_severity: 2
+  - id: procchain.evasion.cscript_rundll32
+    title: "CScript spawned rundll32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cscript
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "CScript -> rundll32 - DLL load via script"
+    source_severity: 2
+  - id: procchain.evasion.excel_mshta
+    title: "Excel spawned mshta"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: mshta
+    mitre: [T1218.005]
+    reason: "Excel -> mshta - HTA execution"
+    source_severity: 3
+  - id: procchain.evasion.excel_regsvr32
+    title: "Excel spawned regsvr32"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "Excel -> regsvr32 - Squiblydoo"
+    source_severity: 3
+  - id: procchain.evasion.excel_rundll32
+    title: "Excel spawned rundll32"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "Excel -> rundll32 - DLL execution"
+    source_severity: 3
+  - id: procchain.evasion.fltmc_unload
+    title: "cmd unloaded a filesystem minifilter"
+    category: defense_evasion
+    severity: critical
+    score: 88
+    confidence: high
+    parent: cmd
+    child: fltmc
+    mitre: [T1562.001]
+    reason: "cmd -> fltMC - filesystem minifilter unloaded, which detaches endpoint security drivers"
+    child_command_line_any:
+      - "\\bunload\\b"
+      - "\\bdetach\\b"
+  - id: procchain.evasion.fltmc_unload_ps
+    title: "PowerShell unloaded a filesystem minifilter"
+    category: defense_evasion
+    severity: critical
+    score: 88
+    confidence: high
+    parent: powershell
+    child: fltmc
+    mitre: [T1562.001]
+    reason: "PowerShell -> fltMC - filesystem minifilter unloaded, which detaches endpoint security drivers"
+    child_command_line_any:
+      - "\\bunload\\b"
+      - "\\bdetach\\b"
+  - id: procchain.evasion.forfiles_cmd
+    title: "forfiles spawned cmd"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: forfiles
+    child: cmd
+    mitre: [T1202]
+    reason: "forfiles -> cmd - indirect command execution"
+    source_severity: 1
+  - id: procchain.evasion.forfiles_powershell
+    title: "forfiles spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: forfiles
+    child: powershell
+    mitre: [T1202]
+    reason: "forfiles -> PowerShell - indirect execution"
+    source_severity: 2
+  - id: procchain.evasion.installutil_cmd
+    title: "InstallUtil spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: installutil
+    child: cmd
+    mitre: [T1218.004]
+    reason: "InstallUtil -> cmd - .NET payload execution"
+    source_severity: 2
+  - id: procchain.evasion.msbuild_cmd
+    title: "MSBuild spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: msbuild
+    child: cmd
+    mitre: [T1127.001]
+    reason: "MSBuild -> cmd - inline task execution"
+    source_severity: 2
+  - id: procchain.evasion.msbuild_powershell
+    title: "MSBuild spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: msbuild
+    child: powershell
+    mitre: [T1127.001]
+    reason: "MSBuild -> PowerShell - inline task execution"
+    source_severity: 2
+  - id: procchain.evasion.mshta_cmd
+    title: "mshta spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mshta
+    child: cmd
+    mitre: [T1218.005]
+    reason: "mshta -> cmd - HTA payload execution"
+    source_severity: 2
+  - id: procchain.evasion.mshta_cscript
+    title: "mshta spawned CScript"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mshta
+    child: cscript
+    mitre: [T1218.005]
+    reason: "mshta -> CScript - chained script execution"
+    source_severity: 2
+  - id: procchain.evasion.mshta_powershell
+    title: "mshta spawned PowerShell"
+    category: defense_evasion
+    severity: high
+    score: 55
+    confidence: medium
+    parent: mshta
+    child: powershell
+    mitre: [T1218.005]
+    reason: "mshta -> PowerShell - HTA to PowerShell cradle"
+    source_severity: 3
+  - id: procchain.evasion.mshta_regsvr32
+    title: "mshta spawned regsvr32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mshta
+    child: regsvr32
+    mitre: [T1218.005]
+    reason: "mshta -> regsvr32 - chained proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.mshta_rundll32
+    title: "mshta spawned rundll32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mshta
+    child: rundll32
+    mitre: [T1218.005]
+    reason: "mshta -> rundll32 - chained proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.mshta_wscript
+    title: "mshta spawned WScript"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mshta
+    child: wscript
+    mitre: [T1218.005]
+    reason: "mshta -> WScript - chained script execution"
+    source_severity: 2
+  - id: procchain.evasion.msiexec_cmd
+    title: "msiexec spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: msiexec
+    child: cmd
+    mitre: [T1218.007]
+    reason: "msiexec -> cmd - malicious MSI custom action"
+    source_severity: 2
+  - id: procchain.evasion.msiexec_powershell
+    title: "msiexec spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: msiexec
+    child: powershell
+    mitre: [T1218.007]
+    reason: "msiexec -> PowerShell - MSI payload"
+    source_severity: 2
+  - id: procchain.evasion.msiexec_rundll32
+    title: "msiexec spawned rundll32"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: msiexec
+    child: rundll32
+    mitre: [T1218.007]
+    reason: "msiexec -> rundll32 - MSI DLL custom action"
+    source_severity: 1
+  - id: procchain.evasion.onenote_mshta
+    title: "OneNote spawned mshta"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: onenote
+    child: mshta
+    mitre: [T1218.005]
+    reason: "OneNote -> mshta - embedded HTA"
+    source_severity: 3
+  - id: procchain.evasion.outlook_mshta
+    title: "Outlook spawned mshta"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: mshta
+    mitre: [T1218.005]
+    reason: "Outlook -> mshta - HTML attachment execution"
+    source_severity: 3
+  - id: procchain.evasion.outlook_regsvr32
+    title: "Outlook spawned regsvr32"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "Outlook -> regsvr32 - COM scriptlet execution"
+    source_severity: 3
+  - id: procchain.evasion.outlook_rundll32
+    title: "Outlook spawned rundll32"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "Outlook -> rundll32 - DLL proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.pcalua_cmd
+    title: "pcalua spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: pcalua
+    child: cmd
+    mitre: [T1218]
+    reason: "pcalua -> cmd - proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.pcalua_mshta
+    title: "pcalua spawned mshta"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: pcalua
+    child: mshta
+    mitre: [T1218]
+    reason: "pcalua -> mshta - proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.pcalua_powershell
+    title: "pcalua spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: pcalua
+    child: powershell
+    mitre: [T1218]
+    reason: "pcalua -> PowerShell - proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.powerpnt_mshta
+    title: "PowerPoint spawned mshta"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: powerpnt
+    child: mshta
+    mitre: [T1218.005]
+    reason: "PowerPoint -> mshta - PowerPoint spawning mshta"
+    source_severity: 3
+  - id: procchain.evasion.powershell_fsutil
+    title: "PowerShell spawned fsutil"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: fsutil
+    mitre: [T1070]
+    reason: "PowerShell -> fsutil - artifact manipulation"
+    source_severity: 1
+  - id: procchain.evasion.powershell_mpcmdrun
+    title: "PowerShell spawned MpCmdRun"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: mpcmdrun
+    mitre: [T1562.001]
+    reason: "PowerShell -> MpCmdRun - Defender manipulation"
+    source_severity: 1
+  - id: procchain.evasion.powershell_mshta
+    title: "PowerShell spawned mshta"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: powershell
+    child: mshta
+    mitre: [T1218.005]
+    reason: "PowerShell -> mshta - proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.powershell_netsh
+    title: "PowerShell spawned netsh"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: netsh
+    mitre: [T1562.004]
+    reason: "PowerShell -> netsh - firewall modification"
+    source_severity: 1
+  - id: procchain.evasion.powershell_regsvr32
+    title: "PowerShell spawned regsvr32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: powershell
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "PowerShell -> regsvr32 - COM scriptlet"
+    source_severity: 2
+  - id: procchain.evasion.powershell_rundll32
+    title: "PowerShell spawned rundll32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: powershell
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "PowerShell -> rundll32 - DLL proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.powershell_taskkill
+    title: "PowerShell spawned taskkill"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: taskkill
+    mitre: [T1562.001]
+    reason: "PowerShell -> taskkill - security tool termination"
+    source_severity: 1
+  - id: procchain.evasion.regsvr32_cmd
+    title: "regsvr32 spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: regsvr32
+    child: cmd
+    mitre: [T1218.010]
+    reason: "regsvr32 -> cmd - Squiblydoo or COM scriptlet"
+    source_severity: 2
+  - id: procchain.evasion.regsvr32_cscript
+    title: "regsvr32 spawned CScript"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: regsvr32
+    child: cscript
+    mitre: [T1218.010]
+    reason: "regsvr32 -> CScript - COM registration abuse"
+    source_severity: 2
+  - id: procchain.evasion.regsvr32_mshta
+    title: "regsvr32 spawned mshta"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: regsvr32
+    child: mshta
+    mitre: [T1218.010]
+    reason: "regsvr32 -> mshta - chained proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.regsvr32_powershell
+    title: "regsvr32 spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: regsvr32
+    child: powershell
+    mitre: [T1218.010]
+    reason: "regsvr32 -> PowerShell - scriptlet execution"
+    source_severity: 2
+  - id: procchain.evasion.regsvr32_wscript
+    title: "regsvr32 spawned WScript"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: regsvr32
+    child: wscript
+    mitre: [T1218.010]
+    reason: "regsvr32 -> WScript - COM registration abuse"
+    source_severity: 2
+  - id: procchain.evasion.rundll32_cmd
+    title: "rundll32 spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: rundll32
+    child: cmd
+    mitre: [T1218.011]
+    reason: "rundll32 -> cmd - DLL proxy to shell"
+    source_severity: 2
+  - id: procchain.evasion.rundll32_cscript
+    title: "rundll32 spawned CScript"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: rundll32
+    child: cscript
+    mitre: [T1218.011]
+    reason: "rundll32 -> CScript - proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.rundll32_powershell
+    title: "rundll32 spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: rundll32
+    child: powershell
+    mitre: [T1218.011]
+    reason: "rundll32 -> PowerShell - DLL proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.rundll32_rundll32
+    title: "rundll32 spawned rundll32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: rundll32
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "rundll32 -> rundll32 - injection or hollowing"
+    source_severity: 2
+  - id: procchain.evasion.rundll32_wscript
+    title: "rundll32 spawned WScript"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: rundll32
+    child: wscript
+    mitre: [T1218.011]
+    reason: "rundll32 -> WScript - proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.spoolsv_rundll32
+    title: "spoolsv spawned rundll32"
+    category: defense_evasion
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: spoolsv
+    child: rundll32
+    mitre: [T1203]
+    reason: "spoolsv -> rundll32 - spooler exploitation"
+    source_severity: 2
+  - id: procchain.evasion.svchost_mshta
+    title: "svchost spawned mshta"
+    category: defense_evasion
+    severity: high
+    score: 55
+    confidence: medium
+    parent: svchost
+    child: mshta
+    mitre: [T1218.005]
+    reason: "svchost -> mshta - service hijack indicator"
+    source_severity: 3
+  - id: procchain.evasion.svchost_regsvr32
+    title: "svchost spawned regsvr32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: svchost
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "svchost -> regsvr32 - COM registration abuse"
+    source_severity: 2
+  - id: procchain.evasion.svchost_rundll32
+    title: "svchost spawned rundll32"
+    category: defense_evasion
+    severity: low
+    score: 20
+    confidence: low
+    parent: svchost
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "svchost -> rundll32 - DLL service execution"
+    source_severity: 1
+  - id: procchain.evasion.taskkill_security_tool
+    title: "cmd terminated a security or backup process"
+    category: defense_evasion
+    severity: high
+    score: 58
+    confidence: high
+    parent: cmd
+    child: taskkill
+    mitre: [T1562.001]
+    reason: "cmd -> taskkill - a named endpoint security or backup process was terminated"
+    child_command_line_any:
+      - "\\b(msmpeng|mssense|sensecncproxy|windefend|cbdefense|cylancesvc|csfalcon|csagent|sentinelagent|sophos|savservice|mcshield|ekrn|avp|xagt|traps|cyserver|sqlwriter|veeam|backupexec)\\b"
+  - id: procchain.evasion.werfault_cmd
+    title: "WerFault spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: werfault
+    child: cmd
+    mitre: [T1036]
+    reason: "WerFault -> cmd - crash handler abuse or injection"
+    source_severity: 2
+  - id: procchain.evasion.werfault_powershell
+    title: "WerFault spawned PowerShell"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: werfault
+    child: powershell
+    mitre: [T1036]
+    reason: "WerFault -> PowerShell - process injection indicator"
+    source_severity: 2
+  - id: procchain.evasion.wevtutil_log_clear
+    title: "cmd cleared a Windows event log"
+    category: defense_evasion
+    severity: critical
+    score: 88
+    confidence: high
+    parent: cmd
+    child: wevtutil
+    mitre: [T1070.001]
+    reason: "cmd -> wevtutil - Windows event log cleared"
+    child_command_line_any:
+      - "\\bcl\\b"
+      - "clear-log"
+  - id: procchain.evasion.wevtutil_log_clear_ps
+    title: "PowerShell cleared a Windows event log"
+    category: defense_evasion
+    severity: critical
+    score: 88
+    confidence: high
+    parent: powershell
+    child: wevtutil
+    mitre: [T1070.001]
+    reason: "PowerShell -> wevtutil - Windows event log cleared"
+    child_command_line_any:
+      - "\\bcl\\b"
+      - "clear-log"
+  - id: procchain.evasion.winword_mshta
+    title: "Word spawned mshta"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: mshta
+    mitre: [T1218.005]
+    reason: "Word -> mshta - HTA proxy execution"
+    source_severity: 3
+  - id: procchain.evasion.winword_regsvr32
+    title: "Word spawned regsvr32"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "Word -> regsvr32 - COM scriptlet execution"
+    source_severity: 3
+  - id: procchain.evasion.winword_rundll32
+    title: "Word spawned rundll32"
+    category: defense_evasion
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "Word -> rundll32 - DLL proxy execution"
+    source_severity: 3
+  - id: procchain.evasion.wmiprvse_mshta
+    title: "WMIPrvSE spawned mshta"
+    category: defense_evasion
+    severity: high
+    score: 55
+    confidence: medium
+    parent: wmiprvse
+    child: mshta
+    mitre: [T1218.005]
+    reason: "WMIPrvSE -> mshta - WMI-based proxy execution"
+    source_severity: 3
+  - id: procchain.evasion.wmiprvse_regsvr32
+    title: "WMIPrvSE spawned regsvr32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wmiprvse
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "WMIPrvSE -> regsvr32 - WMI proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.wmiprvse_rundll32
+    title: "WMIPrvSE spawned rundll32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wmiprvse
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "WMIPrvSE -> rundll32 - WMI proxy execution"
+    source_severity: 2
+  - id: procchain.evasion.wscript_mshta
+    title: "WScript spawned mshta"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wscript
+    child: mshta
+    mitre: [T1218.005]
+    reason: "WScript -> mshta - chained execution"
+    source_severity: 2
+  - id: procchain.evasion.wscript_regsvr32
+    title: "WScript spawned regsvr32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wscript
+    child: regsvr32
+    mitre: [T1218.010]
+    reason: "WScript -> regsvr32 - COM registration abuse"
+    source_severity: 2
+  - id: procchain.evasion.wscript_rundll32
+    title: "WScript spawned rundll32"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wscript
+    child: rundll32
+    mitre: [T1218.011]
+    reason: "WScript -> rundll32 - DLL load via script"
+    source_severity: 2
+  - id: procchain.evasion.wsl_cmd
+    title: "WSL spawned cmd"
+    category: defense_evasion
+    severity: informational
+    score: 0
+    confidence: low
+    parent: wsl
+    child: cmd
+    mitre: [T1202]
+    reason: "WSL -> cmd - cross-subsystem execution"
+    source_severity: 1
+  - id: procchain.evasion.wsl_powershell
+    title: "WSL spawned PowerShell"
+    category: defense_evasion
+    severity: informational
+    score: 0
+    confidence: low
+    parent: wsl
+    child: powershell
+    mitre: [T1202]
+    reason: "WSL -> PowerShell - cross-subsystem execution"
+    source_severity: 1
+  - id: procchain.evasion.xwizard_cmd
+    title: "xwizard spawned cmd"
+    category: defense_evasion
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: xwizard
+    child: cmd
+    mitre: [T1218]
+    reason: "xwizard -> cmd - COM object hijack"
+    source_severity: 2
+  - id: procchain.execution.acrord32_cmd
+    title: "Acrobat Reader spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: acrord32
+    child: cmd
+    mitre: [T1203]
+    reason: "Acrobat Reader -> cmd - PDF exploitation"
+    source_severity: 3
+  - id: procchain.execution.acrord32_powershell
+    title: "Acrobat Reader spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: acrord32
+    child: powershell
+    mitre: [T1203]
+    reason: "Acrobat Reader -> PowerShell - PDF exploitation"
+    source_severity: 3
+  - id: procchain.execution.chrome_cmd
+    title: "Chrome spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: chrome
+    child: cmd
+    mitre: [T1189]
+    reason: "Chrome -> cmd - browser exploitation"
+    source_severity: 2
+  - id: procchain.execution.chrome_powershell
+    title: "Chrome spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: chrome
+    child: powershell
+    mitre: [T1189]
+    reason: "Chrome -> PowerShell - browser exploitation"
+    source_severity: 3
+  - id: procchain.execution.cmd_cscript
+    title: "cmd spawned CScript"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: cscript
+    mitre: [T1059.005]
+    reason: "cmd -> CScript - script execution"
+    source_severity: 1
+  - id: procchain.execution.cmd_powershell
+    title: "cmd spawned PowerShell"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: powershell
+    mitre: [T1059.001]
+    reason: "cmd -> PowerShell - common in multi-stage payloads"
+    source_severity: 1
+  - id: procchain.execution.cmd_wscript
+    title: "cmd spawned WScript"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: wscript
+    mitre: [T1059.005]
+    reason: "cmd -> WScript - script execution"
+    source_severity: 1
+  - id: procchain.execution.cscript_cmd
+    title: "CScript spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cscript
+    child: cmd
+    mitre: [T1059.005]
+    reason: "CScript -> cmd - script payload"
+    source_severity: 2
+  - id: procchain.execution.cscript_powershell
+    title: "CScript spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: cscript
+    child: powershell
+    mitre: [T1059.005]
+    reason: "CScript -> PowerShell - script stager"
+    source_severity: 2
+  - id: procchain.execution.csrss_cmd
+    title: "CSRSS spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: csrss
+    child: cmd
+    mitre: [T1055]
+    reason: "CSRSS -> cmd - kernel-mode process injection"
+    source_severity: 3
+  - id: procchain.execution.csrss_powershell
+    title: "CSRSS spawned PowerShell"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: csrss
+    child: powershell
+    mitre: [T1055]
+    reason: "CSRSS -> PowerShell - critical anomaly"
+    source_severity: 3
+  - id: procchain.execution.dllhost_cmd
+    title: "dllhost spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: dllhost
+    child: cmd
+    mitre: [T1546.015]
+    reason: "dllhost -> cmd - COM object hijack execution"
+    source_severity: 2
+  - id: procchain.execution.dllhost_powershell
+    title: "dllhost spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: dllhost
+    child: powershell
+    mitre: [T1546.015]
+    reason: "dllhost -> PowerShell - COM hijack"
+    source_severity: 2
+  - id: procchain.execution.excel_cmd
+    title: "Excel spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: cmd
+    mitre: [T1204.002]
+    reason: "Excel -> cmd - macro or DDE execution"
+    source_severity: 3
+  - id: procchain.execution.excel_cscript
+    title: "Excel spawned CScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: cscript
+    mitre: [T1059.005]
+    reason: "Excel -> CScript - VBS dropper"
+    source_severity: 3
+  - id: procchain.execution.excel_powershell
+    title: "Excel spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: powershell
+    mitre: [T1059.001]
+    reason: "Excel -> PowerShell - macro execution"
+    source_severity: 3
+  - id: procchain.execution.excel_wscript
+    title: "Excel spawned WScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: excel
+    child: wscript
+    mitre: [T1059.005]
+    reason: "Excel -> WScript - VBS dropper"
+    source_severity: 3
+  - id: procchain.execution.firefox_cmd
+    title: "Firefox spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: firefox
+    child: cmd
+    mitre: [T1189]
+    reason: "Firefox -> cmd - browser exploitation"
+    source_severity: 2
+  - id: procchain.execution.firefox_powershell
+    title: "Firefox spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: firefox
+    child: powershell
+    mitre: [T1189]
+    reason: "Firefox -> PowerShell - browser exploitation"
+    source_severity: 3
+  - id: procchain.execution.foxitreader_cmd
+    title: "Foxit Reader spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: foxitreader
+    child: cmd
+    mitre: [T1203]
+    reason: "Foxit Reader -> cmd - PDF exploitation"
+    source_severity: 3
+  - id: procchain.execution.foxitreader_powershell
+    title: "Foxit Reader spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: foxitreader
+    child: powershell
+    mitre: [T1203]
+    reason: "Foxit Reader -> PowerShell - PDF exploitation"
+    source_severity: 3
+  - id: procchain.execution.httpd_cmd
+    title: "Apache spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: httpd
+    child: cmd
+    mitre: [T1190]
+    reason: "Apache -> cmd - web shell"
+    source_severity: 3
+  - id: procchain.execution.iexplore_cmd
+    title: "Internet Explorer spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: iexplore
+    child: cmd
+    mitre: [T1189]
+    reason: "Internet Explorer -> cmd - browser exploitation"
+    source_severity: 2
+  - id: procchain.execution.iexplore_powershell
+    title: "Internet Explorer spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: iexplore
+    child: powershell
+    mitre: [T1189]
+    reason: "Internet Explorer -> PowerShell - browser exploitation"
+    source_severity: 3
+  - id: procchain.execution.java_bash
+    title: "java spawned bash"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: java
+    child: bash
+    mitre: [T1190]
+    reason: "java -> bash - web shell via WSL"
+    source_severity: 2
+  - id: procchain.execution.java_cmd
+    title: "java spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: java
+    child: cmd
+    mitre: [T1190]
+    reason: "java -> cmd - web shell (Tomcat or WebLogic)"
+    source_severity: 2
+  - id: procchain.execution.java_powershell
+    title: "java spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: java
+    child: powershell
+    mitre: [T1190]
+    reason: "java -> PowerShell - web shell"
+    source_severity: 2
+  - id: procchain.execution.javaw_cmd
+    title: "javaw spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: javaw
+    child: cmd
+    mitre: [T1190]
+    reason: "javaw -> cmd - web shell"
+    source_severity: 2
+  - id: procchain.execution.msaccess_cmd
+    title: "Access spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: msaccess
+    child: cmd
+    mitre: [T1204.002]
+    reason: "Access -> cmd - macro execution"
+    source_severity: 3
+  - id: procchain.execution.msaccess_powershell
+    title: "Access spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: msaccess
+    child: powershell
+    mitre: [T1059.001]
+    reason: "Access -> PowerShell - macro execution"
+    source_severity: 3
+  - id: procchain.execution.msedge_cmd
+    title: "Edge spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: msedge
+    child: cmd
+    mitre: [T1189]
+    reason: "Edge -> cmd - browser exploitation"
+    source_severity: 2
+  - id: procchain.execution.msedge_powershell
+    title: "Edge spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: msedge
+    child: powershell
+    mitre: [T1189]
+    reason: "Edge -> PowerShell - browser exploitation"
+    source_severity: 3
+  - id: procchain.execution.msexchangemailboxreplication_cmd
+    title: "Exchange mailbox replication spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: msexchangemailboxreplication
+    child: cmd
+    mitre: [T1190]
+    reason: "Exchange mailbox replication -> cmd - ProxyShell or OWASSRF"
+    source_severity: 3
+  - id: procchain.execution.mspub_cmd
+    title: "Publisher spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: mspub
+    child: cmd
+    mitre: [T1204.002]
+    reason: "Publisher -> cmd - macro execution"
+    source_severity: 3
+  - id: procchain.execution.mspub_powershell
+    title: "Publisher spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: mspub
+    child: powershell
+    mitre: [T1059.001]
+    reason: "Publisher -> PowerShell - macro execution"
+    source_severity: 3
+  - id: procchain.execution.nginx_cmd
+    title: "nginx spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: nginx
+    child: cmd
+    mitre: [T1190]
+    reason: "nginx -> cmd - web shell"
+    source_severity: 3
+  - id: procchain.execution.onenote_cmd
+    title: "OneNote spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: onenote
+    child: cmd
+    mitre: [T1204.002]
+    reason: "OneNote -> cmd - embedded script or HTA"
+    source_severity: 3
+  - id: procchain.execution.onenote_cscript
+    title: "OneNote spawned CScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: onenote
+    child: cscript
+    mitre: [T1059.005]
+    reason: "OneNote -> CScript - embedded VBS"
+    source_severity: 3
+  - id: procchain.execution.onenote_powershell
+    title: "OneNote spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: onenote
+    child: powershell
+    mitre: [T1059.001]
+    reason: "OneNote -> PowerShell - embedded payload"
+    source_severity: 3
+  - id: procchain.execution.onenote_wscript
+    title: "OneNote spawned WScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: onenote
+    child: wscript
+    mitre: [T1059.005]
+    reason: "OneNote -> WScript - embedded VBS"
+    source_severity: 3
+  - id: procchain.execution.outlook_cmd
+    title: "Outlook spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: cmd
+    mitre: [T1566.001]
+    reason: "Outlook -> cmd - embedded object or preview"
+    source_severity: 2
+  - id: procchain.execution.outlook_cscript
+    title: "Outlook spawned CScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: cscript
+    mitre: [T1566.001]
+    reason: "Outlook -> CScript - script attachment"
+    source_severity: 2
+  - id: procchain.execution.outlook_msdt
+    title: "Outlook spawned msdt"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: msdt
+    mitre: [T1203]
+    reason: "Outlook -> msdt - Follina variant"
+    source_severity: 3
+  - id: procchain.execution.outlook_powershell
+    title: "Outlook spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: powershell
+    mitre: [T1566.001]
+    reason: "Outlook -> PowerShell - phishing execution"
+    source_severity: 3
+  - id: procchain.execution.outlook_wscript
+    title: "Outlook spawned WScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: outlook
+    child: wscript
+    mitre: [T1566.001]
+    reason: "Outlook -> WScript - script attachment"
+    source_severity: 2
+  - id: procchain.execution.powerpnt_cmd
+    title: "PowerPoint spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: powerpnt
+    child: cmd
+    mitre: [T1204.002]
+    reason: "PowerPoint -> cmd - action or macro"
+    source_severity: 3
+  - id: procchain.execution.powerpnt_powershell
+    title: "PowerPoint spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: powerpnt
+    child: powershell
+    mitre: [T1059.001]
+    reason: "PowerPoint -> PowerShell - action or macro"
+    source_severity: 3
+  - id: procchain.execution.powerpnt_wscript
+    title: "PowerPoint spawned WScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: powerpnt
+    child: wscript
+    mitre: [T1059.005]
+    reason: "PowerPoint -> WScript - PowerPoint spawning WScript"
+    source_severity: 3
+  - id: procchain.execution.powershell_bash
+    title: "PowerShell spawned bash"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: bash
+    mitre: [T1059.004]
+    reason: "PowerShell -> bash - cross-subsystem execution"
+    source_severity: 1
+  - id: procchain.execution.powershell_cmd
+    title: "PowerShell spawned cmd"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: cmd
+    mitre: [T1059.003]
+    reason: "PowerShell -> cmd - context-dependent, commonly benign"
+    source_severity: 0
+  - id: procchain.execution.powershell_cscript
+    title: "PowerShell spawned CScript"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: cscript
+    mitre: [T1059.005]
+    reason: "PowerShell -> CScript - script execution"
+    source_severity: 1
+  - id: procchain.execution.powershell_powershell
+    title: "PowerShell spawned PowerShell"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: powershell
+    mitre: [T1059.001]
+    reason: "PowerShell -> PowerShell - double-hop or AMSI bypass"
+    source_severity: 1
+  - id: procchain.execution.powershell_wscript
+    title: "PowerShell spawned WScript"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: wscript
+    mitre: [T1059.005]
+    reason: "PowerShell -> WScript - polyglot or evasion"
+    source_severity: 1
+  - id: procchain.execution.searchindexer_cmd
+    title: "SearchIndexer spawned cmd"
+    category: execution
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: searchindexer
+    child: cmd
+    mitre: [T1203]
+    reason: "SearchIndexer -> cmd - exploitation"
+    source_severity: 2
+  - id: procchain.execution.searchprotocolhost_cmd
+    title: "SearchProtocolHost spawned cmd"
+    category: execution
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: searchprotocolhost
+    child: cmd
+    mitre: [T1203]
+    reason: "SearchProtocolHost -> cmd - exploitation"
+    source_severity: 2
+  - id: procchain.execution.services_cmd
+    title: "services spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: services
+    child: cmd
+    mitre: [T1543.003]
+    reason: "services -> cmd - malicious service installed"
+    source_severity: 2
+  - id: procchain.execution.services_powershell
+    title: "services spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: services
+    child: powershell
+    mitre: [T1543.003]
+    reason: "services -> PowerShell - malicious service"
+    source_severity: 2
+  - id: procchain.execution.smss_cmd
+    title: "SMSS spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: smss
+    child: cmd
+    mitre: [T1055]
+    reason: "SMSS -> cmd - bootkit or rootkit indicator"
+    source_severity: 3
+  - id: procchain.execution.smss_powershell
+    title: "SMSS spawned PowerShell"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: smss
+    child: powershell
+    mitre: [T1055]
+    reason: "SMSS -> PowerShell - critical anomaly"
+    source_severity: 3
+  - id: procchain.execution.spoolsv_cmd
+    title: "spoolsv spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: spoolsv
+    child: cmd
+    mitre: [T1203]
+    reason: "spoolsv -> cmd - PrintNightmare"
+    source_severity: 3
+  - id: procchain.execution.spoolsv_net
+    title: "spoolsv spawned net"
+    category: execution
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: spoolsv
+    child: net
+    mitre: [T1203]
+    reason: "spoolsv -> net - PrintNightmare account creation"
+    source_severity: 2
+  - id: procchain.execution.spoolsv_powershell
+    title: "spoolsv spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: spoolsv
+    child: powershell
+    mitre: [T1203]
+    reason: "spoolsv -> PowerShell - PrintNightmare"
+    source_severity: 3
+  - id: procchain.execution.sqlservr_cmd
+    title: "SQL Server spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: sqlservr
+    child: cmd
+    mitre: [T1190]
+    reason: "SQL Server -> cmd - xp_cmdshell or SQL injection"
+    source_severity: 3
+  - id: procchain.execution.sqlservr_powershell
+    title: "SQL Server spawned PowerShell"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: sqlservr
+    child: powershell
+    mitre: [T1190]
+    reason: "SQL Server -> PowerShell - SQL injection"
+    source_severity: 3
+  - id: procchain.execution.svchost_cmd
+    title: "svchost spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: svchost
+    child: cmd
+    mitre: [T1569.002]
+    reason: "svchost -> cmd - service abuse or lateral movement"
+    source_severity: 2
+  - id: procchain.execution.svchost_cscript
+    title: "svchost spawned CScript"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: svchost
+    child: cscript
+    mitre: [T1059.005]
+    reason: "svchost -> CScript - unusual service behaviour"
+    source_severity: 2
+  - id: procchain.execution.svchost_powershell
+    title: "svchost spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: svchost
+    child: powershell
+    mitre: [T1569.002]
+    reason: "svchost -> PowerShell - service-based execution"
+    source_severity: 2
+  - id: procchain.execution.svchost_wscript
+    title: "svchost spawned WScript"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: svchost
+    child: wscript
+    mitre: [T1059.005]
+    reason: "svchost -> WScript - unusual service behaviour"
+    source_severity: 2
+  - id: procchain.execution.tomcat_cmd
+    title: "Tomcat spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: tomcat
+    child: cmd
+    mitre: [T1190]
+    reason: "Tomcat -> cmd - web shell"
+    source_severity: 3
+  - id: procchain.execution.umworkerprocess_cmd
+    title: "Exchange UM worker spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: umworkerprocess
+    child: cmd
+    mitre: [T1190]
+    reason: "Exchange UM worker -> cmd - ProxyLogon exploitation"
+    source_severity: 3
+  - id: procchain.execution.umworkerprocess_powershell
+    title: "Exchange UM worker spawned PowerShell"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: umworkerprocess
+    child: powershell
+    mitre: [T1190]
+    reason: "Exchange UM worker -> PowerShell - exploitation"
+    source_severity: 3
+  - id: procchain.execution.w3wp_cmd
+    title: "IIS worker spawned cmd"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: w3wp
+    child: cmd
+    mitre: [T1190]
+    reason: "IIS worker -> cmd - web shell execution"
+    source_severity: 3
+  - id: procchain.execution.w3wp_csc
+    title: "IIS worker spawned csc"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: w3wp
+    child: csc
+    mitre: [T1190]
+    reason: "IIS worker -> csc - web shell compilation"
+    source_severity: 3
+  - id: procchain.execution.w3wp_powershell
+    title: "IIS worker spawned PowerShell"
+    category: execution
+    severity: critical
+    score: 85
+    confidence: high
+    parent: w3wp
+    child: powershell
+    mitre: [T1190]
+    reason: "IIS worker -> PowerShell - web shell execution"
+    source_severity: 3
+  - id: procchain.execution.winlogon_cmd
+    title: "winlogon spawned cmd"
+    category: execution
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: winlogon
+    child: cmd
+    mitre: [T1055]
+    reason: "winlogon -> cmd - Sticky Keys or accessibility backdoor"
+    source_severity: 2
+  - id: procchain.execution.winlogon_powershell
+    title: "winlogon spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 45
+    confidence: medium
+    parent: winlogon
+    child: powershell
+    mitre: [T1055]
+    reason: "winlogon -> PowerShell - exploitation"
+    source_severity: 2
+  - id: procchain.execution.winword_bash
+    title: "Word spawned bash"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: bash
+    mitre: [T1059.004]
+    reason: "Word -> bash - unusual execution chain"
+    source_severity: 3
+  - id: procchain.execution.winword_cmd
+    title: "Word spawned cmd"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: cmd
+    mitre: [T1204.002]
+    reason: "Word -> cmd - macro execution"
+    source_severity: 3
+  - id: procchain.execution.winword_cscript
+    title: "Word spawned CScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: cscript
+    mitre: [T1059.005]
+    reason: "Word -> CScript - VBS macro dropper"
+    source_severity: 3
+  - id: procchain.execution.winword_msdt
+    title: "Word spawned msdt"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: msdt
+    mitre: [T1203]
+    reason: "Word -> msdt - Follina (CVE-2022-30190)"
+    source_severity: 3
+  - id: procchain.execution.winword_powershell
+    title: "Word spawned PowerShell"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: powershell
+    mitre: [T1059.001]
+    reason: "Word -> PowerShell - macro execution"
+    source_severity: 3
+  - id: procchain.execution.winword_wscript
+    title: "Word spawned WScript"
+    category: execution
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: wscript
+    mitre: [T1059.005]
+    reason: "Word -> WScript - VBS macro dropper"
+    source_severity: 3
+  - id: procchain.execution.wmiprvse_cmd
+    title: "WMIPrvSE spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wmiprvse
+    child: cmd
+    mitre: [T1047]
+    reason: "WMIPrvSE -> cmd - WMI lateral movement"
+    source_severity: 2
+  - id: procchain.execution.wmiprvse_powershell
+    title: "WMIPrvSE spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wmiprvse
+    child: powershell
+    mitre: [T1047]
+    reason: "WMIPrvSE -> PowerShell - WMI execution"
+    source_severity: 2
+  - id: procchain.execution.wscript_cmd
+    title: "WScript spawned cmd"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wscript
+    child: cmd
+    mitre: [T1059.005]
+    reason: "WScript -> cmd - VBS or JS payload stage 2"
+    source_severity: 2
+  - id: procchain.execution.wscript_cscript
+    title: "WScript spawned CScript"
+    category: execution
+    severity: low
+    score: 20
+    confidence: low
+    parent: wscript
+    child: cscript
+    mitre: [T1059.005]
+    reason: "WScript -> CScript - script engine switch"
+    source_severity: 1
+  - id: procchain.execution.wscript_powershell
+    title: "WScript spawned PowerShell"
+    category: execution
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wscript
+    child: powershell
+    mitre: [T1059.005]
+    reason: "WScript -> PowerShell - VBS to PowerShell stager"
+    source_severity: 2
+  - id: procchain.exfil.cmd_ftp
+    title: "cmd spawned ftp"
+    category: exfiltration
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: ftp
+    mitre: [T1048.003]
+    reason: "cmd -> ftp - FTP data transfer"
+    source_severity: 1
+  - id: procchain.exfil.cmd_megacmd
+    title: "cmd spawned MEGAcmd"
+    category: exfiltration
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: megacmd
+    mitre: [T1567.002]
+    reason: "cmd -> MEGAcmd - cloud exfiltration CLI"
+    source_severity: 3
+  - id: procchain.exfil.cmd_megasync
+    title: "cmd spawned MEGASync"
+    category: exfiltration
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: megasync
+    mitre: [T1567.002]
+    reason: "cmd -> MEGASync - cloud exfiltration"
+    source_severity: 3
+  - id: procchain.exfil.cmd_rclone
+    title: "cmd spawned rclone"
+    category: exfiltration
+    severity: critical
+    score: 85
+    confidence: high
+    parent: cmd
+    child: rclone
+    mitre: [T1567.002]
+    reason: "cmd -> rclone - cloud storage exfiltration"
+    source_severity: 3
+  - id: procchain.exfil.cmd_scp
+    title: "cmd spawned scp"
+    category: exfiltration
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: scp
+    mitre: [T1048]
+    reason: "cmd -> scp - SCP file transfer"
+    source_severity: 1
+  - id: procchain.exfil.cmd_sftp
+    title: "cmd spawned sftp"
+    category: exfiltration
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: sftp
+    mitre: [T1048]
+    reason: "cmd -> sftp - SFTP file transfer"
+    source_severity: 1
+  - id: procchain.exfil.curl_upload
+    title: "cmd uploaded data with curl"
+    category: exfiltration
+    severity: high
+    score: 58
+    confidence: high
+    parent: cmd
+    child: curl
+    mitre: [T1048]
+    reason: "cmd -> curl - local data uploaded over an alternative protocol"
+    child_command_line_any:
+      - "-T\\b"
+      - "--upload-file"
+      - "-F\\b"
+      - "--data-binary"
+      - "-X\\s*(POST|PUT)"
+  - id: procchain.exfil.curl_upload_ps
+    title: "PowerShell uploaded data with curl"
+    category: exfiltration
+    severity: high
+    score: 58
+    confidence: high
+    parent: powershell
+    child: curl
+    mitre: [T1048]
+    reason: "PowerShell -> curl - local data uploaded over an alternative protocol"
+    child_command_line_any:
+      - "-T\\b"
+      - "--upload-file"
+      - "-F\\b"
+      - "--data-binary"
+      - "-X\\s*(POST|PUT)"
+  - id: procchain.exfil.powershell_ftp
+    title: "PowerShell spawned ftp"
+    category: exfiltration
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: ftp
+    mitre: [T1048.003]
+    reason: "PowerShell -> ftp - FTP data transfer"
+    source_severity: 1
+  - id: procchain.exfil.powershell_megacmd
+    title: "PowerShell spawned MEGAcmd"
+    category: exfiltration
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: megacmd
+    mitre: [T1567.002]
+    reason: "PowerShell -> MEGAcmd - cloud exfiltration"
+    source_severity: 3
+  - id: procchain.exfil.powershell_rclone
+    title: "PowerShell spawned rclone"
+    category: exfiltration
+    severity: critical
+    score: 85
+    confidence: high
+    parent: powershell
+    child: rclone
+    mitre: [T1567.002]
+    reason: "PowerShell -> rclone - cloud storage exfiltration"
+    source_severity: 3
+  - id: procchain.impact.bcdedit_recovery_disable
+    title: "cmd disabled Windows recovery via bcdedit"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: cmd
+    child: bcdedit
+    mitre: [T1490]
+    reason: "cmd -> bcdedit - Windows recovery or boot failure handling disabled"
+    child_command_line_any:
+      - "recoveryenabled\\s+no"
+      - "bootstatuspolicy\\s+ignoreallfailures"
+      - "\\bsafeboot\\b"
+  - id: procchain.impact.bcdedit_recovery_disable_ps
+    title: "PowerShell disabled Windows recovery via bcdedit"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: powershell
+    child: bcdedit
+    mitre: [T1490]
+    reason: "PowerShell -> bcdedit - Windows recovery or boot failure handling disabled"
+    child_command_line_any:
+      - "recoveryenabled\\s+no"
+      - "bootstatuspolicy\\s+ignoreallfailures"
+      - "\\bsafeboot\\b"
+  - id: procchain.impact.cipher_wipe
+    title: "cmd wiped free space with cipher"
+    category: impact
+    severity: high
+    score: 63
+    confidence: high
+    parent: cmd
+    child: cipher
+    mitre: [T1485]
+    reason: "cmd -> cipher - free space overwritten, which destroys deleted-file recovery"
+    child_command_line_any:
+      - "/w"
+  - id: procchain.impact.cipher_wipe_ps
+    title: "PowerShell wiped free space with cipher"
+    category: impact
+    severity: high
+    score: 63
+    confidence: high
+    parent: powershell
+    child: cipher
+    mitre: [T1485]
+    reason: "PowerShell -> cipher - free space overwritten, which destroys deleted-file recovery"
+    child_command_line_any:
+      - "/w"
+  - id: procchain.impact.psexec_mass_deployment
+    title: "cmd used PsExec with a target host list"
+    category: impact
+    severity: critical
+    score: 93
+    confidence: high
+    parent: cmd
+    child: psexec
+    mitre: [T1486]
+    reason: "cmd -> PsExec - payload pushed to a host list, the deployment pattern used for mass ransomware execution"
+    child_command_line_any:
+      - "@\\S+"
+  - id: procchain.impact.psexec_mass_deployment_ps
+    title: "PowerShell used PsExec with a target host list"
+    category: impact
+    severity: critical
+    score: 93
+    confidence: high
+    parent: powershell
+    child: psexec
+    mitre: [T1486]
+    reason: "PowerShell -> PsExec - payload pushed to a host list, the deployment pattern used for mass ransomware execution"
+    child_command_line_any:
+      - "@\\S+"
+  - id: procchain.impact.vssadmin_shadow_delete
+    title: "cmd deleted Volume Shadow Copies"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: cmd
+    child: vssadmin
+    mitre: [T1490]
+    reason: "cmd -> vssadmin - shadow copies deleted or resized away, the canonical ransomware recovery-inhibition step"
+    child_command_line_any:
+      - "delete\\s+shadows"
+      - "resize\\s+shadowstorage"
+  - id: procchain.impact.vssadmin_shadow_delete_ps
+    title: "PowerShell deleted Volume Shadow Copies"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: powershell
+    child: vssadmin
+    mitre: [T1490]
+    reason: "PowerShell -> vssadmin - shadow copies deleted or resized away, the canonical ransomware recovery-inhibition step"
+    child_command_line_any:
+      - "delete\\s+shadows"
+      - "resize\\s+shadowstorage"
+  - id: procchain.impact.wbadmin_backup_delete
+    title: "cmd deleted Windows Backup data"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: cmd
+    child: wbadmin
+    mitre: [T1490]
+    reason: "cmd -> wbadmin - backup catalog or system state backups deleted, inhibiting recovery"
+    child_command_line_any:
+      - "delete\\s+(catalog|systemstatebackup|backup)"
+  - id: procchain.impact.wbadmin_backup_delete_ps
+    title: "PowerShell deleted Windows Backup data"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: powershell
+    child: wbadmin
+    mitre: [T1490]
+    reason: "PowerShell -> wbadmin - backup catalog or system state backups deleted, inhibiting recovery"
+    child_command_line_any:
+      - "delete\\s+(catalog|systemstatebackup|backup)"
+  - id: procchain.impact.wmic_shadowcopy_delete
+    title: "cmd deleted shadow copies via WMI"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: cmd
+    child: wmic
+    mitre: [T1490]
+    reason: "cmd -> wmic - shadow copies deleted through WMI, a ransomware recovery-inhibition step"
+    child_command_line_any:
+      - "shadowcopy.*\\bdelete\\b"
+  - id: procchain.impact.wmic_shadowcopy_delete_ps
+    title: "PowerShell deleted shadow copies via WMI"
+    category: impact
+    severity: critical
+    score: 88
+    confidence: high
+    parent: powershell
+    child: wmic
+    mitre: [T1490]
+    reason: "PowerShell -> wmic - shadow copies deleted through WMI, a ransomware recovery-inhibition step"
+    child_command_line_any:
+      - "shadowcopy.*\\bdelete\\b"
+  - id: procchain.lateral.cmd_gpupdate
+    title: "cmd spawned gpupdate"
+    category: lateral_movement
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: gpupdate
+    mitre: [T1484.001]
+    reason: "cmd -> gpupdate - GPO-based deployment"
+    source_severity: 1
+  - id: procchain.lateral.mmc_cmd
+    title: "MMC spawned cmd"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mmc
+    child: cmd
+    mitre: [T1021.003]
+    reason: "MMC -> cmd - DCOM lateral movement"
+    source_severity: 2
+  - id: procchain.lateral.mmc_powershell
+    title: "MMC spawned PowerShell"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mmc
+    child: powershell
+    mitre: [T1021.003]
+    reason: "MMC -> PowerShell - DCOM execution"
+    source_severity: 2
+  - id: procchain.lateral.powershell_gpupdate
+    title: "PowerShell spawned gpupdate"
+    category: lateral_movement
+    severity: informational
+    score: 0
+    confidence: low
+    parent: powershell
+    child: gpupdate
+    mitre: [T1484.001]
+    reason: "PowerShell -> gpupdate - GPO-based deployment"
+    source_severity: 1
+  - id: procchain.lateral.psexec_remote_exec
+    title: "cmd launched PsExec against a remote host"
+    category: lateral_movement
+    severity: medium
+    score: 48
+    confidence: high
+    parent: cmd
+    child: psexec
+    mitre: [T1570]
+    reason: "cmd -> PsExec - remote execution initiated from this host"
+    child_command_line_none:
+      - "@\\S+"
+  - id: procchain.lateral.psexec_remote_exec_ps
+    title: "PowerShell launched PsExec against a remote host"
+    category: lateral_movement
+    severity: medium
+    score: 48
+    confidence: high
+    parent: powershell
+    child: psexec
+    mitre: [T1570]
+    reason: "PowerShell -> PsExec - remote execution initiated from this host"
+    child_command_line_none:
+      - "@\\S+"
+  - id: procchain.lateral.psexesvc_cmd
+    title: "PsExecSvc spawned cmd"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: psexesvc
+    child: cmd
+    mitre: [T1570]
+    reason: "PsExecSvc -> cmd - remote execution (target side)"
+    source_severity: 2
+  - id: procchain.lateral.psexesvc_powershell
+    title: "PsExecSvc spawned PowerShell"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: psexesvc
+    child: powershell
+    mitre: [T1570]
+    reason: "PsExecSvc -> PowerShell - remote execution (target side)"
+    source_severity: 2
+  - id: procchain.lateral.services_psexesvc
+    title: "services spawned PsExecSvc"
+    category: lateral_movement
+    severity: medium
+    score: 45
+    confidence: high
+    parent: services
+    child: psexesvc
+    mitre: [T1570]
+    reason: "services -> PsExecSvc - inbound lateral movement"
+    source_severity: 2
+  - id: procchain.lateral.sshd_cmd
+    title: "sshd spawned cmd"
+    category: lateral_movement
+    severity: low
+    score: 20
+    confidence: low
+    parent: sshd
+    child: cmd
+    mitre: [T1021.004]
+    reason: "sshd -> cmd - SSH-based remote access"
+    source_severity: 1
+  - id: procchain.lateral.sshd_powershell
+    title: "sshd spawned PowerShell"
+    category: lateral_movement
+    severity: low
+    score: 20
+    confidence: low
+    parent: sshd
+    child: powershell
+    mitre: [T1021.004]
+    reason: "sshd -> PowerShell - SSH remote execution"
+    source_severity: 1
+  - id: procchain.lateral.wsmprovhost_cmd
+    title: "WinRM spawned cmd"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wsmprovhost
+    child: cmd
+    mitre: [T1021.006]
+    reason: "WinRM -> cmd - remote PowerShell session to shell"
+    source_severity: 2
+  - id: procchain.lateral.wsmprovhost_net
+    title: "WinRM spawned net"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wsmprovhost
+    child: net
+    mitre: [T1021.006]
+    reason: "WinRM -> net - remote session enumeration"
+    source_severity: 2
+  - id: procchain.lateral.wsmprovhost_powershell
+    title: "WinRM spawned PowerShell"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wsmprovhost
+    child: powershell
+    mitre: [T1021.006]
+    reason: "WinRM -> PowerShell - remote PowerShell session"
+    source_severity: 2
+  - id: procchain.lateral.wsmprovhost_whoami
+    title: "WinRM spawned whoami"
+    category: lateral_movement
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: wsmprovhost
+    child: whoami
+    mitre: [T1021.006]
+    reason: "WinRM -> whoami - remote session reconnaissance"
+    source_severity: 2
+  - id: procchain.persistence.atbroker_cmd
+    title: "ATBroker spawned cmd"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: atbroker
+    child: cmd
+    mitre: [T1546.008]
+    reason: "ATBroker -> cmd - accessibility backdoor"
+    source_severity: 3
+  - id: procchain.persistence.cmd_copy
+    title: "cmd spawned copy"
+    category: persistence
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: copy
+    mitre: [T1547.001]
+    reason: "cmd -> copy - startup folder persistence"
+    source_severity: 0
+  - id: procchain.persistence.cmd_schtasks
+    title: "cmd spawned schtasks"
+    category: persistence
+    severity: low
+    score: 20
+    confidence: low
+    parent: cmd
+    child: schtasks
+    mitre: [T1053.005]
+    reason: "cmd -> schtasks - scheduled task creation"
+    source_severity: 1
+  - id: procchain.persistence.cmd_xcopy
+    title: "cmd spawned xcopy"
+    category: persistence
+    severity: informational
+    score: 0
+    confidence: low
+    parent: cmd
+    child: xcopy
+    mitre: [T1547.001]
+    reason: "cmd -> xcopy - startup folder persistence"
+    source_severity: 0
+  - id: procchain.persistence.displayswitch_cmd
+    title: "DisplaySwitch spawned cmd"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: displayswitch
+    child: cmd
+    mitre: [T1546.008]
+    reason: "DisplaySwitch -> cmd - accessibility backdoor"
+    source_severity: 3
+  - id: procchain.persistence.magnify_cmd
+    title: "Magnifier spawned cmd"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: magnify
+    child: cmd
+    mitre: [T1546.008]
+    reason: "Magnifier -> cmd - accessibility backdoor"
+    source_severity: 3
+  - id: procchain.persistence.mshta_schtasks
+    title: "mshta spawned schtasks"
+    category: persistence
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: mshta
+    child: schtasks
+    mitre: [T1053.005]
+    reason: "mshta -> schtasks - HTA persistence install"
+    source_severity: 2
+  - id: procchain.persistence.narrator_cmd
+    title: "Narrator spawned cmd"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: narrator
+    child: cmd
+    mitre: [T1546.008]
+    reason: "Narrator -> cmd - accessibility backdoor"
+    source_severity: 3
+  - id: procchain.persistence.net_account_add
+    title: "cmd created or elevated an account with net"
+    category: persistence
+    severity: high
+    score: 58
+    confidence: high
+    parent: cmd
+    child: net
+    mitre: [T1136.001]
+    reason: "cmd -> net - account created or added to a privileged group"
+    child_command_line_any:
+      - "\\b(user|group|localgroup)\\b.*\\s/add"
+  - id: procchain.persistence.net_account_add_ps
+    title: "PowerShell created or elevated an account with net"
+    category: persistence
+    severity: high
+    score: 58
+    confidence: high
+    parent: powershell
+    child: net
+    mitre: [T1136.001]
+    reason: "PowerShell -> net - account created or added to a privileged group"
+    child_command_line_any:
+      - "\\b(user|group|localgroup)\\b.*\\s/add"
+  - id: procchain.persistence.osk_cmd
+    title: "On-Screen Keyboard spawned cmd"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: osk
+    child: cmd
+    mitre: [T1546.008]
+    reason: "On-Screen Keyboard -> cmd - accessibility backdoor"
+    source_severity: 3
+  - id: procchain.persistence.powershell_schtasks
+    title: "PowerShell spawned schtasks"
+    category: persistence
+    severity: low
+    score: 20
+    confidence: low
+    parent: powershell
+    child: schtasks
+    mitre: [T1053.005]
+    reason: "PowerShell -> schtasks - scheduled task creation"
+    source_severity: 1
+  - id: procchain.persistence.reg_run_key
+    title: "cmd wrote an autorun registry key"
+    category: persistence
+    severity: medium
+    score: 43
+    confidence: high
+    parent: cmd
+    child: reg
+    mitre: [T1547.001]
+    reason: "cmd -> reg - autorun registry key written"
+    child_command_line_any:
+      - "currentversion\\\\\\\\run"
+      - "currentversion\\\\\\\\runonce"
+      - "\\\\\\\\winlogon\\\\\\\\"
+      - "image\\s+file\\s+execution\\s+options"
+  - id: procchain.persistence.reg_run_key_ps
+    title: "PowerShell wrote an autorun registry key"
+    category: persistence
+    severity: medium
+    score: 43
+    confidence: high
+    parent: powershell
+    child: reg
+    mitre: [T1547.001]
+    reason: "PowerShell -> reg - autorun registry key written"
+    child_command_line_any:
+      - "currentversion\\\\\\\\run"
+      - "currentversion\\\\\\\\runonce"
+      - "\\\\\\\\winlogon\\\\\\\\"
+      - "image\\s+file\\s+execution\\s+options"
+  - id: procchain.persistence.rundll32_schtasks
+    title: "rundll32 spawned schtasks"
+    category: persistence
+    severity: medium
+    score: 40
+    confidence: medium
+    parent: rundll32
+    child: schtasks
+    mitre: [T1053.005]
+    reason: "rundll32 -> schtasks - DLL-based persistence"
+    source_severity: 2
+  - id: procchain.persistence.sc_service_create
+    title: "cmd created or reconfigured a Windows service"
+    category: persistence
+    severity: medium
+    score: 43
+    confidence: high
+    parent: cmd
+    child: sc
+    mitre: [T1543.003]
+    reason: "cmd -> sc - Windows service created or reconfigured"
+    child_command_line_any:
+      - "\\b(create|config)\\b"
+  - id: procchain.persistence.sc_service_create_ps
+    title: "PowerShell created or reconfigured a Windows service"
+    category: persistence
+    severity: medium
+    score: 43
+    confidence: high
+    parent: powershell
+    child: sc
+    mitre: [T1543.003]
+    reason: "PowerShell -> sc - Windows service created or reconfigured"
+    child_command_line_any:
+      - "\\b(create|config)\\b"
+  - id: procchain.persistence.sethc_cmd
+    title: "sethc spawned cmd"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: sethc
+    child: cmd
+    mitre: [T1546.008]
+    reason: "sethc -> cmd - accessibility backdoor active"
+    source_severity: 3
+  - id: procchain.persistence.taskeng_cmd
+    title: "Task Engine spawned cmd"
+    category: persistence
+    severity: low
+    score: 20
+    confidence: low
+    parent: taskeng
+    child: cmd
+    mitre: [T1053.005]
+    reason: "Task Engine -> cmd - scheduled task execution"
+    source_severity: 1
+  - id: procchain.persistence.taskeng_powershell
+    title: "Task Engine spawned PowerShell"
+    category: persistence
+    severity: low
+    score: 20
+    confidence: low
+    parent: taskeng
+    child: powershell
+    mitre: [T1053.005]
+    reason: "Task Engine -> PowerShell - scheduled task execution"
+    source_severity: 1
+  - id: procchain.persistence.taskhostw_cmd
+    title: "TaskHost spawned cmd"
+    category: persistence
+    severity: low
+    score: 20
+    confidence: low
+    parent: taskhostw
+    child: cmd
+    mitre: [T1053.005]
+    reason: "TaskHost -> cmd - scheduled task execution"
+    source_severity: 1
+  - id: procchain.persistence.taskhostw_powershell
+    title: "TaskHost spawned PowerShell"
+    category: persistence
+    severity: low
+    score: 20
+    confidence: low
+    parent: taskhostw
+    child: powershell
+    mitre: [T1053.005]
+    reason: "TaskHost -> PowerShell - scheduled task execution"
+    source_severity: 1
+  - id: procchain.persistence.utilman_cmd
+    title: "utilman spawned cmd"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: utilman
+    child: cmd
+    mitre: [T1546.008]
+    reason: "utilman -> cmd - accessibility backdoor"
+    source_severity: 3
+  - id: procchain.persistence.winlogon_sethc
+    title: "winlogon spawned sethc"
+    category: persistence
+    severity: critical
+    score: 85
+    confidence: medium
+    parent: winlogon
+    child: sethc
+    mitre: [T1546.008]
+    reason: "winlogon -> sethc - Sticky Keys backdoor"
+    source_severity: 3
+  - id: procchain.persistence.winword_schtasks
+    title: "Word spawned schtasks"
+    category: persistence
+    severity: high
+    score: 60
+    confidence: medium
+    parent: winword
+    child: schtasks
+    mitre: [T1053.005]
+    reason: "Word -> schtasks - persistence via macro"
+    source_severity: 2
+  - id: procchain.persistence.wmic_event_subscription
+    title: "cmd used wmic for WMI persistence or remote execution"
+    category: persistence
+    severity: medium
+    score: 43
+    confidence: high
+    parent: cmd
+    child: wmic
+    mitre: [T1546.003]
+    reason: "cmd -> wmic - WMI event subscription or remote process creation"
+    child_command_line_any:
+      - "eventfilter"
+      - "eventconsumer"
+      - "__filtertoconsumerbinding"
+      - "process\\s+call\\s+create"
+      - "/node:"
+  - id: procchain.persistence.wmic_event_subscription_ps
+    title: "PowerShell used wmic for WMI persistence or remote execution"
+    category: persistence
+    severity: medium
+    score: 43
+    confidence: high
+    parent: powershell
+    child: wmic
+    mitre: [T1546.003]
+    reason: "PowerShell -> wmic - WMI event subscription or remote process creation"
+    child_command_line_any:
+      - "eventfilter"
+      - "eventconsumer"
+      - "__filtertoconsumerbinding"
+      - "process\\s+call\\s+create"
+      - "/node:"
+standalone:
+  - id: procchain.execution.suspicious_execution_path
+    title: "Process executed from a user-writable staging directory"
+    category: execution
+    severity: medium
+    score: 45
+    confidence: low
+    mitre: [T1036.005]
+    reason: "Process image is located in a user-writable staging directory rather than a program directory"
+    match: process_path
+    patterns:
+      - "\\\\temp\\\\"
+      - "\\\\tmp\\\\"
+      - "\\\\appdata\\\\"
+      - "\\\\downloads\\\\"
+      - "\\\\public\\\\"
+      - "\\\\recycle"
+      - "\\\\perflogs\\\\"
+    exclude:
+      - "^(mpcmdrun|msmpeng|dismhost|monagentcore|monagenthost|monagentmanager|monagentlauncher|metricsextension_native|cleanmgr|tiworker|wuauclt|setup|msiexec|drvinst|trustedinstaller|taskhostw|backgroundtaskhost|runtimebroker|searchprotocolhost|searchindexer|searchfilterhost|microsoftedgeupdate|googleupdate|onedrive|onedriveupdater|wermgr|werfault|compattelrunner)$"
+  - id: procchain.execution.encoded_powershell
+    title: "PowerShell invoked with an encoded command"
+    category: execution
+    severity: high
+    score: 65
+    confidence: high
+    mitre: [T1059.001, T1027]
+    reason: "PowerShell was invoked with a base64-encoded command, which hides the payload from command-line logging"
+    match: command_line
+    patterns:
+      - "\\s+-e(nc|ncodedcommand|c|n)?\\s+[A-Za-z0-9+/=]{16,}"
+  - id: procchain.credaccess.credential_dump_command
+    title: "Credential-dumping command line observed"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    mitre: [T1003.001]
+    reason: "Command line names a credential-dumping technique or tool"
+    match: command_line
+    patterns:
+      - "comsvcs\\.dll.*minidump"
+      - "\\bsekurlsa\\b"
+      - "\\blsadump\\b"
+      - "procdump.*lsass"
+      - "\\bmimikatz\\b"
+      - "\\bpypykatz\\b"
+      - "\\bnanodump\\b"
+      - "\\bdcsync\\b"
+      - "\\bdrsuapi\\b"
+  - id: procchain.credaccess.ntds_extraction
+    title: "Active Directory database extraction observed"
+    category: credential_access
+    severity: critical
+    score: 85
+    confidence: high
+    mitre: [T1003.003]
+    reason: "Command line targets the Active Directory database for offline credential extraction"
+    match: command_line
+    patterns:
+      - "ntdsutil.*\\bifm\\b"
+      - "wbadmin.*ntds"
+      - "\\bsecretsdump\\b"
+      - "ntds\\.dit"
+  - id: procchain.credaccess.lsass_dump_tool
+    title: "Known LSASS memory-dumping utility executed"
+    category: credential_access
+    severity: high
+    score: 65
+    confidence: medium
+    mitre: [T1003.001]
+    reason: "A utility commonly used to dump LSASS memory was executed"
+    match: process_name
+    patterns:
+      - "^(processhacker|procdump|procdump64|sqldumper|avdump|handlekatz|nanodump)$"
+  - id: procchain.persistence.account_manipulation
+    title: "Local or domain account created or elevated"
+    category: persistence
+    severity: high
+    score: 65
+    confidence: high
+    mitre: [T1136.001, T1098]
+    reason: "An account was created or added to a group through net.exe"
+    match: command_line
+    patterns:
+      - "net1?\\s+(user|group|localgroup)\\s+.*(/add|/domain\\s+/add)"
+  - id: procchain.evasion.recovery_and_log_tampering
+    title: "Recovery data or event logs destroyed"
+    category: defense_evasion
+    severity: critical
+    score: 85
+    confidence: high
+    mitre: [T1490, T1070.001]
+    reason: "Command line deletes shadow copies, clears event logs, or disables boot recovery"
+    match: command_line
+    patterns:
+      - "vssadmin.*\\bdelete\\b"
+      - "wevtutil\\s+cl\\b"
+      - "bcdedit.*safeboot"
+      - "bcdedit.*recoveryenabled"
+  - id: procchain.discovery.network_scanner
+    title: "Network scanning utility executed"
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: medium
+    mitre: [T1046]
+    reason: "A network scanning utility commonly staged by intrusion operators was executed"
+    match: process_name
+    patterns:
+      - "^(netscan|netscan64|advanced_ip_scanner|rustscan|masscan|angry_ip_scanner|nbtscan)$"
+  - id: procchain.discovery.ad_recon_tool
+    title: "Active Directory attack-path tooling executed"
+    category: discovery
+    severity: critical
+    score: 85
+    confidence: high
+    mitre: [T1087.002, T1018]
+    reason: "Purpose-built Active Directory reconnaissance or abuse tooling was executed"
+    match: process_name
+    patterns:
+      - "^(adfind|sharphound|bloodhound|sharpview|seatbelt|rubeus|certify|certipy)$"
+  - id: procchain.c2.rmm_tool_present
+    title: "Remote monitoring and management agent executed"
+    category: command_and_control
+    severity: low
+    score: 25
+    confidence: low
+    mitre: [T1219]
+    reason: "A remote monitoring and management agent ran on this host; benign when it is the sanctioned product"
+    match: process_name
+    patterns:
+      - "^(anydesk|teamviewer|teamviewer_service|screenconnect_clientservice|screenconnect_windowsclient|ateraagent|splashtop|splashtopstreamer|connectwisecontrol|logmein|lmiignition|gotoassist|dwagent|rustdesk|supremo|ammyy)$"
+  - id: procchain.exfil.cloud_transfer_tool
+    title: "Bulk cloud transfer utility executed"
+    category: exfiltration
+    severity: high
+    score: 65
+    confidence: medium
+    mitre: [T1567.002]
+    reason: "A bulk cloud-transfer utility associated with data theft was executed"
+    match: process_name
+    patterns:
+      - "^(rclone|megasync|megacmd|megaclient|filezilla|winscp|freefilesync)$"
+  - id: procchain.c2.tunnel_tool
+    title: "Network tunnelling utility executed"
+    category: command_and_control
+    severity: high
+    score: 65
+    confidence: medium
+    mitre: [T1572]
+    reason: "A reverse-tunnel or proxy utility used to expose internal services was executed"
+    match: process_name
+    patterns:
+      - "^(ngrok|chisel|frpc|frps|plink|gost|iox|revsocks|cloudflared)$"
+  - id: procchain.collection.password_protected_archive
+    title: "Password-protected archive created"
+    category: collection
+    severity: high
+    score: 65
+    confidence: high
+    mitre: [T1560.001]
+    reason: "An archive utility was invoked with a password flag, the standard pre-exfiltration staging pattern"
+    match: command_line
+    patterns:
+      - "\\b(7z|7za|winrar|rar)\\b.*\\s-h?p\\S"
+correlations:
+  - id: procchain.correlation.host_then_account_discovery
+    title: "Host fingerprinting followed by account enumeration"
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: medium
+    mitre: [T1082, T1087.002]
+    reason: "Host fingerprinting was followed by account enumeration on the same host, the standard opening of hands-on-keyboard reconnaissance"
+    window_seconds: 900
+    entity: host
+    sequence:
+      - any_category:
+          - discovery
+        any_child:
+          - hostname
+          - systeminfo
+          - ipconfig
+          - arp
+          - route
+          - nbtstat
+          - netstat
+          - tasklist
+      - any_category:
+          - discovery
+        any_child:
+          - whoami
+          - net
+          - net1
+          - dsquery
+          - dsget
+          - csvde
+          - ldifde
+          - nltest
+          - adfind
+          - sharphound
+          - bloodhound
+  - id: procchain.correlation.discovery_then_remote_exec
+    title: "Account discovery followed by remote execution"
+    category: lateral_movement
+    severity: high
+    score: 55
+    confidence: medium
+    mitre: [T1087.002, T1570]
+    reason: "Account or trust enumeration was followed by remote execution tooling on the same host"
+    window_seconds: 1800
+    entity: host
+    sequence:
+      - any_category:
+          - discovery
+      - any_category:
+          - lateral_movement
+  - id: procchain.correlation.archive_then_cloud_transfer
+    title: "Archive staging followed by bulk cloud transfer"
+    category: exfiltration
+    severity: high
+    score: 65
+    confidence: high
+    mitre: [T1560.001, T1567.002]
+    reason: "Data was archived and then a bulk cloud-transfer utility ran on the same host, the collection-to-exfiltration sequence"
+    window_seconds: 3600
+    entity: host
+    sequence:
+      - any_category:
+          - collection
+      - any_category:
+          - exfiltration
+  - id: procchain.correlation.office_script_then_download
+    title: "Office application spawned a script host that then fetched remote content"
+    category: execution
+    severity: high
+    score: 70
+    confidence: high
+    mitre: [T1204.002, T1105]
+    reason: "An Office application spawned a script interpreter which then retrieved remote content, the classic maldoc staging chain"
+    window_seconds: 600
+    entity: host
+    sequence:
+      - any_category:
+          - execution
+        any_rule_id:
+          - procchain.execution.winword_powershell
+          - procchain.execution.winword_cmd
+          - procchain.execution.winword_wscript
+          - procchain.execution.winword_cscript
+          - procchain.execution.excel_powershell
+          - procchain.execution.excel_cmd
+          - procchain.execution.excel_wscript
+          - procchain.execution.excel_cscript
+          - procchain.execution.onenote_powershell
+          - procchain.execution.onenote_cmd
+          - procchain.execution.outlook_powershell
+          - procchain.execution.powerpnt_powershell
+          - procchain.execution.msaccess_powershell
+          - procchain.execution.mspub_powershell
+      - any_category:
+          - command_and_control
+          - download
+  - id: procchain.correlation.webshell_then_discovery
+    title: "Web-server process spawned a shell that then ran discovery"
+    category: execution
+    severity: critical
+    score: 80
+    confidence: high
+    mitre: [T1190, T1033]
+    reason: "A web-server or database process spawned a shell and discovery commands followed, which is web-shell hands-on activity"
+    window_seconds: 900
+    entity: host
+    sequence:
+      - any_category:
+          - execution
+        any_rule_id:
+          - procchain.execution.w3wp_cmd
+          - procchain.execution.w3wp_powershell
+          - procchain.execution.w3wp_csc
+          - procchain.execution.tomcat_cmd
+          - procchain.execution.httpd_cmd
+          - procchain.execution.nginx_cmd
+          - procchain.execution.sqlservr_cmd
+          - procchain.execution.sqlservr_powershell
+          - procchain.execution.java_cmd
+          - procchain.execution.java_powershell
+          - procchain.execution.javaw_cmd
+          - procchain.execution.umworkerprocess_cmd
+          - procchain.execution.umworkerprocess_powershell
+          - procchain.execution.msexchangemailboxreplication_cmd
+      - any_category:
+          - discovery
+  - id: procchain.correlation.rmm_then_credential_or_evasion
+    title: "RMM agent spawned PowerShell before credential access or defence tampering"
+    category: command_and_control
+    severity: high
+    score: 60
+    confidence: medium
+    mitre: [T1219, T1003]
+    reason: "A remote monitoring agent spawned an interpreter and credential-access or defence-evasion behaviour followed on the same host"
+    window_seconds: 1800
+    entity: host
+    sequence:
+      - any_category:
+          - command_and_control
+        any_rule_id:
+          - procchain.c2.anydesk_powershell
+          - procchain.c2.anydesk_cmd
+          - procchain.c2.teamviewer_powershell
+          - procchain.c2.teamviewer_cmd
+          - procchain.c2.teamviewer_service_powershell
+          - procchain.c2.teamviewer_service_cmd
+          - procchain.c2.screenconnect_clientservice_powershell
+          - procchain.c2.screenconnect_clientservice_cmd
+          - procchain.c2.screenconnect_windowsclient_powershell
+          - procchain.c2.screenconnect_windowsclient_cmd
+          - procchain.c2.ateraagent_powershell
+          - procchain.c2.ateraagent_cmd
+          - procchain.c2.splashtop_powershell
+          - procchain.c2.splashtop_cmd
+      - any_category:
+          - credential_access
+          - defense_evasion

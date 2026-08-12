@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -51,29 +55,23 @@ jobs:
             echo "Tagged commit ${tag_commit} is not an ancestor of fetched origin/main." >&2
             exit 1
           fi
-      - name: "Release gate: verify installer provenance"
+      - name: "Release gate: verify installer content provenance"
         shell: bash
         run: |
           set -euo pipefail
-          installer_commit="$(sed -n 's/^INSTALLER_COMMIT="\([^"]*\)"$/\1/p' scripts/install-telltale)"
-          case "${installer_commit}" in
-            uncommitted|unknown|placeholder|local|dirty|none|todo)
-              echo "Installer provenance is a placeholder: ${installer_commit}." >&2
-              exit 1
-              ;;
-          esac
-          if [[ ! "${installer_commit}" =~ ^[0-9a-f]{7,40}$ ]]; then
-            echo "Installer provenance must be a lowercase hex commit id: ${installer_commit}." >&2
+          installer_path=scripts/install-telltale
+          working_blob="$(git hash-object "${installer_path}")"
+          tagged_blob="$(git rev-parse "${GITHUB_SHA}:${installer_path}")"
+          [[ "${working_blob}" == "${tagged_blob}" ]] || {
+            echo "Installer content does not exactly match the tagged commit blob." >&2
             exit 1
-          fi
-          if ! git cat-file -e "${installer_commit}^{commit}" 2>/dev/null; then
-            echo "Installer provenance commit ${installer_commit} is not present in the checkout." >&2
+          }
+          mode="$(git ls-tree "${GITHUB_SHA}" -- "${installer_path}" | awk '{print $1}')"
+          [[ "${mode}" == 100755 ]] || {
+            echo "Installer must remain an executable file in the tagged commit." >&2
             exit 1
-          fi
-          if ! git merge-base --is-ancestor "${installer_commit}" "${GITHUB_SHA}"; then
-            echo "Installer provenance commit ${installer_commit} is not an ancestor of tagged commit ${GITHUB_SHA}." >&2
-            exit 1
-          fi
+          }
+          printf 'Installer content blob: %s\n' "${tagged_blob}"
       - name: Check Rust formatting
         run: cargo fmt --all --check
       - name: Run Clippy with warnings denied
@@ -82,6 +80,8 @@ jobs:
         run: cargo test --locked --quiet
       - name: Check public documentation boundary
         run: make --silent CARGO_LOCKED=--locked release-public-docs-check
+      - name: Check canonical release identity
+        run: make --silent CARGO_LOCKED=--locked release-canonical-identity-check
       - name: Check package and public-boundary manifest
         run: make --silent CARGO_LOCKED=--locked release-crate-manifest
       - name: Verify normalized packages and packaged CLI
@@ -141,15 +141,14 @@ jobs:
           rm -rf "$bundle_dir"
           mkdir -p "$bundle_dir/config/examples"
 
-          install -m 0755 "target/${{ matrix.target }}/release/telltale" "$bundle_dir/telltale"
-          install -m 0755 "target/${{ matrix.target }}/release/adr" "$bundle_dir/adr"
+           install -m 0755 "target/${{ matrix.target }}/release/telltale" "$bundle_dir/telltale"
           install -m 0644 LICENSE "$bundle_dir/LICENSE"
           install -m 0644 release/README.md "$bundle_dir/README.md"
           for example in \
             config/examples/telltale-outputs.yaml \
-            config/examples/adr-scan.service \
-            config/examples/adr-scan.timer \
-            config/examples/adr-scan-task.xml \
+            config/examples/telltale-scan.service \
+            config/examples/telltale-scan.timer \
+            config/examples/telltale-scan-task.xml \
             config/examples/elastic-telltale-index-template.json \
             config/examples/elastic-telltale-role.json; do
             install -m 0644 "$example" "$bundle_dir/$example"
@@ -158,17 +157,14 @@ jobs:
           archive="telltale-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
           tar czf "$archive" \
             -C "$bundle_dir" \
-            telltale adr LICENSE README.md \
+            telltale LICENSE README.md \
             config/examples/telltale-outputs.yaml \
-            config/examples/adr-scan.service \
-            config/examples/adr-scan.timer \
-            config/examples/adr-scan-task.xml \
+            config/examples/telltale-scan.service \
+            config/examples/telltale-scan.timer \
+            config/examples/telltale-scan-task.xml \
             config/examples/elastic-telltale-index-template.json \
             config/examples/elastic-telltale-role.json
           tar -tzf "$archive"
-          legacy_archive="adr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
-          cp "$archive" "$legacy_archive"
-          cmp -s "$archive" "$legacy_archive"
       - name: Native staged binary --version smoke (unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
@@ -178,7 +174,6 @@ jobs:
           case "${{ matrix.target }}:${runner}" in
             x86_64-unknown-linux-gnu:Linux:x86_64|aarch64-unknown-linux-gnu:Linux:aarch64|aarch64-unknown-linux-gnu:Linux:arm64|x86_64-apple-darwin:macOS:x86_64|aarch64-apple-darwin:macOS:arm64|aarch64-apple-darwin:macOS:aarch64)
               "$RUNNER_TEMP/telltale-bundle/telltale" --version
-              "$RUNNER_TEMP/telltale-bundle/adr" --version
               ;;
             *)
               echo "Skipping native --version smoke for cross-compiled target ${{ matrix.target }} on ${runner}."
@@ -196,14 +191,13 @@ jobs:
           New-Item -ItemType Directory -Path (Join-Path $bundleDir 'config/examples') -Force | Out-Null
 
           Copy-Item "target\${{ matrix.target }}\release\telltale.exe" (Join-Path $bundleDir 'telltale.exe')
-          Copy-Item "target\${{ matrix.target }}\release\adr.exe" (Join-Path $bundleDir 'adr.exe')
           Copy-Item 'LICENSE' (Join-Path $bundleDir 'LICENSE')
           Copy-Item 'release\README.md' (Join-Path $bundleDir 'README.md')
           $examples = @(
             'telltale-outputs.yaml',
-            'adr-scan.service',
-            'adr-scan.timer',
-            'adr-scan-task.xml',
+            'telltale-scan.service',
+            'telltale-scan.timer',
+            'telltale-scan-task.xml',
             'elastic-telltale-index-template.json',
             'elastic-telltale-role.json'
           )
@@ -212,25 +206,50 @@ jobs:
           }
 
           $archive = "telltale-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $archive -CompressionLevel Optimal
+          if (Test-Path -LiteralPath $archive) {
+            Remove-Item -LiteralPath $archive -Force
+          }
+          Add-Type -AssemblyName System.IO.Compression
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path (Get-Location) $archive))
+          $members = @(
+            @{ Source = (Join-Path $bundleDir 'telltale.exe'); Name = 'telltale.exe' },
+            @{ Source = (Join-Path $bundleDir 'LICENSE'); Name = 'LICENSE' },
+            @{ Source = (Join-Path $bundleDir 'README.md'); Name = 'README.md' },
+            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-outputs.yaml'); Name = 'config/examples/telltale-outputs.yaml' },
+            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-scan.service'); Name = 'config/examples/telltale-scan.service' },
+            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-scan.timer'); Name = 'config/examples/telltale-scan.timer' },
+            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-scan-task.xml'); Name = 'config/examples/telltale-scan-task.xml' },
+            @{ Source = (Join-Path $bundleDir 'config/examples/elastic-telltale-index-template.json'); Name = 'config/examples/elastic-telltale-index-template.json' },
+            @{ Source = (Join-Path $bundleDir 'config/examples/elastic-telltale-role.json'); Name = 'config/examples/elastic-telltale-role.json' }
+          )
+          $zip = [System.IO.Compression.ZipFile]::Open(
+            (Join-Path (Get-Location) $archive),
+            [System.IO.Compression.ZipArchiveMode]::Create
+          )
           try {
-            $zip.Entries | ForEach-Object FullName
+            foreach ($member in $members) {
+              [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip,
+                $member.Source,
+                $member.Name,
+                [System.IO.Compression.CompressionLevel]::Optimal
+              ) | Out-Null
+            }
+            $expected = @($members | ForEach-Object { $_.Name } | Sort-Object)
+            $actual = @($zip.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+            $differences = Compare-Object -ReferenceObject $expected -DifferenceObject $actual
+            if ($differences -or $actual.Count -ne $expected.Count) {
+              throw "Windows release ZIP members are not the exact canonical regular-member set: $($actual -join ', ')"
+            }
           } finally {
             $zip.Dispose()
-          }
-          $legacyArchive = "adr-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          Copy-Item -LiteralPath $archive -Destination $legacyArchive
-          if ((Get-FileHash -LiteralPath $archive).Hash -ne (Get-FileHash -LiteralPath $legacyArchive).Hash) {
-            throw "Canonical and legacy release archives differ"
           }
       - name: Mandatory Windows staged binary --version smoke
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($binary in @('telltale.exe', 'adr.exe')) {
+          foreach ($binary in @('telltale.exe')) {
             & (Join-Path $env:RUNNER_TEMP "telltale-bundle/$binary") --version
             if ($LASTEXITCODE -ne 0) {
               throw "$binary --version smoke failed"
@@ -240,17 +259,12 @@ jobs:
         uses: actions/attest@v4.2.2
         with:
           subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
-      - name: Attest legacy release archive
-        uses: actions/attest@v4.2.2
-        with:
-          subject-path: adr-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: telltale-${{ matrix.target }}
           path: |
             telltale-${{ github.ref_name }}-${{ matrix.target }}.*
-            adr-${{ github.ref_name }}-${{ matrix.target }}.*
 
   release:
     name: Create Release
@@ -265,33 +279,150 @@ jobs:
         with:
           path: release-downloads
           merge-multiple: true
+      - name: Validate exact current-tag target archive set
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-downloads
+          shopt -s dotglob nullglob
+          expected=(
+            "telltale-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-x86_64-pc-windows-msvc.zip"
+          )
+          actual=(*)
+          if [[ "${#actual[@]}" -ne "${#expected[@]}" ]]; then
+            printf 'Expected exactly %s current-tag target archives, found %s: %s\n' \
+              "${#expected[@]}" "${#actual[@]}" "${actual[*]}" >&2
+            exit 1
+          fi
+          for archive in "${actual[@]}"; do
+            [[ -f "${archive}" && ! -L "${archive}" ]] || {
+              echo "Release artifact is not a regular file: ${archive}" >&2
+              exit 1
+            }
+            case " ${expected[*]} " in
+              *" ${archive} "*) ;;
+              *)
+                echo "Noncanonical release archive: ${archive}" >&2
+                exit 1
+                ;;
+            esac
+          done
+          for archive in "${expected[@]}"; do
+            [[ -f "${archive}" && ! -L "${archive}" ]] || {
+              echo "Missing canonical release archive: ${archive}" >&2
+              exit 1
+            }
+          done
       - name: Generate checksums
         shell: bash
         run: |
           cd release-downloads
           shopt -s nullglob
           archives=(*.tar.gz *.zip)
-          test "${#archives[@]}" -gt 0
-          canonical_archives=(telltale-${GITHUB_REF_NAME}-*.tar.gz telltale-${GITHUB_REF_NAME}-*.zip)
-          legacy_archives=(adr-${GITHUB_REF_NAME}-*.tar.gz adr-${GITHUB_REF_NAME}-*.zip)
-          test "${#canonical_archives[@]}" -gt 0
-          test "${#canonical_archives[@]}" -eq "${#legacy_archives[@]}"
-          for canonical in "${canonical_archives[@]}"; do
-            legacy="adr-${canonical#telltale-}"
-            test -f "$legacy" || { echo "Missing legacy release archive: $legacy"; exit 1; }
-            cmp -s "$canonical" "$legacy" || {
-              echo "Canonical and legacy release archives differ: $canonical and $legacy"
-              exit 1
-            }
-          done
-          for legacy in "${legacy_archives[@]}"; do
-            canonical="telltale-${legacy#adr-}"
-            test -f "$canonical" || { echo "Missing canonical release archive: $canonical"; exit 1; }
-          done
+          test "${#archives[@]}" -eq 5
           printf '%s\0' "${archives[@]}" | sort -z | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
+      - name: Validate assembled release artifact manifests
+        shell: bash
+        run: make --silent RELEASE_ARTIFACT_DIR=release-downloads release-artifact-manifest
+      - name: Fail closed if the tag already has a Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! response="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" 2>&1)"; then
+            echo "Could not query GitHub Releases to prove that ${GITHUB_REF_NAME} has no existing Release." >&2
+            exit 1
+          fi
+          match_state="$(printf '%s\n' "$response" | python3 -c '
+          import json
+          import sys
+
+          try:
+              pages = json.load(sys.stdin)
+          except (TypeError, ValueError):
+              raise SystemExit(1)
+
+          if not isinstance(pages, list):
+              raise SystemExit(1)
+          match = False
+          for page in pages:
+              if not isinstance(page, list):
+                  raise SystemExit(1)
+              for release in page:
+                  if (
+                      not isinstance(release, dict)
+                      or not isinstance(release.get("tag_name"), str)
+                      or release["tag_name"] == ""
+                  ):
+                      raise SystemExit(1)
+                  if release["tag_name"] == sys.argv[1]:
+                      match = True
+          print("match" if match else "absent")
+           ' "$GITHUB_REF_NAME")" || {
+            echo "Could not validate the GitHub Releases response." >&2
+            exit 1
+          }
+          if [[ "$match_state" == "match" ]]; then
+            echo "A GitHub Release already exists for ${GITHUB_REF_NAME}; published assets are immutable." >&2
+            exit 1
+          fi
+          if [[ "$match_state" != "absent" ]]; then
+           echo "Could not prove that ${GITHUB_REF_NAME} has no existing Release." >&2
+           exit 1
+           fi
+      - name: Reserve GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+          reservation_payload="$(python3 -c 'import json, sys; print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1], "draft": True, "prerelease": sys.argv[2] == "true"}, separators=(",", ":")))' "${GITHUB_REF_NAME}" "${prerelease}")"
+          if ! reservation_response="$(gh api --method POST --include --input - "repos/${GITHUB_REPOSITORY}/releases" <<< "${reservation_payload}" 2>&1)"; then
+            echo "Could not reserve the GitHub Release for ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          http_status="$(printf '%s\n' "${reservation_response}" | awk '/^HTTP/{code=$2} END{print code}')"
+          [[ "${http_status}" == "201" ]] || {
+            echo "GitHub Release reservation did not return HTTP 201." >&2
+            exit 1
+          }
+          reservation_body="$(printf '%s\n' "${reservation_response}" | awk 'BEGIN{body=0} body {print} /^[[:space:]]*$/ {body=1}')"
+          printf '%s\n' "${reservation_body}" | python3 -c '
+          import json
+          import sys
+
+          try:
+              release = json.load(sys.stdin)
+          except (TypeError, ValueError):
+              raise SystemExit(1)
+          if (
+              not isinstance(release, dict)
+              or type(release.get("id")) is not int
+              or release.get("tag_name") != sys.argv[1]
+              or release.get("draft") is not True
+              or release.get("prerelease") is not (sys.argv[2] == "true")
+          ):
+              raise SystemExit(1)
+           ' "${GITHUB_REF_NAME}" "${prerelease}" || {
+            echo "GitHub Release reservation response was malformed or uncertain." >&2
+            exit 1
+          }
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          overwrite_files: false
           files: release-downloads/*

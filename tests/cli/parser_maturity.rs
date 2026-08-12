@@ -13,7 +13,7 @@ fn parser_maturity_fixture_events_preserve_source_tuple_and_order() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("events.jsonl");
     let state_path = temp.path().join("state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -28,7 +28,7 @@ fn parser_maturity_fixture_events_preserve_source_tuple_and_order() {
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr");
+        .expect("run telltale");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -82,28 +82,28 @@ fn parser_maturity_fixture_events_preserve_source_tuple_and_order() {
                 Some("health"),
                 Some("codex,opencode"),
                 Some("scanner"),
-                Some("2.0"),
+                Some("3.0"),
             ),
             (
                 None,
                 Some("activity"),
                 Some("install_inventory"),
                 Some("scanner"),
-                Some("2.0"),
+                Some("3.0"),
             ),
             (
                 Some(("codex.project_sessions", "codex")),
                 Some("activity"),
                 Some("codex"),
                 Some("project-session"),
-                Some("2.0"),
+                Some("3.0"),
             ),
             (
                 Some(("opencode.project_json", "opencode")),
                 Some("activity"),
                 Some("opencode"),
                 Some("opencode-project-session"),
-                Some("2.0"),
+                Some("3.0"),
             ),
         ]
     );

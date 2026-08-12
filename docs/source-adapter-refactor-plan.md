@@ -6,12 +6,12 @@ It replaces the former plan to infer semantic parsing from `SourceKind`.
 The public pipeline is unchanged:
 
 ```text
-discover -> parse -> normalize -> detect -> score -> triage -> emit
+discover -> parse -> normalize -> detect -> score -> emit
 ```
 
-Discovery, normalization, detection, scoring, triage, emission, install
-inventory, Event 2.0, state, and public parser signatures retain their existing
-contracts.
+Discovery, normalization, detection, scoring, emission, install inventory, Event
+2.0 compatibility fields, state, and public parser signatures retain their
+existing contracts.
 
 ## Implemented architecture
 
@@ -89,7 +89,7 @@ host validation.
 
 - `ClientSourceDef`, `ClientId`, source discovery, install metadata, and public
   parser signatures remain stable.
-- Normalized fields, record order, source/event tuple identity, and Event 2.0
+- Normalized fields, record order, source/event tuple identity, and native Event 3.0
   output remain parity-tested.
 - Gemini's established missing-`messages` `Empty` result remains unchanged.
 - Copilot retains plain-line tolerance, standalone JSON-array handling,

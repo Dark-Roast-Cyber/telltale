@@ -1,13 +1,13 @@
 mod cli;
 mod config;
 mod event;
+mod file_lock;
 mod rules;
 mod schema;
 mod sink;
 mod state;
-mod triage;
 
-use telltale_detect::{allowlist, baseline, correlation, detection, mcp, timeline};
+use telltale_detect::{allowlist, baseline, correlation, detection, mcp, process_chain, timeline};
 use telltale_schema::scoring;
 use telltale_sources::{discovery, install_inventory, parser, paths, projects};
 

@@ -1,23 +1,14 @@
 {
-  "cluster": [
-    "manage_ilm",
-    "manage_index_templates",
-    "monitor"
-  ],
+  "cluster": [],
   "indices": [
     {
       "names": [
-        "telltale",
-        "telltale-*",
-        "adr-events",
-        "adr-events-*"
+        "telltale-events",
+        "telltale-events-*"
       ],
       "privileges": [
-        "write",
-        "create",
-        "create_index",
-        "manage",
-        "manage_ilm"
+        "auto_configure",
+        "index"
       ]
     }
   ]

@@ -6,6 +6,11 @@ embedded pipeline returns detection events as values; the host application
 decides where they go. Nothing in the library crates writes JSONL, talks to a
 SIEM, or exits the process.
 
+The versioned state file, sidecar locking, platform-qualified local JSONL
+durability, and the `migrate state` command described in the migration contract
+belong to the standalone CLI runtime. Embedding hosts retain ownership of
+persistence and delivery while using the same analytic and event semantics.
+
 ## Which crate to depend on
 
 | Integrator profile | Dependency | What you get |
@@ -21,8 +26,8 @@ These packages are in current release preparation and are not published to
 crates.io yet. The supported embedding surface is `telltale-core`; consume it
 as a git dependency and pin a revision until publication:
 
-See the [0.4.0 migration guide](migrations/0.4.0.md) before upgrading an
-existing integration.
+See [Versioning and Releases](versioning.md) before upgrading an existing
+integration; the current 0.5.0 section documents the Event 3.0 migration.
 
 ```toml
 [dependencies]
@@ -111,8 +116,9 @@ keeps the rule engine usable in processes with no filesystem access.
   around the pipeline — that would defeat the privacy model documented in
   `privacy-model.md`.
 - **Deterministic, offline evaluation.** No network access at scan time; rules
-  are regex/static scoring. LLM triage is a CLI-side layer and is not part of
-  the embedded pipeline.
+  and scoring are static and native Event 3.0 response metadata and timeline
+  anchors are deterministic. Downstream analyst review is outside the embedded
+  pipeline.
 - **Vendor-neutral events.** The event body is SIEM-agnostic; envelope
   formatting (Splunk HEC, Elastic bulk) belongs at the transport boundary in
   the host.

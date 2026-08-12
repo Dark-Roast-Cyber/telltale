@@ -13,10 +13,9 @@ configuration. It should not include local scanner state, telemetry logs, raw
 agent transcripts, credentials, private planning notes, local agent workflow
 state, or deployment-specific SIEM settings.
 
-Release archives should contain the primary `telltale` command-line binary and
-the compiled `adr` compatibility command, the Apache-2.0 license, a concise
-quick-start README, and reviewed deployment examples generated from checked-in
-public repository contents.
+Release archives should contain only the canonical `telltale` command-line
+binary, the Apache-2.0 license, a concise quick-start README, and reviewed
+deployment examples generated from checked-in public repository contents.
 
 Public release evidence should be reproducible from synthetic fixtures or
 already-redacted telemetry output. Keep live host validation notes local-only;
@@ -25,11 +24,38 @@ families, schema checks, or aggregate results without exposing workstation
 paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
-[Versioning and Releases](versioning.md). Compatible maintenance releases
-remain on the current `0.3.x` line while the unpublished `0.4.0` line is
-prepared. Do not create `0.5.x` for a round of small tasks; a `0.5.0` release
-requires an approved significant milestone with its own compatibility,
-migration, and release-readiness review.
+[Versioning and Releases](versioning.md). The workspace is currently preparing
+the immutable `0.5.0-rc.1` candidate for the approved `0.5.0` Event 3.0
+migration; compatible maintenance fixes remain on the prior `0.3.x` line until
+stable publication. Do not create `0.5.x` for a round of small tasks; follow-up
+fixes belong there only after the reviewed `0.5.0` milestone ships.
+
+## RC Candidate Handoff
+
+The preparation batch does not create a tag, Release, archive, checksum, crate,
+or live-gate evidence. A later reviewed operation may merge the candidate to
+`main`, tag only that reviewed commit as `v0.5.0-rc.1`, and inspect the workflow
+before validation. The RC Release must be explicitly marked `prerelease=true`.
+If code, package metadata, installer behavior, workflow, archive, checksum, or
+attestation provenance changes, use a new reviewed commit and unused `rc.2` (or
+later) tag; do not overwrite a published candidate. A transient environment
+failure with unchanged artifacts may receive only a bounded recheck.
+
+For each of the five target archives, retain a redacted ledger row containing:
+the package/tag pair, reviewed `main` SHA and ancestry result, canonical archive
+name and member-manifest result, archive and extracted-binary SHA-256 values,
+the exact `SHA256SUMS` line, archive attestation subject, Release ID/URL and
+`draft`/`prerelease` metadata, workflow run/ref/source identity, and the exact
+tagged installer blob and executable-mode result. Do not record credentials,
+endpoints, local paths, raw service output, or session contents.
+
+After artifact review, downstream validation is dependency-ordered: G-SERVICE
+with the exact RC tag and independent legacy-manager/drop-in preflight, then
+controlled G-HEC and G-SPLUNK, native Windows, and native macOS. Each gate has
+its own PASS/BLOCKED/FAIL status; a BLOCKED gate is never silently reclassified
+as PASS. The current preparation claims no live gate passed. Stable promotion
+requires explicit PASS evidence for those gates plus release preflight, public
+artifact-boundary review, and publication prerequisites.
 
 ## Pre-Release Checks
 
@@ -123,8 +149,9 @@ crate or tagged source release.
 dependency order using temporary local crates.io patches for unpublished
 workspace packages. It then compiles a registry-style external consumer and
 installs the normalized `telltale-cli` package into a temporary root, checking
-both `telltale --version` and `adr --version`. The target supports Linux and
-macOS and cleans its temporary workspace on exit.
+the `telltale` install and `telltale --version`, and rejects the retired `adr`
+executable if it is installed. The target supports Linux and macOS and cleans
+its temporary workspace on exit.
 
 For the actual publication pass, first recheck crates.io ownership and name
 availability. Publish in dependency order, waiting for each prerequisite to
@@ -132,7 +159,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-pinned `=0.4.0` registry packages before publication is declared complete.
+`=0.5.0` registry packages before publication is declared complete.
 
 ## Artifact Boundary
 
@@ -140,7 +167,7 @@ Before publishing release artifacts, verify that the staged or tagged content
 does not contain:
 
 - local scanner state or baseline files;
-- telemetry output such as `logs/adr-events.jsonl`;
+- telemetry output such as `logs/telltale-events.jsonl`;
 - raw agent session stores or copied transcripts;
 - credentials, API keys, tokens, or `.env` values;
 - host-specific filesystem paths, IP addresses, or SIEM endpoints;
@@ -150,10 +177,10 @@ Keep environment-specific service files and SIEM shipper configuration outside
 the archive unless they are reviewed public examples with placeholder values.
 
 For generated binary archives, inspect the archive listing before upload. The
-archive should contain both `telltale` and `adr` binaries, `LICENSE`,
-`README.md`, and the curated `config/examples/` deployment files
+archive should contain only the `telltale` binary, `LICENSE`, `README.md`, and
+the curated `config/examples/` deployment files
 (`telltale-outputs.yaml`,
-`adr-scan.service`, `adr-scan.timer`, `adr-scan-task.xml`,
+`telltale-scan.service`, `telltale-scan.timer`, `telltale-scan-task.xml`,
 `elastic-telltale-index-template.json`, `elastic-telltale-role.json`) only. It should not
 contain checked-out working-tree residue, scanner state, telemetry output,
 session stores, local planning notes, local agent workflow state, or
@@ -175,11 +202,11 @@ make release-artifact-manifest
 ```
 
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
-archive contains exactly the expected bundle manifest: both the `telltale` and
-`adr` binaries (or their `.exe` forms), `LICENSE`, `README.md`, and the curated
-`config/examples/` deployment files. It also verifies that every `adr-*` archive
-is an exact copy of its matching `telltale-*` archive. When `SHA256SUMS` is
-present in the same directory, the target also
+archive contains exactly the expected canonical bundle manifest: the `telltale`
+binary (or its `.exe` form), `LICENSE`, `README.md`, and the curated
+`config/examples/` deployment files. It rejects active ADR technical archive
+and member identities. The target requires `SHA256SUMS` in the same directory,
+then
 verifies that its entries match the reviewed archives exactly and that each
 checksum validates. The default `release-downloads/` directory is local review
 residue and is ignored and excluded from source packages; legacy local
@@ -191,6 +218,19 @@ The tagged release workflow generates `SHA256SUMS` in its temporary
 archives and uploads it with the GitHub release. Publish equivalent checksums
 for any manually produced archives so operators can verify downloads before
 running the binary.
+
+The default installer selects the latest stable Release. For candidate
+validation, pass the exact tag, for example:
+
+```sh
+./scripts/install-telltale --release-tag v0.5.0-rc.1 --no-timer
+./scripts/install-telltale --release-tag v0.5.0-rc.1 --from-source --no-timer
+```
+
+The candidate path verifies exact Release metadata, the canonical archive
+manifest, the tag-derived `SHA256SUMS` entry, and the extracted binary version
+before acquiring its installer lock. It never uses `--skip-checksum` for the
+G-SERVICE procedure and never falls back to `releases/latest`.
 
 ## Post-Release Smoke Test
 

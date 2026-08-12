@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Validate the exact, canonical release bundle and its checksums."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import sys
+import tarfile
+import zipfile
+from pathlib import Path
+
+
+EXPECTED_EXAMPLES = (
+    "LICENSE",
+    "README.md",
+    "config/examples/telltale-outputs.yaml",
+    "config/examples/telltale-scan.service",
+    "config/examples/telltale-scan.timer",
+    "config/examples/telltale-scan-task.xml",
+    "config/examples/elastic-telltale-index-template.json",
+    "config/examples/elastic-telltale-role.json",
+)
+HEX_DIGEST = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def fail(message: str) -> None:
+    raise SystemExit(message)
+
+
+def unsafe_member(name: str) -> bool:
+    path = Path(name)
+    return name.startswith("/") or "\\" in name or ".." in path.parts or "\x00" in name
+
+
+def expected_members(archive: Path) -> set[str]:
+    binary = "telltale.exe" if archive.name.endswith(".zip") else "telltale"
+    return {binary, *EXPECTED_EXAMPLES}
+
+
+def validate_names(archive: Path, names: list[str]) -> None:
+    if any(unsafe_member(name) for name in names):
+        fail(f"Archive {archive} contains an absolute or traversal member")
+    if len(names) != len(set(names)):
+        fail(f"Archive {archive} contains duplicate members")
+    expected = expected_members(archive)
+    actual = set(names)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        fail(
+            f"Archive {archive} does not match the exact canonical bundle "
+            f"(missing={missing}, extra={extra})"
+        )
+
+
+def validate_tar(archive: Path) -> list[str]:
+    try:
+        with tarfile.open(archive, "r:gz") as bundle:
+            members = bundle.getmembers()
+            names = [member.name for member in members]
+            for member in members:
+                if not member.isreg():
+                    fail(f"Archive {archive} contains a non-regular or link member: {member.name}")
+            validate_names(archive, names)
+            binary = "telltale"
+            binary_member = bundle.extractfile(binary)
+            if binary_member is None or binary_member.read(4) == b"":
+                fail(f"Archive {archive} has no readable canonical binary member")
+    except (tarfile.TarError, OSError) as error:
+        fail(f"Could not inspect {archive}: {error}")
+    return names
+
+
+def validate_zip(archive: Path) -> list[str]:
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            infos = bundle.infolist()
+            names = [info.filename for info in infos]
+            for info in infos:
+                mode = (info.external_attr >> 16) & 0xFFFF
+                dos_attributes = info.external_attr & 0xFFFF
+                file_type = mode & 0o170000
+                if (
+                    info.filename.endswith("/")
+                    or dos_attributes & 0x10
+                    or file_type == 0o120000
+                ):
+                    fail(f"Archive {archive} contains a non-regular or link member: {info.filename}")
+                if file_type not in (0, 0o100000):
+                    fail(f"Archive {archive} contains an unsupported member type: {info.filename}")
+            validate_names(archive, names)
+            binary = "telltale.exe"
+            with bundle.open(binary) as binary_member:
+                if binary_member.read(4) == b"":
+                    fail(f"Archive {archive} has no readable canonical binary member")
+    except (zipfile.BadZipFile, OSError) as error:
+        fail(f"Could not inspect {archive}: {error}")
+    return names
+
+
+def read_checksums(directory: Path, archives: list[Path]) -> dict[str, str]:
+    checksum_path = directory / "SHA256SUMS"
+    if checksum_path.is_symlink() or not checksum_path.is_file():
+        fail(f"SHA256SUMS is required in {directory}")
+    entries: dict[str, str] = {}
+    for line in checksum_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        fields = line.split(None, 1)
+        if len(fields) != 2:
+            fail("SHA256SUMS contains a malformed entry")
+        digest, name = fields
+        name = name.removeprefix("*")
+        if not HEX_DIGEST.fullmatch(digest) or unsafe_member(name) or name in entries:
+            fail("SHA256SUMS contains an unsafe, invalid, or duplicate entry")
+        entries[name] = digest.lower()
+    expected = {archive.name for archive in archives}
+    if set(entries) != expected:
+        fail("SHA256SUMS entries must match release archives exactly")
+    for archive in archives:
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != entries[archive.name]:
+            fail(f"checksum mismatch for {archive.name}")
+    return entries
+
+
+def main() -> int:
+    directory = Path(os.environ.get("RELEASE_ARTIFACT_DIR", "release-downloads"))
+    if not directory.exists():
+        print(f"Skipping release artifact manifest: {directory} does not exist.")
+        return 0
+    if directory.is_symlink() or not directory.is_dir():
+        fail(f"Release artifact directory is not a regular directory: {directory}")
+
+    candidates = sorted(
+        path
+        for path in directory.iterdir()
+        if path.name.endswith((".tar.gz", ".zip"))
+    )
+    if not candidates:
+        print(f"Skipping release artifact manifest: no archives in {directory}.")
+        return 0
+
+    archives: list[Path] = []
+    for archive in candidates:
+        if archive.is_symlink() or not archive.is_file():
+            fail(f"Release archive is not a regular file: {archive}")
+        if not archive.name.startswith("telltale-"):
+            fail(f"Release archive {archive} must use the canonical telltale-* filename")
+        archives.append(archive)
+
+    read_checksums(directory, archives)
+    for archive in archives:
+        print(f"Archive: {archive}")
+        names = validate_tar(archive) if archive.name.endswith(".tar.gz") else validate_zip(archive)
+        for name in sorted(names):
+            print(f"  {name}")
+        print(f"  {archive.name}: OK")
+    print(f"Release artifact manifest passed for {len(archives)} archive(s).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

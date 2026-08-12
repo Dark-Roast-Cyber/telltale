@@ -8,10 +8,10 @@ UF_LOCAL_DIR="${UF_LOCAL_DIR:-$UF_HOME/etc/system/local}"
 UF_BIN="${UF_BIN:-$UF_HOME/bin/splunk}"
 
 # Defaults target the Linux `system` path profile used by managed/Splunk-forwarded
-# deployments. Override ADR_LOG_PATH/COPILOT_LOG_DIR for non-default profiles.
-ADR_LOG_PATH="${ADR_LOG_PATH:-/var/log/telltale/adr-events.jsonl}"
-ADR_INDEX="${ADR_INDEX:-adr}"
-ADR_SOURCETYPE="${ADR_SOURCETYPE:-adr:json}"
+# deployments. Override TELLTALE_LOG_PATH/COPILOT_LOG_DIR for non-default profiles.
+TELLTALE_LOG_PATH="${TELLTALE_LOG_PATH:-/var/log/telltale/telltale-events.jsonl}"
+TELLTALE_INDEX="${TELLTALE_INDEX:-telltale}"
+TELLTALE_SOURCETYPE="${TELLTALE_SOURCETYPE:-telltale:json}"
 
 ENABLE_COPILOT_MONITOR="${ENABLE_COPILOT_MONITOR:-1}"
 COPILOT_LOG_DIR="${COPILOT_LOG_DIR:-/var/log/telltale/copilot}"
@@ -20,11 +20,13 @@ COPILOT_SOURCETYPE="${COPILOT_SOURCETYPE:-copilot:json}"
 
 INDEXER_IPS="${INDEXER_IPS:-}"
 SPLUNK_TCP_PORT="${SPLUNK_TCP_PORT:-9997}"
-TCPOUT_GROUP="${TCPOUT_GROUP:-adr_indexers}"
+TCPOUT_GROUP="${TCPOUT_GROUP:-telltale_indexers}"
 RESTART_FORWARDER="${RESTART_FORWARDER:-1}"
 
 run_as_root() {
-    if [[ "$(id -u)" -eq 0 ]]; then
+    # Keep test/development installs root-free when UF_HOME is user-owned;
+    # production installs under /opt still use sudo as before.
+    if [[ "$(id -u)" -eq 0 || -w "$UF_HOME" ]]; then
         "$@"
     else
         sudo "$@"
@@ -129,13 +131,14 @@ main() {
     temp_dir="$(mktemp -d)"
     stamp="$(date +%Y%m%d%H%M%S)"
 
-    trap 'rm -rf "$temp_dir"' EXIT
+    trap "rm -rf \"$temp_dir\"" EXIT
 
     cat > "$temp_dir/inputs.conf" <<EOF
-[monitor://$ADR_LOG_PATH]
+[monitor://$TELLTALE_LOG_PATH]
 disabled = false
-sourcetype = $ADR_SOURCETYPE
-index = $ADR_INDEX
+sourcetype = $TELLTALE_SOURCETYPE
+index = $TELLTALE_INDEX
+source = telltale
 crcSalt = <SOURCE>
 EOF
 
@@ -146,13 +149,14 @@ EOF
 disabled = false
 sourcetype = $COPILOT_SOURCETYPE
 index = $COPILOT_INDEX
+source = telltale
 whitelist = \.log$
 crcSalt = <SOURCE>
 EOF
     fi
 
     cat > "$temp_dir/props.conf" <<EOF
-[adr:json]
+[telltale:json]
 SHOULD_LINEMERGE = false
 LINE_BREAKER = ([\r\n]+)
 TIME_PREFIX = ^\{"timestamp":"
@@ -193,7 +197,7 @@ EOF
     run_as_root install -m 0644 "$temp_dir/outputs.conf" "$outputs_path"
 
     printf 'Installed Splunk UF configuration in %s\n' "$UF_LOCAL_DIR"
-    printf 'ADR monitor: %s\n' "$ADR_LOG_PATH"
+    printf 'Telltale monitor: %s\n' "$TELLTALE_LOG_PATH"
     if [[ "$ENABLE_COPILOT_MONITOR" == "1" ]]; then
         printf 'Copilot monitor: %s\n' "$COPILOT_LOG_DIR"
     fi

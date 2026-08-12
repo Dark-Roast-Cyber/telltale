@@ -1,12 +1,105 @@
 use super::*;
+use std::path::PathBuf;
+
+fn discovered_config_file(directory: &Path, file_name: &str) -> PathBuf {
+    fs::read_dir(directory)
+        .expect("config directory")
+        .map(|entry| entry.expect("config entry").path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy() == file_name)
+        })
+        .expect("discovered config file")
+}
+
+fn assert_diagnostic_only_scan(
+    output: &std::process::Output,
+    log_path: &Path,
+    sentinel: &str,
+) -> Value {
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for text in [&stdout, &stderr] {
+        for marker in [
+            sentinel,
+            "policy match accounting unavailable",
+            "invalid regex",
+            "unsupported detection_class",
+            "RiskAccountingError",
+            "Overflow",
+        ] {
+            assert!(!text.contains(marker), "diagnostic leaked: {marker}");
+        }
+    }
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    let accounting = &summary["detection_flow"]["policy_match_accounting"];
+    assert_eq!(accounting["status"], "unavailable");
+    for field in [
+        "pre_policy_detection_candidate_count",
+        "fully_filtered_detection_candidate_count",
+        "filtered_rule_id_count",
+    ] {
+        assert!(accounting[field].is_null(), "{field} should be null");
+    }
+    assert_eq!(summary["detection_count"], 1);
+    assert_eq!(summary["emitted_count"], 1);
+    assert_eq!(summary["rule_count"], 1);
+    assert_eq!(
+        summary["detection_flow"]["effective_detection_candidate_count"],
+        1
+    );
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 1);
+    assert_eq!(
+        summary["detection_flow"]["state_deduplicated_detection_count"],
+        0
+    );
+
+    let events = fs::read_to_string(log_path)
+        .expect("event log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect::<Vec<_>>();
+    let event_types = events
+        .iter()
+        .map(|event| event["event_type"].as_str().expect("event type"))
+        .collect::<Vec<_>>();
+    assert_eq!(event_types, vec!["health", "detection"]);
+    assert_eq!(events[0]["scanner_error_count"], 0);
+    assert!(!events.iter().any(|event| {
+        matches!(
+            event["event_type"].as_str(),
+            Some("scanner_error" | "operational_alert")
+        )
+    }));
+    let serialized_events = serde_json::to_string(&events).expect("serialize events");
+    for marker in [
+        sentinel,
+        "policy match accounting unavailable",
+        "invalid regex",
+        "unsupported detection_class",
+        "RiskAccountingError",
+        "Overflow",
+    ] {
+        assert!(
+            !serialized_events.contains(marker),
+            "event diagnostic leaked: {marker}"
+        );
+    }
+    summary
+}
 
 #[test]
 fn rules_list_and_validate_default_rules() {
-    let list = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let list = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "list"])
         .arg("--no-local-config")
         .output()
-        .expect("run adr rules list");
+        .expect("run telltale rules list");
     assert!(
         list.status.success(),
         "stderr: {}",
@@ -23,11 +116,11 @@ fn rules_list_and_validate_default_rules() {
         );
     }
 
-    let validate = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let validate = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate"])
         .arg("--no-local-config")
         .output()
-        .expect("run adr rules validate");
+        .expect("run telltale rules validate");
     assert!(
         validate.status.success(),
         "stderr: {}",
@@ -40,13 +133,13 @@ fn rules_list_and_validate_default_rules() {
 
 #[test]
 fn rules_serve_exposes_read_only_rule_summary_endpoint() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "serve", "--addr", "127.0.0.1:0", "--once"])
         .arg("--no-local-config")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr rules serve");
+        .expect("spawn telltale rules serve");
     let stdout = child.stdout.take().expect("server stdout");
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -88,7 +181,7 @@ fn rules_serve_exposes_read_only_rule_summary_endpoint() {
 
 #[test]
 fn rules_serve_uses_ordered_managed_pack_for_summary() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "serve",
@@ -141,6 +234,78 @@ fn rules_serve_uses_ordered_managed_pack_for_summary() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn scan_reports_consistent_hashed_rule_sources_and_replacements() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    let state_path = temp.path().join("scan-state.json");
+    fs::create_dir_all(&root).expect("empty root");
+    let validation = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "rules",
+            "validate",
+            "--config-dir",
+            "tests/fixtures/rule_packs/ordered",
+        ])
+        .output()
+        .expect("validate ordered pack");
+    assert!(
+        validation.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&validation.stderr)
+    );
+    let validation: Value = serde_json::from_slice(&validation.stdout).expect("validation json");
+    let expected_sources = validation["sources"]
+        .as_array()
+        .expect("validation sources")
+        .iter()
+        .map(|source| Value::String(evidence_hash(source.as_str().expect("raw source"))))
+        .collect::<Vec<_>>();
+    let expected_provenance = validation["provenance"]
+        .as_array()
+        .expect("validation provenance")
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "id": entry["id"],
+                "kind": entry["kind"],
+                "winner": evidence_hash(entry["winner"].as_str().expect("raw winner")),
+                "replaced_sources": entry["replaced_sources"]
+                    .as_array()
+                    .expect("raw replacements")
+                    .iter()
+                    .map(|source| evidence_hash(source.as_str().expect("raw replacement")))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--dry-run", "--root"])
+        .arg(&root)
+        .args([
+            "--config-dir",
+            "tests/fixtures/rule_packs/ordered",
+            "--install-inventory-disabled",
+            "--state-path",
+        ])
+        .arg(&state_path)
+        .output()
+        .expect("run ordered pack scan");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+    let rules = &summary["effective_configuration"]["rules"];
+    let sources = rules["sources"].as_array().expect("hashed sources");
+    assert_eq!(sources, &expected_sources);
+    let provenance = rules["provenance"].as_array().expect("provenance");
+    assert_eq!(provenance, &expected_provenance);
 }
 
 #[test]
@@ -220,7 +385,7 @@ fn rules_serve_rejects_preview_paths_outside_fixtures() {
 }
 
 fn post_rules_serve_once(path: &str, body: &str) -> (String, std::process::Output) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "serve",
@@ -232,7 +397,7 @@ fn post_rules_serve_once(path: &str, body: &str) -> (String, std::process::Outpu
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr rules serve");
+        .expect("spawn telltale rules serve");
     let stdout = child.stdout.take().expect("server stdout");
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -296,12 +461,12 @@ fn post_rules_serve_save_with_mode(
         rule_file.to_string_lossy().to_string(),
     ]);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr rules serve");
+        .expect("spawn telltale rules serve");
     let stdout = child.stdout.take().expect("server stdout");
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -332,12 +497,12 @@ fn post_rules_serve_save_with_args(body: &str, args: &[String]) -> (String, std:
     ];
     command_args.extend_from_slice(args);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(command_args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr rules serve");
+        .expect("spawn telltale rules serve");
     let stdout = child.stdout.take().expect("server stdout");
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -445,7 +610,7 @@ fn rules_serve_save_reloads_rules_without_restart() {
         fs::read_to_string("config/rules/tool-call-regex.yaml").expect("read default rules");
     fs::write(&rule_file, &original).expect("copy rules to temp");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "serve",
@@ -459,7 +624,7 @@ fn rules_serve_save_reloads_rules_without_restart() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn adr rules serve");
+        .expect("spawn telltale rules serve");
     let stdout = child.stdout.take().expect("server stdout");
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
@@ -829,7 +994,7 @@ fn rules_serve_save_rejects_path_not_in_loaded_rules() {
 
 #[test]
 fn rules_validate_reports_invalid_custom_regex() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "validate",
@@ -838,7 +1003,7 @@ fn rules_validate_reports_invalid_custom_regex() {
             "tests/fixtures/custom_rules/invalid-regex.yaml",
         ])
         .output()
-        .expect("run adr rules validate");
+        .expect("run telltale rules validate");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -847,7 +1012,7 @@ fn rules_validate_reports_invalid_custom_regex() {
 
 #[test]
 fn rules_validate_reports_unsupported_targets() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "validate",
@@ -856,7 +1021,7 @@ fn rules_validate_reports_unsupported_targets() {
             "tests/fixtures/custom_rules/unsupported-target.yaml",
         ])
         .output()
-        .expect("run adr rules validate");
+        .expect("run telltale rules validate");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -867,7 +1032,7 @@ fn rules_validate_reports_unsupported_targets() {
 
 #[test]
 fn rules_test_supports_sigma_inspired_custom_yaml() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "test",
@@ -877,7 +1042,7 @@ fn rules_test_supports_sigma_inspired_custom_yaml() {
             "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
         ])
         .output()
-        .expect("run adr rules test");
+        .expect("run telltale rules test");
 
     assert!(
         output.status.success(),
@@ -904,11 +1069,11 @@ fn rules_test_supports_sigma_inspired_custom_yaml() {
 
 #[test]
 fn rules_validate_adds_custom_rules_to_bundled_defaults_unless_disabled() {
-    let defaults = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let defaults = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate"])
         .arg("--no-local-config")
         .output()
-        .expect("run adr rules validate defaults");
+        .expect("run telltale rules validate defaults");
     assert!(
         defaults.status.success(),
         "stderr: {}",
@@ -916,7 +1081,7 @@ fn rules_validate_adds_custom_rules_to_bundled_defaults_unless_disabled() {
     );
     let defaults_summary: Value = serde_json::from_slice(&defaults.stdout).expect("summary json");
 
-    let additive = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let additive = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "validate",
@@ -925,7 +1090,7 @@ fn rules_validate_adds_custom_rules_to_bundled_defaults_unless_disabled() {
             "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
         ])
         .output()
-        .expect("run adr rules validate");
+        .expect("run telltale rules validate");
     assert!(
         additive.status.success(),
         "stderr: {}",
@@ -933,7 +1098,7 @@ fn rules_validate_adds_custom_rules_to_bundled_defaults_unless_disabled() {
     );
     let additive_summary: Value = serde_json::from_slice(&additive.stdout).expect("summary json");
 
-    let custom_only = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let custom_only = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "validate",
@@ -943,7 +1108,7 @@ fn rules_validate_adds_custom_rules_to_bundled_defaults_unless_disabled() {
             "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
         ])
         .output()
-        .expect("run adr rules validate custom only");
+        .expect("run telltale rules validate custom only");
     assert!(
         custom_only.status.success(),
         "stderr: {}",
@@ -972,10 +1137,10 @@ fn rules_validate_discovers_local_rules_d_and_can_disable_local_config() {
     )
     .expect("write local rule");
 
-    let defaults = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let defaults = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--no-local-config"])
         .output()
-        .expect("run adr rules validate defaults");
+        .expect("run telltale rules validate defaults");
     assert!(
         defaults.status.success(),
         "stderr: {}",
@@ -983,11 +1148,11 @@ fn rules_validate_discovers_local_rules_d_and_can_disable_local_config() {
     );
     let defaults_summary: Value = serde_json::from_slice(&defaults.stdout).expect("summary json");
 
-    let discovered = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let discovered = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr rules validate with local config");
+        .expect("run telltale rules validate with local config");
     assert!(
         discovered.status.success(),
         "stderr: {}",
@@ -1002,12 +1167,12 @@ fn rules_validate_discovers_local_rules_d_and_can_disable_local_config() {
             .map(|count| count + 1)
     );
 
-    let ignored = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let ignored = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--config-dir"])
         .arg(&config_root)
         .args(["--no-local-config"])
         .output()
-        .expect("run adr rules validate with local config disabled");
+        .expect("run telltale rules validate with local config disabled");
     assert!(
         ignored.status.success(),
         "stderr: {}",
@@ -1043,7 +1208,7 @@ fn rules_validate_reports_ordered_pack_winner_and_replacements() {
     )
     .expect("write local rule");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--no-default-rules", "--config-dir"])
         .arg(&config_root)
         .output()
@@ -1067,7 +1232,7 @@ fn rules_validate_reports_ordered_pack_winner_and_replacements() {
 #[test]
 fn rules_list_reports_pack_winner_and_replaced_sources() {
     let pack_root = Path::new("tests/fixtures/rule_packs/ordered");
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "list", "--verbose", "--config-dir"])
         .arg(pack_root)
         .output()
@@ -1106,7 +1271,7 @@ fn rules_validate_rejects_equal_tier_duplicates_across_config_roots() {
         fs::write(&path, custom_rule_yaml("same.id", "same")).expect("duplicate rule");
     }
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--no-default-rules", "--config-dir"])
         .arg(&first_root)
         .args(["--config-dir"])
@@ -1124,6 +1289,7 @@ fn rules_validate_rejects_equal_tier_duplicates_across_config_roots() {
 fn rules_validate_discovers_local_overrides_and_can_disable_local_config() {
     let temp = tempdir().expect("tempdir");
     let config_root = temp.path().join("config");
+    let state_path = temp.path().join("scan-state.json");
     let override_path = config_root.join("overrides.d/disable-download.yaml");
     fs::create_dir_all(override_path.parent().expect("overrides dir")).expect("overrides dir");
     fs::write(
@@ -1137,11 +1303,15 @@ overrides:
 "#,
     )
     .expect("write override");
+    let discovered_override_path = discovered_config_file(
+        override_path.parent().expect("override directory"),
+        "disable-download.yaml",
+    );
 
-    let defaults = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let defaults = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--no-local-config"])
         .output()
-        .expect("run adr rules validate defaults");
+        .expect("run telltale rules validate defaults");
     assert!(
         defaults.status.success(),
         "stderr: {}",
@@ -1152,11 +1322,11 @@ overrides:
         .as_u64()
         .expect("default rule count");
 
-    let discovered = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let discovered = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr rules validate with override");
+        .expect("run telltale rules validate with override");
     assert!(
         discovered.status.success(),
         "stderr: {}",
@@ -1169,12 +1339,12 @@ overrides:
         Some(default_rule_count - 1)
     );
 
-    let ignored = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let ignored = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "validate", "--config-dir"])
         .arg(&config_root)
         .arg("--no-local-config")
         .output()
-        .expect("run adr rules validate with local config disabled");
+        .expect("run telltale rules validate with local config disabled");
     assert!(
         ignored.status.success(),
         "stderr: {}",
@@ -1184,6 +1354,29 @@ overrides:
     assert_eq!(
         ignored_summary["rule_count"].as_u64(),
         Some(default_rule_count)
+    );
+
+    let empty_root = temp.path().join("empty-root");
+    fs::create_dir_all(&empty_root).expect("empty root");
+    let scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--dry-run", "--root"])
+        .arg(&empty_root)
+        .args(["--config-dir"])
+        .arg(&config_root)
+        .arg("--install-inventory-disabled")
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run scan with local override");
+    assert!(
+        scan.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&scan.stderr)
+    );
+    let scan_summary: Value = serde_json::from_slice(&scan.stdout).expect("scan summary");
+    assert_eq!(
+        scan_summary["effective_configuration"]["overrides"]["path_hashes"],
+        serde_json::json!([path_hash(&discovered_override_path)])
     );
 }
 
@@ -1211,7 +1404,7 @@ overrides:
     )
     .expect("write fixture");
 
-    let baseline = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let baseline = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "test", "--no-local-config"])
         .arg(&fixture)
         .output()
@@ -1223,7 +1416,7 @@ overrides:
     );
     let baseline_summary: Value = serde_json::from_slice(&baseline.stdout).expect("summary json");
 
-    let tuned = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let tuned = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "test"])
         .arg(&fixture)
         .args(["--config-dir"])
@@ -1265,7 +1458,7 @@ fn rules_test_uses_ordered_managed_replacement_rule() {
     )
     .expect("write Codex fixture");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "test",
@@ -1298,10 +1491,10 @@ fn rules_export_default_writes_bundled_rules_to_stdout() {
     let temp = tempdir().expect("tempdir");
     let exported_path = temp.path().join("exported-default-rules.yaml");
 
-    let export = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let export = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "export-default"])
         .output()
-        .expect("run adr rules export-default");
+        .expect("run telltale rules export-default");
     assert!(
         export.status.success(),
         "stderr: {}",
@@ -1312,7 +1505,7 @@ fn rules_export_default_writes_bundled_rules_to_stdout() {
     assert!(exported_yaml.contains("secret.env.read"));
     fs::write(&exported_path, exported_yaml).expect("write exported yaml");
 
-    let validate = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let validate = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "validate",
@@ -1337,11 +1530,11 @@ fn rules_export_default_writes_file_and_requires_force_to_overwrite() {
     let temp = tempdir().expect("tempdir");
     let output_path = temp.path().join("default-rules.yaml");
 
-    let first_export = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let first_export = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "export-default", "--output"])
         .arg(&output_path)
         .output()
-        .expect("run adr rules export-default --output");
+        .expect("run telltale rules export-default --output");
     assert!(
         first_export.status.success(),
         "stderr: {}",
@@ -1350,23 +1543,23 @@ fn rules_export_default_writes_file_and_requires_force_to_overwrite() {
     let first_contents = fs::read_to_string(&output_path).expect("exported default rules");
     assert!(first_contents.contains("network.download"));
 
-    let overwrite_without_force = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let overwrite_without_force = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "export-default", "--output"])
         .arg(&output_path)
         .output()
-        .expect("run adr rules export-default overwrite");
+        .expect("run telltale rules export-default overwrite");
     assert!(!overwrite_without_force.status.success());
     let stderr = String::from_utf8_lossy(&overwrite_without_force.stderr);
     assert!(stderr.contains("already exists"));
     assert!(stderr.contains("--force"));
 
     fs::write(&output_path, "placeholder\n").expect("replace output with placeholder");
-    let overwrite_with_force = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let overwrite_with_force = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "export-default", "--output"])
         .arg(&output_path)
         .arg("--force")
         .output()
-        .expect("run adr rules export-default --force");
+        .expect("run telltale rules export-default --force");
     assert!(
         overwrite_with_force.status.success(),
         "stderr: {}",
@@ -1378,10 +1571,10 @@ fn rules_export_default_writes_file_and_requires_force_to_overwrite() {
 
 #[test]
 fn config_validate_default_rules_without_local_config() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--no-local-config"])
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(
         output.status.success(),
@@ -1416,7 +1609,7 @@ fn config_validate_custom_only_rules_succeeds_with_one_rule() {
     )
     .expect("write custom rule");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "config",
             "validate",
@@ -1426,7 +1619,7 @@ fn config_validate_custom_only_rules_succeeds_with_one_rule() {
         ])
         .arg(&rule_path)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(
         output.status.success(),
@@ -1460,10 +1653,10 @@ fn config_validate_repeated_rules_are_additive_and_reported() {
     )
     .expect("write second custom rule");
 
-    let defaults = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let defaults = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--no-local-config"])
         .output()
-        .expect("run adr config validate defaults");
+        .expect("run telltale config validate defaults");
     assert!(
         defaults.status.success(),
         "stderr: {}",
@@ -1474,13 +1667,13 @@ fn config_validate_repeated_rules_are_additive_and_reported() {
         .as_u64()
         .expect("default rule count");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--no-local-config", "--rules"])
         .arg(&first_rule)
         .args(["--rules"])
         .arg(&second_rule)
         .output()
-        .expect("run adr config validate with repeated rules");
+        .expect("run telltale config validate with repeated rules");
 
     assert!(
         output.status.success(),
@@ -1507,10 +1700,10 @@ fn config_validate_discovers_local_rules_d_additively() {
     )
     .expect("write local rule");
 
-    let defaults = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let defaults = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--no-local-config"])
         .output()
-        .expect("run adr config validate defaults");
+        .expect("run telltale config validate defaults");
     assert!(
         defaults.status.success(),
         "stderr: {}",
@@ -1518,11 +1711,11 @@ fn config_validate_discovers_local_rules_d_additively() {
     );
     let defaults_summary: Value = serde_json::from_slice(&defaults.stdout).expect("summary json");
 
-    let discovered = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let discovered = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate with local config");
+        .expect("run telltale config validate with local config");
     assert!(
         discovered.status.success(),
         "stderr: {}",
@@ -1563,11 +1756,11 @@ overrides:
     )
     .expect("write override");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(
         output.status.success(),
@@ -1601,11 +1794,11 @@ overrides:
 "#,
     )
     .expect("write unknown override");
-    let unknown = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let unknown = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
     assert!(
         !unknown.status.success(),
         "unknown rule override should fail"
@@ -1623,11 +1816,11 @@ overrides:
 "#,
     )
     .expect("write empty reason override");
-    let empty_reason = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let empty_reason = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
     assert!(
         !empty_reason.status.success(),
         "empty reason override should fail"
@@ -1644,11 +1837,11 @@ overrides:
 "#,
     )
     .expect("write no effect override");
-    let no_effect = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let no_effect = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
     assert!(
         !no_effect.status.success(),
         "no effect override should fail"
@@ -1684,11 +1877,11 @@ modifiers: []
     )
     .expect("write duplicate rule");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(
         output.status.success(),
@@ -1736,11 +1929,11 @@ fn config_validate_reports_ambiguous_policy_unless_explicit_policy_is_supplied()
     )
     .expect("write explicit policy");
 
-    let ambiguous = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let ambiguous = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
     assert!(!ambiguous.status.success(), "policy ambiguity should fail");
     let stderr = String::from_utf8_lossy(&ambiguous.stderr);
     assert!(
@@ -1748,13 +1941,13 @@ fn config_validate_reports_ambiguous_policy_unless_explicit_policy_is_supplied()
         "unexpected stderr: {stderr}"
     );
 
-    let explicit = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .args(["--policy"])
         .arg(&explicit_policy)
         .output()
-        .expect("run adr config validate with explicit policy");
+        .expect("run telltale config validate with explicit policy");
     assert!(
         explicit.status.success(),
         "stderr: {}",
@@ -1783,11 +1976,11 @@ fn config_validate_reports_ambiguous_allowlist_unless_explicit_allowlist_is_supp
     let explicit_allowlist = temp.path().join("explicit-allowlist.yaml");
     fs::write(&explicit_allowlist, "suppressions: []\n").expect("write explicit allowlist");
 
-    let ambiguous = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let ambiguous = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
     assert!(
         !ambiguous.status.success(),
         "allowlist ambiguity should fail"
@@ -1798,13 +1991,13 @@ fn config_validate_reports_ambiguous_allowlist_unless_explicit_allowlist_is_supp
         "unexpected stderr: {stderr}"
     );
 
-    let explicit = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .args(["--allowlist"])
         .arg(&explicit_allowlist)
         .output()
-        .expect("run adr config validate with explicit allowlist");
+        .expect("run telltale config validate with explicit allowlist");
     assert!(
         explicit.status.success(),
         "stderr: {}",
@@ -1830,11 +2023,11 @@ fn config_validate_reports_single_discovered_allowlist_path() {
     )
     .expect("write allowlist");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(
         output.status.success(),
@@ -1862,11 +2055,11 @@ fn config_validate_rejects_unknown_allowlist_suppression_key() {
     )
     .expect("write invalid allowlist");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--no-local-config", "--allowlist"])
         .arg(&allowlist_path)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(!output.status.success(), "config validate should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1887,11 +2080,11 @@ fn config_validate_rejects_unknown_policy_key() {
     )
     .expect("write invalid policy");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--no-local-config", "--policy"])
         .arg(&policy_path)
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(!output.status.success(), "config validate should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1930,14 +2123,14 @@ overrides:
     .expect("write invalid local override");
     let missing_root = temp.path().join("missing-config");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_root)
         .args(["--config-dir"])
         .arg(&missing_root)
         .arg("--no-local-config")
         .output()
-        .expect("run adr config validate");
+        .expect("run telltale config validate");
 
     assert!(
         output.status.success(),
@@ -1981,7 +2174,7 @@ modifiers: []
     )
     .expect("write custom rules");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "test",
@@ -1991,7 +2184,7 @@ modifiers: []
         ])
         .arg(&custom_rules)
         .output()
-        .expect("run adr rules test");
+        .expect("run telltale rules test");
 
     assert!(
         output.status.success(),
@@ -2040,13 +2233,13 @@ modifiers: []
     )
     .expect("write uppercase fixture");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "test", "--no-local-config"])
         .arg(&fixture)
         .args(["--rules"])
         .arg(&custom_rules)
         .output()
-        .expect("run adr rules test");
+        .expect("run telltale rules test");
 
     assert!(
         output.status.success(),
@@ -2065,7 +2258,7 @@ modifiers: []
 
 #[test]
 fn rules_test_classifies_gemini_secret_file_reads_as_secret_access() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "test",
@@ -2075,7 +2268,7 @@ fn rules_test_classifies_gemini_secret_file_reads_as_secret_access() {
             "config/rules/tool-call-regex.yaml",
         ])
         .output()
-        .expect("run adr rules test");
+        .expect("run telltale rules test");
 
     assert!(
         output.status.success(),
@@ -2104,6 +2297,7 @@ fn rules_test_classifies_gemini_secret_file_reads_as_secret_access() {
 fn scan_uses_custom_rules_and_policy_category_filters() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
+    let state_path = temp.path().join("scan-state.json");
     let codex_sessions = root.join("codex/sessions");
     fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
     fs::write(
@@ -2112,16 +2306,18 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     )
     .expect("custom behavior fixture");
 
-    let enabled = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let enabled = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
         .arg(&root)
         .args([
             "--no-default-rules",
             "--rules",
             "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+            "--state-path",
         ])
+        .arg(&state_path)
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
     assert!(
         enabled.status.success(),
         "stderr: {}",
@@ -2130,8 +2326,12 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     let enabled_summary: Value = serde_json::from_slice(&enabled.stdout).expect("summary json");
     assert_eq!(enabled_summary["detection_count"], 1);
     assert_eq!(enabled_summary["rule_count"], 1);
+    assert_eq!(
+        enabled_summary["detection_flow"]["policy_match_accounting"]["status"],
+        "not_applicable"
+    );
 
-    let disabled = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let disabled = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
         .arg(&root)
         .args([
@@ -2140,9 +2340,11 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
             "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
             "--policy",
             "tests/fixtures/custom_rules/disable-custom-category.yaml",
+            "--state-path",
         ])
+        .arg(&state_path)
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
     assert!(
         disabled.status.success(),
         "stderr: {}",
@@ -2152,12 +2354,407 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     assert_eq!(disabled_summary["detection_count"], 0);
     assert_eq!(disabled_summary["rule_count"], 0);
     assert_eq!(disabled_summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["status"],
+        "available"
+    );
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["pre_policy_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["fully_filtered_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        disabled_summary["detection_flow"]["policy_match_accounting"]["filtered_rule_id_count"],
+        1
+    );
+
+    let unnamed_policy = temp.path().join("unnamed-policy.yaml");
+    fs::write(
+        &unnamed_policy,
+        "disabled_categories:\n  - custom_agent_behavior\n",
+    )
+    .expect("write unnamed policy");
+    let unnamed = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--dry-run", "--no-local-config", "--root"])
+        .arg(&root)
+        .args([
+            "--no-default-rules",
+            "--rules",
+            "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+            "--policy",
+        ])
+        .arg(&unnamed_policy)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run unnamed-policy scan");
+    assert!(
+        unnamed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&unnamed.stderr)
+    );
+    let unnamed_summary: Value = serde_json::from_slice(&unnamed.stdout).expect("summary json");
+    assert!(unnamed_summary["policy"].is_null());
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["status"],
+        "available"
+    );
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["pre_policy_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["fully_filtered_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        unnamed_summary["detection_flow"]["policy_match_accounting"]["filtered_rule_id_count"],
+        1
+    );
+
+    let blank_policy = temp.path().join("blank-policy.yaml");
+    fs::write(
+        &blank_policy,
+        "name: \"   \"\ndisabled_categories:\n  - custom_agent_behavior\n",
+    )
+    .expect("write blank policy");
+    let log_path = temp.path().join("blank-policy-events.jsonl");
+    let blank = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--backfill",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--root",
+        ])
+        .arg(&root)
+        .args([
+            "--no-default-rules",
+            "--rules",
+            "tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml",
+            "--policy",
+        ])
+        .arg(&blank_policy)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run blank-policy scan");
+    assert!(
+        blank.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&blank.stderr)
+    );
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
+    let validator = validator_for(&schema).expect("schema validator");
+    let events = fs::read_to_string(&log_path)
+        .expect("blank-policy event log")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+        .collect::<Vec<_>>();
+    let health = events
+        .iter()
+        .find(|event| event["event_type"] == "health")
+        .expect("health event");
+    assert!(health.get("active_policy_name").is_none());
+    for event in &events {
+        assert!(
+            validator.is_valid(event),
+            "native event failed schema: {event}"
+        );
+    }
+}
+
+#[test]
+fn policy_filtered_invalid_rules_only_degrade_diagnostics() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("diagnostic.jsonl"),
+        include_str!("../../tests/fixtures/custom_rules/custom-agent-behavior.jsonl"),
+    )
+    .expect("diagnostic fixture");
+
+    for (case, invalid_rule, sentinel) in [
+        (
+            "regex",
+            r#"    - id: test.invalid.regex
+      category: test
+      severity: medium
+      score: 1
+      targets: [assistant_context]
+      regex: '[DIAGNOSTIC_REGEX_SENTINEL'
+      tags: []
+      explanation: invalid regex fixture
+"#,
+            "DIAGNOSTIC_REGEX_SENTINEL",
+        ),
+        (
+            "metadata",
+            r#"    - id: test.invalid.metadata
+      category: test
+      detection_class: DIAGNOSTIC_METADATA_SENTINEL
+      severity: medium
+      score: 1
+      targets: [assistant_context]
+      regex: 'never-matches'
+      tags: []
+      explanation: invalid metadata fixture
+"#,
+            "DIAGNOSTIC_METADATA_SENTINEL",
+        ),
+    ] {
+        let rules_path = temp.path().join(format!("invalid-{case}.yaml"));
+        let invalid_id = format!("test.invalid.{case}");
+        fs::write(
+            &rules_path,
+            format!(
+                "version: 1\ndescription: diagnostic fixture\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n    - id: test.valid\n      category: test\n      severity: medium\n      score: 1\n      targets: [assistant_context]\n      regex: 'exfiltrate project secrets'\n      tags: []\n      explanation: valid fixture\n{invalid_rule}modifiers: []\n"
+            ),
+        )
+        .expect("invalid rules fixture");
+        let policy_path = temp.path().join(format!("invalid-{case}-policy.yaml"));
+        fs::write(
+            &policy_path,
+            format!("name: diagnostic-policy\ndisabled_rules: [{invalid_id}]\n"),
+        )
+        .expect("invalid policy fixture");
+        let log_path = temp.path().join(format!("invalid-{case}.jsonl"));
+        let state_path = temp.path().join(format!("invalid-{case}-state.json"));
+
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--root",
+            ])
+            .arg(&root)
+            .args(["--client", "codex", "--no-default-rules", "--rules"])
+            .arg(&rules_path)
+            .args(["--policy"])
+            .arg(&policy_path)
+            .args(["--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run invalid diagnostic scan");
+        assert_diagnostic_only_scan(&output, &log_path, sentinel);
+    }
+}
+
+#[test]
+fn policy_filtered_pre_policy_overflow_only_degrades_diagnostics() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("overflow.jsonl"),
+        include_str!("../../tests/fixtures/custom_rules/custom-agent-behavior.jsonl")
+            .replace("exfiltrate project secrets", "overflow diagnostic match"),
+    )
+    .expect("overflow fixture");
+    let rules_path = temp.path().join("overflow.yaml");
+    fs::write(
+        &rules_path,
+        r#"version: 1
+description: overflow diagnostic fixture
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: test.overflow.first
+    category: test
+    severity: medium
+    score: 18446744073709551615
+    targets: [assistant_context]
+    regex: 'overflow diagnostic match'
+    tags: []
+    explanation: first overflow fixture
+  - id: test.overflow.second
+    category: test
+    severity: medium
+    score: 18446744073709551615
+    targets: [assistant_context]
+    regex: 'overflow diagnostic match'
+    tags: []
+    explanation: second overflow fixture
+modifiers: []
+"#,
+    )
+    .expect("overflow rules fixture");
+    let policy_path = temp.path().join("overflow-policy.yaml");
+    fs::write(
+        &policy_path,
+        "name: overflow-policy\ndisabled_rules: [test.overflow.second]\n",
+    )
+    .expect("overflow policy fixture");
+    let log_path = temp.path().join("overflow.jsonl");
+    let state_path = temp.path().join("overflow-state.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--root",
+        ])
+        .arg(&root)
+        .args(["--client", "codex", "--no-default-rules", "--rules"])
+        .arg(&rules_path)
+        .args(["--policy"])
+        .arg(&policy_path)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .output()
+        .expect("run overflow diagnostic scan");
+    assert_diagnostic_only_scan(&output, &log_path, "risk contribution total overflowed u64");
+}
+
+#[test]
+fn partial_policy_repeated_state_preserves_events_and_accounting() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let codex_sessions = root.join("codex/sessions");
+    fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
+    fs::write(
+        codex_sessions.join("partial.jsonl"),
+        include_str!("../../tests/fixtures/custom_rules/custom-agent-behavior.jsonl"),
+    )
+    .expect("partial fixture");
+    let rules_path = temp.path().join("partial.yaml");
+    fs::write(
+        &rules_path,
+        r#"version: 1
+description: partial policy fixture
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: test.partial.first
+    category: test
+    severity: medium
+    score: 1
+    targets: [assistant_context]
+    regex: 'exfiltrate project secrets'
+    tags: []
+    explanation: first partial fixture
+  - id: test.partial.second
+    category: test
+    severity: medium
+    score: 1
+    targets: [assistant_context]
+    regex: 'exfiltrate project secrets'
+    tags: []
+    explanation: second partial fixture
+modifiers: []
+"#,
+    )
+    .expect("partial rules fixture");
+    let policy_path = temp.path().join("partial-policy.yaml");
+    fs::write(
+        &policy_path,
+        "name: partial-policy\ndisabled_rules: [test.partial.second]\n",
+    )
+    .expect("partial policy fixture");
+    let log_path = temp.path().join("partial.jsonl");
+    let state_path = temp.path().join("partial-state.json");
+
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--root",
+            ])
+            .arg(&root)
+            .args(["--client", "codex", "--no-default-rules", "--rules"])
+            .arg(&rules_path)
+            .args(["--policy"])
+            .arg(&policy_path)
+            .args(["--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run partial policy scan")
+    };
+    let first = run();
+    assert!(
+        first.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_summary: Value = serde_json::from_slice(&first.stdout).expect("first summary");
+    let first_log = fs::read_to_string(&log_path).expect("partial event log");
+    assert_eq!(first_log.lines().count(), 2);
+    let second = run();
+    assert!(
+        second.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_summary: Value = serde_json::from_slice(&second.stdout).expect("second summary");
+    for summary in [&first_summary, &second_summary] {
+        assert_eq!(summary["detection_count"], 1);
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["status"],
+            "available"
+        );
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["pre_policy_detection_candidate_count"],
+            1
+        );
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["fully_filtered_detection_candidate_count"],
+            0
+        );
+        assert_eq!(
+            summary["detection_flow"]["policy_match_accounting"]["filtered_rule_id_count"],
+            1
+        );
+    }
+    assert_eq!(
+        first_summary["detection_flow"]["emitted_detection_count"],
+        1
+    );
+    assert_eq!(
+        first_summary["detection_flow"]["state_deduplicated_detection_count"],
+        0
+    );
+    assert_eq!(
+        second_summary["detection_flow"]["emitted_detection_count"],
+        0
+    );
+    assert_eq!(
+        second_summary["detection_flow"]["state_deduplicated_detection_count"],
+        1
+    );
+    let second_log = fs::read_to_string(&log_path).expect("partial event log after repeat");
+    assert_eq!(second_log, first_log);
 }
 
 #[test]
 fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
+    let state_path = temp.path().join("scan-state.json");
     let codex_sessions = root.join("codex/sessions");
     fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
     fs::write(
@@ -2169,6 +2766,7 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     let config_root = temp.path().join("config");
     fs::create_dir_all(config_root.join("rules.d")).expect("rules dir");
     fs::create_dir_all(config_root.join("policies.d")).expect("policies dir");
+    fs::create_dir_all(config_root.join("allowlists.d")).expect("allowlists dir");
     fs::write(
         config_root.join("rules.d/custom-agent-behavior.yaml"),
         include_str!("../../tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml"),
@@ -2179,14 +2777,27 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
         include_str!("../../tests/fixtures/custom_rules/disable-custom-category.yaml"),
     )
     .expect("write local policy");
+    fs::write(
+        config_root.join("allowlists.d/known-benign.yaml"),
+        "version: 1\nsuppressions: []\n",
+    )
+    .expect("write local allowlist");
+    let discovered_policy_path = discovered_config_file(
+        &config_root.join("policies.d"),
+        "disable-custom-category.yml",
+    );
+    let discovered_allowlist_path =
+        discovered_config_file(&config_root.join("allowlists.d"), "known-benign.yaml");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--root"])
         .arg(&root)
         .args(["--no-default-rules", "--config-dir"])
         .arg(&config_root)
+        .args(["--state-path"])
+        .arg(&state_path)
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2196,12 +2807,29 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     assert_eq!(summary["detection_count"], 0);
     assert_eq!(summary["rule_count"], 0);
     assert_eq!(summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["origin"],
+        "local_config"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["path_hash"],
+        path_hash(&discovered_policy_path)
+    );
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["origin"],
+        "local_config"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["path_hash"],
+        path_hash(&discovered_allowlist_path)
+    );
 }
 
 #[test]
 fn scan_explicit_policy_wins_over_discovered_policy_ambiguity() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
+    let state_path = temp.path().join("scan-state.json");
     let codex_sessions = root.join("codex/sessions");
     fs::create_dir_all(&codex_sessions).expect("codex sessions dir");
     fs::write(
@@ -2235,15 +2863,17 @@ fn scan_explicit_policy_wins_over_discovered_policy_ambiguity() {
     )
     .expect("write explicit policy");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--root"])
         .arg(&root)
         .args(["--no-default-rules", "--config-dir"])
         .arg(&config_root)
         .args(["--policy"])
         .arg(&explicit_policy)
+        .args(["--state-path"])
+        .arg(&state_path)
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2252,6 +2882,14 @@ fn scan_explicit_policy_wins_over_discovered_policy_ambiguity() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 0);
     assert_eq!(summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["origin"],
+        "cli"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["policy"]["path_hash"],
+        path_hash(&explicit_policy)
+    );
 }
 
 #[test]
@@ -2278,10 +2916,10 @@ suppressions:
 "#,
     )
     .expect("allowlist fixture");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
             "--once",
@@ -2301,7 +2939,7 @@ suppressions:
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2310,6 +2948,27 @@ suppressions:
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 1);
     assert_eq!(summary["suppressed_count"], 1);
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["origin"],
+        "cli"
+    );
+    assert_eq!(
+        summary["effective_configuration"]["allowlist"]["path_hash"],
+        path_hash(&allowlist_path)
+    );
+    assert_eq!(
+        summary["detection_flow"]["effective_detection_candidate_count"],
+        1
+    );
+    assert_eq!(
+        summary["detection_flow"]["allowlist_marked_detection_count"],
+        1
+    );
+    assert_eq!(
+        summary["detection_flow"]["state_deduplicated_detection_count"],
+        0
+    );
+    assert_eq!(summary["detection_flow"]["emitted_detection_count"], 1);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -2336,8 +2995,8 @@ suppressions:
             .iter()
             .any(|tag| tag == "allowlist:fixture-custom-agent")
     );
-    assert_eq!(detection["triage"]["required"], false);
-    assert!(detection["response"].is_null());
+    assert!(detection.get("triage").is_none());
+    assert!(detection.get("response").is_none());
 }
 
 #[test]
@@ -2371,10 +3030,10 @@ suppressions:
 "#,
     )
     .expect("write local allowlist");
-    let log_path = temp.path().join("adr-events.jsonl");
-    let state_path = temp.path().join("adr-state.json");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--allow-fixtures", "--root"])
         .arg(&root)
         .args(["--no-default-rules", "--config-dir"])
@@ -2384,7 +3043,7 @@ suppressions:
         .args(["--state-path"])
         .arg(&state_path)
         .output()
-        .expect("run adr scan");
+        .expect("run telltale scan");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2412,10 +3071,10 @@ suppressions:
 
 #[test]
 fn rules_coverage_reports_fixture_and_client_coverage() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "coverage", "--no-local-config"])
         .output()
-        .expect("run adr rules coverage");
+        .expect("run telltale rules coverage");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -2437,7 +3096,7 @@ fn rules_coverage_reports_fixture_and_client_coverage() {
 
 #[test]
 fn rules_coverage_uses_ordered_managed_pack() {
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "coverage",
@@ -2500,7 +3159,7 @@ modifiers: []
     )
     .expect("write overflow rules");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "rules",
             "coverage",
@@ -2527,7 +3186,7 @@ fn rules_test_fails_nonzero_on_scanner_error() {
     let fixture = temp.path().join("invalid.jsonl");
     fs::write(&fixture, "not json\n").expect("write invalid fixture");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_adr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["rules", "test", "--no-local-config"])
         .arg(&fixture)
         .output()
