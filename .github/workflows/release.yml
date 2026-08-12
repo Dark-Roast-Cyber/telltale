@@ -279,15 +279,51 @@ jobs:
         with:
           path: release-downloads
           merge-multiple: true
+      - name: Validate exact current-tag target archive set
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-downloads
+          shopt -s dotglob nullglob
+          expected=(
+            "telltale-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
+            "telltale-${GITHUB_REF_NAME}-x86_64-pc-windows-msvc.zip"
+          )
+          actual=(*)
+          if [[ "${#actual[@]}" -ne "${#expected[@]}" ]]; then
+            printf 'Expected exactly %s current-tag target archives, found %s: %s\n' \
+              "${#expected[@]}" "${#actual[@]}" "${actual[*]}" >&2
+            exit 1
+          fi
+          for archive in "${actual[@]}"; do
+            [[ -f "${archive}" && ! -L "${archive}" ]] || {
+              echo "Release artifact is not a regular file: ${archive}" >&2
+              exit 1
+            }
+            case " ${expected[*]} " in
+              *" ${archive} "*) ;;
+              *)
+                echo "Noncanonical release archive: ${archive}" >&2
+                exit 1
+                ;;
+            esac
+          done
+          for archive in "${expected[@]}"; do
+            [[ -f "${archive}" && ! -L "${archive}" ]] || {
+              echo "Missing canonical release archive: ${archive}" >&2
+              exit 1
+            }
+          done
       - name: Generate checksums
         shell: bash
         run: |
           cd release-downloads
           shopt -s nullglob
           archives=(*.tar.gz *.zip)
-          test "${#archives[@]}" -gt 0
-          canonical_archives=(telltale-${GITHUB_REF_NAME}-*.tar.gz telltale-${GITHUB_REF_NAME}-*.zip)
-          test "${#canonical_archives[@]}" -gt 0
+          test "${#archives[@]}" -eq 5
           printf '%s\0' "${archives[@]}" | sort -z | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
       - name: Validate assembled release artifact manifests

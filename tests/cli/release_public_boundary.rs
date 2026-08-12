@@ -1340,6 +1340,157 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(!workflow.contains("adr-${{ github.ref_name }}"));
 }
 
+#[cfg(unix)]
+#[test]
+fn release_workflow_requires_exact_current_tag_target_archive_set() {
+    let workflow = read_release_workflow();
+    let start = workflow
+        .find("- name: Validate exact current-tag target archive set")
+        .expect("exact target archive validation step");
+    let checksum = workflow[start..]
+        .find("- name: Generate checksums")
+        .map(|offset| start + offset)
+        .expect("checksum step");
+    let manifests = workflow
+        .find("- name: Validate assembled release artifact manifests")
+        .expect("assembled manifest validation step");
+    let release = workflow
+        .find("- name: Create GitHub Release")
+        .expect("GitHub Release step");
+    let step = &workflow[start..checksum];
+    let run_start = step.find("run: |\n").expect("archive validation run block") + "run: |\n".len();
+    let indentation = step[run_start..]
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| &line[..line.len() - line.trim_start().len()])
+        .expect("archive validation indentation");
+    let script = step[run_start..]
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                ""
+            } else {
+                line.strip_prefix(indentation)
+                    .expect("archive validation indentation")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let targets = [
+        "x86_64-unknown-linux-gnu.tar.gz",
+        "aarch64-unknown-linux-gnu.tar.gz",
+        "x86_64-apple-darwin.tar.gz",
+        "aarch64-apple-darwin.tar.gz",
+        "x86_64-pc-windows-msvc.zip",
+    ];
+    for target in targets {
+        assert!(
+            step.contains(&format!("telltale-${{GITHUB_REF_NAME}}-{target}")),
+            "workflow is missing canonical target {target}"
+        );
+    }
+    for (name, offset) in [
+        ("checksum generation", checksum),
+        ("assembled manifest validation", manifests),
+        ("GitHub Release creation", release),
+    ] {
+        assert!(start < offset, "archive validation must precede {name}");
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let downloads = temp.path().join("release-downloads");
+    fs::create_dir(&downloads).expect("release downloads");
+    for target in targets {
+        fs::write(
+            downloads.join(format!("telltale-v0.5.0-rc.1-{target}")),
+            b"synthetic archive",
+        )
+        .expect("synthetic archive");
+    }
+
+    let run = |expected_success: bool| {
+        let output = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", &script])
+            .env("GITHUB_REF_NAME", "v0.5.0-rc.1")
+            .current_dir(temp.path())
+            .output()
+            .expect("run archive validation");
+        assert_eq!(
+            output.status.success(),
+            expected_success,
+            "archive validation output: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    let windows_target = downloads.join("telltale-v0.5.0-rc.1-x86_64-pc-windows-msvc.zip");
+    let restore_windows_target = || {
+        fs::write(&windows_target, b"synthetic archive").expect("restore canonical archive");
+    };
+
+    run(true);
+    fs::remove_file(&windows_target).expect("remove canonical archive");
+    run(false);
+    restore_windows_target();
+
+    fs::remove_file(&windows_target).expect("remove canonical archive");
+    fs::create_dir(&windows_target).expect("same-count directory archive");
+    run(false);
+    fs::remove_dir(&windows_target).expect("remove same-count directory archive");
+    restore_windows_target();
+
+    fs::remove_file(&windows_target).expect("remove canonical archive");
+    fs::write(
+        downloads.join("telltale-v0.5.0-rc.1-x86_64-pc-windows-msvc.tar.gz"),
+        b"wrong extension",
+    )
+    .expect("wrong-extension archive");
+    run(false);
+    fs::remove_file(downloads.join("telltale-v0.5.0-rc.1-x86_64-pc-windows-msvc.tar.gz"))
+        .expect("remove wrong-extension archive");
+    restore_windows_target();
+
+    fs::remove_file(&windows_target).expect("remove canonical archive");
+    fs::write(
+        downloads.join("telltale-v0.5.0-x86_64-pc-windows-msvc.zip"),
+        b"wrong tag",
+    )
+    .expect("wrong-tag archive");
+    run(false);
+    fs::remove_file(downloads.join("telltale-v0.5.0-x86_64-pc-windows-msvc.zip"))
+        .expect("remove wrong-tag archive");
+    restore_windows_target();
+
+    fs::remove_file(&windows_target).expect("remove canonical archive");
+    fs::write(
+        downloads.join("telltale-v0.5.0-rc.1-x86_64-pc-windows-msvc-copy.zip"),
+        b"alternate target",
+    )
+    .expect("alternate target archive");
+    run(false);
+
+    fs::remove_file(downloads.join("telltale-v0.5.0-rc.1-x86_64-pc-windows-msvc-copy.zip"))
+        .expect("remove alternate target archive");
+    restore_windows_target();
+
+    fs::remove_file(&windows_target).expect("remove canonical archive");
+    let symlink_target = temp.path().join("symlink-target");
+    fs::write(&symlink_target, b"symlink target").expect("symlink target");
+    symlink(&symlink_target, &windows_target).expect("canonical archive symlink");
+    run(false);
+    fs::remove_file(&windows_target).expect("remove canonical archive symlink");
+    restore_windows_target();
+
+    fs::write(
+        downloads.join("telltale-v0.5.0-rc.1-x86_64-pc-windows-msvc-copy.zip"),
+        b"extra target",
+    )
+    .expect("extra target archive");
+    run(false);
+}
+
 #[test]
 fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
     let workflow = read_release_workflow();
