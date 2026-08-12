@@ -26,6 +26,14 @@ const HOST_ONLY_REPO_PATHS: &[&str] = &[
     "scripts/inspiration/",
     "runtime/ralph/",
     "config/examples/splunk-",
+    "openspec/changes/",
+    "openspec/config.yaml",
+];
+
+const PUBLIC_OPENSPEC_CONTENT_MARKERS: &[&str] = &[
+    "local-only evidence",
+    "private evidence",
+    "redacted local-only evidence",
 ];
 
 #[cfg(unix)]
@@ -2060,10 +2068,10 @@ fn public_docs_links_and_paths_are_safe() {
 
     // Host-only release material is never tracked in the public repository.
     // Some paths are excluded by the tracked `.gitignore`; the internal
-    // planning and workflow ones are excluded per-clone via `.git/info/exclude`
-    // so the public `.gitignore` does not enumerate host-only material. The
-    // invariant that matters either way is that git does not track them.
-    let tracked_host_only = git_tracked_repo_paths()
+    // planning and workflow ones may be excluded per-clone via
+    // `.git/info/exclude`. The invariant that matters either way is that git
+    // does not track them.
+    let tracked_host_only = public_tip_tracked_repo_paths()
         .into_iter()
         .filter(|path| is_host_only_repo_path(Path::new(path)))
         .collect::<Vec<_>>();
@@ -2071,6 +2079,61 @@ fn public_docs_links_and_paths_are_safe() {
         tracked_host_only.is_empty(),
         "host-only release material must not be tracked: {tracked_host_only:?}"
     );
+
+    let tracked_public_specs = public_tip_tracked_repo_paths()
+        .into_iter()
+        .filter(|path| path.starts_with("openspec/specs/"))
+        .collect::<Vec<_>>();
+    assert!(
+        !tracked_public_specs.is_empty(),
+        "public OpenSpec product specifications must remain tracked"
+    );
+    let marker_matches = tracked_public_specs
+        .iter()
+        .flat_map(|path| {
+            let contents = fs::read_to_string(path)
+                .unwrap_or_else(|error| panic!("{path}: {error}"))
+                .to_lowercase();
+            PUBLIC_OPENSPEC_CONTENT_MARKERS
+                .iter()
+                .filter(move |marker| contents.contains(**marker))
+                .map(move |marker| format!("{path} contains {marker:?}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        marker_matches.is_empty(),
+        "public OpenSpec specifications must not contain private evidence declarations: {marker_matches:?}"
+    );
+}
+
+#[test]
+fn public_docs_classify_openspec_planning_and_product_specs() {
+    for path in [
+        "openspec/changes/active/proposal.md",
+        "openspec/changes/archive/evidence.md",
+        "openspec/config.yaml",
+    ] {
+        assert!(
+            is_host_only_repo_path(Path::new(path)),
+            "OpenSpec planning path must be host-only: {path}"
+        );
+    }
+
+    for path in [
+        "openspec/specs/installer-service-archive/spec.md",
+        "openspec/specs/release-rc-provenance/spec.md",
+    ] {
+        assert!(
+            !is_host_only_repo_path(Path::new(path)),
+            "synced OpenSpec product specification must be public-safe: {path}"
+        );
+        assert!(
+            public_tip_tracked_repo_paths()
+                .iter()
+                .any(|tracked| tracked == path),
+            "public specification must be tracked: {path}"
+        );
+    }
 }
 
 #[test]
@@ -2157,6 +2220,28 @@ fn git_tracked_repo_paths() -> Vec<String> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::to_string)
+        .collect()
+}
+
+fn public_tip_tracked_repo_paths() -> Vec<String> {
+    let deleted = Command::new("git")
+        .args(["diff", "--name-only", "--diff-filter=D", "HEAD", "--"])
+        .output()
+        .expect("git diff");
+    assert!(
+        deleted.status.success(),
+        "git diff failed: {}",
+        String::from_utf8_lossy(&deleted.stderr)
+    );
+    let deleted_output = String::from_utf8_lossy(&deleted.stdout);
+    let deleted = deleted_output
+        .lines()
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>();
+
+    git_tracked_repo_paths()
+        .into_iter()
+        .filter(|path| !deleted.contains(path.as_str()))
         .collect()
 }
 

@@ -11,6 +11,8 @@ release-downloads/
 runtime/
 tmp/
 tasks/
+openspec/changes/
+openspec/config.yaml
 *.log
 !tests/fixtures/**/tmp/
 !tests/fixtures/**/tmp/**
