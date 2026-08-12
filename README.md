@@ -178,10 +178,12 @@ use the checked-in script for a reviewed install.
 ./scripts/install-telltale --with-timer
 ```
 
-Add `--from-source` to build with Cargo instead of downloading a prebuilt
-binary. `--no-timer` leaves the canonical timer disabled while safely retiring
-identified legacy schedules. The installer does not create system accounts or
-configure SIEM shippers.
+With `--from-source`, the installer still downloads and validates the selected
+release's canonical archive provenance, resolves that tag to an immutable commit,
+and builds that exact source revision with Cargo; it does not skip the prebuilt
+archive download. `--no-timer` leaves the canonical timer disabled while safely
+retiring identified legacy schedules. The installer does not create system
+accounts or configure SIEM shippers.
 
 ### macOS
 

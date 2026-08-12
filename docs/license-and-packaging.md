@@ -83,11 +83,12 @@ release asset.
 
 The release workflow also creates a GitHub artifact attestation for each
 archive using the workflow's short-lived GitHub/Sigstore identity. Canonical
-assets use `telltale-v<version>-...`. Verify a download before extraction with
-the GitHub CLI:
+assets use `telltale-v<version>-...`. Once the candidate or later stable
+release is published, verify a downloaded archive as a separate
+post-publication step with the GitHub CLI. For the current candidate:
 
 ```sh
-gh attestation verify telltale-v0.5.0-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify telltale-v0.5.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
   --repo Dark-Roast-Cyber/telltale
 ```
 
@@ -99,4 +100,8 @@ stores, private planning notes, local agent workflow state, machine-specific
 configuration, or credentials. Operational examples can ship as reviewed
 repository files, but environment values such as SIEM endpoints, tokens, host
 paths, and live transcript material belong in deployment-specific
-configuration outside the release package.
+configuration outside the release package. Candidate releases are explicitly
+GitHub prereleases and are immutable: a changed validation-relevant source,
+installer, archive, checksum, or attestation requires a new reviewed RC tag.
+The binary release workflow does not publish crates.io packages; publication is
+a separate stable-release handoff after all required gates pass.

@@ -3,7 +3,7 @@
 # Telltale Linux installer: one recoverable current-user transaction.
 #
 # Usage:
-#   ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer]
+#   ./scripts/install-telltale [--from-source] [--release-tag TAG] [--install-dir DIR] [--with-timer]
 
 set -euo pipefail
 umask 077
@@ -13,6 +13,8 @@ INSTALL_DIR="${HOME:-}/.local/bin"
 FROM_SOURCE=0
 WITH_TIMER=0
 SKIP_CHECKSUM=0
+RELEASE_TAG=""
+RELEASE_TAG_SET=0
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 RELEASE_BASE_URL="https://github.com/${REPO}/releases/download"
 
@@ -34,10 +36,11 @@ print_help() {
 Telltale Linux installer — current-user, staged, recoverable transaction.
 
 Usage:
-  ./scripts/install-telltale [--from-source] [--install-dir DIR] [--with-timer]
+  ./scripts/install-telltale [--from-source] [--release-tag TAG] [--install-dir DIR] [--with-timer]
 
 Options:
   --from-source       Build the exact validated release tag with locked Cargo dependencies.
+  --release-tag TAG   Select one exact published RC tag (for example v0.5.0-rc.1).
   --install-dir DIR  Install the canonical telltale binary below the current user's home.
   --with-timer        Install and enable the canonical telltale-scan.timer user schedule.
   --no-timer          Do not enable the canonical timer; retire identified legacy schedules safely.
@@ -85,6 +88,13 @@ reject_retired_runtime_environment() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --from-source) FROM_SOURCE=1; shift ;;
+        --release-tag)
+            [[ $# -ge 2 ]] || die "--release-tag requires a tag"
+            [[ "$RELEASE_TAG_SET" -eq 0 ]] || die "--release-tag may be passed only once"
+            RELEASE_TAG="$2"
+            RELEASE_TAG_SET=1
+            shift 2
+            ;;
         --install-dir)
             [[ $# -ge 2 ]] || die "--install-dir requires a directory"
             INSTALL_DIR="$2"
@@ -99,6 +109,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
+    [[ "$RELEASE_TAG" =~ ^v0\.5\.0-rc\.(0|[1-9][0-9]*)$ ]] \
+        || die "--release-tag must be an exact v0.5.0-rc.<n> tag"
+    [[ "$SKIP_CHECKSUM" -eq 0 ]] \
+        || die "--skip-checksum is not permitted with --release-tag"
+fi
+
 reject_retired_runtime_environment
 
 [[ "$(uname -s)" == "Linux" ]] || die "This installer supports Linux current-user installs only"
@@ -108,6 +125,7 @@ CURRENT_UID="$(id -u)"
 [[ -n "$INSTALL_DIR" && "$INSTALL_DIR" == /* ]] || die "--install-dir must be an absolute current-user path"
 command -v realpath >/dev/null 2>&1 || die "realpath is required for current-user path validation"
 command -v timeout >/dev/null 2>&1 || die "bounded installer probes require timeout"
+command -v python3 >/dev/null 2>&1 || die "python3 is required for release metadata validation"
 
 run_bounded() {
     timeout --signal=TERM --kill-after=5s 30s "$@"
@@ -311,56 +329,9 @@ home_real=""
 home_real="$(realpath -e -- "$HOME")" || die "could not resolve current user's HOME"
 owned_path "$HOME" || die "current user's HOME must be owned by the current user"
 safe_directory "$HOME" || die "current user's HOME has unsafe type, mode, or link count"
-
-# Keep the installer lock outside both overridable XDG roots. HOME already
-# exists and has passed the ownership, mode, and symlink checks, so the lock
-# sidecar is claimed before any other installer-owned directory is created.
-lock_path="$home_real/.telltale-installer.lock"
-acquire_installer_lock
-require_no_replace_move
-
 INSTALL_DIR="$(resolve_under_home "$INSTALL_DIR")"
-state_root="$(resolve_under_home "${XDG_STATE_HOME:-$HOME/.local/state}")"
-config_root="$(resolve_under_home "${XDG_CONFIG_HOME:-$HOME/.config}")"
-unit_dir="$config_root/systemd/user"
 
-journal_path="$state_root/telltale/installer-transaction.json"
-canonical_log="$state_root/telltale/logs/telltale-events.jsonl"
-canonical_state="$state_root/telltale/telltale-state.json"
-canonical_env="$config_root/telltale/telltale.env"
-legacy_log="$state_root/telltale/logs/adr-events.jsonl"
-legacy_state="$state_root/telltale/adr-state.json"
-legacy_env="$config_root/telltale/adr.env"
-
-# Validate every existing ancestor and destination before creating any directory.
-for directory in \
-    "$INSTALL_DIR" "$state_root" "$config_root" "$unit_dir" \
-    "$state_root/telltale" "$config_root/telltale" \
-    "$(dirname -- "$canonical_log")" "$(dirname -- "$canonical_state")"; do
-    validate_directory_chain "$directory" || die "refusing unsafe current-user path: ${directory}"
-done
-
-for private_path in \
-    "$journal_path" "$canonical_state" "$canonical_env" \
-    "$legacy_state" "$legacy_env"; do
-    ensure_owned_regular_or_absent "$private_path" private
-done
-for log_path in "$canonical_log" "$legacy_log"; do
-    ensure_owned_regular_or_absent "$log_path" log
-done
-
-for binary_path in \
-    "$INSTALL_DIR/telltale" "$INSTALL_DIR/adr" "$INSTALL_DIR/adr.exe" "$INSTALL_DIR/telltale.exe"; do
-    ensure_owned_regular_or_absent "$binary_path" executable
-done
-
-ensure_owned_directory "$INSTALL_DIR"
-ensure_owned_directory "$state_root"
-ensure_owned_directory "$config_root"
-ensure_owned_directory "$state_root/telltale"
-ensure_owned_directory "$config_root/telltale"
-
-tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/telltale-installer.XXXXXX")"
+tmpdir=""
 install_stage_dir=""
 unit_stage_dir=""
 transaction_active=0
@@ -1028,6 +999,39 @@ download_stdout() {
     fi
 }
 
+resolve_source_revision() {
+    local tag="$1" remote exact_ref peeled_ref remote_refs sha ref extra
+    local exact_sha='' peeled_sha='' exact_count=0 peeled_count=0
+    remote="https://github.com/${REPO}.git"
+    exact_ref="refs/tags/${tag}"
+    peeled_ref="refs/tags/${tag}^{}"
+    command -v git >/dev/null 2>&1 || die "git is required for --from-source"
+    remote_refs="$(git ls-remote "$remote" "$exact_ref" "$peeled_ref")" \
+        || die "could not resolve immutable source revision for ${tag}"
+    while IFS=$'\t' read -r sha ref extra; do
+        [[ -n "$sha" && -z "$extra" && "$sha" =~ ^[[:xdigit:]]{40}$ ]] \
+            || die "git tag resolution returned malformed provenance for ${tag}"
+        case "$ref" in
+            "$exact_ref")
+                exact_count=$((exact_count + 1))
+                exact_sha="$sha"
+                ;;
+            "$peeled_ref")
+                peeled_count=$((peeled_count + 1))
+                peeled_sha="$sha"
+                ;;
+            *) die "git tag resolution returned an unexpected ref for ${tag}" ;;
+        esac
+    done <<< "$remote_refs"
+    [[ "$exact_count" -eq 1 && "$peeled_count" -le 1 ]] \
+        || die "git tag resolution was missing or ambiguous for ${tag}"
+    if [[ "$peeled_count" -eq 1 ]]; then
+        printf '%s\n' "$peeled_sha"
+    else
+        printf '%s\n' "$exact_sha"
+    fi
+}
+
 verify_release_archive() {
     local archive="$1" archive_members archive_listing member expected
     local member_count=0
@@ -1234,6 +1238,184 @@ on_exit() {
     fi
     exit "$status"
 }
+
+# Resolve and validate release provenance before claiming the installer lock or
+# touching any installer-owned path. A failed candidate lookup only removes its
+# temporary download directory.
+cleanup_provenance_tmpdir() {
+    local status=$?
+    [[ -n "${tmpdir:-}" && -d "$tmpdir" ]] && rm -rf -- "$tmpdir"
+    exit "$status"
+}
+
+arch="$(uname -m)"
+case "$arch" in
+    x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
+    aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+    *) die "unsupported Linux architecture: ${arch}" ;;
+esac
+
+if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
+    API_URL="https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}"
+fi
+release_json="$(download_stdout "$API_URL")" \
+    || die "could not fetch selected release metadata"
+[[ -n "$release_json" ]] || die "selected release metadata was empty"
+metadata_tag_kind=stable
+if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
+    metadata_tag_kind=rc
+fi
+metadata_fields="$(printf '%s' "$release_json" | python3 -c '
+import json
+import re
+import sys
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+def reject_constant(value):
+    raise ValueError("invalid JSON constant")
+
+try:
+    release = json.load(
+        sys.stdin,
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_constant,
+    )
+except (ValueError, TypeError):
+    sys.exit(1)
+
+if not isinstance(release, dict):
+    sys.exit(1)
+tag = release.get("tag_name")
+draft = release.get("draft")
+prerelease = release.get("prerelease")
+if not isinstance(tag, str) or not tag or type(draft) is not bool or type(prerelease) is not bool:
+    sys.exit(1)
+patterns = {
+    "rc": r"v0\.5\.0-rc\.(0|[1-9][0-9]*)",
+    "stable": r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+}
+if len(sys.argv) != 2 or sys.argv[1] not in patterns or not re.fullmatch(patterns[sys.argv[1]], tag):
+    sys.exit(1)
+print(f"{tag}\t{int(draft)}\t{int(prerelease)}")
+' "$metadata_tag_kind" 2>/dev/null)" \
+    || die "selected release metadata was not a valid GitHub Release object"
+IFS=$'\t' read -r version_tag draft_flag prerelease_flag <<< "$metadata_fields"
+[[ -n "$version_tag" && ( "$draft_flag" == 0 || "$draft_flag" == 1 ) \
+    && ( "$prerelease_flag" == 0 || "$prerelease_flag" == 1 ) ]] \
+    || die "selected release metadata was not a valid GitHub Release object"
+if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
+    [[ "$version_tag" =~ ^v0\.5\.0-rc\.(0|[1-9][0-9]*)$ ]] \
+        || die "selected release metadata did not contain a validated RC tag"
+else
+    [[ "$version_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+        || die "latest release metadata did not contain a strict stable tag"
+fi
+
+if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
+    [[ "$version_tag" == "$RELEASE_TAG" ]] \
+        || die "selected release metadata tag does not match --release-tag"
+    [[ "$draft_flag" == 0 ]] \
+        || die "selected candidate release must not be a draft"
+    [[ "$prerelease_flag" == 1 ]] \
+        || die "selected release is not a published prerelease candidate"
+else
+    [[ "$draft_flag" == 0 ]] \
+        || die "latest release must not be a draft"
+    [[ "$prerelease_flag" == 0 ]] \
+        || die "latest release must be stable"
+fi
+expected_version="${version_tag#v}"
+
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/telltale-installer.XXXXXX")"
+trap cleanup_provenance_tmpdir EXIT
+staged_dir="$tmpdir/staged"
+mkdir -p -- "$staged_dir"
+archive_name="telltale-${version_tag}-${target}.tar.gz"
+archive="$tmpdir/$archive_name"
+
+download_to "${RELEASE_BASE_URL}/${version_tag}/${archive_name}" "$archive" \
+    || die "no exact canonical release asset for ${target}: ${archive_name}"
+[[ -s "$archive" ]] || die "downloaded release asset was empty"
+verify_checksum "$archive" "$archive_name" "$tmpdir"
+verify_release_archive "$archive"
+extract_dir="$tmpdir/extract"
+mkdir -p -- "$extract_dir"
+tar xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions -- telltale \
+    || die "could not extract canonical release binary"
+install -m 0755 "$extract_dir/telltale" "$staged_dir/telltale"
+validate_binary_file "$staged_dir/telltale"
+verify_binary_version "$staged_dir/telltale"
+
+if [[ "$FROM_SOURCE" -eq 1 ]]; then
+    command -v cargo >/dev/null 2>&1 || die "cargo is required for --from-source"
+    source_root="$tmpdir/cargo-root"
+    source_revision="$(resolve_source_revision "$version_tag")"
+    info "building validated release ${version_tag} from source"
+    cargo install --git "https://github.com/${REPO}" --rev "$source_revision" \
+        --root "$source_root" --force --locked --bin telltale \
+        || die "cargo install failed for release ${version_tag}"
+    [[ -f "$source_root/bin/telltale" && ! -L "$source_root/bin/telltale" ]] \
+        || die "validated source release did not produce telltale"
+    [[ ! -e "$source_root/bin/adr" ]] || die "source release produced retired adr executable"
+    install -m 0755 "$source_root/bin/telltale" "$staged_dir/telltale"
+    validate_binary_file "$staged_dir/telltale"
+    verify_binary_version "$staged_dir/telltale"
+fi
+
+# Keep the installer lock outside both overridable XDG roots. All release
+# metadata, archive, manifest, checksum, and candidate binary checks above have
+# passed before this side effect is allowed.
+lock_path="$home_real/.telltale-installer.lock"
+acquire_installer_lock
+require_no_replace_move
+
+INSTALL_DIR="$(resolve_under_home "$INSTALL_DIR")"
+state_root="$(resolve_under_home "${XDG_STATE_HOME:-$HOME/.local/state}")"
+config_root="$(resolve_under_home "${XDG_CONFIG_HOME:-$HOME/.config}")"
+unit_dir="$config_root/systemd/user"
+
+journal_path="$state_root/telltale/installer-transaction.json"
+canonical_log="$state_root/telltale/logs/telltale-events.jsonl"
+canonical_state="$state_root/telltale/telltale-state.json"
+canonical_env="$config_root/telltale/telltale.env"
+legacy_log="$state_root/telltale/logs/adr-events.jsonl"
+legacy_state="$state_root/telltale/adr-state.json"
+legacy_env="$config_root/telltale/adr.env"
+
+for directory in \
+    "$INSTALL_DIR" "$state_root" "$config_root" "$unit_dir" \
+    "$state_root/telltale" "$config_root/telltale" \
+    "$(dirname -- "$canonical_log")" "$(dirname -- "$canonical_state")"; do
+    validate_directory_chain "$directory" || die "refusing unsafe current-user path: ${directory}"
+done
+
+for private_path in \
+    "$journal_path" "$canonical_state" "$canonical_env" \
+    "$legacy_state" "$legacy_env"; do
+    ensure_owned_regular_or_absent "$private_path" private
+done
+for log_path in "$canonical_log" "$legacy_log"; do
+    ensure_owned_regular_or_absent "$log_path" log
+done
+
+for binary_path in \
+    "$INSTALL_DIR/telltale" "$INSTALL_DIR/adr" "$INSTALL_DIR/adr.exe" "$INSTALL_DIR/telltale.exe"; do
+    ensure_owned_regular_or_absent "$binary_path" executable
+done
+
+ensure_owned_directory "$INSTALL_DIR"
+ensure_owned_directory "$state_root"
+ensure_owned_directory "$config_root"
+ensure_owned_directory "$state_root/telltale"
+ensure_owned_directory "$config_root/telltale"
+
 trap on_exit EXIT
 
 read_journal_phase || die "could not safely read the installer journal; refusing transaction start"
@@ -1244,51 +1426,6 @@ recover_stale_staging
 write_journal staging
 journal_transaction_started=1
 
-arch="$(uname -m)"
-case "$arch" in
-    x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
-    aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
-    *) die "unsupported Linux architecture: ${arch}" ;;
-esac
-
-release_json="$(download_stdout "$API_URL")" || die "could not fetch latest release metadata"
-[[ -n "$release_json" ]] || die "latest release metadata was empty"
-version_tag="$(printf '%s' "$release_json" | tr '\r\n' '  ' \
-    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
-    | sed -n '1s/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/p' || true)"
-[[ "$version_tag" =~ ^v[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z]+)*$ ]] \
-    || die "latest release metadata did not contain a validated release tag"
-expected_version="${version_tag#v}"
-
-staged_dir="$tmpdir/staged"
-mkdir -p -- "$staged_dir"
-archive_name="telltale-${version_tag}-${target}.tar.gz"
-archive="$tmpdir/$archive_name"
-
-if [[ "$FROM_SOURCE" -eq 1 ]]; then
-    command -v cargo >/dev/null 2>&1 || die "cargo is required for --from-source"
-    source_root="$tmpdir/cargo-root"
-    info "building validated release ${version_tag} from source"
-    cargo install --git "https://github.com/${REPO}" --tag "$version_tag" \
-        --root "$source_root" --force --locked --bin telltale \
-        || die "cargo install failed for release ${version_tag}"
-    [[ -f "$source_root/bin/telltale" && ! -L "$source_root/bin/telltale" ]] \
-        || die "validated source release did not produce telltale"
-    [[ ! -e "$source_root/bin/adr" ]] || die "source release produced retired adr executable"
-    install -m 0755 "$source_root/bin/telltale" "$staged_dir/telltale"
-else
-    info "downloading Telltale ${version_tag} for ${target}"
-    download_to "${RELEASE_BASE_URL}/${version_tag}/${archive_name}" "$archive" \
-        || die "no exact canonical release asset for ${target}: ${archive_name}"
-    [[ -s "$archive" ]] || die "downloaded release asset was empty"
-    verify_checksum "$archive" "$archive_name" "$tmpdir"
-    verify_release_archive "$archive"
-    extract_dir="$tmpdir/extract"
-    mkdir -p -- "$extract_dir"
-    tar xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions -- telltale \
-        || die "could not extract canonical release binary"
-    install -m 0755 "$extract_dir/telltale" "$staged_dir/telltale"
-fi
 validate_binary_file "$staged_dir/telltale"
 
 install_stage_dir="$(mktemp -d "${INSTALL_DIR}/.telltale-install.XXXXXX")"

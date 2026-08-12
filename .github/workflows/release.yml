@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -289,8 +293,100 @@ jobs:
       - name: Validate assembled release artifact manifests
         shell: bash
         run: make --silent RELEASE_ARTIFACT_DIR=release-downloads release-artifact-manifest
+      - name: Fail closed if the tag already has a Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! response="$(gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" 2>&1)"; then
+            echo "Could not query GitHub Releases to prove that ${GITHUB_REF_NAME} has no existing Release." >&2
+            exit 1
+          fi
+          match_state="$(printf '%s\n' "$response" | python3 -c '
+           import json
+           import sys
+
+           try:
+               pages = json.load(sys.stdin)
+           except (TypeError, ValueError):
+               raise SystemExit(1)
+
+           if not isinstance(pages, list):
+               raise SystemExit(1)
+           match = False
+           for page in pages:
+               if not isinstance(page, list):
+                   raise SystemExit(1)
+               for release in page:
+                   if (
+                       not isinstance(release, dict)
+                       or not isinstance(release.get("tag_name"), str)
+                       or release["tag_name"] == ""
+                   ):
+                       raise SystemExit(1)
+                   if release["tag_name"] == sys.argv[1]:
+                       match = True
+           print("match" if match else "absent")
+           ' "$GITHUB_REF_NAME")" || {
+            echo "Could not validate the GitHub Releases response." >&2
+            exit 1
+          }
+          if [[ "$match_state" == "match" ]]; then
+            echo "A GitHub Release already exists for ${GITHUB_REF_NAME}; published assets are immutable." >&2
+            exit 1
+          fi
+          if [[ "$match_state" != "absent" ]]; then
+           echo "Could not prove that ${GITHUB_REF_NAME} has no existing Release." >&2
+           exit 1
+           fi
+      - name: Reserve GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+          reservation_payload="$(python3 -c 'import json, sys; print(json.dumps({"tag_name": sys.argv[1], "name": sys.argv[1], "draft": True, "prerelease": sys.argv[2] == "true"}, separators=(",", ":")))' "${GITHUB_REF_NAME}" "${prerelease}")"
+          if ! reservation_response="$(gh api --method POST --include --input - "repos/${GITHUB_REPOSITORY}/releases" <<< "${reservation_payload}" 2>&1)"; then
+            echo "Could not reserve the GitHub Release for ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          http_status="$(printf '%s\n' "${reservation_response}" | awk '/^HTTP/{code=$2} END{print code}')"
+          [[ "${http_status}" == "201" ]] || {
+            echo "GitHub Release reservation did not return HTTP 201." >&2
+            exit 1
+          }
+          reservation_body="$(printf '%s\n' "${reservation_response}" | awk 'BEGIN{body=0} body {print} /^[[:space:]]*$/ {body=1}')"
+          printf '%s\n' "${reservation_body}" | python3 -c '
+           import json
+           import sys
+
+           try:
+               release = json.load(sys.stdin)
+           except (TypeError, ValueError):
+               raise SystemExit(1)
+           if (
+               not isinstance(release, dict)
+               or type(release.get("id")) is not int
+               or release.get("tag_name") != sys.argv[1]
+               or release.get("draft") is not True
+               or release.get("prerelease") is not (sys.argv[2] == "true")
+           ):
+               raise SystemExit(1)
+           ' "${GITHUB_REF_NAME}" "${prerelease}" || {
+            echo "GitHub Release reservation response was malformed or uncertain." >&2
+            exit 1
+          }
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          overwrite_files: false
           files: release-downloads/*

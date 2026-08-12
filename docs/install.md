@@ -11,6 +11,7 @@ source-support claims and their evidence.
 ## Prerequisites
 
 - Rust toolchain with `cargo` when building from source
+- Python 3 for strict release metadata validation by the repository installer
 - Local access to the agent session stores you want to scan
 - Optional: a SIEM or log shipper for the generated JSONL event stream
 
@@ -58,14 +59,34 @@ archives. Archives do not include local scanner state, telemetry logs, session
 stores, credentials, Splunk/Filebeat content, or other deployment-specific
 configuration.
 
+### Selecting an RC candidate
+
+The no-argument installer selects the latest stable GitHub Release. For
+approved candidate validation, select the exact immutable RC tag:
+
+```sh
+./scripts/install-telltale --release-tag v0.5.0-rc.1 --no-timer
+./scripts/install-telltale --release-tag v0.5.0-rc.1 --from-source --no-timer
+```
+
+The explicit path requires that tag's published non-draft prerelease metadata,
+derives every archive and checksum URL from that tag, and verifies the archive
+manifest, checksum, and binary version before any installer lock, file,
+schedule, or systemd-manager mutation. It does not fall back to
+`releases/latest` or permit `--skip-checksum`. RC artifacts are immutable; a
+validation-relevant change needs the next reviewed RC. GitHub binary releases
+remain separate from the later dependency-ordered crates.io publication.
+
 ### Verify a release archive
 
 The release workflow publishes a GitHub artifact attestation for every `.tar.gz`
-and `.zip` archive. Release assets use `telltale-v<version>-...` names. After
-downloading an archive, verify its provenance before extracting it:
+and `.zip` archive. Release assets use `telltale-v<version>-...` names. Once the
+RC candidate or a later stable release is published, verify the downloaded
+archive as a separate post-publication step before extracting it. For the
+current candidate, the example is:
 
 ```sh
-gh attestation verify telltale-v0.5.0-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify telltale-v0.5.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
   --repo Dark-Roast-Cyber/telltale
 ```
 
@@ -90,9 +111,11 @@ The hosted one-line installer is not part of this repository's release cutover;
 use the checked-in script above for a reviewed install. It uses one locked,
 journaled transaction, verifies `SHA256SUMS`, stages the canonical binary, runs
 explicit state/event/environment migration when legacy inputs exist, and
-smoke-tests before activation. To build from source instead of downloading a
-prebuilt binary, pass `--from-source`; add `--with-timer` to install and enable
-the canonical user-level systemd timer.
+smoke-tests before activation. `--from-source` first downloads and validates the
+selected release's canonical archive provenance, resolves that tag to an
+immutable commit, and builds that exact source revision; it does not skip the
+prebuilt archive download or bypass release provenance. Add `--with-timer` to
+install and enable the canonical user-level systemd timer.
 
 The installer does not create system users, configure SIEM shippers, or require
 root. For managed Linux deployments with the `system` path profile, use the

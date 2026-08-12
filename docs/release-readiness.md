@@ -25,10 +25,37 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). The workspace is currently preparing
-the approved `0.5.0` Event 3.0 migration; compatible maintenance fixes remain
-on the prior `0.3.x` line until that release is published. Do not create
-`0.5.x` for a round of small tasks; follow-up fixes belong there only after the
-reviewed `0.5.0` milestone ships.
+the immutable `0.5.0-rc.1` candidate for the approved `0.5.0` Event 3.0
+migration; compatible maintenance fixes remain on the prior `0.3.x` line until
+stable publication. Do not create `0.5.x` for a round of small tasks; follow-up
+fixes belong there only after the reviewed `0.5.0` milestone ships.
+
+## RC Candidate Handoff
+
+The preparation batch does not create a tag, Release, archive, checksum, crate,
+or live-gate evidence. A later reviewed operation may merge the candidate to
+`main`, tag only that reviewed commit as `v0.5.0-rc.1`, and inspect the workflow
+before validation. The RC Release must be explicitly marked `prerelease=true`.
+If code, package metadata, installer behavior, workflow, archive, checksum, or
+attestation provenance changes, use a new reviewed commit and unused `rc.2` (or
+later) tag; do not overwrite a published candidate. A transient environment
+failure with unchanged artifacts may receive only a bounded recheck.
+
+For each of the five target archives, retain a redacted ledger row containing:
+the package/tag pair, reviewed `main` SHA and ancestry result, canonical archive
+name and member-manifest result, archive and extracted-binary SHA-256 values,
+the exact `SHA256SUMS` line, archive attestation subject, Release ID/URL and
+`draft`/`prerelease` metadata, workflow run/ref/source identity, and the exact
+tagged installer blob and executable-mode result. Do not record credentials,
+endpoints, local paths, raw service output, or session contents.
+
+After artifact review, downstream validation is dependency-ordered: G-SERVICE
+with the exact RC tag and independent legacy-manager/drop-in preflight, then
+controlled G-HEC and G-SPLUNK, native Windows, and native macOS. Each gate has
+its own PASS/BLOCKED/FAIL status; a BLOCKED gate is never silently reclassified
+as PASS. The current preparation claims no live gate passed. Stable promotion
+requires explicit PASS evidence for those gates plus release preflight, public
+artifact-boundary review, and publication prerequisites.
 
 ## Pre-Release Checks
 
@@ -191,6 +218,19 @@ The tagged release workflow generates `SHA256SUMS` in its temporary
 archives and uploads it with the GitHub release. Publish equivalent checksums
 for any manually produced archives so operators can verify downloads before
 running the binary.
+
+The default installer selects the latest stable Release. For candidate
+validation, pass the exact tag, for example:
+
+```sh
+./scripts/install-telltale --release-tag v0.5.0-rc.1 --no-timer
+./scripts/install-telltale --release-tag v0.5.0-rc.1 --from-source --no-timer
+```
+
+The candidate path verifies exact Release metadata, the canonical archive
+manifest, the tag-derived `SHA256SUMS` entry, and the extracted binary version
+before acquiring its installer lock. It never uses `--skip-checksum` for the
+G-SERVICE procedure and never falls back to `releases/latest`.
 
 ## Post-Release Smoke Test
 

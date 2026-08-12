@@ -1,6 +1,8 @@
 use super::*;
 
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 
 const HOST_ONLY_REPO_PATHS: &[&str] = &[
@@ -15,13 +17,13 @@ const HOST_ONLY_REPO_PATHS: &[&str] = &[
     "docs/splunk-content.md",
     "skills/",
     ".ai/",
-    "scripts/ralph",
-    "scripts/inspiration/",
     "tasks/",
     ".opencode/",
     "logs/",
     "state/",
     "artifacts/",
+    "scripts/ralph",
+    "scripts/inspiration/",
     "runtime/ralph/",
     "config/examples/splunk-",
 ];
@@ -1320,6 +1322,22 @@ fn release_workflow_packages_only_canonical_identity() {
         "subject-path: adr-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
     ));
     assert!(!workflow.contains("cmp -s \"$canonical\" \"$legacy\""));
+    assert!(workflow.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
+    assert!(workflow.contains("overwrite_files: false"));
+    assert!(workflow.contains("Fail closed if the tag already has a Release"));
+    assert!(workflow.contains("releases?per_page=100"));
+    assert!(
+        workflow.contains(
+            "concurrency:\n  group: release-${{ github.ref }}\n  cancel-in-progress: false"
+        )
+    );
+    assert!(workflow.contains("on:\n  push:\n    tags:"));
+    assert!(!workflow.contains("workflow_dispatch:"));
+    assert!(!workflow.contains("branches:"));
+    assert!(!workflow.contains("refs/heads/"));
+    assert!(!workflow.contains("branch-artifact"));
+    assert!(!workflow.contains("artifact-reference"));
+    assert!(!workflow.contains("adr-${{ github.ref_name }}"));
 }
 
 #[test]
@@ -1377,6 +1395,283 @@ fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
             "CI release workflow must not invoke local-only check {forbidden:?}"
         );
     }
+
+    let prerelease_line = workflow
+        .lines()
+        .find(|line| line.trim_start().starts_with("prerelease:"))
+        .expect("release action must set prerelease explicitly")
+        .trim();
+    assert_eq!(
+        prerelease_line,
+        "prerelease: ${{ contains(github.ref_name, '-') }}"
+    );
+    let rendered_rc = prerelease_line.replace("github.ref_name", "'v0.5.0-rc.1'");
+    let rendered_stable = prerelease_line.replace("github.ref_name", "'v0.5.0'");
+    assert_eq!(
+        rendered_rc,
+        "prerelease: ${{ contains('v0.5.0-rc.1', '-') }}"
+    );
+    assert_eq!(
+        rendered_stable,
+        "prerelease: ${{ contains('v0.5.0', '-') }}"
+    );
+    let evaluate_contains_dash = |rendered: &str| {
+        let tag = rendered
+            .split("contains('")
+            .nth(1)
+            .and_then(|value| value.split("', '-'").next())
+            .expect("rendered contains expression");
+        tag.contains('-')
+    };
+    assert!(evaluate_contains_dash(&rendered_rc));
+    assert!(!evaluate_contains_dash(&rendered_stable));
+}
+
+#[test]
+fn release_workflow_existing_release_guard_is_fail_closed_without_live_calls() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let start = workflow
+        .find("- name: Fail closed if the tag already has a Release")
+        .expect("existing-release guard");
+    let end = workflow
+        .find("- name: Reserve GitHub Release")
+        .expect("release reservation");
+    assert!(
+        start < end,
+        "existing-release guard must precede release creation"
+    );
+    let guard = &workflow[start..end];
+    for required in [
+        "gh api --paginate --slurp",
+        "releases?per_page=100",
+        "match_state=",
+        "Could not validate the GitHub Releases response.",
+        "published assets are immutable",
+        "release.get(\"tag_name\")",
+    ] {
+        assert!(guard.contains(required), "guard is missing {required:?}");
+    }
+    assert!(guard.contains("exit 1"));
+    assert!(!guard.contains("releases/tags/"));
+}
+
+#[test]
+fn release_workflow_reserves_release_before_action_creation() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let guard = workflow
+        .find("- name: Fail closed if the tag already has a Release")
+        .expect("existing-release guard");
+    let reservation = workflow
+        .find("- name: Reserve GitHub Release")
+        .expect("release reservation");
+    let action = workflow
+        .find("- name: Create GitHub Release")
+        .expect("release action");
+    assert!(guard < reservation && reservation < action);
+    let reservation_block = &workflow[reservation..action];
+    for required in [
+        "gh api --method POST --include --input -",
+        "repos/${GITHUB_REPOSITORY}/releases",
+        "\"draft\": True",
+        "prerelease",
+        "HTTP 201",
+        "reservation response was malformed or uncertain",
+    ] {
+        assert!(
+            reservation_block.contains(required),
+            "reservation is missing {required:?}"
+        );
+    }
+    assert!(workflow.contains("tag_name: ${{ github.ref_name }}"));
+    assert!(workflow.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
+    assert!(workflow.contains("overwrite_files: false"));
+}
+
+#[cfg(unix)]
+#[test]
+fn release_workflow_existing_release_guard_handles_representative_gh_responses() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let guard_start = workflow
+        .find("- name: Fail closed if the tag already has a Release")
+        .expect("existing-release guard");
+    let run_start = workflow[guard_start..]
+        .find("run: |\n")
+        .map(|offset| guard_start + offset + "run: |\n".len())
+        .expect("guard run block");
+    let release_action_start = workflow[run_start..]
+        .find("- name: Reserve GitHub Release")
+        .map(|offset| run_start + offset)
+        .expect("guard run block terminator");
+    let run_end = workflow[..release_action_start]
+        .rfind('\n')
+        .expect("guard run block line boundary");
+    let indentation = workflow[run_start..run_end]
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| &line[..line.len() - line.trim_start().len()])
+        .expect("guard indentation");
+    let guard_script = workflow[run_start..run_end]
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                ""
+            } else {
+                line.strip_prefix(indentation).expect("guard indentation")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let temp = tempdir().expect("tempdir");
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir(&fake_bin).expect("fake bin");
+    let fake_gh = fake_bin.join("gh");
+    fs::write(
+        &fake_gh,
+        r####"#!/bin/sh
+set -eu
+case "${FAKE_GH_RESPONSE:?}" in
+  published) printf '%s\n' '[[{"tag_name":"v0.5.0","draft":false,"prerelease":false}]]'; exit 0;;
+  draft) printf '%s\n' '[[{"tag_name":"v0.5.0","draft":true,"prerelease":false}]]'; exit 0;;
+  empty) printf '%s\n' '[]'; exit 0;;
+  api-error) printf '%s\n' 'API failure'; exit 1;;
+  malformed) printf '%s\n' '{"unexpected":[]}' ; exit 0;;
+  match-then-malformed) printf '%s\n' '[[{"tag_name":"v0.5.0"},{"draft":false}]]'; exit 0;;
+  missing-tag) printf '%s\n' '[[{"draft":false,"prerelease":false}]]'; exit 0;;
+  empty-tag) printf '%s\n' '[[{"tag_name":"","draft":false,"prerelease":false}]]'; exit 0;;
+  non-string-tag) printf '%s\n' '[[{"tag_name":123,"draft":false,"prerelease":false}]]'; exit 0;;
+  *) exit 2;;
+esac
+"####,
+    )
+    .expect("fake gh");
+    fs::set_permissions(&fake_gh, fs::Permissions::from_mode(0o755)).expect("executable fake gh");
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+
+    for (response, expected_success, expected_output) in [
+        ("published", false, "already exists"),
+        ("draft", false, "already exists"),
+        ("empty", true, ""),
+        ("api-error", false, "Could not query"),
+        ("malformed", false, "Could not validate"),
+        ("match-then-malformed", false, "Could not validate"),
+        ("missing-tag", false, "Could not validate"),
+        ("empty-tag", false, "Could not validate"),
+        ("non-string-tag", false, "Could not validate"),
+    ] {
+        let output = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", &guard_script])
+            .env("PATH", &path)
+            .env("FAKE_GH_RESPONSE", response)
+            .env("GH_TOKEN", "synthetic-token")
+            .env("GITHUB_REPOSITORY", "example/telltale")
+            .env("GITHUB_REF_NAME", "v0.5.0")
+            .output()
+            .expect("run release guard");
+        assert_eq!(
+            output.status.success(),
+            expected_success,
+            "response {response}"
+        );
+        let output_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !expected_output.is_empty() {
+            assert!(
+                output_text.contains(expected_output),
+                "response {response} output: {output_text}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn release_workflow_reservation_uses_exact_draft_rc_inputs_without_live_calls() {
+    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let reservation_start = workflow
+        .find("- name: Reserve GitHub Release")
+        .expect("release reservation");
+    let run_start = workflow[reservation_start..]
+        .find("run: |\n")
+        .map(|offset| reservation_start + offset + "run: |\n".len())
+        .expect("reservation run block");
+    let action_start = workflow[run_start..]
+        .find("- name: Create GitHub Release")
+        .map(|offset| run_start + offset)
+        .expect("release action");
+    let run_end = workflow[..action_start]
+        .rfind('\n')
+        .expect("reservation block line boundary");
+    let indentation = workflow[run_start..run_end]
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| &line[..line.len() - line.trim_start().len()])
+        .expect("reservation indentation");
+    let reservation_script = workflow[run_start..run_end]
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                ""
+            } else {
+                line.strip_prefix(indentation)
+                    .expect("reservation indentation")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let temp = tempdir().expect("tempdir");
+    let fake_bin = temp.path().join("bin");
+    fs::create_dir(&fake_bin).expect("fake bin");
+    let fake_gh = fake_bin.join("gh");
+    fs::write(
+        &fake_gh,
+        r####"#!/bin/sh
+set -eu
+printf '%s\n' "$*" > "${FAKE_GH_ARGS:?}"
+cat > "${FAKE_GH_PAYLOAD:?}"
+printf '%s\n\n' 'HTTP/2 201 Created'
+printf '%s\n' '{"id":123,"tag_name":"v0.5.0-rc.1","draft":true,"prerelease":true}'
+"####,
+    )
+    .expect("fake gh");
+    fs::set_permissions(&fake_gh, fs::Permissions::from_mode(0o755)).expect("executable fake gh");
+    let args_path = temp.path().join("gh.args");
+    let payload_path = temp.path().join("gh.payload");
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let output = Command::new("bash")
+        .args(["-euo", "pipefail", "-c", &reservation_script])
+        .env("PATH", &path)
+        .env("FAKE_GH_ARGS", &args_path)
+        .env("FAKE_GH_PAYLOAD", &payload_path)
+        .env("GH_TOKEN", "synthetic-token")
+        .env("GITHUB_REPOSITORY", "example/telltale")
+        .env("GITHUB_REF_NAME", "v0.5.0-rc.1")
+        .output()
+        .expect("run release reservation");
+    assert!(
+        output.status.success(),
+        "reservation failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let args = fs::read_to_string(args_path).unwrap();
+    assert!(args.contains("--method POST --include --input - repos/example/telltale/releases"));
+    let payload = fs::read_to_string(payload_path).unwrap();
+    assert!(payload.contains("\"tag_name\":\"v0.5.0-rc.1\""));
+    assert!(payload.contains("\"draft\":true"));
+    assert!(payload.contains("\"prerelease\":true"));
 }
 
 #[cfg(unix)]

@@ -157,11 +157,21 @@ fn assert_archive_rejected(root: &Path, archive: &Path, message: &str) {
         output_text(&output)
     );
     assert!(!root.join("home/bin/telltale").exists());
+    assert!(!root.join("home/.telltale-installer.lock").exists());
+    assert!(!root.join("systemctl.log").exists());
 }
 
 fn release_metadata(root: &Path, tag: &str) -> PathBuf {
+    release_metadata_with_flags(root, tag, false, false)
+}
+
+fn release_metadata_with_flags(root: &Path, tag: &str, draft: bool, prerelease: bool) -> PathBuf {
     let path = root.join("release.json");
-    fs::write(&path, format!("{{\"tag_name\":\"{tag}\"}}\n")).expect("metadata");
+    fs::write(
+        &path,
+        format!("{{\"tag_name\":\"{tag}\",\"draft\":{draft},\"prerelease\":{prerelease}}}\n"),
+    )
+    .expect("metadata");
     path
 }
 
@@ -182,11 +192,23 @@ done
 printf '%s\n' "$url" >> "${FAKE_CURL_LOG:?}"
 if [ -n "${FAKE_CURL_DELAY:-}" ]; then sleep "$FAKE_CURL_DELAY"; fi
 case "$url" in
-    */releases/latest) cat "$FAKE_CURL_METADATA";;
+    */releases/latest|*/releases/tags/*) cat "$FAKE_CURL_METADATA";;
     */SHA256SUMS) cp "$FAKE_CURL_CHECKSUMS" "$output";;
     */*.tar.gz) cp "$FAKE_CURL_ASSET_DIR/${url##*/}" "$output";;
     *) exit 22;;
 esac
+"####,
+    );
+}
+
+fn fake_git(tools: &Path) {
+    executable(
+        &tools.join("git"),
+        r####"#!/bin/sh
+set -eu
+if [ "${1:-}" != ls-remote ]; then exit 97; fi
+printf '%s\n' "$*" > "${FAKE_GIT_LOG:?}"
+printf '%s\n' "${FAKE_GIT_LS_REMOTE:?}"
 "####,
     );
 }
@@ -240,6 +262,7 @@ fn fake_systemctl(tools: &Path) {
 set -eu
 printf '%s\n' "$*" >> "${FAKE_SYSTEMCTL_LOG:?}"
 if [ -n "${FAKE_EVENT_LOG:-}" ]; then printf 'systemctl:%s\n' "$*" >> "$FAKE_EVENT_LOG"; fi
+if [ -n "${FAKE_SYSTEMCTL_DELAY:-}" ]; then sleep "$FAKE_SYSTEMCTL_DELAY"; fi
 config_root=${XDG_CONFIG_HOME:-$HOME/.config}
 unit_dir=$config_root/systemd/user
 state=${FAKE_SYSTEMCTL_STATE:?}
@@ -379,6 +402,7 @@ fn tools(root: &Path, with_systemctl: bool) -> PathBuf {
     let tools = root.join("tools");
     fs::create_dir_all(&tools).expect("tools");
     fake_curl(&tools);
+    fake_git(&tools);
     if with_systemctl {
         fake_systemctl(&tools);
     }
@@ -422,6 +446,32 @@ fn installer_command(
         command.env_remove("FAKE_CURL_CHECKSUMS");
     }
     command
+}
+
+fn configure_fake_git(
+    command: &mut Command,
+    root: &Path,
+    tag: &str,
+    tag_sha: &str,
+    peeled_sha: Option<&str>,
+) -> PathBuf {
+    let mut refs = format!("{}\trefs/tags/{tag}\n", tag_sha);
+    if let Some(peeled_sha) = peeled_sha {
+        refs.push_str(&format!("{}\trefs/tags/{tag}^{{}}\n", peeled_sha));
+    }
+    let log = root.join("git.log");
+    command
+        .env("FAKE_GIT_LS_REMOTE", refs)
+        .env("FAKE_GIT_LOG", &log);
+    log
+}
+
+fn assert_fake_git_tag_refs(log: &Path, tag: &str) {
+    let args = fs::read_to_string(log).unwrap();
+    assert!(
+        args.contains(&format!("refs/tags/{tag} refs/tags/{tag}^{{}}")),
+        "git did not request exact lightweight and peeled refs: {args}"
+    );
 }
 
 fn piped_installer_command(
@@ -505,11 +555,15 @@ fn installer_script_is_executable() {
 #[test]
 fn installer_requires_no_copy_no_replace_capability_before_installation() {
     let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
     let tools = tools(temp.path(), false);
     reject_no_copy_mv(&tools);
     let home = temp.path().join("home");
-    let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
     command.args([
         "--no-timer",
         "--install-dir",
@@ -521,6 +575,283 @@ fn installer_requires_no_copy_no_replace_capability_before_installation() {
     assert!(home.join(".telltale-installer.lock").is_dir());
     assert!(!home.join(".local").exists());
     assert!(!home.join("bin").exists());
+}
+
+#[test]
+fn explicit_rc_selection_uses_only_the_exact_tag_and_preserves_stable_default() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.5.0-rc.1";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0-rc.1", None);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert_success(&output);
+    assert!(temp.path().join("home/bin/telltale").is_file());
+
+    let urls = fs::read_to_string(temp.path().join("curl.log")).unwrap();
+    assert!(urls.contains("/releases/tags/v0.5.0-rc.1"));
+    assert!(!urls.contains("/releases/latest"));
+    assert!(urls.contains("/releases/download/v0.5.0-rc.1/"));
+}
+
+#[test]
+fn explicit_rc_provenance_rejects_metadata_before_lock_or_manager_mutation() {
+    let temp = tempdir().unwrap();
+    let requested = "v0.5.0-rc.1";
+    let metadata = release_metadata_with_flags(temp.path(), "v0.5.0-rc.2", false, true);
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        None,
+        &["--release-tag", requested, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("does not match --release-tag"));
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!temp.path().join("home/bin").exists());
+    assert!(!temp.path().join("systemctl.log").exists());
+
+    let draft = tempdir().unwrap();
+    let draft_metadata = release_metadata_with_flags(draft.path(), requested, true, true);
+    let output = run_release(
+        draft.path(),
+        &draft_metadata,
+        draft.path(),
+        None,
+        &["--release-tag", requested, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("must not be a draft"));
+    assert!(!draft.path().join("home/.telltale-installer.lock").exists());
+}
+
+#[test]
+fn release_tag_validation_rejects_misclassified_or_ambiguous_candidates() {
+    let stable = tempdir().unwrap();
+    let stable_metadata = release_metadata_with_flags(stable.path(), "v0.5.0-rc.1", false, false);
+    let output = run_release(
+        stable.path(),
+        &stable_metadata,
+        stable.path(),
+        None,
+        &["--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("not a valid GitHub Release object"));
+    assert!(!stable.path().join("home/.telltale-installer.lock").exists());
+
+    let stable_prerelease = tempdir().unwrap();
+    let stable_prerelease_metadata =
+        release_metadata_with_flags(stable_prerelease.path(), "v0.5.0", false, true);
+    let output = run_release(
+        stable_prerelease.path(),
+        &stable_prerelease_metadata,
+        stable_prerelease.path(),
+        None,
+        &["--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("latest release must be stable"));
+    assert!(
+        !stable_prerelease
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
+
+    let misclassified = tempdir().unwrap();
+    let tag = "v0.5.0-rc.1";
+    let metadata = release_metadata_with_flags(misclassified.path(), tag, false, false);
+    let output = run_release(
+        misclassified.path(),
+        &metadata,
+        misclassified.path(),
+        None,
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("not a published prerelease"));
+    assert!(
+        !misclassified
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
+
+    let ambiguous = tempdir().unwrap();
+    let ambiguous_metadata = ambiguous.path().join("release.json");
+    fs::write(
+        &ambiguous_metadata,
+        format!(
+            "{{\"tag_name\":\"{tag}\",\"tag_name\":\"v0.5.0-rc.2\",\"draft\":false,\"prerelease\":true}}\n"
+        ),
+    )
+    .unwrap();
+    let output = run_release(
+        ambiguous.path(),
+        &ambiguous_metadata,
+        ambiguous.path(),
+        None,
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("not a valid GitHub Release object"));
+    assert!(
+        !ambiguous
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
+
+    for (name, contents) in [
+        (
+            "nested",
+            r#"{"release":{"tag_name":"v0.5.0-rc.1"},"draft":false,"prerelease":true}"#,
+        ),
+        (
+            "wrong-types",
+            r#"{"tag_name":["v0.5.0-rc.1"],"draft":"false","prerelease":true}"#,
+        ),
+        (
+            "delimiter",
+            r#"{"tag_name":"v0.5.0-rc.1\t0\t0\nignored","draft":false,"prerelease":true}"#,
+        ),
+    ] {
+        let malformed = tempdir().unwrap();
+        let malformed_metadata = malformed.path().join(format!("{name}.json"));
+        fs::write(&malformed_metadata, contents).unwrap();
+        let output = run_release(
+            malformed.path(),
+            &malformed_metadata,
+            malformed.path(),
+            None,
+            &["--release-tag", tag, "--no-timer"],
+        );
+        assert!(!output.status.success());
+        assert!(output_text(&output).contains("not a valid GitHub Release object"));
+        assert!(
+            !malformed
+                .path()
+                .join("home/.telltale-installer.lock")
+                .exists()
+        );
+    }
+
+    let invalid = tempdir().unwrap();
+    let metadata = release_metadata_with_flags(invalid.path(), "v0.5.0-rc.01", false, true);
+    let output = run_release(
+        invalid.path(),
+        &metadata,
+        invalid.path(),
+        None,
+        &["--release-tag", "v0.5.0-rc.01", "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("exact v0.5.0-rc.<n>"));
+    assert!(
+        !invalid
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
+
+    let empty = tempdir().unwrap();
+    let metadata = release_metadata(empty.path(), "v0.5.0");
+    let output = run_release(
+        empty.path(),
+        &metadata,
+        empty.path(),
+        None,
+        &["--release-tag", "", "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("exact v0.5.0-rc.<n>"));
+    let urls = fs::read_to_string(empty.path().join("curl.log")).unwrap_or_default();
+    assert!(!urls.contains("/releases/latest"));
+    assert!(!empty.path().join("home/.telltale-installer.lock").exists());
+    assert!(!empty.path().join("systemctl.log").exists());
+}
+
+#[test]
+fn explicit_rc_never_allows_checksum_bypass() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.5.0-rc.1";
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        None,
+        &["--release-tag", tag, "--skip-checksum", "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("not permitted with --release-tag"));
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!temp.path().join("systemctl.log").exists());
+}
+
+#[test]
+fn explicit_rc_provenance_rejects_checksum_and_binary_version_before_lock() {
+    let bad_checksum = tempdir().unwrap();
+    let tag = "v0.5.0-rc.1";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let _selected = archive(bad_checksum.path(), &name, "0.5.0-rc.1", None);
+    let metadata = release_metadata_with_flags(bad_checksum.path(), tag, false, true);
+    let sums = bad_checksum.path().join("SHA256SUMS");
+    fs::write(
+        &sums,
+        format!(
+            "{}  {name}\n",
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        ),
+    )
+    .unwrap();
+    let output = run_release(
+        bad_checksum.path(),
+        &metadata,
+        bad_checksum.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("checksum mismatch"));
+    assert!(
+        !bad_checksum
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
+
+    let bad_binary = tempdir().unwrap();
+    let selected = archive(bad_binary.path(), &name, "0.5.0", None);
+    let metadata = release_metadata_with_flags(bad_binary.path(), tag, false, true);
+    let sums = bad_binary.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let output = run_release(
+        bad_binary.path(),
+        &metadata,
+        bad_binary.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("binary version does not match"));
+    assert!(
+        !bad_binary
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
 }
 
 #[test]
@@ -623,6 +954,8 @@ fn checksum_failure_and_active_adr_archive_are_fail_closed() {
     assert!(!output.status.success());
     assert!(output_text(&output).contains("SHA256SUMS"));
     assert!(!temp.path().join("home/bin/telltale").exists());
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!temp.path().join("systemctl.log").exists());
 
     let bad = archive(
         temp.path(),
@@ -642,6 +975,8 @@ fn checksum_failure_and_active_adr_archive_are_fail_closed() {
     );
     assert!(!output.status.success());
     assert!(output_text(&output).contains("active ADR technical identity"));
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!temp.path().join("systemctl.log").exists());
 }
 
 #[test]
@@ -700,6 +1035,13 @@ fn installer_requires_exact_canonical_archive_bundle() {
         "unexpected traversal rejection: {text}"
     );
     assert!(!traversal.path().join("home/bin/telltale").exists());
+    assert!(
+        !traversal
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
+    assert!(!traversal.path().join("systemctl.log").exists());
 
     let link = tempdir().unwrap();
     let archive = archive_with_link_member(
@@ -730,11 +1072,16 @@ fn installer_requires_exact_canonical_archive_bundle() {
 #[test]
 fn source_build_is_pinned_and_does_not_produce_retired_binary() {
     let temp = tempdir().unwrap();
-    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let tag = "v0.5.0-rc.1";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0-rc.1", None);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
     let tools = tools(temp.path(), true);
     let cargo_log = temp.path().join("cargo.log");
     let source_binary = temp.path().join("source-telltale");
-    telltale_binary(&source_binary, "0.5.0", false);
+    telltale_binary(&source_binary, "0.5.0-rc.1", false);
     executable(
         &tools.join("cargo"),
         &format!(
@@ -743,9 +1090,18 @@ fn source_build_is_pinned_and_does_not_produce_retired_binary() {
             source_binary.display()
         ),
     );
-    let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
+    let git_log = configure_fake_git(
+        &mut command,
+        temp.path(),
+        tag,
+        "1111111111111111111111111111111111111111",
+        Some("2222222222222222222222222222222222222222"),
+    );
     command.args([
         "--from-source",
+        "--release-tag",
+        tag,
         "--install-dir",
         temp.path().join("home/bin").to_str().unwrap(),
     ]);
@@ -753,11 +1109,136 @@ fn source_build_is_pinned_and_does_not_produce_retired_binary() {
     assert_success(&output);
     let args = fs::read_to_string(cargo_log).unwrap();
     assert!(
-        args.contains("--tag v0.5.0")
+        args.contains("--rev 2222222222222222222222222222222222222222")
             && args.contains("--locked")
             && args.contains("--bin telltale")
     );
+    assert!(!args.contains("--tag"));
+    assert_fake_git_tag_refs(&git_log, tag);
     assert!(!temp.path().join("home/bin/adr").exists());
+}
+
+#[test]
+fn source_build_wrong_binary_version_fails_before_installer_mutation() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.5.0-rc.1";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0-rc.1", None);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
+    let tools = tools(temp.path(), true);
+    let source_binary = temp.path().join("wrong-source-telltale");
+    telltale_binary(&source_binary, "0.5.0", false);
+    executable(
+        &tools.join("cargo"),
+        &format!(
+            "#!/bin/sh\nroot=''\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--root\" ]; then root=$2; shift 2; else shift; fi; done\nmkdir -p \"$root/bin\"\ncp '{}' \"$root/bin/telltale\"\n",
+            source_binary.display()
+        ),
+    );
+
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
+    let git_log = configure_fake_git(
+        &mut command,
+        temp.path(),
+        tag,
+        "3333333333333333333333333333333333333333",
+        None,
+    );
+    command.args([
+        "--from-source",
+        "--release-tag",
+        tag,
+        "--no-timer",
+        "--install-dir",
+        install.to_str().unwrap(),
+    ]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("binary version does not match"));
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!install.exists());
+    assert!(!temp.path().join("systemctl.log").exists());
+    assert_fake_git_tag_refs(&git_log, tag);
+}
+
+#[test]
+fn source_build_failure_happens_before_installer_mutation() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.5.0-rc.1";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0-rc.1", None);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
+    let tools = tools(temp.path(), true);
+    executable(&tools.join("cargo"), "#!/bin/sh\nexit 42\n");
+
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
+    let git_log = configure_fake_git(
+        &mut command,
+        temp.path(),
+        tag,
+        "4444444444444444444444444444444444444444",
+        None,
+    );
+    command.args([
+        "--from-source",
+        "--release-tag",
+        tag,
+        "--no-timer",
+        "--install-dir",
+        install.to_str().unwrap(),
+    ]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("cargo install failed"));
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!install.exists());
+    assert!(!temp.path().join("systemctl.log").exists());
+    assert_fake_git_tag_refs(&git_log, tag);
+}
+
+#[test]
+fn default_latest_source_build_failure_happens_before_installer_mutation() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.5.0";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let metadata = release_metadata(temp.path(), tag);
+    let tools = tools(temp.path(), true);
+    executable(&tools.join("cargo"), "#!/bin/sh\nexit 42\n");
+
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
+    let git_log = configure_fake_git(
+        &mut command,
+        temp.path(),
+        tag,
+        "5555555555555555555555555555555555555555",
+        None,
+    );
+    command.args([
+        "--from-source",
+        "--no-timer",
+        "--install-dir",
+        install.to_str().unwrap(),
+    ]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("cargo install failed"));
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!install.exists());
+    assert!(!temp.path().join("systemctl.log").exists());
+    assert_fake_git_tag_refs(&git_log, tag);
+    let urls = fs::read_to_string(temp.path().join("curl.log")).unwrap();
+    assert!(urls.contains("/releases/latest"));
+    assert!(!urls.contains("/releases/tags/"));
 }
 
 #[test]
@@ -954,10 +1435,15 @@ fn installer_lock_has_bounded_busy_failure() {
         .spawn()
         .unwrap();
     thread::sleep(Duration::from_millis(100));
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
     let output = {
         let tools = tools(temp.path(), false);
-        let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+        let mut command =
+            installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
         command.args(["--install-dir", home.join("bin").to_str().unwrap()]);
         command.output().unwrap()
     };
@@ -983,14 +1469,14 @@ fn installer_lock_is_shared_across_different_xdg_state_roots() {
     let mut holder = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
     holder
         .env("XDG_STATE_HOME", &state_a)
-        .env("FAKE_CURL_DELAY", "1")
+        .env("FAKE_SYSTEMCTL_DELAY", "0.2")
         .args(["--no-timer", "--install-dir", install_a.to_str().unwrap()]);
     let mut holder = holder.spawn().expect("spawn installer lock holder");
 
-    let curl_log = temp.path().join("curl.log");
+    let systemctl_log = temp.path().join("systemctl.log");
     let mut holder_ready = false;
     for _ in 0..250 {
-        if fs::read_to_string(&curl_log).is_ok_and(|log| !log.trim().is_empty()) {
+        if fs::read_to_string(&systemctl_log).is_ok_and(|log| !log.trim().is_empty()) {
             holder_ready = true;
             break;
         }
@@ -1033,12 +1519,16 @@ fn unsafe_preexisting_installer_lock_fails_closed_before_directory_creation() {
     fs::create_dir_all(&home).unwrap();
     let lock = home.join(".telltale-installer.lock");
     regular_file(&lock, b"regular file, not a lock directory\n", 0o700);
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
     let mut command = installer_command(
         temp.path(),
         &metadata,
         temp.path(),
-        None,
+        Some(&sums),
         &tools(temp.path(), false),
     );
     command.args([
@@ -1088,12 +1578,16 @@ fn installer_lock_reuses_safe_directory_and_rejects_symlink_or_unsafe_directory(
     fs::create_dir_all(&symlink_home).unwrap();
     regular_file(&symlink_home.join("lock-target"), b"lock target\n", 0o600);
     symlink("lock-target", symlink_home.join(".telltale-installer.lock")).unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(symlinked.path(), &name, "0.5.0", None);
     let symlink_metadata = release_metadata(symlinked.path(), "v0.5.0");
+    let symlink_sums = symlinked.path().join("SHA256SUMS");
+    checksum(&selected, &symlink_sums);
     let mut symlink_command = installer_command(
         symlinked.path(),
         &symlink_metadata,
         symlinked.path(),
-        None,
+        Some(&symlink_sums),
         &tools(symlinked.path(), false),
     );
     symlink_command.args([
@@ -1115,12 +1609,16 @@ fn installer_lock_reuses_safe_directory_and_rejects_symlink_or_unsafe_directory(
         fs::Permissions::from_mode(0o755),
     )
     .unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(unsafe_directory.path(), &name, "0.5.0", None);
     let unsafe_metadata = release_metadata(unsafe_directory.path(), "v0.5.0");
+    let unsafe_sums = unsafe_directory.path().join("SHA256SUMS");
+    checksum(&selected, &unsafe_sums);
     let mut unsafe_command = installer_command(
         unsafe_directory.path(),
         &unsafe_metadata,
         unsafe_directory.path(),
-        None,
+        Some(&unsafe_sums),
         &tools(unsafe_directory.path(), false),
     );
     unsafe_command.args([
@@ -1461,7 +1959,11 @@ fn schedule_query_failure_happens_before_candidate_staging() {
 #[test]
 fn committed_journal_survives_schedule_failure_before_recovery() {
     let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
     let install = temp.path().join("home/bin");
     let journal_dir = temp.path().join("home/.local/state/telltale");
     let units = temp.path().join("home/.config/systemd/user");
@@ -1497,7 +1999,7 @@ fn committed_journal_survives_schedule_failure_before_recovery() {
         temp.path(),
         &metadata,
         temp.path(),
-        None,
+        Some(&sums),
         &tools(temp.path(), true),
     );
     command
@@ -1588,19 +2090,30 @@ fn interrupted_binary_replacement_restores_old_before_later_failure() {
     telltale_binary(&stage.join("telltale.old"), "0.4.0", false);
     telltale_binary(&stage.join("telltale.new"), "0.5.0", false);
     let old_bytes = fs::read(stage.join("telltale.old")).unwrap();
+    let new_bytes = fs::read(stage.join("telltale.new")).unwrap();
     fs::copy(stage.join("telltale.new"), install.join("telltale")).unwrap();
 
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
-    let _selected = archive(temp.path(), &name, "0.5.0", None);
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
-    let output = run_release(temp.path(), &metadata, temp.path(), None, &[]);
-    assert!(!output.status.success());
-    assert!(output_text(&output).contains("SHA256SUMS"));
-    assert_eq!(fs::read(install.join("telltale")).unwrap(), old_bytes);
-    assert!(
-        !stage.exists(),
-        "verified interrupted recovery should clean staging"
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let mut command = installer_command(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &tools(temp.path(), true),
     );
+    command
+        .env("FAKE_SYSTEMCTL_FAIL_QUERY", "LoadState:telltale-scan.timer")
+        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("could not safely query systemd state"));
+    assert_eq!(fs::read(install.join("telltale")).unwrap(), new_bytes);
+    assert_ne!(new_bytes, old_bytes);
+    assert!(stage.exists(), "failed recovery must retain staging");
 }
 
 #[test]
@@ -1795,11 +2308,12 @@ fn committed_recovery_keeps_new_install_and_cleans_staging() {
     );
 
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
-    let _selected = archive(temp.path(), &name, "0.5.0", None);
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
-    let output = run_release(temp.path(), &metadata, temp.path(), None, &[]);
-    assert!(!output.status.success());
-    assert!(output_text(&output).contains("SHA256SUMS"));
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let output = run_release(temp.path(), &metadata, temp.path(), Some(&sums), &[]);
+    assert_success(&output);
     assert_eq!(fs::read(install.join("telltale")).unwrap(), new_bytes);
     assert!(!stage.exists(), "committed recovery should clean staging");
 }
@@ -1807,7 +2321,11 @@ fn committed_recovery_keeps_new_install_and_cleans_staging() {
 #[test]
 fn duplicate_conflicting_initial_journal_phase_and_staging_are_retained() {
     let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
     let install = temp.path().join("home/bin");
     let journal_dir = temp.path().join("home/.local/state/telltale");
     fs::create_dir_all(&install).unwrap();
@@ -1832,7 +2350,7 @@ fn duplicate_conflicting_initial_journal_phase_and_staging_are_retained() {
 "#;
     regular_file(&journal, original_journal, 0o600);
 
-    let output = run_release(temp.path(), &metadata, temp.path(), None, &[]);
+    let output = run_release(temp.path(), &metadata, temp.path(), Some(&sums), &[]);
     assert!(!output.status.success());
     assert!(output_text(&output).contains("could not safely read the installer journal"));
     assert_eq!(fs::read(&journal).unwrap(), original_journal);
@@ -1843,7 +2361,11 @@ fn duplicate_conflicting_initial_journal_phase_and_staging_are_retained() {
 #[test]
 fn unknown_hidden_stage_entry_is_retained_before_recursive_recovery_cleanup() {
     let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
     let install = temp.path().join("home/bin");
     fs::create_dir_all(&install).unwrap();
 
@@ -1857,7 +2379,7 @@ fn unknown_hidden_stage_entry_is_retained_before_recursive_recovery_cleanup() {
     regular_file(&stage.join(".unknown"), b"retain this\n", 0o600);
     telltale_binary(&stage.join("telltale.old"), "0.4.0", false);
 
-    let output = run_release(temp.path(), &metadata, temp.path(), None, &[]);
+    let output = run_release(temp.path(), &metadata, temp.path(), Some(&sums), &[]);
     assert!(!output.status.success());
     assert!(output_text(&output).contains("marker-owned installer staging"));
     assert!(stage.exists());
@@ -1918,7 +2440,11 @@ fn recovery_conflict_preserves_both_byte_sets_and_records_failure() {
     regular_file(&install.join("telltale"), b"destination bytes\n", 0o755);
 
     let metadata = release_metadata(temp.path(), "v0.5.0");
-    let output = run_release(temp.path(), &metadata, temp.path(), None, &[]);
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let output = run_release(temp.path(), &metadata, temp.path(), Some(&sums), &[]);
     assert!(!output.status.success());
     assert_eq!(
         fs::read(stage.join("telltale.old")).unwrap(),

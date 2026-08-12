@@ -16,6 +16,9 @@ format.
 - `0.5.0` is the approved coherent breaking milestone for the hard Telltale
   technical migration, embedded-triage removal, schema/configuration changes,
   and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
+- The current preparation value is `0.5.0-rc.1`. It is a Cargo package and
+  GitHub Release candidate, not the stable `0.5.0` release; stable promotion
+  remains gated by the release-readiness matrix.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
@@ -86,13 +89,17 @@ The Cargo/package version is not the version of every data contract:
 1. Release only from a reviewed commit on `main`.
 2. Update the workspace package version and every internal workspace dependency
    version together.
-3. Update public release notes with capabilities, fixes, compatibility impact,
+3. For an RC, use the exact matching `v0.5.0-rc.N` tag. The tag, Release
+   metadata, archive names, checksums, attestations, and installer selection
+   are immutable evidence; a validation-relevant change requires the next
+   reviewed RC rather than reusing a tag or asset.
+4. Update public release notes with capabilities, fixes, compatibility impact,
    and operator impact. Internal planning history stays out of public notes.
-4. Run `make release-preflight` and review the staged/public file boundary.
-5. Create the matching `v<version>` tag. For example, a compatible maintenance
+5. Run `make release-preflight` and review the staged/public file boundary.
+6. Create the matching `v<version>` tag. For example, a compatible maintenance
    release `0.3.1` requires tag `v0.3.1`; the approved breaking milestone
    requires `v0.5.0` only after all migration and reliability gates pass.
-6. Wait for the release workflow, then inspect the published artifacts and
+7. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
 The current 0.5.0 section documents the breaking package and Event 3.0
@@ -132,4 +139,12 @@ pass, and do not publish credentials or local release state.
 Use Cargo-compatible pre-release versions such as `0.5.0-alpha.1`,
 `0.5.0-beta.1`, or `0.5.0-rc.1` only when external validation is useful. A
 pre-release tag and package version must still match exactly, and pre-releases
-do not carry stable compatibility guarantees.
+do not carry stable compatibility guarantees. GitHub Release metadata must set
+`prerelease=true`; an RC must never be made the normal latest stable Release.
+The checked-in installer keeps no-argument selection on `releases/latest`, while
+`--release-tag v0.5.0-rc.N` selects and validates one exact published candidate
+before any user install or schedule mutation. `--from-source` uses that same
+exact tag, validates its archive provenance, resolves its immutable commit, and
+builds that source revision. Binary
+GitHub Releases and later crates.io publication are separate operations; an RC
+workflow does not publish crates.
