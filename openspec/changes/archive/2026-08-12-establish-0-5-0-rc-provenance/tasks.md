@@ -78,7 +78,7 @@
   checks using synthetic/local inputs only; confirm no package version,
   release workflow, tag, release asset, checksum file, or protected boundary
   was changed outside the scoped preparation.
-- [ ] 5.3 Obtain independent review of the RC preparation and keep PR #9 Draft
+- [x] 5.3 Obtain independent review of the RC preparation and keep PR #9 Draft
   until the candidate code, version transition, workflow adjustment, and
   exact-tag installer path are approved and CI is green.
 
