@@ -1291,7 +1291,7 @@ fn release_artifact_manifest_skips_absent_download_directory() {
 
 #[test]
 fn release_workflow_packages_only_canonical_identity() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let workflow = read_release_workflow();
     assert!(workflow.contains("telltale-${{ github.ref_name }}-${{ matrix.target }}"));
     assert!(!workflow.contains("adr-${{ github.ref_name }}-${{ matrix.target }}"));
     assert!(workflow.contains("telltale LICENSE README.md"));
@@ -1342,7 +1342,7 @@ fn release_workflow_packages_only_canonical_identity() {
 
 #[test]
 fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let workflow = read_release_workflow();
     serde_yaml::from_str::<serde_yaml::Value>(&workflow).expect("release workflow YAML");
     let installer = fs::read_to_string("scripts/install-telltale").expect("installer script");
     assert!(installer.contains("INSTALLER_PROVENANCE=\"git-blob\""));
@@ -1429,7 +1429,7 @@ fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
 
 #[test]
 fn release_workflow_existing_release_guard_is_fail_closed_without_live_calls() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let workflow = read_release_workflow();
     let start = workflow
         .find("- name: Fail closed if the tag already has a Release")
         .expect("existing-release guard");
@@ -1457,7 +1457,7 @@ fn release_workflow_existing_release_guard_is_fail_closed_without_live_calls() {
 
 #[test]
 fn release_workflow_reserves_release_before_action_creation() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let workflow = read_release_workflow();
     let guard = workflow
         .find("- name: Fail closed if the tag already has a Release")
         .expect("existing-release guard");
@@ -1490,7 +1490,7 @@ fn release_workflow_reserves_release_before_action_creation() {
 #[cfg(unix)]
 #[test]
 fn release_workflow_existing_release_guard_handles_representative_gh_responses() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let workflow = read_release_workflow();
     let guard_start = workflow
         .find("- name: Fail closed if the tag already has a Release")
         .expect("existing-release guard");
@@ -1594,7 +1594,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn release_workflow_reservation_uses_exact_draft_rc_inputs_without_live_calls() {
-    let workflow = fs::read_to_string(".github/workflows/release.yml").expect("release workflow");
+    let workflow = read_release_workflow();
     let reservation_start = workflow
         .find("- name: Reserve GitHub Release")
         .expect("release reservation");
@@ -1960,6 +1960,12 @@ fn public_markdown_docs() -> Vec<std::path::PathBuf> {
         .into_iter()
         .filter(|path| path.file_name().is_none_or(|name| name != "CHANGELOG.md"))
         .collect()
+}
+
+fn read_release_workflow() -> String {
+    fs::read_to_string(".github/workflows/release.yml")
+        .expect("release workflow")
+        .replace("\r\n", "\n")
 }
 
 fn public_text_surfaces() -> Vec<std::path::PathBuf> {
