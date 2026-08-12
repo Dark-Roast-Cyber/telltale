@@ -304,30 +304,30 @@ jobs:
             exit 1
           fi
           match_state="$(printf '%s\n' "$response" | python3 -c '
-           import json
-           import sys
+          import json
+          import sys
 
-           try:
-               pages = json.load(sys.stdin)
-           except (TypeError, ValueError):
-               raise SystemExit(1)
+          try:
+              pages = json.load(sys.stdin)
+          except (TypeError, ValueError):
+              raise SystemExit(1)
 
-           if not isinstance(pages, list):
-               raise SystemExit(1)
-           match = False
-           for page in pages:
-               if not isinstance(page, list):
-                   raise SystemExit(1)
-               for release in page:
-                   if (
-                       not isinstance(release, dict)
-                       or not isinstance(release.get("tag_name"), str)
-                       or release["tag_name"] == ""
-                   ):
-                       raise SystemExit(1)
-                   if release["tag_name"] == sys.argv[1]:
-                       match = True
-           print("match" if match else "absent")
+          if not isinstance(pages, list):
+              raise SystemExit(1)
+          match = False
+          for page in pages:
+              if not isinstance(page, list):
+                  raise SystemExit(1)
+              for release in page:
+                  if (
+                      not isinstance(release, dict)
+                      or not isinstance(release.get("tag_name"), str)
+                      or release["tag_name"] == ""
+                  ):
+                      raise SystemExit(1)
+                  if release["tag_name"] == sys.argv[1]:
+                      match = True
+          print("match" if match else "absent")
            ' "$GITHUB_REF_NAME")" || {
             echo "Could not validate the GitHub Releases response." >&2
             exit 1
@@ -363,21 +363,21 @@ jobs:
           }
           reservation_body="$(printf '%s\n' "${reservation_response}" | awk 'BEGIN{body=0} body {print} /^[[:space:]]*$/ {body=1}')"
           printf '%s\n' "${reservation_body}" | python3 -c '
-           import json
-           import sys
+          import json
+          import sys
 
-           try:
-               release = json.load(sys.stdin)
-           except (TypeError, ValueError):
-               raise SystemExit(1)
-           if (
-               not isinstance(release, dict)
-               or type(release.get("id")) is not int
-               or release.get("tag_name") != sys.argv[1]
-               or release.get("draft") is not True
-               or release.get("prerelease") is not (sys.argv[2] == "true")
-           ):
-               raise SystemExit(1)
+          try:
+              release = json.load(sys.stdin)
+          except (TypeError, ValueError):
+              raise SystemExit(1)
+          if (
+              not isinstance(release, dict)
+              or type(release.get("id")) is not int
+              or release.get("tag_name") != sys.argv[1]
+              or release.get("draft") is not True
+              or release.get("prerelease") is not (sys.argv[2] == "true")
+          ):
+              raise SystemExit(1)
            ' "${GITHUB_REF_NAME}" "${prerelease}" || {
             echo "GitHub Release reservation response was malformed or uncertain." >&2
             exit 1
