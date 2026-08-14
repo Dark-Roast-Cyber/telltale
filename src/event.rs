@@ -21,7 +21,7 @@ pub fn append_jsonl_events(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = SidecarLock::acquire(path)?;
+    let _lock = SidecarLock::acquire_lock_only(path)?;
     let created = append_jsonl_bytes(path, &bytes)?;
     if created {
         sync_parent(path)?;

@@ -952,7 +952,7 @@ fn acquire_migration_locks(
     ordered.dedup_by(|left, right| left.0 == right.0);
     ordered
         .into_iter()
-        .map(|(_, target)| SidecarLock::acquire(&target))
+        .map(|(_, target)| SidecarLock::acquire_lock_only(&target))
         .collect()
 }
 

@@ -153,6 +153,17 @@ symlinks/reparse points, non-regular files, unsafe hardlinks, and source or
 destination aliases are refused. Lock contention fails fast with a bounded
 busy error.
 
+Native state locks use strict target verification. On Windows, an existing
+state target is read through a short-lived pinned handle and its complete
+SHA-256 content is compared again after cheap identity, link-count, length, and
+timestamp checks; unstable reads and content mismatches fail closed. Unix and
+macOS retain their metadata comparison semantics. Local JSONL append/rotation
+and event or environment migration use explicit lock-only coordination because
+they intentionally mutate protected targets; their existing append, rotation,
+pinned-source, destination, no-clobber, and post-write checks remain
+authoritative. These advisory locks do not make the final verification and
+mutation sequence atomic against arbitrary writers.
+
 Native state and migration manifests are created with owner-only permissions
 (`0600`) on Unix. The local JSONL file is created no broader than `0640`.
 Before accepting exact-idempotent existing bytes, migration rejects an existing
