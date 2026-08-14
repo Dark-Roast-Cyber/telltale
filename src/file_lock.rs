@@ -330,7 +330,7 @@ fn strict_target_baseline(path: &Path) -> Result<TargetBaseline, Box<dyn std::er
         };
         let info = pinned.info;
         let digest = pinned.stream_to(|_| Ok(()))?;
-        return Ok((Some(info), Some(digest)));
+        Ok((Some(info), Some(digest)))
     }
     #[cfg(not(windows))]
     {
