@@ -386,3 +386,7 @@ try {
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# Expected negative helper invocations leave LASTEXITCODE nonzero. Reaching this
+# point means every assertion passed, so report the suite result explicitly.
+exit 0
