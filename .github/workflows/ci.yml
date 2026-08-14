@@ -66,6 +66,9 @@ jobs:
         with:
           components: clippy,rustfmt
           targets: x86_64-pc-windows-msvc
+      - name: Validate Windows release ZIP helper
+        shell: pwsh
+        run: .\tests\release_windows_zip.ps1
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test

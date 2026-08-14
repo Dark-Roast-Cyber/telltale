@@ -37,6 +37,22 @@ const PUBLIC_OPENSPEC_CONTENT_MARKERS: &[&str] = &[
 ];
 
 #[cfg(unix)]
+fn release_fixture_make_command() -> Command {
+    let mut command = Command::new("make");
+    for name in [
+        "PUBLIC_RELEASE_BRANCH",
+        "PUBLIC_RELEASE_TAG",
+        "PUBLIC_RELEASE_UPSTREAM",
+        "PUBLIC_RELEASE_REMOTE",
+        "RELEASE_ARTIFACT_DIR",
+        "CARGO_LOCKED",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
+#[cfg(unix)]
 fn configure_git_user(repo: &Path) {
     git_expect(repo, &["config", "user.email", "adr-test@example.invalid"]);
     git_expect(repo, &["config", "user.name", "ADR Test"]);
@@ -88,7 +104,7 @@ fn release_context_check_rejects_empty_public_config() {
     );
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(makefile)
@@ -116,7 +132,7 @@ fn release_context_check_rejects_empty_public_config() {
         "unexpected output: {combined}"
     );
 
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile"))
@@ -181,7 +197,7 @@ fn public_push_review_summarizes_repo_and_staged_context() {
     git_expect(repo, &["add", "staged.txt"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(makefile)
@@ -265,7 +281,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
     git_expect(&repo, &["push", "--quiet", "-u", "origin", "main"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -303,7 +319,7 @@ fn release_context_check_reports_sync_and_rejects_behind_head() {
     git_expect(&peer, &["push", "--quiet"]);
     git_expect(&repo, &["fetch", "--quiet", "origin", "main"]);
 
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -360,7 +376,7 @@ edition = "2021"
     git_expect(repo, &["commit", "--quiet", "-m", "Initial fixture"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -381,7 +397,7 @@ edition = "2021"
         String::from_utf8_lossy(&output.stdout)
     );
 
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -406,7 +422,7 @@ edition = "2021"
     );
 
     git_expect(repo, &["tag", "-m", "v1.2.3", "v1.2.3"]);
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -469,7 +485,7 @@ fn release_context_check_reports_empty_and_staged_paths() {
     git_expect(&repo, &["push", "--quiet", "-u", "origin", "main"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -503,7 +519,7 @@ fn release_context_check_reports_empty_and_staged_paths() {
         String::from_utf8_lossy(&add.stderr)
     );
 
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -533,7 +549,7 @@ fn release_context_check_reports_empty_and_staged_paths() {
 #[test]
 fn release_crate_manifest_excludes_host_only_release_material() {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -565,7 +581,7 @@ fn release_crate_manifest_excludes_host_only_release_material() {
         "Cargo package must not include host-only release material: {host_only:?}"
     );
 
-    let preflight = Command::new("make")
+    let preflight = release_fixture_make_command()
         .arg("--dry-run")
         .arg("--no-print-directory")
         .arg("-f")
@@ -742,7 +758,7 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
     assert!(initial_checksums.status.success());
     fs::write(artifacts.join("SHA256SUMS"), initial_checksums.stdout).expect("initial sums");
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -803,7 +819,7 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
     );
     fs::write(artifacts.join("SHA256SUMS"), &checksums.stdout).expect("write SHA256SUMS");
 
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -847,7 +863,7 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
         "0000000000000000000000000000000000000000000000000000000000000000  stale.zip\n",
     )
     .expect("write stale SHA256SUMS");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -898,7 +914,7 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
         .expect("bad archive checksum");
     assert!(bad_checksum.status.success());
     fs::write(artifacts.join("SHA256SUMS"), bad_checksum.stdout).expect("bad sums");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--silent")
         .arg("-f")
         .arg(&makefile)
@@ -976,7 +992,7 @@ fn release_artifact_manifest_accepts_only_canonical_bundle() {
         .expect("checksum");
     fs::write(artifacts.join("SHA256SUMS"), sums.stdout).expect("sums");
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .args(["--silent", "-f"])
         .arg(&makefile)
         .arg("release-artifact-manifest")
@@ -997,7 +1013,7 @@ fn release_artifact_manifest_accepts_only_canonical_bundle() {
         artifacts.join("adr-v0.5.0-x86_64-unknown-linux-gnu.tar.gz"),
     )
     .expect("legacy archive");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .args(["--silent", "-f"])
         .arg(&makefile)
         .arg("release-artifact-manifest")
@@ -1087,7 +1103,7 @@ fn release_artifact_manifest_rejects_link_and_traversal_members() {
         .expect("link checksum");
     fs::write(artifacts.join("SHA256SUMS"), sums.stdout).expect("link sums");
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .args(["--silent", "-f"])
         .arg(&makefile)
         .arg("release-artifact-manifest")
@@ -1133,7 +1149,7 @@ fn release_artifact_manifest_rejects_link_and_traversal_members() {
         .output()
         .expect("traversal checksum");
     fs::write(artifacts.join("SHA256SUMS"), sums.stdout).expect("traversal sums");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .args(["--silent", "-f"])
         .arg(&makefile)
         .arg("release-artifact-manifest")
@@ -1197,7 +1213,7 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
     assert!(dos_checksum.status.success());
     fs::write(artifacts.join("SHA256SUMS"), dos_checksum.stdout)
         .expect("write DOS-directory-attribute sums");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .args(["--silent", "-f"])
         .arg(&makefile)
         .arg("release-artifact-manifest")
@@ -1223,7 +1239,7 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
 #[test]
 fn release_fixture_smoke_uses_fixture_safe_commands() {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--dry-run")
         .arg("--no-print-directory")
         .arg("-f")
@@ -1256,7 +1272,7 @@ fn release_fixture_smoke_uses_fixture_safe_commands() {
 #[test]
 fn makefile_build_install_and_scan_targets_use_primary_binary() {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .args(["--dry-run", "--no-print-directory", "-f"])
         .arg(&makefile)
         .args(["build", "install", "scan-dry", "scan"])
@@ -1285,7 +1301,7 @@ fn release_artifact_manifest_skips_absent_download_directory() {
     let temp = tempdir().expect("tempdir");
     let absent = temp.path().join("no-downloaded-artifacts");
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .args(["--silent", "-f"])
         .arg(&makefile)
         .arg("release-artifact-manifest")
@@ -1306,7 +1322,8 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(workflow.contains("config/examples/elastic-telltale-index-template.json"));
     assert!(workflow.contains("config/examples/elastic-telltale-role.json"));
     assert!(!workflow.contains("Compress-Archive"));
-    assert!(workflow.contains("[System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile"));
+    assert!(workflow.contains("& .\\scripts\\release-windows-zip.ps1"));
+    assert!(workflow.contains("-BundleDirectory $bundleDir -OutputArchive $archivePath"));
     for member in [
         "telltale.exe",
         "LICENSE",
@@ -1346,6 +1363,64 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(!workflow.contains("branch-artifact"));
     assert!(!workflow.contains("artifact-reference"));
     assert!(!workflow.contains("adr-${{ github.ref_name }}"));
+}
+
+#[test]
+fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
+    let workflow = read_release_workflow();
+    let package = workflow
+        .find("- name: Stage and package release bundle (windows)")
+        .expect("Windows package step");
+    let smoke = workflow
+        .find("- name: Mandatory Windows staged binary --version smoke")
+        .expect("Windows smoke step");
+    let attestation = workflow
+        .find("- name: Attest release archive")
+        .expect("archive attestation step");
+    let upload = workflow
+        .find("- name: Upload artifact")
+        .expect("artifact upload step");
+    assert!(package < smoke && smoke < attestation && attestation < upload);
+
+    let package_block = &workflow[package..smoke];
+    assert!(package_block.contains("$archivePath = Join-Path (Get-Location) $archive"));
+    assert!(package_block.contains("& .\\scripts\\release-windows-zip.ps1"));
+    for forbidden in [
+        "[System.IO.Compression.ZipFile]::Open",
+        "[System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile",
+        "continue-on-error",
+        "catch",
+        "always()",
+    ] {
+        assert!(
+            !package_block.contains(forbidden),
+            "Windows package block must not bypass helper failure: {forbidden}"
+        );
+    }
+    assert!(workflow.contains(
+        "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
+    ));
+}
+
+#[test]
+fn windows_ci_runs_release_zip_helper_before_rust_suite() {
+    let workflow = fs::read_to_string(".github/workflows/ci.yml")
+        .expect("CI workflow")
+        .replace("\r\n", "\n");
+    let windows = workflow.find("  windows:\n").expect("Windows CI job");
+    let macos = workflow[windows..]
+        .find("  macos:")
+        .map(|offset| windows + offset)
+        .expect("macOS CI job");
+    let job = &workflow[windows..macos];
+    let helper = job
+        .find("- name: Validate Windows release ZIP helper")
+        .expect("Windows helper test step");
+    let rust = job
+        .find("- run: cargo fmt --all --check")
+        .expect("Rust suite");
+    assert!(helper < rust);
+    assert!(job.contains("shell: pwsh\n        run: .\\tests\\release_windows_zip.ps1"));
 }
 
 #[cfg(unix)]
@@ -1921,7 +1996,7 @@ fn text_between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
 #[cfg(unix)]
 fn release_public_docs_check_dry_run_stdout() -> String {
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = Command::new("make")
+    let output = release_fixture_make_command()
         .arg("--dry-run")
         .arg("--no-print-directory")
         .arg("-f")

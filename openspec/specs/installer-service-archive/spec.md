@@ -37,7 +37,7 @@ permitted for approved G-SERVICE validation.
 
 #### Scenario: Candidate provenance fails before mutation
 
-- **GIVEN** an explicit `v0.5.0-rc.1` selection whose release metadata, tag,
+- **GIVEN** an explicit `v0.5.0-rc.N` selection whose release metadata, tag,
   archive, manifest, or `SHA256SUMS` digest is missing or inconsistent
 - **WHEN** the installer starts
 - **THEN** it fails before acquiring an installer lock or changing files,
@@ -45,7 +45,7 @@ permitted for approved G-SERVICE validation.
 
 #### Scenario: Exact candidate staging
 
-- **GIVEN** a published `v0.5.0-rc.1` Release with matching metadata,
+- **GIVEN** a published `v0.5.0-rc.N` Release with matching metadata,
   canonical archive, and verified `SHA256SUMS` entry
 - **WHEN** the installer runs with that explicit release tag
 - **THEN** it stages and verifies only the matching canonical `telltale`

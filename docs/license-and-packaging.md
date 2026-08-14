@@ -85,10 +85,11 @@ The release workflow also creates a GitHub artifact attestation for each
 archive using the workflow's short-lived GitHub/Sigstore identity. Canonical
 assets use `telltale-v<version>-...`. Once the candidate or later stable
 release is published, verify a downloaded archive as a separate
-post-publication step with the GitHub CLI. For the current candidate:
+post-publication step with the GitHub CLI. For a published candidate or stable
+release, replace `<version>` with its exact version:
 
 ```sh
-gh attestation verify telltale-v0.5.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify telltale-v<version>-x86_64-unknown-linux-gnu.tar.gz \
   --repo Dark-Roast-Cyber/telltale
 ```
 

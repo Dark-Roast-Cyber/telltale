@@ -65,8 +65,9 @@ The no-argument installer selects the latest stable GitHub Release. For
 approved candidate validation, select the exact immutable RC tag:
 
 ```sh
-./scripts/install-telltale --release-tag v0.5.0-rc.1 --no-timer
-./scripts/install-telltale --release-tag v0.5.0-rc.1 --from-source --no-timer
+RC_TAG='v0.5.0-rc.N' # replace N with the exact published candidate number
+./scripts/install-telltale --release-tag "$RC_TAG" --no-timer
+./scripts/install-telltale --release-tag "$RC_TAG" --from-source --no-timer
 ```
 
 The explicit path requires that tag's published non-draft prerelease metadata,
@@ -82,11 +83,11 @@ remain separate from the later dependency-ordered crates.io publication.
 The release workflow publishes a GitHub artifact attestation for every `.tar.gz`
 and `.zip` archive. Release assets use `telltale-v<version>-...` names. Once the
 RC candidate or a later stable release is published, verify the downloaded
-archive as a separate post-publication step before extracting it. For the
-current candidate, the example is:
+archive as a separate post-publication step before extracting it. For a
+published candidate, replace `<version>` with its exact version:
 
 ```sh
-gh attestation verify telltale-v0.5.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
+gh attestation verify telltale-v<version>-x86_64-unknown-linux-gnu.tar.gz \
   --repo Dark-Roast-Cyber/telltale
 ```
 

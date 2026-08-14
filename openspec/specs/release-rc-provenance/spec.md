@@ -16,8 +16,8 @@ already be an ancestor of reviewed `origin/main`.
 
 #### Scenario: Valid RC candidate
 
-- **WHEN** the reviewed main commit reports package version `0.5.0-rc.1` and is
-  tagged `v0.5.0-rc.1`
+- **WHEN** the reviewed main commit reports package version `0.5.0-rc.N` and is
+  tagged `v0.5.0-rc.N`
 - **THEN** the release preflight accepts the version/tag relationship and
   proceeds to the canonical candidate build
 
@@ -36,7 +36,7 @@ MUST NOT rely on tag-name inference or mark an RC as a normal latest release.
 
 #### Scenario: RC Release metadata
 
-- **WHEN** the workflow creates a Release for `v0.5.0-rc.1`
+- **WHEN** the workflow creates a Release for `v0.5.0-rc.N`
 - **THEN** the Release is published with `prerelease=true` and is not eligible
   as the repository's latest stable release
 
@@ -67,6 +67,25 @@ reviewed tag and commit.
   member, missing attestation, or source identity that cannot be tied to the
   reviewed tag commit
 - **THEN** the candidate is not approved for downstream live validation
+
+### Requirement: Finalized Windows ZIP validation
+
+For the Windows target, the release process SHALL create the ZIP with the
+canonical nine-member manifest, finalize and close the ZIP writer, reopen that
+same serialized archive read-only, and validate the exact ordinal canonical
+regular-member set before reading every member payload fully to EOF. This
+validation SHALL succeed before the staged binary smoke test, archive
+attestation, or artifact upload; any packaging or validation error SHALL stop
+the workflow.
+
+#### Scenario: Windows archive is validated after finalization
+
+- **WHEN** the Windows package helper has written the staged bundle
+- **THEN** it closes the writer and reopens the same archive read-only
+- **AND** it rejects noncanonical, duplicate, directory, link, unsupported,
+  malformed, corrupt, or unreadable members
+- **AND** it reads every canonical member to EOF before downstream evidence
+  steps run
 
 ### Requirement: Immutable RC iteration
 
