@@ -20,17 +20,19 @@ $ZipMaxCentralDirectoryBytes = [long]67108864
 $ZipUtf8Flag = [uint32]0x0800
 $ZipDataDescriptorFlag = [uint32]0x0008
 $ZipEncryptionFlags = [uint32]0x2041
+$Crc32Mask = [uint64]4294967295
+$Crc32Polynomial = [uint64]3988292384
 $script:Crc32Table = [uint32[]]::new(256)
 for ($tableIndex = 0; $tableIndex -lt $script:Crc32Table.Length; $tableIndex++) {
-    $tableValue = [uint32]$tableIndex
+    $tableValue = [uint64]$tableIndex
     for ($bit = 0; $bit -lt 8; $bit++) {
-        if (($tableValue -band [uint32]1) -ne 0) {
-            $tableValue = [uint32](($tableValue -shr 1) -bxor [uint32]0xEDB88320)
+        if (($tableValue -band [uint64]1) -ne 0) {
+            $tableValue = (($tableValue -shr 1) -bxor $Crc32Polynomial) -band $Crc32Mask
         } else {
-            $tableValue = [uint32]($tableValue -shr 1)
+            $tableValue = ($tableValue -shr 1) -band $Crc32Mask
         }
     }
-    $script:Crc32Table[$tableIndex] = $tableValue
+    $script:Crc32Table[$tableIndex] = [uint32]($tableValue -band $Crc32Mask)
 }
 
 $CanonicalMembers = [ordered]@{
@@ -201,8 +203,8 @@ function Read-ZipCentralDirectoryMetadata([string]$Path) {
             Fail 'archive uses unsupported multi-disk ZIP metadata'
         }
         if ($entriesTotal -eq [uint32]0xFFFF -or
-            $centralDirectorySize32 -eq [uint32]0xFFFFFFFF -or
-            $centralDirectoryOffset32 -eq [uint32]0xFFFFFFFF) {
+            $centralDirectorySize32 -eq [uint32]::MaxValue -or
+            $centralDirectoryOffset32 -eq [uint32]::MaxValue) {
             Fail 'archive uses unsupported ZIP64 metadata'
         }
 
@@ -253,9 +255,9 @@ function Read-ZipCentralDirectoryMetadata([string]$Path) {
             if ($diskStart -ne 0) {
                 Fail "archive central directory entry $entryIndex starts on an unsupported disk"
             }
-            if ($compressedSize32 -eq [uint32]0xFFFFFFFF -or
-                $uncompressedSize32 -eq [uint32]0xFFFFFFFF -or
-                $localHeaderOffset32 -eq [uint32]0xFFFFFFFF) {
+            if ($compressedSize32 -eq [uint32]::MaxValue -or
+                $uncompressedSize32 -eq [uint32]::MaxValue -or
+                $localHeaderOffset32 -eq [uint32]::MaxValue) {
                 Fail 'archive uses unsupported ZIP64 member metadata'
             }
 
@@ -327,8 +329,8 @@ function Read-ZipCentralDirectoryMetadata([string]$Path) {
             if ($localCompressionMethod -ne $entryMetadata.CompressionMethod) {
                 Fail "archive member local and central compression methods differ: $($entryMetadata.Name)"
             }
-            if ($localCompressedSize32 -eq [uint32]0xFFFFFFFF -or
-                $localUncompressedSize32 -eq [uint32]0xFFFFFFFF) {
+            if ($localCompressedSize32 -eq [uint32]::MaxValue -or
+                $localUncompressedSize32 -eq [uint32]::MaxValue) {
                 Fail "archive member uses unsupported ZIP64 local-header metadata: $($entryMetadata.Name)"
             }
 
@@ -395,10 +397,10 @@ function Assert-RegularEntry([System.IO.Compression.ZipArchiveEntry]$Entry) {
         Fail "archive contains a directory member: $name"
     }
 
-    $externalAttributes = [uint32]$Entry.ExternalAttributes
-    $dosAttributes = $externalAttributes -band [uint32]0xFFFF
-    $unixMode = ($externalAttributes -shr 16) -band [uint32]0xFFFF
-    $unixType = $unixMode -band [uint32]0xF000
+    $externalAttributes = ([int64]$Entry.ExternalAttributes) -band [int64]4294967295
+    $dosAttributes = $externalAttributes -band [int64]0xFFFF
+    $unixMode = ($externalAttributes -shr 16) -band [int64]0xFFFF
+    $unixType = $unixMode -band [int64]0xF000
 
     if (($dosAttributes -band [uint32]0x10) -ne 0) {
         Fail "archive member has the DOS directory attribute: $name"
@@ -429,7 +431,7 @@ function Read-EntryToEnd(
     }
 
     $stream = $null
-    $crc32 = [uint32]0xFFFFFFFF
+    $crc32 = $Crc32Mask
     $length = [uint64]0
     $readException = $null
     try {
@@ -441,9 +443,9 @@ function Read-EntryToEnd(
                 break
             }
             for ($index = 0; $index -lt $read; $index++) {
-                $mixed = [uint32]($crc32 -bxor [uint32]$buffer[$index])
-                $tableIndex = [int]($mixed -band [uint32]0xFF)
-                $crc32 = [uint32](($crc32 -shr 8) -bxor $script:Crc32Table[$tableIndex])
+                $mixed = ($crc32 -bxor [uint64]$buffer[$index]) -band $Crc32Mask
+                $tableIndex = [int]($mixed -band [uint64]0xFF)
+                $crc32 = (($crc32 -shr 8) -bxor [uint64]$script:Crc32Table[$tableIndex]) -band $Crc32Mask
             }
             $length = [uint64]($length + [uint64]$read)
         }
@@ -461,13 +463,13 @@ function Read-EntryToEnd(
         }
     }
 
-    $crc32 = [uint32]($crc32 -bxor [uint32]0xFFFFFFFF)
+    $crc32 = ($crc32 -bxor $Crc32Mask) -band $Crc32Mask
     if ($length -ne [uint64]$Metadata.UncompressedSize) {
         Fail "archive member length mismatch: $($Entry.FullName)"
     }
-    if ($crc32 -ne [uint32]$Metadata.Crc32) {
+    if ($crc32 -ne [uint64]$Metadata.Crc32) {
         $actual = $crc32.ToString('X8')
-        $expected = ([uint32]$Metadata.Crc32).ToString('X8')
+        $expected = ([uint64]$Metadata.Crc32).ToString('X8')
         Fail "archive member CRC32 mismatch for $($Entry.FullName): expected $expected, got $actual"
     }
     if ($null -ne $readException) {
@@ -501,7 +503,8 @@ function Validate-FinalizedArchive([string]$Path) {
             if (-not [string]::Equals($entry.FullName, $entryMetadata.Name, [System.StringComparison]::Ordinal)) {
                 Fail "central-directory name differs from the readable archive entry: $($entry.FullName)"
             }
-            if ([uint32]$entry.ExternalAttributes -ne [uint32]$entryMetadata.ExternalAttributes) {
+            $entryExternalAttributes = ([int64]$entry.ExternalAttributes) -band [int64]4294967295
+            if ($entryExternalAttributes -ne [int64]$entryMetadata.ExternalAttributes) {
                 Fail "central-directory attributes differ from the readable archive entry: $($entry.FullName)"
             }
             Assert-EntryName $entry.FullName $seen

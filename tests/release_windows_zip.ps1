@@ -238,7 +238,7 @@ function Increase-EntryUncompressedSize([string]$Path, [string]$MemberName) {
         $name = [System.Text.Encoding]::UTF8.GetString($bytes, $index + 30, $nameLength)
         if ($name -eq $MemberName) {
             $size = [uint32][System.BitConverter]::ToUInt32($bytes, $index + 22)
-            if ($size -eq [uint32]0xFFFFFFFF) {
+            if ($size -eq [uint32]::MaxValue) {
                 throw "test member uses ZIP64 metadata: $MemberName"
             }
             $updatedSize = [uint32]($size + [uint32]1)
@@ -269,7 +269,7 @@ function Increase-EntryUncompressedSize([string]$Path, [string]$MemberName) {
         $name = [System.Text.Encoding]::UTF8.GetString($bytes, $index + 46, $nameLength)
         if ($name -eq $MemberName) {
             $size = [uint32][System.BitConverter]::ToUInt32($bytes, $index + 24)
-            if ($size -eq [uint32]0xFFFFFFFF) {
+            if ($size -eq [uint32]::MaxValue) {
                 throw "test member uses ZIP64 metadata: $MemberName"
             }
             $updatedSize = [uint32]($size + [uint32]1)
