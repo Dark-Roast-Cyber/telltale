@@ -40,7 +40,7 @@ Usage:
 
 Options:
   --from-source       Build the exact validated release tag with locked Cargo dependencies.
-  --release-tag TAG   Select one exact published RC tag (for example v0.5.0-rc.1).
+  --release-tag TAG   Select one exact published RC tag (for example v0.5.0-rc.N).
   --install-dir DIR  Install the canonical telltale binary below the current user's home.
   --with-timer        Install and enable the canonical telltale-scan.timer user schedule.
   --no-timer          Do not enable the canonical timer; retire identified legacy schedules safely.

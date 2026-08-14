@@ -206,44 +206,8 @@ jobs:
           }
 
           $archive = "telltale-${{ github.ref_name }}-${{ matrix.target }}.zip"
-          if (Test-Path -LiteralPath $archive) {
-            Remove-Item -LiteralPath $archive -Force
-          }
-          Add-Type -AssemblyName System.IO.Compression
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $members = @(
-            @{ Source = (Join-Path $bundleDir 'telltale.exe'); Name = 'telltale.exe' },
-            @{ Source = (Join-Path $bundleDir 'LICENSE'); Name = 'LICENSE' },
-            @{ Source = (Join-Path $bundleDir 'README.md'); Name = 'README.md' },
-            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-outputs.yaml'); Name = 'config/examples/telltale-outputs.yaml' },
-            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-scan.service'); Name = 'config/examples/telltale-scan.service' },
-            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-scan.timer'); Name = 'config/examples/telltale-scan.timer' },
-            @{ Source = (Join-Path $bundleDir 'config/examples/telltale-scan-task.xml'); Name = 'config/examples/telltale-scan-task.xml' },
-            @{ Source = (Join-Path $bundleDir 'config/examples/elastic-telltale-index-template.json'); Name = 'config/examples/elastic-telltale-index-template.json' },
-            @{ Source = (Join-Path $bundleDir 'config/examples/elastic-telltale-role.json'); Name = 'config/examples/elastic-telltale-role.json' }
-          )
-          $zip = [System.IO.Compression.ZipFile]::Open(
-            (Join-Path (Get-Location) $archive),
-            [System.IO.Compression.ZipArchiveMode]::Create
-          )
-          try {
-            foreach ($member in $members) {
-              [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-                $zip,
-                $member.Source,
-                $member.Name,
-                [System.IO.Compression.CompressionLevel]::Optimal
-              ) | Out-Null
-            }
-            $expected = @($members | ForEach-Object { $_.Name } | Sort-Object)
-            $actual = @($zip.Entries | ForEach-Object { $_.FullName } | Sort-Object)
-            $differences = Compare-Object -ReferenceObject $expected -DifferenceObject $actual
-            if ($differences -or $actual.Count -ne $expected.Count) {
-              throw "Windows release ZIP members are not the exact canonical regular-member set: $($actual -join ', ')"
-            }
-          } finally {
-            $zip.Dispose()
-          }
+          $archivePath = Join-Path (Get-Location) $archive
+          & .\scripts\release-windows-zip.ps1 -BundleDirectory $bundleDir -OutputArchive $archivePath
       - name: Mandatory Windows staged binary --version smoke
         if: matrix.archive == 'zip'
         shell: pwsh

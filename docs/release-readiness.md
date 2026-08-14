@@ -25,20 +25,25 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). The workspace is currently preparing
-the immutable `0.5.0-rc.1` candidate for the approved `0.5.0` Event 3.0
-migration; compatible maintenance fixes remain on the prior `0.3.x` line until
-stable publication. Do not create `0.5.x` for a round of small tasks; follow-up
-fixes belong there only after the reviewed `0.5.0` milestone ships.
+the next `0.5.0-rc.2` candidate for the approved `0.5.0` Event 3.0 migration;
+compatible maintenance fixes remain on the prior `0.3.x` line until stable
+publication. Do not create `0.5.x` for a round of small tasks; follow-up fixes
+belong there only after the reviewed `0.5.0` milestone ships.
+
+The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
+`8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
+GitHub Release or complete five-target asset/checksum/attestation set was
+created. Never reuse `rc.1`; `rc.2` is the next prepared candidate.
 
 ## RC Candidate Handoff
 
 The preparation batch does not create a tag, Release, archive, checksum, crate,
 or live-gate evidence. A later reviewed operation may merge the candidate to
-`main`, tag only that reviewed commit as `v0.5.0-rc.1`, and inspect the workflow
+`main`, tag only that reviewed commit as `v0.5.0-rc.2`, and inspect the workflow
 before validation. The RC Release must be explicitly marked `prerelease=true`.
 If code, package metadata, installer behavior, workflow, archive, checksum, or
-attestation provenance changes, use a new reviewed commit and unused `rc.2` (or
-later) tag; do not overwrite a published candidate. A transient environment
+attestation provenance changes, use a new reviewed commit and the next unused
+RC tag; do not overwrite a published candidate. A transient environment
 failure with unchanged artifacts may receive only a bounded recheck.
 
 For each of the five target archives, retain a redacted ledger row containing:
@@ -219,12 +224,18 @@ archives and uploads it with the GitHub release. Publish equivalent checksums
 for any manually produced archives so operators can verify downloads before
 running the binary.
 
+The Windows release job uses `scripts/release-windows-zip.ps1` for both package
+creation and finalized-archive validation. It reopens the serialized ZIP
+read-only and reads every canonical member before the staged binary smoke test,
+attestation, or upload.
+
 The default installer selects the latest stable Release. For candidate
 validation, pass the exact tag, for example:
 
 ```sh
-./scripts/install-telltale --release-tag v0.5.0-rc.1 --no-timer
-./scripts/install-telltale --release-tag v0.5.0-rc.1 --from-source --no-timer
+RC_TAG='v0.5.0-rc.N' # replace N with the exact published candidate number
+./scripts/install-telltale --release-tag "$RC_TAG" --no-timer
+./scripts/install-telltale --release-tag "$RC_TAG" --from-source --no-timer
 ```
 
 The candidate path verifies exact Release metadata, the canonical archive

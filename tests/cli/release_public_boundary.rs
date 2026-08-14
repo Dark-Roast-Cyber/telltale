@@ -1306,7 +1306,8 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(workflow.contains("config/examples/elastic-telltale-index-template.json"));
     assert!(workflow.contains("config/examples/elastic-telltale-role.json"));
     assert!(!workflow.contains("Compress-Archive"));
-    assert!(workflow.contains("[System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile"));
+    assert!(workflow.contains("& .\\scripts\\release-windows-zip.ps1"));
+    assert!(workflow.contains("-BundleDirectory $bundleDir -OutputArchive $archivePath"));
     for member in [
         "telltale.exe",
         "LICENSE",
@@ -1346,6 +1347,64 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(!workflow.contains("branch-artifact"));
     assert!(!workflow.contains("artifact-reference"));
     assert!(!workflow.contains("adr-${{ github.ref_name }}"));
+}
+
+#[test]
+fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
+    let workflow = read_release_workflow();
+    let package = workflow
+        .find("- name: Stage and package release bundle (windows)")
+        .expect("Windows package step");
+    let smoke = workflow
+        .find("- name: Mandatory Windows staged binary --version smoke")
+        .expect("Windows smoke step");
+    let attestation = workflow
+        .find("- name: Attest release archive")
+        .expect("archive attestation step");
+    let upload = workflow
+        .find("- name: Upload artifact")
+        .expect("artifact upload step");
+    assert!(package < smoke && smoke < attestation && attestation < upload);
+
+    let package_block = &workflow[package..smoke];
+    assert!(package_block.contains("$archivePath = Join-Path (Get-Location) $archive"));
+    assert!(package_block.contains("& .\\scripts\\release-windows-zip.ps1"));
+    for forbidden in [
+        "[System.IO.Compression.ZipFile]::Open",
+        "[System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile",
+        "continue-on-error",
+        "catch",
+        "always()",
+    ] {
+        assert!(
+            !package_block.contains(forbidden),
+            "Windows package block must not bypass helper failure: {forbidden}"
+        );
+    }
+    assert!(workflow.contains(
+        "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
+    ));
+}
+
+#[test]
+fn windows_ci_runs_release_zip_helper_before_rust_suite() {
+    let workflow = fs::read_to_string(".github/workflows/ci.yml")
+        .expect("CI workflow")
+        .replace("\r\n", "\n");
+    let windows = workflow.find("  windows:\n").expect("Windows CI job");
+    let macos = workflow[windows..]
+        .find("  macos:")
+        .map(|offset| windows + offset)
+        .expect("macOS CI job");
+    let job = &workflow[windows..macos];
+    let helper = job
+        .find("- name: Validate Windows release ZIP helper")
+        .expect("Windows helper test step");
+    let rust = job
+        .find("- run: cargo fmt --all --check")
+        .expect("Rust suite");
+    assert!(helper < rust);
+    assert!(job.contains("shell: pwsh\n        run: .\\tests\\release_windows_zip.ps1"));
 }
 
 #[cfg(unix)]

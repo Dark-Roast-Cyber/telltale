@@ -16,9 +16,13 @@ format.
 - `0.5.0` is the approved coherent breaking milestone for the hard Telltale
   technical migration, embedded-triage removal, schema/configuration changes,
   and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
-- The current preparation value is `0.5.0-rc.1`. It is a Cargo package and
-  GitHub Release candidate, not the stable `0.5.0` release; stable promotion
-  remains gated by the release-readiness matrix.
+- The current preparation value is `0.5.0-rc.2`. It is the next Cargo package
+  and GitHub Release candidate, not the stable `0.5.0` release; stable
+  promotion remains gated by the release-readiness matrix.
+- `v0.5.0-rc.1` is retained as immutable history at reviewed tag commit
+  `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed, so it
+  has no GitHub Release or complete five-target asset/checksum/attestation set.
+  Never reuse that candidate; `rc.2` is the next prepared candidate.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
@@ -137,7 +141,7 @@ pass, and do not publish credentials or local release state.
 ## Pre-Releases
 
 Use Cargo-compatible pre-release versions such as `0.5.0-alpha.1`,
-`0.5.0-beta.1`, or `0.5.0-rc.1` only when external validation is useful. A
+`0.5.0-beta.1`, or `0.5.0-rc.N` only when external validation is useful. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees. GitHub Release metadata must set
 `prerelease=true`; an RC must never be made the normal latest stable Release.
