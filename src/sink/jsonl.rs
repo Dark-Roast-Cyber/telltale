@@ -98,7 +98,7 @@ impl EventSink for LocalJsonlSink {
         if self.rotation.is_enabled() {
             rotation_components(&self.path)?;
         }
-        let lock = SidecarLock::acquire(&self.path)?;
+        let lock = SidecarLock::acquire_lock_only(&self.path)?;
         ensure_jsonl_tail(&self.path)?;
         let rotated = if self.rotation.is_enabled() {
             maybe_rotate(&self.path, &self.rotation)?

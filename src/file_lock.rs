@@ -35,6 +35,8 @@ pub(crate) struct FileInfo {
     changed: FileTime,
 }
 
+type TargetBaseline = (Option<FileInfo>, Option<[u8; 32]>);
+
 /// The private filename namespace reserved by one enabled JSONL rotator.
 /// Rotation cleanup uses the same parent and stem/extension, so protected
 /// persistence paths in that namespace must be rejected before scanning.
@@ -69,11 +71,30 @@ pub(crate) struct SidecarLock {
     file: File,
     target: PathBuf,
     target_info: Option<FileInfo>,
+    target_digest: Option<[u8; 32]>,
     lock_info: FileInfo,
+    verification: TargetVerification,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TargetVerification {
+    Strict,
+    LockOnly,
 }
 
 impl SidecarLock {
     pub(crate) fn acquire(target: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::acquire_with_verification(target, TargetVerification::Strict)
+    }
+
+    pub(crate) fn acquire_lock_only(target: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::acquire_with_verification(target, TargetVerification::LockOnly)
+    }
+
+    fn acquire_with_verification(
+        target: &Path,
+        verification: TargetVerification,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let lock_path = sidecar_path(target);
         if let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent)?;
@@ -83,13 +104,20 @@ impl SidecarLock {
             Ok(true) => {
                 set_file_mode(&file, 0o600)?;
                 let lock_info = safe_file_info(&file, true)?;
+                let (target_info, target_digest) = match verification {
+                    TargetVerification::Strict => strict_target_baseline(target)?,
+                    TargetVerification::LockOnly => (safe_path_info(target)?, None),
+                };
                 let lock = Self {
                     file,
                     target: target.to_path_buf(),
-                    target_info: safe_path_info(target)?,
+                    target_info,
+                    target_digest,
                     lock_info,
+                    verification,
                 };
-                lock.verify()?;
+                lock.verify_lock()?;
+                lock.verify_target_metadata()?;
                 Ok(lock)
             }
             Ok(false) => Err(LOCK_BUSY.into()),
@@ -104,10 +132,17 @@ impl SidecarLock {
 
     pub(crate) fn verify(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.verify_lock()?;
-        if safe_path_info(&self.target)? != self.target_info {
-            return Err("persistence target changed during operation".into());
+        if self.verification != TargetVerification::Strict {
+            return Err("strict target verification is unavailable for a lock-only lock".into());
         }
-        Ok(())
+        let current_info = self.verify_target_metadata()?;
+        let actual_digest = strict_target_digest(&self.target, current_info)?;
+        verify_target_observation(
+            self.target_info,
+            current_info,
+            self.target_digest,
+            actual_digest,
+        )
     }
 
     pub(crate) fn verify_lock(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -115,6 +150,14 @@ impl SidecarLock {
             return Err("persistence lock target changed during operation".into());
         }
         Ok(())
+    }
+
+    fn verify_target_metadata(&self) -> Result<Option<FileInfo>, Box<dyn std::error::Error>> {
+        let current = safe_path_info(&self.target)?;
+        if current != self.target_info {
+            return Err("persistence target changed during operation".into());
+        }
+        Ok(current)
     }
 }
 
@@ -196,12 +239,13 @@ impl PinnedFile {
             consumer(&buffer[..read])?;
         }
         let after = safe_file_info(&self.file, false)?;
-        if after != before
-            || after.length != before.length
-            || safe_path_info(&self.path)? != Some(self.info)
-        {
-            return Err("source changed during migration; retry".into());
-        }
+        validate_pinned_observation(
+            self.info,
+            before,
+            after,
+            safe_path_info(&self.path)?,
+            "source changed during migration; retry",
+        )?;
         let digest: [u8; 32] = hasher.finalize().into();
         if remember_digest {
             self.digest = Some(digest);
@@ -212,13 +256,136 @@ impl PinnedFile {
 
 pub(crate) fn open_pinned_read(path: &Path) -> Result<PinnedFile, Box<dyn std::error::Error>> {
     let file = open_read(path)?;
-    let info = safe_file_info(&file, false)?;
+    pinned_file(path, file)
+}
+
+fn pinned_file(path: &Path, file: File) -> Result<PinnedFile, Box<dyn std::error::Error>> {
+    let info = safe_file_info(&file, true)?;
     Ok(PinnedFile {
         file,
         path: path.to_path_buf(),
         info,
         digest: None,
     })
+}
+
+#[cfg(windows)]
+fn open_pinned_read_if_exists(
+    path: &Path,
+) -> Result<Option<PinnedFile>, Box<dyn std::error::Error>> {
+    if !windows_preflight_regular_file(path)? {
+        return Ok(None);
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    configure_no_follow(&mut options);
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err("persistence target disappeared during acquisition".into());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(Some(pinned_file(path, file)?))
+}
+
+#[cfg(windows)]
+fn windows_preflight_regular_file(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let file_type = metadata.file_type();
+    if !file_type.is_file() || file_type.is_symlink() {
+        return Err("unsafe persistence target: expected a regular file".into());
+    }
+
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+    };
+
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        return Err(io::Error::last_os_error().into());
+    }
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err("unsafe persistence target: reparse points are refused".into());
+    }
+    if attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE) != 0 {
+        return Err("unsafe persistence target: expected a regular file".into());
+    }
+    Ok(true)
+}
+
+fn strict_target_baseline(path: &Path) -> Result<TargetBaseline, Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    {
+        let Some(mut pinned) = open_pinned_read_if_exists(path)? else {
+            return Ok((None, None));
+        };
+        let info = pinned.info;
+        let digest = pinned.stream_to(|_| Ok(()))?;
+        return Ok((Some(info), Some(digest)));
+    }
+    #[cfg(not(windows))]
+    {
+        Ok((safe_path_info(path)?, None))
+    }
+}
+
+fn strict_target_digest(
+    path: &Path,
+    target_info: Option<FileInfo>,
+) -> Result<Option<[u8; 32]>, Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    {
+        let Some(target_info) = target_info else {
+            return Ok(None);
+        };
+        let mut pinned = open_pinned_read(path)?;
+        if pinned.info != target_info {
+            return Err("persistence target changed during operation".into());
+        }
+        return Ok(Some(pinned.stream_to(|_| Ok(()))?));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, target_info);
+        Ok(None)
+    }
+}
+
+fn verify_target_observation(
+    expected_info: Option<FileInfo>,
+    current_info: Option<FileInfo>,
+    expected_digest: Option<[u8; 32]>,
+    current_digest: Option<[u8; 32]>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if current_info != expected_info {
+        return Err("persistence target changed during operation".into());
+    }
+    if expected_digest.is_some() && current_digest != expected_digest {
+        return Err("persistence target changed during operation".into());
+    }
+    Ok(())
+}
+
+fn validate_pinned_observation(
+    expected_info: FileInfo,
+    before: FileInfo,
+    after: FileInfo,
+    path_info: Option<FileInfo>,
+    error: &'static str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if before != expected_info || after != before || path_info != Some(expected_info) {
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 pub(crate) fn read_snapshot(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -848,7 +1015,8 @@ fn platform_file_info(file: &File) -> Result<FileInfo, Box<dyn std::error::Error
     use std::mem::zeroed;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, GetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_REPARSE_POINT, GetFileInformationByHandle,
     };
 
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { zeroed() };
@@ -857,6 +1025,9 @@ fn platform_file_info(file: &File) -> Result<FileInfo, Box<dyn std::error::Error
     }
     if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err("unsafe persistence target: reparse points are refused".into());
+    }
+    if info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE) != 0 {
+        return Err("unsafe persistence target: expected a regular file".into());
     }
     Ok(FileInfo {
         identity: FileIdentity {
@@ -1081,8 +1252,8 @@ mod tests {
     use super::{sync_directory, windows_file_time};
 
     use super::{
-        RotationNamespace, SidecarLock, TempFile, atomic_no_replace, safe_path_info,
-        validate_runtime_paths,
+        RotationNamespace, SidecarLock, TempFile, atomic_no_replace, safe_path_info, sidecar_path,
+        validate_pinned_observation, validate_runtime_paths, verify_target_observation,
     };
 
     #[test]
@@ -1130,6 +1301,146 @@ mod tests {
         let lock = SidecarLock::acquire(&target).expect("lock");
         fs::write(&target, b"two").expect("same-length mutation");
         assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn unchanged_strict_target_verifies_successfully() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        fs::write(&target, b"one").expect("target");
+        let lock = SidecarLock::acquire(&target).expect("lock");
+        lock.verify().expect("unchanged target");
+    }
+
+    #[test]
+    fn strict_verification_detects_different_length_target_changes() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        fs::write(&target, b"one").expect("target");
+        let lock = SidecarLock::acquire(&target).expect("lock");
+        fs::write(&target, b"ones").expect("different-length mutation");
+        assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn strict_verification_detects_replacement_identity_change() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        let replacement = temp.path().join("replacement.json");
+        fs::write(&target, b"one").expect("target");
+        fs::write(&replacement, b"one").expect("replacement");
+        let lock = SidecarLock::acquire(&target).expect("lock");
+        fs::remove_file(&target).expect("remove target");
+        fs::rename(&replacement, &target).expect("replace target");
+        assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn strict_verification_detects_deletion_and_recreation() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        fs::write(&target, b"one").expect("target");
+        let lock = SidecarLock::acquire(&target).expect("lock");
+        fs::remove_file(&target).expect("delete target");
+        fs::write(&target, b"one").expect("recreate target");
+        assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn strict_verification_rejects_absent_to_created_transition() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        let lock = SidecarLock::acquire(&target).expect("lock");
+        fs::write(&target, b"created").expect("created target");
+        assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn sidecar_replacement_is_detected_by_verify_lock() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        let replacement = temp.path().join("replacement.lock");
+        let sidecar = sidecar_path(&target);
+        let lock = SidecarLock::acquire(&target).expect("lock");
+        fs::write(&replacement, b"replacement").expect("replacement sidecar");
+        fs::remove_file(&sidecar).expect("remove sidecar");
+        fs::rename(&replacement, &sidecar).expect("replace sidecar");
+        assert!(lock.verify_lock().is_err());
+    }
+
+    #[test]
+    fn lock_only_allows_protected_target_mutation() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("events.jsonl");
+        fs::write(&target, b"one\n").expect("target");
+        let lock = SidecarLock::acquire_lock_only(&target).expect("lock");
+        fs::write(&target, b"two\n").expect("mutable target");
+        lock.verify_lock().expect("sidecar unchanged");
+        assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn equal_metadata_with_different_digest_fails_closed() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        fs::write(&target, b"one").expect("target");
+        let info = safe_path_info(&target)
+            .expect("target info")
+            .expect("existing target");
+        assert!(
+            verify_target_observation(Some(info), Some(info), Some([0; 32]), Some([1; 32]),)
+                .is_err()
+        );
+        verify_target_observation(Some(info), Some(info), Some([0; 32]), Some([0; 32]))
+            .expect("equal metadata and digest");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_strict_verification_rejects_same_length_mutation_with_restored_timestamp() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        fs::write(&target, b"one").expect("target");
+        let lock = SidecarLock::acquire(&target).expect("lock");
+        let captured_time = lock.target_info.expect("target info").modified;
+
+        fs::write(&target, b"two").expect("same-length mutation");
+        restore_windows_last_write_time(&target, captured_time);
+
+        assert_eq!(
+            safe_path_info(&target).expect("target info"),
+            lock.target_info
+        );
+        assert!(lock.verify().is_err());
+    }
+
+    #[test]
+    fn pinned_read_rejects_acquisition_instability() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        fs::write(&target, b"one").expect("target");
+        let info = safe_path_info(&target)
+            .expect("target info")
+            .expect("existing target");
+        let mut after = info;
+        after.length += 1;
+        assert!(
+            validate_pinned_observation(info, info, after, Some(info), "unstable pinned read",)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pinned_read_rejects_verification_instability() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("state.json");
+        fs::write(&target, b"one").expect("target");
+        let info = safe_path_info(&target)
+            .expect("target info")
+            .expect("existing target");
+        assert!(
+            validate_pinned_observation(info, info, info, None, "unstable pinned read",).is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -1313,5 +1624,34 @@ mod tests {
         assert_eq!(time.nanos, 0);
         sync_directory(Path::new("."))
             .expect("Windows parent durability is intentionally not asserted");
+    }
+
+    #[cfg(windows)]
+    fn restore_windows_last_write_time(path: &std::path::Path, time: super::FileTime) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::Storage::FileSystem::SetFileTime;
+
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .expect("open target for timestamp restoration");
+        let value = time.seconds as u64 * 10_000_000 + u64::from(time.nanos) / 100;
+        let write_time = FILETIME {
+            dwHighDateTime: (value >> 32) as u32,
+            dwLowDateTime: value as u32,
+        };
+        assert_ne!(
+            unsafe {
+                SetFileTime(
+                    file.as_raw_handle(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &write_time,
+                )
+            },
+            0
+        );
     }
 }
