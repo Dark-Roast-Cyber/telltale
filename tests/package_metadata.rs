@@ -249,7 +249,9 @@ fn package_verification_is_local_and_ordered() {
 #[test]
 fn ci_package_verification_uses_posix_shell_and_production_script() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workflow = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow");
+    let workflow = fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("CI workflow")
+        .replace("\r\n", "\n");
     let package_verify_job = workflow
         .split_once("  package-verify:\n")
         .expect("package verification job")
