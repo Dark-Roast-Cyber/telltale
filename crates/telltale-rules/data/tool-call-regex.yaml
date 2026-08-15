@@ -177,7 +177,7 @@ rules:
     tags: [network, controlled-domain, test-fixture]
     explanation: Controlled tester domain appeared in network or injection context.
     falsepositives:
-      - ADR fixtures, documentation, and operator validation commands may intentionally reference the controlled test domain.
+      - Telltale fixtures, documentation, and operator validation commands may intentionally reference the controlled test domain.
 
   - id: exfil.dns_encoding
     category: exfiltration
@@ -279,9 +279,9 @@ modifiers:
       - atlas:AML.T0051
       - atlas:AML.T0086
     when_all_categories: [mcp_prompt_injection, exfiltration]
-    explanation: MCP prompt injection near outbound egress is the first ADR high-signal alert use case.
+    explanation: MCP prompt injection near outbound egress is the first Telltale high-signal alert use case.
     falsepositives:
-      - ADR security fixtures and controlled validation runs may intentionally pair prompt-injection text with test-domain egress.
+      - Telltale security fixtures and controlled validation runs may intentionally pair prompt-injection text with test-domain egress.
   - id: chain.credential_then_publish
     score: 40
     when_all_categories: [credential_harvesting, supply_chain]

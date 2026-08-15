@@ -41,7 +41,7 @@ install: build
 	@echo ""
 	@echo "Installed canonical developer binary: $(BINDIR)/telltale"
 	@echo "This target does not install or activate a user schedule."
-	@echo "Use scripts/install-telltale --with-timer for transactional schedule migration."
+	@echo "Use scripts/install-telltale --with-timer for canonical schedule setup."
 	@echo ""
 	@echo "To view logs:"
 	@echo "  journalctl --user -u telltale-scan.service -f"
@@ -213,8 +213,8 @@ release-fixture-smoke:
 
 ## Verify active release surfaces use only canonical Telltale identities
 release-canonical-identity-check:
-	@test ! -e config/examples/adr-scan.service && test ! -e config/examples/adr-scan.timer && test ! -e config/examples/adr-scan-task.xml
-	@! grep -Eq 'target/.*/release/adr|adr-[^[:space:]]+\.(tar\.gz|zip)|adr-scan\.(service|timer)' .github/workflows/release.yml
+	@for expected in config/examples/telltale-scan.service config/examples/telltale-scan.timer config/examples/telltale-scan-task.xml; do test -f "$$expected" || { echo "missing canonical release example: $$expected"; exit 1; }; done
+	@grep -Eq 'target/.*/release/telltale|telltale-[^[:space:]]+\.(tar\.gz|zip)' .github/workflows/release.yml
 	@grep -q 'telltale-scan.service' .github/workflows/release.yml
 
 ## Public release preflight

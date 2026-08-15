@@ -50,5 +50,6 @@ Detection events retain bounded context for downstream analyst review:
 - timeline anchors and prior related detections from the same scan window.
 
 No outbound model or guard request is made by the scanner. Native Event 3.0
-contains no embedded triage fields or legacy `adr_version` marker; historical
-Event 1.0 and 2.0 imports retain their original review fields when read.
+contains no embedded triage fields or historical product-version marker;
+historical Event 1.0 and 2.0 imports retain their original review fields when
+read.

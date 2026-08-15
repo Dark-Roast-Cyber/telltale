@@ -33,10 +33,8 @@ would not preserve the canonical `u64` contract.
 
 Default thresholds are configured by `TELLTALE_RISK_THRESHOLD_LOW`,
 `TELLTALE_RISK_THRESHOLD_MEDIUM`, `TELLTALE_RISK_THRESHOLD_HIGH`, and
-`TELLTALE_RISK_THRESHOLD_CRITICAL`. Retired ADR threshold names are rejected by
-the runtime tombstone preflight; `telltale migrate env` maps the old triage and
-alert terminology to the canonical high and critical names in an explicit file
-migration.
+`TELLTALE_RISK_THRESHOLD_CRITICAL`. Unknown inherited variables do not affect
+threshold resolution.
 
 ## Rule Categories
 

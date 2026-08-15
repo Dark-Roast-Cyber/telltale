@@ -2,91 +2,72 @@ use super::*;
 
 use telltale_detect::allowlist::{SuppressionMatch, suppress_detection};
 
-const RETIRED_RUNTIME_ENV_NAMES: &[&str] = &[
-    "ADR_GIT_HASH",
-    "ADR_INSTALL_INVENTORY_INTERVAL_SECONDS",
-    "ADR_LOG_PATH",
-    "ADR_LOG_ROTATE_KEEP",
-    "ADR_LOG_ROTATE_MAX_SIZE",
-    "ADR_OP_ALERT_MAX_SCAN_DURATION_MS",
-    "ADR_OP_ALERT_MAX_SCANNER_ERRORS",
-    "ADR_PROCESS_CHAIN_DETECTIONS",
-    "ADR_PROJECT_CONFIG",
-    "ADR_RISK_THRESHOLD_ALERT",
-    "ADR_RISK_THRESHOLD_LOW",
-    "ADR_RISK_THRESHOLD_MEDIUM",
-    "ADR_RISK_THRESHOLD_TRIAGE",
-    "ADR_SCAN_ROOT",
-    "ADR_STATE_PATH",
-    "ADR_TRIAGE_MAX_RETRIES",
-    "ADR_TRIAGE_TIMEOUT_MS",
-];
-
-fn clean_telltale_command() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
-    for name in RETIRED_RUNTIME_ENV_NAMES {
-        command.env_remove(name);
-    }
-    command
-}
-
 #[test]
-fn retired_runtime_environment_tombstones_are_sorted_and_private() {
-    let mut command = clean_telltale_command();
-    command.arg("--help");
-    for (index, name) in RETIRED_RUNTIME_ENV_NAMES.iter().enumerate() {
-        command.env(name, format!("tombstone-canary-{index}"));
-    }
-    let output = command.output().expect("run tombstoned help");
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut names = RETIRED_RUNTIME_ENV_NAMES.to_vec();
-    names.sort_unstable();
-    let expected = format!(
-        "retired environment variables are set: {}; remediation: unset these variables and use canonical TELLTALE_* variables or explicit migration commands",
-        names.join(", ")
-    );
-    assert_eq!(stderr.trim(), expected);
-    assert!(!stderr.contains("tombstone-canary"));
-}
-
-#[test]
-fn retired_runtime_environment_presence_includes_empty_and_old_new_conflicts() {
-    let mut empty = clean_telltale_command();
-    empty.arg("--version").env("ADR_LOG_PATH", "");
-    let output = empty.output().expect("run empty tombstone");
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("ADR_LOG_PATH"));
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("tombstone-secret"));
-
-    let mut conflict = clean_telltale_command();
-    conflict
-        .arg("--version")
-        .env("ADR_LOG_PATH", "old-tombstone-secret")
-        .env("TELLTALE_LOG_PATH", "new-path");
-    let output = conflict.output().expect("run old/new conflict");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ADR_LOG_PATH"));
-    assert!(!stderr.contains("old-tombstone-secret"));
-    assert!(!stderr.contains("new-path"));
-}
-
-#[test]
-fn unrelated_adr_environment_names_are_not_tombstoned() {
-    let mut command = clean_telltale_command();
-    command
-        .arg("--help")
-        .env("ADR_TEST_UNRELATED", "third-party-canary")
-        .env("ADR_VENDOR_MODE", "third-party-mode");
-    let output = command.output().expect("run unrelated ADR environment");
+fn inherited_noncanonical_environment_is_ignored_and_canonical_values_parse() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--dry-run",
+            "--no-local-config",
+            "--root",
+            "tests/fixtures/session_stores",
+        ])
+        .env("UNRELATED_LOG_PATH", "noncanonical-secret")
+        .env("VENDOR_MODE", "noncanonical-mode")
+        .env("TELLTALE_LOG_PATH", &log)
+        .env("TELLTALE_STATE_PATH", &state)
+        .output()
+        .expect("run scan with inherited environment");
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("retired environment"));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!text.contains("noncanonical-secret"));
+    assert!(!text.contains("noncanonical-mode"));
+    assert!(!log.exists());
+    assert!(!state.exists());
+}
+
+#[test]
+fn migration_help_retains_only_explicit_state_and_event_commands() {
+    let env = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["migrate", "env", "--help"])
+        .output()
+        .expect("run removed migration command");
+    assert!(!env.status.success());
+    assert!(String::from_utf8_lossy(&env.stderr).contains("unrecognized subcommand 'env'"));
+
+    let help = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["migrate", "--help"])
+        .output()
+        .expect("run migration help");
+    assert!(help.status.success());
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(help_text.contains("state") && help_text.contains("events"));
+    assert!(!help_text.contains(" env "));
+
+    for command in ["state", "events"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["migrate", command, "--help"])
+            .output()
+            .expect("run migration help");
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("--"));
+    }
 }
 
 #[test]
@@ -791,7 +772,7 @@ fn export_correlate_emits_cross_session_event() {
         [
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-detection-a",
+                "event_id": "fixture-detection-a",
                 "timestamp": "2026-05-01T00:00:00Z",
                 "event_type": "detection",
                 "severity": "critical",
@@ -809,7 +790,7 @@ fn export_correlate_emits_cross_session_event() {
             .to_string(),
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-detection-b",
+                "event_id": "fixture-detection-b",
                 "timestamp": "2026-05-01T00:20:00Z",
                 "event_type": "detection",
                 "severity": "high",
@@ -881,7 +862,7 @@ fn export_timeline_produces_redacted_session_timeline() {
         [
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-activity-a",
+                "event_id": "fixture-activity-a",
                 "timestamp": "2026-05-01T00:00:00Z",
                 "event_type": "activity",
                 "severity": "low",
@@ -905,7 +886,7 @@ fn export_timeline_produces_redacted_session_timeline() {
             .to_string(),
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-detection-a",
+                "event_id": "fixture-detection-a",
                 "timestamp": "2026-05-01T00:01:00Z",
                 "event_type": "detection",
                 "severity": "critical",
@@ -942,7 +923,7 @@ fn export_timeline_produces_redacted_session_timeline() {
             .to_string(),
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-detection-b",
+                "event_id": "fixture-detection-b",
                 "timestamp": "2026-05-01T00:00:30Z",
                 "event_type": "detection",
                 "severity": "high",
@@ -958,7 +939,7 @@ fn export_timeline_produces_redacted_session_timeline() {
             // Different session — should not appear in session-a timeline.
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-detection-c",
+                "event_id": "fixture-detection-c",
                 "timestamp": "2026-05-01T00:02:00Z",
                 "event_type": "detection",
                 "severity": "medium",
@@ -974,7 +955,7 @@ fn export_timeline_produces_redacted_session_timeline() {
             // Same session_id on a different client — should force client disambiguation.
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-detection-d",
+                "event_id": "fixture-detection-d",
                 "timestamp": "2026-05-01T00:00:45Z",
                 "event_type": "detection",
                 "severity": "medium",
@@ -1359,7 +1340,7 @@ fn native_schema_is_closed_and_historical_schemas_remain_separate() {
         "session",
         &["rule.valid"],
     );
-    legacy_id["event_id"] = serde_json::json!("adr-legacy");
+    legacy_id["event_id"] = serde_json::json!("fixture-legacy");
     assert!(!native_validator.is_valid(&legacy_id));
 
     let historical_schema: Value = serde_json::from_str(include_str!(
@@ -1595,7 +1576,7 @@ fn export_timeline_rejects_correlate() {
         serde_json::json!({
             "schema_version": "1.0",
             "event_type": "detection",
-            "event_id": "adr-detection-correlate",
+            "event_id": "fixture-detection-correlate",
             "session_id": "timeline-correlate-session",
             "client": "codex",
             "timestamp": "2026-05-01T00:00:00Z",
@@ -1786,7 +1767,7 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
         [
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-activity-text",
+            "event_id": "fixture-activity-text",
                 "timestamp": "2026-05-01T00:00:00Z",
                 "event_type": "activity",
                 "severity": "low",
@@ -1810,7 +1791,7 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
             .to_string(),
             serde_json::json!({
                 "schema_version": "1.0",
-                "event_id": "adr-detection-text",
+            "event_id": "fixture-detection-text",
                 "timestamp": "2026-05-01T00:00:30Z",
                 "event_type": "detection",
                 "severity": "critical",

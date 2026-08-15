@@ -1,135 +1,160 @@
 # installer-service-archive Specification
 
 ## Purpose
-TBD — Update Purpose after archive.
+
+Define the canonical current-user Telltale install, archive, and service safety
+contract.
+
 ## Requirements
-### Requirement: Canonical installer identity
-The user installer SHALL install only the canonical `telltale` executable and
-`telltale-*` release assets. It SHALL NOT install, alias, or probe an active
-ADR technical executable, archive, service, task, or installer identity.
-Historical migration artifacts are exempt.
 
-#### Scenario: Fresh install
-- GIVEN a target user directory with no prior Telltale or ADR install
-- WHEN the installer runs to completion
-- THEN only the canonical `telltale` binary is installed
-- AND no ADR executable, service, or timer is installed
+### Requirement: Canonical clean-install identity
 
-#### Scenario: Active ADR asset refusal
-- GIVEN a release archive or manifest containing an active ADR technical identity
-- WHEN the installer or release workflow validates the archive
-- THEN validation fails with a static error
-- AND no install or release proceeds
+The user installer SHALL install only the platform-canonical `telltale`
+executable (`telltale.exe` on Windows), reviewed `telltale-*` release assets,
+and canonical Telltale destinations and units within current-user scope.
 
-### Requirement: Transactional installer sequencing
+#### Scenario: Fresh canonical install
 
-The installer SHALL resolve and validate the selected release provenance before
-any installer or systemd mutation. For an explicit candidate tag, it SHALL
-require exact release-tag identity, the matching package/binary version, the
-canonical archive manifest, and the archive digest from that tag's
-`SHA256SUMS`; for the default stable path it SHALL apply the same checks to the
-selected latest release. Only after those checks pass SHALL it acquire the
-installer lock, detect or quiesce schedules, stage the sole canonical archive
-and binary, run explicit state/log/env migration before activation, install new
-units disabled, remove only an identified obsolete compatibility binary, reload
-and smoke-test, and enable only the canonical schedule. Checksum bypass is not
-permitted for approved G-SERVICE validation.
+- **GIVEN** a target user directory with no canonical Telltale installation
+- **WHEN** the installer runs to completion
+- **THEN** only the platform-canonical executable and canonical units are installed
+- **AND** no unrelated executable, service, timer, or alias is installed
+
+#### Scenario: Unrelated resources outside scope
+
+- **GIVEN** unrelated files, executables, units, timers, state, configuration, or
+  logs exist outside canonical Telltale destinations
+- **WHEN** the installer runs
+- **THEN** it ignores them without querying, classifying, warning, disabling,
+  deleting, or migrating them
+
+### Requirement: Canonical transactional sequencing
+
+The installer SHALL resolve and validate selected release provenance before any
+installer or systemd mutation. For an explicit candidate it SHALL require exact
+tag identity, matching package/binary version, the exact canonical archive
+manifest, and the archive digest from that tag's `SHA256SUMS`. Only after those
+checks pass SHALL it acquire the installer lock, validate canonical destinations,
+stage the sole canonical artifact, install canonical units disabled, smoke-test,
+and enable only the canonical schedule when requested.
 
 #### Scenario: Candidate provenance fails before mutation
 
-- **GIVEN** an explicit `v0.5.0-rc.N` selection whose release metadata, tag,
-  archive, manifest, or `SHA256SUMS` digest is missing or inconsistent
+- **GIVEN** release metadata, tag, archive, manifest, or checksum is missing or inconsistent
 - **WHEN** the installer starts
-- **THEN** it fails before acquiring an installer lock or changing files,
-  schedules, units, or the systemd manager
+- **THEN** it fails before acquiring the installer lock or changing files, units,
+  schedules, or the systemd manager
 
-#### Scenario: Exact candidate staging
+#### Scenario: Interrupted canonical transaction recovery
 
-- **GIVEN** a published `v0.5.0-rc.N` Release with matching metadata,
-  canonical archive, and verified `SHA256SUMS` entry
-- **WHEN** the installer runs with that explicit release tag
-- **THEN** it stages and verifies only the matching canonical `telltale`
-  artifact before proceeding with the existing journaled transaction
-
-#### Scenario: Successful upgrade
-
-- **GIVEN** an existing 0.3.0 user install with active `adr-scan` schedule and
-  a release whose provenance checks have already passed
-- **WHEN** the installer runs
-- **THEN** it acquires the installer lock
-- **AND** it quiesces the old `adr-scan` schedule
-- **AND** it runs explicit state/log/env migration before activation
-- **AND** it installs the canonical `telltale` units disabled
-- **AND** it reloads and smoke-tests
-- **AND** it enables only the canonical `telltale-scan` schedule
-
-#### Scenario: Interrupted migration recovery
-
-- **GIVEN** an installer transaction interrupted after staging but before
-  activation
+- **GIVEN** a transaction is interrupted after staging but before activation
 - **WHEN** the installer runs again
-- **THEN** it recovers to a known state without clobbering existing bytes
-- **AND** it leaves all schedules disabled or rolls back to one known schedule
+- **THEN** it recovers only marker-owned canonical files without clobbering bytes
+- **AND** it leaves the canonical schedule disabled or in one known state
 
-### Requirement: Fail-closed ownership and schedule safety
-The installer SHALL fail closed on ownership ambiguity, duplicate-schedule
-risk, or destructive deletion of an unidentified file. It SHALL refuse
-unmanaged/system scope and ambiguous ownership.
+### Requirement: Fail-closed canonical safety
 
-#### Scenario: Unmanaged system scope refusal
-- GIVEN an installer invocation targeting a system-managed unit directory
-- WHEN the installer validates scope
-- THEN it fails with a static error
-- AND no system units are modified
+The installer SHALL fail closed on ownership ambiguity, unsafe canonical path
+aliases, unexpected canonical drop-ins, ambiguous effective configuration,
+non-regular destinations, unsafe modes, archive violations, or destructive
+deletion of an unidentified canonical file. It SHALL refuse system scope and
+unmanaged paths.
 
-#### Scenario: Duplicate schedule conflict
-- GIVEN both old `adr-scan` and new `telltale-scan` schedules are active
-- WHEN the installer detects the conflict
-- THEN it fails closed or rolls back to one known schedule
-- AND never leaves both schedules enabled
+#### Scenario: Canonical effective-unit ambiguity
 
-### Requirement: Migration before activation
-The installer SHALL run explicit state/log/env migration before activating the
-canonical runtime. No migration SHALL rewrite historical events. Existing
-legacy files SHALL remain recoverable until the installer transaction commits.
+- **GIVEN** a canonical service or timer has an unexpected manager-reported
+  drop-in, local drop-in namespace, or ambiguous effective fragment
+- **WHEN** the installer validates the unit
+- **THEN** it fails before staging, replacement, enablement, disablement, or deletion
 
-#### Scenario: Legacy state migration before activation
-- GIVEN an existing `adr-state.json` with detection fingerprints
-- WHEN the installer runs
-- THEN explicit state migration runs before the canonical units are enabled
-- AND the legacy state file remains recoverable until the transaction commits
-- AND previously seen detections remain deduplicated after migration
+#### Scenario: Canonical collision
+
+- **GIVEN** a canonical executable, unit, state, configuration, or log destination
+  is a symlink, non-regular file, unsafe alias, or owned by an unexpected principal
+- **WHEN** the installer validates the destination
+- **THEN** it fails closed before destructive mutation
 
 ### Requirement: Canonical service and timer identity
-Systemd user service and timer units SHALL use canonical `telltale-scan.service`
-and `telltale-scan.timer` identity with `TELLTALE_*` environment and the
-canonical JSONL path. Timer de-duplication SHALL prevent duplicate schedules.
+
+Systemd user units SHALL use only `telltale-scan.service` and
+`telltale-scan.timer`, with `TELLTALE_*` environment and the canonical JSONL
+path. A successful transaction SHALL leave at most one canonical schedule.
 
 #### Scenario: Canonical unit installation
-- GIVEN a fresh user install
-- WHEN the installer installs the service units
-- THEN `telltale-scan.service` and `telltale-scan.timer` are installed disabled
-- AND they reference `TELLTALE_*` environment and `telltale-events.jsonl`
 
-### Requirement: Canonical release archive identity
-Release archives and manifests SHALL contain no active ADR technical identity.
-Public docs, examples, and CI assertions SHALL agree with the canonical
-identity. Historical migration artifacts are exempt.
+- **GIVEN** a fresh user install passes provenance and canonical safety checks
+- **WHEN** the installer installs units
+- **THEN** the canonical service and timer are installed disabled
+- **AND** they reference `TELLTALE_*` and `telltale-events.jsonl`
 
-#### Scenario: Archive manifest validation
-- GIVEN a built release archive and manifest
-- WHEN the release workflow validates the manifest
-- THEN no active ADR executable, archive, service, task, or installer identity
-  is present
-- AND CI assertions agree with the canonical `telltale-*` identity
+### Requirement: Unrelated resource isolation
+
+Non-canonical host resources SHALL be outside the installer's support boundary.
+Their presence SHALL neither block a clean install nor cause Telltale to assume
+responsibility for their lifecycle. A resource that aliases or changes a
+canonical destination or effective unit remains a canonical safety failure.
+
+#### Scenario: Non-canonical host state is ignored
+
+- **GIVEN** unrelated files, executables, units, timers, state, configuration, or
+  logs exist and do not alias a canonical Telltale resource
+- **WHEN** the installer performs its normal preflight and transaction
+- **THEN** it does not query or operate on those resources
+- **AND** the canonical installation proceeds according to its provenance and
+  safety contract
+
+#### Scenario: Canonical resource remains fail-closed
+
+- **GIVEN** an unrelated resource aliases, replaces, or changes the effective
+  configuration of a canonical Telltale destination or unit
+- **WHEN** the installer validates the canonical resource
+- **THEN** it fails closed using the canonical ownership or effective-unit
+  safety rule
+
+### Requirement: Exact canonical release archive identity
+
+Release archives and manifests SHALL contain exactly the approved canonical
+member set, regular-file types, modes, and names. Public docs, examples, and CI
+assertions SHALL validate this positive set and reject unexpected members
+generically, including missing, duplicate, traversal, link, wrong-type, and
+non-regular members.
+
+#### Scenario: Exact archive manifest validation
+
+- **GIVEN** a built release archive and manifest
+- **WHEN** the release workflow or package verifier validates the artifact
+- **THEN** validation succeeds only for the exact canonical member set
+- **AND** invalid or unexpected members fail before publication or installation
+
+### Requirement: Explicit data migration boundary
+
+The installer SHALL perform no product migration or automated cleanup. Explicit
+`telltale migrate state` and `telltale migrate events` commands remain available
+for operator-selected Telltale state and historical Event 1.0/2.0 inputs, with
+their existing bytes, IDs, cursors, fingerprints, locks, manifests, collision,
+no-clobber, and idempotence guarantees.
+
+There is no in-place upgrade or compatibility path for another product; external
+cleanup is the operator's responsibility.
+
+#### Scenario: No automatic product migration
+
+- **GIVEN** unrelated state, configuration, logs, or service resources exist
+  outside canonical Telltale destinations
+- **WHEN** the installer performs a canonical transaction
+- **THEN** it invokes no migration command and performs no automated cleanup
+- **AND** explicit state or historical-event migration remains an operator-run
+  CLI operation
 
 ### Requirement: Installer scope
-The user installer owns only the current Linux user install and its user-unit
-directory. (Previously: the installer handled both `adr` and `telltale`
-compatibility identities during the 0.2.0 transition.)
+
+The user installer SHALL own only the current Linux user's installation and
+user-unit directory. It SHALL not manage system scope or resources outside
+canonical user destinations.
 
 #### Scenario: User-only scope
-- GIVEN an installer invocation
-- WHEN it determines its install scope
-- THEN it acts only within the current user's home and user-unit directory
-- AND refuses any system or unmanaged path
+
+- **GIVEN** an installer invocation
+- **WHEN** it determines its install scope
+- **THEN** it acts only within the current user's home and user-unit directory
+- **AND** it refuses any system or unmanaged path

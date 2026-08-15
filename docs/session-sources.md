@@ -25,7 +25,7 @@ tree. Registered `Home`, `ConfigHome`, and `DataHome` sources also resolve on
 Windows through the platform-aware root helpers. Windows entries below are not
 live-validated and are not by themselves public live-source support claims.
 
-These candidates document expected product behavior and the scanner paths ADR
+These candidates document expected product behavior and the scanner paths Telltale
 can resolve. They are not instructions to publish local session stores,
 workstation-specific transcript paths, raw agent logs, credentials, or
 deployment-specific SIEM paths. Public source-support claims should be backed
@@ -35,16 +35,16 @@ than by exact private path or transcript content.
 
 | Client | Source Kind | Linux candidate | macOS candidate | Windows candidate | Confidence | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows unvalidated | Codex CLI docs confirm `~/.codex/sessions`; ADR also supports `archived_sessions` and `headless` under the same root. |
+| Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows unvalidated | Codex CLI docs confirm `~/.codex/sessions`; Telltale also supports `archived_sessions` and `headless` under the same root. |
 | Codex | `codex.archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `%CODEX_HOME%\archived_sessions` or `%USERPROFILE%\.codex\archived_sessions` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Codex | `codex.headless_sessions` | `$CODEX_HOME/headless` or `~/.codex/headless` | `$CODEX_HOME/headless` or `~/.codex/headless` | `%CODEX_HOME%\headless` or `%USERPROFILE%\.codex\headless` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
-| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows unvalidated | Claude docs confirm `~/.claude/` as the user root; ADR resolves project JSONL sessions through the platform-aware home root. |
+| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows unvalidated | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. |
 | Gemini CLI | `gemini.tmp` | `~/.gemini/tmp` | `~/.gemini/tmp` | `%USERPROFILE%\.gemini\tmp` | Candidate; Windows unvalidated | Gemini docs confirm `~/.gemini/` and `tmp/` usage; all Windows claims remain bounded and unvalidated. |
-| Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | ADR supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
-| OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | ADR supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
+| Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
+| OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
 | RooCode | `roocode.tasks` | `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks` | `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks` | `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\tasks` | Confirmed root; Windows unvalidated | VS Code `globalStorage` path plus confirmed extension identifier `rooveterinaryinc.roo-cline`; not a live Windows support claim. |
 | KiloCode | `kilocode.tasks` | `~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks` | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/tasks` | `%APPDATA%\Code\User\globalStorage\kilocode.kilo-code\tasks` | Confirmed root; Windows unvalidated | VS Code `globalStorage` path plus confirmed extension identifier `kilocode.kilo-code`; not a live Windows support claim. |
-| OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | `%LOCALAPPDATA%\opencode\opencode.db` or `%APPDATA%\opencode\opencode.db` | Confirmed Linux/macOS; Windows unvalidated | ADR resolves Linux through `XDG_DATA_HOME`, macOS through the platform data root, and Windows through the platform data root. Native Windows live validation is incomplete. |
+| OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | `%LOCALAPPDATA%\opencode\opencode.db` or `%APPDATA%\opencode\opencode.db` | Confirmed Linux/macOS; Windows unvalidated | Telltale resolves Linux through `XDG_DATA_HOME`, macOS through the platform data root, and Windows through the platform data root. Native Windows live validation is incomplete. |
 | OpenCode | `opencode.legacy_json` | `$XDG_DATA_HOME/opencode/storage/message` or `~/.local/share/opencode/storage/message` | `~/Library/Application Support/opencode/storage/message` | `%LOCALAPPDATA%\opencode\storage\message` or `%APPDATA%\opencode\storage\message` | Confirmed Linux/macOS; Windows unvalidated | Same root model as `opencode.sqlite`; Windows project/global storage paths are not live-validated. |
 | Codex | `codex.project_sessions` | project-local `.codex-worktree` | project-local `.codex-worktree` | project-local `.codex-worktree` | Candidate | Per-project Codex CLI logs; discovered below configured project roots or applicable default project roots. |
 | OpenCode | `opencode.project_json` | project-local `.opencode` | project-local `.opencode` | project-local `.opencode` | Candidate | Per-project OpenCode JSON messages; discovered below configured project roots or applicable default project roots. |
@@ -116,7 +116,7 @@ Claude Code parser notes:
 
 - JSONL entries commonly use top-level `type` values such as `user` and `assistant`.
 - Message payloads can live under `message.role`, `message.model`, and `message.content`.
-- `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; ADR normalizes `tool_use` blocks as tool calls and `tool_result` blocks as tool results.
+- `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; Telltale normalizes `tool_use` blocks as tool calls and `tool_result` blocks as tool results.
 
 Gemini parser notes:
 

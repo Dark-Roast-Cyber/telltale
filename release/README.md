@@ -29,5 +29,5 @@ configuration. The systemd service/timer and Windows task files are examples;
 risk mappings for Elasticsearch-compatible consumers. None are enabled by
 extracting this archive.
 
-Historical ADR migration inputs remain outside the active release identity and
-are handled only by explicit migration commands.
+Explicit Telltale state and historical-event inputs remain outside the active
+release identity and are handled only by their migration commands.

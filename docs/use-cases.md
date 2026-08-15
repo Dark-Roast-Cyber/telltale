@@ -1,10 +1,10 @@
 # Detection Use Cases
 
-Concrete use cases define what ADR must detect first. Each one should map to synthetic fixtures, static rules, risk scoring, and SIEM JSONL fields before real local session stores are scanned.
+Concrete use cases define what Telltale must detect first. Each one should map to synthetic fixtures, static rules, risk scoring, and SIEM JSONL fields before real local session stores are scanned.
 
 ## UC-001 Fake MCP Prompt Injection To Controlled Domain
 
-Goal: produce ADR's first compelling alert by detecting fake MCP prompt injection or tool poisoning in an agentic coding transcript.
+Goal: produce Telltale's first compelling alert by detecting fake MCP prompt injection or tool poisoning in an agentic coding transcript.
 
 Threat story:
 

@@ -1,5 +1,5 @@
 version: 1
-description: Test-only custom ADR rules using Sigma-inspired detection selection.
+description: Test-only custom Telltale rules using Sigma-inspired detection selection.
 defaults:
   case_insensitive: true
   enabled: true
@@ -7,9 +7,9 @@ rules:
   - id: custom.agent.malicious_behavior
     title: Custom malicious agent behavior
     status: experimental
-    author: adr-test
+    author: telltale-test
     references:
-      - https://example.invalid/adr-custom-rule
+      - https://example.invalid/telltale-custom-rule
     falsepositives:
       - Synthetic fixture text.
     level: high

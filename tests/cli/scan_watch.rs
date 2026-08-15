@@ -2839,8 +2839,8 @@ fn shipper_examples_target_default_jsonl_path() {
     assert!(logrotate.contains("daily"));
     assert!(logrotate.contains("rotate 14"));
     assert!(logrotate.contains("extension .jsonl"));
-    assert!(logrotate.contains("create 0640 telltale adrlogs"));
-    assert!(logrotate.contains("su telltale adrlogs"));
+    assert!(logrotate.contains("create 0640 telltale telltale-logs"));
+    assert!(logrotate.contains("su telltale telltale-logs"));
     assert!(
         !logrotate.contains("copytruncate"),
         "JSONL rotation should avoid copytruncate by default"
@@ -2858,10 +2858,6 @@ fn shipper_examples_target_default_jsonl_path() {
     assert!(
         splunk_uf_setup.contains("COPILOT_LOG_DIR:-/var/log/telltale/copilot"),
         "splunk UF helper must default COPILOT_LOG_DIR to the system-profile copilot path"
-    );
-    assert!(
-        !splunk_uf_setup.contains("/home/christian/github/adr/logs"),
-        "splunk UF helper must not default to stale repo-local log paths"
     );
 }
 
@@ -3280,7 +3276,6 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
     assert!(service.contains("ExecStart=/usr/bin/env -- \"/usr/local/bin/telltale\""));
     assert!(service.contains("--root \"${TELLTALE_SCAN_ROOT}\""));
     assert!(!service.contains("ExecStart=:"));
-    assert!(!service.contains("ExecStart=/usr/local/bin/adr "));
     assert!(service.contains("--emit-activity"));
     assert!(service.contains("--path-profile system"));
     assert!(
@@ -3313,7 +3308,6 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
     let task = include_str!("../../config/examples/telltale-scan-task.xml");
     assert!(task.contains(r#"<URI>\TelltaleScan</URI>"#));
     assert!(task.contains(r#"<Command>%LOCALAPPDATA%\Telltale\telltale.exe</Command>"#));
-    assert!(!task.contains("\\adr.exe"));
 }
 
 #[test]

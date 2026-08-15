@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-const VERSION: &str = "0.5.0-rc.2";
+const VERSION: &str = "0.5.0-rc.3";
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),
@@ -116,8 +116,15 @@ fn publication_order_and_binary_targets_are_explicit() {
 
     let cli = fs::read_to_string(root.join("Cargo.toml")).expect("cli manifest");
     let cli = cli.replace("\r\n", "\n");
-    assert!(cli.contains("name = \"telltale\"\npath = \"src/main.rs\""));
-    assert!(!cli.contains("src/bin/adr.rs"));
+    let bin_section = cli
+        .split_once("[[bin]]")
+        .expect("canonical binary declaration")
+        .1
+        .split("\n\n")
+        .next()
+        .expect("canonical binary section")
+        .trim();
+    assert_eq!(bin_section, "name = \"telltale\"\npath = \"src/main.rs\"");
 }
 
 #[test]
@@ -215,7 +222,8 @@ fn package_verification_is_local_and_ordered() {
     assert!(script.contains("--version"));
     assert!(script.contains("PACKAGED_SHA_FULL"));
     assert!(script.contains("PACKAGED_SHA_PREFIX"));
-    assert!(script.contains("packaged install must not include retired adr executable"));
+    assert!(script.contains("expected_binary_count"));
+    assert!(script.contains("exactly the canonical executable set"));
     assert!(!script.contains("cargo publish"));
 
     let mut previous = 0;

@@ -16,13 +16,16 @@ format.
 - `0.5.0` is the approved coherent breaking milestone for the hard Telltale
   technical migration, embedded-triage removal, schema/configuration changes,
   and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
-- The current preparation value is `0.5.0-rc.2`. It is the next Cargo package
+- The current preparation value is `0.5.0-rc.3`. It is the next Cargo package
   and GitHub Release candidate, not the stable `0.5.0` release; stable
   promotion remains gated by the release-readiness matrix.
 - `v0.5.0-rc.1` is retained as immutable history at reviewed tag commit
   `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed, so it
   has no GitHub Release or complete five-target asset/checksum/attestation set.
-  Never reuse that candidate; `rc.2` is the next prepared candidate.
+  Never reuse that candidate.
+- `v0.5.0-rc.2` is immutable history at reviewed commit
+  `973ce825550941a824aa568a07f80036cd89f497`; do not mutate its tag, Release,
+  assets, or evidence. `rc.3` is the next prepared candidate.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
@@ -34,9 +37,9 @@ format.
 - `telltale` is the sole runtime executable and `telltale-*` is the canonical
   release asset naming. Runtime paths use `telltale-events.jsonl` and
   `telltale-state.json`; runtime configuration uses `TELLTALE_*` names only.
-  Retired product `ADR_*` names fail as exact tombstones, while explicit
-  migration commands preserve source data and file semantics. The Linux
-  installer, canonical user units, release archives, and release workflow use
+  Unknown inherited non-canonical variables are ignored, while explicit state
+  and historical-event migration commands preserve source data and file semantics.
+  The Linux installer, canonical user units, release archives, and release workflow use
   the same Telltale-only identity.
 - `1.0.0` waits until the public CLI, embedding APIs, event contract, and
   configuration behavior are stable enough for explicit compatibility promises.

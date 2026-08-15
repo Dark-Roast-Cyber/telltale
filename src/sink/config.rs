@@ -760,12 +760,12 @@ sinks:
         assert_eq!(inline.resolve("test").expect("inline"), "inline-token");
 
         // SAFETY: test-only env mutation; key is unique to this test.
-        unsafe { std::env::set_var("ADR_TEST_SINK_SECRET", "env-token") };
+        unsafe { std::env::set_var("TELLTALE_TEST_SINK_SECRET", "env-token") };
         let env = SecretValue::Env {
-            env: "ADR_TEST_SINK_SECRET".to_string(),
+            env: "TELLTALE_TEST_SINK_SECRET".to_string(),
         };
         assert_eq!(env.resolve("test").expect("env"), "env-token");
-        unsafe { std::env::remove_var("ADR_TEST_SINK_SECRET") };
+        unsafe { std::env::remove_var("TELLTALE_TEST_SINK_SECRET") };
         assert!(env.resolve("test").is_err(), "unset env must error");
 
         let temp = tempdir().expect("tempdir");
@@ -819,7 +819,7 @@ sinks:
     type: splunk_hec
     enabled: false
     endpoint: http://splunk.example.com:8088
-    token: { env: ADR_TEST_UNSET_TOKEN_VAR }
+    token: { env: TELLTALE_TEST_UNSET_TOKEN_VAR }
 "#,
         );
         let specs = load_outputs_config(&[path]).expect("load");
@@ -842,7 +842,7 @@ sinks:
   - name: corp-splunk
     type: splunk_hec
     endpoint: http://splunk.example.com:8088
-    token: { env: ADR_TEST_UNSET_TOKEN_VAR }
+    token: { env: TELLTALE_TEST_UNSET_TOKEN_VAR }
 "#,
         );
         let specs = load_outputs_config(&[path]).expect("load");
@@ -851,6 +851,6 @@ sinks:
             Ok(_) => panic!("missing env secret must error"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("ADR_TEST_UNSET_TOKEN_VAR"));
+        assert!(err.to_string().contains("TELLTALE_TEST_UNSET_TOKEN_VAR"));
     }
 }

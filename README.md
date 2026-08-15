@@ -19,10 +19,9 @@
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
 > **Runtime contract:** `telltale` (`telltale.exe`) is the sole Cargo binary and
-> CLI identity. Runtime configuration uses `TELLTALE_*` names only; retired
-> product `ADR_*` variables are exact tombstones and fail before parsing or
-> filesystem activity. Use `telltale migrate env` for an explicit environment
-> file migration. Native paths are `telltale-events.jsonl` and
+> CLI identity. Runtime configuration uses `TELLTALE_*` names only; unknown
+> inherited non-canonical variables are ignored. Native paths are
+> `telltale-events.jsonl` and
 > `telltale-state.json`, with profile-specific directories documented in the
 > install and telemetry guides.
 >
@@ -88,7 +87,7 @@ The fixture tree in `tests/fixtures/` is synthetic and safe for local verificati
 Use `--dry-run` for fixture checks. Reserve `--allow-fixtures` for intentional
 synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
-real-session-store setup. Explicit state, historical-event, and environment
+real-session-store setup. Explicit state and historical-event
 migration guidance is in the [migration contract](docs/migration-contract.md).
 
 ## Cargo packages
@@ -181,9 +180,9 @@ use the checked-in script for a reviewed install.
 With `--from-source`, the installer still downloads and validates the selected
 release's canonical archive provenance, resolves that tag to an immutable commit,
 and builds that exact source revision with Cargo; it does not skip the prebuilt
-archive download. `--no-timer` leaves the canonical timer disabled while safely
-retiring identified legacy schedules. The installer does not create system
-accounts or configure SIEM shippers.
+archive download. `--no-timer` leaves the canonical timer disabled and leaves
+unrelated resources untouched. The installer does not create system accounts or
+configure SIEM shippers.
 
 ### macOS
 

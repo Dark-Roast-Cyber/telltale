@@ -33,8 +33,9 @@ Priorities, in order:
 5. **Harden detection and state reliability** — positive and benign fixture
    coverage, exact risk contribution accounting, cursor boundaries, and
    replay-safe deduplication.
-6. **Prove install and upgrade behavior** — functional post-install checks,
-   atomic state/service migration, rollback, and no duplicate schedules.
+6. **Prove canonical install and lifecycle behavior** — functional post-install
+   checks, explicit Telltale state/event migration, rollback, and no duplicate
+   canonical schedules.
 7. **Pass host, SIEM, and cross-platform release gates** — native Linux, macOS,
    and Windows archives must execute a positive fixture and validate emitted
    schema before release.

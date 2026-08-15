@@ -2,7 +2,7 @@
 
 > **Website:** For an approachable overview of schemas and normalization, see [AgentArchaeology.ai/resources/schemas](https://agentarchaeology.ai/resources/schemas/).
 
-ADR's internal normalization contract is `NormalizedRecordV1` in `crates/telltale-schema/src/canonical.rs`. It sits between source-specific parsers and downstream detection, deterministic review metadata, and export code.
+Telltale's internal normalization contract is `NormalizedRecordV1` in `crates/telltale-schema/src/canonical.rs`. It sits between source-specific parsers and downstream detection, deterministic review metadata, and export code.
 
 This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
 
@@ -90,7 +90,7 @@ Derived:
 Lossy today:
 
 - `call_id` is not available from the legacy parser shape.
-- If `arguments` is not valid JSON, ADR preserves the string form and marks the value as string-only.
+- If `arguments` is not valid JSON, Telltale preserves the string form and marks the value as string-only.
 
 ### `ToolResult`
 
@@ -118,7 +118,7 @@ Lossy today:
 
 - `call_id` is not available from the legacy parser shape.
 - `is_error` is not available from the legacy parser shape.
-- If `result` is not valid JSON, ADR preserves the string form and marks the value as string-only.
+- If `result` is not valid JSON, Telltale preserves the string form and marks the value as string-only.
 
 ### `SessionMeta`
 

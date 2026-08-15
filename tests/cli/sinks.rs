@@ -384,7 +384,7 @@ sinks:
   - name: corp-splunk
     type: splunk_hec
     endpoint: {}
-    token: {{ env: ADR_TEST_OUTPUTS_HEC_TOKEN }}
+    token: {{ env: TELLTALE_TEST_OUTPUTS_HEC_TOKEN }}
     source: telltale:outputs-test
   - name: disabled-sensitive
     type: splunk_hec
@@ -439,7 +439,7 @@ sinks:
         .args(["--project-config"])
         .arg(&project_config)
         .arg("--install-inventory-disabled")
-        .env("ADR_TEST_OUTPUTS_HEC_TOKEN", "env-secret-token")
+        .env("TELLTALE_TEST_OUTPUTS_HEC_TOKEN", "env-secret-token")
         .output()
         .expect("run telltale");
 
@@ -530,7 +530,7 @@ sinks:
     );
     let output_projection = summary["effective_configuration"]["outputs"].to_string();
     assert!(!output_projection.contains(&hec_endpoint));
-    assert!(!output_projection.contains("ADR_TEST_OUTPUTS_HEC_TOKEN"));
+    assert!(!output_projection.contains("TELLTALE_TEST_OUTPUTS_HEC_TOKEN"));
     assert!(!output_projection.contains("env-secret-token"));
     assert!(!output_projection.contains("sensitive.example.invalid"));
     assert!(!output_projection.contains("sentinel-inline-secret"));
@@ -1004,7 +1004,7 @@ sinks:
     type: elastic_bulk
     endpoint: {}
     index: telltale-events
-    api_key: {{ env: ADR_TEST_ELASTIC_API_KEY }}
+    api_key: {{ env: TELLTALE_TEST_ELASTIC_API_KEY }}
 "#,
             elastic_endpoint
         ),
@@ -1021,7 +1021,7 @@ sinks:
         .args(["--state-path"])
         .arg(&state_path)
         .arg("--install-inventory-disabled")
-        .env("ADR_TEST_ELASTIC_API_KEY", "test-api-key")
+        .env("TELLTALE_TEST_ELASTIC_API_KEY", "test-api-key")
         .output()
         .expect("run telltale");
 
@@ -1225,7 +1225,7 @@ sinks:
   - name: remote-only
     type: splunk_hec
     endpoint: https://splunk.example.com:8088/services/collector
-    token: { env: ADR_TEST_MISSING_VALIDATE_TOKEN }
+    token: { env: TELLTALE_TEST_MISSING_VALIDATE_TOKEN }
 "#,
     )
     .expect("write outputs yaml");
@@ -1233,14 +1233,14 @@ sinks:
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["config", "validate", "--config-dir"])
         .arg(&config_dir)
-        .env_remove("ADR_TEST_MISSING_VALIDATE_TOKEN")
+        .env_remove("TELLTALE_TEST_MISSING_VALIDATE_TOKEN")
         .output()
         .expect("run telltale");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("ADR_TEST_MISSING_VALIDATE_TOKEN"),
+        stderr.contains("TELLTALE_TEST_MISSING_VALIDATE_TOKEN"),
         "stderr: {stderr}"
     );
     assert!(!stderr.contains("test-token"), "secret leaked: {stderr}");

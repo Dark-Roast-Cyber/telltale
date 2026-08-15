@@ -4,16 +4,16 @@ This document tracks what each validated agent source can expose from its raw lo
 
 ## Why This Matters
 
-ADR's detection engine operates on normalized records, but the quality of those records depends on what the source logs actually contain. A rule that matches on `user_context` is only useful when the source preserves user messages. An analyst review that asks "what did the user request?" can only answer when user intent is available in the log.
+Telltale's detection engine operates on normalized records, but the quality of those records depends on what the source logs actually contain. A rule that matches on `user_context` is only useful when the source preserves user messages. An analyst review that asks "what did the user request?" can only answer when user intent is available in the log.
 
-These profiles document the gap between what ADR would ideally see and what each source actually provides.
+These profiles document the gap between what Telltale would ideally see and what each source actually provides.
 
 ## Legend
 
-- **Full**: field is reliably present in the source format and ADR extracts it.
+- **Full**: field is reliably present in the source format and Telltale extracts it.
 - **Partial**: field is sometimes present or extracted with caveats (see notes).
 - **Absent**: field is not available in the source format.
-- **Lossy**: field exists in the live agent but is not preserved in the log format ADR reads.
+- **Lossy**: field exists in the live agent but is not preserved in the log format Telltale reads.
 
 ## Capability Profiles
 
@@ -58,7 +58,7 @@ These profiles document the gap between what ADR would ideally see and what each
 | Tool calls | Full | Content blocks with `type: tool_use` containing `name` and `input`. |
 | Tool results | Full | Content blocks with `type: tool_result` containing result content. |
 | Model | Full | `model` field or `message.model`. |
-| Provider | Partial | Not always present in source; ADR derives when possible. |
+| Provider | Partial | Not always present in source; Telltale derives when possible. |
 | Agent | Partial | Not always explicitly labeled; defaults to client name. |
 | Workspace | Absent | Not available in the JSONL format. |
 | Timestamps | Partial | May be present on individual entries; not guaranteed. |
@@ -153,7 +153,7 @@ These profiles document the gap between what ADR would ideally see and what each
 | Is error | Lossy | Not preserved through legacy conversion. |
 | Content parts | Lossy | Flattened to text. |
 
-**Known gaps**: Qwen JSONL may also include `usageMetadata` fields that ADR does not currently extract.
+**Known gaps**: Qwen JSONL may also include `usageMetadata` fields that Telltale does not currently extract.
 
 ---
 
@@ -237,7 +237,7 @@ These profiles document the gap between what ADR would ideally see and what each
 | Is error | Lossy | Not preserved through legacy conversion. |
 | Content parts | Lossy | Flattened to text. |
 
-**Known gaps**: The SQLite source stores JSON in a `data` column which ADR parses and merges with the row-level `session_id`. Legacy JSON files are one file per message.
+**Known gaps**: The SQLite source stores JSON in a `data` column which Telltale parses and merges with the row-level `session_id`. Legacy JSON files are one file per message.
 
 ---
 
@@ -259,13 +259,13 @@ These profiles document the gap between what ADR would ideally see and what each
 | Workspace | Partial | Workspace UUID extracted from "Workspace initialized:" lines. |
 | Timestamps | Partial | Extracted from a leading RFC3339 timestamp token when present. |
 | Session ID | Full | Extracted from "Workspace initialized: <uuid>" lines. |
-| Process ID | Partial | The log filename may contain a PID (e.g., `process-12345.log`), but ADR does not currently extract it. |
+| Process ID | Partial | The log filename may contain a PID (e.g., `process-12345.log`), but Telltale does not currently extract it. |
 | Exit code | Absent | Not recorded in process logs. |
 | Call ID | Full | `call_id` field on function call entries. |
 | Is error | Absent | Not recorded. |
 | Content parts | Absent | Process logs do not contain structured content arrays. |
 
-**Known gaps**: Copilot process logs are the most limited source. User intent is invisible — ADR cannot tell what the user asked for. Only tool calls and workspace initialization events are logged. Model and provider fields are not always populated on every function call entry. Log lines without a leading RFC3339 timestamp token remain untimestamped.
+**Known gaps**: Copilot process logs are the most limited source. User intent is invisible — Telltale cannot tell what the user asked for. Only tool calls and workspace initialization events are logged. Model and provider fields are not always populated on every function call entry. Log lines without a leading RFC3339 timestamp token remain untimestamped.
 
 ---
 

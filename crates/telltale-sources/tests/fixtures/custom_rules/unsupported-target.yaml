@@ -1,5 +1,5 @@
 version: 1
-description: Test-only rule with a target that ADR does not evaluate.
+description: Test-only rule with a target that Telltale does not evaluate.
 defaults:
   case_insensitive: true
   enabled: true

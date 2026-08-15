@@ -8,6 +8,6 @@
     dateext
     dateformat -%Y%m%d
     extension .jsonl
-    create 0640 telltale adrlogs
-    su telltale adrlogs
+    create 0640 telltale telltale-logs
+    su telltale telltale-logs
 }
