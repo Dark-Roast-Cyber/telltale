@@ -16,7 +16,7 @@ format.
 - `0.5.0` is the approved coherent breaking milestone for the hard Telltale
   technical migration, embedded-triage removal, schema/configuration changes,
   and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
-- The current preparation value is `0.5.0-rc.3`. It is the next Cargo package
+- The current preparation value is `0.5.0-rc.4`. It is the next Cargo package
   and GitHub Release candidate, not the stable `0.5.0` release; stable
   promotion remains gated by the release-readiness matrix.
 - `v0.5.0-rc.1` is retained as immutable history at reviewed tag commit
@@ -25,7 +25,9 @@ format.
   Never reuse that candidate.
 - `v0.5.0-rc.2` is immutable history at reviewed commit
   `973ce825550941a824aa568a07f80036cd89f497`; do not mutate its tag, Release,
-  assets, or evidence. `rc.3` is the next prepared candidate.
+  assets, or evidence. `v0.5.0-rc.3` is immutable history at reviewed commit
+  `a791ebf8894b3329030fad9e252e22d21e8b7e07` and has no GitHub Release. `rc.4`
+  is the next prepared candidate.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →

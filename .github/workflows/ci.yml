@@ -57,6 +57,27 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
       - run: cargo test --quiet
 
+  package-verify:
+    name: Package verification (POSIX sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Run the production package verifier through /bin/sh
+        shell: sh
+        run: ./scripts/package-verify
+      - name: Run release fixture smoke through /bin/sh
+        shell: sh
+        run: make --silent CARGO_LOCKED=--locked release-fixture-smoke
+
   windows:
     name: Windows (x86_64-pc-windows-msvc)
     runs-on: windows-latest

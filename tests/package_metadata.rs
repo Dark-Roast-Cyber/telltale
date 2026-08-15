@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-const VERSION: &str = "0.5.0-rc.3";
+const VERSION: &str = "0.5.0-rc.4";
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),
@@ -244,6 +244,26 @@ fn package_verification_is_local_and_ordered() {
         );
         previous = position;
     }
+}
+
+#[test]
+fn ci_package_verification_uses_posix_shell_and_production_script() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workflow = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow");
+    let package_verify_job = workflow
+        .split_once("  package-verify:\n")
+        .expect("package verification job")
+        .1
+        .split_once("\n  windows:")
+        .expect("package verification job boundary")
+        .0;
+
+    assert!(
+        package_verify_job.contains("        shell: sh\n        run: ./scripts/package-verify\n")
+    );
+    assert!(package_verify_job.contains(
+        "        shell: sh\n        run: make --silent CARGO_LOCKED=--locked release-fixture-smoke\n"
+    ));
 }
 
 #[test]
