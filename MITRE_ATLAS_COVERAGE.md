@@ -17,23 +17,23 @@ scripts/atlas-lookup "prompt injection"
 
 ## Metadata Contract
 
-All ADR rules use the same rule structure, regardless of purpose:
+All Telltale rules use the same rule structure, regardless of purpose:
 
-- `category`: concrete behavior observed by ADR, such as `exfiltration`, `approval_bypass`, or `mcp_prompt_injection`.
+- `category`: concrete behavior observed by Telltale, such as `exfiltration`, `approval_bypass`, or `mcp_prompt_injection`.
 - `detection_class`: why the rule exists, such as `security_detection`, `threat_hunting`, or `policy_violation`.
 - `signal_type`: analytic shape, such as `atomic`, `chain`, or `correlation`.
 - `analytic_intent`: how analysts should treat the event, such as `alert`, `hunt`, `audit`, `enrich`, or `baseline`.
 - `atlas_tags`: optional ATLAS context tags.
 
-Policy violations, bleeding-edge ad-hoc hunts, and production alerts are all normal ADR rules. They may live in separate bundles for organizational clarity, but they use the same syntax, validation, fixture expectations, scoring, redaction, and event schema.
+Policy violations, bleeding-edge ad-hoc hunts, and production alerts are all normal Telltale rules. They may live in separate bundles for organizational clarity, but they use the same syntax, validation, fixture expectations, scoring, redaction, and event schema.
 
 ## ATLAS Reference (v2026.05)
 
-ATLAS is the Adversarial Threat Landscape for AI Systems. The canonical structured data is `dist/v6/ATLAS-2026.05.yaml` from `github.com/mitre-atlas/atlas-data`. The tags below reference techniques and tactics from that release. ADR uses ATLAS for offline analyst context only; it never fetches ATLAS at runtime.
+ATLAS is the Adversarial Threat Landscape for AI Systems. The canonical structured data is `dist/v6/ATLAS-2026.05.yaml` from `github.com/mitre-atlas/atlas-data`. The tags below reference techniques and tactics from that release. Telltale uses ATLAS for offline analyst context only; it never fetches ATLAS at runtime.
 
-Tactics referenced by current ADR rules:
+Tactics referenced by current Telltale rules:
 
-| Tactic ID | Tactic Name | ADR Relevance |
+| Tactic ID | Tactic Name | Telltale Relevance |
 | --- | --- | --- |
 | `AML.TA0005` | Execution | Shell/interpreter execution, prompt injection, agent tool invocation. |
 | `AML.TA0006` | Persistence | Agent configuration modification, guardrail changes. |
@@ -42,9 +42,9 @@ Tactics referenced by current ADR rules:
 | `AML.TA0010` | Exfiltration | Outbound upload, encoded egress, DNS exfiltration. |
 | `AML.TA0013` | Credential Access | Secret files, private keys, cloud credential stores. |
 
-Techniques referenced by current ADR rules:
+Techniques referenced by current Telltale rules:
 
-| Technique ID | Technique Name | Why ADR Maps Here |
+| Technique ID | Technique Name | Why Telltale Maps Here |
 | --- | --- | --- |
 | `AML.T0050` | Command and Scripting Interpreter | Agent invokes shells or interpreters, including encoded payloads. |
 | `AML.T0051` | LLM Prompt Injection | Direct/indirect injection, tool-call-shaped injection, approval-bypass language, MCP metadata injection. |
@@ -61,7 +61,7 @@ The table covers every bundled rule, chain modifier, and example rule in the rep
 
 ### Bundled Rules (`config/rules/tool-call-regex.yaml`)
 
-| ADR Rule | ADR Category | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
+| Rule | ADR Category | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | `secret.env.read` | `secret_access` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | Access to `.env`-style secret files. |
 | `secret.private_key.read` | `secret_access` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | SSH keys, PEM/P12, private key material. |
@@ -84,11 +84,11 @@ The table covers every bundled rule, chain modifier, and example rule in the rep
 
 ### Bundled Chain Modifiers (`config/rules/tool-call-regex.yaml`)
 
-| ADR Modifier | Trigger | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
+| Modifier | Trigger | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `chain.secret_then_network` | `secret_access` + `download` | `security_detection` | `chain` | `alert` | none | ADR-specific correlation; no single ATLAS technique. |
+| `chain.secret_then_network` | `secret_access` + `download` | `security_detection` | `chain` | `alert` | none | Telltale-specific correlation; no single ATLAS technique. |
 | `chain.download_then_execute` | `download` + `execution` | `security_detection` | `chain` | `alert` | none | Traditional download-execute pattern. |
-| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | `security_detection` | `chain` | `alert` | none | Obfuscated shell execution; ADR-specific scoring. |
+| `chain.shell_encoded_payload` | `execution.shell` + `execution.encoded_payload` | `security_detection` | `chain` | `alert` | none | Obfuscated shell execution; Telltale-specific scoring. |
 | `chain.install_then_persistence` | `install` + `persistence` | `security_detection` | `chain` | `alert` | none | Install near persistence surfaces. |
 | `chain.mcp_injection_then_egress` | `mcp_prompt_injection` + `exfiltration` | `security_detection` | `chain` | `alert` | `atlas:AML.T0051`, `atlas:AML.T0086` | Prompt injection plus agent-tool egress. |
 | `chain.credential_then_publish` | `credential_harvesting` + `supply_chain` | `security_detection` | `chain` | `alert` | none | Credential harvesting near package publishing. |
@@ -97,7 +97,7 @@ The table covers every bundled rule, chain modifier, and example rule in the rep
 
 ### Example Rules
 
-| ADR Rule | ADR Category | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
+| Rule | ADR Category | Detection Class | Signal Type | Analytic Intent | ATLAS Tags | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | `adhoc.agent_tool_exfil_phrase` | `exfiltration` | `threat_hunting` | `atomic` | `hunt` | `atlas:AML.T0086`, `atlas:AML.T0025` | Ad-hoc hunt for agent-tool exfiltration language. |
 | `policy.agent_guardrail_modification` | `persistence` | `policy_violation` | `atomic` | `audit` | `atlas:AML.T0081` | Edits to agent guardrails, policy, skills, or config files. |
@@ -116,13 +116,13 @@ Rules without `atlas_tags` are not automatically deficient. Prefer no ATLAS tag 
 
 Candidate techniques for future mapping as detection content grows:
 
-| ADR Area | Candidate ATLAS Technique | Why It May Fit Later |
+| Telltale Area | Candidate ATLAS Technique | Why It May Fit Later |
 | --- | --- | --- |
-| Agent tool invocation / command execution | `AML.T0053` | When ADR detects unauthorized tool invocation distinct from shell execution. |
-| Supply chain compromise | `AML.T0010`, `AML.T0104`, `AML.T0109` | When ADR adds poisoned-package or rug-pull detections. |
-| Agent context poisoning / memory | `AML.T0080` | When ADR detects memory or thread manipulation. |
-| Jailbreak / guardrail bypass | `AML.T0054` | When ADR adds explicit jailbreak detection beyond approval bypass. |
-| Prompt obfuscation | `AML.T0068` | When ADR detects obfuscated injection payloads. |
-| Credential harvesting from agent config | `AML.T0083` | When ADR distinguishes agent-config credentials from cloud credentials. |
-| Data destruction via agent tools | `AML.T0101` | When ADR adds destructive tool-use detections. |
-| Agentic resource consumption | `AML.T0034.002` | When ADR adds cost/resource-abuse detections. |
+| Agent tool invocation / command execution | `AML.T0053` | When Telltale detects unauthorized tool invocation distinct from shell execution. |
+| Supply chain compromise | `AML.T0010`, `AML.T0104`, `AML.T0109` | When Telltale adds poisoned-package or rug-pull detections. |
+| Agent context poisoning / memory | `AML.T0080` | When Telltale detects memory or thread manipulation. |
+| Jailbreak / guardrail bypass | `AML.T0054` | When Telltale adds explicit jailbreak detection beyond approval bypass. |
+| Prompt obfuscation | `AML.T0068` | When Telltale detects obfuscated injection payloads. |
+| Credential harvesting from agent config | `AML.T0083` | When Telltale distinguishes agent-config credentials from cloud credentials. |
+| Data destruction via agent tools | `AML.T0101` | When Telltale adds destructive tool-use detections. |
+| Agentic resource consumption | `AML.T0034.002` | When Telltale adds cost/resource-abuse detections. |

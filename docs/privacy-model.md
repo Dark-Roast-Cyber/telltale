@@ -2,11 +2,11 @@
 
 > **Website:** For an approachable guide to provenance and evidence handling, see [AgentArchaeology.ai/field-guide/provenance](https://agentarchaeology.ai/field-guide/provenance/).
 
-ADR monitors agent session stores that contain sensitive material: API keys, credentials, private keys, file paths, conversation bodies, and tool-call arguments. The privacy model defines how ADR classifies, transforms, and emits evidence so SIEM events remain useful without becoming a new secret-leak surface.
+Telltale monitors agent session stores that contain sensitive material: API keys, credentials, private keys, file paths, conversation bodies, and tool-call arguments. The privacy model defines how Telltale classifies, transforms, and emits evidence so SIEM events remain useful without becoming a new secret-leak surface.
 
 ## Evidence Classes
 
-ADR uses five evidence classes, ordered from safest to most sensitive:
+Telltale uses five evidence classes, ordered from safest to most sensitive:
 
 ### 1. Safe Metadata
 
@@ -70,7 +70,7 @@ ADR uses five evidence classes, ordered from safest to most sensitive:
 
 **Definition**: Evidence that is useful for local review but should not be emitted to SIEM by default.
 
-**Current event behavior**: ADR does not currently emit a separate local-only context field. The bounded excerpt approach (80 tokens + redaction) serves as the default compromise for SIEM events.
+**Current event behavior**: Telltale does not currently emit a separate local-only context field. The bounded excerpt approach (80 tokens + redaction) serves as the default compromise for SIEM events.
 
 **Baseline state behavior**: Model behavioral baselines are persisted in local scanner state so deviation scoring can compare new observations with prior local activity. Baseline summaries track network host labels observed in parsed tool arguments or results, but persisted scanner state stores those labels as deterministic `sha256:` hashes. Host labels can reveal internal services, customer domains, repository infrastructure, or other environment-specific destinations, so raw labels remain local-only sensitive context and must not be copied into public reports, committed, or exported as telemetry by default. Native state also requires an explicit `state_schema_version` and rejects raw host labels; legacy state is accepted only by the explicit state migration command.
 
@@ -84,7 +84,7 @@ When `--baseline-deviation-scoring` is enabled, emitted activity evidence report
 
 ### 5. Never Emit
 
-**Definition**: Data that must never appear in ADR events, regardless of configuration.
+**Definition**: Data that must never appear in Telltale events, regardless of configuration.
 
 **Examples**:
 - Raw API keys, tokens, passwords, secrets
@@ -99,7 +99,7 @@ When `--baseline-deviation-scoring` is enabled, emitted activity evidence report
 
 ## Evidence Minimalism
 
-ADR should emit the least evidence needed to prove a detection.
+Telltale should emit the least evidence needed to prove a detection.
 
 Guidance:
 - Prefer safe metadata first. If a rule can be explained by `client`, `session_id`, `rule_id`, `category`, `tool_name`, `severity`, or `risk_score`, do not add content evidence just to make the event look richer.

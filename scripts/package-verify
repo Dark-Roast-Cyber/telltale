@@ -482,22 +482,25 @@ done
 echo "== packaged telltale-cli install =="
 CARGO_TARGET_DIR="$TARGET_DIR/install" "$@"
 
-for binary in telltale; do
-    test -x "$INSTALL_ROOT/bin/$binary" || {
-        echo "packaged install omitted $binary" >&2
+expected_binary_count=0
+for binary_path in "$INSTALL_ROOT/bin"/*; do
+    [[ -e "$binary_path" || -L "$binary_path" ]] || continue
+    if [[ "$binary_path" != "$INSTALL_ROOT/bin/telltale" || -L "$binary_path" || ! -f "$binary_path" || ! -x "$binary_path" ]]; then
+        echo "packaged install contains an unexpected executable entry: $binary_path" >&2
         exit 1
-    }
-    version_output=$("$INSTALL_ROOT/bin/$binary" --version)
+    fi
+    expected_binary_count=$((expected_binary_count + 1))
+    version_output=$("$binary_path" --version)
     case "$version_output" in
-        "$binary $VERSION ($PACKAGED_SHA_PREFIX)") printf '%s\n' "$version_output" ;;
+        "telltale $VERSION ($PACKAGED_SHA_PREFIX)") printf '%s\n' "$version_output" ;;
         *)
-            echo "unexpected $binary version output: $version_output" >&2
+            echo "unexpected telltale version output: $version_output" >&2
             exit 1
             ;;
     esac
 done
-test ! -e "$INSTALL_ROOT/bin/adr" || {
-    echo "packaged install must not include retired adr executable" >&2
+[[ "$expected_binary_count" -eq 1 ]] || {
+    echo "packaged install does not contain exactly the canonical executable set" >&2
     exit 1
 }
 

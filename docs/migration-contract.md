@@ -1,6 +1,7 @@
 # Migration contract
 
-The standalone state migration command is explicit and state-only:
+Supported migration commands are explicit and operate only on operator-selected
+Telltale data paths:
 
 ```sh
 telltale migrate state --from <OLD> --to <NEW>
@@ -8,23 +9,18 @@ telltale migrate state --from <OLD> --to <NEW>
 
 Native scans emit and consume Event 3.0. Historical Event 1.0 and 2.0 records
 remain explicit read/import inputs; they are validated against their immutable
-schemas and are never rewritten as native events. Normal runtime paths and
-environment names use the canonical `TELLTALE_*` contract in this slice.
-Retired `ADR_*` runtime variables fail closed before command parsing or any
-configuration, filesystem, or network activity. The explicit migration commands
-below remain the only supported way to transform legacy files.
+schemas and are never rewritten as native events. Runtime paths and environment
+names use the canonical `TELLTALE_*` contract. Unknown inherited environment
+variables are ignored.
 
-Legacy default files such as `adr-events.jsonl` and `adr-state.json` are not
-probed, rewritten, or adopted by the canonical runtime. They remain byte-for-byte
-untouched until an operator performs an explicit migration. Consequently, an
-unmigrated first run starts with fresh canonical state and may re-emit detections
-that were already represented in the legacy state or log.
+Canonical runtime paths are never inferred from unrelated files. An unmigrated
+first run starts with fresh canonical state and may re-emit detections already
+represented in an operator-selected source.
 
-Historical event files and environment files have separate explicit commands:
+Historical event files have one explicit command:
 
 ```sh
 telltale migrate events --pair <OLD> <NEW> [--pair <OLD> <NEW> ...]
-telltale migrate env --from <OLD> --to <NEW>
 ```
 
 Event pairs are ordered. A destination may occur in more than one pair; its
@@ -62,17 +58,6 @@ recoverable and journaled, not globally atomic: a crash or failure between
 destination installs can leave an incomplete subset, and a later identical run
 repairs that subset without clobbering existing bytes or changing sources.
 
-Environment migration streams and rewrites each bounded line while preserving
-opaque right-hand sides, comments, line endings, and final-newline framing. It
-uses one exact audited inventory of approved ADR product keys, including the
-ATLAS, build, live-test, index, sourcetype, path, rotation, inventory,
-process-chain, operational-alert, and risk-threshold mappings. The retired
-`ADR_TRIAGE_TIMEOUT_MS` and `ADR_TRIAGE_MAX_RETRIES` keys are rejected exactly;
-other non-inventory names are preserved verbatim. Environment output and its
-manifest are owner-only on Unix. The source is digest-rechecked after
-transformation and immediately before destination installation, so a same-length
-source mutation fails before installation.
-
 ## Migration budgets
 
 Event migration has fixed cumulative limits. Raw source bytes, including all
@@ -92,15 +77,11 @@ spools, or destination/manifest activity. They bound metadata and filesystem
 fan-out that byte budgets do not measure. Pair and destination cap failures
 return static errors and leave no migration side effects.
 
-Environment migration limits the raw source to 16 MiB, rewritten output to 16
-MiB, input lines to 1,000,000, each line to 1 MiB, and assignments to 100,000.
 Counters use checked arithmetic and each over-limit condition returns a bounded
-static error; migration never emits a `complete` manifest after a budget
-failure. Temporary spools may be created and cleaned up while validation is in
-progress, but no destination or manifest is installed after a failed budget
-check. The existing status/export historical reader, which materializes a
-historical JSONL file for compatibility, is outside this primitive's streaming
-budget contract.
+static error. Temporary spools may be created and cleaned up while validation is
+in progress, but no destination or manifest is installed after a failed budget
+check. Historical readers that materialize JSONL for compatibility are outside
+this primitive's streaming budget contract.
 
 ## Scanner state
 
@@ -158,7 +139,7 @@ state target is read through a short-lived pinned handle and its complete
 SHA-256 content is compared again after cheap identity, link-count, length, and
 timestamp checks; unstable reads and content mismatches fail closed. Unix and
 macOS retain their metadata comparison semantics. Local JSONL append/rotation
-and event or environment migration use explicit lock-only coordination because
+and event migration use explicit lock-only coordination because
 they intentionally mutate protected targets; their existing append, rotation,
 pinned-source, destination, no-clobber, and post-write checks remain
 authoritative. These advisory locks do not make the final verification and
@@ -167,7 +148,7 @@ mutation sequence atomic against arbitrary writers.
 Native state and migration manifests are created with owner-only permissions
 (`0600`) on Unix. The local JSONL file is created no broader than `0640`.
 Before accepting exact-idempotent existing bytes, migration rejects an existing
-event destination broader than `0640` and an existing state, environment, or
+event destination broader than `0640` and an existing state or
 manifest target broader than `0600`; it never silently chmods an existing file.
 On Unix, every existing migration destination and manifest must also be owned by
 the effective UID. Windows currently fails closed with the bounded
@@ -230,5 +211,5 @@ after durable delivery succeeds. It validates before install, cleans up
 temporary files on success and failure, atomically replaces the native state,
 and syncs the parent directory where supported. On Windows, file contents are
 flushed and the replacement uses write-through rename semantics; parent-
-directory durability is not asserted. It does not probe retired path aliases
+directory durability is not asserted. It does not probe unrelated product paths
 or silently create fresh replacement state.

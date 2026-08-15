@@ -1,13 +1,13 @@
 # Agent Policy Authoring
 
-Telltale uses one detection engine for production alerts, bleeding-edge ad-hoc hunts, security detections, and policy-violation detections. A policy violation is not a separate runtime path. It is a normal ADR rule bundle, written in the same YAML syntax, validated by the same CLI commands, tested with the same synthetic fixtures, and emitted as the same SIEM-friendly detection event shape.
+Telltale uses one detection engine for production alerts, bleeding-edge ad-hoc hunts, security detections, and policy-violation detections. A policy violation is not a separate runtime path. It is a normal Telltale rule bundle, written in the same YAML syntax, validated by the same CLI commands, tested with the same synthetic fixtures, and emitted as the same SIEM-friendly detection event shape.
 
-This document defines the first deterministic workflow for turning human-written AI agent policy into ADR detection content. The first supported policy inputs are Markdown and YAML. PDF, DOCX, and AI-assisted import are future workflow layers.
+This document defines the first deterministic workflow for turning human-written AI agent policy into Telltale detection content. The first supported policy inputs are Markdown and YAML. PDF, DOCX, and AI-assisted import are future workflow layers.
 
 ## Goals
 
 - Help humans define what coding agents may do, must not do, and may do only under conditions.
-- Map those statements to observable ADR categories, rule IDs, fixtures, and validation commands.
+- Map those statements to observable Telltale categories, rule IDs, fixtures, and validation commands.
 - Keep policy-violation content data-driven in rule YAML instead of hard-coding policy logic.
 - Preserve the existing detection lifecycle: rules, fixtures, validation, coverage, documentation, and SIEM output.
 - Mark unobservable controls clearly instead of pretending logs can prove behavior they cannot expose.
@@ -28,7 +28,7 @@ This document is source material, not executable configuration.
 
 ### Agent Behavior Policy YAML
 
-The agent behavior policy is a normalized planning artifact. It records controls, decisions, observability, ADR mappings, and expected validation evidence. Keep examples inline and compact rather than relying on a separate example file.
+The agent behavior policy is a normalized planning artifact. It records controls, decisions, observability, Telltale mappings, and expected validation evidence. Keep examples inline and compact rather than relying on a separate example file.
 
 The first schema is intentionally simple and reviewable:
 
@@ -41,7 +41,7 @@ controls:
     decision: prohibited
     summary: Agents must not read local secrets and transmit them externally.
     observability: observable
-    adr_categories: [secret_access, exfiltration]
+    categories: [secret_access, exfiltration]
     rule_ids: [secret.env.read, exfil.outbound_upload, chain.secret_then_network]
     detection_bundle: config/rules/tool-call-regex.yaml
     validation:
@@ -51,7 +51,7 @@ controls:
 
 ### Detection Bundle
 
-Detection bundles remain ADR rule YAML. Bundles can be organized by purpose:
+Detection bundles remain Telltale rule YAML. Bundles can be organized by purpose:
 
 - `config/rules/tool-call-regex.yaml` for bundled security and threat-hunting detections.
 - `config/rules/ad-hoc/*.yaml` for temporary or bleeding-edge rules that should be validated before promotion.

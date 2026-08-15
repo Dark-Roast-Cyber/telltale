@@ -43,46 +43,11 @@ Options:
   --release-tag TAG   Select one exact published RC tag (for example v0.5.0-rc.N).
   --install-dir DIR  Install the canonical telltale binary below the current user's home.
   --with-timer        Install and enable the canonical telltale-scan.timer user schedule.
-  --no-timer          Do not enable the canonical timer; retire identified legacy schedules safely.
+  --no-timer          Do not enable the canonical timer.
   --skip-checksum     Explicitly bypass SHA256SUMS verification.
   --version, -V       Print installer version information.
   --help, -h          Print this help.
 EOF
-}
-
-declare -a RETIRED_RUNTIME_ENV_NAMES=(
-    ADR_GIT_HASH
-    ADR_INSTALL_INVENTORY_INTERVAL_SECONDS
-    ADR_LOG_PATH
-    ADR_LOG_ROTATE_KEEP
-    ADR_LOG_ROTATE_MAX_SIZE
-    ADR_OP_ALERT_MAX_SCAN_DURATION_MS
-    ADR_OP_ALERT_MAX_SCANNER_ERRORS
-    ADR_PROCESS_CHAIN_DETECTIONS
-    ADR_PROJECT_CONFIG
-    ADR_RISK_THRESHOLD_ALERT
-    ADR_RISK_THRESHOLD_LOW
-    ADR_RISK_THRESHOLD_MEDIUM
-    ADR_RISK_THRESHOLD_TRIAGE
-    ADR_SCAN_ROOT
-    ADR_STATE_PATH
-    ADR_TRIAGE_MAX_RETRIES
-    ADR_TRIAGE_TIMEOUT_MS
-)
-
-reject_retired_runtime_environment() {
-    local name
-    local -a present=()
-    for name in "${RETIRED_RUNTIME_ENV_NAMES[@]}"; do
-        if [[ -v "$name" ]]; then
-            present+=("$name")
-        fi
-    done
-    if [[ "${#present[@]}" -gt 0 ]]; then
-        error "retired runtime environment variables are inherited; unset the listed names and use canonical TELLTALE_* variables or explicit migration commands"
-        printf '  %s\n' "${present[@]}" >&2
-        exit 1
-    fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -115,8 +80,6 @@ if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
     [[ "$SKIP_CHECKSUM" -eq 0 ]] \
         || die "--skip-checksum is not permitted with --release-tag"
 fi
-
-reject_retired_runtime_environment
 
 [[ "$(uname -s)" == "Linux" ]] || die "This installer supports Linux current-user installs only"
 CURRENT_UID="$(id -u)"
@@ -342,17 +305,11 @@ journal_phase=none
 journal_phase_before_start=none
 journal_transaction_started=0
 schedule_checked=0
-schedule_quiesced=0
-schedule_conflict=0
 units_installed=0
 telltale_replaced=0
 binary_copy_attempted=0
-old_adr=0
-old_adr_moved=0
 
 declare -a schedule_units=(
-    adr-scan.service
-    adr-scan.timer
     telltale-scan.service
     telltale-scan.timer
 )
@@ -412,11 +369,11 @@ write_journal() {
 stage_entry_kind() {
     case "$1" in
         transaction.marker) printf '%s\n' private ;;
-        telltale.new|telltale.installing|telltale.old|adr.obsolete) printf '%s\n' executable ;;
+        telltale.new|telltale.installing|telltale.old) printf '%s\n' executable ;;
         telltale-scan.service.new|telltale-scan.timer.new|\
         telltale-scan.service.installing|telltale-scan.timer.installing|\
         telltale-scan.service.old|\
-        telltale-scan.timer.old|adr-scan.service.old|adr-scan.timer.old) printf '%s\n' unit ;;
+        telltale-scan.timer.old) printf '%s\n' unit ;;
         *) return 1 ;;
     esac
 }
@@ -441,7 +398,7 @@ read_journal_phase() {
     local phase
     # Journals are produced by write_journal; accept only an exact generated
     # object so unknown, reordered, duplicate, or malformed fields fail closed.
-    for phase in staging schedules migration units smoke activation committed failed recovered; do
+    for phase in staging schedules units smoke activation committed failed recovered; do
         if cmp -s "$journal_path" <(printf '{\n  "version": "1.0",\n  "phase": "%s",\n  "identity": "telltale",\n  "schedule": "telltale-scan.timer"\n}\n' "$phase"); then
             journal_phase="$phase"
             journal_read_valid=1
@@ -555,11 +512,8 @@ verify_committed_stage_dir() {
     done
 
     verify_committed_stage_pair "$stage/telltale.old" "$INSTALL_DIR/telltale" "$stage/telltale.new" || return 1
-    verify_committed_stage_pair "$stage/adr.obsolete" "$INSTALL_DIR/adr" || return 1
     verify_committed_stage_pair "$stage/telltale-scan.service.old" "$unit_dir/telltale-scan.service" "$stage/telltale-scan.service.new" || return 1
     verify_committed_stage_pair "$stage/telltale-scan.timer.old" "$unit_dir/telltale-scan.timer" "$stage/telltale-scan.timer.new" || return 1
-    verify_committed_stage_pair "$stage/adr-scan.service.old" "$unit_dir/adr-scan.service" || return 1
-    verify_committed_stage_pair "$stage/adr-scan.timer.old" "$unit_dir/adr-scan.timer" || return 1
     recover_stage_new "$stage/telltale.new" "$INSTALL_DIR/telltale" || return 1
     recover_stage_new "$stage/telltale-scan.service.new" "$unit_dir/telltale-scan.service" || return 1
     recover_stage_new "$stage/telltale-scan.timer.new" "$unit_dir/telltale-scan.timer" || return 1
@@ -596,11 +550,8 @@ recover_stage_dir() {
     fi
 
     recover_stage_pair "$stage/telltale.old" "$INSTALL_DIR/telltale" "$stage/telltale.new" || return 1
-    recover_stage_pair "$stage/adr.obsolete" "$INSTALL_DIR/adr" || return 1
     recover_stage_pair "$stage/telltale-scan.service.old" "$unit_dir/telltale-scan.service" "$stage/telltale-scan.service.new" || return 1
     recover_stage_pair "$stage/telltale-scan.timer.old" "$unit_dir/telltale-scan.timer" "$stage/telltale-scan.timer.new" || return 1
-    recover_stage_pair "$stage/adr-scan.service.old" "$unit_dir/adr-scan.service" || return 1
-    recover_stage_pair "$stage/adr-scan.timer.old" "$unit_dir/adr-scan.timer" || return 1
 
     recover_stage_new "$stage/telltale.new" "$INSTALL_DIR/telltale" || return 1
     recover_stage_new "$stage/telltale-scan.service.new" "$unit_dir/telltale-scan.service" || return 1
@@ -625,10 +576,6 @@ recover_stale_staging() {
     local -a install_stages=("$INSTALL_DIR"/.telltale-install.*)
     local -a unit_stages=("$unit_dir"/.telltale-units.*)
     shopt -u nullglob
-
-    if [[ "$schedule_checked" -eq 1 ]]; then
-        all_schedules_disabled || die "could not prove all old and new schedules were disabled before staging recovery"
-    fi
 
     for candidate in "${install_stages[@]}" "${unit_stages[@]}"; do
         had_staging=1
@@ -661,7 +608,7 @@ systemctl_show_raw() {
 unit_dropin_directory_is_absent() {
     local unit="$1" dropin_directory="$unit_dir/${unit}.d"
     case "$unit" in
-        adr-scan.service|adr-scan.timer|telltale-scan.service|telltale-scan.timer)
+        telltale-scan.service|telltale-scan.timer)
             [[ ! -e "$dropin_directory" && ! -L "$dropin_directory" ]]
             ;;
         *)
@@ -673,7 +620,7 @@ unit_dropin_directory_is_absent() {
 unit_has_no_dropins() {
     local unit="$1" dropin_metadata dropin_paths
     case "$unit" in
-        adr-scan.service|adr-scan.timer|telltale-scan.service|telltale-scan.timer)
+        telltale-scan.service|telltale-scan.timer)
             dropin_metadata="$(systemctl_show_raw "$unit" DropInPaths)" || return 1
             [[ "$dropin_metadata" == DropInPaths=* ]] || return 1
             dropin_paths="${dropin_metadata#DropInPaths=}"
@@ -740,18 +687,6 @@ query_and_store_unit() {
     unit_active["$unit"]="$QUERY_ACTIVE"
 }
 
-quiesce_unit() {
-    local unit="$1"
-    query_unit "$unit" || return 1
-    [[ "$QUERY_PRESENT" -eq 1 ]] || return 0
-    if [[ "$QUERY_ENABLED" -eq 1 ]]; then
-        systemctl_user disable "$unit" || return 1
-    fi
-    if [[ "$QUERY_ACTIVE" -eq 1 ]]; then
-        systemctl_user stop "$unit" || return 1
-    fi
-}
-
 all_schedules_disabled() {
     local unit
     for unit in "${schedule_units[@]}"; do
@@ -772,19 +707,15 @@ schedule_transaction() {
         query_and_store_unit "$unit"
     done
 
-    if [[ "${unit_enabled[adr-scan.timer]}" -eq 1 || "${unit_active[adr-scan.timer]}" -eq 1 ]] \
-        && [[ "${unit_enabled[telltale-scan.timer]}" -eq 1 || "${unit_active[telltale-scan.timer]}" -eq 1 ]]; then
-        schedule_conflict=1
-    fi
-
     for unit in "${schedule_units[@]}"; do
-        quiesce_unit "$unit" || die "could not quiesce schedule ${unit}; refusing binary migration"
+        if [[ "${unit_enabled[$unit]}" -eq 1 ]]; then
+            systemctl_user disable "$unit" || die "could not disable canonical schedule ${unit}"
+        fi
+        if [[ "${unit_active[$unit]}" -eq 1 ]]; then
+            systemctl_user stop "$unit" || die "could not stop canonical schedule ${unit}"
+        fi
     done
-    all_schedules_disabled || die "could not prove all old and new schedules are disabled"
-    schedule_quiesced=1
-    if [[ "$schedule_conflict" -eq 1 ]]; then
-        die "duplicate old/new schedules detected; both schedules were disabled and the transaction failed closed"
-    fi
+    all_schedules_disabled || die "could not prove all canonical schedules are disabled"
 }
 
 systemd_escape() {
@@ -804,21 +735,12 @@ stage_units() {
 
     ensure_owned_directory "$unit_dir"
     if [[ "$schedule_checked" -eq 1 ]]; then
-        all_schedules_disabled || die "could not prove all old and new schedules were disabled immediately before unit mutation"
+        all_schedules_disabled || die "could not prove all canonical schedules were disabled immediately before unit mutation"
     fi
     unit_stage_dir="$(mktemp -d "${unit_dir}/.telltale-units.XXXXXX")"
     printf 'telltale-installer-transaction-v1\n' > "$unit_stage_dir/transaction.marker"
     chmod 0600 "$unit_stage_dir/transaction.marker"
     units_installed=1
-
-    for unit in adr-scan.service adr-scan.timer; do
-        path="$unit_dir/$unit"
-        unit_file_is_owned_regular "$path" || die "refusing unsafe user unit: ${path}"
-        if [[ -e "$path" ]]; then
-            no_replace_move "$path" "$unit_stage_dir/$unit.old" \
-                || die "could not stage legacy user unit ${unit} without clobbering"
-        fi
-    done
 
     service_path="$unit_dir/telltale-scan.service"
     timer_path="$unit_dir/telltale-scan.timer"
@@ -918,7 +840,7 @@ restore_units() {
         fi
     done
 
-    for unit in telltale-scan.service telltale-scan.timer adr-scan.service adr-scan.timer; do
+    for unit in telltale-scan.service telltale-scan.timer; do
         stage_path="$unit_stage_dir/$unit.old"
         path="$unit_dir/$unit"
         if [[ -e "$stage_path" || -L "$stage_path" ]]; then
@@ -1033,7 +955,7 @@ resolve_source_revision() {
 }
 
 verify_release_archive() {
-    local archive="$1" archive_members archive_listing member expected
+    local archive="$1" archive_members archive_listing member expected mode name
     local member_count=0
     declare -A seen_members=()
     archive_members="$(tar tzf "$archive")" || die "could not inspect release archive"
@@ -1044,8 +966,6 @@ verify_release_archive() {
         [[ "$member" != *\\* ]] || die "release archive contains an unsafe path"
         case "/${member}/" in */../*) die "release archive contains path traversal" ;; esac
         case "$member" in
-            adr|adr.exe|*/adr|*/adr.exe|*adr-*|*ADR_*)
-                die "release archive contains an active ADR technical identity" ;;
             telltale|LICENSE|README.md|config/examples/telltale-outputs.yaml|\
             config/examples/telltale-scan.service|config/examples/telltale-scan.timer|\
             config/examples/telltale-scan-task.xml|\
@@ -1073,51 +993,15 @@ verify_release_archive() {
             -) ;;
             *) die "release archive contains a non-regular member" ;;
         esac
-    done <<< "$archive_listing"
-}
-
-identify_obsolete_binary() {
-    local path old_adr_version
-    if [[ -e "$INSTALL_DIR/adr.exe" || -L "$INSTALL_DIR/adr.exe" ]]; then
-        die "refusing duplicate or active ADR binary at ${INSTALL_DIR}/adr.exe"
-    fi
-    if [[ -e "$INSTALL_DIR/telltale.exe" || -L "$INSTALL_DIR/telltale.exe" ]]; then
-        die "refusing duplicate canonical binary at ${INSTALL_DIR}/telltale.exe"
-    fi
-    path="$INSTALL_DIR/adr"
-    if [[ -e "$path" || -L "$path" ]]; then
-        [[ ! -L "$path" && -f "$path" && -x "$path" ]] \
-            || die "refusing unidentified obsolete compatibility path"
-        owned_path "$path" || die "refusing obsolete compatibility path not owned by the current user"
-        safe_file_mode "$path" executable || die "refusing obsolete compatibility path with unsafe mode or link count"
-        old_adr_version="$(run_bounded "$path" --version 2>/dev/null)" \
-            || die "could not bounded-check the obsolete compatibility binary"
-        case "$old_adr_version" in
-            adr\ *) old_adr=1 ;;
-            *) die "refusing to delete unidentified file at obsolete compatibility path" ;;
+        mode="${member%% *}"
+        name="${member##* }"
+        case "$name" in
+            telltale)
+                [[ "$mode" == "-rwxr-xr-x" ]] || die "release archive has an unexpected canonical binary mode" ;;
+            *)
+                [[ "$mode" == "-rw-r--r--" ]] || die "release archive has an unexpected support-member mode" ;;
         esac
-    fi
-}
-
-run_migrations() {
-    if [[ "$schedule_checked" -eq 1 ]]; then
-        [[ "$schedule_quiesced" -eq 1 ]] \
-            || die "schedule quiescing was not proven before migration"
-        all_schedules_disabled \
-            || die "could not prove all old and new schedules were disabled immediately before migration"
-    fi
-    if [[ -e "$legacy_state" || -L "$legacy_state" ]]; then
-        "$install_stage_dir/telltale.new" migrate state --from "$legacy_state" --to "$canonical_state" >/dev/null \
-            || die "state migration failed; legacy state was retained"
-    fi
-    if [[ -e "$legacy_log" || -L "$legacy_log" ]]; then
-        "$install_stage_dir/telltale.new" migrate events --pair "$legacy_log" "$canonical_log" >/dev/null \
-            || die "event migration failed; historical event bytes were retained"
-    fi
-    if [[ -e "$legacy_env" || -L "$legacy_env" ]]; then
-        "$install_stage_dir/telltale.new" migrate env --from "$legacy_env" --to "$canonical_env" >/dev/null \
-            || die "environment migration failed; legacy environment was retained"
-    fi
+    done <<< "$archive_listing"
 }
 
 replace_binary() {
@@ -1142,13 +1026,6 @@ replace_binary() {
     telltale_replaced=1
     validate_binary_file "$INSTALL_DIR/telltale"
 
-    if [[ "$old_adr" -eq 1 ]]; then
-        [[ "$schedule_checked" -eq 0 ]] || all_schedules_disabled \
-            || die "an old schedule could still run adr; compatibility binary was retained"
-        no_replace_move "$INSTALL_DIR/adr" "$install_stage_dir/adr.obsolete" \
-            || die "could not stage identified obsolete compatibility binary without clobbering"
-        old_adr_moved=1
-    fi
 }
 
 rollback_binary() {
@@ -1165,10 +1042,6 @@ rollback_binary() {
     if [[ -e "$install_stage_dir/telltale.old" || -L "$install_stage_dir/telltale.old" ]]; then
         [[ ! -e "$path" && ! -L "$path" ]] || return 1
         recover_stage_pair "$install_stage_dir/telltale.old" "$path" || return 1
-    fi
-    if [[ "$old_adr_moved" -eq 1 ]]; then
-        [[ ! -e "$INSTALL_DIR/adr" && ! -L "$INSTALL_DIR/adr" ]] || return 1
-        recover_stage_pair "$install_stage_dir/adr.obsolete" "$INSTALL_DIR/adr" || return 1
     fi
     if [[ "$binary_copy_attempted" -eq 1 && "$telltale_replaced" -eq 0 ]]; then
         # The copy was attempted but never became the canonical destination.
@@ -1188,7 +1061,13 @@ rollback_schedules() {
     [[ "$schedule_checked" -eq 1 ]] || return 0
     systemctl_user daemon-reload || return 1
     for unit in "${schedule_units[@]}"; do
-        quiesce_unit "$unit" || return 1
+        query_unit "$unit" || return 1
+        if [[ "$QUERY_ENABLED" -eq 1 ]]; then
+            systemctl_user disable "$unit" || return 1
+        fi
+        if [[ "$QUERY_ACTIVE" -eq 1 ]]; then
+            systemctl_user stop "$unit" || return 1
+        fi
     done
     all_schedules_disabled || return 1
 }
@@ -1363,7 +1242,6 @@ if [[ "$FROM_SOURCE" -eq 1 ]]; then
         || die "cargo install failed for release ${version_tag}"
     [[ -f "$source_root/bin/telltale" && ! -L "$source_root/bin/telltale" ]] \
         || die "validated source release did not produce telltale"
-    [[ ! -e "$source_root/bin/adr" ]] || die "source release produced retired adr executable"
     install -m 0755 "$source_root/bin/telltale" "$staged_dir/telltale"
     validate_binary_file "$staged_dir/telltale"
     verify_binary_version "$staged_dir/telltale"
@@ -1385,9 +1263,6 @@ journal_path="$state_root/telltale/installer-transaction.json"
 canonical_log="$state_root/telltale/logs/telltale-events.jsonl"
 canonical_state="$state_root/telltale/telltale-state.json"
 canonical_env="$config_root/telltale/telltale.env"
-legacy_log="$state_root/telltale/logs/adr-events.jsonl"
-legacy_state="$state_root/telltale/adr-state.json"
-legacy_env="$config_root/telltale/adr.env"
 
 for directory in \
     "$INSTALL_DIR" "$state_root" "$config_root" "$unit_dir" \
@@ -1397,16 +1272,15 @@ for directory in \
 done
 
 for private_path in \
-    "$journal_path" "$canonical_state" "$canonical_env" \
-    "$legacy_state" "$legacy_env"; do
+    "$journal_path" "$canonical_state" "$canonical_env"; do
     ensure_owned_regular_or_absent "$private_path" private
 done
-for log_path in "$canonical_log" "$legacy_log"; do
+for log_path in "$canonical_log"; do
     ensure_owned_regular_or_absent "$log_path" log
 done
 
 for binary_path in \
-    "$INSTALL_DIR/telltale" "$INSTALL_DIR/adr" "$INSTALL_DIR/adr.exe" "$INSTALL_DIR/telltale.exe"; do
+    "$INSTALL_DIR/telltale"; do
     ensure_owned_regular_or_absent "$binary_path" executable
 done
 
@@ -1436,12 +1310,8 @@ validate_binary_file "$install_stage_dir/telltale.new"
 
 write_journal schedules
 verify_binary_version "$install_stage_dir/telltale.new"
-identify_obsolete_binary
-
 ensure_owned_directory "$(dirname -- "$canonical_state")"
 ensure_owned_directory "$(dirname -- "$canonical_log")"
-write_journal migration
-run_migrations
 
 stage_units
 write_journal units
@@ -1476,20 +1346,20 @@ run_bounded "$INSTALL_DIR/telltale" scan --once --dry-run --no-local-config \
 if [[ "$WITH_TIMER" -eq 1 ]]; then
     write_journal activation
     all_schedules_disabled \
-        || die "could not prove all old and new schedules were disabled immediately before activation"
+        || die "could not prove all canonical schedules were disabled immediately before activation"
     systemctl_user enable --now telltale-scan.timer \
         || die "could not enable canonical telltale-scan.timer; rollback was attempted"
     query_unit telltale-scan.timer || die "could not verify canonical timer activation"
     [[ "$QUERY_PRESENT" -eq 1 && "$QUERY_ENABLED" -eq 1 && "$QUERY_ACTIVE" -eq 1 ]] \
         || die "canonical timer activation postcondition failed"
-    for unit in adr-scan.service adr-scan.timer telltale-scan.service; do
+    for unit in telltale-scan.service; do
         query_unit "$unit" || die "could not verify schedule postcondition for ${unit}"
         [[ "$QUERY_ENABLED" -eq 0 && "$QUERY_ACTIVE" -eq 0 ]] \
             || die "schedule postcondition left ${unit} enabled or active"
     done
 else
     all_schedules_disabled \
-        || die "final all-schedules-disabled postcondition failed"
+        || die "final canonical-schedules-disabled postcondition failed"
 fi
 
 write_journal committed

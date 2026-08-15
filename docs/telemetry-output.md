@@ -27,8 +27,7 @@ Use `--path-profile system` for managed service deployments, or
 paths such as `logs/telltale-events.jsonl` and `state/telltale-state.json`.
 Explicit `--log-path` and `--state-path` flags still override profile defaults.
 Service managers can set `TELLTALE_LOG_PATH` and `TELLTALE_STATE_PATH` instead
-of repeating flags. Retired ADR path variables fail closed before command
-parsing.
+of repeating flags. Unknown inherited variables are ignored.
 
 Use `--dry-run` when validating fixtures or command behavior without writing
 events:
@@ -241,10 +240,9 @@ For default workstation installs, that active file is the `user` profile path,
 such as `~/.local/state/telltale/logs/telltale-events.jsonl` on Linux. For
 managed service deployments, run scans with `--path-profile system` or
 explicit `TELLTALE_LOG_PATH`/`TELLTALE_STATE_PATH` values and point shippers at
-the system path, such as `/var/log/telltale/telltale-events.jsonl` on Linux. Do
-not keep monitoring the legacy ADR-named repo-local path unless the scanner is
-intentionally running with `--path-profile project` or an explicit custom path
-writes there.
+the system path, such as `/var/log/telltale/telltale-events.jsonl` on Linux. The
+project profile uses `logs/telltale-events.jsonl`; use an explicit path when an
+operator intentionally selects another destination.
 
 Use explicit file paths instead of broad log directory monitors so diagnostic
 logs or source logs do not get indexed as Telltale events. For Splunk Universal

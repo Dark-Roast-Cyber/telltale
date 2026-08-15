@@ -1,5 +1,5 @@
 version: 1
-description: Invalid custom ADR rule fixture.
+description: Invalid custom Telltale rule fixture.
 defaults:
   case_insensitive: true
   enabled: true

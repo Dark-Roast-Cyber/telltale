@@ -1,6 +1,6 @@
 # Detection Content Standard
 
-This document defines the quality bar for ADR detection rules, fixtures, and related documentation. Every bundled rule must meet this standard before it ships. Custom rules loaded via `--rules` are encouraged but not required to follow it.
+This document defines the quality bar for Telltale detection rules, fixtures, and related documentation. Every bundled rule must meet this standard before it ships. Custom rules loaded via `--rules` are encouraged but not required to follow it.
 
 ## Required Rule Metadata
 
@@ -16,7 +16,7 @@ Every rule in `config/rules/tool-call-regex.yaml` must include:
 | `atlas_tags` | Optional MITRE ATLAS tags using `atlas:<id>` values. Runtime validation checks shape only. | `[atlas:AML.T0051]` |
 | `severity` | One of `informational`, `low`, `medium`, `high`, `critical`. | `high` |
 | `score` | Numeric risk contribution (0–100 per rule). Matching contributions accumulate into the emitted, uncapped `risk_score`. | `60` |
-| `targets` | Fields the regex evaluates. Must be valid ADR targets. | `[assistant_context, arguments, tool_result]` |
+| `targets` | Fields the regex evaluates. Must be valid Telltale targets. | `[assistant_context, arguments, tool_result]` |
 | `regex` or `detection` | The matching pattern. `targets` + `regex` for simple signatures; `detection.selection` with `condition: selection` for Sigma-inspired rules. | See examples in detection-model.md |
 | `tags` | One or more descriptive tags for filtering, searching, and documentation. | `[mcp, prompt-injection, tool-poisoning]` |
 | `explanation` | One sentence describing what the rule detects and why it matters. | "MCP tool metadata appears to contain prompt-injection instructions." |

@@ -110,9 +110,10 @@ binary install unless you opt in:
 
 The hosted one-line installer is not part of this repository's release cutover;
 use the checked-in script above for a reviewed install. It uses one locked,
-journaled transaction, verifies `SHA256SUMS`, stages the canonical binary, runs
-explicit state/event/environment migration when legacy inputs exist, and
-smoke-tests before activation. `--from-source` first downloads and validates the
+journaled transaction, verifies `SHA256SUMS`, stages the canonical binary, and
+smoke-tests before activation. It performs no product migration or cleanup;
+explicit Telltale state/event migration is a separate operator command.
+`--from-source` first downloads and validates the
 selected release's canonical archive provenance, resolves that tag to an
 immutable commit, and builds that exact source revision; it does not skip the
 prebuilt archive download or bypass release provenance. Add `--with-timer` to
@@ -209,7 +210,7 @@ paths.
 Explicit `--log-path` and `--state-path` flags override profile defaults. The
 canonical environment overrides are `TELLTALE_LOG_PATH` and
 `TELLTALE_STATE_PATH`; precedence is explicit CLI, environment, then profile
-default. Retired ADR path variables fail closed before command parsing.
+default. Unknown inherited variables are ignored.
 
 ## Local Rule, Policy, And Allowlist Config
 
@@ -335,9 +336,9 @@ that SIEM dashboards can group by as `component`, `check_name`, and `status`.
 ## Managed Service Setup (Advanced)
 
 The checked-in systemd templates use the canonical `telltale-scan` unit names
-and `TELLTALE_*` environment. Use the explicit migration commands in the
-[migration contract](migration-contract.md) for historical environment files;
-do not alias retired runtime names.
+and `TELLTALE_*` environment. Use the explicit state/event commands in the
+[migration contract](migration-contract.md) for operator-selected Telltale data.
+There is no in-place upgrade path for another product.
 
 The repository and release archives include Linux-oriented systemd examples in
 `config/examples/telltale-scan.service` and `config/examples/telltale-scan.timer` for
@@ -371,6 +372,5 @@ to the `user` profile path by default, such as
 `~/.local/state/telltale/logs/telltale-events.jsonl` on Linux. Managed Splunk/Filebeat
 deployments should run scans with `--path-profile system` or explicit
 `TELLTALE_LOG_PATH`/`TELLTALE_STATE_PATH` values and monitor
-`/var/log/telltale/telltale-events.jsonl`. Do not monitor the legacy repo-local
-ADR-named path; the current project profile uses
+`/var/log/telltale/telltale-events.jsonl`. The current project profile uses
 `logs/telltale-events.jsonl` unless an explicit path selects otherwise.

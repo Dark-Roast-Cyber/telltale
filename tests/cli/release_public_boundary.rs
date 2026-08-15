@@ -54,8 +54,11 @@ fn release_fixture_make_command() -> Command {
 
 #[cfg(unix)]
 fn configure_git_user(repo: &Path) {
-    git_expect(repo, &["config", "user.email", "adr-test@example.invalid"]);
-    git_expect(repo, &["config", "user.name", "ADR Test"]);
+    git_expect(
+        repo,
+        &["config", "user.email", "telltale-test@example.invalid"],
+    );
+    git_expect(repo, &["config", "user.name", "Telltale Test"]);
 }
 
 #[cfg(unix)]
@@ -648,6 +651,11 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
     fs::create_dir_all(good_payload.join("config/examples")).expect("create good payload");
     fs::create_dir_all(bad_payload.join("logs")).expect("create bad payload logs");
     fs::write(good_payload.join("telltale"), "binary\n").expect("write telltale");
+    fs::set_permissions(
+        good_payload.join("telltale"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("canonical binary mode");
     fs::write(good_payload.join("LICENSE"), "Apache-2.0\n").expect("write LICENSE");
     fs::write(good_payload.join("README.md"), "# quick start\n").expect("write README");
     fs::write(
@@ -681,9 +689,9 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
     )
     .expect("write Elastic role example");
     fs::write(bad_payload.join("telltale.exe"), "binary\n").expect("write bad telltale.exe");
-    fs::write(bad_payload.join("adr.exe"), "binary\n").expect("write bad adr.exe");
+    fs::write(bad_payload.join("unexpected.exe"), "binary\n").expect("write unexpected executable");
     fs::write(
-        bad_payload.join("logs").join("adr-events.jsonl"),
+        bad_payload.join("logs").join("unexpected-events.jsonl"),
         "{\"event_type\":\"activity\"}\n",
     )
     .expect("write bad log");
@@ -691,6 +699,11 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
     // The old recursive bundle glob shape creates directory entries. Keep a
     // regression for that rejected shape beside the explicit-file ZIP below.
     fs::write(good_payload.join("telltale.exe"), "binary\n").expect("write Windows binary");
+    fs::set_permissions(
+        good_payload.join("telltale.exe"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("canonical Windows binary mode");
     let directory_artifacts = temp.path().join("directory-artifacts");
     fs::create_dir_all(&directory_artifacts).expect("create directory-entry artifacts");
     let directory_zip = directory_artifacts.join("telltale-v0.1.0-x86_64-pc-windows-msvc.zip");
@@ -897,8 +910,8 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
         .arg("-q")
         .arg(&bad_archive)
         .arg("telltale.exe")
-        .arg("adr.exe")
-        .arg("logs/adr-events.jsonl")
+        .arg("unexpected.exe")
+        .arg("logs/unexpected-events.jsonl")
         .current_dir(&bad_payload)
         .output()
         .expect("zip bad archive");
@@ -965,6 +978,11 @@ fn release_artifact_manifest_accepts_only_canonical_bundle() {
     ] {
         fs::write(payload.join(path), body).expect("payload member");
     }
+    fs::set_permissions(
+        payload.join("telltale"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("canonical binary mode");
     let archive = artifacts.join("telltale-v0.5.0-x86_64-unknown-linux-gnu.tar.gz");
     let output = Command::new("tar")
         .args(["-czf"])
@@ -1010,9 +1028,9 @@ fn release_artifact_manifest_accepts_only_canonical_bundle() {
 
     fs::copy(
         &archive,
-        artifacts.join("adr-v0.5.0-x86_64-unknown-linux-gnu.tar.gz"),
+        artifacts.join("unexpected-v0.5.0-x86_64-unknown-linux-gnu.tar.gz"),
     )
-    .expect("legacy archive");
+    .expect("unexpected archive");
     let output = release_fixture_make_command()
         .args(["--silent", "-f"])
         .arg(&makefile)
@@ -1020,7 +1038,7 @@ fn release_artifact_manifest_accepts_only_canonical_bundle() {
         .arg(format!("RELEASE_ARTIFACT_DIR={}", artifacts.display()))
         .env("MAKEFLAGS", "")
         .output()
-        .expect("legacy manifest check");
+        .expect("unexpected manifest check");
     assert!(!output.status.success());
     assert!(
         format!(
@@ -1058,6 +1076,11 @@ fn release_artifact_manifest_rejects_link_and_traversal_members() {
     ] {
         fs::write(payload.join(path), body).expect("payload member");
     }
+    fs::set_permissions(
+        payload.join("telltale"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("canonical binary mode");
     fs::create_dir_all(link_payload.join("config/examples")).expect("link payload");
     fs::create_dir_all(traversal_payload.join("config/examples")).expect("traversal payload");
     for path in [
@@ -1290,9 +1313,7 @@ fn makefile_build_install_and_scan_targets_use_primary_binary() {
     assert!(stdout.contains("install -m 0755 target/release/telltale"));
     assert!(stdout.contains("does not install or activate a user schedule"));
     assert!(!stdout.contains("systemctl --user enable telltale-scan.timer"));
-    assert!(!stdout.contains("target/release/adr"));
     assert!(stdout.contains("/telltale scan --once"));
-    assert!(!stdout.contains("/adr scan --once"));
 }
 
 #[cfg(unix)]
@@ -1317,7 +1338,6 @@ fn release_artifact_manifest_skips_absent_download_directory() {
 fn release_workflow_packages_only_canonical_identity() {
     let workflow = read_release_workflow();
     assert!(workflow.contains("telltale-${{ github.ref_name }}-${{ matrix.target }}"));
-    assert!(!workflow.contains("adr-${{ github.ref_name }}-${{ matrix.target }}"));
     assert!(workflow.contains("telltale LICENSE README.md"));
     assert!(workflow.contains("config/examples/elastic-telltale-index-template.json"));
     assert!(workflow.contains("config/examples/elastic-telltale-role.json"));
@@ -1343,10 +1363,6 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(workflow.contains(
         "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
     ));
-    assert!(!workflow.contains(
-        "subject-path: adr-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
-    ));
-    assert!(!workflow.contains("cmp -s \"$canonical\" \"$legacy\""));
     assert!(workflow.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
     assert!(workflow.contains("overwrite_files: false"));
     assert!(workflow.contains("Fail closed if the tag already has a Release"));
@@ -1362,7 +1378,6 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(!workflow.contains("refs/heads/"));
     assert!(!workflow.contains("branch-artifact"));
     assert!(!workflow.contains("artifact-reference"));
-    assert!(!workflow.contains("adr-${{ github.ref_name }}"));
 }
 
 #[test]
@@ -1944,14 +1959,12 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
     assert!(source_build.contains("target\\release\\telltale.exe"));
     assert!(source_build.contains("telltale-events.jsonl"));
     assert!(source_build.contains("telltale-state.json"));
-    assert!(!source_build.contains("adr.exe"));
     let archive_download = text_between(
         windows,
         "Download the canonical release archive",
         "Or build from source:",
     );
     assert!(archive_download.contains("telltale.exe"));
-    assert!(!archive_download.contains("adr.exe"));
 
     let readiness =
         fs::read_to_string("docs/release-readiness.md").expect("read release readiness docs");
@@ -1960,25 +1973,13 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
         "`make package-verify` performs",
         "For the actual publication pass",
     );
-    assert!(package_verify.contains("the `telltale` install"));
+    assert!(package_verify.contains("canonical `telltale` install"));
     assert!(package_verify.contains("telltale --version"));
-    assert!(package_verify.contains("rejects the retired `adr`"));
-    assert!(package_verify.contains("executable if it is installed"));
-    assert!(!package_verify.contains("adr --version"));
+    assert!(package_verify.contains("Linux and macOS"));
     let readiness_baseline =
         text_between(&readiness, "# Release Readiness", "## Artifact Boundary");
     assert!(readiness_baseline.contains("telltale --version"));
-    assert!(!readiness_baseline.contains("adr-events.jsonl"));
-    for retired in [
-        "ADR_LOG_PATH",
-        "ADR_STATE_PATH",
-        "ADR_SCAN_ROOT",
-        "adr-events.jsonl",
-        "adr-state.json",
-    ] {
-        assert!(!source_build.contains(retired));
-        assert!(!readiness_baseline.contains(retired));
-    }
+    assert!(readiness_baseline.contains("Telltale"));
 }
 
 fn text_between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {

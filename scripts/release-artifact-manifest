@@ -39,6 +39,10 @@ def expected_members(archive: Path) -> set[str]:
     return {binary, *EXPECTED_EXAMPLES}
 
 
+def expected_mode(name: str) -> int:
+    return 0o755 if name in {"telltale", "telltale.exe"} else 0o644
+
+
 def validate_names(archive: Path, names: list[str]) -> None:
     if any(unsafe_member(name) for name in names):
         fail(f"Archive {archive} contains an absolute or traversal member")
@@ -64,6 +68,9 @@ def validate_tar(archive: Path) -> list[str]:
                 if not member.isreg():
                     fail(f"Archive {archive} contains a non-regular or link member: {member.name}")
             validate_names(archive, names)
+            for member in members:
+                if member.mode & 0o7777 != expected_mode(member.name):
+                    fail(f"Archive {archive} has an unexpected mode for {member.name}")
             binary = "telltale"
             binary_member = bundle.extractfile(binary)
             if binary_member is None or binary_member.read(4) == b"":
@@ -91,6 +98,10 @@ def validate_zip(archive: Path) -> list[str]:
                 if file_type not in (0, 0o100000):
                     fail(f"Archive {archive} contains an unsupported member type: {info.filename}")
             validate_names(archive, names)
+            for info in infos:
+                unix_mode = (info.external_attr >> 16) & 0o7777
+                if unix_mode and unix_mode != expected_mode(info.filename):
+                    fail(f"Archive {archive} has an unexpected mode for {info.filename}")
             binary = "telltale.exe"
             with bundle.open(binary) as binary_member:
                 if binary_member.read(4) == b"":

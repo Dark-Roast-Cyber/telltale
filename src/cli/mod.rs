@@ -26,44 +26,6 @@ mod migrate;
 mod rules_server;
 mod scan;
 
-const RETIRED_RUNTIME_ENV_NAMES: &[&str] = &[
-    "ADR_GIT_HASH",
-    "ADR_INSTALL_INVENTORY_INTERVAL_SECONDS",
-    "ADR_LOG_PATH",
-    "ADR_LOG_ROTATE_KEEP",
-    "ADR_LOG_ROTATE_MAX_SIZE",
-    "ADR_OP_ALERT_MAX_SCAN_DURATION_MS",
-    "ADR_OP_ALERT_MAX_SCANNER_ERRORS",
-    "ADR_PROCESS_CHAIN_DETECTIONS",
-    "ADR_PROJECT_CONFIG",
-    "ADR_RISK_THRESHOLD_ALERT",
-    "ADR_RISK_THRESHOLD_LOW",
-    "ADR_RISK_THRESHOLD_MEDIUM",
-    "ADR_RISK_THRESHOLD_TRIAGE",
-    "ADR_SCAN_ROOT",
-    "ADR_STATE_PATH",
-    "ADR_TRIAGE_MAX_RETRIES",
-    "ADR_TRIAGE_TIMEOUT_MS",
-];
-
-fn reject_retired_environment_variables() -> Result<(), Box<dyn std::error::Error>> {
-    let mut present = RETIRED_RUNTIME_ENV_NAMES
-        .iter()
-        .copied()
-        .filter(|name| std::env::var_os(name).is_some())
-        .collect::<Vec<_>>();
-    if present.is_empty() {
-        return Ok(());
-    }
-
-    present.sort_unstable();
-    Err(format!(
-        "retired environment variables are set: {}; remediation: unset these variables and use canonical TELLTALE_* variables or explicit migration commands",
-        present.join(", ")
-    )
-    .into())
-}
-
 #[derive(Parser)]
 #[command(
     name = "telltale",
@@ -316,7 +278,7 @@ enum Command {
         command: ConfigCommand,
     },
 
-    /// Explicitly migrate state, historical event JSONL, or environment files.
+    /// Explicitly migrate Telltale state or historical event JSONL data.
     Migrate {
         #[command(subcommand)]
         command: MigrateCommand,
@@ -417,18 +379,6 @@ enum MigrateCommand {
             action = ArgAction::Append
         )]
         pairs: Vec<PathBuf>,
-    },
-
-    /// Map an explicit legacy environment file to a canonical environment file
-    /// using the audited ADR product-key inventory.
-    Env {
-        /// Existing legacy environment file.
-        #[arg(long = "from")]
-        from: PathBuf,
-
-        /// Destination canonical environment file.
-        #[arg(long = "to")]
-        to: PathBuf,
     },
 }
 
@@ -1249,7 +1199,6 @@ fn resolve_install_inventory_interval_seconds(
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    reject_retired_environment_variables()?;
     let runtime = observe_runtime();
     let command = Args::command();
     let args = Args::from_arg_matches(&command.get_matches())?;
@@ -1394,7 +1343,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .collect::<Vec<_>>();
                 migrate::run_event_migration(&pairs)?;
             }
-            MigrateCommand::Env { from, to } => migrate::run_env_migration(&from, &to)?,
         },
         Command::Rules { command } => match command {
             RulesCommand::List {

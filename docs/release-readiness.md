@@ -25,7 +25,7 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). The workspace is currently preparing
-the next `0.5.0-rc.2` candidate for the approved `0.5.0` Event 3.0 migration;
+the next `0.5.0-rc.3` candidate for the approved `0.5.0` Event 3.0 migration;
 compatible maintenance fixes remain on the prior `0.3.x` line until stable
 publication. Do not create `0.5.x` for a round of small tasks; follow-up fixes
 belong there only after the reviewed `0.5.0` milestone ships.
@@ -33,13 +33,17 @@ belong there only after the reviewed `0.5.0` milestone ships.
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
 GitHub Release or complete five-target asset/checksum/attestation set was
-created. Never reuse `rc.1`; `rc.2` is the next prepared candidate.
+created. Never reuse `rc.1`.
+
+`v0.5.0-rc.2` is immutable history at reviewed commit
+`973ce825550941a824aa568a07f80036cd89f497`; do not mutate its tag, Release,
+assets, or evidence. `rc.3` is the next prepared candidate.
 
 ## RC Candidate Handoff
 
 The preparation batch does not create a tag, Release, archive, checksum, crate,
 or live-gate evidence. A later reviewed operation may merge the candidate to
-`main`, tag only that reviewed commit as `v0.5.0-rc.2`, and inspect the workflow
+`main`, tag only that reviewed commit as `v0.5.0-rc.3`, and inspect the workflow
 before validation. The RC Release must be explicitly marked `prerelease=true`.
 If code, package metadata, installer behavior, workflow, archive, checksum, or
 attestation provenance changes, use a new reviewed commit and the next unused
@@ -55,7 +59,7 @@ tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
 After artifact review, downstream validation is dependency-ordered: G-SERVICE
-with the exact RC tag and independent legacy-manager/drop-in preflight, then
+with the exact RC tag and canonical unit/drop-in preflight, then
 controlled G-HEC and G-SPLUNK, native Windows, and native macOS. Each gate has
 its own PASS/BLOCKED/FAIL status; a BLOCKED gate is never silently reclassified
 as PASS. The current preparation claims no live gate passed. Stable promotion
@@ -154,8 +158,8 @@ crate or tagged source release.
 dependency order using temporary local crates.io patches for unpublished
 workspace packages. It then compiles a registry-style external consumer and
 installs the normalized `telltale-cli` package into a temporary root, checking
-the `telltale` install and `telltale --version`, and rejects the retired `adr`
-executable if it is installed. The target supports Linux and macOS and cleans
+the canonical `telltale` install and `telltale --version`. The target supports
+Linux and macOS and cleans
 its temporary workspace on exit.
 
 For the actual publication pass, first recheck crates.io ownership and name
@@ -209,8 +213,7 @@ make release-artifact-manifest
 The target lists every `.tar.gz` and `.zip` archive and verifies that each
 archive contains exactly the expected canonical bundle manifest: the `telltale`
 binary (or its `.exe` form), `LICENSE`, `README.md`, and the curated
-`config/examples/` deployment files. It rejects active ADR technical archive
-and member identities. The target requires `SHA256SUMS` in the same directory,
+`config/examples/` deployment files. The target requires `SHA256SUMS` in the same directory,
 then
 verifies that its entries match the reviewed archives exactly and that each
 checksum validates. The default `release-downloads/` directory is local review

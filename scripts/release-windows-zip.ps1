@@ -383,9 +383,6 @@ function Assert-EntryName([string]$Name, [System.Collections.Generic.HashSet[str
             Fail "archive member contains a noncanonical or traversal path: $Name"
         }
     }
-    if ($Name -eq 'adr' -or $Name -eq 'adr.exe') {
-        Fail "archive contains retired ADR member: $Name"
-    }
     if (-not $Seen.Add($Name)) {
         Fail "archive contains duplicate member: $Name"
     }

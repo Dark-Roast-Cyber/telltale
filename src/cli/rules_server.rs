@@ -403,7 +403,7 @@ fn save_rules_request(
 
     // Atomic write: temp file in same directory, then rename.
     let dir = target.parent().ok_or("rule file has no parent directory")?;
-    let tmp = dir.join(".adr-rules-save.tmp");
+    let tmp = dir.join(".telltale-rules-save.tmp");
     std::fs::write(&tmp, &request.rules_yaml)?;
     std::fs::rename(&tmp, &target)?;
 

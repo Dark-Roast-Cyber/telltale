@@ -32,16 +32,12 @@ fn regular_file(path: &Path, contents: &[u8], mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set file mode");
 }
 
-fn telltale_binary(path: &Path, version: &str, report_adr_identity: bool) {
-    let identity = if report_adr_identity {
-        "adr"
-    } else {
-        "telltale"
-    };
+fn telltale_binary(path: &Path, version: &str, _identity_fixture: bool) {
+    let identity = "telltale";
     executable(
         path,
         &format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '{identity} {version} (synthetic)'; fi\nif [ -n \"${{FAKE_EVENT_LOG:-}}\" ]; then printf 'binary:%s:%s\\n' \"$0\" \"$*\" >> \"$FAKE_EVENT_LOG\"; fi\nif [ \"${{FAKE_REQUIRE_SMOKE_FIXTURE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ]; then smoke_root=''; previous=''; for arg in \"$@\"; do if [ \"$previous\" = --root ]; then smoke_root=$arg; fi; previous=$arg; done; [ -f \"$smoke_root/codex/sessions/2026/04/telltale-installer-smoke.jsonl\" ] || exit 77; fi\nif [ \"${{FAKE_REENABLE_DURING_SMOKE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ] && [ -n \"${{FAKE_SYSTEMCTL_STATE:-}}\" ]; then awk '$1 == \"telltale-scan.timer\" {{ $3=1; $4=1 }} {{ print }}' \"$FAKE_SYSTEMCTL_STATE\" > \"$FAKE_SYSTEMCTL_STATE.tmp\"; mv \"$FAKE_SYSTEMCTL_STATE.tmp\" \"$FAKE_SYSTEMCTL_STATE\"; fi\nif [ \"$1\" = \"migrate\" ] && [ -n \"${{FAKE_MIGRATION_LOG:-}}\" ]; then printf '%s|%s\\n' \"$0\" \"$*\" >> \"$FAKE_MIGRATION_LOG\"; fi\nexit 0\n"
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '{identity} {version} (synthetic)'; fi\nif [ -n \"${{FAKE_EVENT_LOG:-}}\" ]; then printf 'binary:%s:%s\\n' \"$0\" \"$*\" >> \"$FAKE_EVENT_LOG\"; fi\nif [ \"${{FAKE_REQUIRE_SMOKE_FIXTURE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ]; then smoke_root=''; previous=''; for arg in \"$@\"; do if [ \"$previous\" = --root ]; then smoke_root=$arg; fi; previous=$arg; done; [ -f \"$smoke_root/codex/sessions/2026/04/telltale-installer-smoke.jsonl\" ] || exit 77; fi\nif [ \"${{FAKE_REENABLE_DURING_SMOKE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ] && [ -n \"${{FAKE_SYSTEMCTL_STATE:-}}\" ]; then awk '$1 == \"telltale-scan.timer\" {{ $3=1; $4=1 }} {{ print }}' \"$FAKE_SYSTEMCTL_STATE\" > \"$FAKE_SYSTEMCTL_STATE.tmp\"; mv \"$FAKE_SYSTEMCTL_STATE.tmp\" \"$FAKE_SYSTEMCTL_STATE\"; fi\nexit 0\n"
         ),
     );
 }
@@ -68,7 +64,8 @@ fn archive_with_members(
     if let Some(member) = extra_member {
         fs::create_dir_all(payload.join(Path::new(member).parent().unwrap_or(Path::new("."))))
             .expect("create extra archive directory");
-        fs::write(payload.join(member), b"active legacy identity\n").expect("write extra member");
+        fs::write(payload.join(member), b"unexpected archive member\n")
+            .expect("write extra member");
     }
     let archive = root.join(name);
     let mut command = Command::new("tar");
@@ -270,18 +267,13 @@ generated=${FAKE_GENERATED_UNIT:-}
 
 init_state() {
   : > "$state"
-  for unit in adr-scan.service adr-scan.timer telltale-scan.service telltale-scan.timer; do
+  for unit in telltale-scan.service telltale-scan.timer; do
     present=0
     [ -f "$unit_dir/$unit" ] && present=1
     [ "$unit" = "$generated" ] && present=1
     enabled=0
     active=0
     case "$unit" in
-      adr-scan.timer)
-        [ "${FAKE_OLD_ENABLED:-0}" = 1 ] && enabled=1
-        [ "${FAKE_OLD_ACTIVE:-0}" = 1 ] && active=1
-        [ "$enabled" = 1 ] || [ "$active" = 1 ] && present=1
-        ;;
       telltale-scan.timer)
         [ "${FAKE_NEW_ENABLED:-0}" = 1 ] && enabled=1
         [ "${FAKE_NEW_ACTIVE:-0}" = 1 ] && active=1
@@ -693,7 +685,7 @@ fn release_tag_validation_rejects_misclassified_or_ambiguous_candidates() {
     fs::write(
         &ambiguous_metadata,
         format!(
-            "{{\"tag_name\":\"{tag}\",\"tag_name\":\"v0.5.0-rc.2\",\"draft\":false,\"prerelease\":true}}\n"
+            "{{\"tag_name\":\"{tag}\",\"tag_name\":\"v0.5.0-rc.3\",\"draft\":false,\"prerelease\":true}}\n"
         ),
     )
     .unwrap();
@@ -865,7 +857,7 @@ fn fresh_install_is_canonical_and_journaled() {
 
     let tools = tools(temp.path(), true);
     let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
-    command.env("ADR_THIRD_PARTY_EXTENSION", "allowed").args([
+    command.args([
         "--no-timer",
         "--install-dir",
         temp.path().join("home/bin").to_str().unwrap(),
@@ -882,7 +874,11 @@ fn fresh_install_is_canonical_and_journaled() {
             & 0o777,
         0o755
     );
-    assert!(!install.join("adr").exists());
+    let installed = fs::read_dir(&install)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(installed, vec![std::ffi::OsString::from("telltale")]);
     let units = temp.path().join("home/.config/systemd/user");
     assert!(units.join("telltale-scan.service").is_file());
     assert!(units.join("telltale-scan.timer").is_file());
@@ -923,29 +919,29 @@ fn piped_install_uses_deterministic_synthetic_smoke_fixture() {
 }
 
 #[test]
-fn inherited_retired_runtime_environment_blocks_install_without_reading_value() {
+fn inherited_noncanonical_environment_does_not_block_install_or_leak_values() {
     let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
     let tools = tools(temp.path(), true);
     let install = temp.path().join("home/bin");
-    let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
     command
-        .env("ADR_LOG_PATH", "retired-secret-canary")
-        .env("ADR_THIRD_PARTY_EXTENSION", "allowed")
+        .env("UNRELATED_LOG_PATH", "noncanonical-secret-canary")
+        .env("THIRD_PARTY_EXTENSION", "allowed")
         .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
     let output = command.output().unwrap();
-    assert!(!output.status.success());
+    assert_success(&output);
     let text = output_text(&output);
-    assert!(text.contains("retired runtime environment variables are inherited"));
-    assert!(text.contains("ADR_LOG_PATH"));
-    assert!(!text.contains("retired-secret-canary"));
-    assert!(!install.exists());
-    assert!(!temp.path().join("home/.local").exists());
-    assert!(!temp.path().join("events.log").exists());
+    assert!(!text.contains("noncanonical-secret-canary"));
+    assert!(install.join("telltale").exists());
 }
 
 #[test]
-fn checksum_failure_and_active_adr_archive_are_fail_closed() {
+fn checksum_failure_and_unexpected_archive_member_are_fail_closed() {
     let temp = tempdir().unwrap();
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
     let _selected = archive(temp.path(), &name, "0.5.0", None);
@@ -961,7 +957,7 @@ fn checksum_failure_and_active_adr_archive_are_fail_closed() {
         temp.path(),
         &name,
         "0.5.0",
-        Some("config/examples/adr-scan.service"),
+        Some("config/examples/unexpected-asset.txt"),
     );
     let bad_sums = temp.path().join("bad-SHA256SUMS");
     checksum(&bad, &bad_sums);
@@ -974,7 +970,7 @@ fn checksum_failure_and_active_adr_archive_are_fail_closed() {
         &[],
     );
     assert!(!output.status.success());
-    assert!(output_text(&output).contains("active ADR technical identity"));
+    assert!(output_text(&output).contains("exact canonical nine-member bundle"));
     assert!(!temp.path().join("home/.telltale-installer.lock").exists());
     assert!(!temp.path().join("systemctl.log").exists());
 }
@@ -1070,7 +1066,7 @@ fn installer_requires_exact_canonical_archive_bundle() {
 }
 
 #[test]
-fn source_build_is_pinned_and_does_not_produce_retired_binary() {
+fn source_build_is_pinned_and_produces_only_canonical_binary() {
     let temp = tempdir().unwrap();
     let tag = "v0.5.0-rc.1";
     let name = format!("telltale-{tag}-{}.tar.gz", target());
@@ -1115,7 +1111,7 @@ fn source_build_is_pinned_and_does_not_produce_retired_binary() {
     );
     assert!(!args.contains("--tag"));
     assert_fake_git_tag_refs(&git_log, tag);
-    assert!(!temp.path().join("home/bin/adr").exists());
+    assert!(temp.path().join("home/bin/telltale").is_file());
 }
 
 #[test]
@@ -1242,37 +1238,24 @@ fn default_latest_source_build_failure_happens_before_installer_mutation() {
 }
 
 #[test]
-fn upgrade_migrates_before_activation_and_installs_one_canonical_schedule() {
+fn canonical_install_ignores_unrelated_files_and_never_runs_migration() {
     let temp = tempdir().unwrap();
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
     let selected = archive(temp.path(), &name, "0.5.0", None);
     let metadata = release_metadata(temp.path(), "v0.5.0");
     let sums = temp.path().join("SHA256SUMS");
     checksum(&selected, &sums);
-    let state = temp.path().join("home/.local/state/telltale");
-    let config = temp.path().join("home/.config/telltale");
     let units = temp.path().join("home/.config/systemd/user");
-    fs::create_dir_all(state.join("logs")).unwrap();
-    fs::create_dir_all(&config).unwrap();
+    let unrelated_binary = temp.path().join("home/bin/other-agent");
+    let unrelated_unit = units.join("other-agent.timer");
+    fs::create_dir_all(unrelated_binary.parent().unwrap()).unwrap();
     fs::create_dir_all(&units).unwrap();
-    regular_file(&state.join("adr-state.json"), b"legacy state", 0o600);
-    regular_file(
-        &state.join("logs/adr-events.jsonl"),
-        b"legacy events\n",
-        0o640,
-    );
-    regular_file(&config.join("adr.env"), b"ADR_LOG_PATH=/old\n", 0o600);
-    fs::create_dir_all(temp.path().join("home/bin")).unwrap();
-    telltale_binary(&temp.path().join("home/bin/adr"), "0.3.0", true);
-    regular_file(&units.join("adr-scan.service"), b"old service\n", 0o644);
-    regular_file(&units.join("adr-scan.timer"), b"old timer\n", 0o644);
+    executable(&unrelated_binary, "#!/bin/sh\nexit 0\n");
+    regular_file(&unrelated_unit, b"unrelated timer\n", 0o644);
     let tools = tools(temp.path(), true);
-    let migration_log = temp.path().join("migrations.log");
     let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
     command
-        .env("FAKE_MIGRATION_LOG", &migration_log)
-        .env("FAKE_OLD_ENABLED", "1")
-        .env("FAKE_OLD_ACTIVE", "1")
+        .env("FAKE_MIGRATION_LOG", temp.path().join("migrations.log"))
         .args([
             "--with-timer",
             "--install-dir",
@@ -1280,10 +1263,9 @@ fn upgrade_migrates_before_activation_and_installs_one_canonical_schedule() {
         ]);
     let output = command.output().unwrap();
     assert_success(&output);
-    let migrations = fs::read_to_string(&migration_log).unwrap();
-    assert!(migrations.contains("migrate state --from"));
-    assert!(migrations.contains("migrate events --pair"));
-    assert!(migrations.contains("migrate env --from"));
+    assert!(!temp.path().join("migrations.log").exists());
+    assert_eq!(fs::read(&unrelated_binary).unwrap(), b"#!/bin/sh\nexit 0\n");
+    assert_eq!(fs::read(&unrelated_unit).unwrap(), b"unrelated timer\n");
     let service = fs::read_to_string(units.join("telltale-scan.service")).unwrap();
     assert!(service.contains("TELLTALE_LOG_PATH") && service.contains("telltale-events.jsonl"));
     assert!(service.contains("TELLTALE_STATE_PATH") && service.contains("telltale-state.json"));
@@ -1295,81 +1277,21 @@ fn upgrade_migrates_before_activation_and_installs_one_canonical_schedule() {
     assert!(!timer.contains("OnBootSec="));
     assert!(timer.contains("OnUnitActiveSec=5min"));
     assert!(timer.contains("Unit=telltale-scan.service"));
-    assert!(!units.join("adr-scan.timer").exists());
-    assert!(!temp.path().join("home/bin/adr").exists());
     let calls = fs::read_to_string(temp.path().join("systemctl.log")).unwrap();
-    assert!(
-        calls.contains("disable adr-scan.timer")
-            && calls.contains("enable --now telltale-scan.timer")
-    );
+    assert!(calls.contains("enable --now telltale-scan.timer"));
+    assert!(!calls.contains("other-agent"));
     let events = fs::read_to_string(temp.path().join("events.log")).unwrap();
-    let quiesce = events
-        .find("systemctl:--user disable adr-scan.timer")
-        .expect("old timer disable event");
     let candidate_version = events
         .find("telltale.new:--version")
         .expect("staged candidate version probe");
-    let migration = events
-        .find("migrate state")
-        .expect("staged migration event");
-    let reload_after_migration = events[migration..]
+    let reload = events[candidate_version..]
         .find("systemctl:--user daemon-reload")
-        .map(|offset| migration + offset)
-        .expect("post-install daemon reload event");
+        .map(|offset| candidate_version + offset)
+        .expect("canonical daemon reload event");
     let enable = events
         .find("systemctl:--user enable --now telltale-scan.timer")
         .expect("canonical timer enable event");
-    assert!(
-        quiesce < migration
-            && quiesce < candidate_version
-            && candidate_version < migration
-            && migration < reload_after_migration
-            && reload_after_migration < enable
-    );
-    let migration_line = fs::read_to_string(migration_log).unwrap();
-    assert!(
-        migration_line.contains(".telltale-install.") && migration_line.contains("telltale.new")
-    );
-}
-
-#[test]
-fn duplicate_schedule_conflict_leaves_both_disabled_and_rolls_back_binary() {
-    let temp = tempdir().unwrap();
-    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
-    let selected = archive(temp.path(), &name, "0.5.0", None);
-    let metadata = release_metadata(temp.path(), "v0.5.0");
-    let sums = temp.path().join("SHA256SUMS");
-    checksum(&selected, &sums);
-    let install = temp.path().join("home/bin");
-    let units = temp.path().join("home/.config/systemd/user");
-    fs::create_dir_all(&install).unwrap();
-    fs::create_dir_all(&units).unwrap();
-    regular_file(&install.join("telltale"), b"old bytes", 0o755);
-    regular_file(&units.join("adr-scan.service"), b"old service\n", 0o644);
-    regular_file(&units.join("adr-scan.timer"), b"old timer\n", 0o644);
-    regular_file(
-        &units.join("telltale-scan.service"),
-        b"new service\n",
-        0o644,
-    );
-    regular_file(&units.join("telltale-scan.timer"), b"new timer\n", 0o644);
-    let mut command = installer_command(
-        temp.path(),
-        &metadata,
-        temp.path(),
-        Some(&sums),
-        &tools(temp.path(), true),
-    );
-    command
-        .env("FAKE_OLD_ENABLED", "1")
-        .env("FAKE_NEW_ENABLED", "1")
-        .args(["--with-timer", "--install-dir", install.to_str().unwrap()]);
-    let output = command.output().unwrap();
-    assert!(!output.status.success());
-    assert!(output_text(&output).contains("duplicate old/new schedules"));
-    assert_eq!(fs::read(install.join("telltale")).unwrap(), b"old bytes");
-    let calls = fs::read_to_string(temp.path().join("systemctl.log")).unwrap();
-    assert!(!calls.contains("enable --now telltale-scan.timer"));
+    assert!(candidate_version < reload && reload < enable);
 }
 
 #[test]
@@ -1633,61 +1555,6 @@ fn installer_lock_reuses_safe_directory_and_rejects_symlink_or_unsafe_directory(
 }
 
 #[test]
-fn no_timer_quiesces_legacy_schedule_before_removing_adr() {
-    let temp = tempdir().unwrap();
-    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
-    let selected = archive(temp.path(), &name, "0.5.0", None);
-    let metadata = release_metadata(temp.path(), "v0.5.0");
-    let sums = temp.path().join("SHA256SUMS");
-    checksum(&selected, &sums);
-    let install = temp.path().join("home/bin");
-    let units = temp.path().join("home/.config/systemd/user");
-    fs::create_dir_all(&install).unwrap();
-    fs::create_dir_all(&units).unwrap();
-    telltale_binary(&install.join("adr"), "0.3.0", true);
-    regular_file(&units.join("adr-scan.service"), b"old service\n", 0o644);
-    regular_file(&units.join("adr-scan.timer"), b"old timer\n", 0o644);
-
-    let mut command = installer_command(
-        temp.path(),
-        &metadata,
-        temp.path(),
-        Some(&sums),
-        &tools(temp.path(), true),
-    );
-    command
-        .env("FAKE_OLD_ENABLED", "1")
-        .env("FAKE_OLD_ACTIVE", "1")
-        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
-    let output = command.output().unwrap();
-    assert_success(&output);
-    assert!(!install.join("adr").exists());
-    assert!(!units.join("adr-scan.service").exists());
-    assert!(!units.join("adr-scan.timer").exists());
-    assert!(units.join("telltale-scan.service").is_file());
-    assert!(units.join("telltale-scan.timer").is_file());
-    let systemctl_state = fs::read_to_string(temp.path().join("systemctl.state")).unwrap();
-    assert!(systemctl_state.contains("telltale-scan.service 1 0 0"));
-    assert!(systemctl_state.contains("telltale-scan.timer 1 0 0"));
-
-    let events = fs::read_to_string(temp.path().join("events.log")).unwrap();
-    let disable = events
-        .find("systemctl:--user disable adr-scan.timer")
-        .expect("legacy timer disable event");
-    let probe = events
-        .find(&format!(
-            "binary:{}:--version",
-            install.join("adr").display()
-        ))
-        .expect("bounded legacy binary probe");
-    assert!(
-        disable < probe,
-        "legacy binary was probed before schedule quiescing: {events}"
-    );
-    assert!(!events.contains("enable --now telltale-scan.timer"));
-}
-
-#[test]
 fn no_timer_query_failure_does_not_assume_schedules_are_absent() {
     let temp = tempdir().unwrap();
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
@@ -1730,7 +1597,7 @@ fn no_timer_final_schedule_proof_rejects_candidate_reenable() {
     ]);
     let output = command.output().unwrap();
     assert!(!output.status.success());
-    assert!(output_text(&output).contains("final all-schedules-disabled postcondition"));
+    assert!(output_text(&output).contains("final canonical-schedules-disabled postcondition"));
     assert!(!install.join("telltale").exists());
     assert!(
         fs::read_to_string(
@@ -1763,13 +1630,8 @@ fn loaded_generated_unit_without_owned_local_file_fails_closed() {
 }
 
 #[test]
-fn all_known_unit_dropins_are_rejected_without_staging_legacy_units() {
-    for unit in [
-        "adr-scan.service",
-        "adr-scan.timer",
-        "telltale-scan.service",
-        "telltale-scan.timer",
-    ] {
+fn canonical_unit_dropins_are_rejected_before_staging() {
+    for unit in ["telltale-scan.service", "telltale-scan.timer"] {
         let temp = tempdir().unwrap();
         let name = format!("telltale-v0.5.0-{}.tar.gz", target());
         let selected = archive(temp.path(), &name, "0.5.0", None);
@@ -1797,12 +1659,7 @@ fn all_known_unit_dropins_are_rejected_without_staging_legacy_units() {
         assert!(!temp.path().join("home/bin/telltale").exists());
     }
 
-    for unit in [
-        "adr-scan.service",
-        "adr-scan.timer",
-        "telltale-scan.service",
-        "telltale-scan.timer",
-    ] {
+    for unit in ["telltale-scan.service", "telltale-scan.timer"] {
         let temp = tempdir().unwrap();
         let name = format!("telltale-v0.5.0-{}.tar.gz", target());
         let selected = archive(temp.path(), &name, "0.5.0", None);
@@ -1811,10 +1668,10 @@ fn all_known_unit_dropins_are_rejected_without_staging_legacy_units() {
         checksum(&selected, &sums);
         let units = temp.path().join("home/.config/systemd/user");
         fs::create_dir_all(&units).unwrap();
-        regular_file(&units.join(unit), b"legacy unit\n", 0o644);
+        regular_file(&units.join(unit), b"unrelated unit\n", 0o644);
         let dropin = units.join(format!("{unit}.d/override.conf"));
         fs::create_dir_all(dropin.parent().unwrap()).unwrap();
-        regular_file(&dropin, b"[Unit]\nDescription=legacy drop-in\n", 0o644);
+        regular_file(&dropin, b"[Unit]\nDescription=unrelated drop-in\n", 0o644);
         let output = run_release(
             temp.path(),
             &metadata,
@@ -1831,23 +1688,18 @@ fn all_known_unit_dropins_are_rejected_without_staging_legacy_units() {
             "local drop-in must be rejected for {unit}"
         );
         assert!(output_text(&output).contains("could not safely query systemd state"));
-        assert_eq!(fs::read(units.join(unit)).unwrap(), b"legacy unit\n");
+        assert_eq!(fs::read(units.join(unit)).unwrap(), b"unrelated unit\n");
         assert_eq!(
             fs::read(dropin).unwrap(),
-            b"[Unit]\nDescription=legacy drop-in\n"
+            b"[Unit]\nDescription=unrelated drop-in\n"
         );
         assert!(!temp.path().join("home/bin/telltale").exists());
     }
 }
 
 #[test]
-fn not_found_unit_system_dropins_are_checked_for_all_known_units() {
-    for unit in [
-        "adr-scan.service",
-        "adr-scan.timer",
-        "telltale-scan.service",
-        "telltale-scan.timer",
-    ] {
+fn canonical_not_found_unit_system_dropins_are_checked() {
+    for unit in ["telltale-scan.service", "telltale-scan.timer"] {
         let temp = tempdir().unwrap();
         let name = format!("telltale-v0.5.0-{}.tar.gz", target());
         let selected = archive(temp.path(), &name, "0.5.0", None);
@@ -1905,9 +1757,6 @@ fn schedule_query_failure_happens_before_candidate_staging() {
     fs::create_dir_all(&install).unwrap();
     fs::create_dir_all(&units).unwrap();
     regular_file(&install.join("telltale"), b"old canonical bytes\n", 0o755);
-    regular_file(&install.join("adr"), b"old compatibility bytes\n", 0o755);
-    regular_file(&units.join("adr-scan.service"), b"old service\n", 0o644);
-    regular_file(&units.join("adr-scan.timer"), b"old timer\n", 0o644);
 
     let mut command = installer_command(
         temp.path(),
@@ -1917,8 +1766,7 @@ fn schedule_query_failure_happens_before_candidate_staging() {
         &tools(temp.path(), true),
     );
     command
-        .env("FAKE_OLD_ENABLED", "1")
-        .env("FAKE_SYSTEMCTL_FAIL_QUERY", "LoadState:adr-scan.timer")
+        .env("FAKE_SYSTEMCTL_FAIL_QUERY", "LoadState:telltale-scan.timer")
         .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
     let output = command.output().unwrap();
     assert!(!output.status.success());
@@ -1926,10 +1774,6 @@ fn schedule_query_failure_happens_before_candidate_staging() {
     assert_eq!(
         fs::read(install.join("telltale")).unwrap(),
         b"old canonical bytes\n"
-    );
-    assert_eq!(
-        fs::read(install.join("adr")).unwrap(),
-        b"old compatibility bytes\n"
     );
     let stages = fs::read_dir(&install)
         .unwrap()
@@ -2014,64 +1858,6 @@ fn committed_journal_survives_schedule_failure_before_recovery() {
         fs::read_to_string(journal_dir.join("installer-transaction.json"))
             .unwrap()
             .contains("\"phase\": \"committed\"")
-    );
-}
-
-#[test]
-fn stale_stage_recovery_waits_for_active_schedule_quiescing() {
-    let temp = tempdir().unwrap();
-    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
-    let selected = archive(temp.path(), &name, "0.5.0", None);
-    let metadata = release_metadata(temp.path(), "v0.5.0");
-    let sums = temp.path().join("SHA256SUMS");
-    checksum(&selected, &sums);
-
-    let install = temp.path().join("home/bin");
-    let units = temp.path().join("home/.config/systemd/user");
-    fs::create_dir_all(&install).unwrap();
-    fs::create_dir_all(&units).unwrap();
-    regular_file(&units.join("adr-scan.service"), b"old service\n", 0o644);
-    regular_file(&units.join("adr-scan.timer"), b"old timer\n", 0o644);
-
-    let stage = install.join(".telltale-install.stale");
-    fs::create_dir_all(&stage).unwrap();
-    regular_file(
-        &stage.join("transaction.marker"),
-        b"telltale-installer-transaction-v1\n",
-        0o600,
-    );
-    telltale_binary(&stage.join("telltale.old"), "0.4.0", false);
-
-    let mut command = installer_command(
-        temp.path(),
-        &metadata,
-        temp.path(),
-        Some(&sums),
-        &tools(temp.path(), true),
-    );
-    command
-        .env("FAKE_OLD_ENABLED", "1")
-        .env("FAKE_OLD_ACTIVE", "1")
-        .env("FAKE_REQUIRE_STAGE_DURING_QUIESCE", &stage)
-        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
-    let output = command.output().unwrap();
-    assert_success(&output);
-    assert!(install.join("telltale").is_file());
-    assert!(
-        !stage.exists(),
-        "stale staging should be recovered and cleaned"
-    );
-
-    let events = fs::read_to_string(temp.path().join("events.log")).unwrap();
-    let quiesce = events
-        .find("systemctl:--user disable adr-scan.timer")
-        .expect("active legacy timer disable event");
-    let candidate = events
-        .find("telltale.new:--version")
-        .expect("candidate version probe");
-    assert!(
-        quiesce < candidate,
-        "candidate execution preceded quiescing: {events}"
     );
 }
 
@@ -2534,7 +2320,7 @@ fn xdg_override_and_space_path_generate_safe_canonical_unit() {
 }
 
 #[test]
-fn duplicate_windows_named_binary_is_rejected_before_install() {
+fn unrelated_platform_named_binary_is_ignored_without_mutation() {
     let temp = tempdir().unwrap();
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
     let selected = archive(temp.path(), &name, "0.5.0", None);
@@ -2545,7 +2331,10 @@ fn duplicate_windows_named_binary_is_rejected_before_install() {
     regular_file(&install.join("telltale.exe"), b"duplicate\n", 0o755);
     let metadata = release_metadata(temp.path(), "v0.5.0");
     let output = run_release(temp.path(), &metadata, temp.path(), Some(&sums), &[]);
-    assert!(!output.status.success());
-    assert!(output_text(&output).contains("duplicate canonical binary"));
-    assert!(!install.join("telltale").exists());
+    assert_success(&output);
+    assert!(install.join("telltale").is_file());
+    assert_eq!(
+        fs::read(install.join("telltale.exe")).unwrap(),
+        b"duplicate\n"
+    );
 }

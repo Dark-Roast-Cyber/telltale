@@ -198,33 +198,10 @@ fn dry_run_does_not_create_state_or_log_targets() {
 }
 
 #[test]
-fn retired_runtime_environment_blocks_migration_before_path_activity() {
-    let temp = tempdir().expect("tempdir");
-    let source = temp.path().join("not-created/source.env");
-    let destination = temp.path().join("not-created/destination.env");
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .env("ADR_LOG_PATH", "/retired/runtime/canary")
-        .current_dir(temp.path())
-        .args(["migrate", "env", "--from"])
-        .arg(&source)
-        .args(["--to"])
-        .arg(&destination)
-        .output()
-        .expect("migration");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ADR_LOG_PATH"), "stderr: {stderr}");
-    assert!(!source.exists());
-    assert!(!destination.exists());
-    assert!(!temp.path().join("not-created").exists());
-}
-
-#[test]
 fn canonical_runtime_ignores_preseeded_legacy_default_log_and_state_files() {
     let temp = tempdir().expect("tempdir");
-    let old_log = temp.path().join("logs/adr-events.jsonl");
-    let old_state = temp.path().join("state/adr-state.json");
+    let old_log = temp.path().join("unrelated/logs/events.jsonl");
+    let old_state = temp.path().join("unrelated/state/state.json");
     fs::create_dir_all(old_log.parent().expect("old log parent")).expect("old log parent");
     fs::create_dir_all(old_state.parent().expect("old state parent")).expect("old state parent");
     let old_log_bytes = b"legacy-log-canary\n";
@@ -1324,7 +1301,7 @@ fn event_migration_accepts_framing_only_duplicate_differences() {
 }
 
 #[test]
-fn migration_cli_exposes_only_explicit_event_and_environment_inputs() {
+fn migration_cli_exposes_only_explicit_state_and_event_inputs() {
     let help = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "events", "--help"])
         .output()
@@ -1343,14 +1320,21 @@ fn migration_cli_exposes_only_explicit_event_and_environment_inputs() {
     assert!(!no_pair.status.success());
     assert!(String::from_utf8_lossy(&no_pair.stderr).contains("at least one pair"));
 
+    let state_help = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["migrate", "state", "--help"])
+        .output()
+        .expect("state help");
+    let state_help_text = String::from_utf8_lossy(&state_help.stdout);
+    assert!(state_help.status.success());
+    assert!(state_help_text.contains("--from <FROM>"));
+    assert!(state_help_text.contains("--to <TO>"));
+
     let env_help = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "env", "--help"])
         .output()
-        .expect("environment help");
-    let env_help_text = String::from_utf8_lossy(&env_help.stdout);
-    assert!(env_help.status.success());
-    assert!(env_help_text.contains("--from <FROM>"));
-    assert!(env_help_text.contains("--to <TO>"));
+        .expect("removed environment help");
+    assert!(!env_help.status.success());
+    assert!(String::from_utf8_lossy(&env_help.stderr).contains("unrecognized subcommand 'env'"));
 }
 
 #[test]
@@ -1467,183 +1451,6 @@ fn event_migration_rejects_frame_and_blank_frame_budgets_before_destination_muta
     }
 }
 
-#[test]
-fn environment_migration_maps_exact_keys_and_preserves_opaque_bytes_and_framing() {
-    let temp = tempdir().expect("tempdir");
-    let source = temp.path().join("adr.env");
-    let destination = temp.path().join("telltale.env");
-    let canary = "opaque-rhs-canary";
-    let source_bytes = format!(
-        "# keep this\r\n\r\nADR_LOG_PATH={canary}\r\nADR_STATE_PATH=/old/state\nADR_RISK_THRESHOLD_TRIAGE= 70 \r\nADR_RISK_THRESHOLD_ALERT='90'\r\nADR_TEST_VENDOR=third-party\r\nUNRELATED=keep\n"
-    )
-    .into_bytes();
-    fs::write(&source, &source_bytes).expect("environment source");
-
-    let output = run_env_migration(&source, &destination);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected = format!(
-        "# keep this\r\n\r\nTELLTALE_LOG_PATH={canary}\r\nTELLTALE_STATE_PATH=/old/state\nTELLTALE_RISK_THRESHOLD_HIGH= 70 \r\nTELLTALE_RISK_THRESHOLD_CRITICAL='90'\r\nADR_TEST_VENDOR=third-party\r\nUNRELATED=keep\n"
-    )
-    .into_bytes();
-    assert_eq!(fs::read(&source).expect("source bytes"), source_bytes);
-    assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
-    assert!(!String::from_utf8_lossy(&output.stdout).contains(canary));
-    let manifest_path = destination.with_file_name("telltale.env.migration.json");
-    let first_manifest = fs::read(&manifest_path).expect("manifest bytes");
-    #[cfg(windows)]
-    let source_before = fs::read(&source).expect("source bytes");
-    let rerun = run_env_migration(&source, &destination);
-    #[cfg(unix)]
-    assert!(rerun.status.success());
-    #[cfg(windows)]
-    {
-        assert_windows_existing_target_unsupported(&rerun);
-        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
-        assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
-    }
-    assert_eq!(
-        fs::read(&manifest_path).expect("manifest bytes"),
-        first_manifest
-    );
-    fs::remove_file(&manifest_path).expect("remove manifest");
-    let repair = run_env_migration(&source, &destination);
-    #[cfg(unix)]
-    assert!(repair.status.success());
-    #[cfg(windows)]
-    {
-        assert_windows_existing_target_unsupported(&repair);
-        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
-        assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
-        assert!(!manifest_path.exists());
-    }
-    #[cfg(unix)]
-    assert_eq!(
-        fs::read(&manifest_path).expect("repaired manifest"),
-        first_manifest
-    );
-    fs::write(&manifest_path, b"manifest-conflict\n").expect("manifest conflict");
-    let conflict = run_env_migration(&source, &destination);
-    assert!(!conflict.status.success());
-    #[cfg(windows)]
-    {
-        assert_windows_existing_target_unsupported(&conflict);
-        assert_eq!(fs::read(&source).expect("source bytes"), source_before);
-        assert_eq!(fs::read(&destination).expect("destination bytes"), expected);
-        assert_eq!(
-            fs::read(&manifest_path).expect("manifest bytes"),
-            b"manifest-conflict\n"
-        );
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&destination)
-                .expect("destination metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-        assert_eq!(
-            fs::metadata(&manifest_path)
-                .expect("manifest metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
-    }
-}
-
-#[test]
-fn environment_migration_covers_the_complete_audited_inventory_without_canary_leaks() {
-    let mappings = [
-        ("ADR_LOG_PATH", "TELLTALE_LOG_PATH"),
-        ("ADR_STATE_PATH", "TELLTALE_STATE_PATH"),
-        ("ADR_SCAN_ROOT", "TELLTALE_SCAN_ROOT"),
-        ("ADR_PROJECT_CONFIG", "TELLTALE_PROJECT_CONFIG"),
-        ("ADR_LOG_ROTATE_MAX_SIZE", "TELLTALE_LOG_ROTATE_MAX_SIZE"),
-        ("ADR_LOG_ROTATE_KEEP", "TELLTALE_LOG_ROTATE_KEEP"),
-        (
-            "ADR_INSTALL_INVENTORY_INTERVAL_SECONDS",
-            "TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS",
-        ),
-        (
-            "ADR_PROCESS_CHAIN_DETECTIONS",
-            "TELLTALE_PROCESS_CHAIN_DETECTIONS",
-        ),
-        (
-            "ADR_OP_ALERT_MAX_SCANNER_ERRORS",
-            "TELLTALE_OP_ALERT_MAX_SCANNER_ERRORS",
-        ),
-        (
-            "ADR_OP_ALERT_MAX_SCAN_DURATION_MS",
-            "TELLTALE_OP_ALERT_MAX_SCAN_DURATION_MS",
-        ),
-        ("ADR_RISK_THRESHOLD_LOW", "TELLTALE_RISK_THRESHOLD_LOW"),
-        (
-            "ADR_RISK_THRESHOLD_MEDIUM",
-            "TELLTALE_RISK_THRESHOLD_MEDIUM",
-        ),
-        ("ADR_RISK_THRESHOLD_TRIAGE", "TELLTALE_RISK_THRESHOLD_HIGH"),
-        (
-            "ADR_RISK_THRESHOLD_ALERT",
-            "TELLTALE_RISK_THRESHOLD_CRITICAL",
-        ),
-        ("ADR_INDEX", "TELLTALE_INDEX"),
-        ("ADR_SOURCETYPE", "TELLTALE_SOURCETYPE"),
-        ("ADR_ATLAS_PATH", "TELLTALE_ATLAS_PATH"),
-        ("ADR_GIT_HASH", "TELLTALE_GIT_HASH"),
-        (
-            "ADR_LIVETEST_ES_CONTAINER",
-            "TELLTALE_LIVETEST_ES_CONTAINER",
-        ),
-        (
-            "ADR_LIVETEST_SPLUNK_CONTAINER",
-            "TELLTALE_LIVETEST_SPLUNK_CONTAINER",
-        ),
-        ("ADR_LIVETEST_ES_INDEX", "TELLTALE_LIVETEST_ES_INDEX"),
-        ("ADR_LIVETEST_ES_PASSWORD", "TELLTALE_LIVETEST_ES_PASSWORD"),
-        ("ADR_LIVETEST_HEC_TOKEN", "TELLTALE_LIVETEST_HEC_TOKEN"),
-    ];
-    let temp = tempdir().expect("tempdir");
-    let source = temp.path().join("inventory.env");
-    let destination = temp.path().join("inventory-telltale.env");
-    let mut source_text = String::new();
-    let mut expected_text = String::new();
-    for (index, (old, new)) in mappings.iter().enumerate() {
-        let value = format!("migration-inventory-canary-{index}");
-        source_text.push_str(&format!("{old}={value}\n"));
-        expected_text.push_str(&format!("{new}={value}\n"));
-    }
-    source_text.push_str(
-        "ADR_TEST_UNRELATED=preserve\nADR_LOGISTICS_PATH=preserve\nADR_VENDOR_MODE=preserve\nADR_LOG_CUSTOM=preserve\nADR_TRIAGE_OTHER=preserve\n",
-    );
-    expected_text.push_str(
-        "ADR_TEST_UNRELATED=preserve\nADR_LOGISTICS_PATH=preserve\nADR_VENDOR_MODE=preserve\nADR_LOG_CUSTOM=preserve\nADR_TRIAGE_OTHER=preserve\n",
-    );
-    fs::write(&source, source_text.as_bytes()).expect("inventory source");
-    let output = run_env_migration(&source, &destination);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        fs::read(&destination).expect("inventory destination"),
-        expected_text.as_bytes()
-    );
-    let output_text = String::from_utf8_lossy(&output.stdout);
-    let error_text = String::from_utf8_lossy(&output.stderr);
-    assert!(!output_text.contains("migration-inventory-canary"));
-    assert!(!error_text.contains("migration-inventory-canary"));
-}
-
 #[cfg(windows)]
 #[test]
 fn migration_rejects_existing_manifest_without_destination_without_mutation() {
@@ -1704,39 +1511,6 @@ fn migration_rerun_rejects_broader_existing_event_env_and_manifest_modes() {
             & 0o777,
         0o644
     );
-
-    let env_source = temp.path().join("mode.env");
-    let env_destination = temp.path().join("mode-telltale.env");
-    fs::write(&env_source, b"ADR_LOG_PATH=/old\n").expect("env source");
-    assert!(
-        run_env_migration(&env_source, &env_destination)
-            .status
-            .success()
-    );
-    let env_manifest = env_destination.with_file_name("mode-telltale.env.migration.json");
-    set_mode(&env_destination, 0o640);
-    let env_conflict = run_env_migration(&env_source, &env_destination);
-    assert!(!env_conflict.status.success());
-    assert_eq!(
-        fs::metadata(&env_destination)
-            .expect("env mode")
-            .permissions()
-            .mode()
-            & 0o777,
-        0o640
-    );
-    set_mode(&env_destination, 0o600);
-    set_mode(&env_manifest, 0o644);
-    let env_manifest_conflict = run_env_migration(&env_source, &env_destination);
-    assert!(!env_manifest_conflict.status.success());
-    assert_eq!(
-        fs::metadata(&env_manifest)
-            .expect("env manifest mode")
-            .permissions()
-            .mode()
-            & 0o777,
-        0o644
-    );
 }
 
 #[cfg(unix)]
@@ -1773,123 +1547,6 @@ fn migration_rejects_foreign_owned_existing_event_env_and_manifest_targets() {
         fs::read(&event_destination).expect("event destination"),
         b"event-destination-sentinel\n"
     );
-
-    let env_source = temp.path().join("foreign.env");
-    let env_destination = temp.path().join("foreign-telltale.env");
-    fs::write(&env_source, b"ADR_LOG_PATH=/old\n").expect("environment source");
-    fs::write(&env_destination, b"env-destination-sentinel\n").expect("environment destination");
-    assert!(make_foreign(&env_destination));
-    let env_output = run_env_migration(&env_source, &env_destination);
-    assert!(!env_output.status.success());
-    assert!(
-        String::from_utf8_lossy(&env_output.stderr).contains("not owned by the effective user")
-    );
-    assert_eq!(
-        fs::read(&env_destination).expect("environment destination"),
-        b"env-destination-sentinel\n"
-    );
-
-    let owned_destination = temp.path().join("owned-telltale.env");
-    assert!(
-        run_env_migration(&env_source, &owned_destination)
-            .status
-            .success()
-    );
-    let manifest = manifest_path_for(&owned_destination);
-    assert!(make_foreign(&manifest));
-    let manifest_output = run_env_migration(&env_source, &owned_destination);
-    assert!(!manifest_output.status.success());
-    assert!(
-        String::from_utf8_lossy(&manifest_output.stderr)
-            .contains("not owned by the effective user")
-    );
-}
-
-#[test]
-fn environment_migration_rejects_duplicates_coexistence_unmapped_and_malformed_inputs() {
-    let cases = [
-        "ADR_LOG_PATH=one\nADR_LOG_PATH=two\n",
-        "ADR_LOG_PATH=one\nTELLTALE_LOG_PATH=two\n",
-        "ADR_TRIAGE_TIMEOUT_MS=secret-canary\n",
-        "ADR_TRIAGE_MAX_RETRIES=secret-canary\n",
-        "ADR_LOG_PATH=one\\\ncontinued\n",
-        "not-an-assignment\n",
-    ];
-    for (index, contents) in cases.into_iter().enumerate() {
-        let temp = tempdir().expect("tempdir");
-        let source = temp.path().join(format!("source-{index}.env"));
-        let destination = temp.path().join(format!("destination-{index}.env"));
-        fs::write(&source, contents.as_bytes()).expect("source");
-        #[cfg(unix)]
-        {
-            fs::write(&destination, b"destination-sentinel\n").expect("destination");
-        }
-        let output = run_env_migration(&source, &destination);
-        assert!(!output.status.success());
-        assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-canary"));
-        #[cfg(unix)]
-        assert_eq!(
-            fs::read(&destination).expect("destination"),
-            b"destination-sentinel\n"
-        );
-        #[cfg(windows)]
-        assert!(!destination.exists());
-    }
-
-    let temp = tempdir().expect("tempdir");
-    let source = temp.path().join("nul.env");
-    let destination = temp.path().join("nul-destination.env");
-    fs::write(&source, b"ADR_LOG_PATH=before\0after\n").expect("NUL source");
-    let output = run_env_migration(&source, &destination);
-    assert!(!output.status.success());
-    assert!(!destination.exists());
-
-    let alias = run_env_migration(&source, &source);
-    assert!(!alias.status.success());
-}
-
-#[cfg(unix)]
-#[test]
-fn environment_migration_refuses_symlink_hardlink_and_nonregular_paths() {
-    use std::fs::{hard_link, read_link};
-    use std::os::unix::fs::symlink;
-
-    let temp = tempdir().expect("tempdir");
-    let source = temp.path().join("source.env");
-    fs::write(&source, b"ADR_LOG_PATH=/old\n").expect("source");
-
-    let symlink_destination = temp.path().join("symlink.env");
-    let symlink_target = temp.path().join("symlink-target.env");
-    fs::write(&symlink_target, b"target\n").expect("symlink target");
-    symlink(&symlink_target, &symlink_destination).expect("symlink");
-    let output = run_env_migration(&source, &symlink_destination);
-    assert!(!output.status.success());
-    assert_eq!(
-        read_link(&symlink_destination).expect("symlink remains"),
-        symlink_target
-    );
-
-    let hardlink_source = temp.path().join("hardlink-source.env");
-    hard_link(&source, &hardlink_source).expect("hardlink source");
-    let hardlink_destination = temp.path().join("hardlink-destination.env");
-    let output = run_env_migration(&hardlink_source, &hardlink_destination);
-    assert!(!output.status.success());
-    assert!(!hardlink_destination.exists());
-
-    let hardlink_destination = temp.path().join("hardlink-existing.env");
-    fs::write(&hardlink_destination, b"target\n").expect("hardlink target");
-    let hardlink_alias = temp.path().join("hardlink-alias.env");
-    hard_link(&hardlink_destination, &hardlink_alias).expect("hardlink destination");
-    let output = run_env_migration(&source, &hardlink_destination);
-    assert!(!output.status.success());
-
-    let directory_destination = temp.path().join("directory.env");
-    fs::create_dir(&directory_destination).expect("directory destination");
-    let output = run_env_migration(&source, &directory_destination);
-    assert!(!output.status.success());
-
-    let alias = run_env_migration(&source, &source);
-    assert!(!alias.status.success());
 }
 
 fn compact_historical_fixture(name: &str) -> Vec<u8> {
@@ -1939,19 +1596,6 @@ fn run_event_pairs(pairs: &[(&std::path::Path, &std::path::Path)]) -> std::proce
         command.args(["--pair"]).arg(source).arg(destination);
     }
     command.output().expect("event migration")
-}
-
-fn run_env_migration(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args(["migrate", "env", "--from"])
-        .arg(source)
-        .args(["--to"])
-        .arg(destination)
-        .output()
-        .expect("environment migration")
 }
 
 #[cfg(windows)]

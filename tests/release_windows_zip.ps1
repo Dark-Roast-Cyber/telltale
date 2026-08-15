@@ -315,7 +315,7 @@ try {
         @{ Name = 'directory'; Extra = @('config/examples/') },
         @{ Name = 'traversal'; Extra = @('../escape.txt') },
         @{ Name = 'backslash'; Extra = @('bad\name.txt') },
-        @{ Name = 'retired-adr'; Extra = @('adr.exe') },
+        @{ Name = 'unexpected-executable'; Extra = @('unexpected.exe') },
         @{ Name = 'dos-directory'; Attributes = @{ 'README.md' = 0x10 } },
         @{ Name = 'dos-volume-label'; Attributes = @{ 'README.md' = 0x08 }; Expected = 'DOS volume-label' },
         @{ Name = 'unsupported-flags'; Flags = 0x10; Expected = 'unsupported general-purpose flags' },
