@@ -35,8 +35,11 @@ installer or systemd mutation. For an explicit candidate it SHALL require exact
 tag identity, matching package/binary version, the exact canonical archive
 manifest, and the archive digest from that tag's `SHA256SUMS`. Only after those
 checks pass SHALL it acquire the installer lock, validate canonical destinations,
-stage the sole canonical artifact, install canonical units disabled, smoke-test,
-and enable only the canonical schedule when requested.
+ quiesce canonical schedules, recover only proven marker-owned staging, stage the
+ sole canonical artifact, install canonical units disabled, validate effective
+ canonical behavior, smoke-test, and enable only the canonical schedule when
+ requested. It SHALL never activate a canonical schedule before the validated
+ candidate binary is installed.
 
 #### Scenario: Candidate provenance fails before mutation
 
@@ -55,17 +58,30 @@ and enable only the canonical schedule when requested.
 ### Requirement: Fail-closed canonical safety
 
 The installer SHALL fail closed on ownership ambiguity, unsafe canonical path
-aliases, unexpected canonical drop-ins, ambiguous effective configuration,
+aliases, Telltale-specific or ambiguous effective drop-ins, unsafe effective
+configuration,
 non-regular destinations, unsafe modes, archive violations, or destructive
 deletion of an unidentified canonical file. It SHALL refuse system scope and
-unmanaged paths.
+unmanaged paths. Inherited type-wide `service.d` or `timer.d` policy MAY
+coexist only when the effective canonical execution, identity, environment,
+path, security, and timer contract remains unchanged.
 
 #### Scenario: Canonical effective-unit ambiguity
 
-- **GIVEN** a canonical service or timer has an unexpected manager-reported
-  drop-in, local drop-in namespace, or ambiguous effective fragment
+- **GIVEN** a canonical service or timer has a Telltale-specific or ambiguous
+  manager-reported drop-in, local drop-in namespace, or unsafe effective
+  fragment/property
 - **WHEN** the installer validates the unit
 - **THEN** it fails before staging, replacement, enablement, disablement, or deletion
+
+#### Scenario: Benign inherited type-wide policy
+
+- **GIVEN** a canonical service has the expected fragment and effective
+  execution contract
+- **AND** an inherited type-wide `service.d` policy changes only benign
+  lifecycle behavior such as `TimeoutStopFailureMode`
+- **WHEN** the installer validates the unit
+- **THEN** validation succeeds without requiring an empty `DropInPaths` list
 
 #### Scenario: Canonical collision
 
@@ -77,8 +93,12 @@ unmanaged paths.
 ### Requirement: Canonical service and timer identity
 
 Systemd user units SHALL use only `telltale-scan.service` and
-`telltale-scan.timer`, with `TELLTALE_*` environment and the canonical JSONL
-path. A successful transaction SHALL leave at most one canonical schedule.
+`telltale-scan.timer`, with the expected canonical `FragmentPath`,
+`TELLTALE_*` environment, canonical executable/path identity, and canonical
+JSONL path. The service's effective execution/security properties and the
+timer's effective target, two-entry monotonic cadence, empty calendar schedule,
+and persistence contract SHALL be validated independently. A successful
+transaction SHALL leave at most one canonical schedule.
 
 #### Scenario: Canonical unit installation
 
@@ -86,6 +106,14 @@ path. A successful transaction SHALL leave at most one canonical schedule.
 - **WHEN** the installer installs units
 - **THEN** the canonical service and timer are installed disabled
 - **AND** they reference `TELLTALE_*` and `telltale-events.jsonl`
+
+#### Scenario: Unsafe global effective mutation
+
+- **GIVEN** a type-wide or manager-wide policy changes `ExecStart`, command
+  hooks, environment, environment files, execution identity, required path or
+  security properties, timer target, or timer cadence
+- **WHEN** the installer validates the effective canonical units
+- **THEN** it fails closed even though the policy source is global
 
 ### Requirement: Unrelated resource isolation
 
