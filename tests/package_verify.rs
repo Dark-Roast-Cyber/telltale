@@ -9,7 +9,7 @@ use tempfile::tempdir;
 
 const FAKE_CARGO: &str = r##"#!/bin/sh
 set -eu
-VERSION=0.5.0-rc.4
+VERSION=0.5.0-rc.5
 
 case "$1" in
 metadata)
@@ -18,7 +18,7 @@ metadata)
         test "$argument" = "--no-deps" && no_deps=1
     done
     if test "$no_deps" -eq 1; then
-        printf '%s\n' '{"packages":[{"name":"telltale-cli","version":"0.5.0-rc.4"}]}'
+        printf '%s\n' '{"packages":[{"name":"telltale-cli","version":"0.5.0-rc.5"}]}'
     else
         printf '%s\n' '{"packages":[{"id":"consumer","name":"telltale-detect-light-consumer"}],"resolve":{"nodes":[{"id":"consumer","deps":[]}]}}'
     fi
@@ -41,9 +41,9 @@ package)
         */Cargo.toml) package=telltale-cli ;;
         *) exit 1 ;;
     esac
-    package_root="$CARGO_TARGET_DIR/package/$package-0.5.0-rc.4"
+    package_root="$CARGO_TARGET_DIR/package/$package-0.5.0-rc.5"
     mkdir -p "$package_root"
-    printf '%s\n' '[package]' "name = \"$package\"" 'version = "0.5.0-rc.4"' > "$package_root/Cargo.toml"
+    printf '%s\n' '[package]' "name = \"$package\"" 'version = "0.5.0-rc.5"' > "$package_root/Cargo.toml"
     if test "$package" = telltale-cli; then
         mkdir -p "$package_root/schemas/historical"
         for schema in \
@@ -59,7 +59,7 @@ package)
 test|check)
     ;;
 run)
-    printf '%s\n' '0.5.0-rc.4'
+    printf '%s\n' '0.5.0-rc.5'
     ;;
 install)
     install_root=

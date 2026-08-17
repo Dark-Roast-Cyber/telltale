@@ -589,6 +589,7 @@ recover_stale_staging() {
         fi
     done
     if [[ "$had_staging" -eq 1 ]]; then
+        systemctl_user daemon-reload || return 1
         write_journal recovered || true
     fi
 }
@@ -606,10 +607,17 @@ systemctl_show_raw() {
 }
 
 unit_dropin_directory_is_absent() {
-    local unit="$1" dropin_directory="$unit_dir/${unit}.d"
+    local unit="$1" dropin_directory unit_type
     case "$unit" in
         telltale-scan.service|telltale-scan.timer)
-            [[ ! -e "$dropin_directory" && ! -L "$dropin_directory" ]]
+            unit_type="${unit##*.}"
+            for dropin_directory in \
+                "$unit_dir/${unit}.d" \
+                "$unit_dir/telltale-.${unit_type}.d" \
+                "$unit_dir/telltale-scan-.${unit_type}.d"; do
+                [[ ! -e "$dropin_directory" && ! -L "$dropin_directory" ]] || return 1
+            done
+            return 0
             ;;
         *)
             return 1
@@ -617,14 +625,31 @@ unit_dropin_directory_is_absent() {
     esac
 }
 
-unit_has_no_dropins() {
-    local unit="$1" dropin_metadata dropin_paths
+classify_dropins() {
+    local unit="$1" dropin_metadata dropin_paths path parent
     case "$unit" in
         telltale-scan.service|telltale-scan.timer)
+            unit_dropin_directory_is_absent "$unit" || return 1
             dropin_metadata="$(systemctl_show_raw "$unit" DropInPaths)" || return 1
             [[ "$dropin_metadata" == DropInPaths=* ]] || return 1
             dropin_paths="${dropin_metadata#DropInPaths=}"
-            [[ -z "$dropin_paths" ]]
+            [[ -z "$dropin_paths" ]] && return 0
+            read -r -a dropin_paths_array <<< "$dropin_paths"
+            [[ "${#dropin_paths_array[@]}" -gt 0 ]] || return 1
+            for path in "${dropin_paths_array[@]}"; do
+                [[ "$path" == /* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
+                parent="${path%/*}"
+                case "$unit:$parent" in
+                    telltale-scan.service:"${unit_dir}/service.d"|\
+                    telltale-scan.timer:"${unit_dir}/timer.d"|\
+                    telltale-scan.service:*/service.d|\
+                    telltale-scan.timer:*/timer.d)
+                        ;;
+                    *)
+                        return 1
+                        ;;
+                esac
+            done
             ;;
         *)
             return 1
@@ -636,10 +661,6 @@ query_unit() {
     local unit="$1" load_state fragment unit_state active_state local_path
     local_path="$unit_dir/$unit"
     unit_file_is_owned_regular "$local_path" || return 1
-    unit_dropin_directory_is_absent "$unit" || return 1
-    # DropInPaths is meaningful even when systemd reports the unit as
-    # not-found, so check the manager-owned namespace before that early exit.
-    unit_has_no_dropins "$unit" || return 1
 
     load_state="$(systemctl_show "$unit" LoadState)" || return 1
     case "$load_state" in
@@ -654,11 +675,7 @@ query_unit() {
     esac
 
     fragment="$(systemctl_show "$unit" FragmentPath)" || return 1
-    [[ -n "$fragment" ]] || return 1
-    case "$fragment" in
-        "$unit_dir"/*) ;;
-        *) return 1 ;;
-    esac
+    [[ "$fragment" == "$local_path" ]] || return 1
     unit_file_is_owned_regular "$fragment" || return 1
 
     unit_state="$(systemctl_show "$unit" UnitFileState)" || return 1
@@ -675,6 +692,200 @@ query_unit() {
         *) return 1 ;;
     esac
     QUERY_PRESENT=1
+}
+
+systemd_show_unescape() {
+    local value="$1"
+    value="${value//\\x20/ }"
+    value="${value//\\x09/$'\t'}"
+    value="${value//\\x0a/$'\n'}"
+    value="${value//\\x22/\"}"
+    value="${value//\\x24/\$}"
+    value="${value//\\x25/%}"
+    value="${value//\\x5c/\\}"
+    printf '%s' "$value"
+}
+
+validate_service_exec_start() {
+    local value prefix argv trailer
+    value="$(systemctl_show telltale-scan.service ExecStart)" || return 1
+    value="$(systemd_show_unescape "$value")"
+    prefix='{ path=/usr/bin/env ; argv[]=/usr/bin/env -- '
+    [[ "$value" == "$prefix"* ]] || return 1
+    argv="${value#"$prefix"}"
+    [[ "$argv" == *" ;"* ]] || return 1
+    trailer="${argv#* ;}"
+    argv="${argv%% ;*}"
+    case "$trailer" in
+        " ignore_errors=no ;"*) ;;
+        *) return 1 ;;
+    esac
+    [[ "$trailer" != *'} {'* && "$trailer" != *'path='* && \
+        "$trailer" != *'argv[]='* && "$trailer" != *'flags='* ]] || return 1
+    if python3 - "$argv" "$INSTALL_DIR/telltale" <<'PY'
+import shlex
+import sys
+
+try:
+    actual = shlex.split(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+expected = [
+    sys.argv[2],
+    "scan",
+    "--once",
+    "--emit-activity",
+    "--root",
+    "${TELLTALE_SCAN_ROOT}",
+    "--path-profile",
+    "user",
+]
+raise SystemExit(0 if actual == expected else 1)
+PY
+    then
+        return 0
+    fi
+    error "effective service ExecStart argv is not canonical"
+    return 1
+}
+
+validate_service_policy() {
+    local value
+    validate_service_exec_start || {
+        error "effective service ExecStart contract failed"
+        return 1
+    }
+    for property in ExecStartPre ExecStartPost ExecCondition ExecStopPre ExecStop \
+        ExecStopPost ExecReload ExecReloadPost; do
+        value="$(systemctl_show telltale-scan.service "$property")" || return 1
+        [[ -z "$value" ]] || {
+            error "effective service ${property} hook is non-empty"
+            return 1
+        }
+    done
+
+    value="$(systemctl_show telltale-scan.service Environment)" || return 1
+    value="$(systemd_show_unescape "$value")"
+    if python3 - "$value" "$canonical_log" "$canonical_state" "$HOME" <<'PY'
+import shlex
+import sys
+
+try:
+    actual = shlex.split(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+log_path, state_path, home = sys.argv[2:]
+expected = [
+    [
+        f"TELLTALE_LOG_PATH={log_path}",
+        f"TELLTALE_STATE_PATH={state_path}",
+        "TELLTALE_SCAN_ROOT=%h",
+    ],
+    [
+        f"TELLTALE_LOG_PATH={log_path}",
+        f"TELLTALE_STATE_PATH={state_path}",
+        f"TELLTALE_SCAN_ROOT={home}",
+    ],
+]
+raise SystemExit(0 if actual in expected else 1)
+PY
+    then
+        :
+    else
+        error "effective service Environment contract failed"
+        return 1
+    fi
+
+    value="$(systemctl_show telltale-scan.service EnvironmentFiles)" || return 1
+    value="$(systemd_show_unescape "$value")"
+    [[ "$value" == "${canonical_env} (ignore_errors=yes)" || \
+        "$value" == "\"${canonical_env}\" (ignore_errors=yes)" || \
+        "$value" == "'${canonical_env}' (ignore_errors=yes)" ]] || {
+        error "effective service EnvironmentFiles contract failed"
+        return 1
+    }
+
+    for property in WorkingDirectory User Group SupplementaryGroups RootDirectory RootImage \
+        PassEnvironment UnsetEnvironment; do
+        value="$(systemctl_show telltale-scan.service "$property")" || return 1
+        [[ -z "$value" ]] || {
+            error "effective service ${property} contract is non-empty"
+            return 1
+        }
+    done
+    for property in Type NoNewPrivileges PrivateTmp ProtectHome DynamicUser PrivateUsers; do
+        value="$(systemctl_show telltale-scan.service "$property")" || return 1
+        case "$property:$value" in
+            Type:oneshot|NoNewPrivileges:yes|PrivateTmp:yes|ProtectHome:no|\
+            DynamicUser:no|PrivateUsers:no) ;;
+            *)
+                error "effective service ${property} contract is unsafe"
+                return 1
+                ;;
+        esac
+    done
+}
+
+validate_timer_policy() {
+    local value
+    value="$(systemctl_show telltale-scan.timer FragmentPath)" || return 1
+    [[ "$value" == "$unit_dir/telltale-scan.timer" ]] || return 1
+    value="$(systemctl_show telltale-scan.timer TimersMonotonic)" || return 1
+    value="$(systemd_show_unescape "$value")"
+    if python3 - "$value" <<'PY'
+import re
+import sys
+
+entries = re.findall(r"\{\s*([^;{}]+?)\s*;\s*next_elapse=[^;{}]+\s*\}", sys.argv[1])
+expected = sorted((
+    "OnActiveUSec=1min",
+    "OnUnitActiveUSec=5min",
+))
+actual = sorted(entry.strip() for entry in entries)
+raise SystemExit(0 if actual == expected else 1)
+PY
+    then
+        :
+    else
+        error "effective timer monotonic schedule contract failed"
+        return 1
+    fi
+    value="$(systemctl_show telltale-scan.timer TimersCalendar)" || return 1
+    [[ -z "$value" ]] || return 1
+    for property in Unit Persistent WakeSystem RemainAfterElapse; do
+        value="$(systemctl_show telltale-scan.timer "$property")" || return 1
+        case "$property:$value" in
+            Unit:telltale-scan.service|Persistent:yes|WakeSystem:no|RemainAfterElapse:yes) ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
+validate_effective_policy() {
+    local unit="$1" load_state
+    classify_dropins "$unit" || return 1
+    load_state="$(systemctl_show "$unit" LoadState)" || return 1
+    case "$load_state" in
+        not-found) return 0 ;;
+        loaded) ;;
+        *) return 1 ;;
+    esac
+    case "$unit" in
+        telltale-scan.service) validate_service_policy ;;
+        telltale-scan.timer) validate_timer_policy ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_all_effective_policy() {
+    validate_effective_policy telltale-scan.service || {
+        error "effective canonical service policy is unsafe or unprovable"
+        return 1
+    }
+    validate_effective_policy telltale-scan.timer || {
+        error "effective canonical timer policy is unsafe or unprovable"
+        return 1
+    }
 }
 
 query_and_store_unit() {
@@ -706,6 +917,8 @@ schedule_transaction() {
         unit_file_is_owned_regular "$unit_dir/$unit" || die "refusing unsafe user unit: ${unit}"
         query_and_store_unit "$unit"
     done
+    validate_all_effective_policy \
+        || die "could not safely validate effective canonical systemd policy"
 
     for unit in "${schedule_units[@]}"; do
         if [[ "${unit_enabled[$unit]}" -eq 1 ]]; then
@@ -774,6 +987,7 @@ EnvironmentFile=-"${env_value}"
 ExecStart=/usr/bin/env -- "${executable}" scan --once --emit-activity --root "\${TELLTALE_SCAN_ROOT}" --path-profile user
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectHome=no
 
 [Install]
 WantedBy=default.target
@@ -1315,12 +1529,20 @@ ensure_owned_directory "$(dirname -- "$canonical_log")"
 
 stage_units
 write_journal units
+systemctl_user daemon-reload \
+    || die "could not reload the user systemd manager for effective policy validation"
+all_schedules_disabled \
+    || die "could not prove schedules remained disabled before effective policy validation"
+validate_all_effective_policy \
+    || die "effective canonical systemd policy validation failed before binary replacement"
 replace_binary
 
 write_journal smoke
 if [[ "$schedule_checked" -eq 1 ]]; then
     systemctl_user daemon-reload || die "could not reload the user systemd manager"
     all_schedules_disabled || die "could not prove schedules remained disabled before smoke tests"
+    validate_all_effective_policy \
+        || die "effective canonical systemd policy validation failed before smoke tests"
 fi
 verify_binary_version "$INSTALL_DIR/telltale"
 run_bounded "$INSTALL_DIR/telltale" rules validate --no-local-config >/dev/null \
