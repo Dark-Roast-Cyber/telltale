@@ -11,6 +11,14 @@ fn source_inventory_change_value(event: &Value) -> &str {
         .expect("source inventory change value")
 }
 
+static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn watch_process_guard() -> std::sync::MutexGuard<'static, ()> {
+    WATCH_PROCESS_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn assert_source_processing_accounting(summary: &Value) {
     let source_processing = &summary["source_processing"];
     assert_eq!(
@@ -3680,6 +3688,7 @@ fn wait_for_watch_ready(_pid: u32) {
 
 #[test]
 fn watch_scans_changed_source_and_exits_after_iterations() {
+    let _watch_guard = watch_process_guard();
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("stores");
     copy_dir_recursive(
@@ -3837,6 +3846,7 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
 
 #[test]
 fn watch_skips_no_op_state_save() {
+    let _watch_guard = watch_process_guard();
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("stores");
     copy_dir_recursive(
@@ -4041,6 +4051,7 @@ impl Drop for WatchChildGuard {
 #[test]
 #[ignore = "Phase 4 synthetic watch soak; run explicitly on Linux"]
 fn watch_synthetic_multi_cycle_soak() {
+    let _watch_guard = watch_process_guard();
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("stores");
     let sessions = root.join("codex/sessions");
@@ -4467,6 +4478,7 @@ fn watch_synthetic_multi_cycle_soak() {
 #[cfg(unix)]
 #[test]
 fn watch_exits_cleanly_on_sigterm() {
+    let _watch_guard = watch_process_guard();
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("stores");
     copy_dir_recursive(
