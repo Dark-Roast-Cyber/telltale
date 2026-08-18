@@ -78,9 +78,10 @@ proven from its canonical path and exact generated representation or equivalent
 integrity-bound bytes; a separately duplicated divergent template SHALL not be
 used as the authority. Unit-specific drop-ins SHALL remain forbidden. Inherited
 type-wide or global drop-ins MAY coexist only when each allowed file is
-independently inspected and proven to contain no `EnvironmentFile` directive,
-reset, injection, ambiguous continuation, or other unreviewed environment
-contribution. Benign inherited lifecycle-only policy MAY coexist only when the
+independently inspected and proven to contain no `EnvironmentFile` or
+`WorkingDirectory` directive, reset, injection, ambiguous continuation, or
+other unreviewed environment or execution-path contribution. Benign inherited
+lifecycle-only policy MAY coexist only when the
 effective canonical execution, identity, environment, path, security, and
 timer contract remains unchanged.
 
@@ -138,9 +139,15 @@ effective `EnvironmentFiles` report. An empty effective `EnvironmentFiles`
 report SHALL be accepted only after that declaration proof succeeds. A
 non-empty report SHALL contain exactly the canonical optional path with the
 missing-file-ignore form; extra, alternate, reset, glob, or unknown forms SHALL
-fail closed. The effective service execution/security properties and timer's
-effective target, two-entry monotonic cadence, empty calendar schedule, and
-persistence contract SHALL be validated independently. A successful transaction
+fail closed. The canonical service need not declare `WorkingDirectory=`; its
+absence SHALL be positively proven in the base declaration and allowed inherited
+policy before accepting the exact manager-reported `!<canonical-home>` default.
+Explicit, inherited, reset, alternate, missing-ok, or ambiguous
+`WorkingDirectory=` contributions SHALL fail closed even when their effective
+path equals the canonical home. The effective service execution/security
+properties and timer's effective target, two-entry monotonic cadence, empty
+calendar schedule, and persistence contract SHALL be validated independently. A
+successful transaction
 SHALL leave at most one canonical schedule.
 
 #### Scenario: Canonical unit installation
@@ -216,6 +223,32 @@ SHALL leave at most one canonical schedule.
   security properties, timer target, or timer cadence
 - **WHEN** the installer validates the effective canonical units
 - **THEN** it fails closed even though the policy source is global
+
+#### Scenario: Implicit user-manager working directory
+
+- **GIVEN** the canonical service and all allowed inherited policy are proven
+  not to declare or reset `WorkingDirectory=`
+- **AND** systemd reports the exact `!<canonical-home>` user-manager default
+- **WHEN** the installer validates the effective canonical service
+- **THEN** validation succeeds without adding a `WorkingDirectory=` directive
+  to the canonical unit
+
+#### Scenario: Explicit working-directory contribution
+
+- **GIVEN** the base service or any unit-specific, type-wide, or global policy
+  explicitly declares, resets, or ambiguously contributes `WorkingDirectory=`
+- **WHEN** the installer validates the canonical service
+- **THEN** it fails closed before binary replacement or activation
+- **AND** an effective path equal to the canonical user's home does not bypass
+  declaration proof
+
+#### Scenario: Unexpected normalized working directory
+
+- **GIVEN** declaration proof succeeds
+- **AND** the manager reports an alternate path or unknown working-directory
+  normalization form
+- **WHEN** the installer validates the effective canonical service
+- **THEN** validation fails closed before binary replacement or activation
 
 ### Requirement: Unrelated resource isolation
 

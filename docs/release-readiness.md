@@ -25,7 +25,7 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). The workspace is currently preparing
-the next `0.5.0-rc.6` candidate for the approved `0.5.0` Event 3.0 migration;
+the next `0.5.0-rc.7` candidate for the approved `0.5.0` Event 3.0 migration;
 compatible maintenance fixes remain on the prior `0.3.x` line until stable
 publication. Do not create `0.5.x` for a round of small tasks; follow-up fixes
 belong there only after the reviewed `0.5.0` milestone ships.
@@ -40,14 +40,16 @@ created. Never reuse `rc.1`.
 assets, or evidence. `v0.5.0-rc.3` is immutable history at reviewed commit
 `a791ebf8894b3329030fad9e252e22d21e8b7e07` and has no GitHub Release. `rc.4`
 is historical; the immutable `rc.5` publication/provenance passed, but G-SERVICE
-failed on the canonical optional `EnvironmentFile` defect. `rc.6` is the next
-prepared candidate and has no tag, Release, or live-gate evidence.
+failed on the canonical optional `EnvironmentFile` defect. The immutable `rc.6`
+publication/provenance passed and repaired that defect, but G-SERVICE then failed
+before binary replacement on user-manager `WorkingDirectory` normalization.
+`rc.7` is the next prepared candidate and has no tag, Release, or live-gate evidence.
 
 ## RC Candidate Handoff
 
 The preparation batch does not create a tag, Release, archive, checksum, crate,
 or live-gate evidence. A later reviewed operation may merge the candidate to
-`main`, tag only that reviewed commit as `v0.5.0-rc.6`, and inspect the workflow
+`main`, tag only that reviewed commit as `v0.5.0-rc.7`, and inspect the workflow
 before validation. The RC Release must be explicitly marked `prerelease=true`.
 If code, package metadata, installer behavior, workflow, archive, checksum, or
 attestation provenance changes, use a new reviewed commit and the next unused

@@ -4,14 +4,27 @@
 
 ---
 
-## 0.5.0-rc.6 — prepared, unpublished
+## 0.5.0-rc.7 — prepared, unpublished
+
+- Repair canonical Linux installer validation for the documented implicit
+  systemd user-manager working-directory default, accepting only the exact
+  missing-OK canonical home form after declaration proof.
+- Reject base, unit-specific, and inherited `WorkingDirectory=` contributions
+  while retaining optional environment-file, transaction, recovery, and
+  activation ordering safeguards.
+- No rc.7 tag, Release, crate publication, or live-host validation has
+  occurred.
+
+---
+
+## 0.5.0-rc.6 — published candidate
 
 - Repair canonical Linux installer validation for an absent optional
   `EnvironmentFile`, while rejecting alternate, extra, reset, ambiguous, and
   inherited environment sources.
-- The immutable `v0.5.0-rc.5` publication and provenance passed, but G-SERVICE
-  failed on this canonical optional-file defect. No rc.6 tag, Release, crate
-  publication, or live-host validation has occurred.
+- Publication and provenance passed. Live G-SERVICE confirmed the optional-file
+  repair, then failed before binary replacement on the separate systemd
+  user-manager `WorkingDirectory` normalization defect.
 
 ---
 
