@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-const VERSION: &str = "0.5.0-rc.6";
+const VERSION: &str = "0.5.0-rc.7";
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),

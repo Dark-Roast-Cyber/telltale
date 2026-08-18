@@ -308,6 +308,7 @@ journal_phase=none
 journal_phase_before_start=none
 journal_transaction_started=0
 schedule_checked=0
+schedules_mutation_started=0
 units_installed=0
 telltale_replaced=0
 binary_copy_attempted=0
@@ -883,6 +884,15 @@ PY
     return 1
 }
 
+validate_service_working_directory() {
+    local value
+    value="$(systemctl_show telltale-scan.service WorkingDirectory)" || return 1
+    [[ "$value" == "!${home_real}" ]] || {
+        error "effective service WorkingDirectory contract failed"
+        return 1
+    }
+}
+
 validate_service_policy() {
     local value
     validate_generated_service_declaration || {
@@ -945,7 +955,9 @@ PY
         }
     fi
 
-    for property in WorkingDirectory User Group SupplementaryGroups RootDirectory RootImage \
+    validate_service_working_directory || return 1
+
+    for property in User Group SupplementaryGroups RootDirectory RootImage \
         PassEnvironment UnsetEnvironment; do
         value="$(systemctl_show telltale-scan.service "$property")" || return 1
         [[ -z "$value" ]] || {
@@ -1060,6 +1072,7 @@ schedule_transaction() {
     validate_all_effective_policy \
         || die "could not safely validate effective canonical systemd policy"
 
+    schedules_mutation_started=1
     for unit in "${schedule_units[@]}"; do
         if [[ "${unit_enabled[$unit]}" -eq 1 ]]; then
             systemctl_user disable "$unit" || die "could not disable canonical schedule ${unit}"
@@ -1209,12 +1222,12 @@ for line in text.split("\n"):
         section = stripped[1:-1]
         continue
     if "=" not in line:
-        if stripped.startswith("EnvironmentFile"):
+        if stripped.startswith(("EnvironmentFile", "WorkingDirectory")):
             raise SystemExit(1)
         continue
     key, value = line.split("=", 1)
     normalized_key = key.strip()
-    if normalized_key.startswith("EnvironmentFile"):
+    if normalized_key.startswith(("EnvironmentFile", "WorkingDirectory")):
         if normalized_key != "EnvironmentFile":
             raise SystemExit(1)
         environment_file_count += 1
@@ -1561,7 +1574,9 @@ on_exit() {
     trap - EXIT
     if [[ "$status" -ne 0 ]]; then
         if [[ "$transaction_active" -eq 1 ]]; then
-            if [[ "$journal_read_valid" -eq 1 && "$recovery_failed" -eq 0 ]]; then
+            if [[ "$journal_read_valid" -eq 1 && "$recovery_failed" -eq 0 \
+                && ( "$schedules_mutation_started" -eq 1 || "$journal_transaction_started" -eq 1 \
+                    || ( "$journal_phase_before_start" != none && "$journal_phase_before_start" != committed ) ) ]]; then
                 if rollback_transaction; then
                     rollback_verified=1
                 fi

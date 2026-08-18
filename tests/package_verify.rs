@@ -7,9 +7,11 @@ use std::process::{Command, Output};
 
 use tempfile::tempdir;
 
+const FIXTURE_VERSION: &str = "0.5.0-rc.7";
+
 const FAKE_CARGO: &str = r##"#!/bin/sh
 set -eu
-VERSION=0.5.0-rc.6
+VERSION=@@VERSION@@
 
 case "$1" in
 metadata)
@@ -18,7 +20,7 @@ metadata)
         test "$argument" = "--no-deps" && no_deps=1
     done
     if test "$no_deps" -eq 1; then
-        printf '%s\n' '{"packages":[{"name":"telltale-cli","version":"0.5.0-rc.6"}]}'
+        printf '%s\n' '{"packages":[{"name":"telltale-cli","version":"@@VERSION@@"}]}'
     else
         printf '%s\n' '{"packages":[{"id":"consumer","name":"telltale-detect-light-consumer"}],"resolve":{"nodes":[{"id":"consumer","deps":[]}]}}'
     fi
@@ -41,9 +43,9 @@ package)
         */Cargo.toml) package=telltale-cli ;;
         *) exit 1 ;;
     esac
-    package_root="$CARGO_TARGET_DIR/package/$package-0.5.0-rc.6"
+    package_root="$CARGO_TARGET_DIR/package/$package-@@VERSION@@"
     mkdir -p "$package_root"
-    printf '%s\n' '[package]' "name = \"$package\"" 'version = "0.5.0-rc.6"' > "$package_root/Cargo.toml"
+    printf '%s\n' '[package]' "name = \"$package\"" 'version = "@@VERSION@@"' > "$package_root/Cargo.toml"
     if test "$package" = telltale-cli; then
         mkdir -p "$package_root/schemas/historical"
         for schema in \
@@ -59,7 +61,7 @@ package)
 test|check)
     ;;
 run)
-    printf '%s\n' '0.5.0-rc.6'
+    printf '%s\n' '@@VERSION@@'
     ;;
 install)
     install_root=
@@ -150,7 +152,8 @@ fn package_verifier_enforces_the_canonical_executable_set() {
 fn run_package_verifier(root: &Path, case: &str) -> Output {
     let fixture = tempdir().expect("fake cargo fixture directory");
     let cargo = fixture.path().join("cargo");
-    fs::write(&cargo, FAKE_CARGO).expect("fake cargo script");
+    fs::write(&cargo, FAKE_CARGO.replace("@@VERSION@@", FIXTURE_VERSION))
+        .expect("fake cargo script");
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))
         .expect("make fake cargo executable");
 
