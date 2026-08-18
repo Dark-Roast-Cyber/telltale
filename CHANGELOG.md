@@ -4,6 +4,17 @@
 
 ---
 
+## 0.5.0-rc.6 — prepared, unpublished
+
+- Repair canonical Linux installer validation for an absent optional
+  `EnvironmentFile`, while rejecting alternate, extra, reset, ambiguous, and
+  inherited environment sources.
+- The immutable `v0.5.0-rc.5` publication and provenance passed, but G-SERVICE
+  failed on this canonical optional-file defect. No rc.6 tag, Release, crate
+  publication, or live-host validation has occurred.
+
+---
+
 ## Unreleased
 
 **Telltale-only runtime identity**

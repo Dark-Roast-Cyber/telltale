@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread;
@@ -30,6 +30,20 @@ fn executable(path: &Path, contents: &str) {
 fn regular_file(path: &Path, contents: &[u8], mode: u32) {
     fs::write(path, contents).expect("write regular file");
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set file mode");
+}
+
+fn rc4_generated_service(install: &Path, state_root: &Path, config_root: &Path) -> String {
+    format!(
+        "[Unit]\nDescription=Telltale one-shot agent session scan\n\n[Service]\nType=oneshot\nEnvironment=\"TELLTALE_LOG_PATH={}/telltale/logs/telltale-events.jsonl\"\nEnvironment=\"TELLTALE_STATE_PATH={}/telltale/telltale-state.json\"\nEnvironment=\"TELLTALE_SCAN_ROOT=%h\"\nEnvironmentFile=-\"{}/telltale/telltale.env\"\nExecStart=/usr/bin/env -- \"{}/telltale\" scan --once --emit-activity --root \"${{TELLTALE_SCAN_ROOT}}\" --path-profile user\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=default.target\n",
+        state_root.display(),
+        state_root.display(),
+        config_root.display(),
+        install.display(),
+    )
+}
+
+fn rc4_generated_timer() -> &'static str {
+    "[Unit]\nDescription=Run Telltale agent session scans periodically\n\n[Timer]\nOnActiveSec=1min\nOnUnitActiveSec=5min\nUnit=telltale-scan.service\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
 }
 
 fn telltale_binary(path: &Path, version: &str, _identity_fixture: bool) {
@@ -269,7 +283,7 @@ init_state() {
   : > "$state"
   for unit in telltale-scan.service telltale-scan.timer; do
     present=0
-    [ -f "$unit_dir/$unit" ] && present=1
+    [ "${FAKE_INITIAL_NOT_FOUND:-0}" = 1 ] || { [ -f "$unit_dir/$unit" ] && present=1; }
     [ "$unit" = "$generated" ] && present=1
     enabled=0
     active=0
@@ -337,7 +351,12 @@ case "$command" in
         ExecStopPre:stop-pre) printf '%s\n' '{ path=/bin/sh ; argv[]=/bin/sh -c hook ; ignore_errors=no ; }';;
         ExecReloadPost:reload-post) printf '%s\n' '{ path=/bin/sh ; argv[]=/bin/sh -c hook ; ignore_errors=no ; }';;
         Environment:environment) printf '%s\n' 'TELLTALE_LOG_PATH=/safe TELLTALE_STATE_PATH=/safe TELLTALE_SCAN_ROOT=%h INJECTED=1';;
-        EnvironmentFiles:env-file) printf '%s\n' '/tmp/injected.env (ignore_errors=yes)';;
+         EnvironmentFiles:empty) printf '\n';;
+         EnvironmentFiles:alternate) printf '%s\n' '/tmp/alternate.env (ignore_errors=yes)';;
+         EnvironmentFiles:extra) printf '%s (ignore_errors=yes) /tmp/extra.env (ignore_errors=yes)\n' "$canonical_env";;
+         EnvironmentFiles:reset) printf '%s\n' '(reset)';;
+         EnvironmentFiles:unknown) printf '%s\n' 'unknown';;
+         EnvironmentFiles:env-file) printf '%s\n' '/tmp/injected.env (ignore_errors=yes)';;
         Environment:quoted-values) printf 'TELLTALE_LOG_PATH="%s" TELLTALE_STATE_PATH="%s" TELLTALE_SCAN_ROOT="%%h"\n' "$canonical_log" "$canonical_state";;
         EnvironmentFiles:quoted-values) printf '"%s" (ignore_errors=yes)\n' "$canonical_env";;
         WorkingDirectory:path) printf '%s\n' '/tmp';;
@@ -445,6 +464,13 @@ case "$command" in
     ;;
   daemon-reload)
     refresh_present
+    if [ -f "$unit_dir/telltale-scan.service" ] && [ -n "${FAKE_MUTATE_GENERATED_UNIT:-}" ]; then
+      case "$FAKE_MUTATE_GENERATED_UNIT" in
+        omit) sed -i '/^EnvironmentFile=/d' "$unit_dir/telltale-scan.service";;
+        alternate) sed -i 's|^EnvironmentFile=.*|EnvironmentFile=-"/tmp/alternate.env"|' "$unit_dir/telltale-scan.service";;
+        *) exit 98;;
+      esac
+    fi
     ;;
   disable)
     unit=${3:?unit}
@@ -1034,6 +1060,13 @@ fn inherited_generic_service_policy_is_allowed_when_effective_contract_is_canoni
     let sums = temp.path().join("SHA256SUMS");
     checksum(&selected, &sums);
     let install = temp.path().join("home/bin");
+    let inherited_dropin = temp.path().join("systemd user/service.d/timeout-stop.conf");
+    fs::create_dir_all(inherited_dropin.parent().unwrap()).unwrap();
+    regular_file(
+        &inherited_dropin,
+        b"[Service]\nTimeoutStopFailureMode=abort\n",
+        0o644,
+    );
     let mut command = installer_command(
         temp.path(),
         &metadata,
@@ -1045,7 +1078,7 @@ fn inherited_generic_service_policy_is_allowed_when_effective_contract_is_canoni
         .env("FAKE_DROP_IN_UNIT", "telltale-scan.service")
         .env(
             "FAKE_DROP_IN_PATHS",
-            "/usr/lib/systemd/user/service.d/timeout-stop.conf",
+            inherited_dropin.to_string_lossy().replace(' ', "\\x20"),
         )
         .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
     let output = command.output().unwrap();
@@ -1054,6 +1087,78 @@ fn inherited_generic_service_policy_is_allowed_when_effective_contract_is_canoni
     let calls = fs::read_to_string(temp.path().join("systemctl.log")).unwrap();
     assert!(calls.contains("show telltale-scan.service --property=FragmentPath --value"));
     assert!(calls.contains("show telltale-scan.timer --property=FragmentPath --value"));
+}
+
+#[test]
+fn inherited_unicode_service_policy_with_escaped_utf8_path_is_allowed() {
+    let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let install = temp.path().join("home/bin");
+    let inherited_dropin = temp
+        .path()
+        .join("global/Ѐ😀/service.d/timeout\\policy.conf");
+    fs::create_dir_all(inherited_dropin.parent().unwrap()).unwrap();
+    regular_file(
+        &inherited_dropin,
+        b"[Service]\nTimeoutStopFailureMode=abort\n",
+        0o644,
+    );
+    let escaped_dropin = inherited_dropin
+        .to_str()
+        .unwrap()
+        .replace('Ѐ', r"\xd0\x80")
+        .replace('😀', r"\xf0\x9f\x98\x80")
+        .replace("\\policy", r"\x5cpolicy");
+    let mut command = installer_command(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &tools(temp.path(), true),
+    );
+    command
+        .env("FAKE_DROP_IN_UNIT", "telltale-scan.service")
+        .env("FAKE_DROP_IN_PATHS", escaped_dropin)
+        .env("FAKE_PROPERTY_MUTATION", "empty")
+        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+    let output = command.output().unwrap();
+    assert_success(&output);
+    assert!(install.join("telltale").is_file());
+}
+
+#[test]
+fn malformed_or_invalid_dropin_path_escapes_fail_closed() {
+    for escaped_name in [r"benign\q1.conf", r"benign\x.conf", r"benign\xff.conf"] {
+        let temp = tempdir().unwrap();
+        let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+        let selected = archive(temp.path(), &name, "0.5.0", None);
+        let metadata = release_metadata(temp.path(), "v0.5.0");
+        let sums = temp.path().join("SHA256SUMS");
+        checksum(&selected, &sums);
+        let decoy = temp.path().join(format!("global/service.d/{escaped_name}"));
+        fs::create_dir_all(decoy.parent().unwrap()).unwrap();
+        regular_file(&decoy, b"[Service]\nTimeoutStopFailureMode=abort\n", 0o644);
+        let install = temp.path().join("home/bin");
+        let mut command = installer_command(
+            temp.path(),
+            &metadata,
+            temp.path(),
+            Some(&sums),
+            &tools(temp.path(), true),
+        );
+        command
+            .env("FAKE_DROP_IN_UNIT", "telltale-scan.service")
+            .env("FAKE_DROP_IN_PATHS", decoy.to_str().unwrap())
+            .env("FAKE_PROPERTY_MUTATION", "empty")
+            .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+        let output = command.output().unwrap();
+        assert!(!output.status.success(), "{escaped_name} must fail");
+        assert!(!install.join("telltale").exists());
+    }
 }
 
 #[test]
@@ -1078,6 +1183,280 @@ fn shell_quoted_systemd_environment_values_are_accepted() {
     let output = command.output().unwrap();
     assert_success(&output);
     assert!(install.join("telltale").is_file());
+}
+
+#[test]
+fn absent_optional_environment_file_accepts_empty_effective_report_after_declaration_proof() {
+    let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let install = temp.path().join("home/bin");
+    let installer_tmpdir = temp.path().join("installer tmp");
+    fs::create_dir_all(&installer_tmpdir).unwrap();
+    let mut command = installer_command(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &tools(temp.path(), true),
+    );
+    command
+        .env("TMPDIR", &installer_tmpdir)
+        .env("FAKE_PROPERTY_MUTATION", "empty")
+        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+    let output = command.output().unwrap();
+    assert_success(&output);
+    assert!(
+        !temp
+            .path()
+            .join("home/.config/telltale/telltale.env")
+            .exists()
+    );
+    assert!(install.join("telltale").is_file());
+    let service = fs::read_to_string(
+        temp.path()
+            .join("home/.config/systemd/user/telltale-scan.service"),
+    )
+    .unwrap();
+    assert!(service.contains(&format!(
+        "EnvironmentFile=-\"{}\"",
+        temp.path()
+            .join("home/.config/telltale/telltale.env")
+            .display()
+    )));
+}
+
+#[test]
+fn present_private_optional_environment_file_accepts_exact_effective_report() {
+    let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let env_path = temp.path().join("home/.config/telltale/telltale.env");
+    fs::create_dir_all(env_path.parent().unwrap()).unwrap();
+    regular_file(&env_path, b"TELLTALE_SCAN_ROOT=/synthetic\n", 0o600);
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &tools(temp.path(), true),
+    );
+    command.args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+    let output = command.output().unwrap();
+    assert_success(&output);
+    assert!(install.join("telltale").is_file());
+    assert_eq!(
+        fs::metadata(env_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn effective_environment_file_reports_reject_unknown_alternate_and_extra_forms() {
+    for mutation in ["alternate", "extra", "reset", "unknown"] {
+        let temp = tempdir().unwrap();
+        let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+        let selected = archive(temp.path(), &name, "0.5.0", None);
+        let metadata = release_metadata(temp.path(), "v0.5.0");
+        let sums = temp.path().join("SHA256SUMS");
+        checksum(&selected, &sums);
+        let install = temp.path().join("home/bin");
+        let mut command = installer_command(
+            temp.path(),
+            &metadata,
+            temp.path(),
+            Some(&sums),
+            &tools(temp.path(), true),
+        );
+        command.env("FAKE_PROPERTY_MUTATION", mutation).args([
+            "--no-timer",
+            "--install-dir",
+            install.to_str().unwrap(),
+        ]);
+        let output = command.output().unwrap();
+        assert!(!output.status.success(), "{mutation} must fail");
+        assert!(output_text(&output).contains("before binary replacement"));
+        assert!(!install.join("telltale").exists());
+    }
+}
+
+#[test]
+fn canonical_service_declaration_omission_or_mutation_fails_closed() {
+    for mutation in ["omit", "alternate"] {
+        let temp = tempdir().unwrap();
+        let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+        let selected = archive(temp.path(), &name, "0.5.0", None);
+        let metadata = release_metadata(temp.path(), "v0.5.0");
+        let sums = temp.path().join("SHA256SUMS");
+        checksum(&selected, &sums);
+        let install = temp.path().join("home/bin");
+        let mut command = installer_command(
+            temp.path(),
+            &metadata,
+            temp.path(),
+            Some(&sums),
+            &tools(temp.path(), true),
+        );
+        command
+            .env("FAKE_MUTATE_GENERATED_UNIT", mutation)
+            .env("FAKE_PROPERTY_MUTATION", "empty")
+            .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+        let output = command.output().unwrap();
+        assert!(!output.status.success(), "{mutation} must fail");
+        assert!(output_text(&output).contains("generated canonical service declaration"));
+        assert!(!install.join("telltale").exists());
+    }
+}
+
+#[test]
+fn inherited_environment_policy_is_rejected_even_when_referenced_file_is_absent() {
+    for (case_name, contents, mode) in [
+        (
+            "environment-file",
+            "[Service]\nEnvironmentFile=-/tmp/missing-telltale.env\n",
+            0o644,
+        ),
+        ("reset", "[Service]\nEnvironmentFile=\n", 0o644),
+        (
+            "environment-injection",
+            "[Service]\nEnvironment=INJECTED=1\n",
+            0o644,
+        ),
+        (
+            "continuation",
+            "[Service]\nTimeoutStopFailureMode=ab\\\nort\n",
+            0o644,
+        ),
+        ("malformed", "[Service]\nnot-a-directive\n", 0o644),
+        (
+            "unreadable",
+            "[Service]\nTimeoutStopFailureMode=abort\n",
+            0o000,
+        ),
+    ] {
+        let temp = tempdir().unwrap();
+        let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+        let selected = archive(temp.path(), &name, "0.5.0", None);
+        let metadata = release_metadata(temp.path(), "v0.5.0");
+        let sums = temp.path().join("SHA256SUMS");
+        checksum(&selected, &sums);
+        let dropin = temp
+            .path()
+            .join(format!("global/service.d/{case_name}.conf"));
+        fs::create_dir_all(dropin.parent().unwrap()).unwrap();
+        regular_file(&dropin, contents.as_bytes(), mode);
+        let install = temp.path().join("home/bin");
+        let mut command = installer_command(
+            temp.path(),
+            &metadata,
+            temp.path(),
+            Some(&sums),
+            &tools(temp.path(), true),
+        );
+        command
+            .env("FAKE_DROP_IN_UNIT", "telltale-scan.service")
+            .env("FAKE_DROP_IN_PATHS", dropin.to_str().unwrap())
+            .env("FAKE_PROPERTY_MUTATION", "empty")
+            .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+        let output = command.output().unwrap();
+        assert!(!output.status.success(), "{case_name} must fail");
+        assert!(
+            output_text(&output)
+                .contains("could not safely validate effective canonical systemd policy")
+        );
+        assert!(!install.join("telltale").exists());
+    }
+}
+
+#[test]
+fn escaped_whitespace_inherited_environment_file_is_rejected() {
+    let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let dropin = temp
+        .path()
+        .join("global policy/service.d/environment-file.conf");
+    let escaped_dropin = temp
+        .path()
+        .join(r"global\x20policy/service.d/environment-file.conf");
+    fs::create_dir_all(dropin.parent().unwrap()).unwrap();
+    fs::create_dir_all(escaped_dropin.parent().unwrap()).unwrap();
+    regular_file(
+        &dropin,
+        b"[Service]\nEnvironmentFile=-/tmp/missing-telltale.env\n",
+        0o644,
+    );
+    regular_file(
+        &escaped_dropin,
+        b"[Service]\nTimeoutStopFailureMode=abort\n",
+        0o644,
+    );
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &tools(temp.path(), true),
+    );
+    command
+        .env("FAKE_DROP_IN_UNIT", "telltale-scan.service")
+        .env(
+            "FAKE_DROP_IN_PATHS",
+            dropin.to_string_lossy().replace(' ', "\\x20"),
+        )
+        .env("FAKE_PROPERTY_MUTATION", "empty")
+        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        output_text(&output)
+            .contains("could not safely validate effective canonical systemd policy")
+    );
+    assert!(!install.join("telltale").exists());
+}
+
+#[test]
+fn unknown_dropin_hex_escape_is_rejected_before_inspecting_literal_decoy() {
+    let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let decoy = temp.path().join(r"global/service.d/benign\x01.conf");
+    fs::create_dir_all(decoy.parent().unwrap()).unwrap();
+    regular_file(&decoy, b"[Service]\nTimeoutStopFailureMode=abort\n", 0o644);
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &tools(temp.path(), true),
+    );
+    command
+        .env("FAKE_DROP_IN_UNIT", "telltale-scan.service")
+        .env("FAKE_DROP_IN_PATHS", decoy.to_str().unwrap())
+        .env("FAKE_PROPERTY_MUTATION", "empty")
+        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        output_text(&output)
+            .contains("could not safely validate effective canonical systemd policy")
+    );
+    assert!(!install.join("telltale").exists());
 }
 
 #[test]
@@ -1941,7 +2320,11 @@ fn canonical_unit_dropins_are_rejected_before_staging() {
         regular_file(&units.join(unit), b"unrelated unit\n", 0o644);
         let dropin = units.join(format!("{unit}.d/override.conf"));
         fs::create_dir_all(dropin.parent().unwrap()).unwrap();
-        regular_file(&dropin, b"[Unit]\nDescription=unrelated drop-in\n", 0o644);
+        regular_file(
+            &dropin,
+            b"[Service]\nEnvironmentFile=-/tmp/missing-unit-specific.env\n",
+            0o644,
+        );
         let output = run_release(
             temp.path(),
             &metadata,
@@ -1964,7 +2347,7 @@ fn canonical_unit_dropins_are_rejected_before_staging() {
         assert_eq!(fs::read(units.join(unit)).unwrap(), b"unrelated unit\n");
         assert_eq!(
             fs::read(dropin).unwrap(),
-            b"[Unit]\nDescription=unrelated drop-in\n"
+            b"[Service]\nEnvironmentFile=-/tmp/missing-unit-specific.env\n"
         );
         assert!(!temp.path().join("home/bin/telltale").exists());
     }
@@ -2259,10 +2642,22 @@ fn failed_unit_copy_restores_preexisting_units_after_partial_stage() {
     let install = temp.path().join("home/bin");
     let units = temp.path().join("home/.config/systemd/user");
     fs::create_dir_all(&units).unwrap();
-    let old_service = b"preexisting service bytes\n";
-    let old_timer = b"preexisting timer bytes\n";
-    regular_file(&units.join("telltale-scan.service"), old_service, 0o644);
-    regular_file(&units.join("telltale-scan.timer"), old_timer, 0o644);
+    let old_service = rc4_generated_service(
+        &install,
+        &temp.path().join("home/.local/state"),
+        &temp.path().join("home/.config"),
+    );
+    let old_timer = rc4_generated_timer();
+    regular_file(
+        &units.join("telltale-scan.service"),
+        old_service.as_bytes(),
+        0o644,
+    );
+    regular_file(
+        &units.join("telltale-scan.timer"),
+        old_timer.as_bytes(),
+        0o644,
+    );
 
     let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
     command.env("FAKE_FAIL_INSTALL_COPY", "unit-service").args([
@@ -2280,12 +2675,18 @@ fn failed_unit_copy_restores_preexisting_units_after_partial_stage() {
     assert!(!install.join("telltale").exists());
     assert_eq!(
         fs::read(units.join("telltale-scan.service")).unwrap(),
-        old_service
+        old_service.as_bytes()
     );
     assert_eq!(
         fs::read(units.join("telltale-scan.timer")).unwrap(),
-        old_timer
+        old_timer.as_bytes()
     );
+    let restored_service_ino = fs::metadata(units.join("telltale-scan.service"))
+        .unwrap()
+        .ino();
+    let restored_timer_ino = fs::metadata(units.join("telltale-scan.timer"))
+        .unwrap()
+        .ino();
     let staging_exists = fs::read_dir(&units)
         .expect("unit directory after failed copy")
         .filter_map(Result::ok)
@@ -2319,12 +2720,16 @@ fn failed_unit_copy_restores_preexisting_units_after_partial_stage() {
     assert!(units.join("telltale-scan.service").is_file());
     assert!(units.join("telltale-scan.timer").is_file());
     assert_ne!(
-        fs::read(units.join("telltale-scan.service")).unwrap(),
-        old_service
+        fs::metadata(units.join("telltale-scan.service"))
+            .unwrap()
+            .ino(),
+        restored_service_ino
     );
     assert_ne!(
-        fs::read(units.join("telltale-scan.timer")).unwrap(),
-        old_timer
+        fs::metadata(units.join("telltale-scan.timer"))
+            .unwrap()
+            .ino(),
+        restored_timer_ino
     );
     let staging_exists = fs::read_dir(&units)
         .unwrap()
@@ -2392,14 +2797,12 @@ fn failed_rc4_transaction_with_generated_units_is_recovered_without_activation()
     fs::create_dir_all(&journal_dir).unwrap();
     regular_file(&journal_dir.join("telltale-state.json"), state_bytes, 0o600);
 
-    let service = format!(
-        "[Service]\nEnvironment=\"TELLTALE_LOG_PATH={}/telltale/logs/telltale-events.jsonl\"\nEnvironment=\"TELLTALE_STATE_PATH={}/telltale/telltale-state.json\"\nEnvironment=\"TELLTALE_SCAN_ROOT=%h\"\nEnvironmentFile=-\"{}/telltale/telltale.env\"\nExecStart=/usr/bin/env -- \"{}/telltale\" scan --once --emit-activity --root \"${{TELLTALE_SCAN_ROOT}}\" --path-profile user\nType=oneshot\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=no\n",
-        temp.path().join("home/.local/state").display(),
-        temp.path().join("home/.local/state").display(),
-        temp.path().join("home/.config").display(),
-        install.display(),
+    let service = rc4_generated_service(
+        &install,
+        &temp.path().join("home/.local/state"),
+        &temp.path().join("home/.config"),
     );
-    let timer = "[Timer]\nOnActiveSec=1min\nOnUnitActiveSec=5min\nUnit=telltale-scan.service\nPersistent=true\n";
+    let timer = rc4_generated_timer();
     regular_file(
         &units.join("telltale-scan.service"),
         service.as_bytes(),
@@ -2428,6 +2831,13 @@ fn failed_rc4_transaction_with_generated_units_is_recovered_without_activation()
         timer.as_bytes(),
         0o644,
     );
+    let inherited_dropin = temp.path().join("systemd/user/service.d/timeout-stop.conf");
+    fs::create_dir_all(inherited_dropin.parent().unwrap()).unwrap();
+    regular_file(
+        &inherited_dropin,
+        b"[Service]\nTimeoutStopFailureMode=abort\n",
+        0o644,
+    );
     regular_file(
         &journal_dir.join("installer-transaction.json"),
         br#"{
@@ -2454,10 +2864,8 @@ fn failed_rc4_transaction_with_generated_units_is_recovered_without_activation()
     );
     command
         .env("FAKE_DROP_IN_UNIT", "telltale-scan.service")
-        .env(
-            "FAKE_DROP_IN_PATHS",
-            "/usr/lib/systemd/user/service.d/timeout-stop.conf",
-        )
+        .env("FAKE_DROP_IN_PATHS", inherited_dropin.to_str().unwrap())
+        .env("FAKE_PROPERTY_MUTATION", "empty")
         .env("FAKE_NEW_ENABLED", "1")
         .env("FAKE_NEW_ACTIVE", "1")
         .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);

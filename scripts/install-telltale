@@ -297,6 +297,9 @@ INSTALL_DIR="$(resolve_under_home "$INSTALL_DIR")"
 tmpdir=""
 install_stage_dir=""
 unit_stage_dir=""
+canonical_service_template=""
+canonical_timer_template=""
+service_units_staged=0
 transaction_active=0
 recovery_failed=0
 rollback_verified=0
@@ -625,8 +628,133 @@ unit_dropin_directory_is_absent() {
     esac
 }
 
+validate_inherited_dropin_file() {
+    local path="$1" unit="$2"
+    python3 - "$path" "$unit" <<'PY'
+import os
+import stat
+import sys
+
+path, unit = sys.argv[1:]
+expected_section = "Service" if unit.endswith(".service") else "Timer"
+
+def identity(value):
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_uid,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+try:
+    before_path = os.lstat(path)
+    if not stat.S_ISREG(before_path.st_mode) or before_path.st_nlink != 1:
+        raise OSError
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        before_fd = os.fstat(fd)
+        if identity(before_fd) != identity(before_path):
+            raise OSError
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if sum(map(len, chunks)) > 1024 * 1024:
+                raise OSError
+        after_fd = os.fstat(fd)
+        after_path = os.lstat(path)
+        if identity(after_fd) != identity(before_fd) or identity(after_path) != identity(before_path):
+            raise OSError
+    finally:
+        os.close(fd)
+    text = b"".join(chunks).decode("utf-8")
+except (OSError, UnicodeDecodeError):
+    raise SystemExit(1)
+
+if "\x00" in text or "\r" in text:
+    raise SystemExit(1)
+
+seen_timeout = False
+section = None
+for line in text.split("\n"):
+    if line.endswith("\\"):
+        raise SystemExit(1)
+    stripped = line.strip()
+    if not stripped or line.lstrip().startswith(("#", ";")):
+        continue
+    if stripped.startswith("["):
+        if stripped not in ("[Unit]", f"[{expected_section}]"):
+            raise SystemExit(1)
+        section = stripped[1:-1]
+        continue
+    if section != expected_section or "=" not in line:
+        raise SystemExit(1)
+    key, value = line.split("=", 1)
+    if not key or key != key.strip() or not key.replace("_", "").isalnum():
+        raise SystemExit(1)
+    if key in {
+        "Environment",
+        "EnvironmentFile",
+        "PassEnvironment",
+        "UnsetEnvironment",
+    }:
+        raise SystemExit(1)
+    if key == "TimeoutStopFailureMode" and value == "abort" and not seen_timeout:
+        seen_timeout = True
+        continue
+    raise SystemExit(1)
+PY
+}
+
+systemd_show_unescape_path() {
+    local raw="$1"
+    python3 - "$raw" <<'PY'
+import os
+import sys
+import unicodedata
+
+raw = os.fsencode(sys.argv[1])
+decoded = bytearray()
+index = 0
+hex_digits = b"0123456789abcdefABCDEF"
+
+while index < len(raw):
+    if raw[index] == ord("\\"):
+        if (
+            index + 3 >= len(raw)
+            or raw[index + 1] != ord("x")
+            or raw[index + 2] not in hex_digits
+            or raw[index + 3] not in hex_digits
+        ):
+            raise SystemExit(1)
+        decoded.append(int(raw[index + 2 : index + 4], 16))
+        index += 4
+    else:
+        decoded.append(raw[index])
+        index += 1
+
+try:
+    text = bytes(decoded).decode("utf-8", "strict")
+except UnicodeDecodeError:
+    raise SystemExit(1)
+
+if "\x00" in text or any(unicodedata.category(char) == "Cc" for char in text):
+    raise SystemExit(1)
+
+sys.stdout.buffer.write(text.encode("utf-8"))
+PY
+}
+
 classify_dropins() {
-    local unit="$1" dropin_metadata dropin_paths path parent
+    local unit="$1" dropin_metadata dropin_paths path decoded_path parent
+    local LC_ALL=C
     case "$unit" in
         telltale-scan.service|telltale-scan.timer)
             unit_dropin_directory_is_absent "$unit" || return 1
@@ -634,11 +762,13 @@ classify_dropins() {
             [[ "$dropin_metadata" == DropInPaths=* ]] || return 1
             dropin_paths="${dropin_metadata#DropInPaths=}"
             [[ -z "$dropin_paths" ]] && return 0
+            [[ "$dropin_paths" != *[[:cntrl:]]* ]] || return 1
             read -r -a dropin_paths_array <<< "$dropin_paths"
             [[ "${#dropin_paths_array[@]}" -gt 0 ]] || return 1
             for path in "${dropin_paths_array[@]}"; do
-                [[ "$path" == /* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] || return 1
-                parent="${path%/*}"
+                decoded_path="$(systemd_show_unescape_path "$path")" || return 1
+                [[ "$decoded_path" == /* ]] || return 1
+                parent="${decoded_path%/*}"
                 case "$unit:$parent" in
                     telltale-scan.service:"${unit_dir}/service.d"|\
                     telltale-scan.timer:"${unit_dir}/timer.d"|\
@@ -649,6 +779,7 @@ classify_dropins() {
                         return 1
                         ;;
                 esac
+                validate_inherited_dropin_file "$decoded_path" "$unit" || return 1
             done
             ;;
         *)
@@ -699,6 +830,9 @@ systemd_show_unescape() {
     value="${value//\\x20/ }"
     value="${value//\\x09/$'\t'}"
     value="${value//\\x0a/$'\n'}"
+    value="${value//\\x0b/$'\v'}"
+    value="${value//\\x0c/$'\f'}"
+    value="${value//\\x0d/$'\r'}"
     value="${value//\\x22/\"}"
     value="${value//\\x24/\$}"
     value="${value//\\x25/%}"
@@ -751,6 +885,10 @@ PY
 
 validate_service_policy() {
     local value
+    validate_generated_service_declaration || {
+        error "generated canonical service declaration is unsafe or unproven"
+        return 1
+    }
     validate_service_exec_start || {
         error "effective service ExecStart contract failed"
         return 1
@@ -798,12 +936,14 @@ PY
 
     value="$(systemctl_show telltale-scan.service EnvironmentFiles)" || return 1
     value="$(systemd_show_unescape "$value")"
-    [[ "$value" == "${canonical_env} (ignore_errors=yes)" || \
-        "$value" == "\"${canonical_env}\" (ignore_errors=yes)" || \
-        "$value" == "'${canonical_env}' (ignore_errors=yes)" ]] || {
-        error "effective service EnvironmentFiles contract failed"
-        return 1
-    }
+    if [[ -n "$value" ]]; then
+        [[ "$value" == "${canonical_env} (ignore_errors=yes)" || \
+            "$value" == "\"${canonical_env}\" (ignore_errors=yes)" || \
+            "$value" == "'${canonical_env}' (ignore_errors=yes)" ]] || {
+            error "effective service EnvironmentFiles contract failed"
+            return 1
+        }
+    fi
 
     for property in WorkingDirectory User Group SupplementaryGroups RootDirectory RootImage \
         PassEnvironment UnsetEnvironment; do
@@ -942,8 +1082,160 @@ systemd_escape() {
     printf '%s' "$escaped"
 }
 
+render_canonical_units() {
+    local executable log_value state_value env_value
+    executable="$(systemd_escape "$INSTALL_DIR/telltale")"
+    log_value="$(systemd_escape "$canonical_log")"
+    state_value="$(systemd_escape "$canonical_state")"
+    env_value="$(systemd_escape "$canonical_env")"
+
+    canonical_service_template="$tmpdir/telltale-scan.service.generated"
+    canonical_timer_template="$tmpdir/telltale-scan.timer.generated"
+    cat > "$canonical_service_template" <<EOF
+[Unit]
+Description=Telltale one-shot agent session scan
+
+[Service]
+Type=oneshot
+Environment="TELLTALE_LOG_PATH=${log_value}"
+Environment="TELLTALE_STATE_PATH=${state_value}"
+Environment="TELLTALE_SCAN_ROOT=%h"
+EnvironmentFile=-"${env_value}"
+ExecStart=/usr/bin/env -- "${executable}" scan --once --emit-activity --root "\${TELLTALE_SCAN_ROOT}" --path-profile user
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=no
+
+[Install]
+WantedBy=default.target
+EOF
+    cat > "$canonical_timer_template" <<'EOF'
+[Unit]
+Description=Run Telltale agent session scans periodically
+
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=5min
+Unit=telltale-scan.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    chmod 0600 "$canonical_service_template" "$canonical_timer_template"
+    safe_file_mode "$canonical_service_template" unit || die "generated canonical service template is unsafe"
+    safe_file_mode "$canonical_timer_template" unit || die "generated canonical timer template is unsafe"
+}
+
+validate_generated_service_declaration() {
+    local fragment expected_env_line generated_before generated_after fragment_before fragment_after
+    [[ -n "$canonical_service_template" ]] || return 1
+    safe_file_mode "$canonical_service_template" unit || return 1
+    fragment="$(systemctl_show telltale-scan.service FragmentPath)" || return 1
+    [[ "$fragment" == "$unit_dir/telltale-scan.service" ]] || return 1
+    unit_file_is_owned_regular "$fragment" || return 1
+    expected_env_line="$(awk '
+        /^EnvironmentFile=/ {
+            count++
+            line=$0
+        }
+        END {
+            if (count != 1) exit 1
+            print line
+        }
+    ' "$canonical_service_template")" || return 1
+
+    if [[ "$service_units_staged" -eq 0 ]]; then
+        python3 - "$fragment" "$expected_env_line" <<'PY'
+import os
+import stat
+import sys
+
+path, expected = sys.argv[1:]
+
+def identity(value):
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_uid,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+try:
+    before_path = os.lstat(path)
+    if not stat.S_ISREG(before_path.st_mode) or before_path.st_nlink != 1:
+        raise OSError
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before_fd = os.fstat(fd)
+        if identity(before_fd) != identity(before_path):
+            raise OSError
+        content = b""
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            content += chunk
+            if len(content) > 1024 * 1024:
+                raise OSError
+        after_fd = os.fstat(fd)
+        after_path = os.lstat(path)
+        if identity(after_fd) != identity(before_fd) or identity(after_path) != identity(before_path):
+            raise OSError
+    finally:
+        os.close(fd)
+    text = content.decode("utf-8")
+except (OSError, UnicodeDecodeError):
+    raise SystemExit(1)
+
+if any(char == "\x00" or (ord(char) < 0x20 and char != "\n") for char in text):
+    raise SystemExit(1)
+
+section = None
+environment_file_count = 0
+for line in text.split("\n"):
+    if line.endswith("\\"):
+        raise SystemExit(1)
+    stripped = line.strip()
+    if not stripped or line.lstrip().startswith(("#", ";")):
+        continue
+    if stripped.startswith("["):
+        if not stripped.endswith("]"):
+            raise SystemExit(1)
+        section = stripped[1:-1]
+        continue
+    if "=" not in line:
+        if stripped.startswith("EnvironmentFile"):
+            raise SystemExit(1)
+        continue
+    key, value = line.split("=", 1)
+    normalized_key = key.strip()
+    if normalized_key.startswith("EnvironmentFile"):
+        if normalized_key != "EnvironmentFile":
+            raise SystemExit(1)
+        environment_file_count += 1
+        if section != "Service" or line != expected:
+            raise SystemExit(1)
+
+raise SystemExit(0 if environment_file_count == 1 else 1)
+PY
+        return $?
+    fi
+
+    generated_before="$(stat_value '%d:%i:%u:%h:%a:%s:%Y:%Z:%F' "$canonical_service_template")" || return 1
+    fragment_before="$(stat_value '%d:%i:%u:%h:%a:%s:%Y:%Z:%F' "$fragment")" || return 1
+    cmp -s "$fragment" "$canonical_service_template" || return 1
+    generated_after="$(stat_value '%d:%i:%u:%h:%a:%s:%Y:%Z:%F' "$canonical_service_template")" || return 1
+    fragment_after="$(stat_value '%d:%i:%u:%h:%a:%s:%Y:%Z:%F' "$fragment")" || return 1
+    [[ "$generated_before" == "$generated_after" && "$fragment_before" == "$fragment_after" ]]
+}
+
 stage_units() {
-    local unit path service_path timer_path executable log_value state_value env_value
+    local unit path service_path timer_path
     local candidate_path installing_path
 
     ensure_owned_directory "$unit_dir"
@@ -969,43 +1261,8 @@ stage_units() {
             || die "could not stage existing canonical timer without clobbering"
     fi
 
-    # Literal percent signs become %%; %h below remains the intentional home specifier.
-    executable="$(systemd_escape "$INSTALL_DIR/telltale")"
-    log_value="$(systemd_escape "$canonical_log")"
-    state_value="$(systemd_escape "$canonical_state")"
-    env_value="$(systemd_escape "$canonical_env")"
-    cat > "$unit_stage_dir/telltale-scan.service.new" <<EOF
-[Unit]
-Description=Telltale one-shot agent session scan
-
-[Service]
-Type=oneshot
-Environment="TELLTALE_LOG_PATH=${log_value}"
-Environment="TELLTALE_STATE_PATH=${state_value}"
-Environment="TELLTALE_SCAN_ROOT=%h"
-EnvironmentFile=-"${env_value}"
-ExecStart=/usr/bin/env -- "${executable}" scan --once --emit-activity --root "\${TELLTALE_SCAN_ROOT}" --path-profile user
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=no
-
-[Install]
-WantedBy=default.target
-EOF
-    cat > "$unit_stage_dir/telltale-scan.timer.new" <<'EOF'
-[Unit]
-Description=Run Telltale agent session scans periodically
-
-[Timer]
-OnActiveSec=1min
-OnUnitActiveSec=5min
-Unit=telltale-scan.service
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-    chmod 0644 "$unit_stage_dir/telltale-scan.service.new" "$unit_stage_dir/telltale-scan.timer.new"
+    install -m 0644 "$canonical_service_template" "$unit_stage_dir/telltale-scan.service.new"
+    install -m 0644 "$canonical_timer_template" "$unit_stage_dir/telltale-scan.timer.new"
     for unit in telltale-scan.service telltale-scan.timer; do
         candidate_path="$unit_stage_dir/$unit.new"
         installing_path="$unit_stage_dir/$unit.installing"
@@ -1020,6 +1277,7 @@ EOF
         unit_file_is_owned_regular "$path" \
             || die "installed canonical user unit is unsafe: ${unit}"
     done
+    service_units_staged=1
 }
 
 restore_units() {
@@ -1503,6 +1761,7 @@ ensure_owned_directory "$state_root"
 ensure_owned_directory "$config_root"
 ensure_owned_directory "$state_root/telltale"
 ensure_owned_directory "$config_root/telltale"
+render_canonical_units
 
 trap on_exit EXIT
 
