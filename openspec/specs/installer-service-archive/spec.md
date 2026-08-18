@@ -36,10 +36,13 @@ tag identity, matching package/binary version, the exact canonical archive
 manifest, and the archive digest from that tag's `SHA256SUMS`. Only after those
 checks pass SHALL it acquire the installer lock, validate canonical destinations,
  quiesce canonical schedules, recover only proven marker-owned staging, stage the
- sole canonical artifact, install canonical units disabled, validate effective
- canonical behavior, smoke-test, and enable only the canonical schedule when
- requested. It SHALL never activate a canonical schedule before the validated
- candidate binary is installed.
+sole canonical artifact, install canonical units disabled, prove the base
+canonical service declaration and allowed inherited policy, validate effective
+canonical behavior, smoke-test, and enable only the canonical schedule when
+requested. Effective validation and all declaration/drop-in proofs SHALL
+complete before binary replacement, and activation SHALL remain the last
+mutating step. It SHALL never activate a canonical schedule before the
+validated candidate binary is installed.
 
 #### Scenario: Candidate provenance fails before mutation
 
@@ -55,16 +58,31 @@ checks pass SHALL it acquire the installer lock, validate canonical destinations
 - **THEN** it recovers only marker-owned canonical files without clobbering bytes
 - **AND** it leaves the canonical schedule disabled or in one known state
 
+#### Scenario: Environment policy is validated before replacement and activation
+
+- **GIVEN** provenance, retained-transaction recovery, canonical destinations,
+  quiescence, and staging have succeeded
+- **WHEN** canonical service declaration proof or effective policy validation fails
+- **THEN** the installer fails before replacing the installed binary or enabling
+  the canonical schedule
+
 ### Requirement: Fail-closed canonical safety
 
 The installer SHALL fail closed on ownership ambiguity, unsafe canonical path
-aliases, Telltale-specific or ambiguous effective drop-ins, unsafe effective
-configuration,
-non-regular destinations, unsafe modes, archive violations, or destructive
-deletion of an unidentified canonical file. It SHALL refuse system scope and
-unmanaged paths. Inherited type-wide `service.d` or `timer.d` policy MAY
-coexist only when the effective canonical execution, identity, environment,
-path, security, and timer contract remains unchanged.
+aliases, unsafe or unproven canonical service declarations, Telltale-specific
+or ambiguous effective drop-ins, unsafe effective configuration, non-regular
+destinations, unsafe modes, archive violations, or destructive deletion of an
+unidentified canonical file. It SHALL refuse system scope and
+unmanaged paths. The base canonical service declaration SHALL be positively
+proven from its canonical path and exact generated representation or equivalent
+integrity-bound bytes; a separately duplicated divergent template SHALL not be
+used as the authority. Unit-specific drop-ins SHALL remain forbidden. Inherited
+type-wide or global drop-ins MAY coexist only when each allowed file is
+independently inspected and proven to contain no `EnvironmentFile` directive,
+reset, injection, ambiguous continuation, or other unreviewed environment
+contribution. Benign inherited lifecycle-only policy MAY coexist only when the
+effective canonical execution, identity, environment, path, security, and
+timer contract remains unchanged.
 
 #### Scenario: Canonical effective-unit ambiguity
 
@@ -78,10 +96,27 @@ path, security, and timer contract remains unchanged.
 
 - **GIVEN** a canonical service has the expected fragment and effective
   execution contract
+- **AND** every inherited type-wide `service.d` policy is proven to contain no
+  environment-file directive or ambiguous continuation
 - **AND** an inherited type-wide `service.d` policy changes only benign
   lifecycle behavior such as `TimeoutStopFailureMode`
 - **WHEN** the installer validates the unit
 - **THEN** validation succeeds without requiring an empty `DropInPaths` list
+
+#### Scenario: Unproven global environment policy
+
+- **GIVEN** an allowed type-wide or global drop-in contains an `EnvironmentFile=`
+  directive, an empty assignment that resets prior values, an environment
+  injection, a continuation whose meaning is ambiguous, or unreadable content
+- **WHEN** the installer validates the unit
+- **THEN** it fails closed before staging, replacement, or activation
+
+#### Scenario: Unit-specific drop-in remains forbidden
+
+- **GIVEN** `telltale-scan.service` has a unit-specific drop-in even if its
+  contents appear benign
+- **WHEN** the installer validates the unit
+- **THEN** it fails closed before staging, replacement, or activation
 
 #### Scenario: Canonical collision
 
@@ -95,10 +130,18 @@ path, security, and timer contract remains unchanged.
 Systemd user units SHALL use only `telltale-scan.service` and
 `telltale-scan.timer`, with the expected canonical `FragmentPath`,
 `TELLTALE_*` environment, canonical executable/path identity, and canonical
-JSONL path. The service's effective execution/security properties and the
-timer's effective target, two-entry monotonic cadence, empty calendar schedule,
-and persistence contract SHALL be validated independently. A successful
-transaction SHALL leave at most one canonical schedule.
+JSONL path. The service's base declaration SHALL include exactly one optional
+canonical environment-file declaration for
+`${XDG_CONFIG_HOME:-$HOME/.config}/telltale/telltale.env`, with missing-file
+errors ignored, and that declaration SHALL be proven independently of the
+effective `EnvironmentFiles` report. An empty effective `EnvironmentFiles`
+report SHALL be accepted only after that declaration proof succeeds. A
+non-empty report SHALL contain exactly the canonical optional path with the
+missing-file-ignore form; extra, alternate, reset, glob, or unknown forms SHALL
+fail closed. The effective service execution/security properties and timer's
+effective target, two-entry monotonic cadence, empty calendar schedule, and
+persistence contract SHALL be validated independently. A successful transaction
+SHALL leave at most one canonical schedule.
 
 #### Scenario: Canonical unit installation
 
@@ -106,6 +149,65 @@ transaction SHALL leave at most one canonical schedule.
 - **WHEN** the installer installs units
 - **THEN** the canonical service and timer are installed disabled
 - **AND** they reference `TELLTALE_*` and `telltale-events.jsonl`
+
+#### Scenario: Absent optional environment file
+
+- **GIVEN** the generated canonical declaration is proven
+- **AND** the optional environment file is absent
+- **AND** the effective environment-file report is empty
+- **WHEN** the installer validates the service
+- **THEN** validation succeeds
+
+#### Scenario: Unsafe effective environment-file report
+
+- **GIVEN** the generated canonical declaration is proven
+- **AND** the effective report contains an extra, alternate, reset, glob, or
+  ambiguous source
+- **WHEN** the installer validates the service
+- **THEN** validation fails closed before replacement or activation
+
+#### Scenario: Benign inherited lifecycle policy
+
+- **GIVEN** inherited policy is independently readable and contains only benign
+  lifecycle behavior
+- **AND** all effective execution and security properties remain canonical
+- **WHEN** the installer validates the service
+- **THEN** validation succeeds
+
+#### Scenario: Absent canonical optional environment file
+
+- **GIVEN** the canonical generated service declaration is positively proven
+- **AND** the canonical environment file is absent
+- **AND** systemd reports an empty effective `EnvironmentFiles` property
+- **WHEN** the installer validates the effective canonical service
+- **THEN** validation succeeds
+- **AND** no alternate or unknown environment source is accepted by inference
+
+#### Scenario: Present canonical optional environment file
+
+- **GIVEN** the canonical generated service declaration is positively proven
+- **AND** the canonical environment file is present and satisfies the existing
+  current-user regular-file, ownership, non-symlink, single-link, and private-mode contract
+- **AND** systemd reports exactly the canonical path with missing-file errors ignored
+- **WHEN** the installer validates the effective canonical service
+- **THEN** validation succeeds
+
+#### Scenario: Effective environment report has an extra or alternate source
+
+- **GIVEN** the canonical declaration is proven
+- **AND** systemd reports an extra, alternate, reset, glob, noncanonical, or
+  non-optional environment-file form
+- **WHEN** the installer validates the effective canonical service
+- **THEN** it fails closed before binary replacement or activation
+
+#### Scenario: Environment report is not declaration proof
+
+- **GIVEN** systemd reports an empty effective `EnvironmentFiles` property
+- **AND** the base canonical declaration or allowed inherited policy cannot be
+  independently proven
+- **WHEN** the installer validates the effective canonical service
+- **THEN** it fails closed rather than treating the empty report as proof of a
+  safe declaration
 
 #### Scenario: Unsafe global effective mutation
 

@@ -16,9 +16,12 @@ format.
 - `0.5.0` is the approved coherent breaking milestone for the hard Telltale
   technical migration, embedded-triage removal, schema/configuration changes,
   and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
-- The current preparation value is `0.5.0-rc.5`. It is the next Cargo package
+- The current preparation value is `0.5.0-rc.6`. It is the next Cargo package
   and GitHub Release candidate, not the stable `0.5.0` release; stable
-  promotion remains gated by the release-readiness matrix.
+  promotion remains gated by the release-readiness matrix. The immutable
+  `v0.5.0-rc.5` publication passed provenance checks, but its G-SERVICE gate
+  failed on canonical optional `EnvironmentFile` validation; rc.6 is the next
+  prepared candidate and has not been published.
 - `v0.5.0-rc.1` is retained as immutable history at reviewed tag commit
   `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed, so it
   has no GitHub Release or complete five-target asset/checksum/attestation set.
@@ -27,7 +30,8 @@ format.
   `973ce825550941a824aa568a07f80036cd89f497`; do not mutate its tag, Release,
   assets, or evidence. `v0.5.0-rc.3` is immutable history at reviewed commit
   `a791ebf8894b3329030fad9e252e22d21e8b7e07` and has no GitHub Release. `rc.4`
-  is the prior candidate; `rc.5` is the next prepared candidate.
+  is historical; `rc.5` remains immutable at `e023ea91529f0731200aae1682b8d357a7b5f58c`,
+  and `rc.6` is the next prepared candidate.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
