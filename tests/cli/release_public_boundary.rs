@@ -2034,6 +2034,7 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
         "ref: ${{ github.sha }}",
         "refs/heads/main",
         "RUNNER_TEMP",
+        "telltale-schema-venv",
     ] {
         assert!(
             workflow.contains(required),
