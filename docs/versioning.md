@@ -19,7 +19,9 @@ format.
 - The current preparation value is `0.5.0`. It is the stable package version
   prepared from accepted immutable `v0.5.0-rc.7`; the matching `v0.5.0` tag
   and GitHub Release remain absent until release-preflight, artifact-boundary,
-  and publication-prerequisite gates pass. The immutable
+  and GitHub publication-prerequisite gates pass. Crates.io publication is a
+  separate later distribution action and does not block stable GitHub
+  `v0.5.0`. The immutable
   `v0.5.0-rc.5` publication passed provenance checks, but its G-SERVICE gate
   failed on canonical optional `EnvironmentFile` validation. The immutable rc.6
   publication/provenance passed and repaired that defect, but G-SERVICE then
@@ -119,10 +121,10 @@ The Cargo/package version is not the version of every data contract:
    the matching `v<version>` tag is still absent, and review the staged/public
    file boundary.
 6. Create the matching `v<version>` tag only after preflight, artifact-boundary,
-   and publication-prerequisite gates pass. For example, a compatible
-   maintenance release `0.3.1` requires tag `v0.3.1`; the approved breaking
-   milestone requires `v0.5.0` only after all migration and reliability gates
-   pass.
+   and GitHub publication-prerequisite gates pass. Crates.io publication is not
+   part of this GitHub tagging step. For example, a compatible maintenance
+   release `0.3.1` requires tag `v0.3.1`; the approved breaking milestone
+   requires `v0.5.0` only after all migration and reliability gates pass.
 7. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
@@ -131,6 +133,12 @@ changes. The older [0.4.0 migration guide](migrations/0.4.0.md) documents the
 unpublished API hardening work folded into this release.
 
 ## Crates.io Publication
+
+Crates.io publication is a separate later distribution action from stable
+GitHub tagging and GitHub binary Release. Deferring crates.io does not block
+stable GitHub `v0.5.0` and does not weaken Cargo package-readiness gates.
+When crates.io publication is later attempted, the registry-specific safety
+requirements in this section remain mandatory.
 
 Publish functional packages only after `cargo package --list`, package-boundary
 checks, and a workspace-independent consumer build pass. Recheck crates.io name
@@ -170,5 +178,5 @@ The checked-in installer keeps no-argument selection on `releases/latest`, while
 before any user install or schedule mutation. `--from-source` uses that same
 exact tag, validates its archive provenance, resolves its immutable commit, and
 builds that source revision. Binary
-GitHub Releases and later crates.io publication are separate operations; an RC
-workflow does not publish crates.
+GitHub Releases and later crates.io publication are separate operations;
+neither an RC workflow nor the stable GitHub Release workflow publishes crates.

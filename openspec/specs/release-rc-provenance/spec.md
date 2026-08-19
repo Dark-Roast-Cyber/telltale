@@ -198,25 +198,26 @@ in those gates SHALL block stable promotion even when live G-HEC is
 
 ### Requirement: Stable promotion requires explicit gate completion
 
-Stable `v0.5.0` promotion SHALL require explicit PASS evidence for the required
-G-SERVICE, native Windows, native macOS, release-preflight, artifact-boundary,
-and publication-prerequisite gates, and for the mandatory deterministic HEC
-and Splunk-format product gates. Native Windows and native macOS PASS MAY be
-produced by an authorized native host or by a GitHub-hosted native runner that
-executed the final published Release artifact for that architecture. Live
-G-HEC and live G-SPLUNK SHALL be environment-dependent evidence: `PASS` or
-`SKIPPED_EXTERNAL` satisfies the stable matrix, and `FAIL` remains a release
-blocker. A required `BLOCKED`, `BLOCKED_EXTERNAL`, or `FAIL` gate MUST NOT be
-silently reclassified as `PASS`.
+Stable `v0.5.0` GitHub promotion SHALL require explicit PASS evidence for the
+required G-SERVICE, native Windows, native macOS, release-preflight,
+artifact-boundary, and GitHub publication-prerequisite gates, and for the
+mandatory deterministic HEC and Splunk-format product gates. Native Windows
+and native macOS PASS MAY be produced by an authorized native host or by a
+GitHub-hosted native runner that executed the final published Release artifact
+for that architecture. Live G-HEC and live G-SPLUNK SHALL be
+environment-dependent evidence: `PASS` or `SKIPPED_EXTERNAL` satisfies the
+stable matrix, and `FAIL` remains a release blocker. A required `BLOCKED`,
+`BLOCKED_EXTERNAL`, or `FAIL` gate MUST NOT be silently reclassified as
+`PASS`.
 
 Preparing a reviewed reversible stable-version commit at package version
 `0.5.0` is a prerequisite for final stable preflight and is not itself
 irreversible promotion. Final stable `make release-preflight` SHALL run
 against that exact reviewed commit while `v0.5.0` is absent. The existing
 tag-review gate SHALL continue to reject an already-existing matching tag.
-Irreversible stable tagging and publication remain prohibited until that
-preflight, the separate artifact-boundary gate, and the
-publication-prerequisite gate all have PASS evidence.
+Irreversible stable GitHub tagging and GitHub Release publication remain
+prohibited until that preflight, the separate artifact-boundary gate, and the
+GitHub publication-prerequisite gate all have PASS evidence.
 
 #### Scenario: Complete stable gate matrix
 
@@ -225,15 +226,17 @@ publication-prerequisite gate all have PASS evidence.
   prepared on `main`, final stable preflight passes against that exact commit
   while `v0.5.0` is absent, and live G-HEC and live G-SPLUNK are each `PASS` or
   `SKIPPED_EXTERNAL`
-- **THEN** the matching stable tag may be created only after the separate
-  artifact-boundary and publication-prerequisite gates also pass
+- **THEN** the matching stable GitHub tag may be created only after the
+  separate artifact-boundary and GitHub publication-prerequisite gates also
+  pass
 
 #### Scenario: Required gate remains blocked
 
 - **WHEN** any required stable gate remains `BLOCKED`, `BLOCKED_EXTERNAL`, or
   `FAIL`, or a mandatory deterministic HEC or Splunk-format gate lacks passing
   evidence
-- **THEN** stable `v0.5.0` tagging and publication remain prohibited
+- **THEN** stable `v0.5.0` GitHub tagging and GitHub Release publication
+  remain prohibited
 
 #### Scenario: GitHub-hosted native evidence completes the platform gates
 
@@ -250,3 +253,32 @@ publication-prerequisite gate all have PASS evidence.
   and tag `v0.5.0` already exists
 - **THEN** `release-tag-review` fails and release-preflight MUST NOT be
   considered passing
+
+### Requirement: GitHub stable publication is independent of crates.io
+
+Stable GitHub `v0.5.0` tagging and GitHub binary Release SHALL require the
+accepted release gate matrix, final stable preflight, artifact-boundary
+review, and GitHub publication prerequisites. Crates.io publication SHALL
+remain a separate later distribution action and MUST NOT be a required PASS
+for GitHub stable publication. Deferring crates.io publication MUST NOT block
+stable GitHub `v0.5.0`. Cargo package readiness SHALL remain a mandatory
+stable-release gate, including version lockstep, internal dependency pins,
+lock entries, `release-crate-manifest`, `package-verify`, registry-style
+consumer verification, normalized CLI installation verification, and package
+public-boundary checks. When crates.io publication is later attempted, the
+existing registry-specific safety requirements SHALL remain mandatory.
+
+#### Scenario: Operator defers crates.io publication
+
+- **WHEN** the operator defers crates.io publication
+- **THEN** that deferral MUST NOT by itself block stable GitHub `v0.5.0`
+  tagging or GitHub binary Release
+- **AND** Cargo package-readiness evidence remains required
+
+#### Scenario: Later crates.io publication keeps registry safety
+
+- **WHEN** crates.io publication is later authorized
+- **THEN** package name and version availability checks, ownership checks,
+  credential readiness, dependency-order publication, registry propagation
+  waits, unpatched external consumer verification, and unpatched CLI
+  installation verification remain mandatory
