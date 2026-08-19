@@ -16,13 +16,15 @@ format.
 - `0.5.0` is the approved coherent breaking milestone for the hard Telltale
   technical migration, embedded-triage removal, schema/configuration changes,
   and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
-- The current preparation value is `0.5.0-rc.7`. It is the next Cargo package
-  and GitHub Release candidate, not the stable `0.5.0` release; stable
-  promotion remains gated by the release-readiness matrix. The immutable
+- The current preparation value is `0.5.0`. It is the stable package version
+  prepared from accepted immutable `v0.5.0-rc.7`; the matching `v0.5.0` tag
+  and GitHub Release remain absent until release-preflight, artifact-boundary,
+  and publication-prerequisite gates pass. The immutable
   `v0.5.0-rc.5` publication passed provenance checks, but its G-SERVICE gate
   failed on canonical optional `EnvironmentFile` validation. The immutable rc.6
   publication/provenance passed and repaired that defect, but G-SERVICE then
-  failed on user-manager `WorkingDirectory` normalization; rc.7 is next.
+  failed on user-manager `WorkingDirectory` normalization. Immutable `rc.7`
+  publication/provenance, G-SERVICE, and GitHub-hosted native gates passed.
 - `v0.5.0-rc.1` is retained as immutable history at reviewed tag commit
   `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed, so it
   has no GitHub Release or complete five-target asset/checksum/attestation set.
@@ -33,7 +35,8 @@ format.
   `a791ebf8894b3329030fad9e252e22d21e8b7e07` and has no GitHub Release. `rc.4`
   is historical; `rc.5` remains immutable at `e023ea91529f0731200aae1682b8d357a7b5f58c`,
   and `rc.6` is immutable at `88789d30ef34af720261e9e462e3cfd6274126e1`;
-  `rc.7` is the next prepared candidate.
+  `rc.7` is the accepted immutable candidate at
+  `6696888cd5d559fa47b8252e3495524da9fbd1eb`.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
   The planned publication order is schema → rules → sources → detect → core →
@@ -103,17 +106,23 @@ The Cargo/package version is not the version of every data contract:
 
 1. Release only from a reviewed commit on `main`.
 2. Update the workspace package version and every internal workspace dependency
-   version together.
+   version together. For stable promotion from an accepted RC, prepare that
+   reviewed reversible `0.5.0` commit before final preflight; it is not itself
+   tagging or publication.
 3. For an RC, use the exact matching `v0.5.0-rc.N` tag. The tag, Release
    metadata, archive names, checksums, attestations, and installer selection
    are immutable evidence; a validation-relevant change requires the next
    reviewed RC rather than reusing a tag or asset.
 4. Update public release notes with capabilities, fixes, compatibility impact,
    and operator impact. Internal planning history stays out of public notes.
-5. Run `make release-preflight` and review the staged/public file boundary.
-6. Create the matching `v<version>` tag. For example, a compatible maintenance
-   release `0.3.1` requires tag `v0.3.1`; the approved breaking milestone
-   requires `v0.5.0` only after all migration and reliability gates pass.
+5. Run `make release-preflight` against the exact reviewed version commit while
+   the matching `v<version>` tag is still absent, and review the staged/public
+   file boundary.
+6. Create the matching `v<version>` tag only after preflight, artifact-boundary,
+   and publication-prerequisite gates pass. For example, a compatible
+   maintenance release `0.3.1` requires tag `v0.3.1`; the approved breaking
+   milestone requires `v0.5.0` only after all migration and reliability gates
+   pass.
 7. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 

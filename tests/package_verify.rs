@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 
 use tempfile::tempdir;
 
-const FIXTURE_VERSION: &str = "0.5.0-rc.7";
+const FIXTURE_VERSION: &str = "0.5.0";
 
 const FAKE_CARGO: &str = r##"#!/bin/sh
 set -eu

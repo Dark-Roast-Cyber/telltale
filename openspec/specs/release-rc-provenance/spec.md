@@ -209,13 +209,24 @@ G-HEC and live G-SPLUNK SHALL be environment-dependent evidence: `PASS` or
 blocker. A required `BLOCKED`, `BLOCKED_EXTERNAL`, or `FAIL` gate MUST NOT be
 silently reclassified as `PASS`.
 
+Preparing a reviewed reversible stable-version commit at package version
+`0.5.0` is a prerequisite for final stable preflight and is not itself
+irreversible promotion. Final stable `make release-preflight` SHALL run
+against that exact reviewed commit while `v0.5.0` is absent. The existing
+tag-review gate SHALL continue to reject an already-existing matching tag.
+Irreversible stable tagging and publication remain prohibited until that
+preflight, the separate artifact-boundary gate, and the
+publication-prerequisite gate all have PASS evidence.
+
 #### Scenario: Complete stable gate matrix
 
-- **WHEN** all required candidate and native gates and final stable preflight
-  pass on reviewed `main`, and live G-HEC and live G-SPLUNK are each `PASS` or
+- **WHEN** all required candidate and native gates pass, a reviewed reversible
+  stable-version commit changing the package version to `0.5.0` has been
+  prepared on `main`, final stable preflight passes against that exact commit
+  while `v0.5.0` is absent, and live G-HEC and live G-SPLUNK are each `PASS` or
   `SKIPPED_EXTERNAL`
-- **THEN** the package version may be promoted from the accepted RC to
-  `0.5.0` and the matching stable tag may be created
+- **THEN** the matching stable tag may be created only after the separate
+  artifact-boundary and publication-prerequisite gates also pass
 
 #### Scenario: Required gate remains blocked
 
@@ -231,3 +242,11 @@ silently reclassified as `PASS`.
   artifacts
 - **THEN** the native platform gates are complete and MUST NOT still require a
   physical host
+
+#### Scenario: Existing matching tag still blocks preflight
+
+- **WHEN** the workspace package version is `0.5.0-rc.N` and tag
+  `v0.5.0-rc.N` already exists, or the workspace package version is `0.5.0`
+  and tag `v0.5.0` already exists
+- **THEN** `release-tag-review` fails and release-preflight MUST NOT be
+  considered passing
