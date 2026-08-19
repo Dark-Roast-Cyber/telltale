@@ -1950,6 +1950,45 @@ fn release_readiness_documents_public_docs_check_commands() {
 }
 
 #[test]
+fn public_docs_github_release_is_independent_of_crates_io_publication() {
+    let versioning = fs::read_to_string("docs/versioning.md").expect("versioning docs");
+    assert!(
+        versioning.contains("later crates.io publication are separate operations"),
+        "versioning must keep GitHub Releases and crates.io as separate operations"
+    );
+    assert!(
+        versioning.contains("does not block stable GitHub"),
+        "versioning must say deferring crates.io does not block stable GitHub publication"
+    );
+    assert!(
+        versioning.contains("`=0.5.0`"),
+        "versioning must retain the current registry pin"
+    );
+
+    let readiness =
+        fs::read_to_string("docs/release-readiness.md").expect("release readiness docs");
+    assert!(
+        readiness.contains("For the actual publication pass"),
+        "release readiness must keep the crates.io publication-pass marker"
+    );
+    assert!(
+        readiness.contains("does not block stable GitHub `v0.5.0`"),
+        "release readiness must say deferring crates.io does not block stable GitHub v0.5.0"
+    );
+    assert!(
+        readiness.contains("not crates.io publication authorization"),
+        "release readiness must keep Cargo package readiness distinct from crates.io publication"
+    );
+
+    let packaging =
+        fs::read_to_string("docs/license-and-packaging.md").expect("license and packaging docs");
+    assert!(
+        packaging.contains("does not publish crates.io packages"),
+        "packaging docs must keep the binary workflow free of crates.io publication"
+    );
+}
+
+#[test]
 fn public_docs_native_release_gate_guidance_is_complete() {
     let docs = fs::read_to_string("docs/release-readiness.md").expect("release readiness docs");
     for required in [

@@ -104,5 +104,7 @@ paths, and live transcript material belong in deployment-specific
 configuration outside the release package. Candidate releases are explicitly
 GitHub prereleases and are immutable: a changed validation-relevant source,
 installer, archive, checksum, or attestation requires a new reviewed RC tag.
-The binary release workflow does not publish crates.io packages; publication is
-a separate stable-release handoff after all required gates pass.
+The binary release workflow does not publish crates.io packages. Crates.io
+publication is a separate later distribution action and does not block the
+stable GitHub tag or Release. When that later publication is attempted, the
+existing registry-specific safety requirements remain mandatory.

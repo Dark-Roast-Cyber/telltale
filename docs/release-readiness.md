@@ -82,9 +82,11 @@ promotion, while deterministic HEC/JSONL-parity and Splunk-format gates remain
 mandatory. Each gate has its own PASS/BLOCKED/FAIL status; a BLOCKED gate is
 never silently reclassified as PASS. Preparing the reversible `0.5.0` version
 commit is a prerequisite for final stable preflight and is not itself tagging
-or publication. Stable tagging requires explicit PASS evidence for the required
-gates plus release preflight against that `0.5.0` commit, public
-artifact-boundary review, and publication prerequisites.
+or publication. Stable GitHub tagging and GitHub binary Release require
+explicit PASS evidence for the required gates plus release preflight against
+that `0.5.0` commit, public artifact-boundary review, and GitHub publication
+prerequisites. Crates.io publication is a separate later distribution action
+and does not block stable GitHub `v0.5.0`.
 
 ## Pre-Release Checks
 
@@ -182,13 +184,22 @@ the canonical `telltale` install and `telltale --version`. The target supports
 Linux and macOS and cleans
 its temporary workspace on exit.
 
+Cargo package readiness from those targets remains a mandatory GitHub
+stable-release gate. It is not crates.io publication authorization and does
+not weaken version lockstep, internal pins, lock entries, package-boundary
+checks, or registry-style consumer and CLI installation verification.
+
 For the actual publication pass, first recheck crates.io ownership and name
 availability. Publish in dependency order, waiting for each prerequisite to
 appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.5.0` registry packages before publication is declared complete.
+`=0.5.0` registry packages before publication is declared complete. That
+crates.io pass is a separate later distribution action, not a prerequisite for
+creating the stable Git tag or GitHub binary Release. Deferring it does not
+block stable GitHub `v0.5.0`. When crates.io publication is later attempted,
+those registry-specific safety requirements remain mandatory.
 
 ## Artifact Boundary
 
