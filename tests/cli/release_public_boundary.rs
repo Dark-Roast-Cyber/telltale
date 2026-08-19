@@ -2033,6 +2033,7 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
         "gh attestation verify",
         "ref: ${{ github.sha }}",
         "refs/heads/main",
+        "RUNNER_TEMP",
     ] {
         assert!(
             workflow.contains(required),
@@ -2050,6 +2051,7 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
         "dtolnay/rust-toolchain",
         "HEC",
         "Splunk",
+        "runner.temp",
     ] {
         assert!(
             !workflow.contains(forbidden),

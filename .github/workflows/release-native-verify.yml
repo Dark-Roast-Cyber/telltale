@@ -40,8 +40,6 @@ jobs:
       TARGET: ${{ matrix.target }}
       ARCHIVE: ${{ matrix.archive }}
       RUNNER_LABEL: ${{ matrix.os }}
-      DOWNLOAD_DIR: ${{ runner.temp }}/telltale-release-download
-      RELEASE_METADATA: ${{ runner.temp }}/telltale-release.json
 
     steps:
       - name: Checkout workflow revision
@@ -68,6 +66,10 @@ jobs:
           PYTHON: ${{ steps.runtime.outputs.python }}
         run: |
           set -euo pipefail
+          DOWNLOAD_DIR="${RUNNER_TEMP}/telltale-release-download"
+          RELEASE_METADATA="${RUNNER_TEMP}/telltale-release.json"
+          printf 'DOWNLOAD_DIR=%s\n' "${DOWNLOAD_DIR}" >> "${GITHUB_ENV}"
+          printf 'RELEASE_METADATA=%s\n' "${RELEASE_METADATA}" >> "${GITHUB_ENV}"
           test "${RELEASE_TAG}" = "v0.5.0-rc.7"
           test "${GITHUB_REF}" = "refs/heads/main"
           git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
