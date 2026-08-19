@@ -108,21 +108,126 @@ than overwriting or reusing the published candidate.
 - **THEN** the same candidate may receive a bounded recheck without changing
   its tag or assets
 
+### Requirement: Native platform evidence executes published artifacts
+
+Native Windows and native macOS release gates SHALL prove runtime behavior of
+the exact final published GitHub Release artifact for the target architecture.
+A native platform gate MAY be satisfied by either an explicitly authorized
+native host or an appropriate GitHub-hosted native runner. The evidence MUST
+download that Release archive, verify its filename and SHA-256 against the
+published `SHA256SUMS` and the pinned candidate identity, extract it into an
+isolated temporary directory, verify the extracted binary SHA-256, and execute
+that same downloaded binary. The gate MUST NOT treat cross-compilation, archive
+creation, source-unit tests on another OS, staged or rebuilt binaries, or
+binary inspection without native execution as native-release evidence.
+
+Required native targets are Windows x86_64, macOS x86_64, and macOS arm64.
+Each target MUST record runner OS and architecture, archive filename and hash,
+binary hash, exact version identity, bundled-rule validation, one bounded
+positive synthetic fixture scan, and canonical Event 3.0 schema validation.
+The scan MUST use fixture-safe, no-local-config behavior and MUST NOT load
+host or operator rule packs, scan runner session stores, send HEC events,
+query Splunk, query ADR runtime resources, install Telltale persistently, or
+publish artifacts. If GitHub-hosted CI cannot supply a required native
+architecture, that target MUST be recorded as `BLOCKED_EXTERNAL` rather than
+silently substituted.
+
+#### Scenario: GitHub-hosted native runner executes the published artifact
+
+- **WHEN** a GitHub-hosted native runner downloads the final published Release
+  archive for its architecture, verifies provenance, extracts the binary, and
+  that same binary exits 0 with the exact candidate version and commit prefix
+  while bundled-rule validation, the bounded positive fixture, and Event 3.0
+  schema validation pass
+- **THEN** that native platform target is recorded as `PASS`
+
+#### Scenario: Rebuilt or cross-compiled binary is not native evidence
+
+- **WHEN** validation builds Telltale from source, executes a staged CI
+  binary, or runs a binary whose architecture does not match the runner
+- **THEN** the result MUST NOT be classified as native-release `PASS`
+
+#### Scenario: Required GitHub-hosted architecture is unavailable
+
+- **WHEN** GitHub cannot provide a native runner for a required target
+  architecture
+- **THEN** that target is recorded as `BLOCKED_EXTERNAL` and MUST NOT be
+  silently replaced by another architecture
+
+### Requirement: Live HEC and Splunk validation are environment-dependent
+
+Live G-HEC and live G-SPLUNK SHALL use the outcomes `PASS`,
+`SKIPPED_EXTERNAL`, and `FAIL`. `PASS` means an approved controlled
+environment was available and the bounded live validation succeeded; that
+result is additional release evidence and is not required for stable
+promotion. `SKIPPED_EXTERNAL` means no approved endpoint, credential,
+authorization, or suitable environment was available; it is not a product
+failure, not `BLOCKED`, and not a stable-release blocker. `FAIL` means an
+approved environment was available, validation was attempted, and evidence
+demonstrates a Telltale product defect.
+
+#### Scenario: Live HEC is skipped without an approved environment
+
+- **WHEN** the operator has not supplied an approved HEC endpoint, token
+  reference, authorization window, or reachable collector
+- **THEN** live G-HEC is recorded as `SKIPPED: EXTERNAL HEC ENVIRONMENT NOT
+  AVAILABLE` and MUST NOT block remaining required gates
+
+#### Scenario: Live Splunk does not inherit a skipped HEC blocker
+
+- **WHEN** live G-HEC is `SKIPPED_EXTERNAL` or no approved Splunk environment
+  is available
+- **THEN** live G-SPLUNK is recorded as `SKIPPED_EXTERNAL` and MUST NOT be
+  treated as a missing required PASS
+
+### Requirement: Deterministic HEC and Splunk-format evidence remains mandatory
+
+Release-preflight and the existing HEC integration, unit, and CLI tests SHALL
+remain mandatory stable-release gates for HEC configuration, secret handling,
+canonical Event 3.0 serialization, JSONL/HEC body parity, retry and failure
+semantics, and deterministic Splunk-format fixtures. A deterministic failure
+in those gates SHALL block stable promotion even when live G-HEC is
+`SKIPPED_EXTERNAL`.
+
+#### Scenario: Deterministic HEC parity failure blocks promotion
+
+- **WHEN** a required JSONL/HEC body-parity, retry, unreachable-endpoint,
+  secret-handling, or schema fixture test fails
+- **THEN** stable `v0.5.0` promotion remains prohibited even if live G-HEC is
+  `SKIPPED_EXTERNAL`
+
 ### Requirement: Stable promotion requires explicit gate completion
 
 Stable `v0.5.0` promotion SHALL require explicit PASS evidence for the required
-G-SERVICE, G-HEC, G-SPLUNK, native Windows, native macOS, release-preflight,
-artifact-boundary, and publication-prerequisite gates. A required BLOCKED gate
-MUST NOT be silently reclassified as PASS.
+G-SERVICE, native Windows, native macOS, release-preflight, artifact-boundary,
+and publication-prerequisite gates, and for the mandatory deterministic HEC
+and Splunk-format product gates. Native Windows and native macOS PASS MAY be
+produced by an authorized native host or by a GitHub-hosted native runner that
+executed the final published Release artifact for that architecture. Live
+G-HEC and live G-SPLUNK SHALL be environment-dependent evidence: `PASS` or
+`SKIPPED_EXTERNAL` satisfies the stable matrix, and `FAIL` remains a release
+blocker. A required `BLOCKED`, `BLOCKED_EXTERNAL`, or `FAIL` gate MUST NOT be
+silently reclassified as `PASS`.
 
 #### Scenario: Complete stable gate matrix
 
-- **WHEN** all required candidate/live gates and final stable preflight pass on
-  reviewed `main`
+- **WHEN** all required candidate and native gates and final stable preflight
+  pass on reviewed `main`, and live G-HEC and live G-SPLUNK are each `PASS` or
+  `SKIPPED_EXTERNAL`
 - **THEN** the package version may be promoted from the accepted RC to
   `0.5.0` and the matching stable tag may be created
 
 #### Scenario: Required gate remains blocked
 
-- **WHEN** any required stable gate remains BLOCKED or lacks measured evidence
+- **WHEN** any required stable gate remains `BLOCKED`, `BLOCKED_EXTERNAL`, or
+  `FAIL`, or a mandatory deterministic HEC or Splunk-format gate lacks passing
+  evidence
 - **THEN** stable `v0.5.0` tagging and publication remain prohibited
+
+#### Scenario: GitHub-hosted native evidence completes the platform gates
+
+- **WHEN** Windows x86_64, macOS x86_64, and macOS arm64 each have `PASS`
+  evidence from GitHub-hosted native execution of the published Release
+  artifacts
+- **THEN** the native platform gates are complete and MUST NOT still require a
+  physical host

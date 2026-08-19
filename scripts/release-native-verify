@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Verify and execute one pinned, published Telltale release artifact."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import zipfile
+from pathlib import Path
+
+
+DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+FIXTURE = Path("tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl")
+SESSION_STORE_ROOT = Path("tests/fixtures/session_stores")
+
+
+def fail(message: str) -> None:
+    raise SystemExit(message)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def regular_file(path: Path, description: str) -> None:
+    if path.is_symlink() or not path.is_file():
+        fail(f"{description} is not a regular file: {path}")
+
+
+def safe_member(name: str) -> bool:
+    path = Path(name)
+    return not (
+        not name
+        or name.startswith(("/", "\\"))
+        or "\\" in name
+        or ".." in path.parts
+        or "\x00" in name
+    )
+
+
+def validate_tar_members(archive: Path) -> None:
+    try:
+        with tarfile.open(archive, "r:gz") as bundle:
+            for member in bundle.getmembers():
+                if not safe_member(member.name) or not member.isreg():
+                    fail(f"Unsafe tar member: {member.name}")
+    except (OSError, tarfile.TarError) as error:
+        fail(f"Could not inspect tar archive: {error}")
+
+
+def extract_archive(archive: Path, destination: Path) -> None:
+    destination.mkdir()
+    if archive.name.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(archive) as bundle:
+                for info in bundle.infolist():
+                    if not safe_member(info.filename) or info.filename.endswith("/"):
+                        fail(f"Unsafe ZIP member: {info.filename}")
+                    target = destination / info.filename
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    resolved_target = target.resolve()
+                    if destination.resolve() not in (resolved_target, *resolved_target.parents):
+                        fail(f"ZIP member escapes extraction directory: {info.filename}")
+                    with bundle.open(info) as source, target.open("wb") as output:
+                        shutil.copyfileobj(source, output)
+        except (OSError, zipfile.BadZipFile) as error:
+            fail(f"Could not extract ZIP archive: {error}")
+    else:
+        validate_tar_members(archive)
+        result = subprocess.run(
+            ["tar", "--no-same-owner", "-xzf", str(archive), "-C", str(destination)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            fail(f"Could not extract tar archive: {result.stderr.strip()}")
+
+
+def run_checked(command: list[str], description: str, *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        fail(
+            f"{description} failed with exit code {result.returncode}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    return result
+
+
+def validate_release_metadata(metadata_path: Path, pin: dict, archive_name: str, archive_hash: str) -> None:
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"Could not load GitHub Release metadata: {error}")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("id") != pin["release_id"]
+        or metadata.get("tag_name") != pin["release_tag"]
+        or metadata.get("draft") is not False
+        or metadata.get("prerelease") is not True
+    ):
+        fail("GitHub Release metadata does not match the immutable pinned candidate")
+
+    assets = metadata.get("assets")
+    if not isinstance(assets, list):
+        fail("GitHub Release metadata has no usable assets list")
+    matching = [asset for asset in assets if isinstance(asset, dict) and asset.get("name") == archive_name]
+    if len(matching) != 1:
+        fail(f"GitHub Release does not contain exactly one asset named {archive_name}")
+    digest = matching[0].get("digest")
+    if digest != f"sha256:{archive_hash}":
+        fail(f"GitHub asset digest does not match the archive hash for {archive_name}")
+
+
+def validate_checksum_line(checksums_path: Path, archive_name: str, archive_hash: str) -> str:
+    try:
+        lines = [line for line in checksums_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, UnicodeError) as error:
+        fail(f"Could not read published SHA256SUMS: {error}")
+    matches: list[str] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 2:
+            fail("SHA256SUMS contains a malformed entry")
+        digest, name = fields[0].lower(), fields[1].removeprefix("*")
+        if name == archive_name:
+            matches.append(digest)
+    if len(matches) != 1:
+        fail(f"Published SHA256SUMS must contain exactly one entry for {archive_name}")
+    if matches[0] != archive_hash:
+        fail("Published SHA256SUMS does not match the pinned target archive")
+    return f"{matches[0]}  {archive_name}\n"
+
+
+def validate_runner(target: dict, target_name: str) -> None:
+    actual_os = {"Darwin": "macOS"}.get(platform.system(), platform.system())
+    if actual_os != target["expected_os"]:
+        fail(f"Runner OS {actual_os} does not match target {target_name}")
+
+    if actual_os == "macOS":
+        uname = subprocess.run(["uname", "-m"], capture_output=True, text=True)
+        if uname.returncode != 0:
+            fail("Could not determine the macOS runner architecture")
+        actual_uname = uname.stdout.strip()
+        if actual_uname not in target["expected_unames"]:
+            fail(
+                f"Runner architecture {actual_uname} does not match target {target_name}; "
+                "this is not native evidence"
+            )
+        translated = subprocess.run(["sysctl", "-n", "sysctl.proc_translated"], capture_output=True, text=True)
+        if translated.returncode != 0:
+            # Intel macOS does not expose this sysctl; absence is native Intel.
+            if actual_uname != "x86_64":
+                fail("Could not prove that the macOS runner is not Rosetta-translated")
+        elif translated.stdout.strip() == "1":
+            fail("macOS runner is Rosetta-translated; this is not native evidence")
+        elif translated.stdout.strip() != "0":
+            fail("Could not prove that the macOS runner is not Rosetta-translated")
+    else:
+        actual_uname = platform.machine()
+        if actual_uname not in target["expected_unames"]:
+            fail(
+                f"Runner architecture {actual_uname} does not match target {target_name}; "
+                "this is not native evidence"
+            )
+
+
+def validate_native_paths(paths: list[Path], expected_os: str) -> None:
+    for path in paths:
+        text = str(path)
+        if expected_os == "Windows":
+            if not DRIVE_PATH.match(text):
+                fail(f"Windows native path is not absolute with a drive letter: {text}")
+        elif expected_os == "macOS" and not path.is_absolute():
+            fail(f"macOS native path is not absolute: {text}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", required=True, type=Path)
+    parser.add_argument("--pin", required=True, type=Path)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--release-metadata", required=True, type=Path)
+    parser.add_argument("--download-dir", required=True, type=Path)
+    parser.add_argument("--manifest-helper", required=True, type=Path)
+    parser.add_argument("--event-validator", required=True, type=Path)
+    args = parser.parse_args()
+
+    try:
+        pin = json.loads(args.pin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"Could not load release pin: {error}")
+    if not isinstance(pin, dict) or pin.get("release_tag") != "v0.5.0-rc.7":
+        fail("Release pin is not the immutable v0.5.0-rc.7 pin")
+    targets = pin.get("targets")
+    target = targets.get(args.target) if isinstance(targets, dict) else None
+    if not isinstance(target, dict):
+        fail(f"Target is not present in the release pin: {args.target}")
+    runner_label = os.environ.get("RUNNER_LABEL")
+    if runner_label is None or target.get("runner") != runner_label:
+        fail(f"Runner label does not match pinned target {args.target}")
+
+    archive_name = target["archive"]
+    archive = args.download_dir / archive_name
+    checksums = args.download_dir / "SHA256SUMS"
+    regular_file(archive, "Downloaded archive")
+    regular_file(checksums, "Downloaded SHA256SUMS")
+    archive_hash = sha256(archive)
+    if archive_hash != target["archive_sha256"]:
+        fail(f"Archive hash does not match the pinned target: {archive_name}")
+    checksum_line = validate_checksum_line(checksums, archive_name, archive_hash)
+    validate_release_metadata(args.release_metadata, pin, archive_name, archive_hash)
+
+    with tempfile.TemporaryDirectory(prefix="telltale-native-verify-") as temporary:
+        temporary_root = Path(temporary).resolve()
+        manifest_dir = temporary_root / "manifest"
+        manifest_dir.mkdir()
+        shutil.copy2(archive, manifest_dir / archive_name)
+        (manifest_dir / "SHA256SUMS").write_text(checksum_line, encoding="utf-8")
+        helper = args.repo_root / args.manifest_helper
+        result = subprocess.run(
+            [sys.executable, str(helper)],
+            cwd=args.repo_root,
+            env={**os.environ, "RELEASE_ARTIFACT_DIR": str(manifest_dir)},
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            fail(f"release-artifact-manifest failed: {result.stderr.strip() or result.stdout.strip()}")
+
+        extraction = temporary_root / "extracted"
+        extract_archive(archive, extraction)
+        binary = extraction / target["binary"]
+        regular_file(binary, "Extracted binary")
+        resolved_binary = binary.resolve(strict=True)
+        if extraction not in resolved_binary.parents:
+            fail("Resolved downloaded binary escapes the isolated extraction directory")
+        binary_hash = sha256(resolved_binary)
+        if binary_hash != target["binary_sha256"]:
+            fail("Extracted binary hash does not match the pinned target")
+
+        validate_runner(target, args.target)
+        if platform.system() == "Darwin":
+            expected_arch = "arm64" if args.target.startswith("aarch64") else "x86_64"
+            file_result = run_checked(["file", str(resolved_binary)], "macOS native file check")
+            if expected_arch not in file_result.stdout:
+                fail(f"Executed macOS binary is not {expected_arch}: {file_result.stdout.strip()}")
+
+        isolated_root = temporary_root / "session-store"
+        fixture_source = args.repo_root / FIXTURE
+        fixture_destination = isolated_root / FIXTURE.relative_to(SESSION_STORE_ROOT)
+        fixture_destination.parent.mkdir(parents=True)
+        shutil.copy2(fixture_source, fixture_destination)
+        state_path = temporary_root / "state.json"
+        log_path = temporary_root / "events.jsonl"
+        validate_native_paths([isolated_root, state_path, log_path], target["expected_os"])
+
+        version = run_checked([str(resolved_binary), "--version"], "published binary --version")
+        if not version.stdout.startswith(pin["version_prefix"]):
+            fail("Published binary version does not match the pinned candidate")
+        if sha256(resolved_binary) != binary_hash:
+            fail("Downloaded binary changed after --version")
+
+        run_checked([str(resolved_binary), "rules", "validate", "--no-local-config"], "bundled rule validation")
+        run_checked(
+            [
+                str(resolved_binary),
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--install-inventory-disabled",
+                "--no-local-config",
+                "--root",
+                str(isolated_root),
+                "--state-path",
+                str(state_path),
+                "--log-path",
+                str(log_path),
+            ],
+            "positive fixture scan",
+        )
+
+        validator = args.repo_root / args.event_validator
+        run_checked(
+            [
+                sys.executable,
+                str(validator),
+                "--schema",
+                str(args.repo_root / "schemas/event.schema.json"),
+                "--events",
+                str(log_path),
+            ],
+            "Event 3.0 JSONL validation",
+        )
+        try:
+            events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            fail(f"Could not inspect validated Event 3.0 JSONL: {error}")
+        detections = [event for event in events if isinstance(event, dict) and event.get("event_type") == "detection"]
+        if len(detections) != 1:
+            fail(f"Expected exactly one positive fixture detection, found {len(detections)}")
+        detection = detections[0]
+        if (
+            detection.get("session_id") != "uc001-positive"
+            or "mcp.tool_metadata.prompt_injection" not in detection.get("rule_ids", [])
+            or detection.get("schema_version") != "3.0"
+            or detection.get("telltale_version") != pin["package_version"]
+            or detection.get("event_type") != "detection"
+        ):
+            fail("Positive fixture detection does not match the required Event 3.0 identity")
+
+        runner_arch = (
+            subprocess.run(["uname", "-m"], capture_output=True, text=True).stdout.strip()
+            if target["expected_os"] == "macOS"
+            else platform.machine()
+        )
+        print("NATIVE_RELEASE_EVIDENCE")
+        print(f"target={args.target}")
+        print(f"runner_os={target['expected_os']}")
+        print(f"runner_arch={runner_arch}")
+        print(f"runner_label={runner_label}")
+        print(f"archive={archive_name}")
+        print(f"archive_sha256={archive_hash}")
+        print(f"binary={target['binary']}")
+        print(f"binary_sha256={binary_hash}")
+        print(f"version={version.stdout.strip()}")
+        print("bundled_rules=PASS")
+        print("positive_fixture=PASS")
+        print("event_3_0=PASS")
+        print("provenance=PASS")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

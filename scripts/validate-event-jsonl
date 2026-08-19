@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Validate every Event 3.0 JSONL object with Draft 2020-12 JSON Schema.
+
+CI bootstrap exception: installing the PyPI ``jsonschema`` package is allowed
+on GitHub-hosted runners because ``uv`` is not guaranteed on Windows/macOS
+images.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+try:
+    from jsonschema import Draft202012Validator, FormatChecker
+except ImportError as error:
+    raise SystemExit(f"jsonschema is required to validate Event 3.0 JSONL: {error}")
+
+
+def fail(message: str) -> int:
+    print(message, file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--schema", required=True, type=Path)
+    parser.add_argument("--events", required=True, type=Path)
+    args = parser.parse_args()
+
+    try:
+        schema = json.loads(args.schema.read_text(encoding="utf-8"))
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+        with args.events.open(encoding="utf-8") as events:
+            lines = events.readlines()
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+        return fail(f"Could not load Event 3.0 schema or JSONL: {error}")
+
+    if not lines:
+        return fail("Event 3.0 JSONL must not be empty")
+
+    for line_number, line in enumerate(lines, start=1):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as error:
+            return fail(f"Invalid JSON on line {line_number}: {error}")
+        if not isinstance(value, dict):
+            return fail(f"Line {line_number} is not a JSON object")
+        errors = sorted(validator.iter_errors(value), key=lambda error: list(error.path))
+        if errors:
+            error = errors[0]
+            path = ".".join(str(part) for part in error.path) or "$"
+            return fail(f"Schema validation failed on line {line_number} at {path}: {error.message}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

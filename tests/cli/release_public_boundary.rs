@@ -1950,6 +1950,191 @@ fn release_readiness_documents_public_docs_check_commands() {
 }
 
 #[test]
+fn public_docs_native_release_gate_guidance_is_complete() {
+    let docs = fs::read_to_string("docs/release-readiness.md").expect("release readiness docs");
+    for required in [
+        "GitHub-hosted native runners",
+        "final published Release artifact",
+        "cross-compilation",
+        "archive inspection",
+        "Linux source-unit tests",
+        "staged or rebuilt binaries",
+        "SKIPPED: EXTERNAL HEC ENVIRONMENT NOT AVAILABLE",
+        "JSONL-parity",
+        ".github/workflows/release-native-verify.yml",
+        "rc.7` is published and immutable",
+    ] {
+        assert!(
+            docs.contains(required),
+            "release readiness docs are missing {required:?}"
+        );
+    }
+}
+
+#[test]
+fn release_native_verify_pin_and_workflow_are_fail_closed() {
+    let pin: Value = serde_json::from_str(
+        &fs::read_to_string("scripts/release-native-verify-rc7.json").expect("release pin"),
+    )
+    .expect("release pin JSON");
+    assert_eq!(pin["release_tag"], "v0.5.0-rc.7");
+    assert_eq!(pin["package_version"], "0.5.0-rc.7");
+    assert_eq!(
+        pin["source_sha"],
+        "6696888cd5d559fa47b8252e3495524da9fbd1eb"
+    );
+    assert_eq!(pin["version_prefix"], "telltale 0.5.0-rc.7 (6696888cd5d5");
+    assert_eq!(pin["release_id"], 372636498);
+    for (target, archive_hash, binary_hash) in [
+        (
+            "x86_64-pc-windows-msvc",
+            "ad6711ae0e19c5e934b35f7ba4806ce5500536c2a911be5c778438c5ad311ce0",
+            "8672a011e962371cc307fcbbba2c7c598cbef440be17ef5104fa8261e4894ee1",
+        ),
+        (
+            "x86_64-apple-darwin",
+            "9438bc60d231c4fa80299ea5166c659664ee4fccfea94d669c2abf369d609867",
+            "26f57eb06b390deb0f50ab9cb8dabd8ad7e9e30679b3789fad5aafc56156453c",
+        ),
+        (
+            "aarch64-apple-darwin",
+            "a87c3cf5aa01dc0c32a474df729771b695613c849ec42219f78f2d064ec44121",
+            "6923120967cefc405f3824088480fe51b00294a481da097a88df970445056212",
+        ),
+        (
+            "x86_64-unknown-linux-gnu",
+            "6285aa291d826bebcc03f357bdffb6500934fab05fcbe96a3f5d1a4b78d3e398",
+            "cc86b537551a41b44799b9f2814dcfec3afd84006ceaac17160d85205c2dd3cc",
+        ),
+    ] {
+        assert_eq!(pin["targets"][target]["archive_sha256"], archive_hash);
+        assert_eq!(pin["targets"][target]["binary_sha256"], binary_hash);
+    }
+
+    let workflow = fs::read_to_string(".github/workflows/release-native-verify.yml")
+        .expect("native verification workflow")
+        .replace("\r\n", "\n");
+    serde_yaml::from_str::<serde_yaml::Value>(&workflow).expect("native workflow YAML");
+    for required in [
+        "workflow_dispatch:",
+        "default: v0.5.0-rc.7",
+        "permissions: {}",
+        "fail-fast: false",
+        "contents: read",
+        "attestations: read",
+        "gh release download",
+        "scripts/release-native-verify-rc7.json",
+        "scripts/validate-event-jsonl",
+        "scripts/release-artifact-manifest",
+        "windows-latest",
+        "macos-15-intel",
+        "macos-latest",
+        "ubuntu-latest",
+        "gh attestation verify",
+        "ref: ${{ github.sha }}",
+        "refs/heads/main",
+    ] {
+        assert!(
+            workflow.contains(required),
+            "workflow is missing {required:?}"
+        );
+    }
+    for forbidden in [
+        "contents: write",
+        "attestations: write",
+        "id-token: write",
+        "secrets.",
+        "actions/download-artifact",
+        "cargo build",
+        "rust-toolchain",
+        "dtolnay/rust-toolchain",
+        "HEC",
+        "Splunk",
+    ] {
+        assert!(
+            !workflow.contains(forbidden),
+            "workflow contains forbidden {forbidden:?}"
+        );
+    }
+    let release = read_release_workflow();
+    assert!(!release.contains("workflow_dispatch:"));
+
+    let driver = fs::read_to_string("scripts/release-native-verify").expect("native verify driver");
+    assert!(
+        driver.contains("\"--allow-fixtures\""),
+        "native verify must write isolated fixture JSONL with --allow-fixtures"
+    );
+    assert!(
+        driver.contains("\"--install-inventory-disabled\""),
+        "native verify must not probe runner-installed agent inventory"
+    );
+    assert!(
+        driver.contains("NATIVE_RELEASE_EVIDENCE"),
+        "native verify must emit a deterministic per-target evidence summary"
+    );
+    assert!(
+        !driver.contains("\"--dry-run\""),
+        "native verify must not use --dry-run; dry-run does not write Event 3.0 JSONL"
+    );
+    assert!(
+        driver.contains("Published SHA256SUMS must contain exactly one entry for"),
+        "native verify must select the target line from the published multi-entry SHA256SUMS"
+    );
+}
+
+#[test]
+fn event_jsonl_validator_rejects_invalid_and_non_event_objects() {
+    let temp = tempdir().expect("tempdir");
+    let events = temp.path().join("events.jsonl");
+    let schema = Path::new("schemas/event.schema.json");
+    for body in ["{not-json}\n", "null\n", "{}\n"] {
+        fs::write(&events, body).expect("write invalid events");
+        let output = event_validator_command(schema, &events);
+        assert!(!output.status.success(), "validator accepted {body:?}");
+    }
+}
+
+#[test]
+fn event_jsonl_validator_accepts_a_native_constructor_event() {
+    let probe = Command::new("python3")
+        .args(["-c", "import jsonschema"])
+        .output();
+    let Ok(probe) = probe else {
+        return;
+    };
+    if !probe.status.success() {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let events = temp.path().join("events.jsonl");
+    let event = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000001",
+        "2026-05-01T00:00:00Z",
+        "informational",
+        "codex",
+        "synthetic-session",
+        &[],
+    );
+    fs::write(
+        &events,
+        format!(
+            "{}\n",
+            serde_json::to_string(&event).expect("serialize event")
+        ),
+    )
+    .expect("write valid events");
+    let output = event_validator_command(Path::new("schemas/event.schema.json"), &events);
+    assert!(
+        output.status.success(),
+        "validator rejected a native constructor event: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn public_docs_runtime_identity_guidance_is_canonical() {
     let readme = fs::read_to_string("README.md").expect("read README");
     assert!(readme.contains("./scripts/install-telltale"));
@@ -2228,7 +2413,11 @@ fn public_docs_wording_and_config_are_safe() {
     );
 
     // Public release workflows do not reference host-only paths
-    let release_workflows = [".github/workflows/ci.yml", ".github/workflows/release.yml"];
+    let release_workflows = [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/release-native-verify.yml",
+    ];
     let workflow_matches = release_workflows
         .iter()
         .flat_map(|path| {
@@ -2262,14 +2451,28 @@ fn public_text_surfaces() -> Vec<std::path::PathBuf> {
     let mut surfaces = vec![Path::new("README.md").to_path_buf()];
     surfaces.extend(public_markdown_docs());
     surfaces.extend(
-        [".github/workflows/ci.yml", ".github/workflows/release.yml"]
-            .into_iter()
-            .map(Path::new)
-            .filter(|path| path.exists() && git_tracks_path(path))
-            .map(Path::to_path_buf),
+        [
+            ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
+            ".github/workflows/release-native-verify.yml",
+        ]
+        .into_iter()
+        .map(Path::new)
+        .filter(|path| path.exists())
+        .map(Path::to_path_buf),
     );
 
     surfaces
+}
+
+fn event_validator_command(schema: &Path, events: &Path) -> std::process::Output {
+    Command::new("python3")
+        .args(["scripts/validate-event-jsonl", "--schema"])
+        .arg(schema)
+        .args(["--events"])
+        .arg(events)
+        .output()
+        .expect("run Event 3.0 validator")
 }
 
 fn top_level_markdown_docs() -> Vec<std::path::PathBuf> {

@@ -24,8 +24,8 @@ families, schema checks, or aggregate results without exposing workstation
 paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
-[Versioning and Releases](versioning.md). The workspace is currently preparing
-the next `0.5.0-rc.7` candidate for the approved `0.5.0` Event 3.0 migration;
+[Versioning and Releases](versioning.md). The workspace is validating the
+published immutable `0.5.0-rc.7` candidate for the approved `0.5.0` Event 3.0 migration;
 compatible maintenance fixes remain on the prior `0.3.x` line until stable
 publication. Do not create `0.5.x` for a round of small tasks; follow-up fixes
 belong there only after the reviewed `0.5.0` milestone ships.
@@ -43,14 +43,16 @@ is historical; the immutable `rc.5` publication/provenance passed, but G-SERVICE
 failed on the canonical optional `EnvironmentFile` defect. The immutable `rc.6`
 publication/provenance passed and repaired that defect, but G-SERVICE then failed
 before binary replacement on user-manager `WorkingDirectory` normalization.
-`rc.7` is the next prepared candidate and has no tag, Release, or live-gate evidence.
+`rc.7` is published and immutable at reviewed commit
+`6696888cd5d559fa47b8252e3495524da9fbd1eb`; its GitHub Release and assets are
+the final candidate artifacts for native validation.
 
 ## RC Candidate Handoff
 
-The preparation batch does not create a tag, Release, archive, checksum, crate,
-or live-gate evidence. A later reviewed operation may merge the candidate to
-`main`, tag only that reviewed commit as `v0.5.0-rc.7`, and inspect the workflow
-before validation. The RC Release must be explicitly marked `prerelease=true`.
+The `v0.5.0-rc.7` handoff is complete: the reviewed commit is tagged and its
+immutable GitHub Release is explicitly marked `prerelease=true`. Native
+validation uses those published artifacts and the workflow revision under
+review, not the RC tag as its working tree.
 If code, package metadata, installer behavior, workflow, archive, checksum, or
 attestation provenance changes, use a new reviewed commit and the next unused
 RC tag; do not overwrite a published candidate. A transient environment
@@ -65,12 +67,20 @@ tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
 After artifact review, downstream validation is dependency-ordered: G-SERVICE
-with the exact RC tag and canonical unit/drop-in preflight, then
-controlled G-HEC and G-SPLUNK, native Windows, and native macOS. Each gate has
-its own PASS/BLOCKED/FAIL status; a BLOCKED gate is never silently reclassified
-as PASS. The current preparation claims no live gate passed. Stable promotion
-requires explicit PASS evidence for those gates plus release preflight, public
-artifact-boundary review, and publication prerequisites.
+with the exact RC tag and canonical unit/drop-in preflight, then native Windows
+and native macOS. After G-SERVICE, each native gate may be satisfied by an
+authorized native host or appropriate GitHub-hosted native runners. The gate
+must download and execute the final published Release artifact for that
+architecture; cross-compilation, archive inspection, Linux source-unit tests,
+and staged or rebuilt binaries are not native-release evidence. Run the
+manually dispatched `.github/workflows/release-native-verify.yml` workflow for
+the GitHub-hosted path. Live G-HEC and G-SPLUNK are environment-dependent:
+`SKIPPED: EXTERNAL HEC ENVIRONMENT NOT AVAILABLE` does not block stable
+promotion, while deterministic HEC/JSONL-parity and Splunk-format gates remain
+mandatory. Each gate has its own PASS/BLOCKED/FAIL status; a BLOCKED gate is
+never silently reclassified as PASS. Stable promotion requires explicit PASS
+evidence for the required gates plus release preflight, public artifact-boundary
+review, and publication prerequisites.
 
 ## Pre-Release Checks
 
