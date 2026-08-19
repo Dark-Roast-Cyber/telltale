@@ -141,11 +141,17 @@ jobs:
         shell: pwsh
         run: python -m pip install --user jsonschema
 
-      # CI bootstrap exception: uv is not guaranteed on GitHub-hosted Windows/macOS images.
+      # CI bootstrap exception: uv is not guaranteed on GitHub-hosted Windows/macOS
+      # images, and Homebrew Python on macOS rejects pip --user (PEP 668).
       - name: Install Event 3.0 JSON Schema validator (Unix)
         if: runner.os != 'Windows'
+        id: unix-schema
         shell: bash
-        run: python3 -m pip install --user jsonschema
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/telltale-schema-venv"
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install jsonschema
+          printf 'python=%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin/python" >> "${GITHUB_OUTPUT}"
 
       - name: Execute the downloaded Release binary (Windows)
         if: runner.os == 'Windows'
@@ -166,7 +172,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          PYTHON: ${{ steps.runtime.outputs.python }}
+          PYTHON: ${{ steps.unix-schema.outputs.python }}
         run: |
           "${PYTHON}" scripts/release-native-verify \
             --repo-root "${GITHUB_WORKSPACE}" \
