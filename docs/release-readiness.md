@@ -24,11 +24,12 @@ families, schema checks, or aggregate results without exposing workstation
 paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
-[Versioning and Releases](versioning.md). The workspace is validating the
-published immutable `0.5.0-rc.7` candidate for the approved `0.5.0` Event 3.0 migration;
-compatible maintenance fixes remain on the prior `0.3.x` line until stable
-publication. Do not create `0.5.x` for a round of small tasks; follow-up fixes
-belong there only after the reviewed `0.5.0` milestone ships.
+[Versioning and Releases](versioning.md). The workspace is preparing stable
+`0.5.0` from the accepted immutable `v0.5.0-rc.7` candidate for the approved
+`0.5.0` Event 3.0 migration; compatible maintenance fixes remain on the prior
+`0.3.x` line until stable publication. Do not create `0.5.x` for a round of
+small tasks; follow-up fixes belong there only after the reviewed `0.5.0`
+milestone ships.
 
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
@@ -45,14 +46,15 @@ publication/provenance passed and repaired that defect, but G-SERVICE then faile
 before binary replacement on user-manager `WorkingDirectory` normalization.
 `rc.7` is published and immutable at reviewed commit
 `6696888cd5d559fa47b8252e3495524da9fbd1eb`; its GitHub Release and assets are
-the final candidate artifacts for native validation.
+the accepted candidate artifacts. The current workspace package version is
+`0.5.0`; the matching `v0.5.0` tag remains absent.
 
 ## RC Candidate Handoff
 
 The `v0.5.0-rc.7` handoff is complete: the reviewed commit is tagged and its
 immutable GitHub Release is explicitly marked `prerelease=true`. Native
-validation uses those published artifacts and the workflow revision under
-review, not the RC tag as its working tree.
+validation used those published artifacts. Final stable preflight runs against
+the reviewed `0.5.0` commit while `v0.5.0` is absent.
 If code, package metadata, installer behavior, workflow, archive, checksum, or
 attestation provenance changes, use a new reviewed commit and the next unused
 RC tag; do not overwrite a published candidate. A transient environment
@@ -78,9 +80,11 @@ the GitHub-hosted path. Live G-HEC and G-SPLUNK are environment-dependent:
 `SKIPPED: EXTERNAL HEC ENVIRONMENT NOT AVAILABLE` does not block stable
 promotion, while deterministic HEC/JSONL-parity and Splunk-format gates remain
 mandatory. Each gate has its own PASS/BLOCKED/FAIL status; a BLOCKED gate is
-never silently reclassified as PASS. Stable promotion requires explicit PASS
-evidence for the required gates plus release preflight, public artifact-boundary
-review, and publication prerequisites.
+never silently reclassified as PASS. Preparing the reversible `0.5.0` version
+commit is a prerequisite for final stable preflight and is not itself tagging
+or publication. Stable tagging requires explicit PASS evidence for the required
+gates plus release preflight against that `0.5.0` commit, public
+artifact-boundary review, and publication prerequisites.
 
 ## Pre-Release Checks
 

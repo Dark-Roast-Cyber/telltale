@@ -4,7 +4,16 @@
 
 ---
 
-## 0.5.0-rc.7 — prepared, unpublished
+## 0.5.0 — prepared, unpublished
+
+- Promote the accepted immutable `v0.5.0-rc.7` candidate to the stable
+  package version `0.5.0` without changing runtime, Event 3.0, detection,
+  installer, or service behavior.
+- No stable tag, GitHub Release, or crate publication has occurred.
+
+---
+
+## 0.5.0-rc.7 — published candidate
 
 - Repair canonical Linux installer validation for the documented implicit
   systemd user-manager working-directory default, accepting only the exact
@@ -12,8 +21,9 @@
 - Reject base, unit-specific, and inherited `WorkingDirectory=` contributions
   while retaining optional environment-file, transaction, recovery, and
   activation ordering safeguards.
-- No rc.7 tag, Release, crate publication, or live-host validation has
-  occurred.
+- Publication and provenance passed. G-SERVICE passed. GitHub-hosted native
+  Windows/macOS execution of the published Release artifacts passed. Live
+  HEC/Splunk remain `SKIPPED_EXTERNAL`.
 
 ---
 
