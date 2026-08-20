@@ -8,65 +8,68 @@ category.
 This roadmap is a stable public summary of project direction. Detailed
 execution planning is maintained internally.
 
-## Current Focus: 0.5.0 Telltale Maturation
+## Current Focus: 0.6.0 Trust, Privacy, and Durable Collection
 
-The approved 0.5.0 milestone folds in the unpublished 0.4.0 API and parser work
-and completes the breaking native Event 3.0 and SIEM identity migration from the
-former product identity.
-The objective is a reliable, testable path from installation through source
-discovery, parsing, deterministic detection, state handling, and SIEM delivery.
+Telltale 0.5.0 established the canonical Event 3.0 identity, explicit source-parser
+architecture, cross-platform release gates, and a deterministic local detection
+pipeline. The 0.6.0 milestone focuses on the evidence and operational guarantees
+needed for controlled client adoption.
+
 Priorities, in order:
 
-1. **Establish a measured baseline** — prove known-positive synthetic detection
-   and canonical JSONL/HEC event parity before changing contracts.
-2. **Make runtime provenance explainable** — expose the exact build,
-   configuration, rule origins, source selection, normalized record counts,
-   matches, emitted detections, and suppression reasons without transcript
-   inspection.
-3. **Complete the native identity cut** — native events use Event 3.0,
-   `telltale-*` IDs, package-only `telltale_version`, and canonical Telltale SIEM
-   identities. ADR remains the category term. Historical events retain explicit
-   read/import handling and their original legacy fields.
-4. **Keep embedded review out of the scanner** — deterministic detection,
-   response metadata, and timeline anchors remain the core contract; any future
-   AI enrichment is a separately designed capability.
-5. **Harden detection and state reliability** — positive and benign fixture
-   coverage, exact risk contribution accounting, cursor boundaries, and
-   replay-safe deduplication.
-6. **Prove canonical install and lifecycle behavior** — functional post-install
-   checks, explicit Telltale state/event migration, rollback, and no duplicate
-   canonical schedules.
-7. **Pass host, SIEM, and cross-platform release gates** — native Linux, macOS,
-   and Windows archives must execute a positive fixture and validate emitted
-   schema before release.
+1. **Measure detection behavior** — maintain a versioned labeled synthetic corpus
+   that separates deterministic conformance from synthetic efficacy and produces
+   reproducible rule/session metrics. Do not present synthetic results as
+   production false-positive or detection rates.
+2. **Harden the privacy boundary** — make evidence sanitization a centralized
+   contract and prove controlled credential/path markers do not survive emitted
+   events, diagnostics, or durable delivery storage.
+3. **Add persistent remote-delivery replay** — preserve local JSONL as the
+   recommended durable first write while adding restart-safe at-least-once remote
+   delivery for that deployment mode.
+4. **Formalize project security** — publish vulnerability-reporting and
+   threat-model documentation, gate dependency advisories/licenses/sources,
+   generate an SBOM, and harden release-workflow dependencies.
+5. **Prove install and platform reliability** — close remaining installer
+   correctness gaps and decide the Windows clean-host runtime policy if Windows
+   remains an advertised target.
+6. **Prove an adoption profile** — document and validate the supported
+   embedding/sidecar model for another endpoint client without making Telltale
+   itself a hosted multi-tenant control plane.
 
-For future tagged releases: installer integrity checks, CI preflight, archive
-verification, and cross-platform smoke tests.
+### 0.6.0 principles
+
+- Event 3.0 remains the native event contract unless a separately reviewed
+  compatibility need requires otherwise.
+- Deterministic detection remains authoritative.
+- Synthetic efficacy results are not presented as production false-positive or
+  detection rates.
+- Durable remote delivery is explicitly at-least-once; receivers must
+  deduplicate.
+- Privacy tests use synthetic controlled markers, never real secrets or customer
+  transcripts.
+- Telltale remains tenant-agnostic; multi-tenant identity and re-keying belong
+  to downstream collectors.
 
 ## Near-Term Themes
 
-- **Test dataset and visibility requirements** — a labeled dataset of AI
-  sessions (benign, uneventful, eventful) with sysmon/EDR-style event capture:
-  packages installed, sites called via curl/wget/cli/python, download-to-disk,
-  and additional researched visibility requirements. Events are tied to
-  session IDs that reference collected session storage (planned S3 buckets or
-  file drives). Designed to work out of the box while remaining highly
-  configurable.
-- **Agentic development framework** — research and adopt a structured framework
-  (e.g., spec-driven development) for how Telltale is built by AI agents.
+- **Agentic development framework** — continue using a structured
+  spec-driven workflow for how Telltale is built by AI agents, with one accepted
+  Issue and one active OpenSpec change at a time.
 
-## Beyond 0.5.0
+## Beyond 0.6.0
 
-The following remain outside the approved 0.5.0 reliability and migration
-milestone and require separate scope, compatibility review, and release
-planning:
+The following remain outside the approved 0.6.0 trust, privacy, and durable
+collection milestone and require separate scope, compatibility review, and
+release planning:
 
 - New agent sources and third-party parser/plugin APIs
 - Sequence/data-flow detection syntax and new rule-language features
 - Policy modes, intent guard, active response, confirmation, and blocking
 - Remote rule feeds, manifests, signatures, and polling
 - Tamper-evident signing and forensic snapshots
-- Native persistent delivery outbox
+- Hook-based process interception
+- Embedded or agentic runtime review
 - Long-lived semver promises and a feature-flag matrix
 
 ## Principles
@@ -76,7 +79,7 @@ planning:
   understandable. Only consider active blocking after the data model is stable.
 - **Batch first, real-time later.** Log review before live hooks.
 - **Deterministic detection is authoritative.** AI enrichment is optional future
-  work outside the embedded 0.5.0 runtime.
+  work outside the embedded runtime.
 - **Detection separate from action.** Telltale emits visibility and alerts;
   blocking is a future policy layer.
 - **Privacy by default.** No raw secrets, API keys, full transcript bodies, or
