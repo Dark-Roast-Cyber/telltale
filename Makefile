@@ -78,7 +78,7 @@ evaluation-check:
 ## Write the current synthetic evaluation report under target only
 evaluation-report:
 	mkdir -p target/evaluation
-	TELLTALE_EVAL_REPORT=target/evaluation/report.v1.json cargo test $(CARGO_LOCKED) --test evaluation_corpus -- --nocapture
+	TELLTALE_EVAL_REPORT=report.v1.json cargo test $(CARGO_LOCKED) --test evaluation_corpus -- --nocapture
 
 ## Show public push review context
 public-push-review:

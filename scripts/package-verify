@@ -75,7 +75,7 @@ run_package telltale-rules telltale-schema
 run_package telltale-sources telltale-schema
 run_package telltale-detect telltale-schema telltale-rules telltale-sources
 run_package telltale-core telltale-schema telltale-rules telltale-sources telltale-detect
-run_package telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect
+run_package telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect telltale-core
 for schema_path in \
     schemas/event.schema.json \
     schemas/historical/README.md \
@@ -104,7 +104,7 @@ run_normalized_test telltale-rules telltale-schema
 run_normalized_test telltale-sources telltale-schema
 run_normalized_test telltale-detect telltale-schema telltale-rules telltale-sources
 run_normalized_test telltale-core telltale-schema telltale-rules telltale-sources telltale-detect
-run_normalized_test telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect
+run_normalized_test telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect telltale-core
 echo "Note: workspace integration tests outside package include boundaries remain intentionally excluded."
 
 EMPTY_ROOT="$WORK_DIR/empty-root"
@@ -469,14 +469,14 @@ CARGO_TARGET_DIR="$TARGET_DIR/core-consumer" "$@" >/dev/null
 
 set -- "$CARGO_BIN" check --manifest-path "$CLI_CONSUMER_DIR/Cargo.toml"
 set -- "$@" --config "patch.crates-io.telltale-cli.path=\"$(package_path telltale-cli)\""
-for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
+for package in telltale-schema telltale-rules telltale-sources telltale-detect telltale-core; do
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== registry-style CLI consumer =="
 CARGO_TARGET_DIR="$TARGET_DIR/cli-consumer" "$@"
 
 set -- "$CARGO_BIN" install --locked --path "$(package_path telltale-cli)" --root "$INSTALL_ROOT"
-for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
+for package in telltale-schema telltale-rules telltale-sources telltale-detect telltale-core; do
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== packaged telltale-cli install =="

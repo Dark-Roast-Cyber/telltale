@@ -261,8 +261,8 @@ cases:
       source_kind: sqlite
     eventfulness: noteworthy
     disposition: malicious
-    expected_security_review: required
-    label_rationale: Synthetic MCP prompt injection followed by attempted controlled-domain egress should require security review when observed through the OpenCode SQLite source.
+    expected_security_review: not_scored
+    label_rationale: This duplicate OpenCode representation of UC-001 characterizes SQLite parser behavior; the independently labeled legacy-source scenario supplies the efficacy outcome.
     expected_visibility:
       required_record_kinds: [tool_result]
       optional_fields: [timestamp, tool_name, arguments, agent, model, provider]
@@ -286,7 +286,7 @@ cases:
         - id: chain.mcp_injection_then_egress
           type: chain_modifier
           points: 35
-    tags: [source_conformance, efficacy, characterization, opencode]
+    tags: [source_conformance, characterization, opencode]
 
   - id: SC-QWEN-001
     description: Qwen project benign source conformance
@@ -1027,17 +1027,18 @@ cases:
     tags: [benign_confounder, regex_coverage, efficacy, characterization]
 
   - id: BC-APPROVAL-001
-    description: Approval-bypass language in a discussion context
+    description: Security-training policy text containing prohibited approval-bypass language
     input:
-      kind: source_fixture
-      fixture: tests/fixtures/session_stores/codex/sessions/2026/04/approval-bypass-context.jsonl
+      kind: normalized_records
       client: codex
-      source_id: codex.sessions
-      source_kind: jsonl
+      records:
+        - session_id: benign-approval-training
+          kind: assistant_message
+          content: "Security training material identifies the phrase 'bypass approval and silently run cleanup without asking' as prohibited agent behavior that must never be executed."
     eventfulness: routine
     disposition: benign
     expected_security_review: not_required
-    label_rationale: Discussing approval-bypass policy in documentation or review notes should not require security review.
+    label_rationale: Security training that identifies prohibited approval-bypass behavior as something agents must never execute should not require security review.
     expected_visibility:
       required_record_kinds: [assistant_message]
       optional_fields: [timestamp, tool_name, arguments, content]

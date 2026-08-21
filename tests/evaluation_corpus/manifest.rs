@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use telltale_rules::bundled_default_rule_set;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::scoring::RiskContributionType;
+use telltale_sources::clients::supported_clients;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -367,6 +368,7 @@ fn validate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<(), String
             ));
         }
         validate_input(&case.input, repo_root)?;
+        validate_tags(case)?;
         validate_visibility(&case.expected_visibility, &case.id)?;
         validate_detection(case, &enabled_rule_ids)?;
     }
@@ -395,12 +397,81 @@ fn validate_input(input: &Input, repo_root: &Path) -> Result<(), String> {
     if !fixture_path.is_file() {
         return Err(format!("fixture does not exist: {fixture}"));
     }
+    let canonical_root = repo_root
+        .canonicalize()
+        .map_err(|error| format!("canonicalize repo root: {error}"))?;
+    let canonical_fixture = fixture_path
+        .canonicalize()
+        .map_err(|error| format!("canonicalize fixture {fixture}: {error}"))?;
+    if !canonical_fixture.starts_with(&canonical_root) {
+        return Err(format!("fixture resolves outside repository: {fixture}"));
+    }
     if expected_source_kind(*client, source_id) != Some(source_kind.source_kind()) {
         return Err(format!(
             "invalid source identity ({}, {source_id}, {})",
             client.client_id().as_str(),
             source_kind.source_kind().as_str()
         ));
+    }
+    Ok(())
+}
+
+fn validate_tags(case: &Case) -> Result<(), String> {
+    let tags = case
+        .tags
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if tags.len() != case.tags.len() {
+        return Err(format!("case {} has duplicate tags", case.id));
+    }
+    let has_tag = |tag| tags.contains(&tag);
+    let scored = case.expected_security_review.is_scored();
+
+    if has_tag("efficacy") != scored {
+        return Err(format!(
+            "case {} must use the efficacy tag exactly when security review is scored",
+            case.id
+        ));
+    }
+    if has_tag("benign_confounder")
+        && (case.disposition != Disposition::Benign
+            || case.expected_security_review != ExpectedSecurityReview::NotRequired
+            || !case
+                .expected_detection
+                .rule_expectations
+                .iter()
+                .any(|expectation| {
+                    matches!(
+                        expectation.expectation,
+                        RuleExpectationKind::ExpectedMatch | RuleExpectationKind::ExpectedAbsent
+                    )
+                }))
+    {
+        return Err(format!(
+            "case {} has an invalid benign_confounder tag",
+            case.id
+        ));
+    }
+    if has_tag("source_conformance") && !matches!(case.input, Input::SourceFixture { .. }) {
+        return Err(format!(
+            "case {} has source_conformance without a source fixture",
+            case.id
+        ));
+    }
+    if has_tag("candidate_source") {
+        let Input::SourceFixture { source_id, .. } = &case.input else {
+            return Err(format!(
+                "case {} has candidate_source without a source fixture",
+                case.id
+            ));
+        };
+        if !candidate_source_ids().contains(source_id) || scored {
+            return Err(format!(
+                "case {} has an invalid candidate_source tag",
+                case.id
+            ));
+        }
     }
     Ok(())
 }
@@ -440,8 +511,15 @@ fn validate_detection(case: &Case, enabled_rule_ids: &BTreeSet<String>) -> Resul
                 case.id, expectation.rule_id
             ));
         }
+        if detection.exact_rule_set && expectation.expectation == RuleExpectationKind::NotScored {
+            return Err(format!(
+                "case {} cannot use not_scored expectations with exact_rule_set",
+                case.id
+            ));
+        }
     }
     let mut contributions = BTreeSet::new();
+    let mut expected_points = 0_u64;
     for contribution in &detection.expected_contributions {
         if contribution.points == 0
             || !telltale_schema::scoring::is_canonical_contribution_id(&contribution.id)
@@ -452,61 +530,127 @@ fn validate_detection(case: &Case, enabled_rule_ids: &BTreeSet<String>) -> Resul
                 case.id
             ));
         }
+        expected_points = expected_points
+            .checked_add(contribution.points)
+            .ok_or_else(|| {
+                format!(
+                    "case {} expected contribution points overflow the score range",
+                    case.id
+                )
+            })?;
+    }
+    if expected_points != detection.expected_score {
+        return Err(format!(
+            "case {} expected contribution points {expected_points} do not equal expected score {}",
+            case.id, detection.expected_score
+        ));
     }
     Ok(())
 }
 
 pub fn expected_source_kind(client: Client, source_id: &str) -> Option<SourceKind> {
-    let source = match (client, source_id) {
-        (Client::Codex, "codex.sessions") | (Client::Codex, "codex.project_sessions") => {
-            SourceKind::Jsonl
-        }
-        (Client::Codex, "codex.archived_sessions") => SourceKind::ArchivedJsonl,
-        (Client::Codex, "codex.headless_sessions") => SourceKind::HeadlessJsonl,
-        (Client::Claude, "claude.projects")
-        | (Client::Openclaw, "openclaw.agents")
-        | (Client::Qwen, "qwen.projects") => SourceKind::Jsonl,
-        (Client::Gemini, "gemini.tmp") => SourceKind::Json,
-        (Client::Roocode, "roocode.tasks") | (Client::Kilocode, "kilocode.tasks") => {
-            SourceKind::UiMessagesJson
-        }
-        (Client::Opencode, "opencode.sqlite") => SourceKind::Sqlite,
-        (Client::Opencode, "opencode.legacy_json")
-        | (Client::Opencode, "opencode.project_json") => SourceKind::LegacyJson,
-        (Client::Copilot, "copilot.process_log") => SourceKind::CopilotProcessLog,
-        _ => return None,
-    };
-    Some(source)
+    supported_clients()
+        .iter()
+        .find(|definition| definition.id == client.client_id())
+        .and_then(|definition| {
+            definition
+                .sources
+                .iter()
+                .find(|source| source.id == source_id)
+        })
+        .map(|source| source.kind)
 }
 
 pub fn supported_source_ids() -> BTreeSet<String> {
-    BTreeSet::from_iter(
-        [
-            "codex.sessions",
-            "codex.archived_sessions",
-            "codex.headless_sessions",
-            "claude.projects",
-            "gemini.tmp",
-            "openclaw.agents",
-            "qwen.projects",
-            "roocode.tasks",
-            "kilocode.tasks",
-            "opencode.sqlite",
-            "opencode.legacy_json",
-            "copilot.process_log",
-        ]
-        .into_iter()
-        .map(str::to_string),
-    )
+    registered_source_ids()
+        .difference(&candidate_source_ids())
+        .cloned()
+        .collect()
 }
 
 pub fn candidate_source_ids() -> BTreeSet<String> {
-    BTreeSet::from_iter(["codex.project_sessions", "opencode.project_json"])
-        .into_iter()
-        .map(str::to_string)
+    // The public registry does not encode support maturity. Keep the two
+    // documented candidate identities explicit, then derive the supported
+    // denominator as every other registered identity. A newly registered
+    // source therefore fails evaluation coverage until its status and fixture
+    // representation are reviewed.
+    BTreeSet::from([
+        "codex.project_sessions".to_string(),
+        "opencode.project_json".to_string(),
+    ])
+}
+
+fn registered_source_ids() -> BTreeSet<String> {
+    supported_clients()
+        .iter()
+        .flat_map(|client| client.sources.iter())
+        .map(|source| source.id.to_string())
         .collect()
 }
 
 pub fn fixture_path(repo_root: &Path, fixture: &str) -> PathBuf {
     repo_root.join(fixture)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_derived_source_sets_preserve_current_coverage_contract() {
+        let supported = supported_source_ids();
+        let candidates = candidate_source_ids();
+        assert_eq!(
+            supported,
+            BTreeSet::from([
+                "claude.projects".to_string(),
+                "codex.archived_sessions".to_string(),
+                "codex.headless_sessions".to_string(),
+                "codex.sessions".to_string(),
+                "copilot.process_log".to_string(),
+                "gemini.tmp".to_string(),
+                "kilocode.tasks".to_string(),
+                "openclaw.agents".to_string(),
+                "opencode.legacy_json".to_string(),
+                "opencode.sqlite".to_string(),
+                "qwen.projects".to_string(),
+                "roocode.tasks".to_string(),
+            ])
+        );
+        assert_eq!(
+            candidates,
+            BTreeSet::from([
+                "codex.project_sessions".to_string(),
+                "opencode.project_json".to_string(),
+            ])
+        );
+        assert_eq!(
+            supported_source_ids()
+                .union(&candidate_source_ids())
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            registered_source_ids()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_fixture_symlink_outside_repository_is_rejected() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let repo_root = temporary.path().join("repository");
+        fs::create_dir_all(&repo_root).expect("repository directory");
+        let outside = temporary.path().join("outside.jsonl");
+        fs::write(&outside, "synthetic fixture").expect("outside fixture");
+        std::os::unix::fs::symlink(&outside, repo_root.join("fixture.jsonl"))
+            .expect("fixture symlink");
+
+        let input = Input::SourceFixture {
+            fixture: "fixture.jsonl".to_string(),
+            client: Client::Codex,
+            source_id: "codex.sessions".to_string(),
+            source_kind: SourceKindName::Jsonl,
+        };
+
+        assert!(validate_input(&input, &repo_root).is_err());
+    }
 }

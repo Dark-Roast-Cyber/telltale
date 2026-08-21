@@ -3,7 +3,9 @@ mod manifest;
 mod process_chain;
 mod report;
 
+use std::ffi::OsStr;
 use std::fs;
+use std::path::{Component, Path, PathBuf};
 
 use evaluate::evaluate_manifest;
 use manifest::{load_manifest, validate_manifest_bytes};
@@ -12,8 +14,8 @@ use report::render_report;
 const MANIFEST_PATH: &str = "tests/evaluation/manifest.yaml";
 const GOLDEN_PATH: &str = "tests/evaluation/baseline-report.v1.json";
 
-fn repo_root() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 fn current_report() -> Result<Vec<u8>, String> {
@@ -28,20 +30,30 @@ fn write_eval_report_if_requested(bytes: &[u8]) -> Result<(), String> {
         return Ok(());
     };
     let root = repo_root();
-    let requested = std::path::PathBuf::from(path);
-    let path = if requested.is_absolute() {
-        requested
-    } else {
-        root.join(requested)
-    };
-    let allowed = root.join("target/evaluation");
-    if !path.starts_with(&allowed) {
-        return Err("TELLTALE_EVAL_REPORT must be under target/evaluation".to_string());
-    }
+    let path = evaluation_report_path(&root, &path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     fs::write(path, bytes).map_err(|error| error.to_string())
+}
+
+fn evaluation_report_path(repo_root: &Path, requested: &OsStr) -> Result<PathBuf, String> {
+    if requested
+        .to_string_lossy()
+        .chars()
+        .any(|character| matches!(character, '/' | '\\'))
+    {
+        return Err("TELLTALE_EVAL_REPORT must be a single normal filename".to_string());
+    }
+    let requested = Path::new(requested);
+    let mut components = requested.components();
+    let Some(Component::Normal(filename)) = components.next() else {
+        return Err("TELLTALE_EVAL_REPORT must be a single normal filename".to_string());
+    };
+    if components.next().is_some() {
+        return Err("TELLTALE_EVAL_REPORT must be a single normal filename".to_string());
+    }
+    Ok(repo_root.join("target/evaluation").join(filename))
 }
 
 fn write_actual_report(bytes: &[u8]) -> Result<(), String> {
@@ -98,6 +110,13 @@ fn manifest_schema_validation_failures() {
     );
     assert!(validate_manifest_bytes(&duplicate, &root).is_err());
 
+    let duplicate_tags = base.replacen(
+        "tags: [seed, opencode, source_conformance, characterization]",
+        "tags: [seed, seed, opencode, source_conformance, characterization]",
+        1,
+    );
+    assert!(validate_manifest_bytes(&duplicate_tags, &root).is_err());
+
     let unknown_enum = base.replacen(
         "expected_security_review: not_scored",
         "expected_security_review: unexpected",
@@ -111,6 +130,37 @@ fn manifest_schema_validation_failures() {
         1,
     );
     assert!(validate_manifest_bytes(&output_derived_rationale, &root).is_err());
+
+    let score_contribution_mismatch = base.replacen("expected_score: 0", "expected_score: 1", 1);
+    assert!(validate_manifest_bytes(&score_contribution_mismatch, &root).is_err());
+
+    let exact_not_scored = base.replacen(
+        "rule_expectations: []\n      exact_rule_set: true",
+        "rule_expectations:\n        - rule_id: approval.bypass.context\n          expectation: not_scored\n      exact_rule_set: true",
+        1,
+    );
+    assert!(validate_manifest_bytes(&exact_not_scored, &root).is_err());
+
+    let benign_tag_contradiction = base.replacen(
+        "    disposition: benign\n    expected_security_review: not_required\n    label_rationale: Authorized local formatting via a developer shell should not require security review.",
+        "    disposition: benign\n    expected_security_review: required\n    label_rationale: Authorized local formatting via a developer shell should not require security review.",
+        1,
+    );
+    assert!(validate_manifest_bytes(&benign_tag_contradiction, &root).is_err());
+
+    let source_tag_on_normalized_input = base.replacen(
+        "tags: [seed, opencode, routine, efficacy, characterization]",
+        "tags: [seed, opencode, routine, efficacy, characterization, source_conformance]",
+        1,
+    );
+    assert!(validate_manifest_bytes(&source_tag_on_normalized_input, &root).is_err());
+
+    let candidate_tag_contradiction = base.replacen(
+        "source_id: codex.project_sessions",
+        "source_id: codex.sessions",
+        1,
+    );
+    assert!(validate_manifest_bytes(&candidate_tag_contradiction, &root).is_err());
 }
 
 #[test]
@@ -129,6 +179,38 @@ fn report_regenerates_byte_identically_twice_in_process() {
     let first = current_report().expect("first evaluation");
     let second = current_report().expect("second evaluation");
     assert_eq!(first, second, "evaluation report was not deterministic");
+}
+
+#[test]
+fn evaluation_report_path_accepts_a_single_filename() {
+    let root = Path::new("repo");
+    assert_eq!(
+        evaluation_report_path(root, OsStr::new("report.v1.json")),
+        Ok(root.join("target/evaluation/report.v1.json"))
+    );
+}
+
+#[test]
+fn evaluation_report_path_rejects_parent_escape() {
+    assert!(evaluation_report_path(Path::new("repo"), OsStr::new("../report.v1.json")).is_err());
+}
+
+#[test]
+fn evaluation_report_path_rejects_nested_path() {
+    assert!(
+        evaluation_report_path(Path::new("repo"), OsStr::new("nested/report.v1.json")).is_err()
+    );
+    assert!(
+        evaluation_report_path(Path::new("repo"), OsStr::new("nested\\report.v1.json")).is_err()
+    );
+}
+
+#[test]
+fn evaluation_report_path_rejects_absolute_path() {
+    let absolute = std::env::current_dir()
+        .expect("current directory")
+        .join("report.v1.json");
+    assert!(evaluation_report_path(Path::new("repo"), absolute.as_os_str()).is_err());
 }
 
 #[test]

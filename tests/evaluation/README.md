@@ -51,6 +51,6 @@ Rule-match correctness is not security-review correctness. A benign case may cor
 
 Process-chain coverage is definition-backed self-match through `CompiledProcessChainRules::evaluate` plus correlation. It is not process-chain scenario efficacy and is not invoked by `Pipeline::scan_root`, `detect_records`, or `evaluate_session`.
 
-Parser/source-conformance cases are normally `not_scored` unless the same fixture is also an independent efficacy scenario.
+Parser/source-conformance cases are normally `not_scored` unless the same fixture is also an independent efficacy scenario. The supported-source denominator is derived from the public source registry after excluding the two explicitly documented candidate identities, so a newly registered source fails coverage until its status and fixture representation are reviewed.
 
 `make evaluation-check` validates the manifest and compares the generated deterministic report with the tracked baseline. `make evaluation-report` writes a current report only under `target/evaluation/`.
