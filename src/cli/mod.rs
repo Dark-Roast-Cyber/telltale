@@ -1334,11 +1334,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Migrate { command } => match command {
             MigrateCommand::State { from, to } => migrate::run_state_migration(&from, &to)?,
             MigrateCommand::Events { pairs } => {
-                if pairs.len() % 2 != 0 {
+                let (pair_chunks, remainder) = pairs.as_chunks::<2>();
+                if !remainder.is_empty() {
                     return Err("event migration requires OLD and NEW for every --pair".into());
                 }
-                let pairs = pairs
-                    .chunks_exact(2)
+                let pairs = pair_chunks
+                    .iter()
                     .map(|pair| (pair[0].clone(), pair[1].clone()))
                     .collect::<Vec<_>>();
                 migrate::run_event_migration(&pairs)?;
