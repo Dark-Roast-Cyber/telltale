@@ -1594,6 +1594,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "telltale-core",
  "telltale-detect",
  "telltale-rules",
  "telltale-schema",

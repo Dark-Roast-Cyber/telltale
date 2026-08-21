@@ -19,7 +19,7 @@ RELEASE_ARTIFACT_DIR ?= release-downloads
 CARGO_LOCKED ?=
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check evaluation-check evaluation-report public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -70,6 +70,15 @@ clippy:
 ## Full verification
 check: fmt clippy test
 	@echo "All checks passed."
+
+## Validate and compare the synthetic evaluation baseline
+evaluation-check:
+	cargo test $(CARGO_LOCKED) --test evaluation_corpus
+
+## Write the current synthetic evaluation report under target only
+evaluation-report:
+	mkdir -p target/evaluation
+	TELLTALE_EVAL_REPORT=report.v1.json cargo test $(CARGO_LOCKED) --test evaluation_corpus -- --nocapture
 
 ## Show public push review context
 public-push-review:
