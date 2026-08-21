@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "cases"],
+  "properties": {
+    "version": { "const": 1 },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/case" }
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "input", "eventfulness", "disposition", "expected_security_review", "label_rationale", "expected_visibility", "expected_detection", "tags"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "input": { "$ref": "#/$defs/input" },
+        "eventfulness": { "enum": ["uneventful", "routine", "noteworthy"] },
+        "disposition": { "enum": ["benign", "malicious", "unknown", "not_applicable"] },
+        "expected_security_review": { "enum": ["required", "not_required", "not_scored"] },
+        "label_rationale": { "type": "string", "minLength": 1 },
+        "expected_visibility": { "$ref": "#/$defs/visibility" },
+        "expected_detection": { "$ref": "#/$defs/detection" },
+        "tags": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "input": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fixture", "client", "source_id", "source_kind"],
+          "properties": {
+            "kind": { "const": "source_fixture" },
+            "fixture": { "type": "string", "minLength": 1 },
+            "client": { "$ref": "#/$defs/client" },
+            "source_id": { "type": "string", "minLength": 1 },
+            "source_kind": { "$ref": "#/$defs/source_kind" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "client", "records"],
+          "properties": {
+            "kind": { "const": "normalized_records" },
+            "client": { "$ref": "#/$defs/client" },
+            "records": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/record" } }
+          }
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "kind", "content"],
+      "properties": {
+        "session_id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["user_message", "assistant_message", "tool_call", "tool_result", "session_meta", "other"] },
+        "tool_name": { "type": ["string", "null"] },
+        "arguments": { "type": ["string", "null"] },
+        "content": { "type": "string" },
+        "agent": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "provider": { "type": ["string", "null"] },
+        "timestamp": { "type": ["string", "null"] }
+      }
+    },
+    "visibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_record_kinds", "optional_fields", "unavailable_fields"],
+      "properties": {
+        "required_record_kinds": { "type": "array", "items": { "$ref": "#/$defs/record_kind" } },
+        "optional_fields": { "type": "array", "items": { "$ref": "#/$defs/visibility_field" } },
+        "unavailable_fields": { "type": "array", "items": { "$ref": "#/$defs/visibility_field" } }
+      }
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_expectations", "exact_rule_set", "expected_score", "expected_contributions"],
+      "properties": {
+        "rule_expectations": { "type": "array", "items": { "$ref": "#/$defs/rule_expectation" } },
+        "exact_rule_set": { "type": "boolean" },
+        "expected_score": { "type": "integer", "minimum": 0 },
+        "expected_contributions": { "type": "array", "items": { "$ref": "#/$defs/contribution" } }
+      }
+    },
+    "rule_expectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "expectation"],
+      "properties": {
+        "rule_id": { "type": "string", "minLength": 1 },
+        "expectation": { "enum": ["expected_match", "expected_absent", "not_scored"] }
+      }
+    },
+    "contribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "points"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["deterministic_rule", "chain_modifier", "baseline_deviation"] },
+        "points": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "client": { "enum": ["codex", "claude", "gemini", "openclaw", "qwen", "roocode", "kilocode", "opencode", "copilot"] },
+    "source_kind": { "enum": ["json", "jsonl", "archived_jsonl", "headless_jsonl", "sqlite", "legacy_json", "ui_messages_json", "copilot_process_log"] },
+    "record_kind": { "enum": ["user_message", "assistant_message", "tool_call", "tool_result", "session_meta", "other"] },
+    "visibility_field": { "enum": ["pid", "parent_pid", "user_intent", "timestamp", "tool_name", "arguments", "content", "agent", "model", "provider"] }
+  }
+}
