@@ -28,6 +28,8 @@ pub(crate) fn extract_codex_jsonl_source(
             });
         }
 
+        let record_value = codex_record_value(&value);
+
         agent = agent
             .or_else(|| string_field(&value, "agent_nickname"))
             .or_else(|| string_field(&value, "agent"));
@@ -46,14 +48,26 @@ pub(crate) fn extract_codex_jsonl_source(
             model: model.clone(),
             provider: provider.clone(),
             timestamp: string_field(&value, "timestamp"),
-            kind: codex_record_kind(&value),
-            tool_name: codex_tool_name(&value),
-            arguments: arguments_field(&value).or_else(|| codex_tool_input_as_string(&value)),
-            content: record_content(&value),
+            kind: codex_record_kind(record_value),
+            tool_name: codex_tool_name(record_value),
+            arguments: arguments_field(record_value)
+                .or_else(|| codex_tool_input_as_string(record_value)),
+            content: record_content(record_value),
         });
     }
 
     Ok(ExtractedSourceRecords::records(records))
+}
+
+fn codex_record_value(value: &Value) -> &Value {
+    if value.get("type").and_then(Value::as_str) == Some("response_item") {
+        value
+            .get("payload")
+            .filter(|payload| payload.is_object())
+            .unwrap_or(value)
+    } else {
+        value
+    }
 }
 
 fn codex_record_kind(value: &Value) -> RecordKind {
@@ -93,8 +107,21 @@ fn codex_record_kind(value: &Value) -> RecordKind {
         {
             RecordKind::AssistantMessage
         }
+        Some("message") if value.get("role").and_then(Value::as_str) == Some("user") => {
+            RecordKind::UserMessage
+        }
+        Some("message")
+            if matches!(
+                value.get("role").and_then(Value::as_str),
+                Some("assistant" | "model")
+            ) =>
+        {
+            RecordKind::AssistantMessage
+        }
         Some("tool_call") => RecordKind::ToolCall,
         Some("tool_result") => RecordKind::ToolResult,
+        Some("custom_tool_call") => RecordKind::ToolCall,
+        Some("custom_tool_call_output") => RecordKind::ToolResult,
         Some("tool") if codex_tool_part_is_result(value) => RecordKind::ToolResult,
         Some("tool") => RecordKind::ToolCall,
         Some("session_meta") => RecordKind::SessionMeta,
@@ -135,8 +162,11 @@ fn is_known_codex_discriminator(kind: &str) -> bool {
             | "gemini"
             | "model"
             | "text"
+            | "message"
             | "tool_call"
             | "tool_result"
+            | "custom_tool_call"
+            | "custom_tool_call_output"
             | "tool"
             | "session_meta"
     )
@@ -287,6 +317,47 @@ mod tests {
         );
         assert_eq!(records[2].kind, RecordKind::ToolResult);
         assert_eq!(records[2].tool_name.as_deref(), None);
+    }
+
+    #[test]
+    fn parses_codex_app_response_item_envelopes() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("codex-app-response-items.jsonl");
+        fs::write(
+            &path,
+            br#"{"type":"session_meta","payload":{"session_id":"codex-app-session","model_provider":"openai"}}
+{"timestamp":"2026-08-24T20:31:53Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the repository."}]}}
+{"timestamp":"2026-08-24T20:31:54Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect it."}]}}
+{"timestamp":"2026-08-24T20:31:55Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"call-1","input":"{\"cmd\":\"git status\"}"}}
+{"timestamp":"2026-08-24T20:31:56Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":"clean"}}
+"#,
+        )
+        .expect("Codex app response-item fixture");
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path,
+        };
+
+        let records = extract_codex_jsonl_source(&source, ParseOptions::default())
+            .expect("Codex app records")
+            .records;
+
+        assert_eq!(records.len(), 5);
+        assert_eq!(records[0].kind, RecordKind::SessionMeta);
+        assert_eq!(records[1].kind, RecordKind::UserMessage);
+        assert!(records[1].content.contains("Inspect the repository."));
+        assert_eq!(records[2].kind, RecordKind::AssistantMessage);
+        assert!(records[2].content.contains("I will inspect it."));
+        assert_eq!(records[3].kind, RecordKind::ToolCall);
+        assert_eq!(records[3].tool_name.as_deref(), Some("exec"));
+        assert_eq!(
+            records[3].arguments.as_deref(),
+            Some("{\"cmd\":\"git status\"}")
+        );
+        assert_eq!(records[4].kind, RecordKind::ToolResult);
+        assert!(records[4].content.contains("clean"));
     }
 
     #[test]
