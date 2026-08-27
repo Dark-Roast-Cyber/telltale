@@ -8,7 +8,7 @@ pub(crate) use elastic::{DEFAULT_ELASTIC_INDEX, ElasticBulkSink, elastic_bulk_ac
 pub(crate) use jsonl::{LocalJsonlSink, RotationConfig};
 pub(crate) use splunk_hec::{SplunkHecConfig, SplunkHecHttpSink};
 
-use crate::event::Event;
+use crate::event::{Event, PrivacySanitizer, SanitizationContext};
 use crate::file_lock::RotationNamespace;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -32,7 +32,7 @@ impl DeliveryPosture {
     }
 }
 
-pub trait EventSink {
+pub(crate) trait EventSink {
     /// Operator-facing sink name, used in delivery-failure alerts and logs.
     fn name(&self) -> &str;
     fn emit(&self, events: &[Event]) -> Result<(), Box<dyn std::error::Error>>;
@@ -46,7 +46,7 @@ fn emit_events(sink: &dyn EventSink, events: &[Event]) -> Result<(), Box<dyn std
 /// A delivery failure on a non-durable sink, reported back to the caller so it
 /// can emit an operational alert and continue.
 #[derive(Debug, Clone)]
-pub struct SinkFailure {
+pub(crate) struct SinkFailure {
     pub name: String,
     pub kind: String,
     pub attempts: u32,
@@ -56,7 +56,7 @@ pub struct SinkFailure {
 /// Error type network sinks return from `emit` so the delivery loop can
 /// report how many attempts the transport made.
 #[derive(Debug)]
-pub struct SinkDeliveryError {
+pub(crate) struct SinkDeliveryError {
     pub attempts: u32,
     pub message: String,
 }
@@ -82,17 +82,21 @@ struct SinkEntry {
 
 /// The ordered set of sinks a scan delivers events to.
 #[derive(Default)]
-pub struct SinkSet {
+pub(crate) struct SinkSet {
     entries: Vec<SinkEntry>,
 }
 
 impl SinkSet {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     #[allow(dead_code)]
-    pub fn add_durable(&mut self, kind: &'static str, sink: Box<dyn EventSink + Send + Sync>) {
+    pub(crate) fn add_durable(
+        &mut self,
+        kind: &'static str,
+        sink: Box<dyn EventSink + Send + Sync>,
+    ) {
         self.entries.push(SinkEntry {
             sink,
             kind,
@@ -118,7 +122,11 @@ impl SinkSet {
         });
     }
 
-    pub fn add_remote(&mut self, kind: &'static str, sink: Box<dyn EventSink + Send + Sync>) {
+    pub(crate) fn add_remote(
+        &mut self,
+        kind: &'static str,
+        sink: Box<dyn EventSink + Send + Sync>,
+    ) {
         self.entries.push(SinkEntry {
             sink,
             kind,
@@ -142,11 +150,11 @@ impl SinkSet {
             .collect()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub fn has_durable(&self) -> bool {
+    pub(crate) fn has_durable(&self) -> bool {
         self.entries.iter().any(|entry| entry.durable)
     }
 
@@ -164,7 +172,7 @@ impl SinkSet {
     /// preserving order within each class. A durable sink failure is fatal
     /// (`Err`); remote failures are collected and returned while delivery to
     /// the remaining remote sinks continues.
-    pub fn deliver(
+    pub(crate) fn deliver(
         &self,
         events: &[Event],
     ) -> Result<Vec<SinkFailure>, Box<dyn std::error::Error>> {
@@ -197,15 +205,19 @@ impl SinkSet {
     /// generate further events, so a failing sink cannot alert about itself
     /// recursively. Durable sinks are attempted before remotes, preserving
     /// order within each class; a durable alert failure stops alert delivery.
-    pub fn deliver_alerts(&self, events: &[Event], skip: &[&str]) {
+    pub(crate) fn deliver_alerts(&self, events: &[Event], skip: &[&str]) {
         for entry in self.entries.iter().filter(|entry| entry.durable) {
             if skip.contains(&entry.sink.name()) {
                 continue;
             }
             if let Err(err) = entry.sink.emit(events) {
-                eprintln!(
+                let rendered = format!(
                     "warning: could not deliver sink-failure alert to sink {}: {err}",
                     entry.sink.name()
+                );
+                eprintln!(
+                    "{}",
+                    PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered)
                 );
                 return;
             }
@@ -215,9 +227,13 @@ impl SinkSet {
                 continue;
             }
             if let Err(err) = entry.sink.emit(events) {
-                eprintln!(
+                let rendered = format!(
                     "warning: could not deliver sink-failure alert to sink {}: {err}",
                     entry.sink.name()
+                );
+                eprintln!(
+                    "{}",
+                    PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered)
                 );
             }
         }
@@ -229,7 +245,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::{EventSink, SinkSet};
-    use crate::event::{Event, health_event_with_metadata};
+    use crate::event::{
+        ControlledMarker, Event, OperationalAlertInput, check_serialized_event_markers,
+        health_event_with_metadata, operational_alert_event,
+    };
 
     fn make_health_event() -> Event {
         health_event_with_metadata(crate::event::HealthEventInput {
@@ -346,6 +365,52 @@ mod tests {
         assert!(failures[0].error.contains("connection refused"));
         // The later sink still received the batch.
         assert_eq!(*batches.lock().expect("lock"), vec![1]);
+    }
+
+    #[test]
+    fn delivery_failures_redact_unsafe_urls_before_alert_serialization() {
+        struct UnsafeFailingSink;
+
+        impl EventSink for UnsafeFailingSink {
+            fn name(&self) -> &str {
+                "remote"
+            }
+
+            fn emit(&self, _events: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
+                Err("request to https://user:TT_PRIVACY_DELIVERY_25@example.invalid/?token=TT_PRIVACY_DELIVERY_25 failed at /home/TT_PRIVACY_DELIVERY_25/.config/state.db".into())
+            }
+        }
+
+        let mut sinks = SinkSet::new();
+        sinks.add_remote("splunk_hec", Box::new(UnsafeFailingSink));
+        let failures = sinks
+            .deliver(&[make_health_event()])
+            .expect("remote failure is collected");
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].error.contains("TT_PRIVACY_DELIVERY_25"));
+
+        let alert = operational_alert_event(OperationalAlertInput {
+            alert_type: "sink_delivery_failure".to_string(),
+            threshold: "attempts_made=1".to_string(),
+            actual_value: format!(
+                "sink={} type={} error={}",
+                failures[0].name, failures[0].kind, failures[0].error
+            ),
+            scan_duration_ms: None,
+            scanner_error_count: None,
+        });
+        let bytes = serde_json::to_vec(&alert.emittable()).expect("serialize delivery alert");
+        assert!(
+            check_serialized_event_markers(
+                &bytes,
+                "delivery-alert",
+                &[ControlledMarker {
+                    id: "delivery-marker",
+                    value: "TT_PRIVACY_DELIVERY_25",
+                }],
+            )
+            .is_ok()
+        );
     }
 
     #[test]

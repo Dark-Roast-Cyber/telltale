@@ -7,6 +7,7 @@ use crate::rules::{
     RuleLoadMode, RulePackPaths,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
+use telltale_schema::event::{PrivacySanitizer, SanitizationContext, terminal_identifier};
 
 pub(crate) fn run_rules_coverage(
     root: &Path,
@@ -29,7 +30,10 @@ pub(crate) fn run_rules_coverage(
 
     let sources = discover_sources_best_effort(root);
     if sources.is_empty() {
-        println!("No fixture sources found under {}", root.display());
+        println!(
+            "No fixture sources found under {}",
+            PrivacySanitizer::sanitize(SanitizationContext::Path, &root.to_string_lossy())
+        );
         return Ok(());
     }
 
@@ -51,11 +55,19 @@ pub(crate) fn run_rules_coverage(
                 .evidence
                 .iter()
                 .find(|evidence| evidence.field == "error")
-                .map(|evidence| evidence.redacted_value.as_str())
-                .unwrap_or("scanner error");
+                .map(|evidence| {
+                    PrivacySanitizer::sanitize(
+                        SanitizationContext::Diagnostic,
+                        &evidence.redacted_value,
+                    )
+                })
+                .unwrap_or_else(|| "scanner error".to_string());
             return Err(format!(
                 "rules coverage failed for {}: {detail}",
-                source.path.display()
+                PrivacySanitizer::sanitize(
+                    SanitizationContext::Path,
+                    &source.path.to_string_lossy()
+                )
             )
             .into());
         }
@@ -100,9 +112,9 @@ pub(crate) fn run_rules_coverage(
     for rule_id in &all_rule_ids {
         let pos_count = positive_sessions.get(rule_id).map_or(0, |s| s.len());
         let client_count = rule_clients.get(rule_id).map_or(0, |s| s.len());
-        let fps = all_falsepositives
-            .get(rule_id)
-            .map_or(String::new(), |v| v.join("; "));
+        let fps = all_falsepositives.get(rule_id).map_or(String::new(), |v| {
+            PrivacySanitizer::sanitize(SanitizationContext::Metadata, &v.join("; "))
+        });
 
         // Find category from rule set summaries.
         let category = all_rule_categories
@@ -118,7 +130,11 @@ pub(crate) fn run_rules_coverage(
 
         println!(
             "{:<45} {:<10} {:<10} {:<20} {}",
-            rule_id, pos_count, client_count, category, fps
+            terminal_identifier("rule", rule_id),
+            pos_count,
+            client_count,
+            terminal_identifier("category", &category),
+            fps
         );
     }
 
@@ -133,7 +149,7 @@ pub(crate) fn run_rules_coverage(
             zero_coverage.len()
         );
         for id in zero_coverage {
-            println!("  - {}", id);
+            println!("  - {}", terminal_identifier("rule", id));
         }
     }
 

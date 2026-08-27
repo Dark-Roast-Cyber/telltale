@@ -3,7 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::{Event, append_jsonl_bytes, ensure_jsonl_tail, serialize_jsonl_events};
+use crate::event::{
+    Event, PrivacySanitizer, SanitizationContext, append_jsonl_bytes, ensure_jsonl_tail,
+    serialize_jsonl_events,
+};
 use crate::file_lock::{RotationNamespace, SidecarLock, atomic_rename_no_replace, sync_parent};
 use crate::sink::EventSink;
 
@@ -278,9 +281,13 @@ fn cleanup_rotated_files(active: &Path, keep: usize) -> Result<(), Box<dyn std::
     for file in to_delete {
         // Best-effort cleanup: don't abort the scan if one file can't be deleted.
         if let Err(err) = fs::remove_file(&file.path) {
-            eprintln!(
+            let rendered = format!(
                 "warning: could not delete rotated log {}: {err}",
                 file.path.display()
+            );
+            eprintln!(
+                "{}",
+                PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered)
             );
         }
     }

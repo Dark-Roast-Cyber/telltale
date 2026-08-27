@@ -2083,11 +2083,8 @@ fn repeated_telltale_scans_share_state_and_deduplicate() {
     );
     let status_summary: Value = serde_json::from_slice(&status.stdout).expect("status json");
     assert_eq!(status_summary["status"], "ok");
-    assert_eq!(status_summary["log_path"], log_path.display().to_string());
-    assert_eq!(
-        status_summary["state_path"],
-        state_path.display().to_string()
-    );
+    assert_eq!(status_summary["log_path"], "[sensitive-path]");
+    assert_eq!(status_summary["state_path"], "[sensitive-path]");
     assert!(
         status_summary["detection_count"]
             .as_u64()
@@ -3256,7 +3253,7 @@ fn scan_uses_env_log_and_state_defaults() {
     );
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
-    assert_eq!(summary["log_path"], log_path.display().to_string());
+    assert_eq!(summary["log_path"], "[sensitive-path]");
     assert!(log_path.is_file());
     assert!(state_path.is_file());
     assert!(!temp.path().join("logs/telltale-events.jsonl").exists());

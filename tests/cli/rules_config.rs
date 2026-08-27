@@ -219,12 +219,10 @@ fn rules_serve_uses_ordered_managed_pack_for_summary() {
         .iter()
         .find(|entry| entry["id"] == "secret.env.read")
         .expect("replacement provenance");
-    assert!(
-        provenance["winner"]
-            .as_str()
-            .unwrap()
-            .contains("deployment:")
-    );
+    let winner = provenance["winner"].as_str().expect("winner marker");
+    let marker = telltale_schema::event::parse_canonical_opaque_identifier(winner)
+        .expect("opaque rule-source marker");
+    assert_eq!(marker.kind(), "rule-source");
 
     let output = child
         .wait_with_output()
@@ -260,27 +258,11 @@ fn scan_reports_consistent_hashed_rule_sources_and_replacements() {
     let expected_sources = validation["sources"]
         .as_array()
         .expect("validation sources")
-        .iter()
-        .map(|source| Value::String(evidence_hash(source.as_str().expect("raw source"))))
-        .collect::<Vec<_>>();
+        .to_vec();
     let expected_provenance = validation["provenance"]
         .as_array()
         .expect("validation provenance")
-        .iter()
-        .map(|entry| {
-            serde_json::json!({
-                "id": entry["id"],
-                "kind": entry["kind"],
-                "winner": evidence_hash(entry["winner"].as_str().expect("raw winner")),
-                "replaced_sources": entry["replaced_sources"]
-                    .as_array()
-                    .expect("raw replacements")
-                    .iter()
-                    .map(|source| evidence_hash(source.as_str().expect("raw replacement")))
-                    .collect::<Vec<_>>(),
-            })
-        })
-        .collect::<Vec<_>>();
+        .to_vec();
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--dry-run", "--root"])
@@ -578,12 +560,7 @@ fn rules_serve_save_writes_validated_rules_and_creates_backup() {
     let summary = json_response_body(&response);
     assert_eq!(summary["status"], "ok");
     assert_eq!(summary["rule_count"], 1);
-    assert!(
-        summary["saved"]
-            .as_str()
-            .expect("saved path")
-            .ends_with("tool-call-regex.yaml")
-    );
+    assert_eq!(summary["saved"], "[sensitive-path]");
 
     // Verify the file was actually written.
     let saved = fs::read_to_string(&rule_file).expect("read saved file");
@@ -838,7 +815,7 @@ fn rules_serve_save_without_path_writes_explicit_rules_not_discovered_rules() {
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     let summary = json_response_body(&response);
     assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["saved"], explicit_file.display().to_string());
+    assert_eq!(summary["saved"], "[sensitive-path]");
     assert_eq!(
         fs::read_to_string(&explicit_file).expect("read explicit rule"),
         replacement
@@ -1225,7 +1202,9 @@ fn rules_validate_reports_ordered_pack_winner_and_replacements() {
         .iter()
         .find(|entry| entry["id"] == "replacement.target")
         .expect("replacement provenance");
-    assert!(provenance["winner"].as_str().unwrap().contains("local-ui:"));
+    assert!(telltale_schema::event::is_canonical_sha256_hex(
+        provenance["winner"].as_str().expect("terminal winner hash")
+    ));
     assert_eq!(provenance["replaced_sources"].as_array().unwrap().len(), 2);
 }
 
@@ -1249,14 +1228,76 @@ fn rules_list_reports_pack_winner_and_replaced_sources() {
         .expect("listed replaced bundled rule");
     let columns: Vec<_> = line.split('\t').collect();
     assert_eq!(columns.len(), 7, "unexpected verbose rule-list row: {line}");
-    assert!(
-        columns[5].contains("deployment:"),
-        "missing winner source: {line}"
+    assert_eq!(
+        telltale_schema::event::parse_canonical_opaque_identifier(columns[5])
+            .expect("opaque winner source")
+            .kind(),
+        "rule-source"
     );
-    assert!(
-        columns[6].contains("builtin:telltale.default"),
-        "missing replaced source: {line}"
+    assert_eq!(
+        telltale_schema::event::parse_canonical_opaque_identifier(columns[6])
+            .expect("opaque replaced source")
+            .kind(),
+        "rule-source"
     );
+}
+
+#[test]
+fn operational_rule_outputs_terminalize_policy_and_source_provenance() {
+    let temp = tempdir().expect("tempdir");
+    let marker = "CONTROLLED_RULE_OUTPUT_SECRET";
+    let rule_path = temp.path().join(format!("{marker}-rules.yaml"));
+    let policy_path = temp.path().join(format!("{marker}-policy.yaml"));
+    fs::write(
+        &rule_path,
+        custom_rule_yaml("custom.operational.output", "operational-output"),
+    )
+    .expect("write rule");
+    fs::write(
+        &policy_path,
+        format!("name: {marker}\ndisabled_categories: []\n"),
+    )
+    .expect("write policy");
+
+    for command in [
+        vec!["config", "validate"],
+        vec!["rules", "list", "--verbose"],
+        vec!["rules", "validate"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(&command)
+            .args(["--no-default-rules", "--no-local-config", "--rules"])
+            .arg(&rule_path)
+            .arg("--policy")
+            .arg(&policy_path)
+            .output()
+            .expect("run operational rule command");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains(marker),
+            "operational output leaked controlled policy or source provenance"
+        );
+        if command.as_slice() != ["rules", "list", "--verbose"] {
+            let json: Value = serde_json::from_slice(&output.stdout).expect("diagnostic JSON");
+            let provenance = if command.as_slice() == ["config", "validate"] {
+                &json["rules"]["provenance"]
+            } else {
+                &json["provenance"]
+            };
+            assert!(
+                provenance
+                    .as_array()
+                    .expect("provenance")
+                    .iter()
+                    .all(|entry| matches!(entry["kind"].as_str(), Some("rule" | "modifier"))),
+                "closed provenance kinds should remain analytically useful"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1281,8 +1322,8 @@ fn rules_validate_rejects_equal_tier_duplicates_across_config_roots() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("duplicate rule id: same.id"));
-    assert!(stderr.contains("first.yaml"));
-    assert!(stderr.contains("second.yaml"));
+    assert!(!stderr.contains(&first_root.display().to_string()));
+    assert!(!stderr.contains(&second_root.display().to_string()));
 }
 
 #[test]
@@ -1633,7 +1674,7 @@ fn config_validate_custom_only_rules_succeeds_with_one_rule() {
     assert_eq!(summary["rules"]["explicit_count"], 1);
     assert_eq!(
         summary["rules"]["paths"],
-        Value::Array(vec![Value::String(rule_path.display().to_string())])
+        Value::Array(vec![Value::String("[sensitive-path]".to_string())])
     );
 }
 
@@ -1684,8 +1725,7 @@ fn config_validate_repeated_rules_are_additive_and_reported() {
     assert_eq!(summary["rule_count"].as_u64(), Some(default_rule_count + 2));
     assert_eq!(summary["rules"]["explicit_count"], 2);
     let paths = summary["rules"]["paths"].as_array().expect("rule paths");
-    assert!(paths.contains(&Value::String(first_rule.display().to_string())));
-    assert!(paths.contains(&Value::String(second_rule.display().to_string())));
+    assert!(paths.iter().all(|path| path == "[sensitive-path]"));
 }
 
 #[test]
@@ -1773,7 +1813,7 @@ overrides:
     assert_eq!(summary["overrides"]["discovered_count"], 1);
     assert_eq!(
         summary["overrides"]["paths"],
-        Value::Array(vec![Value::String(override_path.display().to_string())])
+        Value::Array(vec![Value::String("[sensitive-path]".to_string())])
     );
 }
 
@@ -1895,15 +1935,14 @@ modifiers: []
         .iter()
         .find(|entry| entry["id"] == "secret.env.read")
         .expect("replaced bundled rule provenance");
-    assert!(
+    assert!(telltale_schema::event::is_canonical_sha256_hex(
         replacement["winner"]
             .as_str()
-            .unwrap()
-            .contains("deployment:")
-    );
+            .expect("terminal winner hash")
+    ));
     assert_eq!(
         replacement["replaced_sources"],
-        serde_json::json!(["builtin:telltale.default"])
+        serde_json::json!([evidence_hash("builtin:telltale.default")])
     );
 }
 
@@ -1954,7 +1993,10 @@ fn config_validate_reports_ambiguous_policy_unless_explicit_policy_is_supplied()
         String::from_utf8_lossy(&explicit.stderr)
     );
     let summary: Value = serde_json::from_slice(&explicit.stdout).expect("summary json");
-    assert_eq!(summary["policy_name"], "explicit-policy");
+    assert_eq!(
+        summary["policy_name"],
+        format!("[policy:{}]", evidence_hash("explicit-policy"))
+    );
     assert_eq!(summary["local_config"]["discovered_policy_count"], 2);
 }
 
@@ -2005,10 +2047,7 @@ fn config_validate_reports_ambiguous_allowlist_unless_explicit_allowlist_is_supp
     );
     let summary: Value = serde_json::from_slice(&explicit.stdout).expect("summary json");
     assert_eq!(summary["local_config"]["discovered_allowlist_count"], 2);
-    assert_eq!(
-        summary["allowlist_path"],
-        explicit_allowlist.display().to_string()
-    );
+    assert_eq!(summary["allowlist_path"], "[sensitive-path]");
 }
 
 #[test]
@@ -2036,10 +2075,7 @@ fn config_validate_reports_single_discovered_allowlist_path() {
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["local_config"]["discovered_allowlist_count"], 1);
-    assert_eq!(
-        summary["allowlist_path"],
-        allowlist_path.display().to_string()
-    );
+    assert_eq!(summary["allowlist_path"], "[sensitive-path]");
 }
 
 #[test]
@@ -2353,7 +2389,10 @@ fn scan_uses_custom_rules_and_policy_category_filters() {
     let disabled_summary: Value = serde_json::from_slice(&disabled.stdout).expect("summary json");
     assert_eq!(disabled_summary["detection_count"], 0);
     assert_eq!(disabled_summary["rule_count"], 0);
-    assert_eq!(disabled_summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        disabled_summary["policy"],
+        format!("[policy:{}]", evidence_hash("no-custom-agent-behavior"))
+    );
     assert_eq!(
         disabled_summary["detection_flow"]["policy_match_accounting"]["status"],
         "available"
@@ -2806,7 +2845,10 @@ fn scan_discovers_local_policy_when_explicit_policy_is_absent() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 0);
     assert_eq!(summary["rule_count"], 0);
-    assert_eq!(summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        summary["policy"],
+        format!("[policy:{}]", evidence_hash("no-custom-agent-behavior"))
+    );
     assert_eq!(
         summary["effective_configuration"]["policy"]["origin"],
         "local_config"
@@ -2881,7 +2923,10 @@ fn scan_explicit_policy_wins_over_discovered_policy_ambiguity() {
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["detection_count"], 0);
-    assert_eq!(summary["policy"], "no-custom-agent-behavior");
+    assert_eq!(
+        summary["policy"],
+        format!("[policy:{}]", evidence_hash("no-custom-agent-behavior"))
+    );
     assert_eq!(
         summary["effective_configuration"]["policy"]["origin"],
         "cli"
@@ -2993,7 +3038,11 @@ suppressions:
             .as_array()
             .expect("tags")
             .iter()
-            .any(|tag| tag == "allowlist:fixture-custom-agent")
+            .any(|tag| tag
+                == &format!(
+                    "allowlist:[suppression:{}]",
+                    evidence_hash("fixture-custom-agent")
+                ))
     );
     assert!(detection.get("triage").is_none());
     assert!(detection.get("response").is_none());
@@ -3065,7 +3114,11 @@ suppressions:
             .as_array()
             .expect("tags")
             .iter()
-            .any(|tag| tag == "allowlist:fixture-custom-agent")
+            .any(|tag| tag
+                == &format!(
+                    "allowlist:[suppression:{}]",
+                    evidence_hash("fixture-custom-agent")
+                ))
     );
 }
 
@@ -3194,4 +3247,86 @@ fn rules_test_fails_nonzero_on_scanner_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("rules test failed"), "{stderr}");
+}
+
+#[test]
+fn rules_test_uses_the_terminal_session_policy_for_source_sessions() {
+    let temp = tempdir().expect("tempdir");
+    let fixture = temp.path().join("unsafe-session.jsonl");
+    let sessions = [
+        "TOKEN=TT_PRIVACY_RULES_TEST_SESSION_ASSIGNMENT_25",
+        "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz12",
+        "https://user:TT_PRIVACY_RULES_TEST_SESSION_URL_25@session.example.invalid",
+    ];
+    fs::write(
+        &fixture,
+        sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| format!(
+                "{{\"type\":\"event_msg\",\"session_id\":\"{session}\",\"timestamp\":\"2026-05-08T10:00:0{}Z\",\"payload\":{{\"type\":\"tool_call\",\"tool_name\":\"shell\",\"command\":\"cat .env\"}}}}",
+                index + 1
+            ))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "test", "--no-local-config"])
+        .arg(&fixture)
+        .output()
+        .expect("run rules test");
+    assert!(output.status.success(), "rules test did not complete");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for session in sessions {
+        assert!(
+            !text.contains(session),
+            "rules test retained a controlled session marker"
+        );
+    }
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("rules test JSON");
+    assert!(
+        summary["match_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    assert!(
+        summary["matches"]
+            .as_array()
+            .expect("matches")
+            .iter()
+            .all(|item| item["session_id"]
+                .as_str()
+                .is_some_and(|session| session.starts_with("[session:")))
+    );
+}
+
+#[test]
+fn rules_coverage_sanitizes_the_root_path_in_operator_output() {
+    let temp = tempdir().expect("tempdir");
+    let marker = "TT_PRIVACY_RULES_COVERAGE_ROOT_25";
+    let root = temp.path().join(marker);
+    fs::create_dir_all(&root).expect("create empty fixture root");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["rules", "coverage", "--no-local-config", "--root"])
+        .arg(&root)
+        .output()
+        .expect("run rules coverage");
+    assert!(output.status.success(), "rules coverage did not complete");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !text.contains(marker),
+        "rules coverage retained a controlled root marker"
+    );
+    assert!(text.contains("[sensitive-path]"));
 }

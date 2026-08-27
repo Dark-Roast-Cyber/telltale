@@ -10,6 +10,10 @@ use crate::rules::{
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::event::{
+    PrivacySanitizer, SanitizationContext, opaque_identifier, terminal_identifier,
+    terminal_session_id,
+};
 use telltale_schema::source::Source;
 
 pub(crate) fn run_rules_server(
@@ -91,10 +95,25 @@ fn rule_summary_json(
     serde_json::json!({
         "status": "ok",
         "rule_count": rule_set.rule_count(),
-        "policy": rule_set.policy_name(),
-        "rules": rule_set.summaries(),
-        "sources": diagnostics.sources,
-        "provenance": diagnostics.provenance,
+        "policy": rule_set.policy_name().map(|value| opaque_identifier("policy", value)),
+        "rules": rule_set.summaries().into_iter().map(|rule| serde_json::json!({
+            "id": terminal_identifier("rule", &rule.id),
+            "category": terminal_identifier("category", &rule.category),
+            "detection_class": rule.detection_class,
+            "signal_type": rule.signal_type,
+            "analytic_intent": rule.analytic_intent,
+            "atlas_tags": rule.atlas_tags.into_iter().map(|value| terminal_identifier("atlas-tag", &value)).collect::<Vec<_>>(),
+            "severity": rule.severity,
+            "score": rule.score,
+            "enabled": rule.enabled,
+        })).collect::<Vec<_>>(),
+        "sources": diagnostics.sources.iter().map(|source| opaque_identifier("rule-source", source)).collect::<Vec<_>>(),
+        "provenance": diagnostics.provenance.iter().map(|entry| serde_json::json!({
+            "id": terminal_identifier("rule", &entry.id),
+            "kind": terminal_identifier("provenance-kind", &entry.kind),
+            "winner": opaque_identifier("rule-source", &entry.winner),
+            "replaced_sources": entry.replaced_sources.iter().map(|source| opaque_identifier("rule-source", source)).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -269,12 +288,13 @@ impl ApiResponse {
     }
 
     fn bad_request(error: impl Into<String>) -> Self {
+        let error = PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &error.into());
         Self {
             status_code: 400,
             reason: "Bad Request",
             body: serde_json::json!({
                 "status": "error",
-                "error": error.into(),
+                "error": error,
             }),
         }
     }
@@ -332,18 +352,21 @@ fn preview_rules_request(
         .filter(|(_, event)| event.event_type == "detection")
         .map(|(_, event)| {
             serde_json::json!({
-                "session_id": event.session_id,
+                "session_id": terminal_session_id(&event.session_id),
                 "severity": event.severity,
                 "risk_score": event.risk_score,
-                "rule_ids": event.rule_ids,
-                "categories": event.categories,
+                "rule_ids": event.rule_ids.iter().map(|value| terminal_identifier("rule", value)).collect::<Vec<_>>(),
+                "categories": event.categories.iter().map(|value| terminal_identifier("category", value)).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
 
     Ok(ApiResponse::ok(serde_json::json!({
         "status": "ok",
-        "fixture_path": display_fixture_path(&fixture_path),
+        "fixture_path": PrivacySanitizer::sanitize(
+            SanitizationContext::Path,
+            &display_fixture_path(&fixture_path),
+        ),
         "match_count": matches.len(),
         "matches": matches,
     })))
@@ -409,8 +432,8 @@ fn save_rules_request(
 
     Ok(ApiResponse::ok(serde_json::json!({
         "status": "ok",
-        "saved": target.display().to_string(),
-        "backup": backup.display().to_string(),
+        "saved": PrivacySanitizer::sanitize(SanitizationContext::Path, &target.to_string_lossy()),
+        "backup": PrivacySanitizer::sanitize(SanitizationContext::Path, &backup.to_string_lossy()),
         "rule_count": request.rules_yaml.lines().filter(|l| l.contains("id:")).count(),
     })))
 }
@@ -621,3 +644,111 @@ document.getElementById('preview-rules').addEventListener('click', () => {
 </script>
 </body>
 </html>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::{compile_rule_yaml, preview_rules_request, rule_summary_json};
+
+    #[test]
+    fn preview_uses_the_terminal_session_policy_for_source_sessions() {
+        let sessions = [
+            "TOKEN=TT_PRIVACY_RULES_SERVER_SESSION_ASSIGNMENT_25",
+            "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz12",
+            "https://user:TT_PRIVACY_RULES_SERVER_SESSION_URL_25@session.example.invalid",
+        ];
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/rule_samples/privacy-session-id.jsonl"
+        );
+        let body = serde_json::to_vec(&serde_json::json!({ "fixture_path": fixture }))
+            .expect("preview request JSON");
+        let rule_set = compile_rule_yaml(
+            r#"version: 1
+description: synthetic privacy preview rule
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: fixture.session
+    category: test
+    severity: low
+    score: 20
+    targets: [command]
+    regex: "cat \\.env"
+    tags: []
+    explanation: synthetic privacy preview rule
+modifiers: []
+"#,
+            None,
+        )
+        .expect("synthetic rule set");
+        let response = preview_rules_request(&body, &rule_set).expect("preview response");
+        let serialized = serde_json::to_string(&response.body).expect("preview JSON");
+
+        for session in sessions {
+            assert!(
+                !serialized.contains(session),
+                "rules preview retained a controlled session marker"
+            );
+        }
+        assert!(
+            response.body["matches"]
+                .as_array()
+                .expect("matches")
+                .iter()
+                .all(|item| item["session_id"]
+                    .as_str()
+                    .is_some_and(|session| session.starts_with("[session:")))
+        );
+    }
+
+    #[test]
+    fn summary_omits_policy_source_and_provenance_text() {
+        let marker = "ghp_abcdefghijklmnop";
+        let rule_set = compile_rule_yaml(
+            &format!(
+                r#"version: 1
+description: synthetic privacy summary rule
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: {marker}.rule
+    category: {marker}
+    severity: low
+    score: 20
+    targets: [command]
+    regex: "cat \\.env"
+    tags: []
+    explanation: synthetic privacy summary rule
+modifiers: []
+"#
+            ),
+            Some(&format!(
+                "version: 1\nname: {marker}\nenabled_rules: []\ndisabled_rules: []\n"
+            )),
+        )
+        .expect("synthetic rule set");
+        let summary = rule_summary_json(
+            &rule_set,
+            &crate::rules::RuleResolutionDiagnostics {
+                sources: vec![format!(
+                    "https://{marker}@source.example.invalid/rules.yaml"
+                )],
+                provenance: vec![crate::rules::RuleProvenance {
+                    id: format!("{marker}.rule"),
+                    kind: "rule".to_string(),
+                    winner: format!("/private/{marker}/winner.yaml"),
+                    replaced_sources: vec![format!("/private/{marker}/replaced.yaml")],
+                }],
+            },
+        );
+
+        assert!(
+            !serde_json::to_string(&summary)
+                .expect("serialize summary")
+                .contains(marker),
+            "rules-server summary exposed policy, source, or provenance text"
+        );
+    }
+}

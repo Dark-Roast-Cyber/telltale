@@ -143,7 +143,9 @@ mod tests {
     use std::path::PathBuf;
 
     use telltale_schema::clients::{ClientId, SourceKind};
-    use telltale_schema::event::{DetectionEventInput, detection_event};
+    use telltale_schema::event::{
+        ControlledMarker, DetectionEventInput, check_serialized_event_markers, detection_event,
+    };
     use telltale_schema::scoring::{RiskContribution, RiskContributionType};
     use telltale_schema::source::Source;
 
@@ -233,6 +235,51 @@ mod tests {
         assert!(event.tags.iter().any(|tag| tag == "suppressed"));
         assert!(event.response.is_none());
         assert!(event.timeline_anchors.is_empty());
+    }
+
+    #[test]
+    fn suppression_keeps_raw_matching_values_but_terminal_bytes_hide_its_name() {
+        let marker = "TT_PRIVACY_ALLOWLIST_25";
+        let mut event = event();
+        event.tool_name = Some(marker.to_string());
+        let allowlist = Allowlist {
+            suppressions: vec![Suppression {
+                name: Some(marker.to_string()),
+                tool_names: vec![marker.to_string()],
+                ..Suppression::default()
+            }],
+            ..Allowlist::default()
+        };
+
+        let suppression = allowlist
+            .suppression_for(&source(), &event)
+            .expect("raw tool name must still match the allowlist");
+        suppress_detection(&mut event, &suppression);
+
+        assert!(
+            event
+                .tags
+                .iter()
+                .any(|tag| tag == &format!("allowlist:{marker}"))
+        );
+        assert!(
+            event
+                .evidence
+                .iter()
+                .any(|evidence| evidence.field == "allowlist" && evidence.redacted_value == marker)
+        );
+        let bytes = serde_json::to_vec(&event.emittable()).expect("terminal event serialization");
+        assert!(
+            check_serialized_event_markers(
+                &bytes,
+                "allowlist-suppression",
+                &[ControlledMarker {
+                    id: "allowlist-marker",
+                    value: marker,
+                }],
+            )
+            .is_ok()
+        );
     }
 
     #[test]

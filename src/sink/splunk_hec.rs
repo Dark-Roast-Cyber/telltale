@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::event::{Event, parse_event_timestamp};
+use crate::event::{EmittableEvent, Event, parse_event_timestamp};
 use crate::sink::http::{HttpClient, RetryConfig, TlsOptions, chunk_segments};
 use crate::sink::{EventSink, SinkDeliveryError};
 
@@ -152,7 +152,7 @@ pub struct SplunkHecEnvelope<'a> {
     pub sourcetype: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<&'a str>,
-    pub event: &'a Event,
+    pub event: EmittableEvent<'a>,
 }
 
 impl<'a> SplunkHecEnvelope<'a> {
@@ -163,7 +163,7 @@ impl<'a> SplunkHecEnvelope<'a> {
             index: config.index.as_deref(),
             sourcetype: &config.sourcetype,
             source: config.source.as_deref(),
-            event,
+            event: event.emittable(),
         }
     }
 }
@@ -290,8 +290,22 @@ mod tests {
             panic!("mock hec listener timed out");
         });
 
+        let marker = "TT_PRIVACY_HEC_25";
         let mut first = make_health_event();
         first.timestamp = "2026-05-18T02:00:00.000Z".to_string();
+        first.tags.push(format!("allowlist:{marker}"));
+        first.evidence.push(crate::event::Evidence {
+            field: "allowlist".to_string(),
+            redacted_value: marker.to_string(),
+            hash: None,
+            rule_id: None,
+        });
+        first.evidence.push(crate::event::Evidence {
+            field: "url".to_string(),
+            redacted_value: format!("https://example.invalid/home/{marker}/.ssh/id_rsa?mode=view"),
+            hash: None,
+            rule_id: None,
+        });
         let mut second = make_health_event();
         second.timestamp = "2026-05-18T02:05:00.000Z".to_string();
         let sink = SplunkHecHttpSink::new(
@@ -318,6 +332,8 @@ mod tests {
             .unwrap_or_else(|| panic!("request channel header missing; request:\n{request}"));
         assert!(Uuid::parse_str(request_channel.trim()).is_ok());
         assert!(lowercase.contains("content-type: application/json"));
+        assert!(!request.contains(marker));
+        assert!(request.contains("https://example.invalid/[sensitive-path]?mode=view"));
         // Both envelopes arrive in one newline-batched request body.
         let body = request.split_once("\r\n\r\n").expect("body split").1;
         let envelopes: Vec<serde_json::Value> = body

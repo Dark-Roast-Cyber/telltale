@@ -24,9 +24,11 @@ use crate::discovery::{
     discover_watch_roots_with_projects, is_fixture_root,
 };
 use crate::event::{
-    Event, Evidence, HealthEventInput, OperationalAlertInput, SessionRiskSummaryEventInput,
-    evidence_hash, health_event_with_metadata, load_operational_alert_config,
-    operational_alert_event, scanner_error_event, session_risk_summary_event,
+    Event, Evidence, HealthEventInput, OperationalAlertInput, PrivacySanitizer,
+    SanitizationContext, SessionRiskSummaryEventInput, evidence_hash, health_event_with_metadata,
+    load_operational_alert_config, opaque_identifier, operational_alert_event,
+    sanitize_serialized_event, scanner_error_event, session_risk_summary_event,
+    terminal_identifier,
 };
 use crate::file_lock::validate_runtime_paths;
 use crate::install_inventory::{
@@ -1024,21 +1026,15 @@ fn run_scan(
     })
 }
 
-/// Truncation cap for delivery error text embedded in alert evidence.
-const SINK_FAILURE_ERROR_MAX_CHARS: usize = 500;
-
 fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
-    let mut error = failure.error.clone();
-    if error.chars().count() > SINK_FAILURE_ERROR_MAX_CHARS {
-        error = error.chars().take(SINK_FAILURE_ERROR_MAX_CHARS).collect();
-        error.push('…');
-    }
     operational_alert_event(OperationalAlertInput {
         alert_type: "sink_delivery_failure".to_string(),
         threshold: format!("attempts_made={}", failure.attempts),
         actual_value: format!(
             "sink={} type={} error={}",
-            failure.name, failure.kind, error
+            terminal_identifier("sink", &failure.name),
+            failure.kind,
+            failure.error
         ),
         scan_duration_ms: None,
         scanner_error_count: None,
@@ -1813,10 +1809,10 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         .iter()
         .map(|failure| {
             serde_json::json!({
-                "name": failure.name,
+                "name": terminal_identifier("sink", &failure.name),
                 "type": failure.kind,
                 "attempts": failure.attempts,
-                "error": failure.error,
+                "error": PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &failure.error),
             })
         })
         .collect();
@@ -1829,8 +1825,15 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         "suppressed_count": summary.suppressed_count,
         "emitted_count": summary.emitted_events.len().saturating_sub(usize::from(summary.health_emitted)),
         "rule_count": summary.rule_count,
-        "policy": summary.active_policy_name,
-        "log_path": if summary.dry_run { None } else { Some(summary.log_path.display().to_string()) },
+        "policy": summary.active_policy_name.map(|value| opaque_identifier("policy", value)),
+        "log_path": if summary.dry_run {
+            None
+        } else {
+            Some(PrivacySanitizer::sanitize(
+                SanitizationContext::Path,
+                &summary.log_path.to_string_lossy(),
+            ))
+        },
         "delivery": {
             "posture": summary.delivery_posture.as_str(),
             "status": delivery_status,
@@ -1862,21 +1865,28 @@ fn status_json(
     log_path: &Path,
     state_path: &Path,
 ) -> serde_json::Value {
+    let health = health.map(|health| {
+        let mut terminal = health.clone();
+        sanitize_serialized_event(&mut terminal);
+        terminal
+    });
     let field_or_null = |key: &str| {
         health
+            .as_ref()
             .map(|health| json_field_or_null(health, key))
             .unwrap_or(serde_json::Value::Null)
     };
     let field_or_empty_object = |key: &str| {
         health
+            .as_ref()
             .map(|health| json_field_or_empty_object(health, key))
             .unwrap_or_else(|| serde_json::json!({}))
     };
     serde_json::json!({
         "status": status,
         "last_scan_time": field_or_null("timestamp"),
-        "log_path": log_path.display().to_string(),
-        "state_path": state_path.display().to_string(),
+        "log_path": PrivacySanitizer::sanitize(SanitizationContext::Path, &log_path.to_string_lossy()),
+        "state_path": PrivacySanitizer::sanitize(SanitizationContext::Path, &state_path.to_string_lossy()),
         "health_component": field_or_null("component"),
         "health_check_name": field_or_null("check_name"),
         "health_check_status": field_or_null("status"),
@@ -2679,5 +2689,48 @@ mod tests {
             result,
             Err(RiskAccountingError::ConflictingContribution(id)) if id == "baseline.synthetic"
         ));
+    }
+
+    #[test]
+    fn operational_json_omits_hostile_sink_names() {
+        let sink_name = "https://sink-owner.example.invalid/private";
+        let alert = sink_failure_alert_event(&SinkFailure {
+            name: sink_name.to_string(),
+            kind: "splunk_hec".to_string(),
+            attempts: 1,
+            error: "connection refused".to_string(),
+        });
+        let alert_bytes = serde_json::to_vec(&alert).expect("serialize sink alert");
+        assert!(
+            !String::from_utf8_lossy(&alert_bytes).contains(sink_name),
+            "operational alert exposed a hostile sink name"
+        );
+    }
+
+    #[test]
+    fn status_json_omits_hostile_historical_health_fields() {
+        let marker = "sk-abcdefgh";
+        let historical_health = serde_json::json!({
+            "schema_version": "2.0",
+            "event_type": "health",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "component": marker,
+            "check_name": marker,
+            "status": marker,
+            "active_policy_name": marker,
+            "source_counts": { marker: 1 },
+        });
+        let status = status_json(
+            "historical_only",
+            Some(&historical_health),
+            0,
+            std::path::Path::new("/tmp/telltale-events.jsonl"),
+            std::path::Path::new("/tmp/telltale-state.json"),
+        );
+        let status_bytes = serde_json::to_vec(&status).expect("serialize status");
+        assert!(
+            !String::from_utf8_lossy(&status_bytes).contains(marker),
+            "status output exposed hostile historical health metadata"
+        );
     }
 }

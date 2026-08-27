@@ -5,7 +5,12 @@ use time::OffsetDateTime;
 
 use crate::correlation::{CorrelationConfig, correlation_events_from_detections};
 use crate::event::{
-    Event, evidence_hash, parse_event_timestamp, validate_risk_accounting_scope, validate_rule_ids,
+    Event, PrivacySanitizer, SanitizationContext, evidence_hash,
+    is_canonical_opaque_identifier_for_kind, is_canonical_sha256_hex, opaque_identifier,
+    parse_event_timestamp, sanitize_serialized_event, terminal_historical_identifier,
+    terminal_historical_product_metadata, terminal_historical_session_id, terminal_identifier,
+    terminal_product_metadata, terminal_rule_identifier, terminal_session_id,
+    validate_risk_accounting_scope, validate_rule_ids,
 };
 use crate::rules::{CompiledRuleSet, load_default_rule_set};
 use crate::schema::{NormalizedRecordV1, Provenance};
@@ -31,6 +36,13 @@ pub(crate) struct ExportConfig<'a> {
 struct ParsedExportRange {
     since: Option<OffsetDateTime>,
     until: Option<OffsetDateTime>,
+}
+
+struct ExportSummaryCounts {
+    event_types: BTreeMap<String, usize>,
+    severities: BTreeMap<String, usize>,
+    clients: BTreeMap<String, usize>,
+    rule_ids: BTreeMap<String, usize>,
 }
 
 pub(crate) fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
@@ -271,15 +283,50 @@ fn correlation_events_from_filtered(
             event.get("event_type").and_then(serde_json::Value::as_str) == Some("detection")
         })
         .map(|event| {
-            let parsed = event_from_json_value(event)?;
+            let mut parsed = event_from_json_value(event)?;
+            if !is_canonical_historical_event(event)
+                && let Some(parsed) = parsed.as_mut()
+            {
+                terminalize_noncanonical_correlation_input(parsed);
+            }
             parsed.ok_or_else(|| "correlation input event is not schema-shaped".into())
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
 
     correlation_events_from_detections(&detection_events, &CorrelationConfig::default())?
         .into_iter()
-        .map(|event| serde_json::to_value(event).map_err(Into::into))
+        .map(|event| serde_json::to_value(event.historical_derived()).map_err(Into::into))
         .collect()
+}
+
+fn is_canonical_historical_event(event: &serde_json::Value) -> bool {
+    event
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        == Some("3.0")
+}
+
+fn terminalize_noncanonical_correlation_input(event: &mut Event) {
+    event.client = terminal_identifier("client", &event.client);
+    event.agent = event
+        .agent
+        .as_deref()
+        .map(|value| terminal_product_metadata("agent", value));
+    event.model = event
+        .model
+        .as_deref()
+        .map(|value| terminal_product_metadata("model", value));
+    event.provider = event
+        .provider
+        .as_deref()
+        .map(|value| terminal_product_metadata("provider", value));
+    event.session_id = terminal_session_id(&event.session_id);
+    event.event_id = terminal_identifier("event", &event.event_id);
+    event.rule_ids = event
+        .rule_ids
+        .iter()
+        .map(|value| terminal_identifier("rule", value))
+        .collect();
 }
 
 fn print_export_events(
@@ -289,7 +336,9 @@ fn print_export_events(
     match format {
         super::ExportFormat::Jsonl => {
             for event in events {
-                println!("{}", serde_json::to_string(event)?);
+                let mut terminal = (*event).clone();
+                sanitize_serialized_event(&mut terminal);
+                println!("{}", serde_json::to_string(&terminal)?);
             }
             Ok(())
         }
@@ -345,11 +394,13 @@ fn ensure_single_timeline_match(
 
 fn print_elastic_bulk(events: &[&serde_json::Value]) -> Result<(), Box<dyn std::error::Error>> {
     for event in events {
-        let event_id = event.get("event_id").and_then(|value| value.as_str());
+        let mut terminal = (*event).clone();
+        sanitize_serialized_event(&mut terminal);
+        let event_id = terminal.get("event_id").and_then(|value| value.as_str());
         let action =
             crate::sink::elastic_bulk_action_json(crate::sink::DEFAULT_ELASTIC_INDEX, event_id);
         println!("{}", serde_json::to_string(&action)?);
-        println!("{}", serde_json::to_string(event)?);
+        println!("{}", serde_json::to_string(&terminal)?);
     }
     Ok(())
 }
@@ -491,13 +542,28 @@ fn format_timeline_entry_text(entry: &serde_json::Value) -> String {
     }
     if let Some(response) = entry.get("response") {
         if let Some(action) = json_str(response, "recommended_action") {
-            output.push_str(&format!("  Recommended action: {action}\n"));
+            output.push_str(&format!(
+                "  Recommended action: {}\n",
+                PrivacySanitizer::sanitize(SanitizationContext::Summary, action)
+            ));
         }
         if let Some(playbook) = json_str(response, "response_playbook") {
-            output.push_str(&format!("  Playbook: {playbook}\n"));
+            output.push_str(&format!(
+                "  Playbook: {}\n",
+                PrivacySanitizer::sanitize(SanitizationContext::Summary, playbook)
+            ));
         }
         if let Some(summary) = json_str(response, "investigation_summary") {
-            output.push_str(&format!("  Summary: {summary}\n"));
+            output.push_str(&format!(
+                "  Summary: {}\n",
+                PrivacySanitizer::sanitize(SanitizationContext::Summary, summary)
+            ));
+        }
+        if let Some(escalation) = json_str(response, "escalation") {
+            output.push_str(&format!(
+                "  Escalation: {}\n",
+                PrivacySanitizer::sanitize(SanitizationContext::Summary, escalation)
+            ));
         }
     }
 
@@ -561,9 +627,15 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
 
         // Extract session metadata from the first event.
         let first = session_events.first();
-        let agent = first.and_then(|e| e.get("agent").and_then(|v| v.as_str()));
-        let model = first.and_then(|e| e.get("model").and_then(|v| v.as_str()));
-        let provider = first.and_then(|e| e.get("provider").and_then(|v| v.as_str()));
+        let agent = first
+            .and_then(|e| e.get("agent").and_then(|v| v.as_str()))
+            .map(|value| terminal_timeline_product_metadata(first, "agent", value));
+        let model = first
+            .and_then(|e| e.get("model").and_then(|v| v.as_str()))
+            .map(|value| terminal_timeline_product_metadata(first, "model", value));
+        let provider = first
+            .and_then(|e| e.get("provider").and_then(|v| v.as_str()))
+            .map(|value| terminal_timeline_product_metadata(first, "provider", value));
 
         // Build timeline entries.
         let entries: Vec<serde_json::Value> = session_events
@@ -573,11 +645,13 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
                 let event_type = event
                     .get("event_type")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
+                    .map(terminal_export_event_type)
+                    .unwrap_or_else(|| opaque_identifier("event-type", "missing"));
                 let severity = event
                     .get("severity")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("informational");
+                    .map(terminal_export_severity)
+                    .unwrap_or_else(|| "informational".to_string());
                 let timestamp = event
                     .get("timestamp")
                     .and_then(|v| v.as_str())
@@ -611,9 +685,12 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
                         arr.iter()
                             .filter_map(|item| {
                                 let field = item.get("field")?.as_str()?;
-                                let hash = item.get("hash").and_then(|v| v.as_str());
+                                let hash = item
+                                    .get("hash")
+                                    .and_then(|value| value.as_str())
+                                    .map(terminal_timeline_evidence_hash);
                                 Some(serde_json::json!({
-                                    "field": field,
+                                    "field": terminal_timeline_identifier(event, "evidence-field", field),
                                     "hash": hash,
                                 }))
                             })
@@ -625,43 +702,46 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
                 // native 3.0 events never carry this field.
                 let triage = event.get("triage").map(|t| {
                     serde_json::json!({
-                        "verdict": t.get("verdict").and_then(|v| v.as_str()),
+                        "verdict": t.get("verdict").and_then(|v| v.as_str()).map(|value| PrivacySanitizer::sanitize(SanitizationContext::Summary, value)),
                         "confidence": t.get("confidence").and_then(|v| v.as_f64()),
-                        "reason": t.get("reason").and_then(|v| v.as_str()),
+                        "reason": t.get("reason").and_then(|v| v.as_str()).map(|value| PrivacySanitizer::sanitize(SanitizationContext::Summary, value)),
                     })
                 });
 
                 // Response summary.
                 let response = event.get("response").map(|r| {
                     serde_json::json!({
-                        "recommended_action": r.get("recommended_action").and_then(|v| v.as_str()),
-                        "response_playbook": r.get("response_playbook").and_then(|v| v.as_str()),
-                        "investigation_summary": r.get("investigation_summary").and_then(|v| v.as_str()),
+                        "recommended_action": r.get("recommended_action").and_then(|v| v.as_str()).map(|value| PrivacySanitizer::sanitize(SanitizationContext::Summary, value)),
+                        "response_playbook": r.get("response_playbook").and_then(|v| v.as_str()).map(|value| PrivacySanitizer::sanitize(SanitizationContext::Summary, value)),
+                        "investigation_summary": r.get("investigation_summary").and_then(|v| v.as_str()).map(|value| PrivacySanitizer::sanitize(SanitizationContext::Summary, value)),
+                        "escalation": r.get("escalation").and_then(|v| v.as_str()).map(|value| PrivacySanitizer::sanitize(SanitizationContext::Summary, value)),
                     })
                 });
 
                 let mut entry = serde_json::json!({
                     "index": index,
-                    "timestamp": timestamp,
+                    "timestamp": terminal_timeline_timestamp(event, &timestamp),
                     "event_type": event_type,
                     "severity": severity,
                 });
 
                 if let Some(tool) = tool_name {
-                    entry["tool_name"] = serde_json::Value::String(tool.to_string());
+                    entry["tool_name"] = serde_json::Value::String(terminal_timeline_identifier(event, "tool", tool));
                 }
                 if !rule_ids.is_empty() {
-                    entry["rule_ids"] = serde_json::json!(rule_ids);
+                    entry["rule_ids"] = serde_json::json!(terminal_timeline_identifiers(event, "rule", &rule_ids));
                 }
                 if !categories.is_empty() {
-                    entry["categories"] = serde_json::json!(categories);
+                    entry["categories"] = serde_json::json!(terminal_timeline_identifiers(event, "category", &categories));
                 }
                 if let Some(anchors) = event
                     .get("timeline_anchors")
                     .filter(|value| value.is_array())
                     .filter(|value| !value.as_array().is_some_and(Vec::is_empty))
                 {
-                    entry["timeline_anchors"] = anchors.clone();
+                    let mut anchors = anchors.clone();
+                    sanitize_timeline_anchors(&mut anchors, event);
+                    entry["timeline_anchors"] = anchors;
                 }
                 if !evidence_summary.is_empty() {
                     entry["evidence"] = serde_json::json!(evidence_summary);
@@ -689,8 +769,9 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
         let max_severity = session_events
             .iter()
             .filter_map(|e| e.get("severity").and_then(|v| v.as_str()))
-            .max_by_key(|s| severity_rank(s))
-            .unwrap_or("informational");
+            .map(terminal_export_severity)
+            .max_by_key(|severity| severity_rank(severity))
+            .unwrap_or_else(|| "informational".to_string());
         // Native events have no triage field. Historical records may retain a
         // terminal model verdict, which is shown only in this derived view.
         let has_triage = session_events
@@ -715,8 +796,11 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
 
         let timeline = serde_json::json!({
             "event_type": "timeline",
-            "session_id": session_id,
-            "client": client,
+            "session_id": terminal_timeline_session_id(first, &session_id),
+            "client": first.map_or_else(
+                || terminal_identifier("client", &client),
+                |event| terminal_timeline_identifier(event, "client", &client),
+            ),
             "agent": agent,
             "model": model,
             "provider": provider,
@@ -733,6 +817,114 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
     }
 
     timelines
+}
+
+fn terminal_timeline_session_id(event: Option<&&serde_json::Value>, value: &str) -> String {
+    if event.is_some_and(|event| is_canonical_historical_event(event)) {
+        terminal_historical_session_id(value)
+    } else {
+        terminal_session_id(value)
+    }
+}
+
+fn terminal_timeline_product_metadata(
+    event: Option<&&serde_json::Value>,
+    kind: &str,
+    value: &str,
+) -> String {
+    if event.is_some_and(|event| is_canonical_historical_event(event)) {
+        terminal_historical_product_metadata(kind, value)
+    } else {
+        terminal_product_metadata(kind, value)
+    }
+}
+
+fn terminal_timeline_timestamp(event: &serde_json::Value, value: &str) -> String {
+    if parse_event_timestamp(value).is_some() {
+        value.to_string()
+    } else if is_canonical_historical_event(event) {
+        terminal_historical_identifier("invalid-timestamp", value)
+    } else {
+        opaque_identifier("invalid-timestamp", value)
+    }
+}
+
+fn terminal_timeline_identifier(event: &serde_json::Value, kind: &str, value: &str) -> String {
+    if is_canonical_historical_event(event) {
+        terminal_historical_identifier(kind, value)
+    } else {
+        terminal_identifier(kind, value)
+    }
+}
+
+fn terminal_timeline_evidence_hash(value: &str) -> String {
+    if is_canonical_sha256_hex(value) {
+        value.to_string()
+    } else {
+        evidence_hash(value)
+    }
+}
+
+fn terminal_timeline_summary_identifier(
+    event: &serde_json::Value,
+    kind: &str,
+    value: &str,
+) -> String {
+    if is_canonical_historical_event(event) && is_canonical_opaque_identifier_for_kind(kind, value)
+    {
+        value.to_string()
+    } else {
+        terminal_identifier("risk-summary", value)
+    }
+}
+
+fn terminal_timeline_identifiers(
+    event: &serde_json::Value,
+    kind: &str,
+    values: &[&str],
+) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| terminal_timeline_identifier(event, kind, value))
+        .collect()
+}
+
+fn sanitize_timeline_anchors(anchors: &mut serde_json::Value, event: &serde_json::Value) {
+    let mut wrapper = serde_json::json!({
+        "schema_version": event
+            .get("schema_version")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::String("3.0".to_string())),
+        "timeline_anchors": anchors.clone(),
+    });
+    sanitize_serialized_event(&mut wrapper);
+    if let Some(sanitized) = wrapper.get("timeline_anchors") {
+        *anchors = sanitized.clone();
+    }
+
+    let Some(anchors) = anchors.as_array_mut() else {
+        return;
+    };
+    for anchor in anchors {
+        let Some(anchor) = anchor.as_object_mut() else {
+            continue;
+        };
+        for (field, kind) in [
+            ("rule_ids", "rule"),
+            ("categories", "category"),
+            ("evidence_fields", "evidence-field"),
+        ] {
+            let Some(values) = anchor.get_mut(field).and_then(|value| value.as_array_mut()) else {
+                continue;
+            };
+            for value in values {
+                let serde_json::Value::String(value) = value else {
+                    continue;
+                };
+                *value = terminal_timeline_identifier(event, kind, value);
+            }
+        }
+    }
 }
 
 fn build_source_backed_session_timelines(
@@ -873,14 +1065,17 @@ fn build_source_backed_risk_summary(
 fn build_session_risk_summary(session_events: &[&serde_json::Value]) -> serde_json::Value {
     let mut tool_call_count = None;
     let mut detection_count = 0_usize;
-    let mut max_severity = "informational";
+    let mut max_severity = "informational".to_string();
     let mut triage_ran = false;
     let mut rule_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut category_counts: BTreeMap<String, usize> = BTreeMap::new();
 
     for event in session_events {
-        if let Some(severity) = event.get("severity").and_then(|value| value.as_str())
-            && severity_rank(severity) > severity_rank(max_severity)
+        if let Some(severity) = event
+            .get("severity")
+            .and_then(|value| value.as_str())
+            .map(terminal_export_severity)
+            && severity_rank(&severity) > severity_rank(&max_severity)
         {
             max_severity = severity;
         }
@@ -895,12 +1090,18 @@ fn build_session_risk_summary(session_events: &[&serde_json::Value]) -> serde_js
 
                 if let Some(values) = event.get("rule_ids").and_then(|value| value.as_array()) {
                     for value in values.iter().filter_map(|value| value.as_str()) {
-                        *rule_counts.entry(value.to_string()).or_insert(0) += 1;
+                        *rule_counts
+                            .entry(terminal_timeline_summary_identifier(event, "rule", value))
+                            .or_insert(0) += 1;
                     }
                 }
                 if let Some(values) = event.get("categories").and_then(|value| value.as_array()) {
                     for value in values.iter().filter_map(|value| value.as_str()) {
-                        *category_counts.entry(value.to_string()).or_insert(0) += 1;
+                        *category_counts
+                            .entry(terminal_timeline_summary_identifier(
+                                event, "category", value,
+                            ))
+                            .or_insert(0) += 1;
                     }
                 }
             }
@@ -1209,32 +1410,89 @@ fn parse_export_filter_timestamp(
 }
 
 fn print_export_summary(events: &[&serde_json::Value]) {
+    let counts = export_summary_counts(events);
+
+    println!("events: {}", events.len());
+    print_count_section("event_types", &counts.event_types);
+    print_count_section("severities", &counts.severities);
+    print_count_section("clients", &counts.clients);
+    print_count_section("rule_ids", &counts.rule_ids);
+}
+
+fn export_summary_counts(events: &[&serde_json::Value]) -> ExportSummaryCounts {
     let mut event_types = BTreeMap::new();
     let mut severities = BTreeMap::new();
     let mut clients = BTreeMap::new();
     let mut rule_ids = BTreeMap::new();
 
     for event in events {
-        increment_field(event, "event_type", &mut event_types);
-        increment_field(event, "severity", &mut severities);
-        increment_field(event, "client", &mut clients);
+        if let Some(value) = event.get("event_type").and_then(|value| value.as_str()) {
+            *event_types
+                .entry(terminal_export_event_type(value))
+                .or_insert(0) += 1;
+        }
+        if let Some(value) = event.get("severity").and_then(|value| value.as_str()) {
+            *severities
+                .entry(terminal_export_severity(value))
+                .or_insert(0) += 1;
+        }
+        increment_terminal_identifier_field(event, "client", "client", &mut clients);
         if let Some(values) = event.get("rule_ids").and_then(|value| value.as_array()) {
             for value in values.iter().filter_map(|value| value.as_str()) {
-                *rule_ids.entry(value.to_string()).or_insert(0_usize) += 1;
+                *rule_ids
+                    .entry(terminal_rule_identifier(value))
+                    .or_insert(0_usize) += 1;
             }
         }
     }
 
-    println!("events: {}", events.len());
-    print_count_section("event_types", &event_types);
-    print_count_section("severities", &severities);
-    print_count_section("clients", &clients);
-    print_count_section("rule_ids", &rule_ids);
+    ExportSummaryCounts {
+        event_types,
+        severities,
+        clients,
+        rule_ids,
+    }
 }
 
-fn increment_field(event: &serde_json::Value, field: &str, counts: &mut BTreeMap<String, usize>) {
+fn terminal_export_event_type(value: &str) -> String {
+    if matches!(
+        value,
+        "detection"
+            | "activity"
+            | "health"
+            | "scanner_error"
+            | "operational_alert"
+            | "session_risk_summary"
+            | "correlation"
+            | "process_chain"
+    ) {
+        value.to_string()
+    } else {
+        opaque_identifier("event-type", value)
+    }
+}
+
+fn terminal_export_severity(value: &str) -> String {
+    if matches!(
+        value,
+        "informational" | "low" | "medium" | "high" | "critical" | "warning"
+    ) {
+        value.to_string()
+    } else {
+        opaque_identifier("severity", value)
+    }
+}
+
+fn increment_terminal_identifier_field(
+    event: &serde_json::Value,
+    field: &str,
+    kind: &str,
+    counts: &mut BTreeMap<String, usize>,
+) {
     if let Some(value) = event.get(field).and_then(|value| value.as_str()) {
-        *counts.entry(value.to_string()).or_insert(0) += 1;
+        *counts
+            .entry(terminal_identifier(kind, value))
+            .or_insert(0_usize) += 1;
     }
 }
 
@@ -1246,5 +1504,148 @@ fn print_count_section(label: &str, counts: &BTreeMap<String, usize>) {
     }
     for (value, count) in counts {
         println!("  {value}: {count}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_session_timelines, correlation_events_from_filtered, export_summary_counts,
+        format_timeline_text,
+    };
+    use telltale_schema::event::opaque_identifier;
+
+    fn canonical_detection(
+        event_id: &str,
+        session_id: &str,
+        agent: &str,
+        model: &str,
+        provider: &str,
+        timestamp: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "3.0",
+            "event_id": event_id,
+            "event_type": "detection",
+            "timestamp": timestamp,
+            "observed_at": timestamp,
+            "ingested_at": timestamp,
+            "severity": "high",
+            "risk_score": 80,
+            "client": "codex",
+            "agent": agent,
+            "model": model,
+            "provider": provider,
+            "session_id": session_id,
+            "rule_ids": ["rule.test"],
+            "categories": ["test"],
+            "detection_classes": ["security_detection"],
+            "signal_types": ["atomic"],
+            "analytic_intents": ["alert"],
+            "risk_contributions": [],
+        })
+    }
+
+    #[test]
+    fn historical_summary_and_timeline_terminalize_event_type_and_severity() {
+        let marker = "CONTROLLED_HISTORICAL_LABEL_SECRET";
+        let historical = serde_json::json!({
+            "schema_version": "1.0",
+            "event_id": "historical-labels",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "event_type": format!("event-{marker}"),
+            "severity": format!("severity-{marker}"),
+            "risk_score": 0,
+            "client": "codex",
+            "session_id": "historical-label-session",
+            "rule_ids": [],
+            "categories": [],
+            "evidence": [],
+        });
+        let events = [&historical];
+
+        let counts = export_summary_counts(&events);
+        assert!(
+            !serde_json::to_string(&counts.event_types)
+                .expect("summary event types JSON")
+                .contains(marker),
+            "summary emitted a controlled event type"
+        );
+        assert!(
+            !serde_json::to_string(&counts.severities)
+                .expect("summary severities JSON")
+                .contains(marker),
+            "summary emitted a controlled severity"
+        );
+
+        let timelines = build_session_timelines(&events);
+        let timeline = timelines.first().expect("historical timeline");
+        assert!(
+            !serde_json::to_string(timeline)
+                .expect("timeline JSON")
+                .contains(marker),
+            "timeline JSON emitted a controlled event label"
+        );
+        assert!(
+            !format_timeline_text(timeline).contains(marker),
+            "timeline text emitted a controlled event label"
+        );
+    }
+
+    #[test]
+    fn historical_timeline_and_correlation_preserve_exact_canonical_links() {
+        let first_session = opaque_identifier("session", "first source session");
+        let second_session = opaque_identifier("session", "second source session");
+        let agent = opaque_identifier("agent", "first source agent");
+        let model = opaque_identifier("model", "first source model");
+        let provider = opaque_identifier("provider", "first source provider");
+        let first = canonical_detection(
+            "telltale-00000000-0000-4000-8000-000000000001",
+            &first_session,
+            &agent,
+            &model,
+            &provider,
+            "2026-05-01T00:00:00Z",
+        );
+        let second = canonical_detection(
+            "telltale-00000000-0000-4000-8000-000000000002",
+            &second_session,
+            &agent,
+            &model,
+            &provider,
+            "2026-05-01T00:20:00Z",
+        );
+        let events = [&first, &second];
+
+        let timelines = build_session_timelines(&events);
+        assert_eq!(timelines.len(), 2);
+        assert!(timelines.iter().any(|timeline| {
+            timeline["session_id"] == first_session
+                && timeline["agent"] == agent
+                && timeline["model"] == model
+                && timeline["provider"] == provider
+        }));
+        assert_eq!(build_session_timelines(&events), timelines);
+
+        let correlations =
+            correlation_events_from_filtered(&events).expect("historical correlation output");
+        assert_eq!(correlations.len(), 1);
+        let serialized = serde_json::to_string(&correlations).expect("correlation JSON");
+        for marker in [&first_session, &second_session, &agent, &model, &provider] {
+            assert!(
+                serialized.contains(marker),
+                "historical derived output rehashed a canonical marker"
+            );
+        }
+        let repeated =
+            correlation_events_from_filtered(&events).expect("repeat correlation output");
+        let repeated_serialized =
+            serde_json::to_string(&repeated).expect("repeated correlation JSON");
+        for marker in [&first_session, &second_session, &agent, &model, &provider] {
+            assert!(
+                repeated_serialized.contains(marker),
+                "repeated historical derived output rehashed a canonical marker"
+            );
+        }
     }
 }
