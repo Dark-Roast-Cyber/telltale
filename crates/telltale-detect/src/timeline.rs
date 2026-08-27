@@ -10,7 +10,10 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 use telltale_schema::canonical::NormalizedRecordV1;
-use telltale_schema::event::{Event, evidence_hash, redact_sensitive_text};
+use telltale_schema::event::{
+    Event, evidence_hash, opaque_identifier, parse_event_timestamp, redact_sensitive_text,
+    terminal_identifier, terminal_product_metadata, terminal_session_id,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum TimelineEntryKind {
@@ -153,11 +156,20 @@ pub fn build_exported_session_timeline(
 
     Some(ExportedSessionTimeline {
         event_type: "timeline",
-        session_id: timeline.session_id,
-        client: first_meta.client.clone(),
-        agent: first_meta.agent.clone(),
-        model: first_meta.model.clone(),
-        provider: first_meta.provider.clone(),
+        session_id: terminal_session_id(&timeline.session_id),
+        client: terminal_identifier("client", &first_meta.client),
+        agent: first_meta
+            .agent
+            .as_deref()
+            .map(|value| terminal_product_metadata("agent", value)),
+        model: first_meta
+            .model
+            .as_deref()
+            .map(|value| terminal_product_metadata("model", value)),
+        provider: first_meta
+            .provider
+            .as_deref()
+            .map(|value| terminal_product_metadata("provider", value)),
         entry_count: entries.len(),
         entries,
     })
@@ -194,13 +206,27 @@ fn exported_timeline_entry(
 ) -> ExportedTimelineEntry {
     ExportedTimelineEntry {
         index: entry.index,
-        timestamp: entry.timestamp.clone(),
+        timestamp: entry.timestamp.as_deref().map(terminal_timeline_timestamp),
         event_type: exported_entry_type(&entry.kind),
-        client: entry.client.clone(),
-        tool_name: entry.tool_name.clone(),
-        call_id: entry.call_id.clone(),
+        client: terminal_identifier("client", &entry.client),
+        tool_name: entry
+            .tool_name
+            .as_deref()
+            .map(|value| terminal_identifier("tool", value)),
+        call_id: entry
+            .call_id
+            .as_deref()
+            .map(|value| opaque_identifier("call", value)),
         linked_entry_index: entry.linked_entry_index,
         evidence: record_evidence(record),
+    }
+}
+
+fn terminal_timeline_timestamp(value: &str) -> String {
+    if parse_event_timestamp(value).is_some() {
+        value.to_string()
+    } else {
+        opaque_identifier("invalid-timestamp", value)
     }
 }
 
@@ -269,6 +295,8 @@ fn evidence_vec_from_value(field: &str, value: &str) -> Vec<TimelineEvidenceSumm
 fn redacted_evidence(field: &str, value: &str) -> TimelineEvidenceSummary {
     TimelineEvidenceSummary {
         field: field.to_string(),
+        // Exported timelines are a terminal presentation; raw timeline
+        // records remain available to ordering and correlation above.
         redacted_value: redact_sensitive_text(value),
         hash: evidence_hash(value),
     }
@@ -578,5 +606,40 @@ mod tests {
         assert!(!arguments.redacted_value.contains(".env"));
         assert!(!arguments.redacted_value.contains("sk-1234567890abcdef1234"));
         assert!(arguments.redacted_value.contains("[redacted-secret]"));
+    }
+
+    #[test]
+    fn exported_timeline_sanitizes_direct_source_text_fields() {
+        let marker = "TT_PRIVACY_TIMELINE_25";
+        let mut record = tool_call(&format!("TOKEN={marker}"), Some(marker));
+        if let NormalizedRecordV1::ToolCall(call) = &mut record {
+            call.meta.session_id = marker.to_string();
+            call.tool_name = format!("TOKEN={marker}");
+        }
+
+        let exported = build_exported_session_timeline(&[record]).expect("exported timeline");
+        let bytes = serde_json::to_vec(&exported).expect("serialize exported timeline");
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(marker),
+            "timeline export retained a direct source marker"
+        );
+        assert!(
+            exported.entries[0]
+                .timestamp
+                .as_deref()
+                .is_some_and(|value| value.starts_with("[invalid-timestamp:"))
+        );
+        assert!(
+            exported.entries[0]
+                .tool_name
+                .as_deref()
+                .is_some_and(|value| value.starts_with("[tool:"))
+        );
+        assert!(
+            exported.entries[0]
+                .call_id
+                .as_deref()
+                .is_some_and(|value| value.starts_with("[call:"))
+        );
     }
 }

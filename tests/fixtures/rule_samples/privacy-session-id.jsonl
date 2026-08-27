@@ -1,0 +1,3 @@
+{"type":"event_msg","session_id":"TOKEN=TT_PRIVACY_RULES_SERVER_SESSION_ASSIGNMENT_25","timestamp":"2026-05-08T10:00:01Z","payload":{"type":"tool_call","tool_name":"shell","command":"cat .env"}}
+{"type":"event_msg","session_id":"ghp_AbCdEfGhIjKlMnOpQrStUvWxYz12","timestamp":"2026-05-08T10:00:02Z","payload":{"type":"tool_call","tool_name":"shell","command":"cat .env"}}
+{"type":"event_msg","session_id":"https://user:TT_PRIVACY_RULES_SERVER_SESSION_URL_25@session.example.invalid","timestamp":"2026-05-08T10:00:03Z","payload":{"type":"tool_call","tool_name":"shell","command":"cat .env"}}

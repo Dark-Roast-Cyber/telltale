@@ -210,8 +210,8 @@ fn status_reports_latest_health_event() {
     let summary: Value = serde_json::from_slice(&status.stdout).expect("status json");
 
     assert_eq!(summary["status"], "ok");
-    assert_eq!(summary["log_path"], log_path.display().to_string());
-    assert_eq!(summary["state_path"], state_path.display().to_string());
+    assert_eq!(summary["log_path"], "[sensitive-path]");
+    assert_eq!(summary["state_path"], "[sensitive-path]");
     assert!(summary["last_scan_time"].as_str().is_some());
     assert_eq!(summary["health_component"], "scanner");
     assert_eq!(summary["health_check_name"], "source_discovery");
@@ -699,6 +699,175 @@ fn export_summary_reports_filtered_counts() {
 }
 
 #[test]
+fn historical_summary_terminalizes_imported_client_and_rule_labels() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let marker = "CONTROLLED_HISTORICAL_SUMMARY_SECRET";
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "1.0",
+            "event_id": "historical-summary",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "event_type": "detection",
+            "severity": "high",
+            "risk_score": 80,
+            "client": format!("tenant-{marker}"),
+            "session_id": "historical-summary-session",
+            "rule_ids": [format!("rule.{marker}")],
+            "categories": ["test"],
+            "evidence": [],
+        })
+        .to_string(),
+    )
+    .expect("write historical log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .args(["--format", "summary"])
+        .output()
+        .expect("run telltale export summary");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains(marker),
+        "summary emitted a controlled historical marker"
+    );
+}
+
+#[test]
+fn historical_timeline_replaces_invalid_evidence_hashes_in_json_and_text() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let marker = "CONTROLLED_HISTORICAL_TIMELINE_SECRET";
+    let canonical_hash = "a".repeat(64);
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "1.0",
+            "event_id": "historical-timeline",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "event_type": "detection",
+            "severity": "high",
+            "risk_score": 80,
+            "client": "codex",
+            "session_id": "historical-timeline-session",
+            "rule_ids": ["rule.test"],
+            "categories": ["test"],
+            "timeline_anchors": [{
+                "entry_index": 0,
+                "rule_ids": ["rule.test", 7],
+                "categories": ["test"],
+                "evidence_fields": ["tool_result"],
+                "extension": {"nested": format!("TOKEN={marker}")},
+            }],
+            "evidence": [{
+                "field": "tool_result",
+                "redacted_value": "safe",
+                "hash": marker,
+            }, {
+                "field": "arguments",
+                "redacted_value": "safe",
+                "hash": canonical_hash,
+            }],
+        })
+        .to_string(),
+    )
+    .expect("write historical log");
+
+    let json = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .args(["--timeline", "--session-id", "historical-timeline-session"])
+        .output()
+        .expect("run telltale export timeline json");
+    assert!(json.status.success());
+    assert!(
+        !String::from_utf8_lossy(&json.stdout).contains(marker),
+        "timeline JSON emitted a controlled historical marker from evidence or anchor extensions"
+    );
+    let timeline: Value = serde_json::from_slice(&json.stdout).expect("timeline JSON");
+    assert_eq!(
+        timeline["entries"][0]["evidence"][1]["hash"],
+        canonical_hash
+    );
+
+    let text = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .args([
+            "--timeline",
+            "--session-id",
+            "historical-timeline-session",
+            "--format",
+            "timeline-text",
+        ])
+        .output()
+        .expect("run telltale export timeline text");
+    assert!(text.status.success());
+    assert!(
+        !String::from_utf8_lossy(&text.stdout).contains(marker),
+        "timeline text emitted a controlled historical marker"
+    );
+}
+
+#[test]
+fn terminalized_identifier_fallbacks_remain_event_schema_valid() {
+    let credential = "ghp_abcdefghijklmnop";
+    let mut event = detection_event(DetectionEventInput {
+        client: ClientId::Codex,
+        agent: None,
+        model: None,
+        provider: None,
+        session_id: "safe-session".to_string(),
+        source_path_hash: "source-hash".to_string(),
+        tool_name: None,
+        rule_ids: vec!["rule.safe".to_string()],
+        categories: vec!["test".to_string()],
+        detection_classes: vec!["security_detection".to_string()],
+        signal_types: vec!["atomic".to_string()],
+        analytic_intents: vec!["alert".to_string()],
+        atlas_tags: Vec::new(),
+        tags: Vec::new(),
+        evidence: Vec::new(),
+        risk_contributions: vec![
+            RiskContribution::new(
+                "rule.safe",
+                RiskContributionType::DeterministicRule,
+                1,
+                "safe rationale",
+            )
+            .expect("contribution"),
+        ],
+        event_time: None,
+    })
+    .expect("safe detection event");
+    event.rule_ids = vec![format!("rule.{credential}")];
+    event.atlas_tags = vec![format!("atlas:{credential}")];
+    event.evidence = vec![Evidence {
+        field: "safe_field".to_string(),
+        redacted_value: "safe".to_string(),
+        hash: None,
+        rule_id: Some(format!("rule.{credential}")),
+    }];
+
+    let serialized = serde_json::to_value(&event).expect("serialize terminal event");
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
+    let validator = validator_for(&schema).expect("schema validator");
+    assert!(
+        validator.is_valid(&serialized),
+        "terminalized event must remain Event 3.0 schema-valid"
+    );
+    assert!(
+        !serialized.to_string().contains(credential),
+        "terminalized event emitted a credential-shaped identifier"
+    );
+}
+
+#[test]
 fn export_elastic_bulk_wraps_canonical_events_without_rewriting_fields() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
@@ -1092,7 +1261,7 @@ fn export_timeline_produces_redacted_session_timeline() {
     let evidence = entries[2]["evidence"].as_array().expect("evidence");
     assert_eq!(evidence.len(), 1);
     assert_eq!(evidence[0]["field"], "tool_result");
-    assert_eq!(evidence[0]["hash"], "sha256:abc123");
+    assert_eq!(evidence[0]["hash"], evidence_hash("sha256:abc123"));
     assert!(
         evidence[0].get("redacted_value").is_none(),
         "redacted_value should not appear in timeline"
@@ -1491,6 +1660,287 @@ fn export_rejects_schema_two_invalid_rule_ids_even_with_empty_ledger() {
 }
 
 #[test]
+fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("historical-events.jsonl");
+    let triage_marker = "TT_PRIVACY_HISTORICAL_TRIAGE_25";
+    let note_marker = "TT_PRIVACY_HISTORICAL_NOTE_25";
+    let deep_marker = "TT_PRIVACY_HISTORICAL_DEEP_25";
+    let key_marker = "TT_PRIVACY_HISTORICAL_UNSAFE_KEY_25";
+    let sessions = [
+        "TOKEN=TT_PRIVACY_HISTORICAL_SESSION_ASSIGNMENT_25",
+        "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz12",
+        "https://user:TT_PRIVACY_HISTORICAL_SESSION_URL_25@session.example.invalid",
+    ];
+    let source_path_hash = "a".repeat(64);
+    let evidence_hash_value = "b".repeat(64);
+    let events = sessions
+        .iter()
+        .enumerate()
+        .map(|(index, session)| {
+            let mut event = serde_json::json!({
+                "schema_version": "1.0",
+                "event_id": format!("historical-privacy-{index}"),
+                "event_type": "activity",
+                "timestamp": "2026-05-01T00:00:00Z",
+                "severity": "informational",
+                "risk_score": 0,
+                "client": "codex",
+                "agent": "codex",
+                "model": "gpt-5",
+                "provider": "openai",
+                "session_id": session,
+                "source_path_hash": source_path_hash,
+                "risk_entity_type": "session",
+                "risk_entity_value": session,
+                "rule_ids": ["secret.env.read"],
+                "response": {
+                    "recommended_action": "investigate",
+                    "response_playbook": "telltale-playbook-credential-access",
+                    "investigation_summary": "synthetic historical fixture",
+                    "escalation": "security_review_required"
+                },
+                "triage": {"reason": format!("TOKEN={triage_marker}")},
+                "evidence": [{
+                    "field": "arguments",
+                    "redacted_value": "safe",
+                    "hash": evidence_hash_value
+                }],
+                "unknown_extension": {
+                    "note": format!("TOKEN={note_marker}"),
+                    "deep": {"array": [{"text": format!("TOKEN={deep_marker}")}]}
+                }
+            });
+            event
+                .as_object_mut()
+                .expect("historical event object")
+                .insert(key_marker.to_string(), serde_json::json!("safe value"));
+            event
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        &log_path,
+        events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .expect("write historical events");
+
+    for format in [None, Some("elastic-bulk")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command.args(["export", "--log-path"]).arg(&log_path);
+        if let Some(format) = format {
+            command.args(["--format", format]);
+        }
+        let output = command.output().expect("run historical export");
+        assert!(
+            output.status.success(),
+            "historical {format:?} export failed without exposing controlled input"
+        );
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for marker in [triage_marker, note_marker, deep_marker, key_marker]
+            .into_iter()
+            .chain(sessions)
+        {
+            assert!(
+                !text.contains(marker),
+                "historical export retained a controlled marker"
+            );
+        }
+        if format.is_none() {
+            let exported = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("historical JSONL"))
+                .collect::<Vec<_>>();
+            assert_eq!(exported.len(), sessions.len());
+            for event in exported {
+                assert!(
+                    event["session_id"]
+                        .as_str()
+                        .is_some_and(|value| value.starts_with("[session:"))
+                );
+                assert_eq!(event["rule_ids"][0], "secret.env.read");
+                assert_eq!(event["source_path_hash"], source_path_hash);
+                assert_eq!(event["evidence"][0]["hash"], evidence_hash_value);
+                assert_eq!(
+                    event["response"]["response_playbook"],
+                    "telltale-playbook-credential-access"
+                );
+                assert!(
+                    event["triage"]["reason"]
+                        .as_str()
+                        .is_some_and(|value| value.contains("[redacted-secret]"))
+                );
+                assert!(
+                    event["unknown_extension"]["note"]
+                        .as_str()
+                        .is_some_and(|value| value.contains("[redacted-secret]"))
+                );
+                assert!(
+                    event["unknown_extension"]["deep"]["array"][0]["text"]
+                        .as_str()
+                        .is_some_and(|value| value.contains("[redacted-secret]"))
+                );
+                let unsafe_key_replacement = event
+                    .as_object()
+                    .expect("historical object")
+                    .iter()
+                    .find(|(key, value)| {
+                        key.starts_with("[metadata-key:") && value.as_str() == Some("safe value")
+                    });
+                assert!(
+                    unsafe_key_replacement.is_some(),
+                    "unsafe historical key must be replaced deterministically without dropping its value"
+                );
+            }
+        } else {
+            let lines = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("elastic bulk JSON"))
+                .collect::<Vec<_>>();
+            assert_eq!(lines.len(), sessions.len() * 2);
+            for pair in lines.as_chunks::<2>().0 {
+                assert_eq!(pair[0]["index"]["_index"], "telltale-events");
+                assert!(pair[1].get("index").is_none());
+                assert!(
+                    pair[1]["session_id"]
+                        .as_str()
+                        .is_some_and(|value| value.starts_with("[session:"))
+                );
+                assert_eq!(pair[1]["rule_ids"][0], "secret.env.read");
+                assert_eq!(pair[1]["source_path_hash"], source_path_hash);
+                assert_eq!(pair[1]["evidence"][0]["hash"], evidence_hash_value);
+                assert_eq!(
+                    pair[1]["response"]["response_playbook"],
+                    "telltale-playbook-credential-access"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn historical_jsonl_and_elastic_hide_sensitive_filesystem_url_paths() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("historical-url-path.jsonl");
+    let marker = "TT_PRIVACY_HISTORICAL_EXPORT_URL_PATH_USER_25";
+    let authority_marker = "TT_PRIVACY_HISTORICAL_EXPORT_URL_AUTHORITY_25";
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "1.0",
+            "event_id": "historical-url-path",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "event_type": "activity",
+            "severity": "informational",
+            "risk_score": 0,
+            "client": "codex",
+            "session_id": "safe-session",
+            "evidence": [],
+            "unknown_extension": {
+                "note": format!("https://example.invalid/home/{marker}/.ssh/id_rsa"),
+                "deep": [{"value": format!("file:///Users/{marker}/%2Essh/id%5Fed25519")}],
+                "authority": {"nested": [format!("https://example.invalid%2Fhome%2F{authority_marker}%2F.ssh%2Fid_rsa")]},
+            }
+        })
+        .to_string(),
+    )
+    .expect("write historical URL-path event");
+
+    for format in [None, Some("elastic-bulk")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command.args(["export", "--log-path"]).arg(&log_path);
+        if let Some(format) = format {
+            command.args(["--format", format]);
+        }
+        let output = command.output().expect("historical export");
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(marker));
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains(authority_marker),
+            "historical export retained a malformed URL authority marker"
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("[sensitive-path]"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("[redacted-url]"));
+    }
+}
+
+#[test]
+fn historical_jsonl_and_elastic_redact_nested_encoded_urls_inside_outer_components() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("historical-nested-url.jsonl");
+    let marker = "TT_PRIVACY_HISTORICAL_NESTED_BOUNDARY_25";
+    let query = format!("https://outer.invalid/?next=https%3A%2F%2Finner.invalid%252F{marker}");
+    let path = format!("https://outer.invalid/redirect/https%3A%2F%2Finner.invalid%252F{marker}");
+    let fragment =
+        format!("https://outer.invalid/#next=https%3A%2F%2Finner.invalid%2523token%253D{marker}");
+    fs::write(
+        &log_path,
+        serde_json::json!({
+            "schema_version": "1.0",
+            "event_id": "historical-nested-url",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "event_type": "activity",
+            "severity": "informational",
+            "risk_score": 0,
+            "client": "codex",
+            "session_id": "historical-nested-url-session",
+            "evidence": [],
+            "diagnostic": query,
+            "unknown_extension": {
+                "path": path,
+                "nested": {"fragment": fragment},
+            },
+        })
+        .to_string(),
+    )
+    .expect("write historical nested URL event");
+
+    let mut first_jsonl: Option<String> = None;
+    for format in [None, Some("elastic-bulk")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command.args(["export", "--log-path"]).arg(&log_path);
+        if let Some(format) = format {
+            command.args(["--format", format]);
+        }
+        let output = command.output().expect("historical nested URL export");
+        assert!(
+            output.status.success(),
+            "historical nested URL export failed"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        assert!(!stdout.contains(marker));
+        assert!(!stdout.contains("https%3A%2F%2Finner.invalid"));
+        assert!(stdout.contains("[redacted-url]"));
+        if format.is_none() {
+            first_jsonl = Some(stdout);
+        }
+    }
+
+    let first_jsonl = first_jsonl.expect("historical JSONL output");
+    let first_event: Value = serde_json::from_str(first_jsonl.lines().next().expect("JSONL line"))
+        .expect("historical nested URL JSONL event");
+    assert_eq!(
+        first_event["diagnostic"],
+        "https://outer.invalid/?next=[redacted-url]"
+    );
+    assert_eq!(
+        first_event["unknown_extension"]["path"],
+        "https://outer.invalid/redirect/[redacted-url]"
+    );
+    assert_eq!(
+        first_event["unknown_extension"]["nested"]["fragment"],
+        "https://outer.invalid/#next=[redacted-url]"
+    );
+}
+
+#[test]
 fn export_fails_when_legacy_invalid_rule_ids_are_promoted_to_correlation() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
@@ -1857,7 +2307,10 @@ fn export_timeline_text_produces_human_readable_session_timeline() {
     assert!(stdout.contains("[1] 2026-05-01T00:00:30Z critical detection tool=shell"));
     assert!(stdout.contains("Rules: mcp.tool_metadata.prompt_injection"));
     assert!(stdout.contains("Categories: mcp_prompt_injection"));
-    assert!(stdout.contains("Evidence: tool_result hash=sha256:abc123"));
+    assert!(stdout.contains(&format!(
+        "Evidence: tool_result hash={}",
+        evidence_hash("sha256:abc123")
+    )));
     assert!(
         stdout.contains("Triage: malicious confidence=0.95 reason=MCP prompt injection detected")
     );
@@ -2020,7 +2473,7 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         .expect("arguments evidence");
     assert_eq!(
         arguments["redacted_value"],
-        "{\"cmd\":\"cat /home/alice/project/[sensitive-path]\"}"
+        "{\"cmd\":\"cat [sensitive-path]\"}"
     );
     assert!(arguments["hash"].as_str().expect("hash").len() >= 64);
 

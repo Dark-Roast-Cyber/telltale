@@ -14,7 +14,10 @@ use clap::{
 };
 use sha2::Digest;
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::event::path_hash;
+use telltale_schema::event::{
+    PrivacySanitizer, SanitizationContext, opaque_identifier, path_hash, terminal_identifier,
+    terminal_rule_identifier, terminal_session_id,
+};
 use telltale_schema::source::Source;
 use telltale_sources::clients::supported_clients;
 
@@ -691,6 +694,24 @@ fn source_identity_hash(source: &str) -> String {
     telltale_schema::event::evidence_hash(source)
 }
 
+fn terminal_provenance_kind(kind: &str) -> String {
+    match kind {
+        "rule" | "modifier" => kind.to_string(),
+        _ => opaque_identifier("provenance-kind", kind),
+    }
+}
+
+fn terminal_rule_category(category: &str) -> String {
+    terminal_identifier("category", category)
+}
+
+fn terminal_rule_severity(severity: &str) -> String {
+    match severity {
+        "informational" | "low" | "medium" | "high" | "critical" => severity.to_string(),
+        _ => opaque_identifier("severity", severity),
+    }
+}
+
 fn rule_diagnostics_value(diagnostics: &RuleResolutionDiagnostics) -> serde_json::Value {
     serde_json::json!({
         "sources": diagnostics
@@ -702,8 +723,8 @@ fn rule_diagnostics_value(diagnostics: &RuleResolutionDiagnostics) -> serde_json
             .provenance
             .iter()
             .map(|entry| serde_json::json!({
-                "id": entry.id,
-                "kind": entry.kind,
+                "id": terminal_rule_identifier(&entry.id),
+                "kind": terminal_provenance_kind(&entry.kind),
                 "winner": source_identity_hash(&entry.winner),
                 "replaced_sources": entry
                     .replaced_sources
@@ -749,7 +770,7 @@ fn output_snapshot_value(
                 _ => None,
             };
             sinks.push(serde_json::json!({
-                "name": spec.name,
+                "name": terminal_identifier("sink", &spec.name),
                 "type": spec.kind.type_name(),
                 "enabled": spec.enabled,
                 "selection": if replaced_by_cli { "replaced_by_cli" } else if spec.enabled { "selected" } else { "disabled" },
@@ -956,12 +977,12 @@ fn resolve_scan_config(
 fn display_paths(paths: &[PathBuf]) -> Vec<String> {
     paths
         .iter()
-        .map(|path| path.display().to_string())
+        .map(|path| PrivacySanitizer::sanitize(SanitizationContext::Path, &path.to_string_lossy()))
         .collect()
 }
 
 fn display_path(path: Option<&Path>) -> Option<String> {
-    path.map(|path| path.display().to_string())
+    path.map(|path| PrivacySanitizer::sanitize(SanitizationContext::Path, &path.to_string_lossy()))
 }
 
 fn run_config_validate(
@@ -1022,7 +1043,7 @@ fn run_config_validate(
         .map(|spec| {
             format!(
                 "sink '{}' has an inline secret; prefer {{env: NAME}} or {{file: PATH}} references",
-                spec.name
+                terminal_identifier("sink", &spec.name)
             )
         })
         .collect();
@@ -1033,7 +1054,7 @@ fn run_config_validate(
             .map(|spec| {
                 format!(
                     "sink '{}' disables TLS certificate verification (insecure_skip_verify)",
-                    spec.name
+                    terminal_identifier("sink", &spec.name)
                 )
             }),
     );
@@ -1051,12 +1072,13 @@ fn run_config_validate(
         .iter()
         .map(|spec| {
             serde_json::json!({
-                "name": spec.name,
+                "name": terminal_identifier("sink", &spec.name),
                 "type": spec.kind.type_name(),
                 "enabled": spec.enabled,
             })
         })
         .collect();
+    let rule_diagnostics = rule_diagnostics_value(&resolution.diagnostics);
 
     println!(
         "{}",
@@ -1064,7 +1086,7 @@ fn run_config_validate(
             "status": "ok",
             "rule_count": rule_set.rule_count(),
             "default_rules": !no_default_rules,
-            "policy_name": rule_set.policy_name(),
+            "policy_name": rule_set.policy_name().map(|name| opaque_identifier("policy", name)),
             "local_config": {
                 "enabled": !local_config.no_local_config,
                 "explicit_config_dirs": if local_config.no_local_config {
@@ -1096,8 +1118,8 @@ fn run_config_validate(
                 "paths": display_paths(&resolved_config.rule_paths),
                 "explicit_count": rule_paths.len(),
                 "discovered_count": resolved_config.discovered.rule_paths.len(),
-                "provenance": resolution.diagnostics.provenance,
-                "sources": resolution.diagnostics.sources,
+                "provenance": rule_diagnostics["provenance"],
+                "sources": rule_diagnostics["sources"],
             },
             "overrides": {
                 "paths": display_paths(&resolved_config.override_paths),
@@ -1373,18 +1395,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 for rule in resolution.rule_set.summaries() {
                     let source = provenance
                         .get(rule.id.as_str())
-                        .map(|entry| entry.winner.as_str())
-                        .unwrap_or("-");
+                        .map(|entry| opaque_identifier("rule-source", &entry.winner))
+                        .unwrap_or_else(|| "-".to_string());
                     let replaced = provenance
                         .get(rule.id.as_str())
-                        .map(|entry| entry.replaced_sources.join(","))
+                        .map(|entry| {
+                            entry
+                                .replaced_sources
+                                .iter()
+                                .map(|source| opaque_identifier("rule-source", source))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
                         .unwrap_or_default();
                     if verbose {
                         println!(
                             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                            rule.id,
-                            rule.category,
-                            rule.severity,
+                            terminal_rule_identifier(&rule.id),
+                            terminal_rule_category(&rule.category),
+                            terminal_rule_severity(&rule.severity),
                             rule.score,
                             rule.enabled,
                             source,
@@ -1393,7 +1422,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         println!(
                             "{}\t{}\t{}\t{}\t{}",
-                            rule.id, rule.category, rule.severity, rule.score, rule.enabled
+                            terminal_rule_identifier(&rule.id),
+                            terminal_rule_category(&rule.category),
+                            terminal_rule_severity(&rule.severity),
+                            rule.score,
+                            rule.enabled
                         );
                     }
                 }
@@ -1415,14 +1448,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &resolved_config.override_paths,
                         &[],
                     )?;
+                let diagnostics = rule_diagnostics_value(&resolution.diagnostics);
                 println!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
                         "status": "ok",
                         "rule_count": resolution.rule_set.rule_count(),
-                        "policy": resolution.rule_set.policy_name(),
-                        "sources": resolution.diagnostics.sources,
-                        "provenance": resolution.diagnostics.provenance,
+                        "policy": resolution.rule_set.policy_name().map(|name| opaque_identifier("policy", name)),
+                        "sources": diagnostics["sources"],
+                        "provenance": diagnostics["provenance"],
                     }))?
                 );
             }
@@ -1459,8 +1493,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .evidence
                         .iter()
                         .find(|evidence| evidence.field == "error")
-                        .map(|evidence| evidence.redacted_value.as_str())
-                        .unwrap_or("rule evaluation failed");
+                        .map(|evidence| {
+                            PrivacySanitizer::sanitize(
+                                SanitizationContext::Diagnostic,
+                                &evidence.redacted_value,
+                            )
+                        })
+                        .unwrap_or_else(|| "rule evaluation failed".to_string());
                     return Err(format!("rules test failed: {detail}").into());
                 }
                 let matches = detections
@@ -1468,11 +1507,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|(_, event)| event.event_type == "detection")
                     .map(|(_, event)| {
                         serde_json::json!({
-                            "session_id": event.session_id,
+                            "session_id": terminal_session_id(&event.session_id),
                             "severity": event.severity,
                             "risk_score": event.risk_score,
-                            "rule_ids": event.rule_ids,
-                            "categories": event.categories,
+                            "rule_ids": event.rule_ids.iter().map(|value| terminal_identifier("rule", value)).collect::<Vec<_>>(),
+                            "categories": event.categories.iter().map(|value| terminal_identifier("category", value)).collect::<Vec<_>>(),
                         })
                     })
                     .collect::<Vec<_>>();

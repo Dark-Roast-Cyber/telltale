@@ -10,7 +10,15 @@ This document defines the trust boundaries Telltale must respect when parsing, n
 
 ## Core Principle
 
-**Treat agent session content as untrusted by default.** Only structured metadata that Telltale itself generates (client IDs, rule IDs, severity, timestamps, session IDs derived from file paths) should be treated as trusted. Everything extracted from session store files is untrusted input.
+**Treat agent session content as untrusted by default.** Only structured metadata that Telltale itself generates (client IDs, rule IDs, severity, and timestamps) is trusted without review. Everything extracted from session store files, including session IDs and product metadata, is untrusted input until its emission policy classifies it.
+
+The v0.6 emission boundary is deterministic and local-only: `PrivacySanitizer` in `telltale-schema` sanitizes text after parsing and detection at terminal Event 3.0 serialization, delivery alerts, timeline export, historical JSONL/Elastic export, or stderr/log diagnostics. Inspection first applies a UTF-8-safe 4096-byte bound; if the cut retains an ambiguous terminal lexical fragment, that fragment is neutralized with an idempotent marker before classification and compaction, while safe leading evidence remains bounded and useful. This is bounded inspection, not an arbitrary scanning or perfect-classification claim. Recognized bounded product metadata (`codex`, `gpt-5`, `openai`) and controlled identifiers remain readable only when credential-free; other source actor fields (`agent`, `model`, and `provider`), source-event IDs, dedup keys, and unsafe config/source text become deterministic opaque values where required. Session IDs must be structurally safe and credential-free to remain readable; all other source session IDs use a session-specific domain-separated hash. Source values that imitate terminal opaque-marker syntax are hashed from the raw value rather than trusted. Response strings and risk rationales use bounded summary sanitization so useful safe rationale remains visible. Historical traversal preserves object/array shape while assigning unknown string values to Summary and sanitizing unsafe extension keys; canonical Event 3.0 re-export preserves established hash fields and exact recognized opaque labels. Valid RFC3339 event timestamps retain their values; invalid source timestamps fail closed. It does not alter parser ownership/failures, detector inputs, scores, labels, or Event 3.0 shape, and it makes no network call or use of an external model/service.
+
+### Historical Opaque Marker Boundary
+
+An imported Event 3.0 record is still untrusted. Telltale recognizes a historical opaque label only when the entire value has a registered type and the exact emitted form `[type:64-lowercase-hex-digest]`. It preserves such labels solely to keep repeated exports and derived timeline/correlation references linkable. Recognition does not authenticate the record, authorize an action, suppress a detection, establish provenance, or make the label trusted metadata. An attacker can supply an exact marker and it will be preserved as an unauthenticated pseudonymous label.
+
+Malformed, near-miss, unknown-type, upper-case, prefixed, and suffixed values do not receive historical preservation. Native/source-controlled values that look like markers use the normal source identifier policy and are rehashed where that policy requires it. Any future authenticated provenance mechanism must be a separately designed verifiable envelope; marker syntax alone is never an authentication or trust signal.
 
 ## Untrusted Sources
 
@@ -138,7 +146,8 @@ The following content sources in agent session stores should be treated as untru
 | Install scripts | Low | Context window | `install`, `persistence`, `supply_chain` |
 | Prior session history | Low-Medium | Context window | Cross-session correlation |
 | Generated code | Low | Context window | `execution`, `approval_bypass`, `download` |
-| Telltale metadata (client, rule ID, severity, session ID) | High | Structured fields | N/A — trusted |
+| Telltale-generated metadata (client, rule ID, severity) | High | Structured fields | N/A — trusted |
+| Source session and product identifiers | Low until classified | Structured fields | Emitted-session or product-metadata safety policy |
 
 ## Parser Guidance
 
@@ -158,16 +167,19 @@ When writing or modifying detection rules:
 2. **Do not trust model output as intent.** A tool call in model output may not reflect user intent. Detection rules should consider whether the user's preceding context supports the action.
 3. **Treat MCP metadata as the highest-risk surface.** MCP tool descriptions, parameter descriptions, and server instructions are the most attacker-controlled content in a session. Prioritize `mcp_prompt_injection` rules for these surfaces.
 4. **Chain signals from different trust boundaries.** The most reliable detections combine signals from multiple surfaces: MCP injection plus egress, credential access plus publishing, download plus execution. Chain modifiers formalize these combinations.
-5. **Redact all untrusted evidence.** Evidence extracted from untrusted sources must pass through `redact_sensitive_text()` before emission. See [privacy-model.md](privacy-model.md).
+5. **Redact all untrusted evidence.** Evidence extracted from untrusted sources must cross the `PrivacySanitizer` evidence, command/result, URL, path, diagnostic, or summary context before emission. `redact_sensitive_text()` remains only an evidence-context compatibility wrapper. See [privacy-model.md](privacy-model.md).
 
 ## Emission Guidance
 
 When emitting events to SIEM:
 
-1. **Safe metadata is trusted.** Fields like `client`, `session_id`, `severity`, `risk_score`, `rule_ids`, and `event_type` are Telltale-generated and safe for indexing.
-2. **Redacted excerpts are semi-trusted.** They contain bounded, redacted snippets of untrusted content. They are safe for analyst review but should not be parsed as structured data by downstream systems.
-3. **Hashed values are trusted.** SHA-256 hashes are deterministic Telltale-generated values safe for correlation.
-4. **Never emit raw untrusted content.** Full session transcripts, raw tool arguments, raw tool results, and raw MCP metadata must never appear in events. See [privacy-model.md](privacy-model.md) for the full evidence class contract.
+1. **Approved metadata is structured.** `client`, rule IDs, severities, categories, timestamps, recognized product metadata, and bounded safe identifiers are preserved for indexing. Unsafe source session IDs are domain-separated hashes; source-event IDs and process dedup keys are opaque at emission. Each field is reviewed by provenance rather than treated as transcript excerpts.
+2. **Redacted excerpts are semi-trusted.** They contain bounded, redacted snippets of untrusted content. Evidence, command/result, URL, path, diagnostic, and summary contexts preserve only useful safe structure; process host/user and non-session entity values become deterministic opaque markers.
+3. **Hashes aid correlation but are not encryption.** `source_path_hash` and `evidence_hash` retain deterministic semantics. Low-entropy inputs can be subject to dictionary comparison.
+4. **Canonical JSONL is post-boundary only.** Durable first-write JSONL stores canonical Event 3.0 bytes after sanitization; it must not retain raw parser records as a repair or replay source.
+5. **Never emit raw untrusted content.** Full session transcripts, raw tool arguments, raw tool results, raw MCP metadata, unsafe parser errors, and unsafe sink errors must never appear in Events or stderr/log diagnostics. See [privacy-model.md](privacy-model.md) for the full evidence class contract.
+
+The synthetic controlled-marker corpus covers detection, activity, health, scanner error, operational alert, session risk summary, correlation, process-chain, MCP, and JSONL output paths. It is an adversarial regression oracle, not a claim of perfect secret classification. The serialized-byte checker compares exact decoded JSON keys and string values; supported escaped and percent-encoded forms are established by separate sanitizer regressions rather than implicit normalization in the checker. The checker has explicit 1 MiB input and nesting limits, fails with marker-safe errors, and stops at the first marker. Issue #26 must apply it to outbox, retry, permanent-failure, and dead-letter payloads; no external service is authorized for that work.
 
 ## Publication Boundary
 

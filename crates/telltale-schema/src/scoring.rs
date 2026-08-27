@@ -205,6 +205,24 @@ impl RiskContribution {
         &self.rationale
     }
 
+    /// Keep rule/config rationale useful while applying the terminal emitted-
+    /// text privacy policy. Event serialization is the only caller.
+    pub(crate) fn for_emission(mut self) -> Self {
+        self.id = crate::event::terminal_rule_identifier(&self.id);
+        self.rationale = Self::emitted_rationale(&self.rationale);
+        self
+    }
+
+    pub(crate) fn emitted_rationale(rationale: &str) -> String {
+        let sanitized = crate::event::PrivacySanitizer::sanitize(
+            crate::event::SanitizationContext::Summary,
+            rationale,
+        );
+        // Rationale has a schema-constrained safe-text grammar. Preserve that
+        // established representation after terminal sanitization.
+        normalize_risk_rationale(&sanitized)
+    }
+
     pub fn new(
         id: impl Into<String>,
         contribution_type: RiskContributionType,
@@ -232,7 +250,9 @@ impl RiskContribution {
         if self.id.trim().is_empty() {
             return Err(RiskAccountingError::EmptyContributionId);
         }
-        if !is_canonical_contribution_id(&self.id) {
+        if !is_canonical_contribution_id(&self.id)
+            || crate::event::contains_credential_material(&self.id)
+        {
             return Err(RiskAccountingError::InvalidContributionId(self.id.clone()));
         }
         if self.points == 0 {

@@ -88,7 +88,10 @@ impl EventSink for ElasticBulkSink {
             let action = elastic_bulk_action_json(&self.index, Some(&event.event_id));
             let mut segment = serde_json::to_vec(&action)?;
             segment.push(b'\n');
-            segment.extend_from_slice(&serde_json::to_vec(event)?);
+            let mut event_bytes = Vec::new();
+            let mut serializer = serde_json::Serializer::new(&mut event_bytes);
+            crate::event::serialize_event_for_emission(event, &mut serializer)?;
+            segment.extend_from_slice(&event_bytes);
             segments.push(segment);
         }
         let mut headers: Vec<(&str, &str)> = Vec::new();
@@ -284,7 +287,22 @@ mod tests {
         let (endpoint, handle) = start_mock_elastic(r#"{"took":1,"errors":false,"items":[]}"#);
         let sink = ElasticBulkSink::new(&endpoint, "telltale-events").with_api_key("test-key");
 
-        let events = [make_health_event(), make_health_event()];
+        let marker = "TT_PRIVACY_ELASTIC_25";
+        let mut first = make_health_event();
+        first.tags.push(format!("allowlist:{marker}"));
+        first.evidence.push(crate::event::Evidence {
+            field: "allowlist".to_string(),
+            redacted_value: marker.to_string(),
+            hash: None,
+            rule_id: None,
+        });
+        first.evidence.push(crate::event::Evidence {
+            field: "url".to_string(),
+            redacted_value: format!("https://example.invalid/home/{marker}/.ssh/id_rsa?mode=view"),
+            hash: None,
+            rule_id: None,
+        });
+        let events = [first, make_health_event()];
         emit_events(&sink, &events).expect("emit bulk events");
 
         let request = handle.join().expect("mock join");
@@ -292,6 +310,8 @@ mod tests {
         let lowercase = request.to_lowercase();
         assert!(lowercase.contains("authorization: apikey test-key"));
         assert!(lowercase.contains("content-type: application/x-ndjson"));
+        assert!(!request.contains(marker));
+        assert!(request.contains("https://example.invalid/[sensitive-path]?mode=view"));
 
         let body = request.split_once("\r\n\r\n").expect("body split").1;
         assert!(body.ends_with('\n'), "bulk body must end with a newline");

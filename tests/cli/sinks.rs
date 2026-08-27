@@ -276,7 +276,9 @@ fn scan_once_requires_splunk_hec_endpoint_and_token_together() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--splunk-hec-endpoint and --splunk-hec-token must be set together"));
+    assert!(stderr.contains(
+        "--splunk-hec-endpoint and --splunk-hec-token [redacted-secret] be set together"
+    ));
     assert!(!log_path.exists());
     assert!(!state_path.exists());
 }
@@ -1153,6 +1155,39 @@ sinks:
             .as_str()
             .expect("warning text")
             .contains("inline secret")
+    );
+}
+
+#[test]
+fn config_validate_omits_hostile_sink_names_from_json_and_warnings() {
+    let temp = tempdir().expect("tempdir");
+    let config_dir = temp.path().join("conf");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs.d");
+    let sink_name = "https://sink-owner.example.invalid/private";
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\nsinks:\n  - name: {sink_name}\n    type: splunk_hec\n    enabled: false\n    endpoint: https://splunk.example.invalid/collector\n    token: inline-lab-token\n"
+        ),
+    )
+    .expect("write outputs yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_dir)
+        .output()
+        .expect("run telltale");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.contains(sink_name),
+        "config validation exposed a hostile sink name"
     );
 }
 

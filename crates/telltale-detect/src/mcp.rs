@@ -7,7 +7,8 @@ use walkdir::WalkDir;
 
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::event::{
-    ActivityEventInput, Event, Evidence, activity_event, evidence_hash, path_hash,
+    ActivityEventInput, Event, Evidence, PrivacySanitizer, SanitizationContext, activity_event,
+    evidence_hash, path_hash,
 };
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -638,7 +639,10 @@ fn mcp_inventory_error_event(client: ClientId, error: std::io::Error) -> Event {
         ],
         evidence: vec![Evidence {
             field: "mcp_inventory_error".to_string(),
-            redacted_value: redact_error_message(&error.to_string()),
+            redacted_value: PrivacySanitizer::sanitize(
+                SanitizationContext::Diagnostic,
+                &error.to_string(),
+            ),
             hash: Some(evidence_hash(&error.to_string())),
             rule_id: None,
         }],
@@ -757,6 +761,8 @@ fn package_from_arg(arg: &str) -> Option<String> {
         .then_some(arg.to_string())
 }
 
+/// This predates terminal event sanitization and deliberately remains before
+/// summary hashing so state and correlation retain their established inputs.
 fn redact_command_value(command: &str) -> String {
     if command.contains('=') || command.to_ascii_lowercase().contains("token") {
         "[redacted-command]".to_string()
@@ -774,29 +780,29 @@ fn host_from_url(url: &str) -> Option<String> {
     after_scheme
         .split('/')
         .next()
+        .map(|authority| {
+            authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host)
+        })
         .filter(|host| !host.is_empty())
         .map(str::to_string)
-}
-
-fn redact_error_message(message: &str) -> String {
-    if message.len() > 240 {
-        format!("{}[truncated]", &message[..240])
-    } else {
-        message.to_string()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
     use tempfile::tempdir;
 
     use super::{
-        ConfigFormat, DiscoveredMcpConfig, McpToolIndex, discover_mcp_inventory,
-        discover_mcp_inventory_servers, discover_mcp_usage, parse_toml_mcp_config,
+        ConfigFormat, DiscoveredMcpConfig, McpServerInventory, McpToolIndex,
+        discover_mcp_inventory, discover_mcp_inventory_servers, discover_mcp_usage,
+        inventory_evidence, mcp_inventory_error_event, mcp_inventory_event, parse_toml_mcp_config,
     };
     use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::event::{ControlledMarker, check_serialized_event_markers, evidence_hash};
     use telltale_schema::source::Source;
 
     #[test]
@@ -986,5 +992,93 @@ mod tests {
         }];
 
         assert!(discover_mcp_usage(temp.path(), &sources).is_empty());
+    }
+
+    #[test]
+    fn mcp_inventory_summaries_and_errors_cross_the_privacy_boundary() {
+        let marker = "TT_PRIVACY_MCP_25";
+        let inventory = McpServerInventory {
+            client: ClientId::Codex,
+            source_id: "codex.mcp_config".to_string(),
+            path: PathBuf::from(format!("/home/{marker}/.codex/config.toml")),
+            server_name: "fixture".to_string(),
+            transport: Some("stdio".to_string()),
+            command: Some(format!("node --api-key={marker}")),
+            package: Some("mcp-fixture".to_string()),
+            url_host: None,
+            arg_count: 1,
+            env_keys: vec!["API_KEY".to_string()],
+            declared_tools: vec!["fixture_tool".to_string()],
+            supported: true,
+            unsupported_reason: None,
+        };
+        let events = [
+            mcp_inventory_event(&inventory),
+            mcp_inventory_error_event(
+                ClientId::Codex,
+                std::io::Error::other(format!(
+                    "config at /home/{marker}/.codex/config.toml failed for https://user:{marker}@example.invalid/?token={marker}"
+                )),
+            ),
+        ];
+        let markers = [ControlledMarker {
+            id: "mcp-marker",
+            value: marker,
+        }];
+
+        for event in events {
+            let bytes = serde_json::to_vec(&event.emittable()).expect("serialize MCP event");
+            assert!(
+                check_serialized_event_markers(&bytes, "mcp", &markers).is_ok(),
+                "MCP event retained a controlled marker"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_inventory_errors_use_the_shared_diagnostic_policy_before_emission() {
+        let marker = "TT_PRIVACY_MCP_DIAGNOSTIC_25";
+        let event = mcp_inventory_error_event(
+            ClientId::Codex,
+            std::io::Error::other(format!(
+                "config at /home/{marker}/.codex/config.toml failed with token={marker}"
+            )),
+        );
+        let error = event
+            .evidence
+            .iter()
+            .find(|evidence| evidence.field == "mcp_inventory_error")
+            .expect("MCP error evidence");
+
+        assert!(
+            !error.redacted_value.contains(marker),
+            "MCP diagnostic retained a controlled marker before emission"
+        );
+        assert!(error.redacted_value.contains("<path>"));
+    }
+
+    #[test]
+    fn mcp_inventory_summary_hashes_the_established_safe_command_value() {
+        let inventory = McpServerInventory {
+            client: ClientId::Codex,
+            source_id: "codex.mcp_config".to_string(),
+            path: PathBuf::from("/synthetic/config.toml"),
+            server_name: "fixture".to_string(),
+            transport: Some("stdio".to_string()),
+            command: Some("node --api-key=synthetic-value".to_string()),
+            package: Some("mcp-fixture".to_string()),
+            url_host: None,
+            arg_count: 1,
+            env_keys: Vec::new(),
+            declared_tools: Vec::new(),
+            supported: true,
+            unsupported_reason: None,
+        };
+
+        let evidence = inventory_evidence(&inventory);
+        let summary = &evidence[0];
+        let expected_hash = evidence_hash(&summary.redacted_value);
+        assert!(summary.redacted_value.contains("[redacted-command]"));
+        assert_eq!(summary.hash.as_deref(), Some(expected_hash.as_str()));
     }
 }
