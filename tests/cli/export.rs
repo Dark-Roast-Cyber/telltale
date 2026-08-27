@@ -1805,7 +1805,7 @@ fn historical_exports_recursively_sanitize_unknown_structure_and_unsafe_sessions
                 .map(|line| serde_json::from_str::<Value>(line).expect("elastic bulk JSON"))
                 .collect::<Vec<_>>();
             assert_eq!(lines.len(), sessions.len() * 2);
-            for pair in lines.chunks_exact(2) {
+            for pair in lines.as_chunks::<2>().0 {
                 assert_eq!(pair[0]["index"]["_index"], "telltale-events");
                 assert!(pair[1].get("index").is_none());
                 assert!(
