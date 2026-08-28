@@ -330,6 +330,7 @@ These files are the source-of-truth for Telltale's implementation, rules, and sc
 
 - [Install](docs/install.md) — build, verify, and deploy
 - [Architecture](docs/architecture.md) — pipeline stages and module boundaries
+- [Development principles](docs/development-principles.md) — authoritative architecture and development philosophy
 - [Detection model](docs/detection-model.md) — risk scoring, rule categories, thresholds
 - [Telemetry output](docs/telemetry-output.md) — JSONL event schema and forwarding
 - [Detection content standard](docs/detection-content-standard.md) — quality bar for bundled rules

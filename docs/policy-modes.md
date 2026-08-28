@@ -4,7 +4,20 @@ Telltale operates in named policy modes that control what the scanner does with 
 
 ## Current Phase: Log-Review
 
-Telltale is a batch log-review system. It discovers agent session stores, parses transcripts, applies deterministic detection rules, and emits JSONL events for SIEM ingestion. It does not hook into agent processes, intercept tool calls, make outbound review requests, or terminate sessions.
+Telltale currently operates as a batch log-review system. It discovers agent
+session stores, parses transcripts, applies deterministic detection rules, and
+emits JSONL events for SIEM ingestion. It does not hook into agent processes,
+intercept tool calls, make outbound review requests, or terminate sessions.
+
+Per the adopted [development
+principles](development-principles.md), the long-term
+engine separates detection (produces signals) from policy (produces decisions
+such as allow, observe, warn, require approval, reprompt, block, and remediate)
+and capability-driven action adapters. This document's "modes" describe the
+current phase's configuration vocabulary, not that future engine stage; today's
+policy YAML selects active rule categories and rule IDs, and the emitted
+deterministic response metadata is the review artifact downstream consumers
+use.
 
 Three policy modes are available in the current phase:
 
@@ -52,7 +65,9 @@ Emit detections with deterministic response metadata for analyst review. This is
 | Review metadata | Native Event 3.0 uses deterministic response metadata and optional `timeline_anchors`; no embedded triage verdict |
 | Operational alerts | emitted |
 
-Detections follow the standard severity-to-behavior mapping:
+Detections follow this severity mapping (the current convention; the adopted
+principles treat response selection as a future policy responsibility rather
+than a fixed severity table):
 
 | Score | Severity | Review metadata | Emission |
 | ---: | --- | --- | --- |
@@ -81,7 +96,12 @@ Mark detections that *would* have been blocked without actually blocking anythin
 
 ## Future Phases: Active Hook
 
-The following modes require integration with agent runtimes or process control. They belong to a later phase after the log-review model proves accurate and the false-positive profile is stable.
+The following modes are historical forward-looking intent predating the adopted
+development principles. They require integration with agent runtimes or process
+control and belong to a later phase after the log-review model proves accurate
+and the false-positive profile is stable; the principles' provider-neutral
+decision/action model supersedes this older mode vocabulary when that work is
+accepted.
 
 ### `confirm`
 
@@ -136,7 +156,12 @@ Load a policy at scan time:
 telltale scan --once --policy config/policy.yaml --root ~/.codex/sessions
 ```
 
-The policy YAML controls *which rules fire*. The policy mode controls *what happens when they fire*. In the current log-review phase, the mode is implicitly `alert` for all detections that pass the policy filter.
+The policy YAML controls *which rules fire*. The policy mode controls *what
+happens when they fire*. In the current log-review phase, the mode is implicitly
+`alert` for all detections that pass the policy filter. Under the adopted
+principles, this policy-file vocabulary is legacy/current-implementation
+terminology; future policy semantics (decisions, capabilities, enforcement
+degradation) belong to the separately accepted policy layer.
 
 ## Relationship to Other Features
 

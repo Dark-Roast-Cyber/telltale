@@ -285,7 +285,6 @@
 - `f9734e5` (05-23) — Add README local link regression test.
 - `1122d75` (05-23) — Clarify public packaging boundary.
 - `f7a4e11` (05-23) — Update systemd scan example cadence.
-- `994f09a` (05-19) — Add OpenCode durable workflow.
 - `a9c1baf` (05-19) — Refactor CLI scan and parser helpers.
 - `f8721c6` (05-19) — Cap redacted evidence excerpts.
 - `f65ead9` (05-19) — Improve chain modifier coverage guidance.
@@ -302,7 +301,6 @@
 - `3d0314e` (05-18) — Clarify install scan root.
 - `594e601` (05-18) — Align install verification with README.
 - `9c5f913` (05-18) — Add README links for public reference docs.
-- `1cb3545` (05-18) — Ignore local OpenCode skills.
 - `c59b162` (05-18) — Ignore local SIEM development files.
 - `a6135ef` (05-18) — Ignore local-only development files.
 

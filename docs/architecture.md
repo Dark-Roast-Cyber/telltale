@@ -2,6 +2,21 @@
 
 > **Website:** For an approachable architecture overview, see [AgentArchaeology.ai/telltale/architecture](https://agentarchaeology.ai/telltale/architecture/).
 
+The authoritative development principles live in
+[development-principles.md](development-principles.md).
+
+### Conceptual flow
+
+```text
+Observation -> Normalization -> Detection -> Signals -> Policy -> Decision -> Action -> Audit/Telemetry
+```
+
+These responsibilities stay distinct. Today, session-store scanning is the
+shipped observation adapter; signals, policy, decision, and action are the
+conceptual core stages defined in the principles. Until that policy/decision
+stage is separately accepted, decisions are represented as the deterministic
+response metadata carried by emitted events.
+
 ## Pipeline
 
 Telltale runs a repeatable batch pipeline:

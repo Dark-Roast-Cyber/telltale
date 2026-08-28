@@ -6,7 +6,10 @@ AI systems. It is the foundation for the Agent Detection and Response (ADR)
 category.
 
 This roadmap is a stable public summary of project direction. Detailed
-execution planning is maintained internally.
+execution planning is maintained internally. The authoritative architecture
+philosophy lives in [development
+principles](docs/development-principles.md); where that document and the
+summaries below differ on future architecture, the principles govern.
 
 ## Current Focus: 0.6.0 Trust, Privacy, and Durable Collection
 
@@ -53,9 +56,9 @@ Priorities, in order:
 
 ## Near-Term Themes
 
-- **Agentic development framework** — continue using a structured
-  spec-driven workflow for how Telltale is built by AI agents, with one accepted
-  Issue and one active OpenSpec change at a time.
+- **Architecture & quality framework** — evolve the engineering standards and
+  architecture principles Telltale is built against, with one accepted Issue at
+  a time and bounded, reviewable changes.
 
 ## Beyond 0.6.0
 

@@ -12,6 +12,13 @@ This document defines the first deterministic workflow for turning human-written
 - Preserve the existing detection lifecycle: rules, fixtures, validation, coverage, documentation, and SIEM output.
 - Mark unobservable controls clearly instead of pretending logs can prove behavior they cannot expose.
 
+These controls feed today's detection pipeline. Under the adopted
+[development principles](development-principles.md), a
+future policy layer will evaluate canonical facts and signals to produce
+provider-neutral decisions; this bundled-rules workflow remains the current
+implementation for expressing human policy as observable detection content until
+that layer is accepted.
+
 ## Concepts
 
 ### Human Policy
