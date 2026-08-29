@@ -5,7 +5,7 @@ use base64::Engine as _;
 
 use crate::event::Event;
 use crate::sink::http::{HttpClient, RetryConfig, TlsOptions, chunk_segments};
-use crate::sink::{EventSink, SinkDeliveryError};
+use crate::sink::{DeliveryError, DeliveryErrorClass, EventSink};
 
 pub const DEFAULT_ELASTIC_INDEX: &str = "telltale-events";
 /// Elasticsearch's default `http.max_content_length` is 100 MB; 5 MiB per
@@ -102,55 +102,128 @@ impl EventSink for ElasticBulkSink {
             let response = self
                 .client
                 .post(&self.bulk_url, &headers, "application/x-ndjson", &chunk)
-                .map_err(|err| SinkDeliveryError {
-                    attempts: err.attempts,
-                    message: format!("Elasticsearch bulk request failed: {}", err.message),
-                })?;
+                .map_err(elastic_transport_error)?;
             if !(200..300).contains(&response.status) {
-                return Err(SinkDeliveryError {
-                    attempts: response.attempts,
-                    message: format!(
-                        "Elasticsearch bulk request failed with HTTP {}",
-                        response.status
-                    ),
-                }
-                .into());
+                return Err(elastic_status_error(response.status, response.attempts).into());
             }
-            // The bulk API returns 200 even when individual items failed, but
-            // every successful response must still carry a valid `errors` flag.
-            let item_errors = match bulk_item_errors(&response.body) {
-                Ok(item_errors) => item_errors,
-                Err(reason) => {
-                    return Err(SinkDeliveryError {
-                        attempts: response.attempts,
-                        message: format!("Elasticsearch bulk response is invalid: {reason}"),
-                    }
-                    .into());
-                }
-            };
-            if let Some(item_errors) = item_errors {
-                let statuses = item_errors
-                    .statuses
-                    .iter()
-                    .map(u16::to_string)
-                    .collect::<Vec<_>>();
-                let detail = if statuses.is_empty() {
-                    "no parseable item statuses".to_string()
-                } else {
-                    format!("status codes: {}", statuses.join(", "))
-                };
-                return Err(SinkDeliveryError {
-                    attempts: response.attempts,
-                    message: format!(
-                        "Elasticsearch bulk response reported {} failed item(s); {detail}",
-                        item_errors.failed_count
-                    ),
-                }
-                .into());
-            }
+            validate_bulk_response(&response.body, response.attempts)?;
         }
         Ok(())
     }
+
+    fn emit_canonical_once(&self, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let segment = elastic_bulk_segment(payload, &self.index)?;
+        let mut headers: Vec<(&str, &str)> = Vec::new();
+        if let Some(auth) = &self.auth_header {
+            headers.push(("Authorization", auth));
+        }
+        let response = self
+            .client
+            .post_once(&self.bulk_url, &headers, "application/x-ndjson", &segment)
+            .map_err(elastic_transport_error)?;
+        if !(200..300).contains(&response.status) {
+            return Err(elastic_status_error(response.status, response.attempts).into());
+        }
+        validate_bulk_response(&response.body, response.attempts)
+    }
+}
+
+fn elastic_transport_error(err: crate::sink::http::HttpPostError) -> DeliveryError {
+    let class = match err.kind {
+        crate::sink::http::HttpPostErrorKind::NoResponse => DeliveryErrorClass::TransportNoResponse,
+        crate::sink::http::HttpPostErrorKind::Timeout => DeliveryErrorClass::Timeout,
+    };
+    DeliveryError::new(
+        class,
+        err.attempts,
+        format!("Elasticsearch bulk request failed: {}", err.message),
+    )
+}
+
+fn elastic_status_error(status: u16, attempts: u32) -> DeliveryError {
+    let class = match status {
+        401 | 403 => DeliveryErrorClass::AuthenticationBlocked { status },
+        status => DeliveryErrorClass::HttpStatus { status },
+    };
+    DeliveryError::new(
+        class,
+        attempts,
+        format!("Elasticsearch bulk request failed with HTTP {status}"),
+    )
+}
+
+fn validate_bulk_response(body: &str, attempts: u32) -> Result<(), Box<dyn std::error::Error>> {
+    // The bulk API returns 200 even when individual items failed, but every
+    // successful response must still carry a valid `errors` flag.
+    let item_errors = bulk_item_errors(body).map_err(|reason| {
+        Box::new(DeliveryError::new(
+            DeliveryErrorClass::SinkApplicationRejected,
+            attempts,
+            format!("Elasticsearch bulk response is invalid: {reason}"),
+        )) as Box<dyn std::error::Error>
+    })?;
+    if let Some(item_errors) = item_errors {
+        let statuses = item_errors
+            .statuses
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>();
+        let detail = if statuses.is_empty() {
+            "no parseable item statuses".to_string()
+        } else {
+            format!("status codes: {}", statuses.join(", "))
+        };
+        return Err(DeliveryError::new(
+            DeliveryErrorClass::SinkApplicationRejected,
+            attempts,
+            format!(
+                "Elasticsearch bulk response reported {} failed item(s); {detail}",
+                item_errors.failed_count
+            ),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Build one Bulk API action/source pair while retaining the stored canonical
+/// Event 3.0 bytes verbatim as the source line.
+fn elastic_bulk_segment(
+    payload: &[u8],
+    index: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let value: serde_json::Value = serde_json::from_slice(payload).map_err(|error| {
+        Box::new(DeliveryError::new(
+            DeliveryErrorClass::SinkApplicationRejected,
+            1,
+            format!("canonical Elasticsearch payload is invalid: {error}"),
+        )) as Box<dyn std::error::Error>
+    })?;
+    let event_id = value
+        .get("event_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|event_id| !event_id.is_empty())
+        .ok_or_else(|| {
+            Box::new(DeliveryError::new(
+                DeliveryErrorClass::SinkApplicationRejected,
+                1,
+                "canonical Elasticsearch payload has no event ID",
+            )) as Box<dyn std::error::Error>
+        })?;
+    if !value.is_object() {
+        return Err(DeliveryError::new(
+            DeliveryErrorClass::SinkApplicationRejected,
+            1,
+            "canonical Elasticsearch payload is not an Event object",
+        )
+        .into());
+    }
+    let action = elastic_bulk_action_json(index, Some(event_id));
+    let mut segment = serde_json::to_vec(&action)?;
+    segment.push(b'\n');
+    segment.extend_from_slice(payload);
+    segment.push(b'\n');
+    Ok(segment)
 }
 
 /// The Bulk API action line for one event. Shared with `telltale export
@@ -340,6 +413,14 @@ mod tests {
 
         let err = emit_events(&sink, &[make_health_event()]).expect_err("item errors");
         handle.join().expect("mock join");
+        let delivery = err
+            .downcast_ref::<crate::sink::DeliveryError>()
+            .expect("structured delivery error");
+        assert_eq!(
+            delivery.class,
+            crate::sink::DeliveryErrorClass::SinkApplicationRejected
+        );
+        assert_eq!(delivery.attempts, 1);
 
         let message = err.to_string();
         assert!(message.contains("1 failed item(s)"), "message: {message}");
@@ -354,6 +435,13 @@ mod tests {
 
         let err = emit_events(&sink, &[make_health_event()]).expect_err("malformed response");
         handle.join().expect("mock join");
+        let delivery = err
+            .downcast_ref::<crate::sink::DeliveryError>()
+            .expect("structured delivery error");
+        assert_eq!(
+            delivery.class,
+            crate::sink::DeliveryErrorClass::SinkApplicationRejected
+        );
 
         let message = err.to_string();
         assert!(

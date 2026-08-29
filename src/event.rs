@@ -87,6 +87,7 @@ mod tests {
     use super::{append_jsonl_events, serialize_jsonl_events};
     use crate::event::{
         ActivityEventInput, ControlledMarker, Evidence, check_serialized_event_markers,
+        serialize_event_for_emission,
     };
     use telltale_schema::clients::ClientId;
 
@@ -136,6 +137,52 @@ mod tests {
                 "canonical-jsonl",
                 &[ControlledMarker {
                     id: "jsonl-marker",
+                    value: marker,
+                }],
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn canonical_jsonl_stores_the_terminal_emission_bytes() {
+        let marker = "TT_PRIVACY_JSONL_STORED_BYTES_26";
+        let event = crate::event::activity_event(ActivityEventInput {
+            client: ClientId::Codex,
+            agent: None,
+            model: None,
+            provider: None,
+            session_id: "synthetic-jsonl-session".to_string(),
+            source_path_hash: "synthetic-jsonl-source".to_string(),
+            tool_name: Some("shell".to_string()),
+            tags: vec![format!("controlled:{marker}")],
+            evidence: vec![Evidence {
+                field: "tool_result".to_string(),
+                redacted_value: format!("SECRET={marker}"),
+                hash: None,
+                rule_id: None,
+            }],
+            risk_contributions: Vec::new(),
+            event_time: None,
+        })
+        .expect("activity event");
+        let mut canonical = Vec::new();
+        let mut serializer = serde_json::Serializer::new(&mut canonical);
+        serialize_event_for_emission(&event, &mut serializer).expect("terminal Event 3.0");
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("events.jsonl");
+
+        append_jsonl_events(&path, std::slice::from_ref(&event)).expect("append JSONL");
+        let stored = fs::read(&path).expect("read stored JSONL bytes");
+
+        assert_eq!(stored, [canonical.as_slice(), b"\n"].concat());
+        assert_eq!(stored.strip_suffix(b"\n"), Some(canonical.as_slice()));
+        assert!(
+            check_serialized_event_markers(
+                &stored,
+                "canonical-jsonl-stored-bytes",
+                &[ControlledMarker {
+                    id: "stored-bytes-marker",
                     value: marker,
                 }],
             )

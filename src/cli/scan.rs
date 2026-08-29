@@ -139,6 +139,10 @@ pub(crate) fn run_scan_loop(
 const WATCH_SHUTDOWN_POLL: Duration = Duration::from_millis(200);
 
 pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_durable_scan_platform(
+        config.execution.sinks,
+        crate::sink::outbox::current_platform_is_windows(),
+    )?;
     if !config.execution.dry_run
         && !config.execution.allow_fixtures
         && is_fixture_root(config.execution.root)
@@ -612,6 +616,16 @@ pub(crate) enum StateSavePolicy {
     OnChange,
 }
 
+fn ensure_durable_scan_platform(
+    sinks: &SinkSet,
+    is_windows: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if sinks.has_persistent_replay() {
+        crate::sink::outbox::ensure_durable_storage_supported_for_platform(is_windows)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     run_scan(config, ScanTargets::Full, StateSavePolicy::Always).map(|_| ())
 }
@@ -621,6 +635,21 @@ fn run_scan(
     targets: ScanTargets,
     save_policy: StateSavePolicy,
 ) -> Result<ScanRunResult, Box<dyn std::error::Error>> {
+    run_scan_for_platform(
+        config,
+        targets,
+        save_policy,
+        crate::sink::outbox::current_platform_is_windows(),
+    )
+}
+
+fn run_scan_for_platform(
+    config: ScanConfig<'_>,
+    targets: ScanTargets,
+    save_policy: StateSavePolicy,
+    is_windows: bool,
+) -> Result<ScanRunResult, Box<dyn std::error::Error>> {
+    ensure_durable_scan_platform(config.execution.sinks, is_windows)?;
     let scan_started = Instant::now();
     validate_runtime_paths(
         config.execution.state_path,
@@ -965,9 +994,37 @@ fn run_scan(
             .as_ref()
             .ok_or("state lock missing before durable delivery")?
             .verify()?;
-        sink_failures = config.execution.sinks.deliver(&emitted_events)?;
+        if config.execution.sinks.has_persistent_replay() {
+            sink_failures = config
+                .execution
+                .sinks
+                .persist_for_durable_replay_with_failures(&emitted_events)?;
+            if let Some(prepared_state) = prepared_state {
+                state_lock
+                    .as_ref()
+                    .ok_or("state lock missing for durable scan")?
+                    .verify()?;
+                prepared_state.install_replace(config.execution.state_path)?;
+            }
+            sink_failures.extend(config.execution.sinks.deliver_durable()?);
+            sink_failures.extend(
+                config
+                    .execution
+                    .sinks
+                    .deliver_best_effort(&emitted_events)?,
+            );
+        } else {
+            sink_failures = config.execution.sinks.deliver(&emitted_events)?;
+            if let Some(prepared_state) = prepared_state {
+                state_lock
+                    .as_ref()
+                    .ok_or("state lock missing for durable scan")?
+                    .verify()?;
+                prepared_state.install_replace(config.execution.state_path)?;
+            }
+        }
         if !sink_failures.is_empty() {
-            if config.execution.sinks.has_durable() {
+            if config.execution.sinks.has_canonical_first_write() {
                 eprintln!(
                     "warning: remote delivery failed (retries exhausted or not applicable); local JSONL retains the event record"
                 );
@@ -978,17 +1035,20 @@ fn run_scan(
             }
             let alerts: Vec<Event> = sink_failures.iter().map(sink_failure_alert_event).collect();
             let failed_names: Vec<&str> = sink_failures.iter().map(|f| f.name.as_str()).collect();
+            if config.execution.sinks.has_persistent_replay()
+                && let Err(error) = config.execution.sinks.persist_for_durable_replay(&alerts)
+            {
+                let rendered = format!(
+                    "warning: could not persist sink-delivery alert for durable replay: {error}"
+                );
+                let rendered =
+                    PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &rendered);
+                eprintln!("{}", rendered.chars().take(200).collect::<String>());
+            }
             config
                 .execution
                 .sinks
                 .deliver_alerts(&alerts, &failed_names);
-        }
-        if let Some(prepared_state) = prepared_state {
-            state_lock
-                .as_ref()
-                .ok_or("state lock missing for durable scan")?
-                .verify()?;
-            prepared_state.install_replace(config.execution.state_path)?;
         }
     }
 
@@ -1019,6 +1079,7 @@ fn run_scan(
         policy_active,
         runtime: config.execution.runtime,
         effective_configuration: &effective_configuration,
+        durable_health: config.execution.sinks.durable_health_json(),
     });
     println!("{}", serde_json::to_string(&summary)?);
     Ok(ScanRunResult {
@@ -1031,9 +1092,10 @@ fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
         alert_type: "sink_delivery_failure".to_string(),
         threshold: format!("attempts_made={}", failure.attempts),
         actual_value: format!(
-            "sink={} type={} error={}",
+            "sink={} type={} class={} error={}",
             terminal_identifier("sink", &failure.name),
             failure.kind,
+            failure.class.as_str(),
             failure.error
         ),
         scan_duration_ms: None,
@@ -1457,6 +1519,7 @@ fn update_baseline_snapshots(
 pub(crate) fn run_status(
     log_path: &Path,
     state_path: &Path,
+    durable_health: serde_json::Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !log_path.exists() {
         return Err("no_native_health".into());
@@ -1491,6 +1554,7 @@ pub(crate) fn run_status(
             detection_count,
             log_path,
             state_path,
+            durable_health,
         )
     } else if records
         .iter()
@@ -1519,6 +1583,7 @@ pub(crate) fn run_status(
             detection_count,
             log_path,
             state_path,
+            durable_health,
         )
     } else {
         return Err("no_native_health".into());
@@ -1549,6 +1614,7 @@ struct ScanSummaryInput<'a> {
     policy_active: bool,
     runtime: &'a serde_json::Value,
     effective_configuration: &'a serde_json::Value,
+    durable_health: serde_json::Value,
 }
 
 struct ScanRunResult {
@@ -1811,11 +1877,17 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
             serde_json::json!({
                 "name": terminal_identifier("sink", &failure.name),
                 "type": failure.kind,
+                "class": failure.class.as_str(),
                 "attempts": failure.attempts,
                 "error": PrivacySanitizer::sanitize(SanitizationContext::Diagnostic, &failure.error),
             })
         })
         .collect();
+    let built_in_persistent_replay = summary
+        .durable_health
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        == Some("durable");
     serde_json::json!({
         "client": summary.health_event.client,
         "event_type": summary.health_event.event_type,
@@ -1838,7 +1910,8 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
             "posture": summary.delivery_posture.as_str(),
             "status": delivery_status,
             "durable_first_write": summary.delivery_posture.has_durable_first_write(),
-            "built_in_persistent_replay": false,
+            "built_in_persistent_replay": built_in_persistent_replay,
+            "durable_health": summary.durable_health,
         },
         "source_counts": summary.health_event.source_counts.clone().unwrap_or_default(),
         "sink_failures": sink_failures,
@@ -1864,6 +1937,7 @@ fn status_json(
     detection_count: usize,
     log_path: &Path,
     state_path: &Path,
+    durable_health: serde_json::Value,
 ) -> serde_json::Value {
     let health = health.map(|health| {
         let mut terminal = health.clone();
@@ -1898,6 +1972,7 @@ fn status_json(
         "emitted_count": field_or_null("emitted_count"),
         "suppressed_count": field_or_null("suppressed_count"),
         "scanner_error_count": field_or_null("scanner_error_count"),
+        "durable_queue_health": durable_health,
     })
 }
 
@@ -1915,9 +1990,14 @@ fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_jso
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::install_inventory::InstallInventorySnapshot;
+    use crate::sink::{
+        DeliveryError, DeliveryErrorClass, EventSink, LocalJsonlSink, RotationConfig,
+    };
 
     fn assert_same_execution_config(
         left: &ScanExecutionConfig<'_>,
@@ -2080,6 +2160,125 @@ mod tests {
             state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
             Some(5_000)
         );
+    }
+
+    #[test]
+    fn simulated_windows_durable_scan_rejects_before_state_progress_or_best_effort_fallback() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("synthetic-root");
+        fs::create_dir_all(&root).expect("synthetic root");
+        let log_path = temp.path().join("events.jsonl");
+        let state_path = temp.path().join("state.json");
+        let outbox_path = temp.path().join("private").join("outbox.sqlite");
+
+        let mut initial_state = ScanState::default();
+        initial_state
+            .seen_source_fingerprints
+            .insert("synthetic-existing-fingerprint".to_string());
+        initial_state.save(&state_path).expect("save initial state");
+        let state_before = fs::read(&state_path).expect("read initial state");
+
+        let delivery_calls = Arc::new(AtomicUsize::new(0));
+        let mut sinks = SinkSet::new();
+        sinks.add_canonical_first_write_path_with_rotation(
+            "jsonl",
+            Box::new(LocalJsonlSink::with_rotation(
+                &log_path,
+                RotationConfig::disabled(),
+            )),
+            log_path.clone(),
+            None,
+        );
+        sinks.add_best_effort(
+            "synthetic",
+            Box::new(CountingSink {
+                calls: Arc::clone(&delivery_calls),
+            }),
+        );
+        sinks.enable_persistent_replay_with_capacity(
+            outbox_path.clone(),
+            vec!["synthetic".to_string()],
+            crate::sink::outbox::CapacityLimits::default(),
+        );
+
+        let rule_pack_paths = RulePackPaths::default();
+        let rule_paths = Vec::new();
+        let override_paths = Vec::new();
+        let project_config_paths = Vec::new();
+        let clients = Vec::new();
+        let runtime = serde_json::json!({});
+        let effective_configuration = serde_json::json!({});
+        let config = ScanConfig {
+            execution: ScanExecutionConfig {
+                root: &root,
+                log_path: &log_path,
+                sinks: &sinks,
+                state_path: &state_path,
+                dry_run: false,
+                emit_activity: false,
+                emit_session_risk_summary: false,
+                allow_fixtures: true,
+                rule_pack_paths: &rule_pack_paths,
+                rule_paths: &rule_paths,
+                override_paths: &override_paths,
+                rule_load_mode: RuleLoadMode::IncludeDefault,
+                policy_path: None,
+                allowlist_path: None,
+                baseline_deviation_scoring: false,
+                clients: &clients,
+                project_config_paths: &project_config_paths,
+                install_inventory_interval_seconds: None,
+                runtime: &runtime,
+                effective_configuration: &effective_configuration,
+            },
+            backfill: false,
+            rebuild_baselines: false,
+            max_sources: None,
+        };
+
+        let error =
+            match run_scan_for_platform(config, ScanTargets::Full, StateSavePolicy::Always, true) {
+                Ok(_) => panic!("Windows durable scan must be rejected"),
+                Err(error) => error,
+            };
+        let delivery = error
+            .downcast_ref::<DeliveryError>()
+            .expect("platform rejection must be structured");
+        assert_eq!(delivery.class, DeliveryErrorClass::DurableStorage);
+        assert_eq!(delivery.attempts, 0);
+        assert_eq!(
+            delivery.message,
+            crate::sink::outbox::WINDOWS_DURABLE_STORAGE_UNSUPPORTED
+        );
+
+        assert_eq!(
+            fs::read(&state_path).expect("read state after rejection"),
+            state_before
+        );
+        assert!(!log_path.exists());
+        assert!(!outbox_path.parent().expect("outbox parent").exists());
+        assert!(!outbox_path.exists());
+        assert_eq!(delivery_calls.load(Ordering::SeqCst), 0);
+    }
+
+    struct CountingSink {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl EventSink for CountingSink {
+        fn name(&self) -> &str {
+            "synthetic"
+        }
+
+        fn emit(&self, _events: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn emit_canonical_once(&self, _payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
     }
 
     #[test]
@@ -2697,6 +2896,7 @@ mod tests {
         let alert = sink_failure_alert_event(&SinkFailure {
             name: sink_name.to_string(),
             kind: "splunk_hec".to_string(),
+            class: crate::sink::DeliveryErrorClass::UnknownInternal,
             attempts: 1,
             error: "connection refused".to_string(),
         });
@@ -2726,11 +2926,16 @@ mod tests {
             0,
             std::path::Path::new("/tmp/telltale-events.jsonl"),
             std::path::Path::new("/tmp/telltale-state.json"),
+            serde_json::json!({"mode": "not_configured", "sinks": {}}),
         );
         let status_bytes = serde_json::to_vec(&status).expect("serialize status");
         assert!(
             !String::from_utf8_lossy(&status_bytes).contains(marker),
             "status output exposed hostile historical health metadata"
+        );
+        assert_eq!(
+            status["durable_queue_health"],
+            serde_json::json!({"mode": "not_configured", "sinks": {}})
         );
     }
 }

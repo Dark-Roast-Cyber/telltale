@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::event::{EmittableEvent, Event, parse_event_timestamp};
 use crate::sink::http::{HttpClient, RetryConfig, TlsOptions, chunk_segments};
-use crate::sink::{EventSink, SinkDeliveryError};
+use crate::sink::{DeliveryError, DeliveryErrorClass, EventSink};
 
 const DEFAULT_HEC_TIMEOUT: Duration = Duration::from_secs(10);
 /// Splunk's conservative default `max_content_length` is 1 MiB.
@@ -88,20 +88,121 @@ impl EventSink for SplunkHecHttpSink {
             let response = self
                 .client
                 .post(&self.url, &headers, "application/json", &chunk)
-                .map_err(|err| SinkDeliveryError {
-                    attempts: err.attempts,
-                    message: format!("Splunk HEC request failed: {}", err.message),
-                })?;
+                .map_err(splunk_transport_error)?;
             if !(200..300).contains(&response.status) {
-                return Err(SinkDeliveryError {
-                    attempts: response.attempts,
-                    message: format!("Splunk HEC request failed with HTTP {}", response.status),
-                }
-                .into());
+                return Err(splunk_status_error(response.status, response.attempts).into());
             }
         }
         Ok(())
     }
+
+    fn emit_canonical_once(&self, payload: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let body = splunk_hec_envelope_bytes(payload, &self.config)?;
+        let auth = format!("Splunk {}", self.token);
+        let headers = [
+            ("Authorization", auth.as_str()),
+            ("X-Splunk-Request-Channel", self.request_channel.as_str()),
+        ];
+        let response = self
+            .client
+            .post_once(&self.url, &headers, "application/json", &body)
+            .map_err(splunk_transport_error)?;
+        if !(200..300).contains(&response.status) {
+            return Err(splunk_status_error(response.status, response.attempts).into());
+        }
+        Ok(())
+    }
+}
+
+fn splunk_transport_error(err: crate::sink::http::HttpPostError) -> DeliveryError {
+    let class = match err.kind {
+        crate::sink::http::HttpPostErrorKind::NoResponse => DeliveryErrorClass::TransportNoResponse,
+        crate::sink::http::HttpPostErrorKind::Timeout => DeliveryErrorClass::Timeout,
+    };
+    DeliveryError::new(
+        class,
+        err.attempts,
+        format!("Splunk HEC request failed: {}", err.message),
+    )
+}
+
+fn splunk_status_error(status: u16, attempts: u32) -> DeliveryError {
+    let class = match status {
+        401 | 403 => DeliveryErrorClass::AuthenticationBlocked { status },
+        status => DeliveryErrorClass::HttpStatus { status },
+    };
+    DeliveryError::new(
+        class,
+        attempts,
+        format!("Splunk HEC request failed with HTTP {status}"),
+    )
+}
+
+fn append_json_field<T: serde::Serialize>(
+    output: &mut Vec<u8>,
+    first: &mut bool,
+    name: &str,
+    value: &T,
+) -> Result<(), serde_json::Error> {
+    if !*first {
+        output.push(b',');
+    }
+    output.extend_from_slice(&serde_json::to_vec(name)?);
+    output.push(b':');
+    output.extend_from_slice(&serde_json::to_vec(value)?);
+    *first = false;
+    Ok(())
+}
+
+/// Wrap stored canonical Event 3.0 bytes in the HEC envelope without parsing
+/// and reserializing the event body. The optional timestamp is read only to
+/// preserve the existing HEC metadata behavior.
+fn splunk_hec_envelope_bytes(
+    payload: &[u8],
+    config: &SplunkHecConfig,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let value: serde_json::Value = serde_json::from_slice(payload).map_err(|error| {
+        Box::new(DeliveryError::new(
+            DeliveryErrorClass::SinkApplicationRejected,
+            1,
+            format!("canonical Splunk HEC payload is invalid: {error}"),
+        )) as Box<dyn std::error::Error>
+    })?;
+    if !value.is_object() {
+        return Err(DeliveryError::new(
+            DeliveryErrorClass::SinkApplicationRejected,
+            1,
+            "canonical Splunk HEC payload is not an Event object",
+        )
+        .into());
+    }
+
+    let mut output = vec![b'{'];
+    let mut first = true;
+    if let Some(time) = value
+        .get("timestamp")
+        .and_then(serde_json::Value::as_str)
+        .and_then(splunk_hec_time)
+    {
+        append_json_field(&mut output, &mut first, "time", &time)?;
+    }
+    if let Some(host) = config.host.as_deref() {
+        append_json_field(&mut output, &mut first, "host", &host)?;
+    }
+    if let Some(index) = config.index.as_deref() {
+        append_json_field(&mut output, &mut first, "index", &index)?;
+    }
+    append_json_field(&mut output, &mut first, "sourcetype", &config.sourcetype)?;
+    if let Some(source) = config.source.as_deref() {
+        append_json_field(&mut output, &mut first, "source", &source)?;
+    }
+    if !first {
+        output.push(b',');
+    }
+    output.extend_from_slice(b"\"event\":");
+    output.extend_from_slice(payload);
+    output.push(b'}');
+    Ok(output)
 }
 
 /// Normalize a HEC endpoint: an empty or root path gets the default
@@ -392,6 +493,14 @@ mod tests {
 
         let error = emit_events(&sink, &[make_health_event()]).expect_err("HTTP failure");
         handle.join().expect("mock hec join");
+        let delivery = error
+            .downcast_ref::<crate::sink::DeliveryError>()
+            .expect("structured delivery error");
+        assert_eq!(
+            delivery.class,
+            crate::sink::DeliveryErrorClass::AuthenticationBlocked { status: 403 }
+        );
+        assert_eq!(delivery.attempts, 1);
         let message = error.to_string();
         assert!(message.contains("HTTP 403"), "message: {message}");
         assert!(!message.contains("credential-marker"), "message: {message}");

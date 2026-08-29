@@ -173,14 +173,143 @@ Elastic item-level Bulk API errors are observable failures and are not retried b
 the current sink. These are at-least-once-oriented handoff semantics, not an
 exactly-once guarantee: crashes around delivery, retries, and external rotation
 can still require downstream deduplication.
+Durable delivery is at-least-once; receivers should deduplicate by `event_id`
+within their deployment context. The same ID with different canonical bytes is
+an integrity failure, not a new event.
 
 These local durability statements cover flushed file contents and the
 platform-specific parent-directory behavior above; they are not a claim of
 crash-proof delivery across every filesystem or operating-system failure.
 
+### Durable storage boundaries
+
+Durable admission is serialized for cooperating Telltale writers by the private
+outbox sidecar lock. A ready-work drain runs before the capacity gate, so an
+acknowledged pending row can release capacity without a restart; blocked and
+retry-delayed rows remain capacity-consuming until their normal state transition
+or an explicit blocked-delivery release. The admission lock covers recovery,
+capacity inspection, JSONL append, and reconciliation, but it is not a
+distributed lock service.
+
+Persistent durable delivery currently has one explicit platform boundary:
+Windows durable private storage is rejected fail-closed before outbox or
+sidecar creation/opening/inspection/mutation, before a prospective canonical
+JSONL append, and before scanner-state progress. The bounded diagnostic is
+`persistent durable-delivery private storage is not supported on Windows yet`.
+This does not make Telltale or existing Windows best-effort operation
+unsupported, and a requested durable policy is never silently downgraded to
+best-effort. Cross-platform API/cfg compilation and deterministic policy tests
+do not establish native Windows durable-runtime support. Network filesystems
+are unsupported for durable storage.
+
+The durable guarantee assumes private local storage controlled by a cooperating
+Telltale process/user boundary. Hostile same-OS-principal actors and
+privileged/root/admin actors are outside the durable-storage threat model.
+Path, advisory-lock, and stable-identity checks are useful integrity defenses
+for cooperating writers, but they are not an atomic pathname-to-opened-SQLite
+object binding against those excluded actors. A stronger opened-object-aware
+SQLite/VFS design would be needed for that defense and is outside Issue #26.
+
+Three storage limits remain explicit:
+
+1. **Reconciliation memory:** the bounded unread-capacity inspection is not a
+   bound on replay ingest. Reconciliation currently snapshots complete discovered
+   JSONL generations and builds their payload plan in memory. Keep generations
+   within available process resources; arbitrary-size or streaming reconciliation
+   is not claimed, and an oversized generation is not permission to advance an
+   unverified cursor.
+2. **Terminal payload retention:** SQLite retains canonical payload bytes for
+   `Acked` and `Dead` history. Terminal rows are excluded from pending queue
+   limits, and Issue #26 provides no automatic purge or compaction guarantee, so
+   private outbox storage may grow beyond configured pending limits.
+3. **External writers:** verified rotation deletion coordinates only with writers
+   that honor Telltale's JSONL sidecar lock. A non-cooperating local writer can
+   race the final path check and unlink; external rotation/writers in the managed
+   generation namespace and network filesystems are unsupported durable
+   configurations. The verification and fail-safe retention checks reduce this
+   risk but cannot provide atomic deletion against an actor that ignores the
+   lock.
+
+## Future local collector boundary
+
+The public out-of-process extension boundary is exactly
+`terminal/emittable Event 3.0 -> durable JSONL -> future generic vendor-neutral
+local collector transport`. This transport is not implemented here. Event 3.0
+is independent of transport. Sink identity, transport, delivery policy, and
+persistence role remain separate concerns:
+a future local IPC transport may be `BestEffort`, and a durable transport need
+not be HTTP. Future transport work should reuse generic structured delivery
+classification and outbox dispatch rather than require a foundational sink
+refactor.
+
+The future local collector implementation and protocol are deferred. Issue #26
+defines no local collector protocol, introduces no public plugin ABI, and does
+not change Event 3.0. Adopter-specific integrations remain outside the core
+contract. Issue #28 remains deferred and unfrozen; JSONL-only is not its final
+adoption architecture.
+
+### Durable queue health
+
+When durable downstream delivery is configured, scan summaries and the
+`effective_configuration.outputs.delivery` projection include
+`durable_queue_health`. `telltale status --outbox-path PATH` exposes the same
+health without reading event payloads. The health object is metadata-only and
+has this shape:
+
+```json
+{
+  "mode": "durable",
+  "sinks": {
+    "sink-id": {
+      "pending_depth": 0,
+      "pending_bytes": 0,
+      "oldest_pending_age_seconds": null,
+      "dead_count": 0,
+      "last_success_at": null,
+      "last_error": null
+    }
+  }
+}
+```
+
+Values are independent for each stable sink identity. `pending_depth` and
+`pending_bytes` include `pending` rows, including retry-delayed rows, and
+`blocked` rows awaiting operator action. `oldest_pending_age_seconds` is based
+on the oldest event creation timestamp among those rows. `dead_count` counts
+permanent/dead rows and is not part of pending depth; `acked` rows are excluded
+from both. `last_success_at` and `last_error.at` are persisted Unix
+milliseconds from sink state transitions. `last_error` contains only the
+structured error `class` and, when applicable, an HTTP `status`; it never
+contains response bodies or event bytes.
+
+`mode` is `not_configured` when no durable outbox is selected and
+`unavailable` when the bounded read-only lookup cannot validate or open the
+outbox. Health lookup uses SQLite's bounded busy timeout and fails closed for
+locked, corrupt, or inaccessible state. It does not repair state or authorize
+delivery. Queue health is not a cross-sink total: independent sinks can have
+different depth, age, dead, success, and error values. These metrics describe
+local durable replay state only and do not prove receiver acceptance or
+exactly-once delivery.
+
+### Releasing blocked deliveries
+
+After repairing a sink's credentials or endpoint, an operator can explicitly
+release all of that sink's authentication-blocked rows for retry:
+
+```sh
+telltale delivery retry-blocked \
+  --outbox-path /var/lib/telltale/outbox/outbox.sqlite \
+  --sink corp-splunk
+```
+
+The command updates only blocked rows for the exact sink identity, preserves
+attempt and error history, and schedules them immediately. It prints only
+`released_blocked=<count>`; a valid sink with no blocked rows reports zero.
+
 `telltale config validate` reports the `outputs.d` delivery posture, while each
 scan summary reports its effective posture and delivery status, including
-whether Telltale itself has `built_in_persistent_replay` (currently false).
+whether Telltale's `built_in_persistent_replay` field is true only when durable
+policy activates Telltale's built-in replay/outbox; otherwise it is false.
 Scan CLI HEC overlays can change the runtime posture; they are not part of the
 `config validate` report. These reports do not create remote history or imply
 external-shipper replay capability.

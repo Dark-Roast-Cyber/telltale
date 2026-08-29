@@ -11,6 +11,27 @@ durability, and the `migrate state` command described in the migration contract
 belong to the standalone CLI runtime. Embedding hosts retain ownership of
 persistence and delivery while using the same analytic and event semantics.
 
+## Delivery boundary
+
+`telltale-core::Pipeline` yields `Event` values; the embedding host owns
+serialization, persistence, and I/O. The public out-of-process path is exactly
+`terminal/emittable Event 3.0 -> durable JSONL -> future generic vendor-neutral
+local collector transport`. The collector transport is a future extension, not
+an implementation in this release.
+
+Event 3.0 is independent of transport. Sink identity, transport, delivery
+policy, and persistence role are separate concerns.
+A future local IPC transport may be `BestEffort`, while a durable transport need
+not be HTTP. The extension seam reuses generic structured delivery
+classification and outbox dispatch; adding a transport does not require a
+foundational sink refactor.
+
+The future local collector implementation and protocol are deferred. Issue #26
+defines no local collector protocol, introduces no public plugin ABI, and does
+not change Event 3.0. Adopter-specific integrations remain outside the core
+contract. Issue #28 remains deferred and unfrozen; JSONL-only is not its final
+adoption architecture.
+
 ## Which crate to depend on
 
 | Integrator profile | Dependency | What you get |

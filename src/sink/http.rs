@@ -40,7 +40,14 @@ pub struct HttpResponse {
 #[derive(Debug)]
 pub struct HttpPostError {
     pub attempts: u32,
+    pub kind: HttpPostErrorKind,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum HttpPostErrorKind {
+    NoResponse,
+    Timeout,
 }
 
 impl std::fmt::Display for HttpPostError {
@@ -117,6 +124,57 @@ impl HttpClient {
         })
     }
 
+    fn post_once_inner(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<HttpResponse, HttpPostError> {
+        let mut request = self.agent.post(url).content_type(content_type);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        match request.send(body) {
+            Ok(mut response) => {
+                let status = response.status().as_u16();
+                let body = response
+                    .body_mut()
+                    .read_to_string()
+                    .unwrap_or_else(|err| format!("<unreadable response body: {err}>"));
+                Ok(HttpResponse {
+                    status,
+                    body,
+                    attempts: 1,
+                })
+            }
+            Err(err) => {
+                let kind = if matches!(&err, ureq::Error::Timeout(_)) {
+                    HttpPostErrorKind::Timeout
+                } else {
+                    HttpPostErrorKind::NoResponse
+                };
+                Err(HttpPostError {
+                    attempts: 1,
+                    kind,
+                    message: err.to_string(),
+                })
+            }
+        }
+    }
+
+    /// POST a body exactly once. Durable delivery owns retry scheduling, so
+    /// this operation never sleeps or retries a response/status.
+    pub fn post_once(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<HttpResponse, HttpPostError> {
+        self.post_once_inner(url, headers, content_type, body)
+    }
+
     /// POST a body, retrying transport errors, 429, and 5xx with exponential
     /// backoff. Returns the final response (which may still be non-2xx for
     /// non-retryable statuses, or a retryable status once attempts are
@@ -137,30 +195,17 @@ impl HttpClient {
                 thread::sleep(delay);
                 delay *= 2;
             }
-            let mut request = self.agent.post(url).content_type(content_type);
-            for (name, value) in headers {
-                request = request.header(*name, *value);
-            }
-            match request.send(body) {
+            match self.post_once_inner(url, headers, content_type, body) {
                 Ok(mut response) => {
-                    let status = response.status().as_u16();
-                    let body = response
-                        .body_mut()
-                        .read_to_string()
-                        .unwrap_or_else(|err| format!("<unreadable response body: {err}>"));
-                    let response = HttpResponse {
-                        status,
-                        body,
-                        attempts: attempt,
-                    };
-                    if is_retryable_status(status) && attempt < max_attempts {
+                    response.attempts = attempt;
+                    if is_retryable_status(response.status) && attempt < max_attempts {
                         last_response = Some(response);
                         continue;
                     }
                     return Ok(response);
                 }
                 Err(err) => {
-                    last_error = Some(err.to_string());
+                    last_error = Some((err.kind, err.message));
                     continue;
                 }
             }
@@ -171,9 +216,12 @@ impl HttpClient {
                 ..response
             });
         }
+        let (kind, message) =
+            last_error.unwrap_or((HttpPostErrorKind::NoResponse, "request failed".to_string()));
         Err(HttpPostError {
             attempts: max_attempts,
-            message: last_error.unwrap_or_else(|| "request failed".to_string()),
+            kind,
+            message,
         })
     }
 }
@@ -291,6 +339,44 @@ mod tests {
     }
 
     #[test]
+    fn post_retries_429_until_success() {
+        let (url, handle) = start_mock_server(vec![429, 200]);
+        let client = HttpClient::new(
+            Duration::from_secs(2),
+            fast_retry(2),
+            &TlsOptions::default(),
+        )
+        .expect("client");
+
+        let response = client
+            .post(&url, &[], "application/json", b"{}")
+            .expect("response");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.attempts, 2);
+        assert_eq!(handle.join().expect("mock join").len(), 2);
+    }
+
+    #[test]
+    fn post_once_does_not_retry_a_retryable_status() {
+        let (url, handle) = start_mock_server(vec![503]);
+        let client = HttpClient::new(
+            Duration::from_secs(2),
+            fast_retry(3),
+            &TlsOptions::default(),
+        )
+        .expect("client");
+
+        let response = client
+            .post_once(&url, &[], "application/json", b"{}")
+            .expect("one response");
+
+        assert_eq!(response.status, 503);
+        assert_eq!(response.attempts, 1);
+        assert_eq!(handle.join().expect("mock join").len(), 1);
+    }
+
+    #[test]
     fn post_returns_last_retryable_status_after_exhaustion() {
         let (url, handle) = start_mock_server(vec![503, 503]);
         let client = HttpClient::new(
@@ -348,6 +434,7 @@ mod tests {
             .expect_err("unreachable");
 
         assert_eq!(err.attempts, 2);
+        assert_eq!(err.kind, super::HttpPostErrorKind::NoResponse);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::sink::http::{RetryConfig, TlsOptions};
+use crate::sink::outbox::CapacityLimits;
 use crate::sink::splunk_hec::DEFAULT_HEC_MAX_BATCH_BYTES;
 use crate::sink::{
     DEFAULT_ELASTIC_INDEX, DeliveryPosture, ElasticBulkSink, LocalJsonlSink, RotationConfig,
@@ -239,15 +240,106 @@ impl SecretValue {
 struct OutputsDocRaw {
     version: u64,
     sinks: Vec<serde_yaml::Value>,
+    delivery: Option<DeliverySpecRaw>,
 }
 
-/// Load and merge every discovered `outputs.d` file, in discovery order.
-///
-/// Merge rule: sinks are keyed by `name`; a later file's sink with the same
-/// name replaces the earlier definition entirely, new names append in
-/// first-seen order. Duplicate names within one file are an error.
-pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn std::error::Error>> {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeliverySpecRaw {
+    policy: String,
+    outbox_path: Option<PathBuf>,
+    max_pending_events: Option<u64>,
+    max_pending_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum ConfigDeliveryPolicy {
+    BestEffort,
+    Durable,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct DeliveryConfig {
+    pub(crate) policy: ConfigDeliveryPolicy,
+    pub(crate) outbox_path: Option<PathBuf>,
+    pub(crate) capacity_limits: CapacityLimits,
+}
+
+impl Default for DeliveryConfig {
+    fn default() -> Self {
+        Self {
+            policy: ConfigDeliveryPolicy::BestEffort,
+            outbox_path: None,
+            capacity_limits: CapacityLimits::default(),
+        }
+    }
+}
+
+pub(crate) struct LoadedOutputsConfig {
+    pub(crate) sinks: Vec<SinkSpec>,
+    /// Retained for durable-mode construction; Batch 4+ reads it for dispatch wiring.
+    #[allow(dead_code)]
+    pub(crate) delivery: DeliveryConfig,
+}
+
+fn parse_delivery(value: DeliverySpecRaw) -> Result<DeliveryConfig, Box<dyn std::error::Error>> {
+    let policy = match value.policy.as_str() {
+        "best_effort" => ConfigDeliveryPolicy::BestEffort,
+        "durable" => ConfigDeliveryPolicy::Durable,
+        other => return Err(format!("unsupported delivery policy '{other}'").into()),
+    };
+    if policy == ConfigDeliveryPolicy::Durable && value.outbox_path.is_none() {
+        return Err("durable delivery requires outbox_path".into());
+    }
+    if policy == ConfigDeliveryPolicy::BestEffort && value.outbox_path.is_some() {
+        return Err("best-effort delivery cannot configure outbox_path".into());
+    }
+    if policy == ConfigDeliveryPolicy::BestEffort
+        && (value.max_pending_events.is_some() || value.max_pending_bytes.is_some())
+    {
+        return Err(
+            "best-effort delivery cannot configure durable capacity limits (max_pending_events/max_pending_bytes)"
+                .into(),
+        );
+    }
+    let defaults = CapacityLimits::default();
+    let max_pending_events = validate_capacity_value(
+        "max_pending_events",
+        value
+            .max_pending_events
+            .unwrap_or(defaults.max_pending_events),
+    )?;
+    let max_pending_bytes = validate_capacity_value(
+        "max_pending_bytes",
+        value
+            .max_pending_bytes
+            .unwrap_or(defaults.max_pending_bytes),
+    )?;
+    Ok(DeliveryConfig {
+        policy,
+        outbox_path: value.outbox_path,
+        capacity_limits: CapacityLimits {
+            max_pending_events,
+            max_pending_bytes,
+        },
+    })
+}
+
+fn validate_capacity_value(name: &str, value: u64) -> Result<u64, Box<dyn std::error::Error>> {
+    if value == 0 {
+        return Err(format!("{name} must be greater than zero").into());
+    }
+    usize::try_from(value).map_err(|_| -> Box<dyn std::error::Error> {
+        format!("{name} is too large for this platform").into()
+    })?;
+    Ok(value)
+}
+
+pub(crate) fn load_outputs_config_with_delivery(
+    paths: &[PathBuf],
+) -> Result<LoadedOutputsConfig, Box<dyn std::error::Error>> {
     let mut merged: Vec<SinkSpec> = Vec::new();
+    let mut delivery = DeliveryConfig::default();
     for path in paths {
         let text = fs::read_to_string(path)
             .map_err(|err| format!("could not read outputs config {}: {err}", path.display()))?;
@@ -261,6 +353,10 @@ pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn s
                 SUPPORTED_OUTPUTS_VERSION
             )
             .into());
+        }
+        if let Some(raw_delivery) = doc.delivery {
+            delivery = parse_delivery(raw_delivery)
+                .map_err(|err| format!("outputs config {}: {err}", path.display()))?;
         }
         let mut names_in_file = BTreeSet::new();
         for sink_value in doc.sinks {
@@ -282,7 +378,10 @@ pub fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn s
             }
         }
     }
-    Ok(merged)
+    Ok(LoadedOutputsConfig {
+        sinks: merged,
+        delivery,
+    })
 }
 
 /// Parse one `sinks:` entry. `name`/`enabled`/`type` are extracted by hand and
@@ -352,15 +451,107 @@ fn build_sink_set(
     specs: &[SinkSpec],
     cli: &CliSinkOverrides<'_>,
 ) -> Result<SinkSet, Box<dyn std::error::Error>> {
-    build_sink_set_with_presence(specs, !specs.is_empty(), cli, true)
+    build_sink_set_with_presence_and_delivery(
+        specs,
+        !specs.is_empty(),
+        cli,
+        &DeliveryConfig::default(),
+        true,
+    )
 }
 
-pub(crate) fn build_sink_set_with_presence(
+#[cfg(test)]
+fn build_sink_set_with_presence_and_delivery(
     specs: &[SinkSpec],
     outputs_config_present: bool,
     cli: &CliSinkOverrides<'_>,
+    delivery: &DeliveryConfig,
     emit_warnings: bool,
 ) -> Result<SinkSet, Box<dyn std::error::Error>> {
+    build_sink_set_with_presence_and_delivery_for_activation(
+        specs,
+        outputs_config_present,
+        cli,
+        delivery,
+        emit_warnings,
+        true,
+    )
+}
+
+/// Build and validate sinks without activating persistent durable storage.
+/// This is used by configuration validation and dry-run scans so they can
+/// resolve durable settings without opening SQLite or creating its artifacts.
+pub(crate) fn build_sink_set_with_presence_and_delivery_for_validation(
+    specs: &[SinkSpec],
+    outputs_config_present: bool,
+    cli: &CliSinkOverrides<'_>,
+    delivery: &DeliveryConfig,
+    emit_warnings: bool,
+) -> Result<SinkSet, Box<dyn std::error::Error>> {
+    build_sink_set_with_presence_and_delivery_for_activation(
+        specs,
+        outputs_config_present,
+        cli,
+        delivery,
+        emit_warnings,
+        false,
+    )
+}
+
+/// Build sinks with an explicit persistent-storage activation decision. The
+/// activation flag is deliberately controlled by the caller's command mode.
+pub(crate) fn build_sink_set_with_presence_and_delivery_for_activation(
+    specs: &[SinkSpec],
+    outputs_config_present: bool,
+    cli: &CliSinkOverrides<'_>,
+    delivery: &DeliveryConfig,
+    emit_warnings: bool,
+    activate_persistent_replay: bool,
+) -> Result<SinkSet, Box<dyn std::error::Error>> {
+    build_sink_set_with_presence_and_delivery_with_activation(
+        specs,
+        outputs_config_present,
+        cli,
+        delivery,
+        emit_warnings,
+        activate_persistent_replay,
+        crate::sink::outbox::current_platform_is_windows(),
+    )
+}
+
+#[cfg(test)]
+fn build_sink_set_with_presence_and_delivery_for_platform(
+    specs: &[SinkSpec],
+    outputs_config_present: bool,
+    cli: &CliSinkOverrides<'_>,
+    delivery: &DeliveryConfig,
+    emit_warnings: bool,
+    is_windows: bool,
+) -> Result<SinkSet, Box<dyn std::error::Error>> {
+    build_sink_set_with_presence_and_delivery_with_activation(
+        specs,
+        outputs_config_present,
+        cli,
+        delivery,
+        emit_warnings,
+        true,
+        is_windows,
+    )
+}
+
+fn build_sink_set_with_presence_and_delivery_with_activation(
+    specs: &[SinkSpec],
+    outputs_config_present: bool,
+    cli: &CliSinkOverrides<'_>,
+    delivery: &DeliveryConfig,
+    emit_warnings: bool,
+    activate_persistent_replay: bool,
+    is_windows: bool,
+) -> Result<SinkSet, Box<dyn std::error::Error>> {
+    if delivery.policy == ConfigDeliveryPolicy::Durable {
+        crate::sink::outbox::ensure_durable_storage_supported_for_platform(is_windows)?;
+    }
+
     let cli_hec = match (cli.splunk_hec_endpoint, cli.splunk_hec_token) {
         (None, None) => None,
         (Some(endpoint), Some(token)) => Some((endpoint, token)),
@@ -372,13 +563,31 @@ pub(crate) fn build_sink_set_with_presence(
     let mut sinks = SinkSet::new();
     if !outputs_config_present {
         let sink = LocalJsonlSink::with_rotation(cli.log_path, cli.rotation.clone());
+        let rotation_keep = (delivery.policy == ConfigDeliveryPolicy::Durable
+            && cli.rotation.is_enabled())
+        .then_some(cli.rotation.keep);
+        let sink = if delivery.policy == ConfigDeliveryPolicy::Durable {
+            sink.with_durable_rotation()
+        } else {
+            sink
+        };
         let rotation_namespace = sink.rotation_namespace()?;
-        sinks.add_durable_path_with_rotation(
-            "jsonl",
-            Box::new(sink),
-            cli.log_path,
-            rotation_namespace,
-        );
+        if let Some(rotation_keep) = rotation_keep {
+            sinks.add_canonical_first_write_path_with_rotation_and_keep(
+                "jsonl",
+                Box::new(sink),
+                cli.log_path,
+                rotation_namespace,
+                Some(rotation_keep),
+            );
+        } else {
+            sinks.add_canonical_first_write_path_with_rotation(
+                "jsonl",
+                Box::new(sink),
+                cli.log_path,
+                rotation_namespace,
+            );
+        }
     } else {
         for spec in specs.iter().filter(|spec| spec.enabled) {
             // The CLI flags own this reserved name: the flag-built sink below
@@ -401,19 +610,29 @@ pub(crate) fn build_sink_set_with_presence(
                             keep: rotation.keep.unwrap_or(cli.rotation.keep),
                         },
                     };
+                    let rotation_keep = rotation.is_enabled().then_some(rotation.keep);
                     let sink =
                         LocalJsonlSink::with_rotation(path.clone(), rotation).with_name(&spec.name);
+                    let sink = if delivery.policy == ConfigDeliveryPolicy::Durable {
+                        sink.with_durable_rotation()
+                    } else {
+                        sink
+                    };
                     let rotation_namespace = sink.rotation_namespace()?;
-                    sinks.add_durable_path_with_rotation(
+                    sinks.add_canonical_first_write_path_with_rotation_and_keep(
                         "jsonl",
                         Box::new(sink),
                         path,
                         rotation_namespace,
+                        (delivery.policy == ConfigDeliveryPolicy::Durable)
+                            .then_some(rotation_keep)
+                            .flatten(),
                     );
                 }
                 SinkKind::SplunkHec(hec) => {
                     validate_http_endpoint(&spec.name, &hec.endpoint)?;
                     let token = hec.token.resolve(&format!("sink '{}' token", spec.name))?;
+                    let retry = retry_config_from_spec(hec.retry.as_ref());
                     let defaults = SplunkHecConfig::default();
                     let config = SplunkHecConfig {
                         index: hec.index.clone().or(defaults.index),
@@ -425,16 +644,17 @@ pub(crate) fn build_sink_set_with_presence(
                         .with_name(&spec.name)
                         .with_transport_warning(
                             Duration::from_millis(hec.timeout_ms.unwrap_or(10_000)),
-                            retry_config_from_spec(hec.retry.as_ref()),
+                            retry.clone(),
                             &tls_options_from_spec(hec.tls.as_ref()),
                             hec.max_batch_bytes.unwrap_or(DEFAULT_HEC_MAX_BATCH_BYTES),
                             emit_warnings,
                         )
                         .map_err(|err| format!("sink '{}': {err}", spec.name))?;
-                    sinks.add_remote("splunk_hec", Box::new(sink));
+                    sinks.add_best_effort_with_retry("splunk_hec", Box::new(sink), retry);
                 }
                 SinkKind::ElasticBulk(elastic) => {
                     validate_http_endpoint(&spec.name, &elastic.endpoint)?;
+                    let retry = retry_config_from_spec(elastic.retry.as_ref());
                     let index = elastic
                         .index
                         .clone()
@@ -443,7 +663,7 @@ pub(crate) fn build_sink_set_with_presence(
                         .with_name(&spec.name)
                         .with_transport_warning(
                             Duration::from_millis(elastic.timeout_ms.unwrap_or(10_000)),
-                            retry_config_from_spec(elastic.retry.as_ref()),
+                            retry.clone(),
                             &tls_options_from_spec(elastic.tls.as_ref()),
                             elastic
                                 .max_batch_bytes
@@ -478,14 +698,14 @@ pub(crate) fn build_sink_set_with_presence(
                         }
                         (None, None, None) => {}
                     }
-                    sinks.add_remote("elastic_bulk", Box::new(sink));
+                    sinks.add_best_effort_with_retry("elastic_bulk", Box::new(sink), retry);
                 }
             }
         }
     }
 
     if let Some((endpoint, token)) = cli_hec {
-        sinks.add_remote(
+        sinks.add_best_effort(
             "splunk_hec",
             Box::new(SplunkHecHttpSink::new(
                 endpoint.to_string(),
@@ -495,9 +715,31 @@ pub(crate) fn build_sink_set_with_presence(
         );
     }
 
+    if delivery.policy == ConfigDeliveryPolicy::Durable {
+        let paths = sinks.local_persistence_paths();
+        if paths.len() != 1 {
+            return Err("durable downstream delivery requires canonical JSONL".into());
+        }
+        let outbox_path = delivery
+            .outbox_path
+            .as_ref()
+            .ok_or("durable delivery requires outbox_path")?;
+        crate::sink::outbox::validate_outbox_jsonl_paths(outbox_path, &paths[0])?;
+        crate::sink::outbox::validate_outbox_path_without_activation(outbox_path)?;
+        let sink_ids = sinks.delivery_sink_ids();
+        sinks.enable_persistent_replay_with_capacity(
+            outbox_path.clone(),
+            sink_ids,
+            delivery.capacity_limits,
+        );
+        if activate_persistent_replay {
+            sinks.activate_persistent_replay()?;
+        }
+    }
+
     if emit_warnings && sinks.is_empty() {
         eprintln!("warning: outputs config defines no enabled sinks; events will not be delivered");
-    } else if emit_warnings && !sinks.has_durable() {
+    } else if emit_warnings && !sinks.has_canonical_first_write() {
         eprintln!(
             "warning: outputs config defines no enabled jsonl sink; remote delivery is best-effort with no persistent replay, and events may be lost after retry exhaustion, process exit, or restart"
         );
@@ -510,9 +752,22 @@ pub(crate) fn build_sink_set_with_presence(
 mod tests {
     use std::path::PathBuf;
 
-    use tempfile::tempdir;
+    use tempfile::{tempdir, tempdir_in};
 
-    use super::{CliSinkOverrides, SecretValue, SinkKind, build_sink_set, load_outputs_config};
+    use super::{
+        CliSinkOverrides, ConfigDeliveryPolicy, DeliveryConfig, JsonlSpec, SecretValue, SinkKind,
+        SinkSpec, build_sink_set, build_sink_set_with_presence_and_delivery_for_platform,
+        build_sink_set_with_presence_and_delivery_for_validation,
+        load_outputs_config_with_delivery,
+    };
+    use crate::sink::outbox::{
+        CapacityLimits, DEFAULT_MAX_PENDING_BYTES, DEFAULT_MAX_PENDING_EVENTS,
+    };
+    use crate::sink::{DeliveryError, DeliveryErrorClass};
+
+    fn load_outputs_config(paths: &[PathBuf]) -> Result<Vec<SinkSpec>, Box<dyn std::error::Error>> {
+        Ok(load_outputs_config_with_delivery(paths)?.sinks)
+    }
     use crate::sink::RotationConfig;
 
     fn write_outputs(dir: &std::path::Path, file_name: &str, contents: &str) -> PathBuf {
@@ -789,7 +1044,7 @@ sinks:
         let log_path = temp.path().join("telltale-events.jsonl");
 
         let sinks = build_sink_set(&[], &cli_defaults(&log_path)).expect("build");
-        assert!(sinks.has_durable());
+        assert!(sinks.has_canonical_first_write());
 
         let mut cli = cli_defaults(&log_path);
         cli.splunk_hec_endpoint = Some("http://127.0.0.1:8088");
@@ -826,7 +1081,7 @@ sinks:
 
         // The disabled sink's secret must not be resolved: no error.
         let sinks = build_sink_set(&specs, &cli_defaults(&log_path)).expect("build");
-        assert!(sinks.has_durable());
+        assert!(sinks.has_canonical_first_write());
     }
 
     #[test]
@@ -852,5 +1107,433 @@ sinks:
             Err(err) => err,
         };
         assert!(err.to_string().contains("TELLTALE_TEST_UNSET_TOKEN_VAR"));
+    }
+
+    #[test]
+    fn simulated_windows_durable_config_is_rejected_before_outbox_initialization() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("events.jsonl");
+        let outbox_path = temp.path().join("private").join("outbox.sqlite");
+        let path = write_outputs(
+            temp.path(),
+            "durable-windows.yaml",
+            &format!(
+                "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n",
+                outbox_path.display()
+            ),
+        );
+        let loaded = load_outputs_config_with_delivery(&[path]).expect("load durable config");
+
+        let error = match build_sink_set_with_presence_and_delivery_for_platform(
+            &loaded.sinks,
+            true,
+            &CliSinkOverrides {
+                log_path: &log_path,
+                rotation: RotationConfig::disabled(),
+                splunk_hec_endpoint: None,
+                splunk_hec_token: None,
+            },
+            &loaded.delivery,
+            false,
+            true,
+        ) {
+            Ok(_) => panic!("Windows durable config must be rejected"),
+            Err(error) => error,
+        };
+        let delivery = error
+            .downcast_ref::<DeliveryError>()
+            .expect("platform rejection must be structured");
+        assert_eq!(delivery.class, DeliveryErrorClass::DurableStorage);
+        assert!(
+            error
+                .to_string()
+                .contains(crate::sink::outbox::WINDOWS_DURABLE_STORAGE_UNSUPPORTED)
+        );
+        assert!(!outbox_path.parent().expect("outbox parent").exists());
+        assert!(!outbox_path.exists());
+        assert!(!log_path.exists());
+    }
+
+    #[test]
+    fn simulated_windows_best_effort_configuration_remains_valid() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("best-effort.jsonl");
+        let sinks = build_sink_set_with_presence_and_delivery_for_platform(
+            &[],
+            false,
+            &cli_defaults(&log_path),
+            &DeliveryConfig::default(),
+            false,
+            true,
+        )
+        .expect("Windows best-effort configuration");
+        assert!(sinks.has_canonical_first_write());
+        assert!(!sinks.has_persistent_replay());
+    }
+
+    #[cfg(unix)]
+    fn pure_durable_sink_set(
+        log_path: &std::path::Path,
+        outbox_path: &std::path::Path,
+    ) -> Result<crate::sink::SinkSet, Box<dyn std::error::Error>> {
+        let specs = [SinkSpec {
+            name: "canonical".to_string(),
+            enabled: true,
+            kind: SinkKind::Jsonl(JsonlSpec {
+                path: Some(log_path.to_path_buf()),
+                rotation: None,
+            }),
+            origin_path: None,
+        }];
+        let delivery = DeliveryConfig {
+            policy: ConfigDeliveryPolicy::Durable,
+            outbox_path: Some(outbox_path.to_path_buf()),
+            capacity_limits: CapacityLimits::default(),
+        };
+        build_sink_set_with_presence_and_delivery_for_validation(
+            &specs,
+            true,
+            &cli_defaults(log_path),
+            &delivery,
+            false,
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_nonexistent_lexical_alias_without_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("journal").join("events.jsonl");
+        let outbox_path = temp
+            .path()
+            .join("missing")
+            .join("..")
+            .join("journal")
+            .join("events.jsonl");
+
+        let error = match pure_durable_sink_set(&log_path, &outbox_path) {
+            Err(error) => error,
+            Ok(_) => panic!("lexical durable path alias must be rejected"),
+        };
+        assert!(error.to_string().contains("collides"), "error: {error}");
+        assert!(!log_path.exists());
+        assert!(!outbox_path.parent().expect("outbox parent").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_relative_absolute_alias_without_artifacts() {
+        let working_dir = std::env::current_dir().expect("working directory");
+        let temp = tempdir_in(&working_dir).expect("temporary directory");
+        let absolute_path = temp.path().join("events.jsonl");
+        let relative_root = temp
+            .path()
+            .strip_prefix(&working_dir)
+            .expect("temporary directory under working directory");
+        let relative_path = relative_root.join("events.jsonl");
+
+        let error = match pure_durable_sink_set(&absolute_path, &relative_path) {
+            Err(error) => error,
+            Ok(_) => panic!("relative/absolute durable path alias must be rejected"),
+        };
+        assert!(error.to_string().contains("collides"), "error: {error}");
+        assert!(!absolute_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_symlink_parent_alias_without_artifacts() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tempdir");
+        let real_parent = temp.path().join("real");
+        let alias_parent = temp.path().join("alias");
+        std::fs::create_dir(&real_parent).expect("real parent");
+        symlink(&real_parent, &alias_parent).expect("symlink parent");
+        let log_path = real_parent.join("events.jsonl");
+        let outbox_path = alias_parent.join("events.jsonl");
+
+        let error = match pure_durable_sink_set(&log_path, &outbox_path) {
+            Err(error) => error,
+            Ok(_) => panic!("symlink-parent durable path alias must be rejected"),
+        };
+        assert!(error.to_string().contains("collides"), "error: {error}");
+        assert!(!log_path.exists());
+        assert!(!outbox_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_existing_symlink_leaf_alias_without_opening_outbox() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("events.jsonl");
+        let outbox_path = temp.path().join("outbox.sqlite");
+        std::fs::write(&log_path, b"synthetic JSONL fixture\n").expect("log fixture");
+        symlink(&log_path, &outbox_path).expect("symlink leaf fixture");
+
+        let error = match pure_durable_sink_set(&log_path, &outbox_path) {
+            Err(error) => error,
+            Ok(_) => panic!("symlink-leaf durable path alias must be rejected"),
+        };
+        assert!(error.to_string().contains("collides"), "error: {error}");
+        assert_eq!(
+            std::fs::read(&log_path).expect("read log fixture"),
+            b"synthetic JSONL fixture\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_existing_hard_link_alias_without_opening_outbox() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("events.jsonl");
+        let outbox_path = temp.path().join("outbox.sqlite");
+        std::fs::write(&log_path, b"synthetic durable path fixture\n").expect("log fixture");
+        std::fs::hard_link(&log_path, &outbox_path).expect("hard-link fixture");
+
+        let before = std::fs::read(&log_path).expect("read log fixture");
+        let error = match pure_durable_sink_set(&log_path, &outbox_path) {
+            Err(error) => error,
+            Ok(_) => panic!("hard-linked durable paths must be rejected"),
+        };
+        assert!(error.to_string().contains("collides"), "error: {error}");
+        assert_eq!(
+            std::fs::read(&outbox_path).expect("read outbox fixture"),
+            before
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_accepts_distinct_paths_without_activation() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("events.jsonl");
+        let outbox_path = temp.path().join("private").join("outbox.sqlite");
+
+        let sinks = pure_durable_sink_set(&log_path, &outbox_path).expect("distinct paths");
+        assert!(sinks.has_persistent_replay());
+        assert!(!outbox_path.exists());
+        assert!(!log_path.exists());
+        assert!(!outbox_path.parent().expect("outbox parent").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_delete_journal_sidecar_alias() {
+        let temp = tempdir().expect("tempdir");
+        let outbox_path = temp.path().join("private").join("outbox.sqlite");
+        let log_path = temp.path().join("private").join("outbox.sqlite-journal");
+
+        let error = match pure_durable_sink_set(&log_path, &outbox_path) {
+            Err(error) => error,
+            Ok(_) => panic!("SQLite rollback journal alias must be rejected"),
+        };
+        assert!(error.to_string().contains("journal"), "error: {error}");
+        assert!(!outbox_path.parent().expect("outbox parent").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_jsonl_coordination_sidecar_alias() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("events.jsonl");
+        let outbox_path = temp.path().join("events.jsonl.lock");
+
+        let error = match pure_durable_sink_set(&log_path, &outbox_path) {
+            Err(error) => error,
+            Ok(_) => panic!("JSONL coordination sidecar alias must be rejected"),
+        };
+        assert!(error.to_string().contains("sidecar"), "error: {error}");
+        assert!(!outbox_path.exists());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn durable_mode_requires_canonical_jsonl_and_private_outbox() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("events.jsonl");
+        let outbox_path = temp.path().join("private").join("outbox.sqlite");
+        let path = write_outputs(
+            temp.path(),
+            "durable.yaml",
+            &format!(
+                "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n  - name: remote-a\n    type: splunk_hec\n    endpoint: https://collector.example.invalid/collector\n    token: {{ env: TELLTALE_TEST_DURABLE_TOKEN }}\n",
+                outbox_path.display()
+            ),
+        );
+        let loaded = load_outputs_config_with_delivery(&[path]).expect("load durable config");
+        // SAFETY: test-only env mutation; key is unique to this test.
+        unsafe { std::env::set_var("TELLTALE_TEST_DURABLE_TOKEN", "synthetic-token") };
+        let sinks = super::build_sink_set_with_presence_and_delivery(
+            &loaded.sinks,
+            true,
+            &CliSinkOverrides {
+                log_path: &log_path,
+                rotation: RotationConfig::disabled(),
+                splunk_hec_endpoint: None,
+                splunk_hec_token: None,
+            },
+            &loaded.delivery,
+            false,
+        )
+        .expect("durable config");
+        unsafe { std::env::remove_var("TELLTALE_TEST_DURABLE_TOKEN") };
+
+        assert!(sinks.has_persistent_replay());
+        assert!(sinks.durable_sink_ids().contains(&"remote-a".to_string()));
+        assert!(outbox_path.is_file());
+        assert_eq!(
+            sinks.delivery_posture(),
+            crate::sink::DeliveryPosture::DurableFirstWrite
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn durable_mode_without_jsonl_is_rejected_without_forcing_a_local_sink() {
+        let temp = tempdir().expect("tempdir");
+        let outbox_path = temp.path().join("private").join("outbox.sqlite");
+        let path = write_outputs(
+            temp.path(),
+            "durable-remote-only.yaml",
+            &format!(
+                "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: remote-a\n    type: splunk_hec\n    endpoint: https://collector.example.invalid/collector\n    token: synthetic-token\n",
+                outbox_path.display()
+            ),
+        );
+        let loaded = load_outputs_config_with_delivery(&[path]).expect("load durable config");
+        let result = super::build_sink_set_with_presence_and_delivery(
+            &loaded.sinks,
+            true,
+            &CliSinkOverrides {
+                log_path: temp.path().join("events.jsonl").as_path(),
+                rotation: RotationConfig::disabled(),
+                splunk_hec_endpoint: None,
+                splunk_hec_token: None,
+            },
+            &loaded.delivery,
+            false,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("durable remote-only config must fail"),
+        };
+        assert!(error.to_string().contains("requires canonical JSONL"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn durable_mode_retains_existing_tls_validation() {
+        let temp = tempdir().expect("tempdir");
+        let outbox_path = temp.path().join("private").join("outbox.sqlite");
+        let path = write_outputs(
+            temp.path(),
+            "durable-invalid-tls.yaml",
+            &format!(
+                "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n  - name: remote-a\n    type: splunk_hec\n    endpoint: https://collector.example.invalid/collector\n    token: synthetic-token\n    tls:\n      ca_file: {}/missing-ca.pem\n",
+                outbox_path.display(),
+                temp.path().display()
+            ),
+        );
+        let loaded = load_outputs_config_with_delivery(&[path]).expect("load durable config");
+        let log_path = temp.path().join("events.jsonl");
+        let result = super::build_sink_set_with_presence_and_delivery(
+            &loaded.sinks,
+            true,
+            &CliSinkOverrides {
+                log_path: &log_path,
+                rotation: RotationConfig::disabled(),
+                splunk_hec_endpoint: None,
+                splunk_hec_token: None,
+            },
+            &loaded.delivery,
+            false,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("missing TLS CA must fail in durable mode"),
+        };
+        assert!(error.to_string().contains("ca_file"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn durable_capacity_defaults_and_yaml_overrides_are_loaded() {
+        let temp = tempdir().expect("tempdir");
+        let default_path = write_outputs(
+            temp.path(),
+            "default.yaml",
+            &format!(
+                "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}/outbox.sqlite\nsinks: []\n",
+                temp.path().display()
+            ),
+        );
+        let defaults = load_outputs_config_with_delivery(&[default_path])
+            .expect("default durable config")
+            .delivery;
+        assert_eq!(defaults.policy, ConfigDeliveryPolicy::Durable);
+        assert_eq!(
+            defaults.capacity_limits,
+            CapacityLimits {
+                max_pending_events: DEFAULT_MAX_PENDING_EVENTS,
+                max_pending_bytes: DEFAULT_MAX_PENDING_BYTES,
+            }
+        );
+
+        let override_path = write_outputs(
+            temp.path(),
+            "override.yaml",
+            &format!(
+                "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}/outbox.sqlite\n  max_pending_events: 7\n  max_pending_bytes: 4096\nsinks: []\n",
+                temp.path().display()
+            ),
+        );
+        let overrides = load_outputs_config_with_delivery(&[override_path])
+            .expect("overridden durable config")
+            .delivery;
+        assert_eq!(
+            overrides.capacity_limits,
+            CapacityLimits {
+                max_pending_events: 7,
+                max_pending_bytes: 4096,
+            }
+        );
+    }
+
+    #[test]
+    fn zero_capacity_and_best_effort_capacity_fields_are_rejected() {
+        let temp = tempdir().expect("tempdir");
+        for field in ["max_pending_events", "max_pending_bytes"] {
+            let path = write_outputs(
+                temp.path(),
+                &format!("zero-{field}.yaml"),
+                &format!(
+                    "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}/outbox.sqlite\n  {field}: 0\nsinks: []\n",
+                    temp.path().display()
+                ),
+            );
+            let error = match load_outputs_config_with_delivery(&[path]) {
+                Ok(_) => panic!("zero durable capacity must be rejected"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("must be greater than zero"));
+        }
+
+        let path = write_outputs(
+            temp.path(),
+            "best-effort-capacity.yaml",
+            "version: 1\ndelivery:\n  policy: best_effort\n  max_pending_events: 1\nsinks: []\n",
+        );
+        let error = match load_outputs_config_with_delivery(&[path]) {
+            Ok(_) => panic!("best-effort capacity fields must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("best-effort delivery cannot configure durable capacity limits")
+        );
     }
 }

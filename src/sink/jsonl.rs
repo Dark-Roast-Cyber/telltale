@@ -7,7 +7,9 @@ use crate::event::{
     Event, PrivacySanitizer, SanitizationContext, append_jsonl_bytes, ensure_jsonl_tail,
     serialize_jsonl_events,
 };
-use crate::file_lock::{RotationNamespace, SidecarLock, atomic_rename_no_replace, sync_parent};
+use crate::file_lock::{
+    RotationNamespace, SidecarLock, atomic_rename_no_replace, stable_file_identity, sync_parent,
+};
 use crate::sink::EventSink;
 
 /// Built-in size-based log rotation configuration.
@@ -50,6 +52,7 @@ pub struct LocalJsonlSink {
     name: String,
     path: PathBuf,
     rotation: RotationConfig,
+    preserve_rotated: bool,
 }
 
 impl LocalJsonlSink {
@@ -59,6 +62,7 @@ impl LocalJsonlSink {
             name: "local".to_string(),
             path: path.into(),
             rotation: RotationConfig::default(),
+            preserve_rotated: false,
         }
     }
 
@@ -67,11 +71,19 @@ impl LocalJsonlSink {
             name: "local".to_string(),
             path: path.into(),
             rotation,
+            preserve_rotated: false,
         }
     }
 
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
+        self
+    }
+
+    /// Keep rotated generations for durable cursor coordination. Ordinary
+    /// rotation keeps its existing keep-based cleanup behavior.
+    pub(crate) fn with_durable_rotation(mut self) -> Self {
+        self.preserve_rotated = true;
         self
     }
 
@@ -95,6 +107,16 @@ impl EventSink for LocalJsonlSink {
 
     fn emit(&self, events: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
         let bytes = serialize_jsonl_events(events)?;
+        self.emit_jsonl_bytes(&bytes)
+    }
+
+    fn emit_canonical_jsonl_bytes(&self, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        self.emit_jsonl_bytes(bytes)
+    }
+}
+
+impl LocalJsonlSink {
+    fn emit_jsonl_bytes(&self, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -104,11 +126,11 @@ impl EventSink for LocalJsonlSink {
         let lock = SidecarLock::acquire_lock_only(&self.path)?;
         ensure_jsonl_tail(&self.path)?;
         let rotated = if self.rotation.is_enabled() {
-            maybe_rotate(&self.path, &self.rotation)?
+            maybe_rotate_with_mode(&self.path, &self.rotation, self.preserve_rotated)?
         } else {
             false
         };
-        let created = append_jsonl_bytes(&self.path, &bytes)?;
+        let created = append_jsonl_bytes(&self.path, bytes)?;
         if rotated || created {
             sync_parent(&self.path)?;
         }
@@ -117,8 +139,89 @@ impl EventSink for LocalJsonlSink {
     }
 }
 
+/// A JSONL generation in oldest-to-newest journal order. The identity is
+/// derived from the platform file identity and therefore survives a rename.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct JsonlGeneration {
+    pub(crate) path: PathBuf,
+    pub(crate) identity: String,
+    pub(crate) is_active: bool,
+}
+
+/// Discover the active file and exact built-in rotated generations. Matching
+/// names that are not regular files fail closed rather than being ignored, so
+/// a symlink cannot hide a replay source from durable ingest.
+pub(crate) fn discover_jsonl_generations(
+    active: &Path,
+) -> Result<Vec<JsonlGeneration>, Box<dyn std::error::Error>> {
+    let mut generations = Vec::new();
+    match fs::symlink_metadata(active) {
+        Ok(_) => {
+            generations.push(JsonlGeneration {
+                path: active.to_path_buf(),
+                identity: stable_file_identity(active)?,
+                is_active: true,
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    let components = match rotation_components(active) {
+        Ok(components) => components,
+        Err(_) => return Ok(generations),
+    };
+    let parent = active.parent().unwrap_or_else(|| Path::new("."));
+    let entries: Vec<_> = fs::read_dir(parent)?.collect::<Result<_, _>>()?;
+    let mut rotated = Vec::new();
+    for entry in entries {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some((date, counter)) = parse_rotated_name(name, &components.0, &components.1) else {
+            continue;
+        };
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() {
+            return Err(format!(
+                "durable JSONL generation {} is not a regular file",
+                entry.path().display()
+            )
+            .into());
+        }
+        rotated.push(RotatedFileEntry {
+            date,
+            counter,
+            path: entry.path(),
+        });
+    }
+    rotated.sort();
+    let mut discovered = Vec::with_capacity(rotated.len() + generations.len());
+    for entry in rotated {
+        discovered.push(JsonlGeneration {
+            identity: stable_file_identity(&entry.path)?,
+            path: entry.path,
+            is_active: false,
+        });
+    }
+    discovered.extend(generations);
+
+    let mut identities = std::collections::BTreeSet::new();
+    for generation in &discovered {
+        if !identities.insert(generation.identity.clone()) {
+            return Err("durable JSONL generation identity is ambiguous".into());
+        }
+    }
+    Ok(discovered)
+}
+
 /// Check if the active file exceeds the rotation threshold and rotate if so.
-fn maybe_rotate(path: &Path, config: &RotationConfig) -> Result<bool, Box<dyn std::error::Error>> {
+fn maybe_rotate_with_mode(
+    path: &Path,
+    config: &RotationConfig,
+    preserve_rotated: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let size = match fs::metadata(path) {
         Ok(meta) => meta.len(),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -129,11 +232,15 @@ fn maybe_rotate(path: &Path, config: &RotationConfig) -> Result<bool, Box<dyn st
         return Ok(false);
     }
 
-    rotate_file(path, config)
+    rotate_file(path, config, preserve_rotated)
 }
 
 /// Rename the active file to a date-stamped rotated file and clean up old rotations.
-fn rotate_file(path: &Path, config: &RotationConfig) -> Result<bool, Box<dyn std::error::Error>> {
+fn rotate_file(
+    path: &Path,
+    config: &RotationConfig,
+    preserve_rotated: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let date = current_date_utc();
     let rotated = rotated_path(path, &date)?;
 
@@ -147,7 +254,9 @@ fn rotate_file(path: &Path, config: &RotationConfig) -> Result<bool, Box<dyn std
 
     atomic_rename_no_replace(path, &final_path)?;
 
-    cleanup_rotated_files(path, config.keep)?;
+    if !preserve_rotated {
+        cleanup_rotated_files(path, config.keep)?;
+    }
     sync_parent(path)?;
     Ok(true)
 }
@@ -330,7 +439,7 @@ mod tests {
 
     use super::{
         LocalJsonlSink, RotationConfig, cleanup_rotated_files, date_from_days_since_epoch,
-        maybe_rotate, parse_rotated_name, rotated_path,
+        maybe_rotate_with_mode, parse_rotated_name, rotated_path,
     };
     use crate::event::health_event_with_metadata;
     use crate::sink::{EventSink, emit_events};
@@ -404,6 +513,61 @@ mod tests {
         assert!(
             !rotated.is_empty(),
             "expected at least one rotated file after exceeding max size"
+        );
+    }
+
+    #[test]
+    fn non_durable_rotation_keeps_only_the_configured_number_of_generations() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("logs/telltale-events.jsonl");
+        let sink = LocalJsonlSink::with_rotation(
+            &log_path,
+            RotationConfig {
+                max_size_bytes: 1,
+                keep: 1,
+            },
+        );
+        let event = make_health_event();
+
+        for _ in 0..4 {
+            sink.emit(std::slice::from_ref(&event)).expect("emit event");
+        }
+
+        let generations = super::discover_jsonl_generations(&log_path).expect("discover files");
+        assert!(generations.iter().any(|generation| generation.is_active));
+        assert_eq!(
+            generations
+                .iter()
+                .filter(|generation| !generation.is_active)
+                .count(),
+            1,
+            "non-durable rotation must retain its existing keep policy"
+        );
+    }
+
+    #[test]
+    fn reopening_non_durable_sink_appends_without_changing_rotation_policy() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("logs/telltale-events.jsonl");
+        let event = make_health_event();
+        let rotation = RotationConfig {
+            max_size_bytes: 10_000,
+            keep: 2,
+        };
+        LocalJsonlSink::with_rotation(&log_path, rotation.clone())
+            .emit(std::slice::from_ref(&event))
+            .expect("first process emit");
+        drop(LocalJsonlSink::with_rotation(&log_path, rotation).emit(&[event]));
+
+        let contents = std::fs::read_to_string(&log_path).expect("reopened JSONL");
+        assert_eq!(contents.lines().count(), 2);
+        assert_eq!(
+            super::discover_jsonl_generations(&log_path)
+                .expect("discover reopened files")
+                .iter()
+                .filter(|generation| !generation.is_active)
+                .count(),
+            0
         );
     }
 
@@ -719,7 +883,7 @@ mod tests {
             max_size_bytes: 10_000,
             keep: 5,
         };
-        maybe_rotate(&log_path, &config).expect("rotate check");
+        maybe_rotate_with_mode(&log_path, &config, false).expect("rotate check");
 
         // File should still be the active file, unchanged.
         let content = std::fs::read_to_string(&log_path).expect("read");
@@ -735,7 +899,7 @@ mod tests {
             max_size_bytes: 100,
             keep: 5,
         };
-        maybe_rotate(&log_path, &config).expect("rotate check on missing file");
+        maybe_rotate_with_mode(&log_path, &config, false).expect("rotate check on missing file");
     }
 
     #[test]

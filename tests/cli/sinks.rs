@@ -1,5 +1,12 @@
 use super::*;
 
+#[cfg(not(windows))]
+use rusqlite::{Connection, params};
+#[cfg(not(windows))]
+use std::path::PathBuf;
+#[cfg(not(windows))]
+use tempfile::TempDir;
+
 fn assert_http_header(request: &str, expected_name: &str, expected_value: &str) {
     let actual = request
         .lines()
@@ -15,6 +22,73 @@ fn assert_http_header(request: &str, expected_name: &str, expected_value: &str) 
         Some(expected_value),
         "expected HTTP header {expected_name}: {expected_value}; captured request:\n{request}"
     );
+}
+
+#[cfg(not(windows))]
+fn blocked_outbox_fixture() -> (TempDir, PathBuf, String) {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let config_dir = temp.path().join("config");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs directory");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    let yaml_path = |path: &std::path::Path| {
+        serde_yaml::to_string(&path.to_string_lossy().to_string())
+            .expect("serialize YAML path")
+            .trim()
+            .to_string()
+    };
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n",
+            yaml_path(&outbox_path),
+            yaml_path(&log_path)
+        ),
+    )
+    .expect("write durable outputs config");
+
+    let setup = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("create durable outbox fixture");
+    assert!(
+        setup.status.success(),
+        "fixture scan failed: {}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+
+    let event_id = fs::read_to_string(&log_path)
+        .expect("read durable event")
+        .lines()
+        .next()
+        .map(|line| serde_json::from_str::<Value>(line).expect("parse durable event"))
+        .and_then(|event| event["event_id"].as_str().map(str::to_string))
+        .expect("durable event ID");
+    let connection = Connection::open(&outbox_path).expect("open fixture outbox");
+    connection
+        .execute(
+            "INSERT INTO deliveries
+             (event_id, sink_id, state, attempt_count, next_attempt_at,
+              last_error_class, last_error_status, updated_at)
+             VALUES (?1, 'remote', 'blocked', 7, NULL,
+                     'authentication_blocked', 403, 11)",
+            params![&event_id],
+        )
+        .expect("seed blocked delivery");
+
+    (temp, outbox_path, event_id)
 }
 
 fn start_mock_hec_server() -> (
@@ -524,6 +598,10 @@ sinks:
             "posture": "durable_first_write",
             "durable_first_write": true,
             "built_in_persistent_replay": false,
+            "durable_queue_health": {
+                "mode": "not_configured",
+                "sinks": {},
+            },
             "enabled_sink_count": 2,
             "durable_sink_count": 1,
             "remote_sink_count": 1,
@@ -1246,6 +1324,203 @@ sinks:
     }));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn config_validate_durable_does_not_create_or_migrate_outbox() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().expect("tempdir");
+    let config_dir = temp.path().join("config");
+    let outputs_dir = config_dir.join("outputs.d");
+    let outbox_parent = temp.path().join("private-outbox");
+    let outbox_path = outbox_parent.join("outbox.sqlite");
+    let log_path = temp.path().join("events.jsonl");
+    fs::create_dir_all(&outputs_dir).expect("outputs directory");
+    fs::create_dir(&outbox_parent).expect("outbox parent");
+    fs::set_permissions(&outbox_parent, fs::Permissions::from_mode(0o700))
+        .expect("private outbox parent");
+
+    let connection = Connection::open(&outbox_path).expect("legacy outbox fixture");
+    connection
+        .execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+             INSERT INTO meta (key, value) VALUES ('schema_version', '5');",
+        )
+        .expect("legacy schema fixture");
+    drop(connection);
+    fs::set_permissions(&outbox_path, fs::Permissions::from_mode(0o600))
+        .expect("private outbox fixture");
+    let before = fs::read(&outbox_path).expect("read legacy outbox");
+
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n",
+            serde_yaml::to_string(&outbox_path.to_string_lossy().to_string())
+                .expect("outbox YAML")
+                .trim(),
+            serde_yaml::to_string(&log_path.to_string_lossy().to_string())
+                .expect("log YAML")
+                .trim(),
+        ),
+    )
+    .expect("durable outputs config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["config", "validate", "--config-dir"])
+        .arg(&config_dir)
+        .output()
+        .expect("run config validate");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !log_path.exists(),
+        "config validation wrote canonical JSONL"
+    );
+    assert!(!outbox_path.with_file_name("outbox.sqlite.lock").exists());
+    assert!(!outbox_path.with_file_name("outbox.sqlite-journal").exists());
+    assert_eq!(
+        fs::read(&outbox_path).expect("read unchanged outbox"),
+        before
+    );
+
+    let connection = Connection::open(&outbox_path).expect("inspect unchanged outbox");
+    let version: String = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("schema version");
+    assert_eq!(version, "5");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("validation JSON");
+    assert_eq!(
+        report["outputs"]["delivery"]["built_in_persistent_replay"],
+        true
+    );
+    assert_eq!(
+        report["outputs"]["delivery"]["durable_queue_health"]["mode"],
+        "not_activated"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn scan_dry_run_durable_does_not_create_outbox_or_jsonl() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    let config_dir = temp.path().join("config");
+    let outputs_dir = config_dir.join("outputs.d");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    fs::create_dir_all(&root).expect("empty root");
+    fs::create_dir_all(&outputs_dir).expect("outputs directory");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n",
+            outbox_path.display(),
+            log_path.display(),
+        ),
+    )
+    .expect("durable outputs config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--dry-run", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run durable dry-run scan");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!log_path.exists(), "dry-run wrote canonical JSONL");
+    assert!(!state_path.exists(), "dry-run wrote scanner state");
+    assert!(
+        !outbox_path.parent().expect("outbox parent").exists(),
+        "dry-run created outbox parent"
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("dry-run summary");
+    assert_eq!(summary["delivery"]["status"], "not_attempted");
+    assert_eq!(
+        summary["effective_configuration"]["outputs"]["delivery"]["built_in_persistent_replay"],
+        true
+    );
+    assert_eq!(
+        summary["effective_configuration"]["outputs"]["delivery"]["durable_queue_health"]["mode"],
+        "not_activated"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn normal_durable_scan_initializes_outbox_without_a_new_event() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    let config_dir = temp.path().join("config");
+    let outputs_dir = config_dir.join("outputs.d");
+    let outbox_parent = temp.path().join("private-outbox");
+    let outbox_path = outbox_parent.join("outbox.sqlite");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    fs::create_dir_all(&root).expect("empty root");
+    fs::create_dir_all(&outputs_dir).expect("outputs directory");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n",
+            outbox_path.display(),
+            log_path.display(),
+        ),
+    )
+    .expect("durable outputs config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run durable scan");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        outbox_path.is_file(),
+        "normal durable scan did not initialize outbox"
+    );
+    assert!(
+        state_path.is_file(),
+        "normal scan did not persist scanner state"
+    );
+    assert!(
+        log_path.is_file(),
+        "normal durable scan should persist health JSONL"
+    );
+}
+
 #[test]
 fn config_validate_rejects_missing_enabled_sink_secret() {
     let temp = tempdir().expect("tempdir");
@@ -1279,4 +1554,282 @@ sinks:
         "stderr: {stderr}"
     );
     assert!(!stderr.contains("test-token"), "secret leaked: {stderr}");
+}
+
+#[test]
+fn delivery_retry_blocked_requires_outbox_path_and_sink() {
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked"])
+        .output()
+        .expect("run retry-blocked command");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--outbox-path"), "stderr: {stderr}");
+    assert!(stderr.contains("--sink"), "stderr: {stderr}");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+#[cfg(not(windows))]
+fn delivery_retry_blocked_releases_rows_and_prints_only_the_count() {
+    let (_temp, outbox_path, event_id) = blocked_outbox_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked", "--outbox-path"])
+        .arg(&outbox_path)
+        .args(["--sink", "remote"])
+        .output()
+        .expect("run retry-blocked command");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"released_blocked=1\n");
+    assert!(output.stderr.is_empty());
+
+    let connection = Connection::open(&outbox_path).expect("reopen fixture outbox");
+    let row: (String, i64, Option<i64>, Option<String>, Option<i64>, i64) = connection
+        .query_row(
+            "SELECT state, attempt_count, next_attempt_at, last_error_class,
+                    last_error_status, updated_at
+             FROM deliveries WHERE event_id = ?1 AND sink_id = 'remote'",
+            params![event_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .expect("read released delivery");
+    assert_eq!(row.0, "pending");
+    assert_eq!(row.1, 7);
+    assert!(row.2.is_some());
+    assert_eq!(row.3.as_deref(), Some("authentication_blocked"));
+    assert_eq!(row.4, Some(403));
+    assert_eq!(row.2, Some(row.5));
+}
+
+#[test]
+#[cfg(not(windows))]
+fn delivery_retry_blocked_wrong_sink_releases_nothing() {
+    let (_temp, outbox_path, event_id) = blocked_outbox_fixture();
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked", "--outbox-path"])
+        .arg(&outbox_path)
+        .args(["--sink", "not-configured"])
+        .output()
+        .expect("run retry-blocked command");
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"released_blocked=0\n");
+    assert!(output.stderr.is_empty());
+
+    let connection = Connection::open(&outbox_path).expect("reopen fixture outbox");
+    let state: String = connection
+        .query_row(
+            "SELECT state FROM deliveries WHERE event_id = ?1 AND sink_id = 'remote'",
+            params![event_id],
+            |row| row.get(0),
+        )
+        .expect("read unchanged delivery");
+    assert_eq!(state, "blocked");
+}
+
+#[test]
+#[cfg(not(windows))]
+fn delivery_retry_blocked_does_not_echo_a_hostile_sink_identity() {
+    let temp = tempdir().expect("tempdir");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    let hostile_sink = "https://sink-owner.example.invalid/private?token=synthetic-sink-secret";
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked", "--outbox-path"])
+        .arg(&outbox_path)
+        .args(["--sink", hostile_sink])
+        .output()
+        .expect("run retry-blocked command");
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"released_blocked=0\n");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!combined.contains(hostile_sink));
+}
+
+#[test]
+#[cfg(not(windows))]
+fn delivery_retry_blocked_reports_corrupt_outbox_without_sink_details() {
+    let temp = tempdir().expect("tempdir");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    fs::create_dir_all(outbox_path.parent().expect("outbox parent")).expect("outbox parent");
+    fs::write(&outbox_path, b"synthetic-not-a-sqlite-database").expect("corrupt outbox");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&outbox_path, fs::Permissions::from_mode(0o600))
+            .expect("private corrupt outbox");
+    }
+
+    let hostile_sink = "https://sink-owner.example.invalid/private?token=synthetic-sink-secret";
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked", "--outbox-path"])
+        .arg(&outbox_path)
+        .args(["--sink", hostile_sink])
+        .output()
+        .expect("run retry-blocked command");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains(hostile_sink));
+    assert!(stderr.len() <= 400, "stderr was not bounded: {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn delivery_retry_blocked_rejects_a_non_private_outbox_parent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().expect("tempdir");
+    let parent = temp.path().join("broad-outbox");
+    fs::create_dir(&parent).expect("outbox parent");
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("broad permissions");
+    let outbox_path = parent.join("outbox.sqlite");
+    let hostile_sink = "https://sink-owner.example.invalid/private?token=synthetic-sink-secret";
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked", "--outbox-path"])
+        .arg(&outbox_path)
+        .args(["--sink", hostile_sink])
+        .output()
+        .expect("run retry-blocked command");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("private"), "stderr: {stderr}");
+    assert!(!stderr.contains(hostile_sink));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_durable_scan_is_rejected_before_artifacts_or_fallback() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("empty-root");
+    fs::create_dir_all(&root).expect("empty root");
+    let config_dir = temp.path().join("config");
+    let outputs_dir = config_dir.join("outputs.d");
+    fs::create_dir_all(&outputs_dir).expect("outputs directory");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    fs::write(
+        outputs_dir.join("outputs.yaml"),
+        format!(
+            "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n",
+            outbox_path.display(),
+            log_path.display()
+        ),
+    )
+    .expect("write durable outputs config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--root"])
+        .arg(&root)
+        .args(["--config-dir"])
+        .arg(&config_dir)
+        .args(["--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .arg("--install-inventory-disabled")
+        .output()
+        .expect("run durable scan");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "persistent durable-delivery private storage is not supported on Windows yet"
+        ),
+        "stderr: {stderr}"
+    );
+    assert!(!log_path.exists());
+    assert!(!state_path.exists());
+    assert!(!outbox_path.parent().expect("outbox parent").exists());
+    assert!(!outbox_path.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_durable_health_is_unavailable_without_opening_storage() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let state_path = temp.path().join("state.json");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    let event = native_test_event(
+        "health",
+        "telltale-123e4567-e89b-42d3-a456-426614174000",
+        "2026-01-01T00:00:00Z",
+        "low",
+        "codex",
+        "synthetic-status-session",
+        &[],
+    );
+    fs::write(
+        &log_path,
+        format!("{}\n", serde_json::to_string(&event).expect("health JSON")),
+    )
+    .expect("write synthetic health");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["status", "--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .args(["--outbox-path"])
+        .arg(&outbox_path)
+        .output()
+        .expect("run status");
+
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let status: Value = serde_json::from_slice(&output.stdout).expect("status JSON");
+    assert_eq!(
+        status["durable_queue_health"]["error"]["message"],
+        "persistent durable-delivery private storage is not supported on Windows yet"
+    );
+    assert!(!outbox_path.parent().expect("outbox parent").exists());
+    assert!(!outbox_path.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_retry_blocked_rejects_before_outbox_creation() {
+    let temp = tempdir().expect("tempdir");
+    let outbox_path = temp.path().join("private-outbox").join("outbox.sqlite");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["delivery", "retry-blocked", "--outbox-path"])
+        .arg(&outbox_path)
+        .args(["--sink", "synthetic-sink"])
+        .output()
+        .expect("run retry-blocked command");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "persistent durable-delivery private storage is not supported on Windows yet"
+        )
+    );
+    assert!(!outbox_path.parent().expect("outbox parent").exists());
+    assert!(!outbox_path.exists());
 }

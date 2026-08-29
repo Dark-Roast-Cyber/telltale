@@ -287,6 +287,12 @@ enum Command {
         command: MigrateCommand,
     },
 
+    /// Manage durable delivery state.
+    Delivery {
+        #[command(subcommand)]
+        command: DeliveryCommand,
+    },
+
     /// Show scanner status from the most recent health event.
     Status {
         /// Default path profile used when --log-path or --state-path is not set.
@@ -300,6 +306,10 @@ enum Command {
         /// JSON state path for duplicate suppression. Defaults to TELLTALE_STATE_PATH or the selected path profile.
         #[arg(long)]
         state_path: Option<PathBuf>,
+
+        /// Optional SQLite outbox path for payload-independent durable queue health.
+        #[arg(long)]
+        outbox_path: Option<PathBuf>,
     },
 
     /// Export filtered events from a Telltale JSONL log.
@@ -382,6 +392,20 @@ enum MigrateCommand {
             action = ArgAction::Append
         )]
         pairs: Vec<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DeliveryCommand {
+    /// Make all blocked deliveries for a sink immediately retryable.
+    RetryBlocked {
+        /// SQLite durable outbox path.
+        #[arg(long)]
+        outbox_path: PathBuf,
+
+        /// Stable configured sink identity to release.
+        #[arg(long)]
+        sink: String,
     },
 }
 
@@ -811,7 +835,8 @@ fn output_snapshot_value(
         "delivery": {
             "posture": sink_set.delivery_posture().as_str(),
             "durable_first_write": sink_set.delivery_posture().has_durable_first_write(),
-            "built_in_persistent_replay": false,
+            "built_in_persistent_replay": sink_set.has_persistent_replay(),
+            "durable_queue_health": sink_set.durable_health_json(),
             "enabled_sink_count": enabled_sink_count,
             "durable_sink_count": durable_sink_count,
             "remote_sink_count": enabled_sink_count.saturating_sub(durable_sink_count),
@@ -1003,10 +1028,12 @@ fn run_config_validate(
     )?;
     let rule_set = &resolution.rule_set;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
-    let output_specs = sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
+    let loaded_outputs =
+        sink_config::load_outputs_config_with_delivery(&resolved_config.discovered.output_paths)?;
+    let output_specs = &loaded_outputs.sinks;
     let outputs_config_present = !resolved_config.discovered.output_paths.is_empty();
-    sink_config::build_sink_set_with_presence(
-        &output_specs,
+    let sink_set = sink_config::build_sink_set_with_presence_and_delivery_for_validation(
+        output_specs,
         outputs_config_present,
         &sink_config::CliSinkOverrides {
             log_path: Path::new("telltale-events.jsonl"),
@@ -1014,10 +1041,11 @@ fn run_config_validate(
             splunk_hec_endpoint: None,
             splunk_hec_token: None,
         },
+        &loaded_outputs.delivery,
         false,
     )?;
     let delivery_posture =
-        sink_config::effective_delivery_posture(&output_specs, outputs_config_present);
+        sink_config::effective_delivery_posture(output_specs, outputs_config_present);
     let (enabled_sink_count, durable_sink_count, remote_sink_count, delivery_source) =
         if !outputs_config_present {
             (1, 1, 0, "legacy_default")
@@ -1106,7 +1134,8 @@ fn run_config_validate(
                 "delivery": {
                     "posture": delivery_posture.as_str(),
                     "durable_first_write": delivery_posture.has_durable_first_write(),
-                    "built_in_persistent_replay": false,
+                    "built_in_persistent_replay": sink_set.has_persistent_replay(),
+                    "durable_queue_health": sink_set.durable_health_json(),
                     "enabled_sink_count": enabled_sink_count,
                     "durable_sink_count": durable_sink_count,
                     "remote_sink_count": remote_sink_count,
@@ -1278,10 +1307,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 policy.as_deref(),
                 allowlist.as_deref(),
             )?;
-            let output_specs =
-                sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
-            let sink_set = sink_config::build_sink_set_with_presence(
-                &output_specs,
+            let loaded_outputs = sink_config::load_outputs_config_with_delivery(
+                &resolved_config.discovered.output_paths,
+            )?;
+            let output_specs = &loaded_outputs.sinks;
+            let sink_set = sink_config::build_sink_set_with_presence_and_delivery_for_activation(
+                output_specs,
                 !resolved_config.discovered.output_paths.is_empty(),
                 &sink_config::CliSinkOverrides {
                     log_path: &log_path,
@@ -1289,10 +1320,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
                     splunk_hec_token: splunk_hec_token.as_deref(),
                 },
+                &loaded_outputs.delivery,
                 true,
+                !dry_run,
             )?;
             let outputs = output_snapshot_value(
-                &output_specs,
+                output_specs,
                 &resolved_config.discovered.output_paths,
                 !resolved_config.discovered.output_paths.is_empty(),
                 &log_path,
@@ -1365,6 +1398,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|pair| (pair[0].clone(), pair[1].clone()))
                     .collect::<Vec<_>>();
                 migrate::run_event_migration(&pairs)?;
+            }
+        },
+        Command::Delivery { command } => match command {
+            DeliveryCommand::RetryBlocked { outbox_path, sink } => {
+                let mut outbox = crate::sink::outbox::Outbox::open(&outbox_path)?;
+                let released =
+                    outbox.release_blocked_for_sink(&sink, crate::sink::outbox::unix_millis())?;
+                println!("released_blocked={released}");
             }
         },
         Command::Rules { command } => match command {
@@ -1630,10 +1671,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 policy.as_deref(),
                 allowlist.as_deref(),
             )?;
-            let output_specs =
-                sink_config::load_outputs_config(&resolved_config.discovered.output_paths)?;
-            let sink_set = sink_config::build_sink_set_with_presence(
-                &output_specs,
+            let loaded_outputs = sink_config::load_outputs_config_with_delivery(
+                &resolved_config.discovered.output_paths,
+            )?;
+            let output_specs = &loaded_outputs.sinks;
+            let sink_set = sink_config::build_sink_set_with_presence_and_delivery_for_activation(
+                output_specs,
                 !resolved_config.discovered.output_paths.is_empty(),
                 &sink_config::CliSinkOverrides {
                     log_path: &log_path,
@@ -1641,10 +1684,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     splunk_hec_endpoint: None,
                     splunk_hec_token: None,
                 },
+                &loaded_outputs.delivery,
                 true,
+                !dry_run,
             )?;
             let outputs = output_snapshot_value(
-                &output_specs,
+                output_specs,
                 &resolved_config.discovered.output_paths,
                 !resolved_config.discovered.output_paths.is_empty(),
                 &log_path,
@@ -1701,11 +1746,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             path_profile,
             log_path,
             state_path,
+            outbox_path,
         } => {
             let path_profile = path_profile.into();
             let log_path = paths::resolve_log_path(path_profile, log_path);
             let state_path = paths::resolve_state_path(path_profile, state_path);
-            scan::run_status(&log_path, &state_path)?;
+            let durable_health = outbox_path
+                .as_deref()
+                .map(|path| crate::sink::durable_health_json_from_path(path, &[]))
+                .unwrap_or_else(|| {
+                    serde_json::json!({
+                        "mode": "not_configured",
+                        "sinks": {},
+                    })
+                });
+            scan::run_status(&log_path, &state_path, durable_health)?;
         }
         Command::Export {
             path_profile,

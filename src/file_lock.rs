@@ -181,6 +181,39 @@ pub(crate) struct PinnedFile {
 }
 
 impl PinnedFile {
+    pub(crate) fn length(&self) -> u64 {
+        self.info.length
+    }
+
+    pub(crate) fn read_range(
+        &mut self,
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let before = safe_file_info(&self.file, false)?;
+        if before != self.info || safe_path_info(&self.path)? != Some(self.info) {
+            return Err("source changed during bounded read; retry".into());
+        }
+        let end = offset
+            .checked_add(u64::try_from(length).map_err(|_| "bounded read is too large")?)
+            .ok_or("bounded read offset overflow")?;
+        if end > before.length {
+            return Err("bounded read exceeds source length".into());
+        }
+        self.file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = vec![0_u8; length];
+        self.file.read_exact(&mut bytes)?;
+        let after = safe_file_info(&self.file, false)?;
+        validate_pinned_observation(
+            self.info,
+            before,
+            after,
+            safe_path_info(&self.path)?,
+            "source changed during bounded read; retry",
+        )?;
+        Ok(bytes)
+    }
+
     pub(crate) fn snapshot(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let before = safe_file_info(&self.file, false)?;
         if before != self.info {
@@ -405,6 +438,68 @@ pub(crate) fn safe_path_info(path: &Path) -> Result<Option<FileInfo>, Box<dyn st
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Return a stable, opaque identity for a regular file. The identity is based
+/// on the filesystem file identity rather than its name, so a coordinated
+/// rename preserves a JSONL generation while replacement or recreation does
+/// not. The raw platform identity never leaves this module.
+pub(crate) fn stable_file_identity(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let info = safe_path_info(path)?.ok_or("file identity target does not exist")?;
+    file_identity_token(info)
+}
+
+fn file_identity_token(info: FileInfo) -> Result<String, Box<dyn std::error::Error>> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"telltale-file-identity-v1\0");
+    #[cfg(unix)]
+    {
+        hasher.update(info.identity.device.to_le_bytes());
+        hasher.update(info.identity.inode.to_le_bytes());
+    }
+    #[cfg(windows)]
+    {
+        hasher.update(info.identity.value.to_le_bytes());
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = info;
+        return Err("file identity is unsupported on this platform".into());
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Remove one previously discovered regular file only after reopening and
+/// validating the exact path against its opaque stable identity. The caller
+/// must hold the corresponding sidecar lock while this check and unlink run.
+pub(crate) fn remove_verified_file(
+    path: &Path,
+    expected_identity: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pinned = open_pinned_read(path)?;
+    let expected_info = pinned.info;
+    if file_identity_token(expected_info)? != expected_identity
+        || safe_path_info(path)? != Some(expected_info)
+    {
+        return Err("persistence target changed during verified deletion".into());
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows generally cannot unlink while this handle is open. Close it
+        // and repeat the metadata check immediately before removal; the
+        // sidecar lock held by the caller closes the remaining coordination
+        // window, but cannot prevent an unrelated external actor from racing.
+        drop(pinned);
+        if safe_path_info(path)? != Some(expected_info) {
+            return Err("persistence target changed before verified deletion".into());
+        }
+    }
+    #[cfg(not(windows))]
+    let _pinned = pinned;
+
+    fs::remove_file(path)?;
+    sync_parent(path)
 }
 
 pub(crate) fn validate_target(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -786,6 +881,41 @@ fn normalized_paths_equal(left: &Path, right: &Path) -> Result<bool, Box<dyn std
     {
         // Other Unix filesystems are case-sensitive for this contract.
         Ok(false)
+    }
+}
+
+/// Compare two paths for the identities that can be resolved without opening
+/// either file for mutation. Lexical/symlink aliases are resolved through the
+/// nearest existing ancestor; Unix device/inode identity additionally catches
+/// hard links whose names remain different.
+pub(crate) fn paths_identity_equivalent(
+    left: &Path,
+    right: &Path,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if normalized_paths_equal(left, right)? {
+        return Ok(true);
+    }
+
+    #[cfg(unix)]
+    {
+        let left = path_device_inode(left)?;
+        let right = path_device_inode(right)?;
+        if let (Some(left), Some(right)) = (left, right) {
+            return Ok(left == right);
+        }
+    }
+
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn path_device_inode(path: &Path) -> Result<Option<(u64, u64)>, Box<dyn std::error::Error>> {
+    use std::os::unix::fs::MetadataExt;
+
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some((metadata.dev(), metadata.ino()))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -1252,8 +1382,9 @@ mod tests {
     use super::{sync_directory, windows_file_time};
 
     use super::{
-        RotationNamespace, SidecarLock, TempFile, atomic_no_replace, safe_path_info, sidecar_path,
-        validate_pinned_observation, validate_runtime_paths, verify_target_observation,
+        RotationNamespace, SidecarLock, TempFile, atomic_no_replace, atomic_rename_no_replace,
+        safe_path_info, sidecar_path, stable_file_identity, validate_pinned_observation,
+        validate_runtime_paths, verify_target_observation,
     };
 
     #[test]
@@ -1262,6 +1393,19 @@ mod tests {
         let target = temp.path().join("state.json");
         let first = SidecarLock::acquire(&target).expect("first lock");
         assert!(target.with_file_name("state.json.lock").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(target.with_file_name("state.json.lock"))
+                    .expect("sidecar metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         let error = match SidecarLock::acquire(&target) {
             Ok(_) => panic!("second lock must be busy"),
             Err(error) => error,
@@ -1269,6 +1413,26 @@ mod tests {
         assert_eq!(error.to_string(), "resource busy; retry later");
         drop(first);
         let _second = SidecarLock::acquire(&target).expect("released lock");
+    }
+
+    #[test]
+    fn stable_identity_survives_atomic_rotation_rename_and_restart_lookup() {
+        let temp = tempdir().expect("tempdir");
+        let source = temp.path().join("events.jsonl");
+        let rotated = temp.path().join("events-2026-06-21.jsonl");
+        fs::write(&source, b"one\n").expect("source");
+        let identity = stable_file_identity(&source).expect("source identity");
+        let lock = SidecarLock::acquire_lock_only(&source).expect("rotation lock");
+
+        atomic_rename_no_replace(&source, &rotated).expect("atomic rotation rename");
+        lock.verify_lock().expect("sidecar remains stable");
+        drop(lock);
+
+        assert!(!source.exists());
+        assert_eq!(
+            stable_file_identity(&rotated).expect("rotated identity after restart"),
+            identity
+        );
     }
 
     #[test]
