@@ -301,6 +301,19 @@ mod tests {
         (format!("http://{addr}/ingest"), handle)
     }
 
+    /// Mock HTTP server accepting each connection and closing it without a response.
+    fn start_closing_server(connections: usize) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let handle = thread::spawn(move || {
+            for _ in 0..connections {
+                let (stream, _) = listener.accept().expect("accept");
+                drop(stream);
+            }
+        });
+        (format!("http://{addr}/ingest"), handle)
+    }
+
     fn fast_retry(max_attempts: u32) -> RetryConfig {
         RetryConfig {
             max_attempts,
@@ -416,12 +429,8 @@ mod tests {
     }
 
     #[test]
-    fn post_errors_with_attempt_count_when_unreachable() {
-        // Bind and drop a listener so the port is closed.
-        let addr = {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("probe listener");
-            listener.local_addr().expect("probe addr")
-        };
+    fn post_errors_with_attempt_count_when_peer_closes_without_response() {
+        let (url, handle) = start_closing_server(2);
         let client = HttpClient::new(
             Duration::from_secs(1),
             fast_retry(2),
@@ -430,8 +439,9 @@ mod tests {
         .expect("client");
 
         let err = client
-            .post(&format!("http://{addr}/x"), &[], "application/json", b"{}")
+            .post(&url, &[], "application/json", b"{}")
             .expect_err("unreachable");
+        handle.join().expect("mock join");
 
         assert_eq!(err.attempts, 2);
         assert_eq!(err.kind, super::HttpPostErrorKind::NoResponse);
