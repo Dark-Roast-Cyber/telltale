@@ -1780,7 +1780,7 @@ fn windows_durable_health_is_unavailable_without_opening_storage() {
         "health",
         "telltale-123e4567-e89b-42d3-a456-426614174000",
         "2026-01-01T00:00:00Z",
-        "low",
+        "informational",
         "codex",
         "synthetic-status-session",
         &[],
