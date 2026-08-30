@@ -819,7 +819,7 @@ fn existing_identity(path: &Path) -> Result<Option<FileIdentity>, Box<dyn std::e
     Ok(safe_path_info(path)?.map(|info| info.identity))
 }
 
-fn normalized_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub(crate) fn normalized_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let absolute = std::path::absolute(path)?;
     let mut normalized = PathBuf::new();
     for component in absolute.components() {

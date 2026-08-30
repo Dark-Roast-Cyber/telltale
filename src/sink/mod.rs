@@ -261,7 +261,7 @@ impl SinkSet {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn set_durable_capacity_scan_limit(&mut self, limit: u64) {
         self.durable_capacity_scan_limit = Some(limit);
     }

@@ -752,14 +752,19 @@ fn build_sink_set_with_presence_and_delivery_with_activation(
 mod tests {
     use std::path::PathBuf;
 
-    use tempfile::{tempdir, tempdir_in};
+    use tempfile::tempdir;
+    #[cfg(unix)]
+    use tempfile::tempdir_in;
 
     use super::{
-        CliSinkOverrides, ConfigDeliveryPolicy, DeliveryConfig, JsonlSpec, SecretValue, SinkKind,
-        SinkSpec, build_sink_set, build_sink_set_with_presence_and_delivery_for_platform,
-        build_sink_set_with_presence_and_delivery_for_validation,
-        load_outputs_config_with_delivery,
+        CliSinkOverrides, DeliveryConfig, SecretValue, SinkKind, SinkSpec, build_sink_set,
+        build_sink_set_with_presence_and_delivery_for_platform, load_outputs_config_with_delivery,
     };
+    #[cfg(not(windows))]
+    use super::{
+        ConfigDeliveryPolicy, JsonlSpec, build_sink_set_with_presence_and_delivery_for_validation,
+    };
+    #[cfg(not(windows))]
     use crate::sink::outbox::{
         CapacityLimits, DEFAULT_MAX_PENDING_BYTES, DEFAULT_MAX_PENDING_EVENTS,
     };

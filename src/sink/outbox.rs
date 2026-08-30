@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{
@@ -674,7 +674,7 @@ impl Outbox {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn insert_event(
         &mut self,
         event: &Event,
@@ -1020,7 +1020,7 @@ impl Outbox {
         }))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn get_delivery(
         &self,
         event_id: &str,
@@ -1146,12 +1146,12 @@ impl Outbox {
         }))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn ingest_cursor(&self) -> Result<Option<IngestCursor>, Box<dyn std::error::Error>> {
         read_ingest_cursor(&self.connection)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn fail_next_prune_deletion(&mut self) {
         self.fail_next_prune_deletion = true;
     }
@@ -1279,7 +1279,7 @@ impl Outbox {
     /// Operator action for a blocked sink/event. No automatic path calls this;
     /// a credential or endpoint repair must be explicit before the row is made
     /// eligible again.
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn release_blocked_delivery(
         &mut self,
         event_id: &str,
@@ -1302,7 +1302,7 @@ impl Outbox {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     fn meta_value(&self, key: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
         self.connection
             .query_row(
@@ -2676,11 +2676,58 @@ fn bounded_cursor_text(value: &str, what: &str) -> Result<String, Box<dyn std::e
 }
 
 fn journal_path_hash(path: &Path) -> String {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut hasher = Sha256::new();
     hasher.update(b"telltale-jsonl-journal-v1\0");
-    hasher.update(path.to_string_lossy().as_bytes());
+    match resolve_journal_path(path) {
+        Ok(path) => hasher.update(path.to_string_lossy().as_bytes()),
+        Err(absolute) => {
+            hasher.update(b"\0journal-path-resolution-failed-v1\0");
+            hasher.update(absolute.to_string_lossy().as_bytes());
+        }
+    }
     format!("{:x}", hasher.finalize())
+}
+
+fn resolve_journal_path(path: &Path) -> Result<PathBuf, PathBuf> {
+    let absolute = match std::path::absolute(path) {
+        Ok(path) => path,
+        Err(_) => return Err(path.to_path_buf()),
+    };
+
+    for prefix in absolute.ancestors() {
+        let mut resolved = match fs::canonicalize(prefix) {
+            Ok(resolved) => resolved,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                continue;
+            }
+            Err(_) => return Err(absolute.clone()),
+        };
+        let Ok(suffix) = absolute.strip_prefix(prefix) else {
+            return Err(absolute.clone());
+        };
+        for component in suffix.components() {
+            match component {
+                Component::Normal(name) => resolved.push(name),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    let can_pop = resolved
+                        .parent()
+                        .is_some_and(|parent| parent != resolved.as_path());
+                    if can_pop {
+                        let _ = resolved.pop();
+                    }
+                }
+                Component::Prefix(_) | Component::RootDir => return Err(absolute.clone()),
+            }
+        }
+        return Ok(resolved);
+    }
+    Err(absolute)
 }
 
 fn canonical_payload(event: &Event) -> Result<CanonicalPayload, Box<dyn std::error::Error>> {
@@ -3659,6 +3706,57 @@ mod tests {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_path_hash_is_stable_across_missing_to_created_symlinked_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tempdir");
+        let real_parent = temp.path().join("real");
+        let alias_parent = temp.path().join("alias");
+        fs::create_dir(&real_parent).expect("real parent");
+        symlink(&real_parent, &alias_parent).expect("symlink parent");
+
+        let journal_path = alias_parent.join("events.jsonl");
+        let before = journal_path_hash(&journal_path);
+        fs::write(&journal_path, b"synthetic journal\n").expect("journal leaf");
+        let after = journal_path_hash(&journal_path);
+
+        assert_eq!(before, after);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_path_hash_distinguishes_symlink_then_parent_alias() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let target_nested = temp.path().join("target").join("nested");
+        fs::create_dir_all(&root).expect("root");
+        fs::create_dir_all(&target_nested).expect("target nested");
+        symlink(&target_nested, root.join("alias")).expect("alias symlink");
+
+        let root_journal = root.join("events.jsonl");
+        let aliased_parent_journal = root.join("alias").join("..").join("events.jsonl");
+        fs::write(&root_journal, b"synthetic-root-journal\n").expect("root journal");
+        fs::write(&aliased_parent_journal, b"synthetic-target-journal\n")
+            .expect("aliased parent journal");
+
+        assert_eq!(
+            fs::read(&root_journal).expect("read root journal"),
+            b"synthetic-root-journal\n"
+        );
+        assert_eq!(
+            fs::read(&aliased_parent_journal).expect("read aliased parent journal"),
+            b"synthetic-target-journal\n"
+        );
+        assert_ne!(
+            journal_path_hash(&root_journal),
+            journal_path_hash(&aliased_parent_journal)
+        );
     }
 
     fn create_legacy_base(connection: &Connection, version: i64) {
