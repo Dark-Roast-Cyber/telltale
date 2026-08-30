@@ -1881,6 +1881,10 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let log_path = directory.path().join("events.jsonl");
         let outbox_path = directory.path().join("private-outbox/outbox.sqlite");
+        drop(
+            Outbox::open(&outbox_path)
+                .expect("initialize shared outbox before concurrent admission"),
+        );
         let first = make_health_event();
         let second = make_health_event();
         let first_id = first.event_id.clone();
