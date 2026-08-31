@@ -241,22 +241,26 @@ directory, run the reusable manifest check:
 make release-artifact-manifest
 ```
 
-The target lists every `.tar.gz` and `.zip` archive and verifies that each
-archive contains exactly the expected canonical bundle manifest: the `telltale`
-binary (or its `.exe` form), `LICENSE`, `README.md`, and the curated
-`config/examples/` deployment files. The target requires `SHA256SUMS` in the same directory,
-then
-verifies that its entries match the reviewed archives exactly and that each
-checksum validates. The default `release-downloads/` directory is local review
-residue and is ignored and excluded from source packages; legacy local
-`artifacts/` review directories remain ignored and excluded as well. Use
-`RELEASE_ARTIFACT_DIR=<path>` when reviewing artifacts from another directory.
+The tagged release contains exactly five target archives plus the fixed
+`telltale-sbom.cdx.json` SBOM. The target lists every `.tar.gz` and `.zip`
+archive and verifies that each archive contains exactly the expected canonical
+bundle manifest: the `telltale` binary (or its `.exe` form), `LICENSE`,
+`README.md`, and the curated `config/examples/` deployment files. For the
+complete release set, run `REQUIRE_SBOM=1 make release-artifact-manifest`; it
+requires `SHA256SUMS` in the same directory, verifies exactly six entries (the
+five archives and SBOM), and validates every checksum. The default
+`release-downloads/` directory is local review residue and is ignored and
+excluded from source packages; legacy local `artifacts/` review directories
+remain ignored and excluded as well. Use `RELEASE_ARTIFACT_DIR=<path>` when
+reviewing artifacts from another directory.
 
-The tagged release workflow generates `SHA256SUMS` in its temporary
-`release-downloads` artifact directory from the downloaded `.tar.gz` and `.zip`
-archives and uploads it with the GitHub release. Publish equivalent checksums
-for any manually produced archives so operators can verify downloads before
-running the binary.
+The tagged release workflow verifies the downloaded SBOM against the tagged
+locked release graph before generating `SHA256SUMS`; it then generates the
+manifest from the five `.tar.gz`/`.zip` archives and SBOM in its temporary
+`release-downloads` directory and uploads the checksum file with the GitHub
+release. See the detailed procedure in
+`docs/security/operations.md#release-integrity-verification` for the complete
+SBOM, checksum, and attestation verification procedure.
 
 The Windows release job uses `scripts/release-windows-zip.ps1` for both package
 creation and finalized-archive validation. It reopens the serialized ZIP

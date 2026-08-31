@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Fail closed when a public workflow uses an unpinned external action."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+ACTION_RE = re.compile(
+    r"\buses:\s*(?P<action>[^\s#]+)(?:\s+#\s*(?P<comment>[^\s#]+))?"
+)
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+VERSION_RE = re.compile(r"^v[0-9]+(?:\.[0-9]+){0,2}$")
+
+
+def main() -> int:
+    root = Path(__file__).resolve().parent.parent
+    workflow_dir = root / ".github" / "workflows"
+    failures: list[str] = []
+    found = 0
+
+    for workflow in sorted((*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml"))):
+        for line_number, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), 1):
+            match = ACTION_RE.search(line)
+            if match is None:
+                continue
+            found += 1
+            action = match.group("action")
+            comment = match.group("comment")
+            if action.startswith("./") or action.startswith("../"):
+                failures.append(f"{workflow}:{line_number}: local actions are not permitted: {action}")
+                continue
+            if "@" not in action:
+                failures.append(f"{workflow}:{line_number}: action has no immutable ref: {action}")
+                continue
+            name, ref = action.rsplit("@", 1)
+            if not name or not SHA_RE.fullmatch(ref):
+                failures.append(
+                    f"{workflow}:{line_number}: {name or action} must use a lowercase 40-character commit SHA"
+                )
+            if comment is None or not VERSION_RE.fullmatch(comment):
+                failures.append(
+                    f"{workflow}:{line_number}: {action} needs a readable version comment such as '# v4.2.2'"
+                )
+
+    if found == 0:
+        failures.append(f"{workflow_dir}: no workflow action references were found")
+    if failures:
+        print("Workflow action pin check failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"- {failure}", file=sys.stderr)
+        return 1
+
+    print(f"Workflow action pin check passed ({found} immutable action reference(s)).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

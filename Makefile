@@ -17,9 +17,12 @@ PUBLIC_RELEASE_REMOTE ?= git@github.com:Dark-Roast-Cyber/telltale.git
 PUBLIC_RELEASE_UPSTREAM ?= origin/$(PUBLIC_RELEASE_BRANCH)
 RELEASE_ARTIFACT_DIR ?= release-downloads
 CARGO_LOCKED ?=
+CARGO_AUDIT_VERSION ?= 0.22.2
+CARGO_DENY_VERSION ?= 0.20.2
+RUST_TOOLCHAIN_VERSION ?= 1.95.0
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check evaluation-check evaluation-report public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -70,6 +73,42 @@ clippy:
 ## Full verification
 check: fmt clippy test
 	@echo "All checks passed."
+
+## Install the exact security gate tool versions
+security-tools:
+	cargo install cargo-audit --version "$(CARGO_AUDIT_VERSION)" --locked
+	cargo install cargo-deny --version "$(CARGO_DENY_VERSION)" --locked
+
+## Verify the installed security gate tool versions
+security-tool-versions:
+	@test "$$(rustc --version | awk '{print $$2}')" = "$(RUST_TOOLCHAIN_VERSION)" || { echo "Rust toolchain version mismatch; expected $(RUST_TOOLCHAIN_VERSION)" >&2; exit 1; }
+	@test "$$(cargo audit --version)" = "cargo-audit-audit $(CARGO_AUDIT_VERSION)" || { echo "cargo-audit version mismatch; run make security-tools" >&2; exit 1; }
+	@test "$$(cargo deny --version)" = "cargo-deny $(CARGO_DENY_VERSION)" || { echo "cargo-deny version mismatch; run make security-tools" >&2; exit 1; }
+	@echo "Toolchain: rust $(RUST_TOOLCHAIN_VERSION); security tools: cargo-audit $(CARGO_AUDIT_VERSION), cargo-deny $(CARGO_DENY_VERSION)"
+
+## Run the RustSec advisory gate with warnings denied
+security-audit: security-tool-versions
+	cargo audit -D warnings
+
+## Run the locked-graph source, license, wildcard, duplicate, and advisory gates
+security-deny: security-tool-versions
+	cargo deny check all
+
+## Run the deterministic SBOM generator and CycloneDX subset tests
+security-sbom-test:
+	@python3 tests/test_generate_sbom.py
+
+## Verify every external GitHub Action is immutably pinned
+workflow-pins-check:
+	@python3 scripts/check-workflow-pins
+
+## Run all repository-owned security and supply-chain gates
+security-check: security-audit security-deny security-sbom-test workflow-pins-check
+	@echo "Security and supply-chain checks passed."
+
+## Generate and repeat-verify the deterministic release SBOM
+release-sbom:
+	@python3 scripts/generate-sbom.py --output target/release/telltale-sbom.cdx.json
 
 ## Validate and compare the synthetic evaluation baseline
 evaluation-check:

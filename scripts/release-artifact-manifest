@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -23,6 +24,10 @@ EXPECTED_EXAMPLES = (
     "config/examples/elastic-telltale-role.json",
 )
 HEX_DIGEST = re.compile(r"^[0-9a-fA-F]{64}$")
+SBOM_NAME = "telltale-sbom.cdx.json"
+UUID = re.compile(
+    r"^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 def fail(message: str) -> None:
@@ -111,7 +116,39 @@ def validate_zip(archive: Path) -> list[str]:
     return names
 
 
-def read_checksums(directory: Path, archives: list[Path]) -> dict[str, str]:
+def validate_sbom(path: Path) -> None:
+    if path.is_symlink() or not path.is_file():
+        fail(f"SBOM is not a regular file: {path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"Could not inspect SBOM {path}: {error}")
+    metadata = document.get("metadata") if isinstance(document, dict) else None
+    if (
+        not isinstance(document, dict)
+        or document.get("bomFormat") != "CycloneDX"
+        or document.get("specVersion") != "1.6"
+        or document.get("version") != 1
+        or not isinstance(document.get("serialNumber"), str)
+        or UUID.fullmatch(document["serialNumber"]) is None
+        or not isinstance(document.get("components"), list)
+        or not document["components"]
+        or not isinstance(document.get("dependencies"), list)
+        or not isinstance(metadata, dict)
+    ):
+        fail(f"SBOM {path} is not the canonical CycloneDX JSON form")
+    if "timestamp" in metadata:
+        fail(f"SBOM {path} contains a nondeterministic timestamp")
+    refs = [component.get("bom-ref") for component in document["components"]]
+    if any(not isinstance(ref, str) or not ref.startswith("pkg:cargo/") for ref in refs):
+        fail(f"SBOM {path} contains a non-Cargo component reference")
+    if len(refs) != len(set(refs)):
+        fail(f"SBOM {path} contains duplicate component references")
+
+
+def read_checksums(
+    directory: Path, archives: list[Path], sbom: Path | None
+) -> dict[str, str]:
     checksum_path = directory / "SHA256SUMS"
     if checksum_path.is_symlink() or not checksum_path.is_file():
         fail(f"SHA256SUMS is required in {directory}")
@@ -128,12 +165,17 @@ def read_checksums(directory: Path, archives: list[Path]) -> dict[str, str]:
             fail("SHA256SUMS contains an unsafe, invalid, or duplicate entry")
         entries[name] = digest.lower()
     expected = {archive.name for archive in archives}
+    if sbom is not None:
+        expected.add(sbom.name)
     if set(entries) != expected:
-        fail("SHA256SUMS entries must match release archives exactly")
-    for archive in archives:
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if digest != entries[archive.name]:
-            fail(f"checksum mismatch for {archive.name}")
+        fail("SHA256SUMS entries must match release archives and SBOM exactly")
+    assets = [*archives]
+    if sbom is not None:
+        assets.append(sbom)
+    for asset in assets:
+        digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+        if digest != entries[asset.name]:
+            fail(f"checksum mismatch for {asset.name}")
     return entries
 
 
@@ -162,7 +204,18 @@ def main() -> int:
             fail(f"Release archive {archive} must use the canonical telltale-* filename")
         archives.append(archive)
 
-    read_checksums(directory, archives)
+    sbom_path = directory / SBOM_NAME
+    sbom: Path | None = None
+    if sbom_path.exists() or sbom_path.is_symlink():
+        validate_sbom(sbom_path)
+        sbom = sbom_path
+    require_sbom = os.environ.get("REQUIRE_SBOM", "").lower() in {"1", "true", "yes"}
+    if require_sbom and sbom is None:
+        fail(f"{SBOM_NAME} is required when REQUIRE_SBOM is enabled")
+
+    read_checksums(directory, archives, sbom)
+    if sbom is not None:
+        print(f"SBOM: {sbom}: OK")
     for archive in archives:
         print(f"Archive: {archive}")
         names = validate_tar(archive) if archive.name.endswith(".tar.gz") else validate_zip(archive)

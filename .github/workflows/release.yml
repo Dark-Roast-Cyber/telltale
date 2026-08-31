@@ -20,14 +20,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: 1.95.0
           components: clippy,rustfmt
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -35,6 +38,10 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+      - name: Install pinned security tools
+        run: make --silent security-tools
+      - name: Run repository-owned security gates
+        run: make --silent security-check
       - name: Verify tag, package version, and public ancestry
         shell: bash
         run: |
@@ -72,6 +79,18 @@ jobs:
             exit 1
           }
           printf 'Installer content blob: %s\n' "${tagged_blob}"
+      - name: Generate and repeat-verify release SBOM
+        run: make --silent CARGO_LOCKED=--locked release-sbom
+      - name: Attest release SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: target/release/telltale-sbom.cdx.json
+      - name: Upload release SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: telltale-sbom
+          path: target/release/telltale-sbom.cdx.json
+          if-no-files-found: error
       - name: Check Rust formatting
         run: cargo fmt --all --check
       - name: Run Clippy with warnings denied
@@ -118,11 +137,12 @@ jobs:
             archive: zip
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: 1.95.0
           targets: ${{ matrix.target }}
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -220,11 +240,11 @@ jobs:
             }
           }
       - name: Attest release archive
-        uses: actions/attest@v4.2.2
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: telltale-${{ matrix.target }}
           path: |
@@ -237,9 +257,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-downloads
           merge-multiple: true
@@ -257,12 +277,17 @@ jobs:
             "telltale-${GITHUB_REF_NAME}-x86_64-pc-windows-msvc.zip"
           )
           actual=(*)
-          if [[ "${#actual[@]}" -ne "${#expected[@]}" ]]; then
-            printf 'Expected exactly %s current-tag target archives, found %s: %s\n' \
+          if [[ "${#actual[@]}" -eq "${#expected[@]}" ]]; then
+            : # The five canonical target archives are present.
+          elif [[ "${#actual[@]}" -eq "$(( ${#expected[@]} + 1 ))" && -f telltale-sbom.cdx.json && ! -L telltale-sbom.cdx.json ]]; then
+            : # The five archives are accompanied by the fixed SBOM asset.
+          else
+            printf 'Expected exactly %s archives (or those archives plus the SBOM), found %s: %s\n' \
               "${#expected[@]}" "${#actual[@]}" "${actual[*]}" >&2
             exit 1
           fi
           for archive in "${actual[@]}"; do
+            [[ "${archive}" == "telltale-sbom.cdx.json" ]] && continue
             [[ -f "${archive}" && ! -L "${archive}" ]] || {
               echo "Release artifact is not a regular file: ${archive}" >&2
               exit 1
@@ -281,18 +306,32 @@ jobs:
               exit 1
             }
           done
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.95.0
+      - name: Verify release SBOM matches tagged locked graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/generate-sbom.py --check release-downloads/telltale-sbom.cdx.json
       - name: Generate checksums
         shell: bash
         run: |
           cd release-downloads
           shopt -s nullglob
-          archives=(*.tar.gz *.zip)
-          test "${#archives[@]}" -eq 5
-          printf '%s\0' "${archives[@]}" | sort -z | xargs -0 sha256sum > SHA256SUMS
+          assets=(*.tar.gz *.zip telltale-sbom.cdx.json)
+          test "${#assets[@]}" -eq 6
+          printf '%s\0' "${assets[@]}" | sort -z | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
+      - name: Require fixed release SBOM asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f release-downloads/telltale-sbom.cdx.json
+          test ! -L release-downloads/telltale-sbom.cdx.json
       - name: Validate assembled release artifact manifests
         shell: bash
-        run: make --silent RELEASE_ARTIFACT_DIR=release-downloads release-artifact-manifest
+        run: REQUIRE_SBOM=1 make --silent RELEASE_ARTIFACT_DIR=release-downloads release-artifact-manifest
       - name: Fail closed if the tag already has a Release
         shell: bash
         env:
@@ -383,7 +422,7 @@ jobs:
             exit 1
           }
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true

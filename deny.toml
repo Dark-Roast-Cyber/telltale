@@ -1,0 +1,84 @@
+# Issue #27 dependency policy. This file was derived from the locked workspace
+# graph with cargo-deny 0.20.2 on 2026-08-30. Additions require a fresh
+# `cargo deny check all` and a package-specific rationale where possible.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+# No advisory is ignored. A newly reported advisory fails the gate until the
+# affected lock entry is upgraded or an exact, reviewed exception is added.
+ignore = []
+
+[licenses]
+# These SPDX identifiers were observed in the current locked graph. Compound
+# expressions are accepted only when every constituent is in this list or in
+# one of the package-specific exceptions below.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+# These exceptions are intentionally package-specific. They are the only
+# unusual license identifiers reported by the current graph:
+# - ryu@1.0.23: Apache-2.0 OR BSL-1.0; transitive serializer dependency.
+# - webpki-roots@1.0.8: CDLA-Permissive-2.0; root certificates for rustls.
+# - r-efi@5.3.0 and r-efi@6.0.0: target-specific firmware support and the
+#   live MIT/Apache-2.0/LGPL-2.1-or-later expression.
+exceptions = [
+    { crate = "ryu@1.0.23", allow = ["Apache-2.0", "BSL-1.0"] },
+    { crate = "webpki-roots@1.0.8", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "r-efi@5.3.0", allow = ["MIT", "Apache-2.0", "LGPL-2.1-or-later"] },
+    { crate = "r-efi@6.0.0", allow = ["MIT", "Apache-2.0", "LGPL-2.1-or-later"] },
+]
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# Exact duplicate members reported by cargo-deny for the current all-target
+# graph. These are not blanket crate allowlists: each entry removes only the
+# named locked member from duplicate detection while the retained versions
+# remain checked for advisories, licenses, sources, and wildcards.
+skip = [
+    { crate = "getrandom@0.2.17", reason = "Live Cargo.lock: ring requires the 0.2 line while tempfile/uuid require newer lines." },
+    { crate = "getrandom@0.3.4", reason = "Live Cargo.lock: the 0.3 line is retained by ahash/rusqlite while uuid uses 0.4." },
+    { crate = "hashbrown@0.14.5", reason = "Live Cargo.lock: rusqlite/hashlink requires 0.14 while serde/indexmap requires a newer line." },
+    { crate = "r-efi@5.3.0", reason = "Live Cargo.lock: getrandom 0.3 and 0.4 require incompatible r-efi lines." },
+    { crate = "windows-sys@0.52.0", reason = "Live Cargo.lock: ring requires 0.52 while direct and notify paths require newer lines." },
+    { crate = "windows-sys@0.59.0", reason = "Live Cargo.lock: fs4 and direct Windows support retain 0.59 while other paths use newer lines." },
+    { crate = "windows-sys@0.60.2", reason = "Live Cargo.lock: notify retains 0.60 while direct and terminal dependencies use 0.61." },
+    { crate = "windows-targets@0.52.6", reason = "Live Cargo.lock: windows-sys 0.52 and 0.59 retain the 0.52 target family." },
+    { crate = "windows_aarch64_gnullvm@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "windows_aarch64_msvc@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "windows_i686_gnu@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "windows_i686_gnullvm@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "windows_i686_msvc@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "windows_x86_64_gnu@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "windows_x86_64_gnullvm@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "windows_x86_64_msvc@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },
+    { crate = "wit-bindgen@0.51.0", reason = "Live Cargo.lock: wasip3 and wasip2 require incompatible wit-bindgen lines." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -872,6 +872,56 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
     );
 
     fs::write(
+        artifacts.join("telltale-sbom.cdx.json"),
+        r#"{
+  "bomFormat": "CycloneDX",
+  "components": [{"bom-ref": "pkg:cargo/synthetic@1.0.0"}],
+  "dependencies": [],
+  "metadata": {},
+  "serialNumber": "urn:uuid:00000000-0000-0000-0000-000000000001",
+  "specVersion": "1.6",
+  "version": 1
+}
+"#,
+    )
+    .expect("write synthetic SBOM");
+    let sbom_checksums = Command::new("sha256sum")
+        .args([
+            good_archive.file_name().unwrap().to_str().unwrap(),
+            good_zip.file_name().unwrap().to_str().unwrap(),
+            "telltale-sbom.cdx.json",
+        ])
+        .current_dir(&artifacts)
+        .output()
+        .expect("SBOM checksum");
+    assert!(sbom_checksums.status.success());
+    fs::write(artifacts.join("SHA256SUMS"), sbom_checksums.stdout).expect("write SBOM checksums");
+    let output = release_fixture_make_command()
+        .arg("--silent")
+        .arg("-f")
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!(
+            "RELEASE_ARTIFACT_DIR={}",
+            artifacts.to_string_lossy()
+        ))
+        .env("REQUIRE_SBOM", "1")
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("make release-artifact-manifest with SBOM");
+    assert!(
+        output.status.success(),
+        "release-artifact-manifest should accept a canonical SBOM: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("SBOM:"),
+        "manifest output should report the SBOM: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    fs::remove_file(artifacts.join("telltale-sbom.cdx.json")).expect("remove synthetic SBOM");
+
+    fs::write(
         artifacts.join("SHA256SUMS"),
         "0000000000000000000000000000000000000000000000000000000000000000  stale.zip\n",
     )
@@ -1449,13 +1499,21 @@ fn release_workflow_requires_exact_current_tag_target_archive_set() {
         .find("- name: Generate checksums")
         .map(|offset| start + offset)
         .expect("checksum step");
+    let sbom_graph_check = workflow[start..]
+        .find("- name: Verify release SBOM matches tagged locked graph")
+        .map(|offset| start + offset)
+        .expect("SBOM graph check step");
     let manifests = workflow
         .find("- name: Validate assembled release artifact manifests")
         .expect("assembled manifest validation step");
     let release = workflow
         .find("- name: Create GitHub Release")
         .expect("GitHub Release step");
-    let step = &workflow[start..checksum];
+    let archive_step_end = workflow[start..]
+        .find("- uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1")
+        .map(|offset| start + offset)
+        .expect("release job Rust setup step");
+    let step = &workflow[start..archive_step_end];
     let run_start = step.find("run: |\n").expect("archive validation run block") + "run: |\n".len();
     let indentation = step[run_start..]
         .lines()
@@ -1489,12 +1547,36 @@ fn release_workflow_requires_exact_current_tag_target_archive_set() {
         );
     }
     for (name, offset) in [
+        ("SBOM graph check", sbom_graph_check),
         ("checksum generation", checksum),
         ("assembled manifest validation", manifests),
         ("GitHub Release creation", release),
     ] {
         assert!(start < offset, "archive validation must precede {name}");
     }
+    assert!(
+        sbom_graph_check < checksum,
+        "SBOM graph check must precede checksum generation"
+    );
+    let release_job = workflow
+        .split_once("\n  release:\n")
+        .map(|(_, job)| job)
+        .expect("release publication job");
+    let rust_setup = release_job
+        .find("uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1")
+        .expect("release job Rust setup");
+    let graph_command = release_job
+        .find("python3 scripts/generate-sbom.py --check release-downloads/telltale-sbom.cdx.json")
+        .expect("release job SBOM graph checker");
+    assert!(
+        rust_setup < graph_command,
+        "Rust setup must precede SBOM graph checking"
+    );
+    assert!(release_job.contains("toolchain: 1.95.0"));
+    assert!(release_job.contains("permissions:\n      contents: write"));
+    assert!(!release_job.contains("id-token: write"));
+    assert!(!release_job.contains("attestations: write"));
+    assert!(!release_job.contains("security-tools"));
 
     let temp = tempdir().expect("tempdir");
     let downloads = temp.path().join("release-downloads");
@@ -2002,6 +2084,10 @@ fn public_docs_native_release_gate_guidance_is_complete() {
         "JSONL-parity",
         ".github/workflows/release-native-verify.yml",
         "rc.7` is published and immutable",
+        "five target archives plus the fixed",
+        "telltale-sbom.cdx.json",
+        "REQUIRE_SBOM=1 make release-artifact-manifest",
+        "security/operations.md#release-integrity-verification",
     ] {
         assert!(
             docs.contains(required),
