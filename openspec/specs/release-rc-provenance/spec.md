@@ -4,9 +4,7 @@
 
 Defines the observable release provenance contract for immutable Telltale
 pre-release candidates and their later promotion to stable `0.5.0`.
-
 ## Requirements
-
 ### Requirement: Candidate package and tag lockstep
 
 The release process SHALL accept a candidate only when the workspace package
@@ -49,24 +47,27 @@ MUST NOT rely on tag-name inference or mark an RC as a normal latest release.
 ### Requirement: Canonical candidate artifact evidence
 
 For every target in the release matrix, the candidate process SHALL publish
-only the canonical Telltale archive and its required public evidence: the
-exact archive manifest, a matching `SHA256SUMS` entry, the archive attestation,
-and the workflow/ref/source identity needed to relate the artifact to its
-reviewed tag and commit.
+only the canonical Telltale archive and its required public evidence: the exact
+archive manifest, a matching `SHA256SUMS` entry, the archive attestation, the
+fixed-name `telltale-sbom.cdx.json` asset and its checksum, the SBOM attestation
+subject, and the workflow/ref/source identity needed to relate the evidence to
+the reviewed tag and commit. Archive members and archive names SHALL remain
+unchanged.
 
 #### Scenario: Complete target evidence
 
 - **WHEN** the RC workflow completes successfully for a target
-- **THEN** the target has a canonical `telltale-v0.5.0-rc.N-<target>` archive,
-  an exact `SHA256SUMS` entry, a verified archive manifest, and an attestation
-  for that exact archive subject
+- **THEN** the target has its canonical archive, exact archive checksum,
+  verified archive manifest, and archive attestation, and the release has the
+  deterministic fixed-name CycloneDX SBOM, an exact SHA256SUMS line, and an
+  attestation subject for that SBOM
 
 #### Scenario: Incomplete or noncanonical evidence
 
-- **WHEN** an archive has a missing checksum, mismatched digest, noncanonical
-  member, missing attestation, or source identity that cannot be tied to the
-  reviewed tag commit
-- **THEN** the candidate is not approved for downstream live validation
+- **WHEN** an archive or SBOM has a missing checksum, mismatched digest,
+  noncanonical member/content, missing attestation, or source identity that
+  cannot be tied to the reviewed tag commit
+- **THEN** release publication SHALL fail before the GitHub Release is created
 
 ### Requirement: Finalized Windows ZIP validation
 
