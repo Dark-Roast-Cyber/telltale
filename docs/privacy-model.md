@@ -6,7 +6,7 @@ Telltale monitors agent session stores that contain sensitive material: API keys
 
 ## Tested v0.6 Boundary
 
-`Event`, `Event::emittable()`, and `serialize_event_for_emission()` are equivalent, authoritative, deterministic, local-only privacy boundaries. Serialization terminal-sanitizes a clone without changing the raw in-memory `Event`; production JSONL, HEC, and Elastic serializers use that canonical representation. Canonical Event 3.0 re-export preserves established 64-character `source_path_hash`/evidence hashes and exact recognized opaque markers only in historical context. `telltale-schema` exposes `PrivacySanitizer` and `SanitizationContext`; the legacy `redact_sensitive_text()` helper delegates to that authority. There is no external redaction model or service, and sanitization happens after parsing and deterministic detection/scoring, not on detector inputs.
+`Event`, `Event::emittable()`, and `serialize_event_for_emission()` are equivalent, authoritative, deterministic, local-only privacy boundaries. Serialization terminal-sanitizes a clone without changing the raw in-memory `Event`; production JSONL, HEC, and Elastic serializers use that canonical representation. Native Event 3.0 emission always uses the trusted compile-time Telltale package version; arbitrary public version mutations, including credential-bearing SemVer metadata, are replaced before emission. Canonical Event 3.0 emission preserves only established 64-character lowercase-hex `source_path_hash`/evidence hashes; arbitrary post-construction source-hash values become deterministic SHA-256 values. MITRE ATT&CK technique IDs preserve the current `T1234`/`T1234.001` forms, while other values become deterministic `mitre:<sha256>` fallbacks. Known `source_counts` keys remain `<client>.<source-kind>` identifiers; noncanonical keys become deterministic `source_count:<sha256>` keys with collision suffixes. `workspace` is not a native Event 3.0 field; source workspace metadata remains part of the local normalized-input model and, when selected as evidence, is emitted only through the evidence path sanitizer. `telltale-schema` exposes `PrivacySanitizer` and `SanitizationContext`; the legacy `redact_sensitive_text()` helper delegates to that authority. There is no external redaction model or service, and sanitization happens after parsing and deterministic detection/scoring, not on detector inputs.
 
 ### Historical Opaque Markers
 
@@ -28,19 +28,20 @@ The matrix records every Event 3.0 and diagnostic text surface. "Controlled" mea
 
 | Surface | Provenance | Context | Earlier handling | Terminal handling and owner |
 | --- | --- | --- | --- | --- |
-| `timestamp`, `observed_at`, `ingested_at`, `schema_version`, `event_id`, `telltale_version`, `event_type`, `severity`, `time_source`, `time_confidence`, `client`, `component`, `check_name`, `status` | Generated or fixed schema/constructor values | Controlled metadata | Serialized as constructed | Preserved by `Event`'s terminal wire view; no source text is accepted here. |
+| `timestamp`, `observed_at`, `ingested_at`, `schema_version`, `event_id`, `event_type`, `severity`, `time_source`, `time_confidence`, `client`, `component`, `check_name`, `status` | Generated or fixed schema/constructor values | Controlled metadata | Serialized as constructed | Preserved by `Event`'s terminal wire view; no source text is accepted here. |
+| `telltale_version` | Compile-time package metadata | Trusted controlled constant | Serialized as constructed | Native terminal serialization replaces public mutations with the trusted compile-time package version; historical JSONL/Elastic export preserves safe historical version metadata. |
 | `event_time` | Source timestamp or constructor timestamp | Timestamp | Serialized as constructed | Valid RFC3339 is preserved; invalid source text becomes an opaque `invalid-event-time` marker in `terminal_emittable_event`. |
 | `time_override_reason` | Local override/error text | Diagnostic | Serialized as constructed | Diagnostic sanitizer in `terminal_emittable_event`. |
 | `agent`, `model`, `provider` | Parsed source metadata | Controlled product metadata | Serialized as constructed | `terminal_product_metadata` preserves recognized bounded product identifiers only when they are credential-free, and makes all other source values opaque; raw values remain available in memory. |
-| `session_id`, `source_path_hash` | Parser identity and precomputed hash | Structured identifier/hash | Serialized as constructed | `terminal_session_id` preserves a bounded credential-free identifier; unsafe source values use a session-specific domain-separated hash. The path never appears because only its established hash is emitted. |
-| `workspace` | Parsed source path | Path | Serialized as constructed | Path sanitizer in `terminal_emittable_event`. |
+| `session_id`, `source_path_hash` | Parser identity and precomputed hash | Structured identifier/hash | Serialized as constructed | `terminal_session_id` preserves a bounded credential-free identifier; unsafe source values use a session-specific domain-separated hash. `terminal_evidence_hash` preserves canonical lowercase-hex source hashes and deterministically hashes arbitrary values. The path never appears because only its hash is emitted. |
 | `tool_name`, `tags` | Parsed tool label; rule/allowlist annotation | Identifier | Serialized as constructed | `terminal_identifier`; `allowlist:*` annotations become opaque suppression markers. |
-| `rule_ids`, `categories`, `detection_classes`, `signal_types`, `analytic_intents`, `atlas_tags`, `timeline_anchors.*`, `mitre_attack_techniques`, `risk_contributions[].id` | Bundled or local rule content | Controlled metadata | Serialized as constructed | Preserved as reviewed rule identifiers/classes; they are not source excerpts and retain detection and schema compatibility. |
+| `rule_ids`, `categories`, `detection_classes`, `signal_types`, `analytic_intents`, `atlas_tags`, `timeline_anchors.*`, `risk_contributions[].id` | Bundled or local rule content | Controlled metadata | Serialized as constructed | Preserved as reviewed rule identifiers/classes; they are not source excerpts and retain detection and schema compatibility. |
+| `mitre_attack_techniques` | Bundled or local ATT&CK mapping | Controlled identifier | Serialized as constructed | Canonical `T1234` and `T1234.001` values remain readable; arbitrary values use deterministic `mitre:<sha256>` fallbacks that remain schema-compatible and idempotent. |
 | `evidence[].field`, `evidence[].rule_id`, `evidence[].hash` | Constructor mapping, rule identifier, precomputed hash | Controlled metadata/hash | Serialized as constructed | Preserved by the terminal wire view. The field names select the sanitizer without exposing source content. |
 | `evidence[].redacted_value` | Source excerpt, path, URL, command/result, or diagnostic | Evidence, Path, URL, CommandResult, or Diagnostic | Constructor-specific redaction could be bypassed by later mutation/direct serde | `terminal_evidence` selects the context from `field` and calls `PrivacySanitizer`. |
 | `risk_contributions[].rationale`, `detection_reason` | Rule/config prose and derived detection explanation | Summary | Serialized as constructed | Bounded summary sanitizer through `RiskContribution::for_emission` and `terminal_emittable_event`; safe rationale remains readable. |
-| `response.recommended_action`, `response.response_playbook`, `response.investigation_summary`, `response.escalation` | Derived response policy text | Summary | Serialized as constructed | `terminal_response_metadata` preserves known static values and summary-sanitizes all others. |
-| `source_counts` keys, `active_policy_name` | Source registry key; operator policy configuration | Controlled metadata; identifier | Serialized as constructed | Registry keys remain readable because they are supported source names. Policy name becomes an opaque marker because it is arbitrary operator text. |
+| `response.recommended_action`, `response.response_playbook`, `response.investigation_summary`, `response.escalation` | Derived response policy text | Summary | Serialized as constructed | Native terminal serialization preserves the reviewed static action, five playbook, and escalation values, rejects unreviewed response-playbook mutations with a generic error, and summary-sanitizes investigation text. |
+| `source_counts` keys, `active_policy_name` | Source registry key; operator policy configuration | Controlled metadata; identifier | Serialized as constructed | Known `<client>.<source-kind>` registry keys remain readable. Noncanonical source-count keys become deterministic `source_count:<sha256>` keys; collision suffixes preserve each count without merging. Policy name becomes an opaque marker because it is arbitrary operator text. |
 | `risk_entity_type`, `risk_entity_value` | Derived entity type and source actor/session identity | Identifier or Summary | Serialized as constructed | Type is controlled; session values use the same safe-or-domain-separated-hash policy as `session_id`, host/user values become opaque, and other values use Summary sanitization. |
 | `process.host`, `process.user`, `process.source_event_id`, `process.dedup_key` | Source process/event identity and derived dedup key | Identifier | Serialized as constructed | Deterministic opaque markers in `terminal_process_context`; a host risk entity uses the same host marker. |
 | `process.source_process_name`, `process.target_process_name`, `process.parent_process_name` | Source process labels | Identifier | Serialized as constructed | `terminal_identifier` preserves recognized safe labels and makes arbitrary values opaque. |
@@ -104,7 +105,7 @@ Telltale uses five evidence classes, ordered from safest to most sensitive:
 
 **Current behavior**:
 - `evidence[].hash` is populated for all evidence items in detection events (tests assert `hash.is_some()`).
-- `source_path_hash` on events is a SHA-256 of the source file path.
+- `source_path_hash` on events is a SHA-256 of the source file path. The terminal boundary also protects manually mutated public Event values by preserving canonical lowercase-hex hashes and hashing any other non-empty value.
 - Correlation events hash `event_id` for cross-reference.
 
 **SIEM use**: Deduplication, correlation across sessions, lookup against known-bad hashes.
@@ -163,7 +164,7 @@ The `Event` struct in `crates/telltale-schema/src/event/mod.rs` maps evidence cl
 | Field | Evidence Class | Notes |
 | --- | --- | --- |
 | `client`, `session_id`, `severity`, `risk_score`, `rule_ids`, `categories`, `tags`, `tool_name`, `timestamp`, `event_type` | Safe metadata | Top-level structured fields |
-| `evidence[].redacted_value` | Redacted excerpt | Bounded, redacted text from session content |
+| `evidence[].redacted_value` | Redacted excerpt | Bounded, redacted text from session content, including workspace observations when a source exposes them |
 | `evidence[].hash` | Hashed value | SHA-256 of the original value |
 | `evidence[].field` | Safe metadata | Identifies which source field the evidence came from |
 | `evidence[].rule_id` | Safe metadata | Links evidence to the rule that matched it |
@@ -192,10 +193,20 @@ Issue #26 must reuse `check_serialized_event_markers()` for every durable outbox
 | Baseline network host label | SHA-256 with `sha256:` prefix | Persisted native scanner state stores hashed host identities; legacy raw labels are accepted only by the explicit state migration command and are hashed in its canonical output |
 | Unsafe session ID | SHA-256 of the `session-id:v1` domain-separated input | `terminal_session_id()` preserves only bounded credential-free IDs and hashes all other source-provided IDs |
 | Event ID | SHA-256 | In correlation events for cross-reference |
+| Non-canonical MITRE technique value | SHA-256 with `mitre:` prefix | Terminal Event serialization |
+| Non-canonical source-count key | SHA-256 with `source_count:` prefix | Terminal Event serialization |
 
 Hashes are deterministic: the same input always produces the same hash, enabling correlation across scans without storing raw values.
 
-The path hashing used for `source_path_hash` and `evidence_hash()` retain their existing SHA-256 input semantics in this boundary change. Deterministic hashes can still be susceptible to dictionary comparison for low-entropy inputs; they are correlation aids, not encryption or a tenant-keyed privacy mechanism.
+The path hashing used for `source_path_hash` and `evidence_hash()` retain their existing SHA-256 input semantics in this boundary change. Deterministic hashes can still be susceptible to dictionary comparison for low-entropy inputs; they are correlation aids, not encryption or a tenant-keyed privacy mechanism. MITRE and source-count fallback hashes are opaque identifiers, not validated ATT&CK mappings or source names.
+
+Canonical constructor output and event identity/delivery mechanisms remain
+unchanged. Public native version mutations and noncanonical source hashes,
+MITRE values, and source-count keys intentionally produce different emitted and
+newly persisted bytes after terminal correction. Corrections happen before the
+JSONL first write; persisted historical bytes are never replay-time
+reserialized. Historical JSONL/Elastic export retains safe historical version
+metadata rather than applying the native version replacement.
 
 ## Fixture Privacy
 

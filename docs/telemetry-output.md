@@ -129,6 +129,45 @@ Common event types include:
   `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
   Elastic bulk) could not be delivered to after retries.
 - `correlation`: cross-session patterns built from emitted telemetry.
+- `process_chain`: process-relationship detections with risk attribution and a
+  terminally sanitized `process` context.
+
+The terminal Event boundary preserves established lowercase-hex
+`source_path_hash` values and canonical ATT&CK IDs (`T1234` or `T1234.001`).
+Native output always carries the trusted compile-time Telltale package version;
+public credential-bearing SemVer mutations are replaced with that version.
+Known `source_counts` keys use the canonical `<client>.<source-kind>` form.
+Non-canonical public values are deterministically emitted as a SHA-256 source
+hash, a `mitre:<sha256>` identifier, or a `source_count:<sha256>` map key;
+collision suffixes retain each source-count value without merging. These
+corrections intentionally change emitted bytes for noncanonical public inputs,
+including mutated native version metadata, but not canonical constructor output,
+event identity, or delivery mechanisms. Historical JSONL/Elastic export keeps
+safe historical version metadata.
+
+### Event 3.0 timing
+
+Native Event 3.0 resolves `timestamp` from a valid source timestamp when one is
+available, normalizing it to UTC with millisecond precision. A missing or
+unparseable source timestamp, or a source timestamp more than five minutes in
+the future, falls back to the local observation time and records the reason in
+`time_override_reason`; `time_source` and `time_confidence` identify the
+resulting posture. `event_time` retains the source/derived event time when
+available. `observed_at` and `ingested_at` are local scan/ingestion timestamps,
+not source event time. These are the frozen coarse Event 3.0 semantics; a
+future observation lifecycle belongs to a separately reviewed Event 4.0
+architecture.
+
+### Event 3.0 freeze policy
+
+Event 3.0 is the stable external compatibility contract for the v0.6 scanner
+and deterministic detection layer. After this freeze, only
+security, privacy, correctness, documentation, and compatibility fixes may
+change its implementation or evidence. New runtime observation lifecycle,
+gateway telemetry, decisions, actions, approvals, or runtime/browser/OS
+context belong to Event 4.0 or future architecture and must not be added
+implicitly to Event 3.0. This records the proposed local compatibility policy;
+it does not claim publication or commit.
 
 ## Sinks and Delivery Failures
 
@@ -156,9 +195,15 @@ write-through semantics; parent-directory durability is not asserted.
 
 ## Delivery Guarantees
 
-Local JSONL is the durable first-write and bounded local handoff record. It is
-not an indefinite system of record or a built-in replay queue; rotation or
-deletion can remove events before an external shipper ingests them. Direct
+Local JSONL is the durable first write and bounded local handoff record. Newly
+emitted noncanonical source-hash, MITRE, and source-count-key values, plus
+mutated native version metadata, are corrected before that first write. In
+durable mode, SQLite reconciles and
+replays the exact terminal-sanitized canonical bytes written to JSONL; it is not
+a second canonical payload representation and does not reserialize persisted
+historical bytes during replay. JSONL is the ingress/recovery source until
+reconciliation, not an indefinite system of record or a file retained until
+downstream ACK. Direct
 Splunk HEC and Elastic HTTP delivery are best-effort sinks with bounded
 in-memory retries, not queues. A process exit or restart discards pending direct
 delivery attempts, while the JSONL record remains available to an external
@@ -426,7 +471,7 @@ canonical. Rotation keeps local retention bounded without external tooling.
 
 ## Optional Export And Sink Paths
 
-The canonical event payload remains the same across delivery paths:
+Each delivery path uses the same terminal canonical event payload:
 
 - `telltale export --format jsonl` reads existing JSONL telemetry.
 - `telltale export --format elastic-bulk` writes Elasticsearch Bulk API pairs.

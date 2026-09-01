@@ -437,7 +437,6 @@ mod tests {
             model: Some("gpt-5".to_string()),
             provider: Some("openai".to_string()),
             session_id: session_id.to_string(),
-            workspace: None,
             source_path_hash: Some("sha256:fixture".to_string()),
             tool_name: tool_name.map(ToOwned::to_owned),
             rule_ids: vec!["mcp.tool_metadata.prompt_injection".to_string()],

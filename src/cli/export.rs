@@ -1252,7 +1252,6 @@ fn event_from_json_value(
         model: optional_string(event, "model"),
         provider: optional_string(event, "provider"),
         session_id: session_id.to_string(),
-        workspace: optional_string(event, "workspace"),
         source_path_hash: optional_string(event, "source_path_hash"),
         tool_name: optional_string(event, "tool_name"),
         rule_ids: string_array(event, "rule_ids"),

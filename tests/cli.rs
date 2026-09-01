@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -14,11 +15,12 @@ use serde_json::Value;
 use sha2::Digest;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::event::{
-    ActivityEventInput, CorrelationEventInput, CorrelationSessionInput, DetectionEventInput,
-    Evidence, HealthEventInput, OperationalAlertInput, ProcessChainEventInput, ProcessContext,
-    SessionRiskSummaryEventInput, activity_event, correlation_event, detection_event,
-    evidence_hash, health_event_with_metadata, install_inventory_event, operational_alert_event,
-    path_hash, process_chain_event, scanner_error_event, session_risk_summary_event,
+    ActivityEventInput, ControlledMarker, CorrelationEventInput, CorrelationSessionInput,
+    DetectionEventInput, Evidence, HealthEventInput, OperationalAlertInput, ProcessChainEventInput,
+    ProcessContext, SessionRiskSummaryEventInput, TELLTALE_VERSION, activity_event,
+    check_serialized_event_markers, correlation_event, detection_event, evidence_hash,
+    health_event_with_metadata, install_inventory_event, operational_alert_event, path_hash,
+    process_chain_event, scanner_error_event, session_risk_summary_event,
 };
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use telltale_schema::source::Source;
@@ -468,10 +470,218 @@ fn every_native_event_constructor_emits_schema_valid_json() {
             "native constructor emitted a JSON null: {event}"
         );
         assert!(
+            event.get("workspace").is_none(),
+            "workspace is not part of the native Event 3.0 wire contract: {event}"
+        );
+        assert!(
             validator.is_valid(&event),
             "native constructor emitted schema-invalid event: {event}"
         );
     }
+}
+
+#[test]
+fn native_constructor_family_registry_covers_the_reviewed_current_corpus() {
+    // This is the reviewed current source-level inventory; future subfamilies
+    // reusing a wire event_type require explicit reviewer/test maintenance.
+    let corpus = [
+        ("detection", "detection"),
+        ("activity_standard", "activity"),
+        ("install_inventory_activity", "activity"),
+        ("session_risk_summary", "session_risk_summary"),
+        ("health", "health"),
+        ("scanner_error", "scanner_error"),
+        ("operational_alert", "operational_alert"),
+        ("process_chain", "process_chain"),
+        ("correlation", "correlation"),
+    ];
+    let registered = telltale_schema::event::NATIVE_EVENT_CONSTRUCTOR_FAMILIES;
+
+    assert_eq!(registered.len(), corpus.len());
+    for (name, event_type) in corpus {
+        assert!(
+            registered
+                .iter()
+                .any(|family| family.name == name && family.event_type == event_type),
+            "constructor family {name} is missing from the conformance registry"
+        );
+    }
+    assert_eq!(
+        registered
+            .iter()
+            .filter(|family| family.event_type == "activity")
+            .count(),
+        2,
+        "standard activity and install inventory must remain distinct families"
+    );
+}
+
+#[test]
+fn sparse_native_event_constructors_remain_schema_valid() {
+    let schema: Value =
+        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
+    let validator = validator_for(&schema).expect("event schema validator");
+    let timestamp = "2026-05-01T00:00:00Z";
+
+    for event_type in [
+        "activity",
+        "detection",
+        "session_risk_summary",
+        "health",
+        "scanner_error",
+        "operational_alert",
+        "process_chain",
+        "correlation",
+    ] {
+        let event = native_test_event(
+            event_type,
+            &format!(
+                "telltale-00000000-0000-4000-8000-000000000{:03}",
+                event_type.len()
+            ),
+            timestamp,
+            if event_type == "operational_alert" {
+                "warning"
+            } else {
+                "informational"
+            },
+            "codex",
+            "sparse-session",
+            &["rule.synthetic"],
+        );
+        assert_eq!(event["event_type"], event_type);
+        assert!(event.get("workspace").is_none());
+        assert!(
+            validator.is_valid(&event),
+            "sparse {event_type} constructor emitted schema-invalid event: {event}"
+        );
+    }
+
+    let install_inventory = serde_json::to_value(
+        install_inventory_event(vec![Evidence {
+            field: "install_inventory_summary".to_string(),
+            redacted_value: "agents=0; installed=0; partial=0; absent=0".to_string(),
+            hash: None,
+            rule_id: None,
+        }])
+        .expect("install inventory constructor"),
+    )
+    .expect("serialize install inventory");
+    assert!(install_inventory.get("workspace").is_none());
+    assert!(validator.is_valid(&install_inventory));
+}
+
+#[test]
+fn native_event_schema_rejects_the_removed_workspace_surface() {
+    let schema: Value =
+        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
+    let validator = validator_for(&schema).expect("event schema validator");
+    let mut event = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000301",
+        "2026-05-01T00:00:00Z",
+        "informational",
+        "codex",
+        "workspace-regression",
+        &["rule.synthetic"],
+    );
+    event["workspace"] = Value::String("[sensitive-path]".to_string());
+    assert!(
+        !validator.is_valid(&event),
+        "workspace must remain rejected by strict Event 3.0 schema"
+    );
+}
+
+#[test]
+fn current_and_frozen_event_3_schemas_are_byte_identical() {
+    assert_eq!(
+        include_bytes!("../schemas/event.schema.json"),
+        include_bytes!("../schemas/historical/event-3.0.schema.json"),
+        "the current Event 3.0 schema must match the frozen historical artifact"
+    );
+}
+
+#[test]
+fn source_count_key_terminalization_remains_strict_schema_valid() {
+    let schema: Value =
+        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
+    let validator = validator_for(&schema).expect("event schema validator");
+    let marker = "TT_PRIVACY_SOURCE_COUNTS_SCHEMA_KEY_30";
+    let canonical_fallback = format!("source_count:{}", evidence_hash(marker));
+    let mut source_counts = BTreeMap::new();
+    source_counts.insert(marker.to_string(), 2);
+    source_counts.insert(canonical_fallback.clone(), 3);
+
+    let mut event = health_event_with_metadata(HealthEventInput {
+        sources: &[],
+        source_inventory_change: None,
+        scan_duration_ms: 0,
+        rule_count: 0,
+        threshold_config: telltale_schema::scoring::load_thresholds(),
+        active_policy_name: None,
+        emitted_count: 0,
+        suppressed_count: 0,
+        scanner_error_count: 0,
+    });
+    event.source_counts = Some(source_counts);
+    let bytes = serde_json::to_vec(&event).expect("serialize health event");
+    assert!(
+        check_serialized_event_markers(
+            &bytes,
+            "source-count-schema-key",
+            &[ControlledMarker {
+                id: "source-count-key",
+                value: marker,
+            }],
+        )
+        .is_ok()
+    );
+    let emitted: Value = serde_json::from_slice(&bytes).expect("serialized health event");
+    assert!(
+        validator.is_valid(&emitted),
+        "terminalized event failed schema validation"
+    );
+    let counts = emitted["source_counts"]
+        .as_object()
+        .expect("source counts map");
+    assert_eq!(counts.len(), 2);
+    assert_eq!(counts[&canonical_fallback], 3);
+    assert_eq!(counts[&format!("{canonical_fallback}:2")], 2);
+    assert_eq!(counts.values().filter_map(Value::as_u64).sum::<u64>(), 5);
+}
+
+#[test]
+fn telltale_version_terminalization_remains_strict_schema_valid() {
+    let schema: Value =
+        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
+    let validator = validator_for(&schema).expect("event schema validator");
+    let credential_version = format!("1.2.3-AKIA{}", "T".repeat(16));
+    let mut event = health_event_with_metadata(HealthEventInput {
+        sources: &[],
+        source_inventory_change: None,
+        scan_duration_ms: 0,
+        rule_count: 0,
+        threshold_config: telltale_schema::scoring::load_thresholds(),
+        active_policy_name: None,
+        emitted_count: 0,
+        suppressed_count: 0,
+        scanner_error_count: 0,
+    });
+    event.telltale_version = credential_version.clone();
+    let mut schema_valid_mutation = serde_json::to_value(&event).expect("serialize baseline event");
+    schema_valid_mutation["telltale_version"] = Value::String(credential_version.clone());
+    assert!(
+        validator.is_valid(&schema_valid_mutation),
+        "synthetic credential-bearing SemVer mutation should remain schema-valid"
+    );
+    let bytes = serde_json::to_vec(&event).expect("serialize health event");
+    let emitted: Value = serde_json::from_slice(&bytes).expect("serialized health event");
+    assert!(
+        validator.is_valid(&emitted),
+        "terminalized event failed schema validation"
+    );
+    assert_eq!(emitted["telltale_version"], TELLTALE_VERSION);
+    assert!(!String::from_utf8_lossy(&bytes).contains(&credential_version));
 }
 
 #[test]

@@ -294,7 +294,6 @@ mod tests {
             model: model.map(ToOwned::to_owned),
             provider: Some("openai".to_string()),
             session_id: session_id.to_string(),
-            workspace: None,
             source_path_hash: Some("sha256:source".to_string()),
             tool_name: Some("shell".to_string()),
             rule_ids: rule_ids

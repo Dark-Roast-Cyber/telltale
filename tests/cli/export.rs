@@ -738,6 +738,82 @@ fn historical_summary_terminalizes_imported_client_and_rule_labels() {
 }
 
 #[test]
+fn historical_jsonl_export_preserves_a_safe_historical_telltale_version() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let historical_version = "0.4.0-rc.1+build.7";
+    let mut event = serde_json::to_value(health_event_with_metadata(HealthEventInput {
+        sources: &[],
+        source_inventory_change: None,
+        scan_duration_ms: 0,
+        rule_count: 0,
+        threshold_config: telltale_schema::scoring::load_thresholds(),
+        active_policy_name: None,
+        emitted_count: 0,
+        suppressed_count: 0,
+        scanner_error_count: 0,
+    }))
+    .expect("serialize historical health event");
+    event["telltale_version"] = Value::String(historical_version.to_string());
+    fs::write(&log_path, format!("{event}\n")).expect("write historical log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .args(["--format", "jsonl"])
+        .output()
+        .expect("run historical JSONL export");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let exported: Value = serde_json::from_slice(&output.stdout).expect("historical JSONL output");
+    assert_eq!(exported["telltale_version"], historical_version);
+}
+
+#[test]
+fn historical_jsonl_export_replaces_a_credential_bearing_telltale_version() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let credential_version = format!("1.2.3-AKIA{}", "T".repeat(16));
+    let mut event = serde_json::to_value(health_event_with_metadata(HealthEventInput {
+        sources: &[],
+        source_inventory_change: None,
+        scan_duration_ms: 0,
+        rule_count: 0,
+        threshold_config: telltale_schema::scoring::load_thresholds(),
+        active_policy_name: None,
+        emitted_count: 0,
+        suppressed_count: 0,
+        scanner_error_count: 0,
+    }))
+    .expect("serialize historical health event");
+    event["telltale_version"] = Value::String(credential_version.clone());
+    fs::write(&log_path, format!("{event}\n")).expect("write historical log");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["export", "--log-path"])
+        .arg(&log_path)
+        .args(["--format", "jsonl"])
+        .output()
+        .expect("run historical JSONL export");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let exported: Value = serde_json::from_slice(&output.stdout).expect("historical JSONL output");
+    assert_eq!(
+        exported["telltale_version"],
+        telltale_schema::event::TELLTALE_VERSION
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&credential_version));
+}
+
+#[test]
 fn historical_timeline_replaces_invalid_evidence_hashes_in_json_and_text() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");

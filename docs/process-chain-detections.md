@@ -301,12 +301,14 @@ it.
 | `informational` | `true` when `risk_score` is 0. |
 | `confidence` | `low` / `medium` / `high`. |
 | `detection_reason` | Redacted analyst sentence. |
-| `mitre_attack_techniques` | Winner's techniques plus every deduplicated rule's. |
+| `mitre_attack_techniques` | Winner's techniques plus every deduplicated rule's. Canonical `T1234`/`T1234.001` IDs remain readable; unexpected values are emitted as deterministic `mitre:<sha256>` identifiers. |
 | `risk_entity_type` / `risk_entity_value` | `host`, `user`, or `session`. Degrades to `session` when a transcript names no host, rather than labelling a session ID as a host. |
 | `process.*` | Host, user, source/target/parent process name, path, PID, and command line; `source_event_id`; `source_process_inferred`; `rule_name`; `rule_severity`; `secondary_rule_ids`; `investigation_fields`; `falsepositives`; `dedup_key`; `suppression_window_seconds`; `risk_adjustment`. |
 
 Command lines and paths pass through `redact_sensitive_text` before emission,
-so a credential pasted into a command line does not reach the SIEM.
+and all process-chain fields cross the terminal Event privacy boundary. A
+credential pasted into a command line or a manually mutated source hash or
+technique value therefore does not reach the SIEM unchanged.
 
 Process-chain risk accrues to the entity named on the event. It is deliberately
 **not** folded into the session `risk_summary`, whose contract is per-session
