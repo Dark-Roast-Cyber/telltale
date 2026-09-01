@@ -166,8 +166,7 @@ security, privacy, correctness, documentation, and compatibility fixes may
 change its implementation or evidence. New runtime observation lifecycle,
 gateway telemetry, decisions, actions, approvals, or runtime/browser/OS
 context belong to Event 4.0 or future architecture and must not be added
-implicitly to Event 3.0. This records the proposed local compatibility policy;
-it does not claim publication or commit.
+implicitly to Event 3.0.
 
 ## Sinks and Delivery Failures
 
