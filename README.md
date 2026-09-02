@@ -326,10 +326,15 @@ For approachable guides on agentic forensics, Telltale, and the broader Agent Ar
 
 ### Upstream technical docs
 
-These files are the source-of-truth for Telltale's implementation, rules, and schemas:
+These files are the source-of-truth for Telltale's current implementation, rules, schemas, and accepted future architecture:
 
 - [Install](docs/install.md) — build, verify, and deploy
 - [Architecture](docs/architecture.md) — pipeline stages and module boundaries
+- [Semantic foundation](docs/semantic-foundation.md) — accepted future semantic boundaries
+- [Event4 architecture](docs/event4.md) — accepted future Event4 contract
+- [Canonical Observation v2](docs/canonical-observation-v2.md) — accepted future evidence contract
+- [Detection v2](docs/detection-v2.md) — accepted future detection contract
+- [Telemetry/output architecture](docs/telemetry-output-architecture.md) — accepted future output boundary
 - [Development principles](docs/development-principles.md) — authoritative architecture and development philosophy
 - [Detection model](docs/detection-model.md) — risk scoring, rule categories, thresholds
 - [Telemetry output](docs/telemetry-output.md) — JSONL event schema and forwarding

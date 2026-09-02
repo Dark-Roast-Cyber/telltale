@@ -4,6 +4,10 @@
 
 Telltale's internal normalization contract is `NormalizedRecordV1` in `crates/telltale-schema/src/canonical.rs`. It sits between source-specific parsers and downstream detection, deterministic review metadata, and export code.
 
+[Canonical Observation v2](canonical-observation-v2.md) is the accepted future
+internal evidence contract. It is not implemented; `NormalizedRecordV1` and its
+loss-aware compatibility path remain current.
+
 This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
 
 The source pipeline now has a distinct extraction step in `crates/telltale-sources/src/parser.rs` before records are normalized into the legacy flat shape for downstream compatibility.

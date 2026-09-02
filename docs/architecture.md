@@ -13,9 +13,20 @@ Observation -> Normalization -> Detection -> Signals -> Policy -> Decision -> Ac
 
 These responsibilities stay distinct. Today, session-store scanning is the
 shipped observation adapter; signals, policy, decision, and action are the
-conceptual core stages defined in the principles. Until that policy/decision
-stage is separately accepted, decisions are represented as the deterministic
-response metadata carried by emitted events.
+conceptual core stages defined in the principles. Until a policy/decision
+runtime is separately implemented, current decisions remain the deterministic
+response metadata carried by emitted Event 3.0 events.
+
+## Accepted future architecture
+
+The accepted future semantic contracts are documented in the [semantic
+foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
+v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
+[telemetry/output architecture](telemetry-output-architecture.md) pages. They
+are accepted architecture, not current implementation. Event4, Canonical
+Observation v2, Detection v2, and Telemetry/Output v2 are not implemented.
+Event 3.0 remains the frozen current compatibility contract. The pipeline below
+continues to describe the shipped implementation.
 
 ## Pipeline
 

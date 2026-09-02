@@ -1,0 +1,508 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Accepted Event 4.0 architecture contract; not a production schema and not runtime-supported. Body objects are closed; semantic validation, terminal privacy, reserved aggregate-risk aliases, extension subtree limits, and terminal byte/depth limits are required in addition to this structural schema. approval_id syntax bounds are not proof of semantic opacity.",
+  "title": "Telltale Event 4.0 Accepted Architecture Contract",
+  "type": "object",
+  "required": ["schema_version", "event_id", "type", "event_action", "observed_at", "materialized_at"],
+  "not": {"anyOf": [
+    {"required": ["received_at"]},
+    {"required": ["timestamp"]},
+    {"required": ["emitted_at"]},
+    {"required": ["id"]}
+  ]},
+  "properties": {
+    "schema_version": {"const": "4.0"},
+    "event_id": {"$ref": "#/$defs/opaque_reference"},
+    "type": {"enum": ["session", "observation", "finding", "decision", "action", "state", "health", "summary"]},
+    "event_action": {"enum": [
+      "session.opened", "session.updated", "session.closed",
+      "message.observed", "inference.requested", "inference.completed",
+      "inference.failed", "tool.proposed", "tool.requested",
+      "tool.execution_started", "tool.execution_completed",
+      "tool.result_returned", "tool_definition.changed", "mcp.inventory_changed",
+      "process.observed", "file.observed", "network.observed", "browser.observed",
+      "runtime.observed", "rule.matched", "sequence.matched",
+      "guard_model.matched", "classifier.matched", "baseline.deviation",
+      "correlation.matched", "policy.evaluated", "approval.requested",
+      "approval.resolved", "enforcement.applied", "enforcement.degraded",
+      "runtime.changed", "isolation.changed", "capabilities.changed",
+      "ruleset.activated", "policy.activated", "toolset.changed",
+      "sensor.heartbeat", "health.degraded", "health.failed", "summary.emitted"
+    ]},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "materialized_at": {"type": "string", "format": "date-time"},
+    "sequence": {"type": "integer", "minimum": 0},
+    "session_id": {"$ref": "#/$defs/opaque_reference"},
+    "workflow_id": {"$ref": "#/$defs/opaque_reference"},
+    "trace_id": {"$ref": "#/$defs/opaque_reference"},
+    "span_id": {"$ref": "#/$defs/opaque_reference"},
+    "session": {"$ref": "#/$defs/session"},
+    "observation": {"$ref": "#/$defs/observation"},
+    "finding": {"$ref": "#/$defs/finding"},
+    "decision": {"$ref": "#/$defs/decision"},
+    "action": {"$ref": "#/$defs/action"},
+    "state": {"$ref": "#/$defs/state"},
+    "health": {"$ref": "#/$defs/health"},
+    "summary": {"$ref": "#/$defs/summary"},
+    "extensions": {"$ref": "#/$defs/extensions"}
+  },
+  "oneOf": [
+    {
+      "properties": {"type": {"const": "session"}},
+      "required": ["session", "session_id"],
+      "not": {"anyOf": [
+        {"required": ["observation"]}, {"required": ["finding"]},
+        {"required": ["decision"]}, {"required": ["action"]},
+        {"required": ["state"]}, {"required": ["health"]},
+        {"required": ["summary"]}
+      ]}
+    },
+    {
+      "properties": {"type": {"const": "observation"}},
+      "required": ["observation"],
+      "not": {"anyOf": [
+        {"required": ["session"]}, {"required": ["finding"]},
+        {"required": ["decision"]}, {"required": ["action"]},
+        {"required": ["state"]}, {"required": ["health"]},
+        {"required": ["summary"]}
+      ]}
+    },
+    {
+      "properties": {"type": {"const": "finding"}},
+      "required": ["finding", "session_id"],
+      "not": {"anyOf": [
+        {"required": ["session"]}, {"required": ["observation"]},
+        {"required": ["decision"]}, {"required": ["action"]},
+        {"required": ["state"]}, {"required": ["health"]},
+        {"required": ["summary"]}
+      ]}
+    },
+    {
+      "properties": {"type": {"const": "decision"}},
+      "required": ["decision"],
+      "not": {"anyOf": [
+        {"required": ["session"]}, {"required": ["observation"]},
+        {"required": ["finding"]}, {"required": ["action"]},
+        {"required": ["state"]}, {"required": ["health"]},
+        {"required": ["summary"]}
+      ]}
+    },
+    {
+      "properties": {"type": {"const": "action"}},
+      "required": ["action"],
+      "not": {"anyOf": [
+        {"required": ["session"]}, {"required": ["observation"]},
+        {"required": ["finding"]}, {"required": ["decision"]},
+        {"required": ["state"]}, {"required": ["health"]},
+        {"required": ["summary"]}
+      ]}
+    },
+    {
+      "properties": {"type": {"const": "state"}},
+      "required": ["state"],
+      "not": {"anyOf": [
+        {"required": ["session"]}, {"required": ["observation"]},
+        {"required": ["finding"]}, {"required": ["decision"]},
+        {"required": ["action"]}, {"required": ["health"]},
+        {"required": ["summary"]}
+      ]}
+    },
+    {
+      "properties": {"type": {"const": "health"}},
+      "required": ["health"],
+      "not": {"anyOf": [
+        {"required": ["session"]}, {"required": ["observation"]},
+        {"required": ["finding"]}, {"required": ["decision"]},
+        {"required": ["action"]}, {"required": ["state"]},
+        {"required": ["summary"]}
+      ]}
+    },
+    {
+      "properties": {"type": {"const": "summary"}},
+      "required": ["summary"],
+      "not": {"anyOf": [
+        {"required": ["session"]}, {"required": ["observation"]},
+        {"required": ["finding"]}, {"required": ["decision"]},
+        {"required": ["action"]}, {"required": ["state"]},
+        {"required": ["health"]}
+      ]}
+    }
+  ],
+  "$defs": {
+    "opaque_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "safe_reason_code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)*$"
+    },
+    "approval_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "aggregate_risk_extension_name": {
+      "enum": ["risk_score", "aggregate_risk", "risk_points", "aggregate_risk_points"]
+    },
+    "availability": {"enum": ["supported", "unsupported", "unknown"]},
+    "capability_outcome": {
+      "type": "object",
+      "required": ["availability"],
+      "properties": {
+        "availability": {"$ref": "#/$defs/availability"},
+        "limitation": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "extension_scalar": {
+      "type": ["string", "number", "boolean", "null"],
+      "maxLength": 1024
+    },
+    "extension_value": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": {
+        "allOf": [
+          {"type": "string", "maxLength": 64},
+          {"pattern": "^[a-z][a-z0-9_]{0,63}$"},
+          {"not": {"enum": ["event_id", "id", "type", "event_type", "schema_version", "received_at", "timestamp", "emitted_at", "severity", "confidence"]}},
+          {"not": {"$ref": "#/$defs/aggregate_risk_extension_name"}}
+        ]
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {"$ref": "#/$defs/extension_scalar"},
+          {
+            "type": "array",
+            "maxItems": 32,
+            "items": {"$ref": "#/$defs/extension_scalar"}
+          }
+        ]
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": {
+        "allOf": [
+          {"type": "string", "maxLength": 128},
+          {"pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\\.[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"},
+          {"not": {"pattern": "^telltale(?:[._-]|$)"}}
+        ]
+      },
+      "additionalProperties": {"$ref": "#/$defs/extension_value"}
+    },
+    "source": {
+      "type": "object",
+      "required": ["mode", "adapter_id", "fidelity"],
+      "properties": {
+        "mode": {"enum": ["session_store", "harness", "gateway", "browser", "os_context", "import", "other"]},
+        "adapter_id": {"$ref": "#/$defs/opaque_reference"},
+        "adapter_version": {"$ref": "#/$defs/opaque_reference"},
+        "native_event_id": {"$ref": "#/$defs/opaque_reference"},
+        "source_path_hash": {"type": "string", "minLength": 1, "maxLength": 128},
+        "offset": {"type": "string", "minLength": 1, "maxLength": 128},
+        "fidelity": {"enum": ["exact", "partial", "lossy"]},
+        "capabilities": {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": {"pattern": "^[a-z][a-z0-9_.-]{0,63}$"},
+          "additionalProperties": {"$ref": "#/$defs/availability"}
+        },
+        "fact_provenance": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128},
+          "additionalProperties": {"enum": ["reported", "parsed", "derived", "inferred", "observed"]}
+        }
+      },
+      "additionalProperties": false
+    },
+    "correlation": {
+      "type": "object",
+      "properties": {
+        "request_id": {"$ref": "#/$defs/opaque_reference"},
+        "response_id": {"$ref": "#/$defs/opaque_reference"},
+        "turn_id": {"$ref": "#/$defs/opaque_reference"},
+        "call_id": {"$ref": "#/$defs/opaque_reference"},
+        "parent_observation_id": {"$ref": "#/$defs/opaque_reference"},
+        "process_instance_id": {"$ref": "#/$defs/opaque_reference"},
+        "delegation_id": {"$ref": "#/$defs/opaque_reference"}
+      },
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "required": ["session_id", "lifecycle"],
+      "properties": {
+        "session_id": {"$ref": "#/$defs/opaque_reference"},
+        "lifecycle": {"enum": ["opened", "updated", "closed"]},
+        "client_ref": {"$ref": "#/$defs/opaque_reference"},
+        "runtime_ref": {"$ref": "#/$defs/opaque_reference"},
+        "ruleset_ref": {"$ref": "#/$defs/opaque_reference"},
+        "policy_ref": {"$ref": "#/$defs/opaque_reference"},
+        "capability_ref": {"$ref": "#/$defs/opaque_reference"},
+        "toolset_ref": {"$ref": "#/$defs/opaque_reference"},
+        "mcp_ref": {"$ref": "#/$defs/opaque_reference"}
+      },
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    },
+    "observation": {
+      "type": "object",
+      "required": ["observation_id", "kind", "stage"],
+      "properties": {
+        "observation_id": {"$ref": "#/$defs/opaque_reference"},
+        "kind": {"enum": ["message", "inference", "tool", "tool_definition", "mcp", "process", "file", "network", "browser", "runtime", "session", "other"]},
+        "stage": {"enum": ["observed", "requested", "completed", "failed", "proposed", "execution_started", "execution_completed", "result_returned", "changed", "inventory_changed"]},
+        "provenance": {"enum": ["reported", "parsed", "derived", "inferred", "observed"]},
+        "fact_provenance": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {"enum": ["reported", "parsed", "derived", "inferred", "observed"]}
+        },
+        "capabilities": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {"$ref": "#/$defs/availability"}
+        },
+        "capability": {"$ref": "#/$defs/capability_outcome"},
+        "source": {"$ref": "#/$defs/source"},
+        "correlation": {"$ref": "#/$defs/correlation"},
+        "runtime_ref": {"$ref": "#/$defs/opaque_reference"},
+        "capability_ref": {"$ref": "#/$defs/opaque_reference"},
+        "toolset_ref": {"$ref": "#/$defs/opaque_reference"},
+        "mcp_ref": {"$ref": "#/$defs/opaque_reference"},
+        "tool": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": {"$ref": "#/$defs/opaque_reference"},
+            "input_hash": {"type": "string", "minLength": 1, "maxLength": 128},
+            "input_keys": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {"type": "string", "minLength": 1, "maxLength": 64}
+            },
+            "command": {"type": "string", "minLength": 1, "maxLength": 1024}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    },
+    "detector": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {"enum": ["rule", "process", "sequence", "correlation", "baseline", "guard_model", "classifier", "imported", "external"]},
+        "id": {"type": "string", "minLength": 1},
+        "engine": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "content_ref": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "finding": {
+      "type": "object",
+      "required": ["kind", "category", "severity", "detector"],
+      "properties": {
+        "kind": {"enum": ["security_detection", "policy_violation", "behavioral_deviation", "guardrail", "compliance_observation", "threat_hunt", "correlation", "informational"]},
+        "category": {"type": "string", "minLength": 1},
+        "severity": {"enum": ["informational", "low", "medium", "high", "critical"]},
+        "risk_points": {"type": "integer", "minimum": 0, "maximum": 100},
+        "confidence": {"enum": ["low", "medium", "high"]},
+        "confidence_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "title": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "rule_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "detector": {"$ref": "#/$defs/detector"},
+        "related_observation_ids": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/opaque_reference"}},
+        "runtime_ref": {"$ref": "#/$defs/opaque_reference"},
+        "ruleset_ref": {"$ref": "#/$defs/opaque_reference"},
+        "policy_ref": {"$ref": "#/$defs/opaque_reference"},
+        "capability_ref": {"$ref": "#/$defs/opaque_reference"},
+        "labels": {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": {
+            "allOf": [
+              {"type": "string", "maxLength": 64},
+              {"pattern": "^[a-z][a-z0-9_.-]*$"}
+            ]
+          },
+          "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "techniques": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": ["representation"],
+            "properties": {
+              "observation_id": {"type": "string", "minLength": 1},
+              "field": {"type": "string", "minLength": 1, "maxLength": 256},
+              "representation": {"enum": ["redacted_excerpt", "hash", "classification", "count", "reference"]},
+              "value": {"$ref": "#/$defs/extension_scalar"}
+            },
+            "additionalProperties": false,
+            "not": {"anyOf": [
+              {"required": ["received_at"]},
+              {"required": ["timestamp"]},
+              {"required": ["emitted_at"]}
+            ]}
+          }
+        }
+      },
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["risk_score"]},
+        {"required": ["aggregate_risk"]},
+        {"required": ["aggregate_risk_points"]},
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    },
+    "outcome": {"enum": ["allow", "observe", "warn", "require_approval", "reprompt", "block", "remediate"]},
+    "approval_state": {"enum": ["required", "requested", "granted", "denied", "expired", "cancelled"]},
+    "decision": {
+      "type": "object",
+      "required": ["requested", "effective", "status", "reason_code"],
+      "properties": {
+        "requested": {"$ref": "#/$defs/outcome"},
+        "effective": {"$ref": "#/$defs/outcome"},
+        "status": {"enum": ["evaluated", "degraded", "pending", "cancelled"]},
+        "reason_code": {"$ref": "#/$defs/safe_reason_code"},
+        "policy_ref": {"$ref": "#/$defs/opaque_reference"},
+        "capability_ref": {"$ref": "#/$defs/opaque_reference"},
+        "basis_event_ids": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/opaque_reference"}},
+        "approval_id": {"$ref": "#/$defs/approval_id"},
+        "approval_state": {"$ref": "#/$defs/approval_state"},
+        "capability": {"$ref": "#/$defs/capability_outcome"},
+        "degradation_reason": {"type": "string", "minLength": 1, "maxLength": 1024}
+      },
+      "allOf": [{
+        "if": {"required": ["approval_state"]},
+        "then": {"required": ["approval_id"]}
+      }, {
+        "if": {"required": ["status"], "properties": {"status": {"const": "degraded"}}},
+        "then": {
+          "required": ["capability", "degradation_reason"],
+          "properties": {
+            "capability": {
+              "required": ["availability", "limitation"]
+            }
+          }
+        }
+      }],
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    },
+    "action": {
+      "type": "object",
+      "required": ["action_id", "decision_ref", "requested", "effective", "status"],
+      "properties": {
+        "action_id": {"$ref": "#/$defs/opaque_reference"},
+        "decision_ref": {"$ref": "#/$defs/opaque_reference"},
+        "requested": {"$ref": "#/$defs/outcome"},
+        "effective": {"$ref": "#/$defs/outcome"},
+        "status": {"enum": ["succeeded", "failed", "degraded", "pending", "cancelled", "expired"]},
+        "reason_code": {"$ref": "#/$defs/safe_reason_code"},
+        "enforcement_point": {"type": "string", "minLength": 1},
+        "approval_id": {"$ref": "#/$defs/approval_id"},
+        "capability_ref": {"$ref": "#/$defs/opaque_reference"},
+        "capability": {"$ref": "#/$defs/capability_outcome"},
+        "degradation_reason": {"type": "string", "minLength": 1, "maxLength": 1024}
+      },
+      "allOf": [{
+        "if": {"required": ["status"], "properties": {"status": {"const": "degraded"}}},
+        "then": {
+          "required": ["capability", "degradation_reason"],
+          "properties": {
+            "capability": {
+              "required": ["availability", "limitation"]
+            }
+          }
+        }
+      }],
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    },
+    "state": {
+      "type": "object",
+      "required": ["kind", "state_ref"],
+      "properties": {
+        "kind": {"enum": ["runtime", "isolation", "capabilities", "ruleset", "policy", "toolset", "mcp", "heartbeat"]},
+        "state_ref": {"$ref": "#/$defs/opaque_reference"},
+        "change": {"enum": ["snapshot", "changed", "removed"]}
+      },
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    },
+    "health": {
+      "type": "object",
+      "required": ["component", "status"],
+      "properties": {
+        "component": {"type": "string", "minLength": 1},
+        "status": {"enum": ["healthy", "degraded", "failed", "unknown"]},
+        "reason_code": {"$ref": "#/$defs/safe_reason_code"}
+      },
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    },
+    "summary": {
+      "type": "object",
+      "required": ["kind", "scope", "count"],
+      "properties": {
+        "kind": {"enum": ["agent_activity", "finding_rollup"]},
+        "scope": {"enum": ["session", "workflow", "agent"]},
+        "count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false,
+      "not": {"anyOf": [
+        {"required": ["received_at"]},
+        {"required": ["timestamp"]},
+        {"required": ["emitted_at"]}
+      ]}
+    }
+  },
+  "unevaluatedProperties": false
+}

@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Accepted telemetry-profile architecture contract; not a production schema and not runtime-supported.",
+  "title": "Telltale Telemetry Profile v1",
+  "type": "object",
+  "required": ["version", "profile", "families", "observation_detail", "evidence", "signal", "diagnostic", "heartbeat", "policy", "destination"],
+  "properties": {
+    "version": {"const": 1},
+    "profile": {"enum": ["minimal", "standard", "verbose", "forensic_safe"]},
+    "families": {
+      "type": "object",
+      "required": ["session", "observation", "finding", "decision", "action", "state", "health", "summary"],
+      "properties": {
+        "session": {"enum": ["always", "never"]},
+        "observation": {"enum": ["none", "finding_evidence_only", "metadata", "richer_sanitized"]},
+        "finding": {"enum": ["security_and_high_value", "all"]},
+        "decision": {"enum": ["when_present", "never"]},
+        "action": {"enum": ["when_present", "never"]},
+        "state": {"enum": ["never", "failures_only", "on_change_initial", "on_change_initial_heartbeat", "on_change_initial_heartbeat_richer"]},
+        "health": {"enum": ["never", "failures_only", "on_change_heartbeat", "on_change_heartbeat_richer", "all"]},
+        "summary": {"enum": ["never", "replacement", "derived"]}
+      },
+      "additionalProperties": false
+    },
+    "observation_detail": {
+      "type": "object",
+      "required": ["inference", "tool", "message_bodies", "prompts", "tool_arguments_results", "raw_native_attachments", "derived_side_effect_observations"],
+      "properties": {
+        "inference": {"enum": ["none", "metadata"]},
+        "tool": {"enum": ["none", "metadata", "richer_sanitized"]},
+        "message_bodies": {"enum": ["off", "hash_classification", "sanitized_excerpt"]},
+        "prompts": {"enum": ["off", "hash_classification", "reference"]},
+        "tool_arguments_results": {"enum": ["off", "hash_classification", "sanitized_excerpt"]},
+        "raw_native_attachments": {"const": false},
+        "derived_side_effect_observations": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["modes", "max_items", "max_excerpt_chars"],
+      "properties": {
+        "modes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {"enum": ["reference", "hash", "classification", "count", "redacted_excerpt", "omitted"]}
+        },
+        "max_items": {"const": 32},
+        "max_excerpt_chars": {"type": "integer", "minimum": 0, "maximum": 512}
+      },
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "required": ["export_mode"],
+      "properties": {
+        "export_mode": {"enum": ["internal", "sanitized_diagnostic"]}
+      },
+      "additionalProperties": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["detail"],
+      "properties": {
+        "detail": {"enum": ["none", "safe", "richer_sanitized"]}
+      },
+      "additionalProperties": false
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": ["enabled", "interval", "on_change"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "interval": {"enum": ["none", "1m", "5m", "15m"]},
+        "on_change": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "required": ["selection_is_auditable", "durable_selected_telemetry_no_silent_loss"],
+      "properties": {
+        "selection_is_auditable": {"const": true},
+        "durable_selected_telemetry_no_silent_loss": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "destination": {
+      "type": "object",
+      "required": ["can_override_privacy", "can_override_profile", "metadata_outside_canonical"],
+      "properties": {
+        "can_override_privacy": {"const": false},
+        "can_override_profile": {"const": false},
+        "metadata_outside_canonical": {"const": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"profile": {"const": "minimal"}}},
+      "then": {
+        "properties": {
+          "families": {"const": {
+            "session": "always",
+            "observation": "finding_evidence_only",
+            "finding": "security_and_high_value",
+            "decision": "when_present",
+            "action": "when_present",
+            "state": "failures_only",
+            "health": "failures_only",
+            "summary": "replacement"
+          }},
+          "observation_detail": {"const": {
+            "inference": "none",
+            "tool": "none",
+            "message_bodies": "off",
+            "prompts": "off",
+            "tool_arguments_results": "off",
+            "raw_native_attachments": false,
+            "derived_side_effect_observations": false
+          }},
+          "evidence": {"const": {
+            "modes": ["reference", "hash", "classification", "omitted"],
+            "max_items": 32,
+            "max_excerpt_chars": 0
+          }},
+          "signal": {"const": {"export_mode": "internal"}},
+          "diagnostic": {"const": {"detail": "safe"}},
+          "heartbeat": {"const": {"enabled": false, "interval": "none", "on_change": false}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"profile": {"const": "standard"}}},
+      "then": {
+        "properties": {
+          "families": {"const": {
+            "session": "always",
+            "observation": "metadata",
+            "finding": "all",
+            "decision": "when_present",
+            "action": "when_present",
+            "state": "on_change_initial_heartbeat",
+            "health": "on_change_heartbeat",
+            "summary": "derived"
+          }},
+          "observation_detail": {"const": {
+            "inference": "metadata",
+            "tool": "metadata",
+            "message_bodies": "off",
+            "prompts": "hash_classification",
+            "tool_arguments_results": "off",
+            "raw_native_attachments": false,
+            "derived_side_effect_observations": false
+          }},
+          "evidence": {"const": {
+            "modes": ["reference", "hash", "classification", "count", "redacted_excerpt", "omitted"],
+            "max_items": 32,
+            "max_excerpt_chars": 256
+          }},
+          "signal": {"const": {"export_mode": "internal"}},
+          "diagnostic": {"const": {"detail": "safe"}},
+          "heartbeat": {"const": {"enabled": true, "interval": "5m", "on_change": true}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"profile": {"const": "verbose"}}},
+      "then": {
+        "properties": {
+          "families": {"const": {
+            "session": "always",
+            "observation": "richer_sanitized",
+            "finding": "all",
+            "decision": "when_present",
+            "action": "when_present",
+            "state": "on_change_initial_heartbeat_richer",
+            "health": "on_change_heartbeat_richer",
+            "summary": "derived"
+          }},
+          "observation_detail": {"const": {
+            "inference": "metadata",
+            "tool": "richer_sanitized",
+            "message_bodies": "sanitized_excerpt",
+            "prompts": "hash_classification",
+            "tool_arguments_results": "sanitized_excerpt",
+            "raw_native_attachments": false,
+            "derived_side_effect_observations": false
+          }},
+          "evidence": {"const": {
+            "modes": ["reference", "hash", "classification", "count", "redacted_excerpt", "omitted"],
+            "max_items": 32,
+            "max_excerpt_chars": 512
+          }},
+          "signal": {"const": {"export_mode": "internal"}},
+          "diagnostic": {"const": {"detail": "richer_sanitized"}},
+          "heartbeat": {"const": {"enabled": true, "interval": "1m", "on_change": true}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"profile": {"const": "forensic_safe"}}},
+      "then": {
+        "properties": {
+          "families": {"const": {
+            "session": "always",
+            "observation": "richer_sanitized",
+            "finding": "all",
+            "decision": "when_present",
+            "action": "when_present",
+            "state": "on_change_initial_heartbeat_richer",
+            "health": "on_change_heartbeat_richer",
+            "summary": "derived"
+          }},
+          "observation_detail": {"const": {
+            "inference": "metadata",
+            "tool": "richer_sanitized",
+            "message_bodies": "sanitized_excerpt",
+            "prompts": "hash_classification",
+            "tool_arguments_results": "sanitized_excerpt",
+            "raw_native_attachments": false,
+            "derived_side_effect_observations": false
+          }},
+          "evidence": {"const": {
+            "modes": ["reference", "hash", "classification", "count", "redacted_excerpt", "omitted"],
+            "max_items": 32,
+            "max_excerpt_chars": 512
+          }},
+          "signal": {"const": {"export_mode": "sanitized_diagnostic"}},
+          "diagnostic": {"const": {"detail": "richer_sanitized"}},
+          "heartbeat": {"const": {"enabled": true, "interval": "1m", "on_change": true}}
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

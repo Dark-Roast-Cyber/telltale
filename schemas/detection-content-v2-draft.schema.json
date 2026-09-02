@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Accepted Detection Content v2 architecture contract; not a production schema and not runtime-supported.",
+  "title": "Telltale Detection Content v2",
+  "type": "object",
+  "required": ["version", "rules"],
+  "properties": {
+    "version": {"const": 2},
+    "description": {"type": "string", "maxLength": 512},
+    "rules": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"$ref": "#/$defs/rule"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "safe_text": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "id": {"type": "string", "pattern": "^[a-z0-9]+(?:[._][a-z0-9_]+)+$", "maxLength": 96},
+    "identity_key": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?:session_id|call_id|process_instance_id|workflow_id|resource_identity|destination_identity|observation_id|signal_id|window_start|detector\\.id|rule\\.id)(?:\\+(?:session_id|call_id|process_instance_id|workflow_id|resource_identity|destination_identity|observation_id|signal_id|window_start|detector\\.id|rule\\.id))*$"},
+    "finding": {
+      "type": "object",
+      "required": ["kind", "category", "severity"],
+      "properties": {
+        "kind": {"enum": ["security_detection", "policy_violation", "behavioral_deviation", "guardrail", "compliance_observation", "threat_hunt", "correlation", "informational"]},
+        "category": {"$ref": "#/$defs/safe_text"},
+        "severity": {"enum": ["informational", "low", "medium", "high", "critical"]},
+        "risk_points": {"type": "integer", "minimum": 0, "maximum": 100},
+        "confidence": {"enum": ["low", "medium", "high"]},
+        "confidence_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "tags": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/safe_text"}},
+        "techniques": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^(?:attack|atlas):[A-Za-z0-9_.-]+$", "maxLength": 96}},
+        "analyst_guidance": {"$ref": "#/$defs/safe_text"},
+        "false_positive_text": {"$ref": "#/$defs/safe_text"}
+      },
+      "additionalProperties": false
+    },
+    "selector": {
+      "type": "string",
+      "pattern": "^(?:(?:session|message|tool|command|resource|network|process|inference|mcp|runtime|browser)\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|compat\\.v1\\.(?:arguments|assistant_context|command|file_path|tool_name|tool_result|url|user_context)|local\\.structured_values\\.(?:tool|message|inference|tool_definition|mcp|browser|other)\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|signal\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*|finding\\.[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*)$",
+      "maxLength": 160
+    },
+    "provenance": {"enum": ["reported", "parsed", "derived", "inferred", "observed"]},
+    "predicate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["field", "op", "value"],
+          "properties": {
+            "field": {"$ref": "#/$defs/selector"},
+            "op": {"enum": ["equals", "not_equals", "contains", "regex", "glob", "in", "not_in", "starts_with", "ends_with", "gt", "gte", "lt", "lte"]},
+            "value": {},
+            "require_provenance": {"$ref": "#/$defs/provenance"},
+            "require_capability": {"type": "string", "minLength": 1, "maxLength": 96}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["field", "op"],
+          "properties": {
+            "field": {"$ref": "#/$defs/selector"},
+            "op": {"enum": ["exists", "not_exists"]},
+            "require_provenance": {"$ref": "#/$defs/provenance"},
+            "require_capability": {"type": "string", "minLength": 1, "maxLength": 96}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "matcher": {
+      "oneOf": [
+        {"$ref": "#/$defs/predicate"},
+        {"type": "object", "required": ["all"], "properties": {"all": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/matcher"}}}, "additionalProperties": false},
+        {"type": "object", "required": ["any"], "properties": {"any": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/matcher"}}}, "additionalProperties": false},
+        {"type": "object", "required": ["not"], "properties": {"not": {"$ref": "#/$defs/matcher"}}, "additionalProperties": false}
+      ]
+    },
+    "applies_to": {
+      "type": "object",
+      "required": ["family", "stages"],
+      "properties": {
+        "family": {"enum": ["message", "inference", "tool", "tool_definition", "mcp", "process", "file", "network", "browser", "runtime", "session", "other"]},
+        "stages": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 48}}
+      },
+      "additionalProperties": false
+    },
+    "dedupe": {
+      "type": "object",
+      "required": ["mode", "key"],
+      "properties": {
+        "mode": {"enum": ["per_input", "per_window", "per_session_detector", "none"]},
+        "key": {"$ref": "#/$defs/identity_key"}
+      },
+      "additionalProperties": false
+    },
+    "emits": {
+      "type": "object",
+      "required": ["result"],
+      "properties": {"result": {"const": "signal_then_finding"}},
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object",
+      "required": ["label", "match"],
+      "properties": {"label": {"$ref": "#/$defs/safe_text"}, "match": {"$ref": "#/$defs/matcher"}},
+      "additionalProperties": false
+    },
+    "sequence_declaration": {
+      "type": "object",
+      "required": ["input_stream", "ordering_field", "correlation_keys", "window", "steps", "dedupe", "emits"],
+      "properties": {
+        "input_stream": {"enum": ["observations", "signals", "findings"]},
+        "ordering_field": {"enum": ["occurred_at", "observed_at", "source.sequence", "source.offset", "observation.sequence"]},
+        "correlation_keys": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"enum": ["session_id", "call_id", "process_instance_id", "workflow_id", "resource_identity", "destination_identity"]}},
+        "window": {"type": "string", "pattern": "^[1-9][0-9]*(ms|s|m|h)$"},
+        "steps": {"type": "array", "minItems": 2, "maxItems": 32, "items": {"$ref": "#/$defs/step"}},
+        "dedupe": {"$ref": "#/$defs/dedupe"},
+        "emits": {"$ref": "#/$defs/emits"}
+      },
+      "additionalProperties": false
+    },
+    "process_identity": {
+      "type": "object",
+      "required": ["process_name"],
+      "properties": {
+        "process_name": {"$ref": "#/$defs/safe_text"},
+        "process_path": {"$ref": "#/$defs/safe_text"}
+      },
+      "additionalProperties": false
+    },
+    "process_correlation_step": {
+      "type": "object",
+      "properties": {
+        "any_category": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/safe_text"}},
+        "any_rule_id": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "any_child": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/safe_text"}}
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    },
+    "parent_child_shape": {
+      "type": "object",
+      "required": ["parent", "child"],
+      "properties": {
+        "parent": {"$ref": "#/$defs/process_identity"},
+        "child": {"$ref": "#/$defs/process_identity"},
+        "child_command_line_any": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/safe_text"}},
+        "child_command_line_none": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/safe_text"}},
+        "child_path_any": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/safe_text"}},
+        "child_path_none": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/safe_text"}}
+      },
+      "additionalProperties": false
+    },
+    "standalone_shape": {
+      "type": "object",
+      "required": ["match", "patterns"],
+      "properties": {
+        "match": {"enum": ["process_name", "process_path", "command_line"]},
+        "patterns": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/safe_text"}},
+        "exclude": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/safe_text"}}
+      },
+      "additionalProperties": false
+    },
+    "process_chain_declaration": {
+      "type": "object",
+      "required": ["rule_ref", "input_stream", "ordering_field", "correlation_keys", "window", "shape", "dedupe", "emits"],
+      "properties": {
+        "rule_ref": {"$ref": "#/$defs/id"},
+        "input_stream": {"const": "observations"},
+        "ordering_field": {"enum": ["occurred_at", "observed_at", "source.sequence", "source.offset", "observation.sequence"]},
+        "correlation_keys": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"enum": ["session_id", "call_id", "process_instance_id", "workflow_id", "resource_identity", "destination_identity"]}},
+        "window": {"type": "string", "pattern": "^[1-9][0-9]*(ms|s|m|h)$"},
+        "shape": {"enum": ["parent_child", "standalone", "entity_correlation"]},
+        "parent_child": {"$ref": "#/$defs/parent_child_shape"},
+        "standalone": {"$ref": "#/$defs/standalone_shape"},
+        "entity_correlation": {
+          "type": "object",
+          "required": ["entity", "steps"],
+          "properties": {
+            "entity": {"$ref": "#/$defs/safe_text"},
+            "steps": {"type": "array", "minItems": 2, "maxItems": 32, "items": {"$ref": "#/$defs/process_correlation_step"}}
+          },
+          "additionalProperties": false
+        },
+        "dedupe": {"$ref": "#/$defs/dedupe"},
+        "emits": {"$ref": "#/$defs/emits"}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {"if": {"properties": {"shape": {"const": "parent_child"}}}, "then": {"required": ["parent_child"], "not": {"anyOf": [{"required": ["standalone"]}, {"required": ["entity_correlation"]}]}}},
+        {"if": {"properties": {"shape": {"const": "standalone"}}}, "then": {"required": ["standalone"], "not": {"anyOf": [{"required": ["parent_child"]}, {"required": ["entity_correlation"]}]}}},
+        {"if": {"properties": {"shape": {"const": "entity_correlation"}}}, "then": {"required": ["entity_correlation"], "not": {"anyOf": [{"required": ["parent_child"]}, {"required": ["standalone"]}]}}}
+      ]
+    },
+    "imported_declaration": {
+      "type": "object",
+      "required": ["source", "version", "confidence_semantics", "evidence_lineage", "observation_linkage"],
+      "properties": {
+        "source": {"$ref": "#/$defs/safe_text"},
+        "version": {"$ref": "#/$defs/safe_text"},
+        "confidence_semantics": {"$ref": "#/$defs/safe_text"},
+        "evidence_lineage": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/safe_text"}},
+        "observation_linkage": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/safe_text"}}
+      },
+      "additionalProperties": false
+    },
+    "detector": {
+      "type": "object",
+      "required": ["kind", "scope"],
+      "properties": {
+        "kind": {"enum": ["observation_match", "process_chain", "sequence", "correlation", "imported", "baseline", "guard_model"]},
+        "scope": {"enum": ["observation", "session", "sequence", "workflow", "process"]},
+        "match_surface": {"enum": ["text", "structured"]},
+        "applies_to": {"$ref": "#/$defs/applies_to"},
+        "where": {"$ref": "#/$defs/matcher"},
+        "required_capabilities": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 96}},
+        "sequence": {"$ref": "#/$defs/sequence_declaration"},
+        "process_chain": {"$ref": "#/$defs/process_chain_declaration"},
+        "imported": {"$ref": "#/$defs/imported_declaration"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "observation_match"}}}, "then": {"required": ["match_surface", "applies_to", "where"], "not": {"anyOf": [{"required": ["sequence"]}, {"required": ["process_chain"]}, {"required": ["imported"]}]}}},
+        {"if": {"properties": {"kind": {"enum": ["sequence", "correlation"]}}}, "then": {"required": ["sequence"], "not": {"anyOf": [{"required": ["match_surface"]}, {"required": ["applies_to"]}, {"required": ["where"]}, {"required": ["process_chain"]}, {"required": ["imported"]}]}}},
+        {"if": {"properties": {"kind": {"const": "process_chain"}}}, "then": {"required": ["process_chain"], "not": {"anyOf": [{"required": ["match_surface"]}, {"required": ["applies_to"]}, {"required": ["where"]}, {"required": ["sequence"]}, {"required": ["imported"]}]}}},
+        {"if": {"properties": {"kind": {"const": "imported"}}}, "then": {"required": ["imported"], "not": {"anyOf": [{"required": ["match_surface"]}, {"required": ["applies_to"]}, {"required": ["where"]}, {"required": ["sequence"]}, {"required": ["process_chain"]}]}}},
+        {"if": {"properties": {"kind": {"enum": ["baseline", "guard_model"]}}}, "then": {"not": {"anyOf": [{"required": ["match_surface"]}, {"required": ["applies_to"]}, {"required": ["where"]}, {"required": ["sequence"]}, {"required": ["process_chain"]}, {"required": ["imported"]}]}}}
+      ],
+      "additionalProperties": false
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["source", "rule_version", "targets"],
+      "properties": {
+        "source": {"const": "rule_v1"},
+        "rule_version": {"const": 1},
+        "targets": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"enum": ["arguments", "assistant_context", "command", "file_path", "tool_name", "tool_result", "url", "user_context"]}}
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "include": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/selector"}},
+        "max_refs": {"type": "integer", "minimum": 1, "maximum": 16}
+      },
+      "additionalProperties": false
+    },
+    "rule": {
+      "type": "object",
+      "required": ["id", "finding", "detector"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "title": {"$ref": "#/$defs/safe_text"},
+        "description": {"type": "string", "maxLength": 2048},
+        "status": {"enum": ["experimental", "test", "stable", "deprecated"]},
+        "author": {"type": "string", "minLength": 1, "maxLength": 128},
+        "references": {"type": "array", "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "falsepositives": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/safe_text"}},
+        "enabled": {"type": "boolean"},
+        "category": {"$ref": "#/$defs/safe_text"},
+        "detection_class": {"enum": ["security_detection", "policy_violation", "threat_hunting", "compliance_observation", "operational_health", "baseline_deviation"]},
+        "signal_type": {"enum": ["atomic", "chain", "correlation", "baseline_deviation"]},
+        "analytic_intent": {"enum": ["alert", "hunt", "enrich", "baseline", "audit"]},
+        "severity": {"enum": ["informational", "low", "medium", "high", "critical"]},
+        "risk_points": {"type": "integer", "minimum": 0, "maximum": 100},
+        "tags": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/safe_text"}},
+        "techniques": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^(?:attack|atlas):[A-Za-z0-9_.-]+$", "maxLength": 96}},
+        "explanation": {"type": "string", "maxLength": 2048},
+        "finding_identity_key": {"$ref": "#/$defs/identity_key"},
+        "finding": {"$ref": "#/$defs/finding"},
+        "detector": {"$ref": "#/$defs/detector"},
+        "compatibility": {"$ref": "#/$defs/compatibility"},
+        "evidence": {"$ref": "#/$defs/evidence"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

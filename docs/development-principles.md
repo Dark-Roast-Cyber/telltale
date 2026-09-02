@@ -14,6 +14,13 @@ because it is described in this document. Implementation requires separately
 accepted, bounded work. Where this document and current behavior differ, the
 difference is intended architecture, not a claim about what exists today.
 
+The accepted semantic-foundation contracts are documented in [Semantic
+foundation](semantic-foundation.md) and its related [Event4](event4.md),
+[Canonical Observation v2](canonical-observation-v2.md), [Detection v2](detection-v2.md),
+and [telemetry/output architecture](telemetry-output-architecture.md) pages.
+Those pages describe accepted future architecture, not implemented capability;
+these principles remain the direction for evaluating future work.
+
 ## Product Direction
 
 Telltale is an open-source, agent-focused Agent Detection and Response (ADR) engine.

@@ -7,6 +7,11 @@ and alerting. The default scan path writes one canonical JSON object per line
 to a local file; optional delivery paths can wrap the same event body for a
 specific sink without changing the event schema.
 
+Event 3.0 remains the current supported and frozen compatibility/output
+contract. The accepted future Event4 and CanonicalPayload architecture is
+documented in [Telemetry/output architecture](telemetry-output-architecture.md)
+and is not implemented.
+
 ## Default JSONL Sink
 
 By default, `telltale scan` uses the `user` path profile and appends native Event
