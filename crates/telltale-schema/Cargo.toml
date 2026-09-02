@@ -14,9 +14,11 @@ categories = ["data-structures", "encoding"]
 include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**"]
 
 [dependencies]
+hmac.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 time.workspace = true
+unicode-normalization.workspace = true
 uuid.workspace = true

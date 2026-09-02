@@ -62,10 +62,11 @@ Priorities, in order:
 
 ## Beyond 0.6.0
 
-The Event4, Canonical Observation v2, Detection v2, and future telemetry/output
-architectures are accepted and documented as intended future work, not
-implemented capability. Event 3.0 remains the current frozen compatibility and
-output contract; migration requires explicit gates.
+The Event4, Detection v2, and future telemetry/output architectures are
+accepted and documented as intended future work, not implemented capability.
+Canonical Observation v2 core types/scaffolding are implemented, but adapter
+migration has not started. Event 3.0 remains the current frozen compatibility
+and output contract; migration requires explicit gates.
 
 The following remain outside the approved 0.6.0 trust, privacy, and durable
 collection milestone and require separate scope, compatibility review, and

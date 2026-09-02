@@ -19,5 +19,9 @@ let _record: Option<NormalizedRecord> = None;
 
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
+Canonical Observation v2 core types are local-only scaffolding and are not the
+Event 3.0 output contract. Callers must not log these types; nested `Debug`
+implementations can still expose local or sensitive values if logged directly.
+
 - [API documentation](https://docs.rs/telltale-schema)
 - [Repository](https://github.com/Dark-Roast-Cyber/telltale)

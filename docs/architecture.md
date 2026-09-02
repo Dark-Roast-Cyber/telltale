@@ -23,8 +23,10 @@ The accepted future semantic contracts are documented in the [semantic
 foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
 v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
 [telemetry/output architecture](telemetry-output-architecture.md) pages. They
-are accepted architecture, not current implementation. Event4, Canonical
-Observation v2, Detection v2, and Telemetry/Output v2 are not implemented.
+are accepted architecture, not current implementation. Event4, Detection v2,
+and Telemetry/Output v2 are not implemented. Canonical Observation v2 core
+types/scaffolding are implemented in `telltale-schema`; production adapter
+migration has not started.
 Event 3.0 remains the frozen current compatibility contract. The pipeline below
 continues to describe the shipped implementation.
 

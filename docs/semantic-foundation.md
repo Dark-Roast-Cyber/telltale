@@ -2,8 +2,10 @@
 
 > **Status:** **Accepted architecture.** These contracts are reviewed and
 > accepted as Telltale's intended future architecture. **Current
-> implementation:** Event4, Canonical Observation v2, Detection v2, and
-> Telemetry/Output v2 are **not implemented yet**. **Existing compatibility:**
+> implementation:** Event4, Detection v2, and Telemetry/Output v2 are **not
+> implemented yet**. Canonical Observation v2 core types/scaffolding are
+> implemented in `telltale-schema`; production adapter migration has not
+> started. **Existing compatibility:**
 > Event 3.0 remains the current frozen external compatibility and output
 > contract.
 

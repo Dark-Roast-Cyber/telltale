@@ -2,7 +2,9 @@
 
 > **Status:** **Accepted architecture.** Canonical Observation v2 is the
 > reviewed intended future internal evidence contract. **Current
-> implementation:** Canonical Observation v2 is **not implemented**. **Existing
+> implementation:** Canonical Observation v2 core domain types/scaffolding are
+> implemented in `telltale-schema`; production adapter migration has not
+> started. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
