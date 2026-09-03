@@ -1329,6 +1329,9 @@ impl CanonicalObservationV2 {
     pub fn source(&self) -> &SourceProvenance {
         &self.source
     }
+    pub fn capability_context(&self) -> Option<&CapabilityContext> {
+        self.capability_context.as_ref()
+    }
     pub fn body(&self) -> &ObservationBody {
         &self.body
     }

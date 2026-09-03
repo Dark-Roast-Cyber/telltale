@@ -71,6 +71,11 @@ These profiles document the gap between what Telltale would ideally see and what
 
 **Known gaps**: Claude Code JSONL uses `message.content` arrays with mixed block types (`text`, `tool_use`, `tool_result`). The parser handles these but the legacy flat record cannot preserve the structure.
 
+The implemented Claude Code (`claude.projects`) Canonical Observation v2
+reference projection preserves call IDs, explicit `is_error`, and ordered
+content parts. Production still uses the lossy legacy projection; filename
+session fallback is legacy-only and is not used for v2 session identity.
+
 ---
 
 ### Gemini CLI

@@ -25,8 +25,9 @@ v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
 [telemetry/output architecture](telemetry-output-architecture.md) pages. They
 are accepted architecture, not current implementation. Event4, Detection v2,
 and Telemetry/Output v2 are not implemented. Canonical Observation v2 core
-types/scaffolding are implemented in `telltale-schema`; production adapter
-migration has not started.
+types/scaffolding are implemented in `telltale-schema`; the Claude Code
+(`claude.projects`) v2 reference projection is implemented, while production
+adapter migration/cutover has not started.
 Event 3.0 remains the frozen current compatibility contract. The pipeline below
 continues to describe the shipped implementation.
 
@@ -45,6 +46,10 @@ Telltale runs a repeatable batch pipeline:
 8. **Emit**: send canonical events through an event sink. The default sink appends
    local JSONL for SIEM shippers; optional delivery paths wrap the same event
    payload for Splunk HEC or Elastic-compatible export.
+
+The current scanner still uses `NormalizedRecordV1`. The Claude Code v2
+reference projection is implemented but is not wired into parsing, detection,
+CLI, or scan execution.
 
 ## Module Boundaries
 

@@ -546,7 +546,7 @@ pub(crate) fn default_source_parent_name(source: &Source) -> String {
         .to_string()
 }
 
-fn session_id_field(value: &Value) -> Option<String> {
+pub(crate) fn session_id_field(value: &Value) -> Option<String> {
     string_field(value, "session_id")
         .or_else(|| string_field(value, "sessionID"))
         .or_else(|| string_field(value, "sessionId"))

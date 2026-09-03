@@ -3,8 +3,9 @@
 > **Status:** **Accepted architecture.** Canonical Observation v2 is the
 > reviewed intended future internal evidence contract. **Current
 > implementation:** Canonical Observation v2 core domain types/scaffolding are
-> implemented in `telltale-schema`; production adapter migration has not
-> started. **Existing
+> implemented in `telltale-schema`. A Claude Code (`claude.projects`) v2
+> reference projection is implemented; it is not the production detector input,
+> and production adapter cutover has not started. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
@@ -18,6 +19,12 @@ source-native fact -> Canonical Observation v2 -> detection / analytics
 Canonical Observation is the unit of evidence. It is local-first and richer
 than any export. Detection consumes it, not Event4 or a destination-specific
 projection.
+
+The Claude Code projection is deliberately not an active normalization path. It
+preserves source call IDs, structured content parts, structured tool values, and
+truthful lifecycle stages while the production scanner continues to use
+`NormalizedRecordV1`. Detection v2, Event4, and telemetry/output v2 are not
+started, and Event 3.0 remains frozen.
 
 ## Conceptual contract
 

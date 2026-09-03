@@ -64,9 +64,11 @@ Priorities, in order:
 
 The Event4, Detection v2, and future telemetry/output architectures are
 accepted and documented as intended future work, not implemented capability.
-Canonical Observation v2 core types/scaffolding are implemented, but adapter
-migration has not started. Event 3.0 remains the current frozen compatibility
-and output contract; migration requires explicit gates.
+Canonical Observation v2 core types/scaffolding are implemented, and the Claude
+Code (`claude.projects`) v2 reference projection is implemented. Production
+normalization/detection still uses `NormalizedRecordV1`. Canonical Observation
+v2 production cutover has not started. Event 3.0 remains the current frozen
+compatibility and output contract; migration requires explicit gates.
 
 The following remain outside the approved 0.6.0 trust, privacy, and durable
 collection milestone and require separate scope, compatibility review, and
@@ -80,6 +82,19 @@ release planning:
 - Hook-based process interception
 - Embedded or agentic runtime review
 - Long-lived semver promises and a feature-flag matrix
+
+### Priority reference clients
+
+- **Claude Code** (`claude.projects`): first implemented Canonical Observation
+  v2 reference adapter; production remains `NormalizedRecordV1`.
+- **Codex**: existing modeled source; priority migration later.
+- **OpenCode**: existing modeled source; priority migration later.
+- **Claude Desktop**: priority discovery and modeling are required before
+  migration; it is not assumed equivalent to Claude Code.
+- **ChatGPT Desktop**: priority discovery and modeling are required before
+  migration; it is not assumed equivalent to Codex.
+- **Gemini CLI** / `gemini.tmp`: legacy compatibility only; no new Canonical
+  Observation v2 migration is planned. It is not renamed to Antigravity.
 
 ## Principles
 
