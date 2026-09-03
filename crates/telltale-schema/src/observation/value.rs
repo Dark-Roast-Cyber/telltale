@@ -27,6 +27,70 @@ pub enum JsonValue {
 }
 
 impl JsonValue {
+    pub fn try_from_source_value(value: &serde_json::Value) -> Result<Self, ObservationError> {
+        let converted = Self::convert_source_value(value, 1)?;
+        if bounded_json_bytes(&converted, 1)? > LOCAL_MAX_VALUE_BYTES {
+            return Err(ObservationError::new(ValidationCode::UnboundedValue));
+        }
+        Ok(converted)
+    }
+
+    fn convert_source_value(
+        value: &serde_json::Value,
+        depth: usize,
+    ) -> Result<Self, ObservationError> {
+        if depth > LOCAL_MAX_DEPTH {
+            return Err(ObservationError::new(ValidationCode::UnboundedValue));
+        }
+        match value {
+            serde_json::Value::Null => Ok(Self::Null),
+            serde_json::Value::Bool(value) => Ok(Self::Bool(*value)),
+            serde_json::Value::Number(value) => {
+                if let Some(value) = value.as_i64() {
+                    Ok(Self::Integer(value))
+                } else if let Some(value) = value.as_u64() {
+                    Ok(Self::Unsigned(value))
+                } else {
+                    let value = value
+                        .as_f64()
+                        .ok_or_else(|| ObservationError::new(ValidationCode::NonFiniteNumber))?;
+                    Self::number(value)
+                }
+            }
+            serde_json::Value::String(value) => {
+                if value.len() > LOCAL_MAX_STRING_BYTES {
+                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                }
+                Ok(Self::string(value))
+            }
+            serde_json::Value::Array(values) => {
+                if values.len() > LOCAL_MAX_ARRAY_ITEMS {
+                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                }
+                values
+                    .iter()
+                    .map(|value| Self::convert_source_value(value, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Self::Array)
+            }
+            serde_json::Value::Object(values) => {
+                if values.len() > LOCAL_MAX_OBJECT_MEMBERS {
+                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                }
+                if values.keys().any(|key| key.len() > LOCAL_MAX_KEY_BYTES) {
+                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                }
+                values
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok((key.clone(), Self::convert_source_value(value, depth + 1)?))
+                    })
+                    .collect::<Result<Vec<_>, ObservationError>>()
+                    .and_then(Self::object)
+            }
+        }
+    }
+
     pub fn number(value: f64) -> Result<Self, ObservationError> {
         if value.is_finite() {
             Ok(Self::Number(value))

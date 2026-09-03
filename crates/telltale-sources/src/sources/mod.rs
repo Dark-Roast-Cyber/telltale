@@ -20,4 +20,6 @@ pub mod registry;
 pub(crate) mod roocode;
 
 #[cfg(test)]
+mod canonical_conformance;
+#[cfg(test)]
 mod parity;

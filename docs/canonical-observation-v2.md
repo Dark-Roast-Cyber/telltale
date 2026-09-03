@@ -6,7 +6,9 @@
 > implemented in `telltale-schema`. A Claude Code (`claude.projects`) v2
 > reference projection and a Codex v2 reference adapter family are implemented
 > as non-production projections; they are not the production detector input,
-> and production adapter cutover has not started. **Existing
+> and production adapter cutover has not started. The P10B identity/conformance
+> amendment is implemented: stable identity is coordinate-only and semantic
+> comparison is separate. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
@@ -46,7 +48,8 @@ CanonicalObservationV2 {
     facets?: Map<FacetName, SemanticFacet>,
     fact_metadata?: Map<FieldPath, FactMetadata>,
     local?: LocalEvidence,
-    identity_basis?: StableIdentityBasis
+    identity_basis?: StableIdentityBasis,
+    semantic_comparison: SemanticComparison // local comparison state only
 }
 ```
 
@@ -119,21 +122,36 @@ global ordering claims. A later detector must name the ordering dimension it
 consumes and treat missing data as ineligible.
 
 `observation_id` is Telltale-owned and distinct from Event4 `event_id`, source
-IDs, session IDs, collector IDs, and delivery IDs. It is opaque and is not an
-authentication proof. When stable source coordinates exist, Telltale derives a
-replay-stable ID from a domain-separated canonical tuple containing adapter
-identity/version, one selected coordinate, family, stage, semantic fingerprint,
-child ordinal, and key-epoch reference. The textual form is:
+IDs, session IDs, collector IDs, and delivery IDs. It identifies a canonical
+source fact; it is opaque and is not an authentication proof. When a stable
+source coordinate exists, Telltale derives the ID from exactly this
+domain-separated canonical tuple:
+
+```text
+["telltale:canonical-observation-coordinate-id-v1", adapter_type, adapter_id,
+ coordinate_kind, coordinate_value, family, stage, child_ordinal]
+```
+
+Semantic values, semantic fingerprints, adapter versions, key epochs, paths,
+filenames, session titles, collection locations, privacy keys, and HMAC
+material are not in this tuple. Adapter version remains provenance only. The
+textual form is:
 
 ```text
 obs:v2:sha256:<64 lowercase hexadecimal digits>
 ```
 
-Coordinate selection is deterministic and ordered: `source.native_id`, then
-`source.source_sequence`, then `source.offset`. No concatenated fallback is
-used. If none exists, a protected persisted assignment is required. Telltale
-must not invent an ID from a path, filename, batch, collector value, or inferred
-parent name.
+Coordinate selection is deterministic and ordered: `source.native_id`, then an
+identity-eligible scoped source sequence, then an identity-eligible scoped
+offset. A producer-local sequence or offset is provenance only unless its
+uniqueness namespace is explicit and stable. A scoped source sequence is
+encoded in the coordinate value as `["session", namespace, ordinal]`. Empty,
+newline-containing, slash-containing, backslash-containing, and `..` namespaces
+are rejected. If none exists, a protected persisted assignment is required.
+Telltale must not invent an ID from a path, filename, batch, collector value, or
+inferred parent name.
+`source.native_id` is optional and must be a truthful source-native identifier,
+never one derived from a prompt, tool, path, or other semantic content.
 
 Canonical identity encoding uses UTF-8 JSON, NFC strings and sorted object keys,
 compact separators, unescaped non-ASCII UTF-8, rejection of non-finite numbers
@@ -142,9 +160,23 @@ semantic fingerprint excludes timestamps, source/admin metadata, capability and
 profile references, and raw references. Sensitive semantic values enter only as
 structural location, sensitivity class, and a producer-local keyed digest.
 
-For sensitive values, keyed fingerprints use HMAC-SHA-256 with an opaque local
-key epoch reference. Keys and commitments never enter the observation or an
-export. Key unavailability requires a protected persisted assignment and must
+Semantic comparison is separate from source-fact identity. All-Normal values
+use the existing unkeyed semantic fingerprint at epoch `none`. Sensitive,
+secret, and reference-only values use keyed fingerprints when available; if a
+stable coordinate exists but a sensitive value has no keyed fingerprint,
+construction still succeeds with `SemanticComparison::Unavailable` and the
+sensitive value is never hashed unkeyed. Keyed fingerprints and epochs remain
+local comparison material and do not enter `observation_id`.
+
+`SemanticComparison::compare` returns `Equivalent` only for equal comparable
+fingerprints in the same epoch, `Mutated` for different comparable fingerprints
+in the same epoch, and `Incomparable` when either side is unavailable or epochs
+differ. Unavailable versus unavailable is not equivalent, and an epoch mismatch
+is not mutation. Comparison material has no generic serde/export path and is
+redacted from Debug/Display.
+
+Keys and commitments never enter the observation or an export. Key
+unavailability on the persisted-assignment path remains fail-closed and must
 not be presented as a deterministic source-coordinate ID.
 
 Persisted assignment state is durable replay state, not source identity. It must

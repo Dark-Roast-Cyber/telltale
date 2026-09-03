@@ -24,7 +24,7 @@ pub use identity::{
     ASSIGNMENT_COMMITMENT_PREFIX, ASSIGNMENT_COMPARISON_DOMAIN, AssignmentStore, IdentityBasis,
     IdentityBasisKind, IdentityCoordinateKind, IdentityCoordinateValue, InMemoryAssignmentStore,
     KEYED_FINGERPRINT_PREFIX, KeyedFingerprint, OBSERVATION_ID_PREFIX, SEMANTIC_FINGERPRINT_PREFIX,
-    canonical_identity_json, valid_observation_id,
+    SemanticComparison, SemanticReplayVerdict, canonical_identity_json, valid_observation_id,
 };
 pub use value::{
     JsonValue, LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_DEPTH, LOCAL_MAX_ENTRIES, LOCAL_MAX_KEY_BYTES,
@@ -422,6 +422,9 @@ impl CorrelationId {
     pub fn value(&self) -> &str {
         &self.value
     }
+    pub fn source_reported(value: impl AsRef<str>) -> Result<Self, ObservationError> {
+        Self::new(value, CorrelationOrigin::SourceReported)
+    }
     pub fn origin(&self) -> CorrelationOrigin {
         self.origin
     }
@@ -522,6 +525,8 @@ pub struct SourceProvenance {
     native_id: Option<String>,
     source_sequence: Option<u64>,
     offset: Option<String>,
+    identity_source_sequence: Option<(String, u64)>,
+    identity_offset: Option<(String, String)>,
     source_path_hash: Option<String>,
     profile_refs: Vec<VersionedReference>,
     normalization_refs: Vec<LocalReference>,
@@ -543,6 +548,8 @@ impl SourceProvenance {
             native_id: None,
             source_sequence: None,
             offset: None,
+            identity_source_sequence: None,
+            identity_offset: None,
             source_path_hash: None,
             profile_refs: Vec::new(),
             normalization_refs: Vec::new(),
@@ -569,13 +576,36 @@ impl SourceProvenance {
     }
     pub fn with_source_sequence(mut self, value: u64) -> Self {
         self.source_sequence = Some(value);
+        self.identity_source_sequence = None;
         self
+    }
+    pub fn with_identity_source_sequence(
+        mut self,
+        namespace: impl AsRef<str>,
+        ordinal: u64,
+    ) -> Result<Self, ObservationError> {
+        let namespace = value::opaque_text(namespace.as_ref(), ValidationCode::PathDerivedId)?;
+        self.source_sequence = Some(ordinal);
+        self.identity_source_sequence = Some((namespace, ordinal));
+        Ok(self)
     }
     pub fn with_offset(mut self, value: impl AsRef<str>) -> Result<Self, ObservationError> {
         self.offset = Some(value::opaque_text(
             value.as_ref(),
             ValidationCode::PathDerivedId,
         )?);
+        self.identity_offset = None;
+        Ok(self)
+    }
+    pub fn with_identity_offset(
+        mut self,
+        namespace: impl AsRef<str>,
+        value: impl AsRef<str>,
+    ) -> Result<Self, ObservationError> {
+        let namespace = value::opaque_text(namespace.as_ref(), ValidationCode::PathDerivedId)?;
+        let value = value::opaque_text(value.as_ref(), ValidationCode::PathDerivedId)?;
+        self.offset = Some(value.clone());
+        self.identity_offset = Some((namespace, value));
         Ok(self)
     }
     pub fn with_source_path_hash(
@@ -657,18 +687,26 @@ impl SourceProvenance {
                 )
             })
             .or_else(|| {
-                self.source_sequence.map(|v| {
-                    (
-                        identity::IdentityCoordinateKind::SourceSequence,
-                        identity::IdentityCoordinateValue::SourceSequence(v),
-                    )
-                })
+                self.identity_source_sequence
+                    .as_ref()
+                    .map(|(namespace, ordinal)| {
+                        (
+                            identity::IdentityCoordinateKind::SourceSequence,
+                            identity::IdentityCoordinateValue::SourceSequence {
+                                namespace: namespace.clone(),
+                                ordinal: *ordinal,
+                            },
+                        )
+                    })
             })
             .or_else(|| {
-                self.offset.as_ref().map(|v| {
+                self.identity_offset.as_ref().map(|(namespace, value)| {
                     (
                         identity::IdentityCoordinateKind::Offset,
-                        identity::IdentityCoordinateValue::Offset(v.clone()),
+                        identity::IdentityCoordinateValue::Offset {
+                            namespace: namespace.clone(),
+                            value: value.clone(),
+                        },
                     )
                 })
             })
@@ -723,6 +761,14 @@ pub struct FactMetadata {
     keyed_fingerprints: Vec<KeyedFingerprint>,
 }
 impl FactMetadata {
+    pub fn reported() -> Result<Self, ObservationError> {
+        Self::new(FactProvenance::Reported, Sensitivity::Normal)
+    }
+
+    pub fn parsed() -> Result<Self, ObservationError> {
+        Self::new(FactProvenance::Parsed, Sensitivity::Normal)
+    }
+
     pub fn new(
         provenance: FactProvenance,
         sensitivity: Sensitivity,
@@ -915,6 +961,7 @@ pub struct CanonicalObservationV2 {
     fact_metadata: BTreeMap<String, FactMetadata>,
     local: Option<LocalEvidence>,
     identity_basis: IdentityBasis,
+    semantic_comparison: SemanticComparison,
 }
 
 impl fmt::Debug for CanonicalObservationV2 {
@@ -1047,32 +1094,42 @@ impl ObservationBuilder {
         self.validate_shape()?;
         let family = self.body.kind();
         let coordinate = self.source.selected_coordinate();
-        let allow_unkeyed = matches!(&self.identity_basis, Some(IdentityBasis::PersistedAssignment { fingerprint_key_epoch_ref, .. }) if fingerprint_key_epoch_ref == "unavailable");
-        let epoch = validate_fingerprints(
+        let fingerprint_policy = match &self.identity_basis {
+            Some(IdentityBasis::PersistedAssignment {
+                fingerprint_key_epoch_ref,
+                ..
+            }) => FingerprintPolicy::PersistedAssignment {
+                allow_unkeyed: fingerprint_key_epoch_ref == "unavailable",
+            },
+            _ => FingerprintPolicy::StableCoordinate,
+        };
+        let fingerprint_state = validate_fingerprints(
             &self.body,
             &self.facets,
             &self.fact_metadata,
             self.local.as_ref(),
             &self.source,
-            allow_unkeyed,
+            fingerprint_policy,
         )?;
-        let semantic = if epoch != "unavailable" {
-            Some(identity::semantic_fingerprint(
-                family,
-                self.stage,
-                &self.body,
-                &self.facets,
-                self.local.as_ref(),
-                &self.fact_metadata,
-            )?)
+        let semantic_comparison = if fingerprint_state.comparable {
+            SemanticComparison::comparable(
+                identity::semantic_fingerprint(
+                    family,
+                    self.stage,
+                    &self.body,
+                    &self.facets,
+                    self.local.as_ref(),
+                    &self.fact_metadata,
+                )?,
+                fingerprint_state.epoch.clone(),
+            )
         } else {
-            None
+            SemanticComparison::Unavailable
         };
         let expected_domain = format!(
-            "{}:{}:{}",
+            "{}:{}",
             self.source.adapter_type(),
-            self.source.adapter_id(),
-            self.source.adapter_version().unwrap_or("unversioned")
+            self.source.adapter_id()
         );
         let (observation_id, basis) = match (coordinate, self.identity_basis) {
             (
@@ -1081,49 +1138,34 @@ impl ObservationBuilder {
                     domain,
                     coordinate_kind: basis_kind,
                     coordinate_value: basis_value,
-                    semantic_fingerprint,
                     child_ordinal,
-                    fingerprint_key_epoch_ref,
                 }),
             ) => {
                 if domain != expected_domain
                     || basis_kind != coordinate_kind
                     || basis_value != coordinate_value
-                    || semantic_fingerprint != semantic.as_deref().unwrap_or("")
-                    || fingerprint_key_epoch_ref != epoch
+                    || child_ordinal != self.child_ordinal
                 {
                     return Err(ObservationError::new(ValidationCode::InvalidIdentityBasis));
                 }
-                let id = identity::derive_stable_id(
-                    &self.source,
-                    family,
-                    self.stage,
-                    semantic.as_deref().unwrap_or(""),
-                    child_ordinal,
-                    &epoch,
-                )?;
+                let id =
+                    identity::derive_stable_id(&self.source, family, self.stage, child_ordinal)?;
                 (
                     id,
                     IdentityBasis::StableSourceCoordinate {
                         domain,
                         coordinate_kind,
                         coordinate_value,
-                        semantic_fingerprint,
                         child_ordinal,
-                        fingerprint_key_epoch_ref,
                     },
                 )
             }
             (Some((coordinate_kind, coordinate_value)), None) => {
-                let semantic = semantic
-                    .ok_or_else(|| ObservationError::new(ValidationCode::ReplayUnverifiable))?;
                 let id = identity::derive_stable_id(
                     &self.source,
                     family,
                     self.stage,
-                    &semantic,
                     self.child_ordinal,
-                    &epoch,
                 )?;
                 (
                     id.clone(),
@@ -1131,9 +1173,7 @@ impl ObservationBuilder {
                         expected_domain,
                         coordinate_kind,
                         coordinate_value,
-                        semantic,
                         self.child_ordinal,
-                        epoch,
                     )?,
                 )
             }
@@ -1150,7 +1190,8 @@ impl ObservationBuilder {
                     fingerprint_key_epoch_ref,
                 }),
             ) => {
-                if domain != expected_domain || fingerprint_key_epoch_ref != epoch {
+                if domain != expected_domain || fingerprint_key_epoch_ref != fingerprint_state.epoch
+                {
                     return Err(ObservationError::new(ValidationCode::InvalidIdentityBasis));
                 }
                 let store = store
@@ -1210,6 +1251,7 @@ impl ObservationBuilder {
             fact_metadata: self.fact_metadata,
             local: self.local,
             identity_basis: basis,
+            semantic_comparison,
         })
     }
 
@@ -1347,7 +1389,19 @@ impl CanonicalObservationV2 {
     pub fn identity_basis(&self) -> &IdentityBasis {
         &self.identity_basis
     }
+    pub fn semantic_comparison(&self) -> &SemanticComparison {
+        &self.semantic_comparison
+    }
     pub fn validate(&self) -> Result<(), ObservationError> {
+        let policy = match &self.identity_basis {
+            IdentityBasis::PersistedAssignment {
+                fingerprint_key_epoch_ref,
+                ..
+            } => FingerprintPolicy::PersistedAssignment {
+                allow_unkeyed: fingerprint_key_epoch_ref == "unavailable",
+            },
+            IdentityBasis::StableSourceCoordinate { .. } => FingerprintPolicy::StableCoordinate,
+        };
         Self::builder_from(self).validate_shape().and_then(|_| {
             validate_fingerprints(
                 &self.body,
@@ -1355,7 +1409,7 @@ impl CanonicalObservationV2 {
                 &self.fact_metadata,
                 self.local.as_ref(),
                 &self.source,
-                self.identity_basis.fingerprint_key_epoch_ref() == "unavailable",
+                policy,
             )
             .map(|_| ())
         })
@@ -1515,36 +1569,48 @@ fn validate_correlation_ids(value: &CorrelationIds) -> Result<(), ObservationErr
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum FingerprintPolicy {
+    StableCoordinate,
+    PersistedAssignment { allow_unkeyed: bool },
+}
+
+struct FingerprintState {
+    epoch: String,
+    comparable: bool,
+}
+
 fn validate_fingerprints(
     body: &ObservationBody,
     facets: &BTreeMap<String, SemanticFacet>,
     metadata: &BTreeMap<String, FactMetadata>,
     local: Option<&LocalEvidence>,
     source: &SourceProvenance,
-    allow_unkeyed: bool,
-) -> Result<String, ObservationError> {
+    policy: FingerprintPolicy,
+) -> Result<FingerprintState, ObservationError> {
+    let allow_missing = match policy {
+        FingerprintPolicy::StableCoordinate => true,
+        FingerprintPolicy::PersistedAssignment { allow_unkeyed } => allow_unkeyed,
+    };
     let mut epochs = Vec::new();
+    let mut comparable = true;
     for (path, value) in body.semantic_fields() {
         let item = metadata
             .get(&path)
             .ok_or_else(|| ObservationError::new(ValidationCode::MetadataCoverage))?;
-        epochs.extend(validate_value_fingerprints(
-            &value,
-            path.as_str(),
-            item,
-            allow_unkeyed,
-        )?);
+        let (value_epochs, value_comparable) =
+            validate_value_fingerprints(&value, path.as_str(), item, allow_missing)?;
+        epochs.extend(value_epochs);
+        comparable &= value_comparable;
     }
     for (path, facet) in facets {
         let item = metadata
             .get(path)
             .ok_or_else(|| ObservationError::new(ValidationCode::MetadataCoverage))?;
-        epochs.extend(validate_value_fingerprints(
-            facet.value(),
-            path,
-            item,
-            allow_unkeyed,
-        )?);
+        let (value_epochs, value_comparable) =
+            validate_value_fingerprints(facet.value(), path, item, allow_missing)?;
+        epochs.extend(value_epochs);
+        comparable &= value_comparable;
     }
     if let Some(local) = local {
         for (key, value) in local.structured_values() {
@@ -1559,8 +1625,10 @@ fn validate_fingerprints(
                         return Err(ObservationError::new(ValidationCode::InvalidFingerprint));
                     }
                     epochs.push(fingerprint.key_epoch_ref().to_owned());
-                } else if !allow_unkeyed {
+                } else if !allow_missing {
                     return Err(ObservationError::new(ValidationCode::ReplayUnverifiable));
+                } else {
+                    comparable = false;
                 }
             }
         }
@@ -1573,23 +1641,37 @@ fn validate_fingerprints(
     if epochs.len() > 1 {
         return Err(ObservationError::new(ValidationCode::InvalidFingerprint));
     }
-    Ok(epochs.into_iter().next().unwrap_or_else(|| {
-        if allow_unkeyed {
-            "unavailable".to_owned()
-        } else {
-            "none".to_owned()
+    let epoch = epochs
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "none".to_owned());
+    let assignment_unkeyed = matches!(
+        policy,
+        FingerprintPolicy::PersistedAssignment {
+            allow_unkeyed: true
         }
-    }))
+    );
+    if !comparable || (assignment_unkeyed && epoch == "none") {
+        Ok(FingerprintState {
+            epoch: "unavailable".to_owned(),
+            comparable: false,
+        })
+    } else {
+        Ok(FingerprintState {
+            epoch,
+            comparable: true,
+        })
+    }
 }
 
 fn validate_value_fingerprints(
     value: &JsonValue,
     path: &str,
     metadata: &FactMetadata,
-    allow_unkeyed: bool,
-) -> Result<Vec<String>, ObservationError> {
+    allow_missing: bool,
+) -> Result<(Vec<String>, bool), ObservationError> {
     if metadata.sensitivity() == Sensitivity::Normal {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), true));
     }
     let fingerprints = metadata.keyed_fingerprints();
     if path == "message.content_parts" {
@@ -1597,8 +1679,8 @@ fn validate_value_fingerprints(
             return Err(ObservationError::new(ValidationCode::InvalidFingerprint));
         };
         if fingerprints.is_empty() {
-            if allow_unkeyed {
-                return Ok(Vec::new());
+            if allow_missing {
+                return Ok((Vec::new(), false));
             }
             return Err(ObservationError::new(ValidationCode::ReplayUnverifiable));
         }
@@ -1614,18 +1696,18 @@ fn validate_value_fingerprints(
                 .ok_or_else(|| ObservationError::new(ValidationCode::InvalidFingerprint))?;
             epochs.push(fingerprint.key_epoch_ref().to_owned());
         }
-        return Ok(epochs);
+        return Ok((epochs, true));
     }
     if fingerprints.is_empty() {
-        if allow_unkeyed {
-            return Ok(Vec::new());
+        if allow_missing {
+            return Ok((Vec::new(), false));
         }
         return Err(ObservationError::new(ValidationCode::ReplayUnverifiable));
     }
     if fingerprints.len() != 1 || fingerprints[0].location() != path {
         return Err(ObservationError::new(ValidationCode::InvalidFingerprint));
     }
-    Ok(vec![fingerprints[0].key_epoch_ref().to_owned()])
+    Ok((vec![fingerprints[0].key_epoch_ref().to_owned()], true))
 }
 
 pub(crate) fn other_classification_allowed(kind: &str, classification: &str) -> bool {

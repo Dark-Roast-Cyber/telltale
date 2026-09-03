@@ -2,14 +2,13 @@
 
 use std::fmt;
 
-use serde_json::Value;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
-    ContentPartKind, CorrelationId, CorrelationIds, CorrelationOrigin, FactMetadata,
-    FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
-    ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
-    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation,
+    ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
+    IngestionMode, JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
+    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
+    SourceTimestamp, ToolObservation,
 };
 use telltale_schema::source::Source;
 
@@ -491,9 +490,9 @@ fn tool_call_id(
         _ => None,
     }
     .ok_or_else(|| mapping("missing_tool_id", "tool block has no source call id"))?;
-    Ok(Some(CorrelationIds::new().with_call_id(
-        CorrelationId::new(value, CorrelationOrigin::SourceReported)?,
-    )))
+    Ok(Some(
+        CorrelationIds::new().with_call_id(CorrelationId::source_reported(value)?),
+    ))
 }
 
 fn common_builder(
@@ -504,13 +503,17 @@ fn common_builder(
     correlation: Option<CorrelationIds>,
     child_ordinal: usize,
 ) -> Result<ObservationBuilder, ClaudeCanonicalError> {
-    let source_provenance = SourceProvenance::new(
+    let mut source_provenance = SourceProvenance::new(
         IngestionMode::SessionStore,
         "claude_code",
         "claude.projects",
         Fidelity::PartialStructured,
     )?
     .with_source_sequence(record.source_sequence);
+    if let Some(session_id) = &record.session_id {
+        source_provenance =
+            source_provenance.with_identity_source_sequence(session_id, record.source_sequence)?;
+    }
     let mut builder = CanonicalObservationV2::builder(
         body,
         stage,
@@ -520,10 +523,7 @@ fn common_builder(
     .sequence(record.source_sequence)
     .capability_context(capabilities());
     if let Some(session_id) = &record.session_id {
-        builder = builder.session_id(CorrelationId::new(
-            session_id,
-            CorrelationOrigin::SourceReported,
-        )?);
+        builder = builder.session_id(CorrelationId::source_reported(session_id)?);
     }
     if let Some(correlation) = correlation {
         builder = builder.correlation(correlation);
@@ -555,10 +555,14 @@ fn normal_reported() -> Result<FactMetadata, ClaudeCanonicalError> {
 }
 
 fn normal(provenance: FactProvenance) -> Result<FactMetadata, ClaudeCanonicalError> {
-    Ok(FactMetadata::new(
-        provenance,
-        telltale_schema::observation::Sensitivity::Normal,
-    )?)
+    Ok(match provenance {
+        FactProvenance::Reported => FactMetadata::reported()?,
+        FactProvenance::Parsed => FactMetadata::parsed()?,
+        _ => FactMetadata::new(
+            provenance,
+            telltale_schema::observation::Sensitivity::Normal,
+        )?,
+    })
 }
 
 fn resource_path(value: &JsonValue) -> Option<&str> {
@@ -571,37 +575,8 @@ fn resource_path(value: &JsonValue) -> Option<&str> {
     }
 }
 
-fn value_to_json(value: &Value) -> Result<JsonValue, ClaudeCanonicalError> {
-    match value {
-        Value::Null => Ok(JsonValue::Null),
-        Value::Bool(value) => Ok(JsonValue::Bool(*value)),
-        Value::Number(value) => {
-            if let Some(value) = value.as_i64() {
-                Ok(JsonValue::Integer(value))
-            } else if let Some(value) = value.as_u64() {
-                Ok(JsonValue::Unsigned(value))
-            } else {
-                let value = value.as_f64().ok_or_else(|| {
-                    mapping(
-                        "non_finite_number",
-                        "Claude number cannot be represented safely",
-                    )
-                })?;
-                Ok(JsonValue::number(value)?)
-            }
-        }
-        Value::String(value) => Ok(JsonValue::string(value)),
-        Value::Array(values) => values
-            .iter()
-            .map(value_to_json)
-            .collect::<Result<Vec<_>, _>>()
-            .map(JsonValue::Array),
-        Value::Object(values) => values
-            .iter()
-            .map(|(key, value)| Ok((key.clone(), value_to_json(value)?)))
-            .collect::<Result<Vec<_>, ClaudeCanonicalError>>()
-            .and_then(|values| Ok(JsonValue::object(values)?)),
-    }
+fn value_to_json(value: &serde_json::Value) -> Result<JsonValue, ClaudeCanonicalError> {
+    Ok(JsonValue::try_from_source_value(value)?)
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> ClaudeCanonicalError {
@@ -614,9 +589,8 @@ mod tests {
 
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::observation::{
-        CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IdentityCoordinateKind,
-        IngestionMode, JsonValue, MessageRole, ObservationBody, ObservationFamily,
-        ObservationStage, ObservedAt,
+        CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
+        MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
     };
     use telltale_schema::source::Source;
     use tempfile::tempdir;
@@ -644,64 +618,17 @@ mod tests {
     }
 
     #[test]
-    fn basic_conversation_uses_source_time_but_not_filename_session() {
-        let first = project("session_stores/claude/projects/project-a/session-a.jsonl");
-        let second = project("session_stores/claude/projects/project-a/session-a.jsonl");
-
-        assert_eq!(first.len(), 2);
-        assert_eq!(
-            first
-                .iter()
-                .map(|observation| observation.kind())
-                .collect::<Vec<_>>(),
-            vec![ObservationFamily::Message, ObservationFamily::Message]
-        );
-        assert_eq!(first[0].stage(), ObservationStage::MessageObserved);
-        assert_eq!(first[1].stage(), ObservationStage::MessageObserved);
-        assert_eq!(first[0].session_id(), None);
-        assert_eq!(first[1].session_id(), None);
-        assert_eq!(
-            first[0].occurred_at().map(|value| value.as_str()),
-            Some("2026-04-27T12:00:00Z")
-        );
-        assert_eq!(
-            first[1].occurred_at().map(|value| value.as_str()),
-            Some("2026-04-27T12:00:01Z")
-        );
-        assert_eq!(first[0].observed_at().as_str(), OBSERVED_AT);
-        assert_ne!(
-            first[0].observed_at().as_str(),
-            first[0].occurred_at().unwrap().as_str()
-        );
-        assert_eq!(
-            first
-                .iter()
-                .map(|observation| observation.observation_id())
-                .collect::<Vec<_>>(),
-            second
-                .iter()
-                .map(|observation| observation.observation_id())
-                .collect::<Vec<_>>()
-        );
-
-        let ObservationBody::Message(message) = first[0].body() else {
-            panic!("expected user message")
-        };
-        assert_eq!(message.role(), Some(MessageRole::User));
-        let ObservationBody::Message(message) = first[1].body() else {
-            panic!("expected assistant message")
-        };
-        assert_eq!(message.role(), Some(MessageRole::Assistant));
-        assert_eq!(first[0].source().source_sequence(), Some(0));
-        assert_eq!(first[1].source().source_sequence(), Some(1));
-        assert_eq!(
-            first[0].identity_basis().coordinate().unwrap().0,
-            IdentityCoordinateKind::SourceSequence
-        );
-        assert_eq!(
-            first[0].identity_basis().domain(),
-            "claude_code:claude.projects:unversioned"
-        );
+    fn basic_conversation_without_source_session_fails_v2_but_keeps_legacy_fallback() {
+        let source = fixture_source("session_stores/claude/projects/project-a/session-a.jsonl");
+        let error = project_claude_canonical_observations(
+            &source,
+            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "replay_unverifiable");
+        let legacy = parse_source_records(&source).expect("legacy projection");
+        assert_eq!(legacy.len(), 2);
+        assert!(legacy.iter().all(|record| record.session_id == "session-a"));
     }
 
     #[test]
@@ -772,6 +699,17 @@ mod tests {
         assert_eq!(observations[1].identity_basis().child_ordinal(), 0);
         assert_eq!(observations[2].identity_basis().child_ordinal(), 1);
         assert_eq!(observations[3].identity_basis().child_ordinal(), 0);
+        assert_eq!(
+            observations[1].identity_basis().domain(),
+            "claude_code:claude.projects"
+        );
+        assert!(matches!(
+            observations[1].identity_basis().coordinate().unwrap().1,
+            telltale_schema::observation::IdentityCoordinateValue::SourceSequence {
+                namespace,
+                ordinal: 1
+            } if namespace == "claude-tool-use"
+        ));
 
         let ObservationBody::Tool(request) = observations[2].body() else {
             panic!("expected tool request")
@@ -816,6 +754,91 @@ mod tests {
     }
 
     #[test]
+    fn scoped_identity_is_stable_across_artifact_moves_and_detects_content_change() {
+        let contents =
+            r#"{"type":"user","sessionId":"synthetic-session","content":"Synthetic message."}"#;
+        let first_directory = tempdir().unwrap();
+        let second_directory = tempdir().unwrap();
+        let first_path = first_directory.path().join("first-name.jsonl");
+        let second_path = second_directory.path().join("moved-name.jsonl");
+        fs::write(&first_path, contents).unwrap();
+        fs::write(&second_path, contents).unwrap();
+        let source = |path| Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".to_owned(),
+            path,
+        };
+        let first = project_claude_canonical_observations(
+            &source(first_path),
+            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        let moved = project_claude_canonical_observations(
+            &source(second_path),
+            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(first[0].observation_id(), moved[0].observation_id());
+        assert_eq!(first[0].session_id().unwrap().value(), "synthetic-session");
+
+        let changed_directory = tempdir().unwrap();
+        let changed_path = changed_directory.path().join("changed.jsonl");
+        fs::write(
+            &changed_path,
+            r#"{"type":"user","sessionId":"synthetic-session","content":"Synthetic changed message."}"#,
+        )
+        .unwrap();
+        let changed = project_claude_canonical_observations(
+            &source(changed_path),
+            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(first[0].observation_id(), changed[0].observation_id());
+        assert_eq!(
+            first[0]
+                .semantic_comparison()
+                .compare(changed[0].semantic_comparison()),
+            telltale_schema::observation::SemanticReplayVerdict::Mutated
+        );
+    }
+
+    #[test]
+    fn different_source_sessions_scope_local_ordinals() {
+        let first_directory = tempdir().unwrap();
+        let second_directory = tempdir().unwrap();
+        let first_path = first_directory.path().join("session-a.jsonl");
+        let second_path = second_directory.path().join("session-b.jsonl");
+        fs::write(
+            &first_path,
+            r#"{"type":"user","sessionId":"synthetic-session-a","content":"Synthetic message."}"#,
+        )
+        .unwrap();
+        fs::write(
+            &second_path,
+            r#"{"type":"user","sessionId":"synthetic-session-b","content":"Synthetic message."}"#,
+        )
+        .unwrap();
+        let source = |path| Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".to_owned(),
+            path,
+        };
+        let first = project_claude_canonical_observations(
+            &source(first_path),
+            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        let second = project_claude_canonical_observations(
+            &source(second_path),
+            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        assert_ne!(first[0].observation_id(), second[0].observation_id());
+    }
+
+    #[test]
     fn additional_tool_result_fixture_keeps_legacy_detection_evidence_linked() {
         let observations =
             project("session_stores/claude/projects/project-c/uc001-claude-tool-result.jsonl");
@@ -841,7 +864,7 @@ mod tests {
         let path = directory.path().join("assistant-tool-result.jsonl");
         fs::write(
             &path,
-            br#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Synthetic assistant response."},{"type":"tool_result","tool_use_id":"toolu_assistant_result","content":"Synthetic tool result."}]}}"#,
+            br#"{"type":"assistant","sessionId":"synthetic-assistant","message":{"role":"assistant","content":[{"type":"text","text":"Synthetic assistant response."},{"type":"tool_result","tool_use_id":"toolu_assistant_result","content":"Synthetic tool result."}]}}"#,
         )
         .unwrap();
         let source = Source {

@@ -16,6 +16,35 @@ fn source() -> SourceProvenance {
     .unwrap()
 }
 
+fn scoped_source(namespace: &str) -> SourceProvenance {
+    SourceProvenance::new(
+        IngestionMode::SessionStore,
+        "synthetic",
+        "fixture",
+        Fidelity::FullNative,
+    )
+    .unwrap()
+    .with_identity_source_sequence(namespace, 0)
+    .unwrap()
+}
+
+fn scoped_message(
+    source: SourceProvenance,
+    content: &str,
+) -> Result<CanonicalObservationV2, ObservationError> {
+    CanonicalObservationV2::builder(
+        ObservationBody::Message(
+            MessageObservation::new(MessageRole::User).with_content(JsonValue::string(content)),
+        ),
+        ObservationStage::MessageObserved,
+        ObservedAt::new(OBSERVED_AT).unwrap(),
+        source,
+    )
+    .fact_metadata("message.role", FactMetadata::reported().unwrap())
+    .fact_metadata("message.content", FactMetadata::reported().unwrap())
+    .build()
+}
+
 fn metadata(provenance: FactProvenance) -> FactMetadata {
     FactMetadata::new(provenance, Sensitivity::Normal).unwrap()
 }
@@ -312,7 +341,13 @@ fn identity_is_deterministic_ordered_and_child_specific() {
     .fact_metadata("message.content", metadata(FactProvenance::Reported))
     .build()
     .unwrap();
-    assert_ne!(first.observation_id(), semantic_changed.observation_id());
+    assert_eq!(first.observation_id(), semantic_changed.observation_id());
+    assert_eq!(
+        first
+            .semantic_comparison()
+            .compare(semantic_changed.semantic_comparison()),
+        SemanticReplayVerdict::Mutated
+    );
 
     let ordered = SourceProvenance::new(
         IngestionMode::Harness,
@@ -344,6 +379,214 @@ fn identity_is_deterministic_ordered_and_child_specific() {
     .build()
     .unwrap();
     assert_eq!(one.observation_id(), two.observation_id());
+}
+
+#[test]
+fn stable_identity_is_coordinate_only_and_comparison_detects_mutation() {
+    let first = scoped_message(scoped_source("session-a"), "synthetic-first").unwrap();
+    let changed = scoped_message(scoped_source("session-a"), "synthetic-second").unwrap();
+    assert_eq!(
+        first
+            .semantic_comparison()
+            .compare(first.semantic_comparison()),
+        SemanticReplayVerdict::Equivalent
+    );
+    assert_eq!(first.observation_id(), changed.observation_id());
+    assert_eq!(
+        first
+            .semantic_comparison()
+            .compare(changed.semantic_comparison()),
+        SemanticReplayVerdict::Mutated
+    );
+
+    let versioned_source = scoped_source("session-a")
+        .with_adapter_version("fixture-v2")
+        .unwrap();
+    let versioned = scoped_message(versioned_source, "synthetic-first").unwrap();
+    assert_eq!(first.observation_id(), versioned.observation_id());
+}
+
+#[test]
+fn fingerprint_epoch_changes_are_incomparable_but_not_identity_changes() {
+    let secret = JsonValue::string("synthetic-secret-marker");
+    let source = scoped_source("session-a")
+        .with_producer_identity_key_ref(
+            LocalReference::new("producerkey:v2:synthetic-1", "identity_key").unwrap(),
+        )
+        .unwrap();
+    let build_secret = |epoch: &str| {
+        let fingerprint = KeyedFingerprint::compute(
+            "tool.arguments",
+            Sensitivity::Secret,
+            &secret,
+            epoch,
+            PRODUCER_KEY,
+        )
+        .unwrap();
+        CanonicalObservationV2::builder(
+            ObservationBody::Tool(
+                ToolObservation::new()
+                    .with_name("shell")
+                    .unwrap()
+                    .with_arguments(secret.clone()),
+            ),
+            ObservationStage::ToolRequested,
+            ObservedAt::new(OBSERVED_AT).unwrap(),
+            source.clone(),
+        )
+        .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+        .fact_metadata(
+            "tool.arguments",
+            FactMetadata::new(FactProvenance::Reported, Sensitivity::Secret)
+                .unwrap()
+                .with_keyed_fingerprint(fingerprint)
+                .unwrap(),
+        )
+        .build()
+        .unwrap()
+    };
+    let first = build_secret("keyepoch:v2:synthetic-1");
+    let rotated = build_secret("keyepoch:v2:synthetic-2");
+    assert_eq!(first.observation_id(), rotated.observation_id());
+    assert_eq!(
+        first
+            .semantic_comparison()
+            .compare(rotated.semantic_comparison()),
+        SemanticReplayVerdict::Incomparable
+    );
+}
+
+#[test]
+fn scoped_coordinates_are_required_and_namespaced() {
+    let first = scoped_message(scoped_source("session-a"), "synthetic").unwrap();
+    let second = scoped_message(scoped_source("session-b"), "synthetic").unwrap();
+    assert_ne!(first.observation_id(), second.observation_id());
+    let coordinate = first.identity_basis().coordinate().unwrap().1;
+    assert!(matches!(
+        coordinate,
+        IdentityCoordinateValue::SourceSequence {
+            namespace,
+            ordinal: 0
+        } if namespace == "session-a"
+    ));
+    assert_eq!(
+        canonical_identity_json(
+            &IdentityCoordinateValue::SourceSequence {
+                namespace: "session-a".to_owned(),
+                ordinal: 0,
+            }
+            .as_json()
+        )
+        .unwrap(),
+        br#"["session","session-a",0]"#
+    );
+
+    let bare_source = SourceProvenance::new(
+        IngestionMode::SessionStore,
+        "synthetic",
+        "fixture",
+        Fidelity::FullNative,
+    )
+    .unwrap()
+    .with_source_sequence(0);
+    assert_eq!(
+        scoped_message(bare_source, "synthetic").unwrap_err().code(),
+        "replay_unverifiable"
+    );
+    assert_eq!(
+        SourceProvenance::new(
+            IngestionMode::SessionStore,
+            "synthetic",
+            "fixture",
+            Fidelity::FullNative,
+        )
+        .unwrap()
+        .with_identity_source_sequence("../session", 0)
+        .unwrap_err()
+        .code(),
+        "path_derived_id"
+    );
+    let bare_offset = SourceProvenance::new(
+        IngestionMode::SessionStore,
+        "synthetic",
+        "fixture",
+        Fidelity::FullNative,
+    )
+    .unwrap()
+    .with_offset("row:0")
+    .unwrap();
+    assert_eq!(
+        scoped_message(bare_offset, "synthetic").unwrap_err().code(),
+        "replay_unverifiable"
+    );
+    let scoped_offset = SourceProvenance::new(
+        IngestionMode::SessionStore,
+        "synthetic",
+        "fixture",
+        Fidelity::FullNative,
+    )
+    .unwrap()
+    .with_identity_offset("artifact", "row:0")
+    .unwrap();
+    assert_eq!(
+        scoped_message(scoped_offset, "synthetic")
+            .unwrap()
+            .identity_basis()
+            .coordinate()
+            .unwrap()
+            .0,
+        IdentityCoordinateKind::Offset
+    );
+}
+
+#[test]
+fn stable_sensitive_identity_can_be_unavailable_without_a_key() {
+    let observation = CanonicalObservationV2::builder(
+        ObservationBody::Tool(
+            ToolObservation::new()
+                .with_name("shell")
+                .unwrap()
+                .with_arguments(JsonValue::string("synthetic-secret-marker")),
+        ),
+        ObservationStage::ToolRequested,
+        ObservedAt::new(OBSERVED_AT).unwrap(),
+        scoped_source("session-a"),
+    )
+    .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+    .fact_metadata(
+        "tool.arguments",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Secret).unwrap(),
+    )
+    .build()
+    .unwrap();
+    assert!(matches!(
+        observation.semantic_comparison(),
+        SemanticComparison::Unavailable
+    ));
+    assert!(
+        !observation
+            .observation_id()
+            .contains("synthetic-secret-marker")
+    );
+    assert_eq!(
+        observation
+            .semantic_comparison()
+            .compare(observation.semantic_comparison()),
+        SemanticReplayVerdict::Incomparable
+    );
+}
+
+#[test]
+fn comparison_debug_is_redacted() {
+    let observation =
+        scoped_message(scoped_source("session-a"), "synthetic-secret-marker").unwrap();
+    let debug = format!("{:?}", observation.semantic_comparison());
+    let display = observation.semantic_comparison().to_string();
+    assert!(!debug.contains("sha256:"));
+    assert!(!debug.contains("synthetic-secret-marker"));
+    assert!(!display.contains("sha256:"));
+    assert!(!display.contains("synthetic-secret-marker"));
+    assert!(!format!("{observation:?}").contains("synthetic-secret-marker"));
 }
 
 #[test]
@@ -405,8 +648,72 @@ fn canonical_identity_encoding_normalizes_unicode_and_sorts_objects() {
     .unwrap();
     assert_eq!(
         fixture.observation_id(),
-        "obs:v2:sha256:0725791c7bb678b938772a1ac10bcf828289ac30bb243f71eed6a10df90d07cf"
+        "obs:v2:sha256:81ad3e8e171654579fde3de76a7a9f56bddefa04322928035445932410c4a21c"
     );
+}
+
+#[test]
+fn source_value_and_provenance_helpers_preserve_schema_ownership() {
+    let value = JsonValue::try_from_source_value(&serde_json::json!({
+        "number": 7,
+        "nested": [true, null, "é"],
+    }))
+    .unwrap();
+    assert_eq!(
+        value,
+        JsonValue::object([
+            ("number".to_owned(), JsonValue::Integer(7)),
+            (
+                "nested".to_owned(),
+                JsonValue::array(vec![
+                    JsonValue::Bool(true),
+                    JsonValue::Null,
+                    JsonValue::string("é"),
+                ]),
+            ),
+        ])
+        .unwrap()
+    );
+    assert_eq!(
+        FactMetadata::reported().unwrap().provenance(),
+        FactProvenance::Reported
+    );
+    assert_eq!(
+        FactMetadata::parsed().unwrap().provenance(),
+        FactProvenance::Parsed
+    );
+    assert_eq!(
+        CorrelationId::source_reported("synthetic-session")
+            .unwrap()
+            .origin(),
+        CorrelationOrigin::SourceReported
+    );
+}
+
+#[test]
+fn source_value_conversion_rejects_oversized_strings_without_payload_errors() {
+    let payload = "S".repeat(LOCAL_MAX_STRING_BYTES + 1);
+    let error =
+        JsonValue::try_from_source_value(&serde_json::Value::String(payload.clone())).unwrap_err();
+    assert_eq!(error.code(), "unbounded_value");
+    assert!(!error.to_string().contains(&payload));
+}
+
+#[test]
+fn source_value_conversion_rejects_too_deep_arrays() {
+    let mut value = serde_json::Value::Null;
+    for _ in 0..LOCAL_MAX_DEPTH {
+        value = serde_json::Value::Array(vec![value]);
+    }
+    let error = JsonValue::try_from_source_value(&value).unwrap_err();
+    assert_eq!(error.code(), "unbounded_value");
+}
+
+#[test]
+fn source_value_conversion_rejects_oversized_arrays() {
+    let value = serde_json::Value::Array(vec![serde_json::Value::Null; LOCAL_MAX_ARRAY_ITEMS + 1]);
+    let error = JsonValue::try_from_source_value(&value).unwrap_err();
+    assert_eq!(error.code(), "unbounded_value");
 }
 
 #[test]
@@ -446,10 +753,10 @@ fn sensitive_semantics_use_keyed_digest_not_raw_value() {
             .observation_id()
             .contains("synthetic-secret-marker")
     );
-    assert_eq!(
-        observation.identity_basis().fingerprint_key_epoch_ref(),
-        "keyepoch:v2:synthetic-1"
-    );
+    assert!(matches!(
+        observation.semantic_comparison(),
+        SemanticComparison::Comparable { .. }
+    ));
 }
 
 #[test]
@@ -564,7 +871,7 @@ fn no_coordinate_has_no_random_fallback_and_assignment_replay_is_protected() {
     .unwrap();
     let assignment = LocalReference::new("assignment-ref-1", "assignment").unwrap();
     let basis = IdentityBasis::persisted(
-        "synthetic:assignment:unversioned",
+        "synthetic:assignment",
         "replay-key-1",
         assignment.clone(),
         0,
@@ -636,7 +943,7 @@ fn no_coordinate_has_no_random_fallback_and_assignment_replay_is_protected() {
     )
     .identity_basis(
         IdentityBasis::persisted(
-            "synthetic:assignment:unversioned",
+            "synthetic:assignment",
             "replay-key-1",
             LocalReference::new("assignment-ref-1", "assignment").unwrap(),
             0,

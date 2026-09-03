@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
@@ -28,15 +29,24 @@ pub enum IdentityCoordinateKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityCoordinateValue {
     NativeId(String),
-    SourceSequence(u64),
-    Offset(String),
+    SourceSequence { namespace: String, ordinal: u64 },
+    Offset { namespace: String, value: String },
 }
 
 impl IdentityCoordinateValue {
     pub(crate) fn as_json(&self) -> JsonValue {
         match self {
-            Self::NativeId(value) | Self::Offset(value) => JsonValue::string(value),
-            Self::SourceSequence(value) => JsonValue::Unsigned(*value),
+            Self::NativeId(value) => JsonValue::string(value),
+            Self::SourceSequence { namespace, ordinal } => JsonValue::Array(vec![
+                JsonValue::string("session"),
+                JsonValue::string(namespace),
+                JsonValue::Unsigned(*ordinal),
+            ]),
+            Self::Offset { namespace, value } => JsonValue::Array(vec![
+                JsonValue::string("offset"),
+                JsonValue::string(namespace),
+                JsonValue::string(value),
+            ]),
         }
     }
 }
@@ -57,9 +67,7 @@ pub enum IdentityBasis {
         domain: String,
         coordinate_kind: IdentityCoordinateKind,
         coordinate_value: IdentityCoordinateValue,
-        semantic_fingerprint: String,
         child_ordinal: u32,
-        fingerprint_key_epoch_ref: String,
     },
     PersistedAssignment {
         domain: String,
@@ -75,27 +83,26 @@ impl IdentityBasis {
         domain: impl AsRef<str>,
         coordinate_kind: IdentityCoordinateKind,
         coordinate_value: IdentityCoordinateValue,
-        semantic_fingerprint: impl AsRef<str>,
         child_ordinal: u32,
-        fingerprint_key_epoch_ref: impl AsRef<str>,
     ) -> Result<Self, ObservationError> {
         let domain =
             super::value::non_empty(domain.as_ref(), ValidationCode::InvalidIdentityBasis)?;
-        let semantic_fingerprint = nfc(semantic_fingerprint.as_ref());
-        if !valid_semantic_fingerprint(&semantic_fingerprint) {
+        let value_kind = match &coordinate_value {
+            IdentityCoordinateValue::NativeId(_) => IdentityCoordinateKind::NativeId,
+            IdentityCoordinateValue::SourceSequence { .. } => {
+                IdentityCoordinateKind::SourceSequence
+            }
+            IdentityCoordinateValue::Offset { .. } => IdentityCoordinateKind::Offset,
+        };
+        if value_kind != coordinate_kind {
             return Err(ObservationError::new(ValidationCode::InvalidIdentityBasis));
         }
-        let fingerprint_key_epoch_ref = opaque_text(
-            fingerprint_key_epoch_ref.as_ref(),
-            ValidationCode::InvalidIdentityBasis,
-        )?;
+        validate_coordinate(&coordinate_value)?;
         Ok(Self::StableSourceCoordinate {
             domain,
             coordinate_kind,
             coordinate_value,
-            semantic_fingerprint,
             child_ordinal,
-            fingerprint_key_epoch_ref,
         })
     }
 
@@ -132,16 +139,13 @@ impl IdentityBasis {
         }
     }
 
-    pub fn fingerprint_key_epoch_ref(&self) -> &str {
+    pub fn fingerprint_key_epoch_ref(&self) -> Option<&str> {
         match self {
-            Self::StableSourceCoordinate {
+            Self::StableSourceCoordinate { .. } => None,
+            Self::PersistedAssignment {
                 fingerprint_key_epoch_ref,
                 ..
-            }
-            | Self::PersistedAssignment {
-                fingerprint_key_epoch_ref,
-                ..
-            } => fingerprint_key_epoch_ref,
+            } => Some(fingerprint_key_epoch_ref),
         }
     }
 
@@ -176,22 +180,83 @@ impl IdentityBasis {
             Self::PersistedAssignment { assignment_ref, .. } => Some(assignment_ref),
         }
     }
-
-    pub fn semantic_fingerprint(&self) -> Option<&str> {
-        match self {
-            Self::StableSourceCoordinate {
-                semantic_fingerprint,
-                ..
-            } => Some(semantic_fingerprint),
-            Self::PersistedAssignment { .. } => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityBasisKind {
     StableSourceCoordinate,
     PersistedAssignment,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum SemanticComparison {
+    Comparable {
+        fingerprint: String,
+        key_epoch_ref: String,
+    },
+    Unavailable,
+}
+
+impl fmt::Debug for SemanticComparison {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Comparable { .. } => formatter.write_str("SemanticComparison::Comparable { .. }"),
+            Self::Unavailable => formatter.write_str("SemanticComparison::Unavailable"),
+        }
+    }
+}
+
+impl fmt::Display for SemanticComparison {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Comparable { .. } => formatter.write_str("comparable"),
+            Self::Unavailable => formatter.write_str("unavailable"),
+        }
+    }
+}
+
+impl SemanticComparison {
+    pub(crate) fn comparable(fingerprint: String, key_epoch_ref: String) -> Self {
+        Self::Comparable {
+            fingerprint,
+            key_epoch_ref,
+        }
+    }
+
+    pub fn compare(&self, other: &Self) -> SemanticReplayVerdict {
+        match (self, other) {
+            (
+                Self::Comparable {
+                    fingerprint: left_fingerprint,
+                    key_epoch_ref: left_epoch,
+                },
+                Self::Comparable {
+                    fingerprint: right_fingerprint,
+                    key_epoch_ref: right_epoch,
+                },
+            ) if left_epoch == right_epoch && left_fingerprint == right_fingerprint => {
+                SemanticReplayVerdict::Equivalent
+            }
+            (
+                Self::Comparable {
+                    key_epoch_ref: left_epoch,
+                    ..
+                },
+                Self::Comparable {
+                    key_epoch_ref: right_epoch,
+                    ..
+                },
+            ) if left_epoch == right_epoch => SemanticReplayVerdict::Mutated,
+            _ => SemanticReplayVerdict::Incomparable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticReplayVerdict {
+    Equivalent,
+    Mutated,
+    Incomparable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,6 +340,22 @@ pub fn canonical_identity_json(value: &JsonValue) -> Result<Vec<u8>, Observation
     let mut output = Vec::new();
     encode_json(value, &mut output)?;
     Ok(output)
+}
+
+fn validate_coordinate(value: &IdentityCoordinateValue) -> Result<(), ObservationError> {
+    match value {
+        IdentityCoordinateValue::NativeId(value) => {
+            opaque_text(value, ValidationCode::PathDerivedId)?;
+        }
+        IdentityCoordinateValue::SourceSequence { namespace, .. } => {
+            opaque_text(namespace, ValidationCode::PathDerivedId)?;
+        }
+        IdentityCoordinateValue::Offset { namespace, value } => {
+            opaque_text(namespace, ValidationCode::PathDerivedId)?;
+            opaque_text(value, ValidationCode::PathDerivedId)?;
+        }
+    }
+    Ok(())
 }
 
 fn encode_json(value: &JsonValue, output: &mut Vec<u8>) -> Result<(), ObservationError> {
@@ -375,28 +456,20 @@ pub(crate) fn derive_stable_id(
     source: &SourceProvenance,
     family: ObservationFamily,
     stage: ObservationStage,
-    semantic_fingerprint: &str,
     child_ordinal: u32,
-    fingerprint_key_epoch_ref: &str,
 ) -> Result<String, ObservationError> {
     let (coordinate_kind, coordinate_value) = source
         .selected_coordinate()
         .ok_or_else(|| ObservationError::new(ValidationCode::ReplayUnverifiable))?;
     let tuple = JsonValue::Array(vec![
-        JsonValue::string("telltale:canonical-observation-v2"),
-        JsonValue::Integer(1),
+        JsonValue::string("telltale:canonical-observation-coordinate-id-v1"),
         JsonValue::string(source.adapter_type()),
         JsonValue::string(source.adapter_id()),
-        source
-            .adapter_version()
-            .map_or(JsonValue::Null, JsonValue::string),
         JsonValue::string(coordinate_kind.as_str()),
         coordinate_value.as_json(),
         JsonValue::string(family.as_str()),
         JsonValue::string(stage.as_str()),
-        JsonValue::string(semantic_fingerprint),
         JsonValue::Unsigned(child_ordinal as u64),
-        JsonValue::string(fingerprint_key_epoch_ref),
     ]);
     let digest = Sha256::digest(canonical_identity_json(&tuple)?);
     Ok(format!("{OBSERVATION_ID_PREFIX}{:x}", digest))
@@ -529,10 +602,6 @@ pub fn valid_observation_id(value: &str) -> bool {
         && value[OBSERVATION_ID_PREFIX.len()..]
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-}
-
-fn valid_semantic_fingerprint(value: &str) -> bool {
-    valid_hex_digest(value, SEMANTIC_FINGERPRINT_PREFIX)
 }
 
 fn valid_hex_digest(value: &str, prefix: &str) -> bool {

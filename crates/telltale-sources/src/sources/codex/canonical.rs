@@ -6,10 +6,10 @@ use serde_json::Value;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
-    ContentPartKind, CorrelationId, CorrelationIds, CorrelationOrigin, FactMetadata,
-    FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
-    ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
-    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
+    ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
+    IngestionMode, JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
+    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
+    SourceTimestamp, ToolObservation, ToolStatus,
 };
 use telltale_schema::source::Source;
 
@@ -597,9 +597,9 @@ fn tool_correlation(call_id: Option<&str>) -> Result<Option<CorrelationIds>, Cod
     let Some(value) = call_id else {
         return Ok(None);
     };
-    Ok(Some(CorrelationIds::new().with_call_id(
-        CorrelationId::new(value, CorrelationOrigin::SourceReported)?,
-    )))
+    Ok(Some(
+        CorrelationIds::new().with_call_id(CorrelationId::source_reported(value)?),
+    ))
 }
 
 fn common_builder(
@@ -610,13 +610,17 @@ fn common_builder(
     correlation: Option<CorrelationIds>,
     child_ordinal: usize,
 ) -> Result<ObservationBuilder, CodexCanonicalError> {
-    let source_provenance = SourceProvenance::new(
+    let mut source_provenance = SourceProvenance::new(
         IngestionMode::SessionStore,
         "codex",
         &record.adapter_id,
         Fidelity::PartialStructured,
     )?
     .with_source_sequence(record.source_sequence);
+    if let Some(session_id) = &record.effective_session_id {
+        source_provenance =
+            source_provenance.with_identity_source_sequence(session_id, record.source_sequence)?;
+    }
     let mut builder = CanonicalObservationV2::builder(
         body,
         stage,
@@ -626,10 +630,7 @@ fn common_builder(
     .sequence(record.source_sequence)
     .capability_context(capabilities());
     if let Some(session_id) = &record.effective_session_id {
-        builder = builder.session_id(CorrelationId::new(
-            session_id,
-            CorrelationOrigin::SourceReported,
-        )?);
+        builder = builder.session_id(CorrelationId::source_reported(session_id)?);
     }
     if let Some(correlation) = correlation {
         builder = builder.correlation(correlation);
@@ -661,10 +662,14 @@ fn normal_reported() -> Result<FactMetadata, CodexCanonicalError> {
 }
 
 fn normal(provenance: FactProvenance) -> Result<FactMetadata, CodexCanonicalError> {
-    Ok(FactMetadata::new(
-        provenance,
-        telltale_schema::observation::Sensitivity::Normal,
-    )?)
+    Ok(match provenance {
+        FactProvenance::Reported => FactMetadata::reported()?,
+        FactProvenance::Parsed => FactMetadata::parsed()?,
+        _ => FactMetadata::new(
+            provenance,
+            telltale_schema::observation::Sensitivity::Normal,
+        )?,
+    })
 }
 
 fn parsed_argument_view(value: &Value) -> Option<Value> {
@@ -692,36 +697,7 @@ fn argument_string(value: &Value, key: &str) -> Option<String> {
 }
 
 fn value_to_json(value: &Value) -> Result<JsonValue, CodexCanonicalError> {
-    match value {
-        Value::Null => Ok(JsonValue::Null),
-        Value::Bool(value) => Ok(JsonValue::Bool(*value)),
-        Value::Number(value) => {
-            if let Some(value) = value.as_i64() {
-                Ok(JsonValue::Integer(value))
-            } else if let Some(value) = value.as_u64() {
-                Ok(JsonValue::Unsigned(value))
-            } else {
-                let value = value.as_f64().ok_or_else(|| {
-                    mapping(
-                        "non_finite_number",
-                        "Codex number cannot be represented safely",
-                    )
-                })?;
-                Ok(JsonValue::number(value)?)
-            }
-        }
-        Value::String(value) => Ok(JsonValue::string(value)),
-        Value::Array(values) => values
-            .iter()
-            .map(value_to_json)
-            .collect::<Result<Vec<_>, _>>()
-            .map(JsonValue::Array),
-        Value::Object(values) => values
-            .iter()
-            .map(|(key, value)| Ok((key.clone(), value_to_json(value)?)))
-            .collect::<Result<Vec<_>, CodexCanonicalError>>()
-            .and_then(|values| Ok(JsonValue::object(values)?)),
-    }
+    Ok(JsonValue::try_from_source_value(value)?)
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> CodexCanonicalError {
@@ -744,9 +720,8 @@ mod tests {
 
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::observation::{
-        CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IdentityCoordinateKind,
-        IngestionMode, JsonValue, MessageRole, ObservationBody, ObservationFamily,
-        ObservationStage, ObservedAt, ToolStatus,
+        CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
+        MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt, ToolStatus,
     };
     use telltale_schema::record::RecordKind;
     use telltale_schema::source::Source;
@@ -800,37 +775,24 @@ mod tests {
             SourceKind::Jsonl,
             "session_stores/codex/sessions/2026/04/session-a.jsonl",
         );
-        let first = project(&source);
-        let second = project(&source);
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].kind(), ObservationFamily::Message);
-        assert_eq!(first[0].stage(), ObservationStage::MessageObserved);
-        assert_eq!(first[0].session_id(), None);
-        assert_eq!(first[0].source().source_sequence(), Some(1));
-        assert_eq!(first[0].observed_at().as_str(), OBSERVED_AT);
-        assert_eq!(
-            first[0].occurred_at().map(|value| value.as_str()),
-            Some("2026-04-01T00:00:01Z")
-        );
-        assert_eq!(
-            first[0].observation_id(),
-            second[0].observation_id(),
-            "same bytes and observed time replay identically"
-        );
-        assert_eq!(
-            first[0].identity_basis().coordinate().unwrap().0,
-            IdentityCoordinateKind::SourceSequence
-        );
+        let error = super::project_codex_canonical_observations(
+            &source,
+            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "replay_unverifiable");
         let legacy = parse_source_records(&source).expect("legacy records");
         assert_eq!(legacy[1].session_id, "session-a");
     }
 
     #[test]
     fn event_messages_map_to_truthful_roles() {
-        let source = source(
+        let (_directory, source) = temp_source(
             "codex.sessions",
             SourceKind::Jsonl,
-            "session_stores/codex/sessions/2026/04/uc001-positive.jsonl",
+            r#"{"type":"session_meta","payload":{"session_id":"synthetic-event-session"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"Synthetic user."}}
+{"type":"event_msg","payload":{"type":"assistant_message","message":"Synthetic assistant."}}"#,
         );
         let observations = project(&source);
         assert_eq!(observations.len(), 2);
@@ -860,6 +822,91 @@ mod tests {
             "source-session"
         );
         assert_eq!(observations[0].source().source_sequence(), Some(0));
+    }
+
+    #[test]
+    fn scoped_identity_is_stable_across_artifact_moves_and_detects_content_change() {
+        let contents =
+            r#"{"type":"user","sessionId":"synthetic-session","content":"Synthetic message."}"#;
+        let first_directory = tempdir().unwrap();
+        let second_directory = tempdir().unwrap();
+        let first_path = first_directory.path().join("first-name.jsonl");
+        let second_path = second_directory.path().join("moved-name.jsonl");
+        fs::write(&first_path, contents).unwrap();
+        fs::write(&second_path, contents).unwrap();
+        let source = |path| Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_owned(),
+            path,
+        };
+        let first = project_codex_canonical_observations(
+            &source(first_path),
+            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        let moved = project_codex_canonical_observations(
+            &source(second_path),
+            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(first[0].observation_id(), moved[0].observation_id());
+        assert_eq!(first[0].session_id().unwrap().value(), "synthetic-session");
+
+        let changed_directory = tempdir().unwrap();
+        let changed_path = changed_directory.path().join("changed.jsonl");
+        fs::write(
+            &changed_path,
+            r#"{"type":"user","sessionId":"synthetic-session","content":"Synthetic changed message."}"#,
+        )
+        .unwrap();
+        let changed = project_codex_canonical_observations(
+            &source(changed_path),
+            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        assert_eq!(first[0].observation_id(), changed[0].observation_id());
+        assert_eq!(
+            first[0]
+                .semantic_comparison()
+                .compare(changed[0].semantic_comparison()),
+            telltale_schema::observation::SemanticReplayVerdict::Mutated
+        );
+    }
+
+    #[test]
+    fn different_effective_sessions_scope_local_ordinals() {
+        let first_directory = tempdir().unwrap();
+        let second_directory = tempdir().unwrap();
+        let first_path = first_directory.path().join("session-a.jsonl");
+        let second_path = second_directory.path().join("session-b.jsonl");
+        fs::write(
+            &first_path,
+            r#"{"type":"user","sessionId":"synthetic-session-a","content":"Synthetic message."}"#,
+        )
+        .unwrap();
+        fs::write(
+            &second_path,
+            r#"{"type":"user","sessionId":"synthetic-session-b","content":"Synthetic message."}"#,
+        )
+        .unwrap();
+        let source = |path| Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_owned(),
+            path,
+        };
+        let first = project_codex_canonical_observations(
+            &source(first_path),
+            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        let second = project_codex_canonical_observations(
+            &source(second_path),
+            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        assert_ne!(first[0].observation_id(), second[0].observation_id());
     }
 
     #[test]
@@ -945,8 +992,8 @@ mod tests {
         let (_directory, source) = temp_source(
             "codex.headless_sessions",
             SourceKind::HeadlessJsonl,
-            r#"{"type":"event_msg","payload":{"type":"function_call","name":"shell","call_id":"call-function-1","arguments":{"command":"printf synthetic"}}}
-{"type":"event_msg","payload":{"type":"function_call_output","call_id":"call-function-1","output":{"exit_code":0}}}"#,
+            r#"{"type":"event_msg","session_id":"function-session","payload":{"type":"function_call","name":"shell","call_id":"call-function-1","arguments":{"command":"printf synthetic"}}}
+{"type":"event_msg","session_id":"function-session","payload":{"type":"function_call_output","call_id":"call-function-1","output":{"exit_code":0}}}"#,
         );
         let observations = project(&source);
         assert_eq!(observations.len(), 2);
@@ -989,7 +1036,7 @@ mod tests {
             "codex.sessions",
             SourceKind::Jsonl,
             r#"{"type":"assistant","session_id":"content-blocks","content":[{"type":"text","text":"Run it."},{"type":"tool_use","name":"exec","input":{"command":"printf synthetic"}}]}
-{"type":"assistant","content":[{"type":"tool_result","content":{"exit_code":0}}]}"#,
+{"type":"assistant","session_id":"content-blocks","content":[{"type":"tool_result","content":{"exit_code":0}}]}"#,
         );
         let observations = project(&source);
         assert_eq!(observations.len(), 4);
@@ -1024,9 +1071,9 @@ mod tests {
         let (_directory, source) = temp_source(
             "codex.sessions",
             SourceKind::Jsonl,
-            r#"{"type":"tool","state":{"status":"running"}}
-{"type":"tool","name":"exec","state":{"status":"completed"}}
-{"type":"tool","state":{"status":"error","error":{"message":"synthetic failure"}}}"#,
+            r#"{"type":"tool","session_id":"generic-session","state":{"status":"running"}}
+{"type":"tool","session_id":"generic-session","name":"exec","state":{"status":"completed"}}
+{"type":"tool","session_id":"generic-session","state":{"status":"error","error":{"message":"synthetic failure"}}}"#,
         );
         let observations = project(&source);
         assert_eq!(observations.len(), 3);
@@ -1083,10 +1130,12 @@ mod tests {
             "session_stores/codex/headless/headless-a.jsonl",
         );
         assert!(project(&headless_source).is_empty());
-        let headless_source = source(
+        let (_directory, headless_source) = temp_source(
             "codex.headless_sessions",
             SourceKind::HeadlessJsonl,
-            "session_stores/codex/headless/uc001-headless.jsonl",
+            r#"{"type":"session_meta","payload":{"session_id":"synthetic-headless-session"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"Synthetic user."}}
+{"type":"event_msg","payload":{"type":"assistant_message","message":"Synthetic assistant."}}"#,
         );
         let observations = project(&headless_source);
         assert_eq!(observations.len(), 2);
@@ -1151,7 +1200,7 @@ mod tests {
         let (_directory, source) = temp_source(
             "codex.project_sessions",
             SourceKind::Jsonl,
-            r#"{"type":"tool_call","arguments":{"command":"git status","file_path":"README.md"},"message":"synthetic command"}"#,
+            r#"{"type":"tool_call","session_id":"facet-session","arguments":{"command":"git status","file_path":"README.md"},"message":"synthetic command"}"#,
         );
         let observations = project(&source);
         assert_eq!(observations.len(), 1);
@@ -1227,10 +1276,11 @@ mod tests {
 
     #[test]
     fn all_projected_families_are_bounded_to_messages_and_tools() {
-        let source = source(
+        let (_directory, source) = temp_source(
             "codex.project_sessions",
             SourceKind::Jsonl,
-            "parser_maturity/codex/project_sessions/project-session.jsonl",
+            r#"{"type":"session_meta","payload":{"session_id":"synthetic-project-session"}}
+{"type":"event_msg","payload":{"type":"assistant_message","message":"Synthetic response."}}"#,
         );
         let observations = project(&source);
         assert_eq!(observations.len(), 1);
