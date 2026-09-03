@@ -33,6 +33,9 @@ flate2 = "1.0"
 hmac = "0.12"
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 unicode-normalization = "0.1"
+# Temporary package-resolution guard for Lokathor/tinyvec#225; remove once a
+# fixed upstream release permits package verification without it.
+tinyvec = { version = "=1.12.0", features = ["alloc"] }
 uuid = { version = "1.11", features = ["v4"] }
 telltale-schema = { path = "crates/telltale-schema", version = "=0.5.0" }
 telltale-rules = { path = "crates/telltale-rules", version = "=0.5.0" }
