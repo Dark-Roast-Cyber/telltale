@@ -53,13 +53,27 @@ fallback, unknown-discriminator `RecordKind::Other`, and object-envelope
 
 ### Requirement: Canonical session identity is source-reported
 
-The v2 projection MUST set `session_id` only from source-reported
-`session_id`, `sessionID`, or `sessionId` on the record, or from the most recent
-prior `session_meta` that explicitly supplied one. Inherited IDs MUST retain
-`SourceReported` origin. It MUST never use a filename, path, or project
-directory fallback. `session_meta` itself MUST be skipped as a v2 observation,
-and the headless `session_meta`/`turn_context` wrapper MUST be skipped as
-ambiguous context rather than treated as a message or execution record.
+For each registered Codex source, the v2 projection MUST use
+`effective_session_id` as the namespace for that record's zero-based JSONL
+ordinal. The effective value MUST come only from a source-reported
+`session_id`, `sessionID`, or `sessionId` on the record, or from a prior
+`session_meta` that explicitly supplied one. A bare producer ordinal MUST remain
+provenance only. If no truthful session ID exists, v2 MUST not use a filename,
+path, project directory, or legacy fallback and MUST fail with
+`replay_unverifiable`; legacy parsing retains its filename-stem behavior.
+
+#### Scenario: Session metadata scopes later records
+
+- **WHEN** a Codex `session_meta` reports a session ID and a later record omits
+  it
+- **THEN** the later v2 ordinal is scoped by that source-reported ID and its
+  canonical session correlation remains source-reported
+
+#### Scenario: Truthful absence fails closed
+
+- **WHEN** `session-a.jsonl` contains no source-reported session ID
+- **THEN** legacy parsing retains `session-a`, while v2 returns
+  `replay_unverifiable` and creates no collision-prone ID
 
 #### Scenario: Session metadata is inherited
 
@@ -154,11 +168,23 @@ Model/provider/agent metadata MUST NOT emit Inference observations.
 
 ### Requirement: Deterministic replay identity
 
-The projection MUST use each non-empty JSONL object's zero-based ordinal as
-source sequence and producer sequence, with child ordinals assigned in native
-emission order. Same source bytes and options MUST produce the same observation
-IDs. No random, filename-derived, path-derived, or fabricated identity is
-allowed.
+Codex v2 IDs MUST use the coordinate-only tuple and MUST remain unchanged for
+semantic content, adapter-version provenance, or privacy-key epoch changes under
+the same effective session and ordinal. Semantic comparison MUST use the
+separate local comparison state; different comparison epochs are incomparable,
+not mutation. Artifact path and filename MUST not participate.
+
+#### Scenario: Same ordinal in different sessions is distinct
+
+- **WHEN** two Codex artifacts each begin at ordinal zero but report different
+  effective session IDs
+- **THEN** their v2 observation IDs differ
+
+#### Scenario: Artifact rename or move is harmless
+
+- **WHEN** identical synthetic Codex JSONL bytes are projected from two
+  filenames or directories with the same truthful source session
+- **THEN** corresponding v2 IDs are identical
 
 #### Scenario: Replay is stable
 
@@ -191,3 +217,17 @@ projection MUST remain a crate-private test/future seam only.
 - **WHEN** the normal Codex scanner parses a registered source
 - **THEN** it returns the existing normalized records without requiring or
   emitting Canonical Observation v2 values
+
+### Requirement: Codex conformance evidence exists
+
+The repository MUST contain test-only canonical conformance vectors comparing
+Codex with Claude for equivalent message/tool semantics, truthful missing call
+IDs, parsed facets, capability visibility, and the absence of inferred lifecycle
+stages. The suite MUST remain test infrastructure and MUST NOT add a provider-
+neutral native model, adapter trait, registry, or production cutover.
+
+#### Scenario: Tool lifecycle meaning remains conservative
+
+- **WHEN** equivalent synthetic tool request/result records are projected
+- **THEN** requested/result-returned stages, structured values, source call IDs
+  when present, and absence of execution stages compare consistently

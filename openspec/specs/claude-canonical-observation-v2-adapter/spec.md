@@ -49,10 +49,26 @@ wired into `parse_source_records`, detection, CLI, or the scan pipeline, and
 
 ### Requirement: Session identity is split between legacy and v2
 
-The legacy projection MUST use the existing filename stem fallback. The v2
-projection MUST set `session_id` only from `sessionId`, `session_id`, or
-`sessionID`, with `SourceReported` origin, and MUST omit it when those fields are
-absent. It MUST never use a filename or path fallback.
+For `claude.projects`, the v2 projection MUST use a source-reported
+`sessionId`, `session_id`, or `sessionID` as the namespace for that record's
+zero-based JSONL ordinal and MUST set the same value as a `SourceReported`
+`session_id` correlation. The ordinal MUST NOT be identity-eligible without
+that explicit scope. If the source session ID is absent, v2 MUST not use a
+filename, path, project directory, or legacy session fallback and MUST fail
+closed with `replay_unverifiable`. Legacy parsing MUST retain its filename-stem
+session behavior.
+
+#### Scenario: Source session scopes an ordinal
+
+- **WHEN** a Claude record reports `sessionId: claude-tool-use`
+- **THEN** its v2 ordinal is scoped by `claude-tool-use`, its canonical session
+  correlation is source-reported, and the observation has a stable ID
+
+#### Scenario: Filename fallback is legacy-only
+
+- **WHEN** `session-a.jsonl` has no source session field
+- **THEN** legacy parsing uses `session-a`, while v2 emits no canonical session
+  identity and fails with `replay_unverifiable` rather than creating an ID
 
 #### Scenario: Session-a has different compatibility and canonical identity
 
@@ -116,10 +132,25 @@ Message; mixed content MUST preserve native emission order.
 
 ### Requirement: Identity and replay are deterministic
 
-The v2 projection MUST use the non-empty JSONL object's zero-based source
-sequence as `SourceProvenance.source_sequence` and producer-local sequence. It
-MUST omit native IDs, path hashes, and path-derived identity. The builder MUST
-derive `StableSourceCoordinate` identity with per-record child ordinals.
+Claude v2 IDs MUST be derived from the coordinate-only tuple and MUST remain
+unchanged when semantic content, adapter-version provenance, or privacy-key
+epoch changes under the same scoped coordinate. Semantic comparison MUST be
+performed through the separate local comparison state; incompatible epochs are
+incomparable, not mutation. Replaying identical source bytes and coordinates
+MUST produce identical IDs.
+
+#### Scenario: Artifact rename or move is harmless
+
+- **WHEN** the same synthetic Claude JSONL bytes with a source session ID are
+  written under two different filenames or directories
+- **THEN** corresponding v2 observation IDs are identical and no path is used as
+  canonical identity
+
+#### Scenario: Local ordinal is scoped by session
+
+- **WHEN** two different Claude artifacts each begin at ordinal zero but report
+  different session IDs
+- **THEN** their v2 observation IDs differ
 
 #### Scenario: Replaying the same source is stable
 
@@ -208,3 +239,19 @@ renamed or migrated by this change.
 - **WHEN** the Claude adapter tests and Event 3.0 regression checks run
 - **THEN** current and historical Event 3.0 schema bytes and all non-Claude
   adapter behavior remain unchanged
+
+### Requirement: Claude conformance evidence exists
+
+The repository MUST contain test-only canonical conformance vectors that compare
+Claude and Codex semantic meaning where both sources truthfully provide it,
+including message roles/content, tool request/result fields and linkage,
+missing-call-ID absence, parsed resource/command facets, capability gaps, and
+lifecycle non-inference. The suite MUST not introduce an adapter trait, native
+record abstraction, registry, or runtime migration.
+
+#### Scenario: Equivalent message meaning is compared
+
+- **WHEN** equivalent synthetic user and assistant messages are projected by
+  both reference adapters with truthful source sessions
+- **THEN** their family, stage, role, content structure, metadata, and lifecycle
+  meaning compare equal while source-specific coordinates and IDs may differ

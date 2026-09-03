@@ -126,57 +126,98 @@ Event4/export type.
 
 ### Requirement: Deterministic privacy-safe identity
 
-The implementation MUST derive IDs only from a domain-separated canonical UTF-8
-JSON identity tuple using NFC strings, compact separators, sorted object keys,
-unescaped non-ASCII UTF-8, and SHA-256 lowercase hexadecimal output. Stable
-coordinate selection MUST be native_id, then source_sequence, then offset; no
-random, path, filename, batch, collector, or inferred-parent fallback is
-allowed. Sensitive values MUST enter semantic identity only as structural
-location, sensitivity, and a keyed digest.
+The implementation MUST derive a stable coordinate ID only from this exact
+domain-separated canonical UTF-8 JSON tuple:
+
+```text
+["telltale:canonical-observation-coordinate-id-v1", adapter_type, adapter_id,
+ coordinate_kind, coordinate_value, family, stage, child_ordinal]
+```
+
+It MUST retain the external form `obs:v2:sha256:<64 lowercase hexadecimal
+digits>`. The tuple MUST NOT contain semantic values, semantic fingerprints,
+fingerprint epochs, adapter versions, paths, filenames, session titles,
+collection locations, privacy keys, HMAC material, or producer text.
+
+Coordinate selection MUST be native_id, then an explicitly identity-scoped
+source sequence, then an explicitly identity-scoped offset. A producer-local
+sequence or offset is not a stable observation coordinate unless its uniqueness
+namespace is itself stable and explicit. Bare producer coordinates remain
+provenance only. Missing coordinates and missing protected assignment state
+MUST fail with `replay_unverifiable`; no random or path-derived fallback is
+allowed. Sensitive values MUST NOT be hashed unkeyed merely to create a stable
+coordinate ID.
+
+#### Scenario: Stable identity ignores semantic comparison material
+
+- **WHEN** two stable-coordinate observations have the same adapter identity,
+  scoped coordinate, family, stage, and child ordinal but different semantic
+  content, adapter version, or fingerprint epoch
+- **THEN** their observation IDs are equal and their semantic comparison reports
+  mutation for same-epoch comparable content or incomparability for an epoch
+  mismatch
 
 #### Scenario: Stable identity is deterministic
 
 - **WHEN** equivalent stable source input is normalized twice with the same
-  family, stage, semantic fingerprint, epoch, and child ordinal
+  adapter identity, scoped coordinate, family, stage, and child ordinal
 - **THEN** both IDs equal `obs:v2:sha256:<64 lowercase hex digits>`
 
 #### Scenario: Sensitive identity does not leak raw content
 
-- **WHEN** a sensitive input changes while keyed identity material is used
-- **THEN** the derived identity input contains no raw sensitive text and the
-  resulting identity changes through the protected digest
+- **WHEN** a sensitive input is used with a stable coordinate and no keyed
+  fingerprint is available
+- **THEN** the stable ID contains no raw sensitive text and comparison is
+  `Unavailable` rather than an unkeyed content hash
+
+#### Scenario: Bare producer sequence is not identity
+
+- **WHEN** a caller sets only a producer-local `source_sequence` or offset
+- **THEN** construction fails with `replay_unverifiable` unless a native ID,
+  explicitly scoped coordinate, or protected persisted assignment is present
+
+#### Scenario: Distinct scoped namespaces do not collide
+
+- **WHEN** two observations use ordinal zero in different valid identity
+  namespaces
+- **THEN** their stable observation IDs differ
+
+#### Scenario: Coordinate namespace rejects path text
+
+- **WHEN** an identity namespace is empty, contains a newline, slash,
+  backslash, or `..`
+- **THEN** construction rejects it with the existing `path_derived_id` code
 
 #### Scenario: No stable coordinate fails closed
 
-- **WHEN** native_id, source_sequence, and offset are all absent and protected
-  assignment state is unavailable
+- **WHEN** native_id, identity-scoped source sequence, and identity-scoped
+  offset are all absent and protected assignment state is unavailable
 - **THEN** construction returns `replay_unverifiable` and creates no random ID
 
 ### Requirement: Protected assignment replay
 
-The implementation MUST provide only an interface-level protected assignment
-abstraction for this slice. Assignment comparison commitments MUST use
-HMAC-SHA256 over complete canonical semantic content, while comparison keys and
-commitments MUST remain outside the observation and identity basis. Matching
-assignment and commitment MUST be idempotent; changed content, missing state, or
-missing comparison key MUST fail closed.
+Persisted assignment MUST continue to verify the complete semantic commitment
+with its protected comparison key. Missing assignment state, missing key, or a
+commitment mismatch MUST return `replay_unverifiable` or `replay_collision` as
+currently defined. The coordinate identity amendment MUST NOT weaken assignment
+verification or make an unkeyed assignment comparison appear equivalent.
 
 #### Scenario: Matching assignment replays idempotently
 
-- **WHEN** a persisted assignment contains the same observation ID and protected
-  semantic commitment as the incoming observation
+- **WHEN** a persisted assignment contains the same observation ID and
+  protected semantic commitment as the incoming observation
 - **THEN** replay is accepted as idempotent
-
-#### Scenario: Changed assignment content collides
-
-- **WHEN** content changes under an existing assignment reference
-- **THEN** replay is rejected as a collision and raw content is absent from the
-  error
 
 #### Scenario: Assignment state is unverifiable
 
-- **WHEN** assignment state or its comparison key is unavailable
-- **THEN** replay returns `replay_unverifiable` and does not accept an opaque ID
+- **WHEN** no stable coordinate exists and assignment state or its comparison
+  key is missing
+- **THEN** construction returns `replay_unverifiable`
+
+#### Scenario: Changed assignment content collides
+
+- **WHEN** complete semantic content changes under an existing assignment
+- **THEN** construction returns `replay_collision` without exposing content
 
 ### Requirement: Event 3.0 and export boundary remain frozen
 
@@ -195,3 +236,77 @@ the local core is scaffolding and not an external output contract.
 
 - **WHEN** a caller holds a local structured value or opaque raw reference
 - **THEN** it cannot be silently serialized as an Event4 or external type
+
+### Requirement: Separate semantic comparison and identity basis
+
+`IdentityBasis::StableSourceCoordinate` MUST contain only its domain,
+coordinate kind, coordinate value, and child ordinal. It MUST NOT own semantic
+fingerprints, fingerprint epochs, or adapter versions. The stable basis domain
+MUST match `adapter_type:adapter_id`, without an adapter-version suffix.
+
+The implementation MUST store semantic comparison state separately on the local
+`CanonicalObservationV2` as either comparable fingerprint plus key epoch or
+`Unavailable`. It MUST provide comparison verdicts `Equivalent`, `Mutated`, and
+`Incomparable`: same-epoch equal comparable fingerprints are Equivalent,
+same-epoch different comparable fingerprints are Mutated, and unavailable or
+different-epoch material is Incomparable. Unavailable versus Unavailable MUST
+NOT be Equivalent, and epoch mismatch MUST NOT be reported as mutation. This
+comparison state MUST have no generic serde or export path and MUST be redacted
+from Debug/Display output.
+
+#### Scenario: Normal semantic change is compared separately
+
+- **WHEN** two observations share a stable coordinate and comparable normal
+  semantics but their body content differs
+- **THEN** construction succeeds with the same observation ID and comparison
+  returns `Mutated`
+
+#### Scenario: Key epoch mismatch is incomparable
+
+- **WHEN** two comparable observations share an identity coordinate but use
+  different valid fingerprint epochs
+- **THEN** their observation IDs are equal and comparison returns
+  `Incomparable`, not `Mutated`
+
+#### Scenario: Stable identity does not require HMAC
+
+- **WHEN** normal facts have no producer key, or sensitive facts have no keyed
+  fingerprints, but a valid stable coordinate exists
+- **THEN** construction succeeds with a stable ID; normal facts are Comparable
+  at epoch `none`, while missing sensitive comparison is `Unavailable`
+
+### Requirement: Identity, correlation, and exported event identity remain distinct
+
+`observation_id` MUST identify a canonical source fact, `session_id` MUST remain
+a source/session correlation, and Event3/Event4 `event_id` MUST remain exported
+event identity. None may be filled from a path, filename, collector value, or
+another identity field. Event 3.0 remains frozen and v2 remains a local,
+non-production foundation.
+
+#### Scenario: Stable fact identity is not session correlation
+
+- **WHEN** a stable source coordinate is scoped by a truthful session namespace
+- **THEN** the namespace may populate `session_id` for correlation, but it is
+  represented in the coordinate tuple only as the explicit coordinate scope
+
+#### Scenario: Event 3.0 remains unchanged
+
+- **WHEN** v2 identity and comparison tests run alongside Event 3.0 regressions
+- **THEN** Event 3.0 schema bytes, IDs, serialization, privacy, and delivery
+  behavior remain unchanged
+
+### Requirement: Canonical construction helpers remain source-neutral
+
+The schema MUST provide only the small source-neutral helpers required by both
+reference adapters: conversion from a `serde_json::Value` to bounded
+`JsonValue`, Normal `FactMetadata::reported()` and `FactMetadata::parsed()`
+constructors, and `CorrelationId::source_reported`. These helpers MUST fail
+closed on unsupported/non-finite values and MUST NOT introduce JSONL,
+filesystem, provider, lifecycle, adapter registry, or export abstractions.
+
+#### Scenario: Source JSON conversion is bounded and safe
+
+- **WHEN** either reference adapter converts a finite JSON value through the
+  shared helper
+- **THEN** the equivalent bounded `JsonValue` is produced, while unsupported
+  numeric values return a code-only observation error
