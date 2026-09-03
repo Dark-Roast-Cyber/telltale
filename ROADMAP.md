@@ -65,7 +65,8 @@ Priorities, in order:
 The Event4, Detection v2, and future telemetry/output architectures are
 accepted and documented as intended future work, not implemented capability.
 Canonical Observation v2 core types/scaffolding are implemented, and the Claude
-Code (`claude.projects`) v2 reference projection is implemented. Production
+Code (`claude.projects`) v2 reference projection plus the Codex v2 reference
+adapter family are implemented as non-production projections. Production
 normalization/detection still uses `NormalizedRecordV1`. Canonical Observation
 v2 production cutover has not started. Event 3.0 remains the current frozen
 compatibility and output contract; migration requires explicit gates.
@@ -87,7 +88,9 @@ release planning:
 
 - **Claude Code** (`claude.projects`): first implemented Canonical Observation
   v2 reference adapter; production remains `NormalizedRecordV1`.
-- **Codex**: existing modeled source; priority migration later.
+- **Codex**: implemented v2 reference adapter family (`codex.sessions`,
+  `codex.archived_sessions`, and `codex.headless_sessions` supported;
+  `codex.project_sessions` candidate); production remains `NormalizedRecordV1`.
 - **OpenCode**: existing modeled source; priority migration later.
 - **Claude Desktop**: priority discovery and modeling are required before
   migration; it is not assumed equivalent to Claude Code.

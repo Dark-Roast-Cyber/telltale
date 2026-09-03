@@ -43,6 +43,13 @@ These profiles document the gap between what Telltale would ideally see and what
 
 **Known gaps**: Headless sessions marked by `session_meta.payload.source == "exec"`. Archived sessions use the same format but in a separate directory.
 
+The implemented Codex Canonical Observation v2 reference adapter family covers
+the four registered identities (`codex.sessions`, `codex.archived_sessions`,
+`codex.headless_sessions`, and `codex.project_sessions`). Production still uses
+the lossy legacy projection; filename/path session fallback is legacy-only and
+is not used for v2 session identity. `codex.project_sessions` remains a
+candidate source, and this mapping does not upgrade its support status.
+
 ---
 
 ### Claude Code
