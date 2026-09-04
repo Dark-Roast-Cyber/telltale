@@ -21,7 +21,7 @@ serde_yaml.workspace = true
 sha2.workspace = true
 time.workspace = true
 walkdir = "2.5"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3.14"
