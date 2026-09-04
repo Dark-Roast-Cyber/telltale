@@ -255,7 +255,13 @@ The implemented `opencode.sqlite` Canonical Observation v2 reference projection
 is non-production. `opencode.legacy_json` remains supported and its v2 migration
 has not started; `opencode.project_json` remains Candidate and its v2 migration
 has not started. Production remains `NormalizedRecordV1`; Canonical Observation
-v2 cutover, Detection v2, Event4, and telemetry/output v2 have not started.
+v2 cutover and production Detection v2 have not started. The experimental
+Detection v2 foundation implements only `observation_match`,
+`DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler; it
+has no shadow or activation path, advanced detector runtime, or Detection
+Content v2 loader. Event4 and telemetry/output v2 have not started. The
+`compat.v1.url` view remains truthfully absent; P13 owns visibility-gap
+measurement.
 
 ---
 

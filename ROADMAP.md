@@ -62,8 +62,12 @@ Priorities, in order:
 
 ## Beyond 0.6.0
 
-The Event4, Detection v2, and future telemetry/output architectures are
-accepted and documented as intended future work, not implemented capability.
+The Event4 and future telemetry/output architectures are accepted and
+documented as intended future work, not implemented capability. Detection v2
+has an experimental, non-production foundation: only `observation_match`, the
+`DetectorResult` -> `Signal` -> atomic `Finding` path, and the Rule v1 compiler
+are implemented. Shadow/activation paths, advanced detector runtimes, and a
+Detection Content v2 loader do not exist.
 Canonical Observation v2 core types/scaffolding are implemented, and the Claude
 Code (`claude.projects`) v2 reference projection plus the Codex v2 reference
 adapter family are implemented as non-production projections. The OpenCode
@@ -71,9 +75,11 @@ adapter family are implemented as non-production projections. The OpenCode
 non-production projection. `opencode.legacy_json` remains supported and its v2
 migration has not started; `opencode.project_json` remains Candidate and its v2
 migration has not started. Production normalization/detection still uses
-`NormalizedRecordV1`. Canonical Observation v2 production cutover, Detection v2,
-Event4, and telemetry/output v2 have not started. Event 3.0 remains the current
-frozen compatibility and output contract; migration requires explicit gates.
+`NormalizedRecordV1`. Canonical Observation v2 production cutover, production
+Detection v2, Event4, and telemetry/output v2 have not started. Event 3.0
+remains the current frozen compatibility and output contract; migration
+requires explicit gates. Broader selector visibility and efficacy measurement,
+including the `compat.v1.url` gap, is deferred to P13.
 
 The following remain outside the approved 0.6.0 trust, privacy, and durable
 collection milestone and require separate scope, compatibility review, and

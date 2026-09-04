@@ -23,9 +23,12 @@ The accepted future semantic contracts are documented in the [semantic
 foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
 v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
 [telemetry/output architecture](telemetry-output-architecture.md) pages. They
-are accepted architecture, not current implementation. Event4, Detection v2,
-and Telemetry/Output v2 are not implemented. Canonical Observation v2 core
-types/scaffolding are implemented in `telltale-schema`; the Claude Code
+are accepted architecture, with an experimental Detection v2 foundation now
+implemented non-production. Event4 and Telemetry/Output v2 are not implemented.
+Only `observation_match`, `DetectorResult` -> `Signal` -> atomic `Finding`, and
+the Rule v1 compiler are implemented for Detection v2; there is no shadow or
+activation path, advanced detector runtime, or Detection Content v2 loader.
+Canonical Observation v2 core types/scaffolding are implemented in `telltale-schema`; the Claude Code
 (`claude.projects`) and Codex v2 reference projections are implemented, and the
 OpenCode (`opencode.sqlite`) v2 reference projection is implemented as
 non-production. `opencode.legacy_json` remains supported and its v2 migration
@@ -53,7 +56,11 @@ Telltale runs a repeatable batch pipeline:
 The current scanner still uses `NormalizedRecordV1`; production remains on this
 path and Canonical Observation v2 cutover has not started. The Claude Code,
 Codex, and OpenCode SQLite v2 reference projections are implemented but are not
-wired into production normalization, detection, CLI, or scan execution.
+wired into production normalization, detection, CLI, or scan execution. The
+experimental Detection v2 foundation is likewise not wired into the scanner;
+production detection remains the existing Rule v1 path. Its `compat.v1.url`
+view remains truthfully absent without URL/path/network manufacturing, with
+visibility and compatibility measurement deferred to P13.
 
 ## Module Boundaries
 

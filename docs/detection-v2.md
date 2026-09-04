@@ -1,13 +1,16 @@
 # Detection v2
 
-> **Status:** **Accepted architecture.** Detection v2 is the reviewed intended
-> future detection contract. **Current implementation:** Detection v2 is **not
-> implemented** and is not the current engine. **Existing compatibility:** Event
-> 3.0 remains the current frozen external compatibility and output contract.
+> **Status:** **Experimental foundation implemented (non-production).** The
+> `telltale_detect::v2` module implements only the `observation_match` detector,
+> `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
+> It is not the current engine. There is no shadow path, activation path,
+> advanced detector runtime, or Detection Content v2 loader. **Existing
+> compatibility:** Event 3.0 remains the current frozen external compatibility
+> and output contract.
 
 The current Rule v1, process-chain, and Event3 scoring behavior remains documented
-in [Detection model](detection-model.md). This page describes the future model
-only.
+in [Detection model](detection-model.md). This page describes the accepted future
+model and identifies the small non-production foundation that is implemented.
 
 ## Detection path and units
 
@@ -47,6 +50,10 @@ enter only through DetectorResult/imported normalization and never gains
 Decision or Action authority. `classifier` is not a kind; future model content
 uses `guard_model`. `external` is not a kind; imported results use `imported`.
 Unknown kinds are rejected.
+
+The implementation activates only `observation_match`. Process-chain,
+sequence, correlation, imported, baseline, and guard-model behavior remains
+reserved architecture and is not runtime-supported by this foundation.
 
 ## DetectorResult
 
@@ -139,6 +146,35 @@ fingerprint, never a raw path, URL, command, or universal asset graph.
 
 ## Canonical selectors and matcher grammar
 
+The implemented registry contains exactly 48 native selectors and eight
+`compat.v1` views. Native selectors are admitted only when backed by a typed
+Canonical Observation field/accessor, a deterministic derived view, or one of
+the explicitly governed facets. A namespace permission alone does not make a
+facet selectable.
+
+| Backing | Count | Selectors |
+| --- | ---: | --- |
+| Direct | 2 | `session.id`, `tool.call_id` |
+| Typed | 37 | `message.role`, `message.content`; `tool.name`, `tool.arguments`, `tool.searchable_arguments`, `tool.result`, `tool.searchable_result`, `tool.reported_status`, `tool.is_error`, `tool.exit_code`; `resource.operation`, `resource.path_class`; `network.domain`, `network.destination_class`, `network.operation`, `network.port`, `network.protocol`; `process.name`, `process.pid`, `process.instance_id`, `process.privilege`; `inference.provider`, `inference.requested_model`, `inference.resolved_model`, `inference.streaming`, `inference.stop_reason`; `mcp.server.id`, `mcp.server.transport`, `mcp.server.location_class`, `mcp.tool.name`; `runtime.execution_mode`, `runtime.isolation.state`, `runtime.privilege`, `runtime.workspace.class`; `browser.surface`, `browser.origin_class`, `browser.navigation_id` |
+| Derived | 7 | `message.text`, `tool.stage`, `tool.arguments.text`, `tool.arguments.keys`, `tool.result.text`, `tool.result.is_error`, `tool.result.exit_code` |
+| Governed facet | 2 | `command.text`, `resource.path` |
+
+`resource.operation` and `resource.path_class` resolve typed `File` body
+accessors (`file.operation` and `file.path_class`); they do not authorize
+arbitrary facets. The native namespace counts are: `session` 1, `message` 3,
+`tool` 15, `command` 1, `resource` 3, `network` 5, `process` 4,
+`inference` 5, `mcp` 4, `runtime` 4, and `browser` 3.
+
+The `Derived` backing category describes deterministic selector views; it does
+not by itself change fact provenance. The scalar aliases `message.text`,
+`tool.arguments.text`, and `tool.result.text` preserve the metadata and
+provenance of the canonical scalar fact they expose, including a searchable
+fact when that is selected. The same applies to the scalar result aliases
+`tool.result.is_error` and `tool.result.exit_code`. Manufactured values such
+as `tool.stage` use `derived` provenance and are absent outside their owning
+family. `tool.arguments.keys` is a deterministic manufactured key list and
+always uses `derived` provenance.
+
 Selectors target governed Canonical Observation fields and facets in these
 namespaces:
 
@@ -174,6 +210,16 @@ operator, including presence operators. A typed mismatch is non-evaluation. A
 valid regex is compiled before evaluation; invalid content is `detector_error`,
 not a type mismatch. The matcher status algebra is `match`, `no_match`, or
 `not_evaluated`; `not_evaluated` is never inverted into a clean match.
+
+The eight compatibility views are exact and remain separate from native
+selectors: `arguments` uses searchable or string tool arguments,
+`assistant_context` and `user_context` use role-specific message content,
+`command` uses `command.text`, `file_path` uses `resource.path`, `tool_name`
+uses the typed tool name, and `tool_result` uses searchable or string result
+content. `url` is compiler-supported as `compat.v1.url` but resolves truthfully
+absent; it does not manufacture URL, path, or network facts. All tool-side
+compatibility views require `ToolCall`, not `ToolExecution`. The URL visibility
+gap and its compatibility impact are deferred to P13 measurement.
 
 ## Sequence, correlation, and process declarations
 
@@ -241,12 +287,17 @@ Rule v1 -> compatibility compiler/adapter -> Detection v2 IR -> DetectorResult
 
 The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
 `command`, `file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
-Existing Rule v1 IDs remain detector IDs with `rule_version: 1` and are never
-renamed. The compiler preserves current policy, overrides, modifiers, scoring,
-allowlist/suppression behavior, and the frozen Event3 projection. Native v2
-selectors are observation-scoped, preserve absence, and do not treat parsed
-paths or URLs as observed side effects. V2-only results without a lossless
-Event3 mapping remain local or Event4-only.
+The compiler copies effective Rule v1 IDs, metadata, scores, and compiled
+target/regex matchers into non-production observation-match detector
+definitions with `rule_version: 1`; IDs are not renamed. Modifiers remain
+non-executing compatibility plans. This compiler does not implement Rule v1
+allowlist or suppression behavior, existing scoring/evaluation equivalence, or
+Event3 projection/equivalence. Native v2 selectors are observation-scoped,
+preserve absence, and do not treat parsed paths or URLs as observed side
+effects. `url` remains compiler-supported as `compat.v1.url`, but it resolves
+truthfully absent until P13 measures URL visibility and compatibility impact.
+Results without a lossless Event3 mapping are not projected by this foundation;
+future Event4 handling is outside this scope.
 
 Imported detectors normalize external results with source/version, confidence
 semantics, evidence lineage, and observation linkage. Imported results cannot
@@ -260,7 +311,8 @@ See the [Detection Content v2 draft schema](../schemas/detection-content-v2-draf
 
 > **Event 3.0: FROZEN / CURRENT COMPATIBILITY CONTRACT**
 
-Detection v2 is not currently running. Event3 remains supported and unchanged:
+The foundation is not currently wired into production or running in the
+scanner. Event3 remains supported and unchanged:
 its Rule v1 IDs, deterministic scoring, thresholds, parser ownership, privacy,
 and persisted/replayed bytes remain current. Event4 is independently versioned
 and does not replace Event3 until explicit migration gates pass. Future semantics

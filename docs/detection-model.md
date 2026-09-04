@@ -3,8 +3,10 @@
 > **Website:** For an approachable overview of the detection model and threat taxonomy, see [AgentArchaeology.ai/telltale/detection-model](https://agentarchaeology.ai/telltale/detection-model/).
 
 The current Rule v1 and process-chain engine is documented here. [Detection v2](detection-v2.md)
-describes the accepted future detection architecture; it is not the current
-engine and is not implemented.
+also documents an experimental, non-production foundation implementing only
+`observation_match`, `DetectorResult` -> `Signal` -> atomic `Finding`, and the
+Rule v1 compiler. It is not the current engine; there is no shadow or activation
+path, advanced detector runtime, or Detection Content v2 loader.
 
 ## Risk Flow
 

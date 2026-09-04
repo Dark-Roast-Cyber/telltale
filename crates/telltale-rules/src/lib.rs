@@ -129,6 +129,54 @@ pub struct CompiledRuleSet {
     policy_name: Option<String>,
 }
 
+/// Effective, read-only Rule v1 data for semantic compatibility consumers.
+/// Regexes are copied from compiled matchers, after defaults and policy have
+/// been applied; source YAML is intentionally not exposed here.
+#[derive(Debug, Clone)]
+pub struct RuleV1CompatibilityExport {
+    policy_name: Option<String>,
+    rules: Vec<RuleV1CompatibilityRule>,
+    modifiers: Vec<RuleV1CompatibilityModifier>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuleV1CompatibilityRule {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub category: String,
+    pub detection_class: String,
+    pub signal_type: String,
+    pub analytic_intent: String,
+    pub atlas_tags: Vec<String>,
+    pub severity: String,
+    pub score: u64,
+    pub tags: Vec<String>,
+    pub explanation: String,
+    pub falsepositives: Vec<String>,
+    pub matchers: Vec<RuleV1CompatibilityMatcher>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuleV1CompatibilityMatcher {
+    pub target: String,
+    pub regex: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuleV1CompatibilityModifier {
+    pub id: String,
+    pub score: u64,
+    pub detection_class: String,
+    pub signal_type: String,
+    pub analytic_intent: String,
+    pub atlas_tags: Vec<String>,
+    pub when_all_categories: Vec<String>,
+    pub when_all_rule_ids: Vec<String>,
+    pub falsepositives: Vec<String>,
+    pub explanation: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct MatchResult {
     pub rule_ids: Vec<String>,
@@ -480,6 +528,57 @@ impl CompiledRuleSet {
             .collect()
     }
 
+    /// Exposes only the effective compiled Rule v1 plan.  In particular, this
+    /// cannot be used to recover a disabled or replaced source definition.
+    pub fn compatibility_export(&self) -> RuleV1CompatibilityExport {
+        RuleV1CompatibilityExport {
+            policy_name: self.policy_name.clone(),
+            rules: self
+                .rules
+                .iter()
+                .map(|rule| RuleV1CompatibilityRule {
+                    id: rule.definition.id.clone(),
+                    title: rule.definition.title.clone(),
+                    description: rule.definition.description.clone(),
+                    category: rule.definition.category.clone(),
+                    detection_class: rule.definition.detection_class.clone(),
+                    signal_type: rule.definition.signal_type.clone(),
+                    analytic_intent: rule.definition.analytic_intent.clone(),
+                    atlas_tags: rule.definition.atlas_tags.clone(),
+                    severity: rule.definition.severity.clone(),
+                    score: rule.definition.score,
+                    tags: rule.definition.tags.clone(),
+                    explanation: rule.definition.explanation.clone(),
+                    falsepositives: rule.definition.falsepositives.clone(),
+                    matchers: rule
+                        .matchers
+                        .iter()
+                        .map(|matcher| RuleV1CompatibilityMatcher {
+                            target: matcher.target.clone(),
+                            regex: matcher.regex.as_str().to_owned(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            modifiers: self
+                .modifiers
+                .iter()
+                .map(|modifier| RuleV1CompatibilityModifier {
+                    id: modifier.id.clone(),
+                    score: modifier.score,
+                    detection_class: modifier.detection_class.clone(),
+                    signal_type: modifier.signal_type.clone(),
+                    analytic_intent: modifier.analytic_intent.clone(),
+                    atlas_tags: modifier.atlas_tags.clone(),
+                    when_all_categories: modifier.when_all_categories.clone(),
+                    when_all_rule_ids: modifier.when_all_rule_ids.clone(),
+                    falsepositives: modifier.falsepositives.clone(),
+                    explanation: modifier.explanation.clone(),
+                })
+                .collect(),
+        }
+    }
+
     pub fn evaluate(
         &self,
         fields: &[(&str, &str)],
@@ -585,6 +684,20 @@ impl CompiledRuleSet {
                 evidence,
             }))
         }
+    }
+}
+
+impl RuleV1CompatibilityExport {
+    pub fn policy_name(&self) -> Option<&str> {
+        self.policy_name.as_deref()
+    }
+
+    pub fn rules(&self) -> &[RuleV1CompatibilityRule] {
+        &self.rules
+    }
+
+    pub fn modifiers(&self) -> &[RuleV1CompatibilityModifier] {
+        &self.modifiers
     }
 }
 

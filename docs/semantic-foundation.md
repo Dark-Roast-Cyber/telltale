@@ -1,12 +1,15 @@
 # Semantic Foundation
 
-> **Status:** **Accepted architecture.** These contracts are reviewed and
-> accepted as Telltale's intended future architecture. **Current
-> implementation:** Event4, Detection v2, and Telemetry/Output v2 are **not
-> implemented yet**. Canonical Observation v2 core types/scaffolding are
-> implemented in `telltale-schema`. Claude Code (`claude.projects`) and Codex v2
-> Canonical Observation v2 reference adapter families are implemented. The
-> OpenCode (`opencode.sqlite`) v2 reference projection is also implemented as a
+> **Status:** **Accepted architecture with an experimental foundation.** These
+> contracts are reviewed future architecture. **Current implementation:** the
+> non-production Detection v2 foundation implements only `observation_match`,
+> `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
+> Event4 and Telemetry/Output v2 are not implemented. There is no shadow or
+> activation path, advanced detector runtime, or Detection Content v2 loader.
+> Canonical Observation v2 core types/scaffolding are implemented in
+> `telltale-schema`. Claude Code (`claude.projects`) and Codex v2 Canonical
+> Observation v2 reference adapter families are implemented. The OpenCode
+> (`opencode.sqlite`) v2 reference projection is also implemented as a
 > non-production projection. `opencode.legacy_json` remains supported and its v2
 > migration has not started; `opencode.project_json` remains Candidate and its
 > v2 migration has not started. Production adapter cutover has not started.
@@ -15,14 +18,17 @@
 > contract.
 
 This page is the map for the future semantic boundaries. It describes accepted
-architecture, not shipped runtime behavior.
+architecture and distinguishes the implemented non-production foundation from
+shipped runtime behavior.
 
 The Claude Code, Codex, and OpenCode SQLite v2 reference projections do not
 activate this path in production: `NormalizedRecordV1` remains the scanner's
 adapter contract and Canonical Observation v2 cutover has not started.
 `opencode.legacy_json` remains supported and `opencode.project_json` remains
-Candidate; neither source's v2 migration has started. Detection v2, Event4, and
-Telemetry/Output v2 remain not started, and Event 3.0 remains frozen.
+Candidate; neither source's v2 migration has started. Production Detection v2,
+Event4, and Telemetry/Output v2 remain not started, and Event 3.0 remains
+frozen. The `compat.v1.url` view is intentionally visibility-limited to truthful
+absence; P13 measurement owns the URL visibility and compatibility assessment.
 
 ## The semantic path
 

@@ -13,6 +13,9 @@ pub mod detection;
 pub mod mcp;
 pub mod process_chain;
 pub mod timeline;
+/// Experimental, non-production Detection v2 APIs. This module is not
+/// scanner-wired and accepts only caller-provided typed observations.
+pub mod v2;
 
 #[cfg(all(test, feature = "source-io"))]
 pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {

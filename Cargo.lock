@@ -1631,6 +1631,7 @@ dependencies = [
 name = "telltale-detect"
 version = "0.5.0"
 dependencies = [
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

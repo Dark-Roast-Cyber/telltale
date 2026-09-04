@@ -333,7 +333,7 @@ These files are the source-of-truth for Telltale's current implementation, rules
 - [Semantic foundation](docs/semantic-foundation.md) — accepted future semantic boundaries
 - [Event4 architecture](docs/event4.md) — accepted future Event4 contract
 - [Canonical Observation v2](docs/canonical-observation-v2.md) — accepted future evidence contract
-- [Detection v2](docs/detection-v2.md) — accepted future detection contract
+- [Detection v2](docs/detection-v2.md) — experimental non-production foundation
 - [Telemetry/output architecture](docs/telemetry-output-architecture.md) — accepted future output boundary
 - [Development principles](docs/development-principles.md) — authoritative architecture and development philosophy
 - [Detection model](docs/detection-model.md) — risk scoring, rule categories, thresholds
