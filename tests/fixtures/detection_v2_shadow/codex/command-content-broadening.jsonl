@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-04-03T09:20:00Z","payload":{"session_id":"command-content-broadening","agent":"codex","model":"synthetic"}}
+{"type":"event_msg","timestamp":"2026-04-03T09:20:01Z","payload":{"type":"tool_call","tool_name":"bash","message":"Synthetic bash tool call without a parsed command field."}}

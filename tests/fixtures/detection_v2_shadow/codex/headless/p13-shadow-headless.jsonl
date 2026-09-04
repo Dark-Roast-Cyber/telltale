@@ -1,0 +1,5 @@
+{"type":"session_meta","timestamp":"2026-09-04T00:00:00Z","payload":{"session_id":"p13-shadow-headless","agent":"codex","model":"synthetic"}}
+{"type":"event_msg","session_id":"p13-shadow-headless","timestamp":"2026-09-04T00:00:01Z","payload":{"type":"user_message","message":"Synthetic headless shadow prompt."}}
+{"type":"event_msg","session_id":"p13-shadow-headless","timestamp":"2026-09-04T00:00:02Z","payload":{"type":"assistant_message","message":"Synthetic headless shadow response."}}
+{"type":"event_msg","session_id":"p13-shadow-headless","timestamp":"2026-09-04T00:00:03Z","payload":{"type":"function_call","name":"shell","call_id":"p13-headless-call","arguments":{"command":"printf synthetic","file_path":"synthetic-headless.txt"}}}
+{"type":"event_msg","session_id":"p13-shadow-headless","timestamp":"2026-09-04T00:00:04Z","payload":{"type":"function_call_output","call_id":"p13-headless-call","output":{"status":"synthetic complete"}}}

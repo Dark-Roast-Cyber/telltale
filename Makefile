@@ -22,7 +22,7 @@ CARGO_DENY_VERSION ?= 0.20.2
 RUST_TOOLCHAIN_VERSION ?= 1.95.0
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check evaluation-check evaluation-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check evaluation-check evaluation-report detection-v2-shadow-check detection-v2-shadow-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 ## Show this help
 help:
@@ -118,6 +118,15 @@ evaluation-check:
 evaluation-report:
 	mkdir -p target/evaluation
 	TELLTALE_EVAL_REPORT=report.v1.json cargo test $(CARGO_LOCKED) --test evaluation_corpus -- --nocapture
+
+## Verify the non-production Detection v2 shadow fixture ledger
+detection-v2-shadow-check:
+	cargo test $(CARGO_LOCKED) --test detection_v2_shadow
+
+## Write the non-production Detection v2 shadow report under target only
+detection-v2-shadow-report:
+	mkdir -p target/detection-v2-shadow
+	TELLTALE_DETECTION_V2_SHADOW_REPORT=report.v1.json cargo test $(CARGO_LOCKED) --test detection_v2_shadow -- --nocapture
 
 ## Show public push review context
 public-push-review:

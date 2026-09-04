@@ -12,6 +12,8 @@ pub mod detection;
 #[cfg(feature = "source-io")]
 pub mod mcp;
 pub mod process_chain;
+/// Experimental, non-production I/O-free Detection v2 equivalence harness.
+pub mod shadow_v2;
 pub mod timeline;
 /// Experimental, non-production Detection v2 APIs. This module is not
 /// scanner-wired and accepts only caller-provided typed observations.

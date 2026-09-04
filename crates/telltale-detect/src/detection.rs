@@ -325,7 +325,16 @@ pub fn evaluate_session_matches(
     rule_set: &CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Result<Option<MatchResult>, telltale_schema::scoring::RiskAccountingError> {
-    let fields = parsed
+    let fields = legacy_evaluation_fields(parsed);
+    rule_set.evaluate(&fields)
+}
+
+/// Builds the exact legacy field view used by session evaluation. This shared
+/// crate-private view is used by both production evaluation and the
+/// experimental shadow comparator, which can identify legacy post-match
+/// filtering without reimplementing legacy flattening.
+pub(crate) fn legacy_evaluation_fields(parsed: &[NormalizedRecord]) -> Vec<(&str, &str)> {
+    parsed
         .iter()
         .flat_map(|record| {
             let context = context_fields(record);
@@ -340,8 +349,7 @@ pub fn evaluate_session_matches(
                 ("tool_name", record.tool_name.as_deref().unwrap_or_default()),
             ]
         })
-        .collect::<Vec<_>>();
-    rule_set.evaluate(&fields)
+        .collect()
 }
 
 struct DetectionAnalysis {

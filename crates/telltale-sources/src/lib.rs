@@ -5,6 +5,8 @@
 //! `telltale-schema` records; detection, scoring, and delivery live in the
 //! downstream crates.
 
+/// Experimental, non-production Canonical Observation v2 projection facade.
+pub mod canonical;
 pub mod clients;
 pub mod discovery;
 pub mod install_inventory;

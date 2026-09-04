@@ -579,6 +579,22 @@ impl CompiledRuleSet {
         }
     }
 
+    /// Returns effective atomic rules whose first legacy match is removed by
+    /// the existing Rule v1 post-match filter. This deliberate, read-only
+    /// legacy compatibility measurement seam is public because
+    /// `telltale-detect` consumes it across the crate boundary; it does not
+    /// alter evaluation.
+    pub fn legacy_filtered_rule_ids(&self, fields: &[(&str, &str)]) -> Vec<String> {
+        self.rules
+            .iter()
+            .filter_map(|rule| {
+                matching_field(rule, fields)
+                    .filter(|matched| should_skip_match(&rule.definition.id, *matched))
+                    .map(|_| rule.definition.id.clone())
+            })
+            .collect()
+    }
+
     pub fn evaluate(
         &self,
         fields: &[(&str, &str)],
@@ -1061,6 +1077,27 @@ mod tests {
         assert_eq!(
             result.evidence[0].rule_id.as_deref(),
             Some("mcp.tool_metadata.prompt_injection")
+        );
+    }
+
+    #[test]
+    fn legacy_filtered_rule_ids_exposes_only_post_match_removals() {
+        let mut definition = rule("secret.env.read", "secret_access");
+        definition.targets = vec!["assistant_context".to_string()];
+        definition.regex = Some("\\.env".to_string());
+        let rule_set = single_rule_set(definition);
+
+        assert_eq!(
+            rule_set.legacy_filtered_rule_ids(&[(
+                "assistant_context",
+                "The policy says do not read .env",
+            )]),
+            vec!["secret.env.read"]
+        );
+        assert!(
+            rule_set
+                .legacy_filtered_rule_ids(&[("assistant_context", "read_file .env")])
+                .is_empty()
         );
     }
 

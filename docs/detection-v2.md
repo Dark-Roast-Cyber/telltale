@@ -1,16 +1,36 @@
 # Detection v2
 
-> **Status:** **Experimental foundation implemented (non-production).** The
-> `telltale_detect::v2` module implements only the `observation_match` detector,
-> `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
-> It is not the current engine. There is no shadow path, activation path,
-> advanced detector runtime, or Detection Content v2 loader. **Existing
+> **Status:** **Experimental foundation and fixture-only shadow harness
+> implemented (non-production).** The `telltale_detect::v2` module implements
+> only the `observation_match` detector, `DetectorResult` -> `Signal` -> atomic
+> `Finding`, and the Rule v1 compiler. It is not the current engine. An offline,
+> deterministic, immutable-fixture harness measures the current native
+> Canonical Observation v2 reference identities (`claude.projects`;
+> `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
+> `opencode.sqlite`) and has zero unexplained mismatches in the current reviewed
+> corpus. Live scanner shadow: **NO**. Production activation: **NO**. Adapter
+> coverage is incomplete, and Event3 remains frozen. Advanced detector runtime
+> and a Detection Content v2 loader are not implemented. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
 The current Rule v1, process-chain, and Event3 scoring behavior remains documented
 in [Detection model](detection-model.md). This page describes the accepted future
-model and identifies the small non-production foundation that is implemented.
+model and identifies the implemented non-production foundation and fixture-only
+P13 measurement harness.
+
+## P13 shadow/equivalence boundary
+
+The P13 harness reports three separate compatibility questions: atomic rule-set
+equivalence, modifier compatibility, and contribution/score compatibility. It
+does not combine those questions into a parity claim. The reviewed differences
+are the known command-content broadening, legacy post-filter differences, and
+the synthetic `compat.v1.url` visibility gap.
+
+The harness explicitly excludes Event3/event construction, allowlist/suppression,
+timeline, baseline, process-chain, mutable live-store reads, and all-client
+parity. It is an opt-in measurement seam only; it does not change production
+behavior or the frozen Event3 contract.
 
 ## Detection path and units
 
@@ -219,7 +239,8 @@ uses the typed tool name, and `tool_result` uses searchable or string result
 content. `url` is compiler-supported as `compat.v1.url` but resolves truthfully
 absent; it does not manufacture URL, path, or network facts. All tool-side
 compatibility views require `ToolCall`, not `ToolExecution`. The URL visibility
-gap and its compatibility impact are deferred to P13 measurement.
+gap and its compatibility impact are reported by the fixture-only P13
+measurement; this does not add URL visibility.
 
 ## Sequence, correlation, and process declarations
 
@@ -295,7 +316,8 @@ allowlist or suppression behavior, existing scoring/evaluation equivalence, or
 Event3 projection/equivalence. Native v2 selectors are observation-scoped,
 preserve absence, and do not treat parsed paths or URLs as observed side
 effects. `url` remains compiler-supported as `compat.v1.url`, but it resolves
-truthfully absent until P13 measures URL visibility and compatibility impact.
+truthfully absent; the fixture-only P13 measurement records its visibility and
+compatibility impact without manufacturing URL facts.
 Results without a lossless Event3 mapping are not projected by this foundation;
 future Event4 handling is outside this scope.
 

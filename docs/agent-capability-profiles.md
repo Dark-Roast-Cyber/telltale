@@ -257,11 +257,12 @@ has not started; `opencode.project_json` remains Candidate and its v2 migration
 has not started. Production remains `NormalizedRecordV1`; Canonical Observation
 v2 cutover and production Detection v2 have not started. The experimental
 Detection v2 foundation implements only `observation_match`,
-`DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler; it
-has no shadow or activation path, advanced detector runtime, or Detection
-Content v2 loader. Event4 and telemetry/output v2 have not started. The
-`compat.v1.url` view remains truthfully absent; P13 owns visibility-gap
-measurement.
+`DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler; the
+fixture-only P13 shadow harness is an offline measurement seam, not a production
+shadow or activation path. Advanced detector runtime and Detection Content v2
+loader are not implemented. Event4 and telemetry/output v2 have not started. The
+`compat.v1.url` view remains truthfully absent; the fixture-only P13 harness owns
+visibility-gap measurement.
 
 ---
 

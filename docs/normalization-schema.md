@@ -15,13 +15,14 @@ plus its loss-aware compatibility path remain current in production.
 
 Detection v2 has only an experimental, non-production foundation: the
 `observation_match` detector, `DetectorResult` -> `Signal` -> atomic `Finding`,
-and Rule v1 compiler. It is not wired into this production path; there is no
-shadow or activation path, advanced detector runtime, or Detection Content v2
-loader. Event4 and telemetry/output v2 are not started, and Canonical
+and Rule v1 compiler. It is not wired into this production path; the fixture-only
+P13 shadow harness is an offline measurement seam, not a production shadow or
+activation path. Advanced detector runtime and Detection Content v2 loader are
+not implemented. Event4 and telemetry/output v2 are not started, and Canonical
 Observation v2 production cutover has not started. Event 3.0 is frozen; the
 reference projections do not change its behavior or output. The
-`compat.v1.url` view remains truthfully absent and its visibility gap is
-deferred to P13 measurement.
+`compat.v1.url` view remains truthfully absent and its visibility gap is recorded
+by the fixture-only P13 measurement.
 
 This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
 

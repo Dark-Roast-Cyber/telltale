@@ -1,0 +1,20 @@
+version: 1
+expectations:
+  - case_id: p13-codex-sessions
+    rule_id: execution.shell
+    expected_relation: legacy_only
+    classification: legacy_flattening_difference
+    reason_code: legacy_tool_content_command_broadening
+    rationale: The synthetic tool-call envelope contains the shell name but no parsed command field; legacy content flattening exposes that name through its command view while canonical has no command.text facet.
+  - case_id: p13-opencode-sqlite
+    rule_id: secret.env.read
+    expected_relation: v2_only
+    classification: legacy_post_filter_difference
+    reason_code: legacy_post_match_filter
+    rationale: The legacy evaluator filters this assistant-context match after matching; the compatibility path measures the unfiltered atomic detector.
+  - case_id: p13-claude-project-c
+    rule_id: secret.env.read
+    expected_relation: v2_only
+    classification: legacy_post_filter_difference
+    reason_code: legacy_post_match_filter
+    rationale: The canonical tool-result content contains the synthetic secret-access example, while the legacy post-match filter removes the same match.

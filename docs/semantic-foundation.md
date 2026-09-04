@@ -4,8 +4,10 @@
 > contracts are reviewed future architecture. **Current implementation:** the
 > non-production Detection v2 foundation implements only `observation_match`,
 > `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
-> Event4 and Telemetry/Output v2 are not implemented. There is no shadow or
-> activation path, advanced detector runtime, or Detection Content v2 loader.
+> Event4 and Telemetry/Output v2 are not implemented. The fixture-only P13
+> shadow harness is an offline measurement seam, not a production shadow or
+> activation path. Advanced detector runtime and Detection Content v2 loader are
+> not implemented.
 > Canonical Observation v2 core types/scaffolding are implemented in
 > `telltale-schema`. Claude Code (`claude.projects`) and Codex v2 Canonical
 > Observation v2 reference adapter families are implemented. The OpenCode
@@ -28,7 +30,8 @@ adapter contract and Canonical Observation v2 cutover has not started.
 Candidate; neither source's v2 migration has started. Production Detection v2,
 Event4, and Telemetry/Output v2 remain not started, and Event 3.0 remains
 frozen. The `compat.v1.url` view is intentionally visibility-limited to truthful
-absence; P13 measurement owns the URL visibility and compatibility assessment.
+absence; the fixture-only P13 measurement records the URL visibility and
+compatibility assessment.
 
 ## The semantic path
 
