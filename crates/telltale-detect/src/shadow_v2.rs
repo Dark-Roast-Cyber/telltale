@@ -234,14 +234,12 @@ pub struct ShadowContribution {
 /// Metadata fields that are reconstructable from the effective Rule v1 export.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize)]
 pub struct MetadataSnapshot {
-    pub rule_ids: Vec<String>,
     pub categories: Vec<String>,
     pub detection_classes: Vec<String>,
     pub signal_types: Vec<String>,
     pub analytic_intents: Vec<String>,
     pub atlas_tags: Vec<String>,
     pub tags: Vec<String>,
-    pub score: u64,
 }
 
 /// A single detector/session comparison. All identity-bearing values are
@@ -385,6 +383,8 @@ pub struct ShadowReport {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct ReviewedException {
     pub case_id: String,
+    /// A `sha256:` session fingerprint, or `unscoped` when no truthful scope exists.
+    pub session_reference: String,
     pub rule_id: String,
     pub expected_relation: AtomicRelation,
     pub classification: MismatchClassification,
@@ -753,14 +753,12 @@ fn legacy_metadata(result: Option<&MatchResult>) -> MetadataSnapshot {
         return MetadataSnapshot::default();
     };
     MetadataSnapshot {
-        rule_ids: sorted_unique(result.rule_ids.clone()),
         categories: sorted_unique(result.categories.clone()),
         detection_classes: sorted_unique(result.detection_classes.clone()),
         signal_types: sorted_unique(result.signal_types.clone()),
         analytic_intents: sorted_unique(result.analytic_intents.clone()),
         atlas_tags: sorted_unique(result.atlas_tags.clone()),
         tags: sorted_unique(result.tags.clone()),
-        score: result.score,
     }
 }
 
@@ -775,7 +773,6 @@ fn v2_metadata(
         .iter()
         .filter(|rule| atomic_ids.contains(&rule.id))
     {
-        snapshot.rule_ids.push(rule.id.clone());
         snapshot.categories.push(rule.category.clone());
         snapshot
             .detection_classes
@@ -784,14 +781,12 @@ fn v2_metadata(
         snapshot.analytic_intents.push(rule.analytic_intent.clone());
         snapshot.atlas_tags.extend(rule.atlas_tags.iter().cloned());
         snapshot.tags.extend(rule.tags.iter().cloned());
-        snapshot.score += rule.score;
     }
     for modifier in export
         .modifiers()
         .iter()
         .filter(|modifier| modifier_ids.contains(&modifier.id))
     {
-        snapshot.rule_ids.push(modifier.id.clone());
         snapshot
             .detection_classes
             .push(modifier.detection_class.clone());
@@ -802,9 +797,7 @@ fn v2_metadata(
         snapshot
             .atlas_tags
             .extend(modifier.atlas_tags.iter().cloned());
-        snapshot.score += modifier.score;
     }
-    snapshot.rule_ids = sorted_unique(snapshot.rule_ids);
     snapshot.categories = sorted_unique(snapshot.categories);
     snapshot.detection_classes = sorted_unique(snapshot.detection_classes);
     snapshot.signal_types = sorted_unique(snapshot.signal_types);
@@ -2028,5 +2021,14 @@ mod tests {
         let text = String::from_utf8(left).unwrap();
         assert!(!text.contains("private-session"));
         assert!(!text.contains("needle"));
+    }
+
+    #[test]
+    fn metadata_snapshot_serialization_excludes_compatibility_risk_score() {
+        let snapshot = MetadataSnapshot::default();
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+
+        assert!(!serialized.contains("score"));
+        assert!(!serialized.contains("rule_ids"));
     }
 }

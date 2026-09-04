@@ -19,6 +19,7 @@ use telltale_sources::parser::parse_source_records;
 const OBSERVED_AT: &str = "2026-09-04T00:00:00Z";
 const EXPECTATIONS_PATH: &str = "tests/evaluation/detection-v2-shadow-expectations.yaml";
 const REPORT_ENV: &str = "TELLTALE_DETECTION_V2_SHADOW_REPORT";
+const UNSCOPED_SESSION_REFERENCE: &str = "unscoped";
 
 #[derive(Clone, Copy)]
 struct CaseDefinition {
@@ -91,6 +92,7 @@ const CASES: &[CaseDefinition] = &[
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct ReviewedExpectation {
     case_id: String,
+    session_reference: String,
     rule_id: String,
     expected_relation: String,
     classification: String,
@@ -101,6 +103,7 @@ struct ReviewedExpectation {
 #[derive(Debug, Clone, Serialize)]
 struct ReviewedExceptionReport {
     case_id: String,
+    session_reference: String,
     rule_id: String,
     expected_relation: String,
     classification: String,
@@ -178,6 +181,7 @@ fn load_expectations(root: &Path) -> ExpectationDocument {
         assert!(!expectation.rule_id.trim().is_empty());
         assert!(!expectation.case_id.contains('*') && !expectation.case_id.contains('?'));
         assert!(!expectation.rule_id.contains('*') && !expectation.rule_id.contains('?'));
+        assert!(valid_session_reference(&expectation.session_reference));
         assert!(!expectation.reason_code.trim().is_empty());
         assert!(matches!(
             expectation.reason_code.as_str(),
@@ -415,6 +419,7 @@ fn aggregate(
             .iter()
             .map(|expectation| ReviewedExceptionReport {
                 case_id: expectation.case_id.clone(),
+                session_reference: expectation.session_reference.clone(),
                 rule_id: expectation.rule_id.clone(),
                 expected_relation: expectation.expected_relation.clone(),
                 classification: expectation.classification.clone(),
@@ -435,12 +440,13 @@ trait Pipe: Sized {
 }
 impl<T> Pipe for T {}
 
-fn expectation_key(
-    case_id: &str,
-    comparison: &AtomicComparison,
-) -> (String, String, String, String, String) {
+fn expectation_key(case_id: &str, comparison: &AtomicComparison) -> ExpectationKey {
     (
         case_id.to_owned(),
+        comparison
+            .session_reference
+            .clone()
+            .unwrap_or_else(|| UNSCOPED_SESSION_REFERENCE.to_owned()),
         comparison.detector_id.clone(),
         comparison.relation.as_str().to_owned(),
         comparison
@@ -452,8 +458,18 @@ fn expectation_key(
     )
 }
 
-type ExpectationKey = (String, String, String, String, String);
+type ExpectationKey = (String, String, String, String, String, String);
 type ExpectationCounts = BTreeMap<ExpectationKey, u64>;
+
+fn valid_session_reference(value: &str) -> bool {
+    value == UNSCOPED_SESSION_REFERENCE
+        || value.strip_prefix("sha256:").is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        })
+}
 
 fn expectation_counts<I>(keys: I) -> ExpectationCounts
 where
@@ -484,6 +500,14 @@ fn check_expectations(root: &Path, evaluated: &[(CaseDefinition, ShadowCompariso
                     "unclassified shadow mismatch: {}",
                     detector.detector_id
                 );
+                let session_reference = detector
+                    .session_reference
+                    .as_deref()
+                    .unwrap_or(UNSCOPED_SESSION_REFERENCE);
+                assert!(
+                    valid_session_reference(session_reference),
+                    "invalid shadow session reference"
+                );
                 actual_keys.push(expectation_key(case.id, detector));
             }
         }
@@ -494,6 +518,7 @@ fn check_expectations(root: &Path, evaluated: &[(CaseDefinition, ShadowCompariso
         .map(|item| {
             (
                 item.case_id.clone(),
+                item.session_reference.clone(),
                 item.rule_id.clone(),
                 item.expected_relation.clone(),
                 item.classification.clone(),
@@ -560,6 +585,15 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
             different: 2,
         }
     );
+    assert_eq!(
+        report.metadata_equivalence,
+        EquivalenceCounts {
+            equal: 6,
+            legacy_only: 1,
+            v2_only: 0,
+            different: 2,
+        }
+    );
     assert_eq!(report.health.total_detector_session_evaluations, 162);
     assert_eq!(report.health.indeterminate, 0);
     assert_eq!(report.health.canonical_projection_errors, 0);
@@ -602,6 +636,7 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
 fn detection_v2_shadow_gate_rejects_unreviewed_mismatch() {
     let actual = expectation_counts([(
         "synthetic-case".to_owned(),
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         "synthetic.rule".to_owned(),
         "v2_only".to_owned(),
         "visibility_gap".to_owned(),
@@ -615,6 +650,7 @@ fn detection_v2_shadow_gate_rejects_unreviewed_mismatch() {
 fn detection_v2_shadow_gate_rejects_disappeared_reviewed_mismatch() {
     let expected = expectation_counts([(
         "synthetic-case".to_owned(),
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         "synthetic.rule".to_owned(),
         "v2_only".to_owned(),
         "visibility_gap".to_owned(),
@@ -628,6 +664,7 @@ fn detection_v2_shadow_gate_rejects_disappeared_reviewed_mismatch() {
 fn detection_v2_shadow_gate_compares_mismatch_multiplicity() {
     let key = (
         "synthetic-case".to_owned(),
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         "synthetic.rule".to_owned(),
         "v2_only".to_owned(),
         "visibility_gap".to_owned(),
@@ -640,6 +677,28 @@ fn detection_v2_shadow_gate_compares_mismatch_multiplicity() {
     assert_eq!(actual_counts.get(&key), Some(&2));
     assert!(!expectation_counts_match(&actual_counts, &one_row));
     assert!(expectation_counts_match(&actual_counts, &two_rows));
+}
+
+#[test]
+fn detection_v2_shadow_gate_does_not_move_reviewed_mismatch_between_sessions() {
+    let expected = expectation_counts([(
+        "synthetic-case".to_owned(),
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        "synthetic.rule".to_owned(),
+        "v2_only".to_owned(),
+        "visibility_gap".to_owned(),
+        "canonical_capability_unknown".to_owned(),
+    )]);
+    let actual = expectation_counts([(
+        "synthetic-case".to_owned(),
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+        "synthetic.rule".to_owned(),
+        "v2_only".to_owned(),
+        "visibility_gap".to_owned(),
+        "canonical_capability_unknown".to_owned(),
+    )]);
+
+    assert!(!expectation_counts_match(&actual, &expected));
 }
 
 #[test]

@@ -1,18 +1,21 @@
 version: 1
 expectations:
   - case_id: p13-codex-sessions
+    session_reference: sha256:5db22c6d0f1139089f4822276ff45f3a21539add0e355f433aa37c91474cd089
     rule_id: execution.shell
     expected_relation: legacy_only
     classification: legacy_flattening_difference
     reason_code: legacy_tool_content_command_broadening
     rationale: The synthetic tool-call envelope contains the shell name but no parsed command field; legacy content flattening exposes that name through its command view while canonical has no command.text facet.
   - case_id: p13-opencode-sqlite
+    session_reference: sha256:11a10d2ea72aacb24f7ee2b78ca1e1e00a7ba21d6248537ddd807b4957233914
     rule_id: secret.env.read
     expected_relation: v2_only
     classification: legacy_post_filter_difference
     reason_code: legacy_post_match_filter
     rationale: The legacy evaluator filters this assistant-context match after matching; the compatibility path measures the unfiltered atomic detector.
   - case_id: p13-claude-project-c
+    session_reference: sha256:a8c0fd0218c822616247c7405a67923ff2625dceb980604756d75fb3793009e2
     rule_id: secret.env.read
     expected_relation: v2_only
     classification: legacy_post_filter_difference
