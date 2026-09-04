@@ -61,7 +61,8 @@ wired into production normalization, detection, CLI, or scan execution. The
 experimental Detection v2 foundation and fixture-only P13 harness are likewise
 not wired into the scanner; production detection remains the existing Rule v1
 path. Its `compat.v1.url` view remains truthfully absent without URL/path/network
-manufacturing; the P13 fixture measurement records that gap.
+manufacturing; focused synthetic harness coverage demonstrates the compatibility
+gap.
 
 ## Module Boundaries
 

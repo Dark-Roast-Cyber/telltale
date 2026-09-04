@@ -67,7 +67,7 @@ documented as intended future work, not implemented capability. Detection v2
 has an experimental, non-production foundation: only `observation_match`, the
 `DetectorResult` -> `Signal` -> atomic `Finding` path, and the Rule v1 compiler
 are implemented. A fixture-only offline shadow/equivalence harness is
-implemented locally for P13; live scanner shadow, production activation,
+published and implemented for P13; live scanner shadow, production activation,
 advanced detector runtimes, and a Detection Content v2 loader do not exist.
 Canonical Observation v2 core types/scaffolding are implemented, and the Claude
 Code (`claude.projects`) v2 reference projection plus the Codex v2 reference
@@ -79,9 +79,10 @@ migration has not started. Production normalization/detection still uses
 `NormalizedRecordV1`. Canonical Observation v2 production cutover, production
 Detection v2, Event4, and telemetry/output v2 have not started. Event 3.0
 remains the current frozen compatibility and output contract; migration
-requires explicit gates. Broader selector visibility and efficacy measurement,
-including the `compat.v1.url` gap, is measured by the fixture-only P13 harness
-without activating Detection v2.
+requires explicit gates. Broader selector visibility and efficacy measurement is
+performed by the published fixture-only P13 harness without activating
+Detection v2; focused synthetic compatibility coverage demonstrates the
+compiler-supported but truthfully absent `compat.v1.url` gap.
 
 The following remain outside the approved 0.6.0 trust, privacy, and durable
 collection milestone and require separate scope, compatibility review, and

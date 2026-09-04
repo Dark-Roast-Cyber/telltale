@@ -30,8 +30,7 @@ adapter contract and Canonical Observation v2 cutover has not started.
 Candidate; neither source's v2 migration has started. Production Detection v2,
 Event4, and Telemetry/Output v2 remain not started, and Event 3.0 remains
 frozen. The `compat.v1.url` view is intentionally visibility-limited to truthful
-absence; the fixture-only P13 measurement records the URL visibility and
-compatibility assessment.
+absence; focused synthetic harness coverage demonstrates the compatibility gap.
 
 ## The semantic path
 

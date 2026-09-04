@@ -21,8 +21,8 @@ activation path. Advanced detector runtime and Detection Content v2 loader are
 not implemented. Event4 and telemetry/output v2 are not started, and Canonical
 Observation v2 production cutover has not started. Event 3.0 is frozen; the
 reference projections do not change its behavior or output. The
-`compat.v1.url` view remains truthfully absent and its visibility gap is recorded
-by the fixture-only P13 measurement.
+`compat.v1.url` view remains truthfully absent; focused synthetic harness
+coverage demonstrates the compatibility gap.
 
 This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
 

@@ -261,8 +261,8 @@ Detection v2 foundation implements only `observation_match`,
 fixture-only P13 shadow harness is an offline measurement seam, not a production
 shadow or activation path. Advanced detector runtime and Detection Content v2
 loader are not implemented. Event4 and telemetry/output v2 have not started. The
-`compat.v1.url` view remains truthfully absent; the fixture-only P13 harness owns
-visibility-gap measurement.
+`compat.v1.url` view remains truthfully absent; focused synthetic harness
+coverage demonstrates the compatibility gap.
 
 ---
 

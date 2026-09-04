@@ -23,9 +23,14 @@ P13 measurement harness.
 
 The P13 harness reports three separate compatibility questions: atomic rule-set
 equivalence, modifier compatibility, and contribution/score compatibility. It
-does not combine those questions into a parity claim. The reviewed differences
-are the known command-content broadening, legacy post-filter differences, and
-the synthetic `compat.v1.url` visibility gap.
+does not combine those questions into a parity claim. The current reviewed
+reference corpus has exactly three observed atomic mismatches: one
+`execution.shell` legacy-only command-content broadening and two
+`secret.env.read` v2-only legacy post-match-filter cases; all three are
+explained, with zero unexplained mismatches. Separately, focused synthetic
+compatibility coverage proves `compat.v1.url` is compiler-supported but
+truthfully absent and demonstrates the compatibility gap; there is no
+end-to-end reference-corpus URL mismatch in the current corpus.
 
 The harness explicitly excludes Event3/event construction, allowlist/suppression,
 timeline, baseline, process-chain, mutable live-store reads, and all-client
@@ -238,9 +243,9 @@ selectors: `arguments` uses searchable or string tool arguments,
 uses the typed tool name, and `tool_result` uses searchable or string result
 content. `url` is compiler-supported as `compat.v1.url` but resolves truthfully
 absent; it does not manufacture URL, path, or network facts. All tool-side
-compatibility views require `ToolCall`, not `ToolExecution`. The URL visibility
-gap and its compatibility impact are reported by the fixture-only P13
-measurement; this does not add URL visibility.
+compatibility views require `ToolCall`, not `ToolExecution`. Focused synthetic
+compatibility coverage demonstrates this URL visibility gap; this does not add
+URL visibility.
 
 ## Sequence, correlation, and process declarations
 
@@ -316,8 +321,8 @@ allowlist or suppression behavior, existing scoring/evaluation equivalence, or
 Event3 projection/equivalence. Native v2 selectors are observation-scoped,
 preserve absence, and do not treat parsed paths or URLs as observed side
 effects. `url` remains compiler-supported as `compat.v1.url`, but it resolves
-truthfully absent; the fixture-only P13 measurement records its visibility and
-compatibility impact without manufacturing URL facts.
+truthfully absent; focused synthetic compatibility coverage demonstrates the
+gap without manufacturing URL facts.
 Results without a lossless Event3 mapping are not projected by this foundation;
 future Event4 handling is outside this scope.
 
