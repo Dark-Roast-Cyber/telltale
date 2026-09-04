@@ -5,8 +5,12 @@
 > implementation:** Canonical Observation v2 core domain types/scaffolding are
 > implemented in `telltale-schema`. A Claude Code (`claude.projects`) v2
 > reference projection and a Codex v2 reference adapter family are implemented
-> as non-production projections; they are not the production detector input,
-> and production adapter cutover has not started. The P10B identity/conformance
+> as non-production projections. An OpenCode (`opencode.sqlite`) v2 reference
+> projection is also implemented as a non-production projection. The
+> `opencode.legacy_json` source remains supported and its v2 migration has not
+> started; `opencode.project_json` remains Candidate and its v2 migration has
+> not started. These projections are not the production detector input, and
+> production adapter cutover has not started. The P10B identity/conformance
 > amendment is implemented: stable identity is coordinate-only and semantic
 > comparison is separate. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
@@ -23,10 +27,12 @@ Canonical Observation is the unit of evidence. It is local-first and richer
 than any export. Detection consumes it, not Event4 or a destination-specific
 projection.
 
-The Claude Code and Codex v2 reference projections are deliberately not active
-normalization paths. They preserve source call IDs, structured content parts,
-structured tool values, and truthful lifecycle stages while the production
-scanner continues to use `NormalizedRecordV1`. Detection v2, Event4, and
+The Claude Code, Codex, and OpenCode SQLite v2 reference projections are
+deliberately not active normalization paths. They preserve source call IDs,
+structured content parts, structured tool values, and truthful lifecycle stages
+while the production scanner continues to use `NormalizedRecordV1`.
+`opencode.legacy_json` remains supported and `opencode.project_json` remains
+Candidate; neither source's v2 migration has started. Detection v2, Event4, and
 telemetry/output v2 are not started, and Event 3.0 remains frozen.
 
 ## Conceptual contract

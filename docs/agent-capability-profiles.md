@@ -251,6 +251,12 @@ session fallback is legacy-only and is not used for v2 session identity.
 
 **Known gaps**: The SQLite source stores JSON in a `data` column which Telltale parses and merges with the row-level `session_id`. Legacy JSON files are one file per message.
 
+The implemented `opencode.sqlite` Canonical Observation v2 reference projection
+is non-production. `opencode.legacy_json` remains supported and its v2 migration
+has not started; `opencode.project_json` remains Candidate and its v2 migration
+has not started. Production remains `NormalizedRecordV1`; Canonical Observation
+v2 cutover, Detection v2, Event4, and telemetry/output v2 have not started.
+
 ---
 
 ### GitHub Copilot

@@ -3,13 +3,20 @@
 use crate::clients::{ClientSourceDef, PathRoot, SourcePattern};
 use telltale_schema::clients::SourceKind;
 
+pub(crate) mod canonical;
 mod install;
+pub(crate) mod native;
 pub(crate) mod parser;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use install::INSTALL;
+
+#[allow(unused_imports)]
+pub(crate) use canonical::{
+    OpenCodeCanonicalError, OpenCodeCanonicalOptions, project_opencode_canonical_observations,
+};
 
 pub(crate) const SOURCES: &[ClientSourceDef] = &[
     ClientSourceDef {

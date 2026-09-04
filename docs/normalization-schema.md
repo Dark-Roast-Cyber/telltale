@@ -7,11 +7,15 @@ Telltale's internal normalization contract is `NormalizedRecordV1` in `crates/te
 [Canonical Observation v2](canonical-observation-v2.md) core types/scaffolding
 are implemented in `telltale-schema` but are not the active normalization path;
 A Claude Code (`claude.projects`) v2 reference projection and a Codex v2
-reference adapter family are implemented, while `NormalizedRecordV1` plus its
-loss-aware compatibility path remain current in production.
+reference adapter family are implemented, and the OpenCode (`opencode.sqlite`)
+v2 reference projection is implemented as non-production. `opencode.legacy_json`
+remains supported and its v2 migration has not started; `opencode.project_json`
+remains Candidate and its v2 migration has not started. `NormalizedRecordV1`
+plus its loss-aware compatibility path remain current in production.
 
-Detection v2, Event4, and telemetry/output v2 are not started. Event 3.0 is
-frozen; the Claude and Codex projections do not change its behavior or output.
+Detection v2, Event4, and telemetry/output v2 are not started, and Canonical
+Observation v2 production cutover has not started. Event 3.0 is frozen; the
+reference projections do not change its behavior or output.
 
 This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
 

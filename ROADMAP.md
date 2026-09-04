@@ -66,10 +66,14 @@ The Event4, Detection v2, and future telemetry/output architectures are
 accepted and documented as intended future work, not implemented capability.
 Canonical Observation v2 core types/scaffolding are implemented, and the Claude
 Code (`claude.projects`) v2 reference projection plus the Codex v2 reference
-adapter family are implemented as non-production projections. Production
-normalization/detection still uses `NormalizedRecordV1`. Canonical Observation
-v2 production cutover has not started. Event 3.0 remains the current frozen
-compatibility and output contract; migration requires explicit gates.
+adapter family are implemented as non-production projections. The OpenCode
+(`opencode.sqlite`) v2 reference projection is also implemented as a
+non-production projection. `opencode.legacy_json` remains supported and its v2
+migration has not started; `opencode.project_json` remains Candidate and its v2
+migration has not started. Production normalization/detection still uses
+`NormalizedRecordV1`. Canonical Observation v2 production cutover, Detection v2,
+Event4, and telemetry/output v2 have not started. Event 3.0 remains the current
+frozen compatibility and output contract; migration requires explicit gates.
 
 The following remain outside the approved 0.6.0 trust, privacy, and durable
 collection milestone and require separate scope, compatibility review, and
@@ -91,7 +95,11 @@ release planning:
 - **Codex**: implemented v2 reference adapter family (`codex.sessions`,
   `codex.archived_sessions`, and `codex.headless_sessions` supported;
   `codex.project_sessions` candidate); production remains `NormalizedRecordV1`.
-- **OpenCode**: existing modeled source; priority migration later.
+- **OpenCode**: `opencode.sqlite` has an implemented non-production Canonical
+  Observation v2 reference projection. `opencode.legacy_json` remains
+  supported, while its v2 migration has not started; `opencode.project_json`
+  remains Candidate, and its v2 migration has not started. Production remains
+  `NormalizedRecordV1`.
 - **Claude Desktop**: priority discovery and modeling are required before
   migration; it is not assumed equivalent to Claude Code.
 - **ChatGPT Desktop**: priority discovery and modeling are required before

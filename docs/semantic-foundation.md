@@ -5,17 +5,23 @@
 > implementation:** Event4, Detection v2, and Telemetry/Output v2 are **not
 > implemented yet**. Canonical Observation v2 core types/scaffolding are
 > implemented in `telltale-schema`. Claude Code (`claude.projects`) and Codex v2
-> Canonical Observation v2 reference adapter families are implemented;
-> production adapter cutover has not started. **Existing compatibility:**
+> Canonical Observation v2 reference adapter families are implemented. The
+> OpenCode (`opencode.sqlite`) v2 reference projection is also implemented as a
+> non-production projection. `opencode.legacy_json` remains supported and its v2
+> migration has not started; `opencode.project_json` remains Candidate and its
+> v2 migration has not started. Production adapter cutover has not started.
+> **Existing compatibility:**
 > Event 3.0 remains the current frozen external compatibility and output
 > contract.
 
 This page is the map for the future semantic boundaries. It describes accepted
 architecture, not shipped runtime behavior.
 
-The Claude Code and Codex v2 reference projections do not activate this path in
-production: `NormalizedRecordV1` remains the scanner's adapter contract and
-Canonical Observation v2 cutover has not started. Detection v2, Event4, and
+The Claude Code, Codex, and OpenCode SQLite v2 reference projections do not
+activate this path in production: `NormalizedRecordV1` remains the scanner's
+adapter contract and Canonical Observation v2 cutover has not started.
+`opencode.legacy_json` remains supported and `opencode.project_json` remains
+Candidate; neither source's v2 migration has started. Detection v2, Event4, and
 Telemetry/Output v2 remain not started, and Event 3.0 remains frozen.
 
 ## The semantic path
