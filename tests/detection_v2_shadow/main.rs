@@ -87,6 +87,34 @@ const CASES: &[CaseDefinition] = &[
         kind: SourceKind::Sqlite,
         fixture: "tests/fixtures/session_stores/opencode/opencode.db",
     },
+    CaseDefinition {
+        id: "p15-openclaw-benign",
+        client: ClientId::OpenClaw,
+        source_id: "openclaw.agents",
+        kind: SourceKind::Jsonl,
+        fixture: "tests/fixtures/benign_baselines/openclaw/agents/baseline-project/benign-baseline.jsonl",
+    },
+    CaseDefinition {
+        id: "p15-openclaw-tool-result",
+        client: ClientId::OpenClaw,
+        source_id: "openclaw.agents",
+        kind: SourceKind::Jsonl,
+        fixture: "tests/fixtures/session_stores/openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl",
+    },
+    CaseDefinition {
+        id: "p15-qwen-benign",
+        client: ClientId::Qwen,
+        source_id: "qwen.projects",
+        kind: SourceKind::Jsonl,
+        fixture: "tests/fixtures/benign_baselines/qwen/projects/baseline-project/chats/benign-baseline.jsonl",
+    },
+    CaseDefinition {
+        id: "p15-qwen-tool-result",
+        client: ClientId::Qwen,
+        source_id: "qwen.projects",
+        kind: SourceKind::Jsonl,
+        fixture: "tests/fixtures/session_stores/qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl",
+    },
 ];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -562,15 +590,15 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
     let bytes = render(&report);
     write_requested_report(&bytes);
     assert_eq!(report.schema_version, "detection-v2-shadow-report.v1");
-    assert_eq!(report.case_count, 8);
-    assert_eq!(report.session_count, 9);
+    assert_eq!(report.case_count, 12);
+    assert_eq!(report.session_count, 13);
     assert_eq!(
         report.atomic_equivalence,
         AtomicEquivalenceCounts {
-            both_match: 9,
-            both_no_match: 139,
+            both_match: 15,
+            both_no_match: 203,
             legacy_only: 1,
-            v2_only: 2,
+            v2_only: 4,
             v2_indeterminate: 0,
             v2_error: 0,
             v2_not_applicable: 11,
@@ -579,29 +607,31 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
     assert_eq!(
         report.risk_equivalence,
         EquivalenceCounts {
-            equal: 6,
+            equal: 8,
             legacy_only: 1,
             v2_only: 0,
-            different: 2,
+            different: 4,
         }
     );
     assert_eq!(
         report.metadata_equivalence,
         EquivalenceCounts {
-            equal: 6,
+            equal: 8,
             legacy_only: 1,
             v2_only: 0,
-            different: 2,
+            different: 4,
         }
     );
-    assert_eq!(report.health.total_detector_session_evaluations, 162);
+    assert_eq!(report.health.total_detector_session_evaluations, 234);
     assert_eq!(report.health.indeterminate, 0);
     assert_eq!(report.health.canonical_projection_errors, 0);
     assert!(!report.target_breakdown.is_empty());
     assert!(!report.rule_breakdown.is_empty());
-    assert_eq!(report.reviewed_exceptions.len(), 3);
-    assert_eq!(report.mismatches.len(), 3);
+    assert_eq!(report.reviewed_exceptions.len(), 5);
+    assert_eq!(report.mismatches.len(), 5);
     assert!(report.source_breakdown.contains_key("claude.projects"));
+    assert!(report.source_breakdown.contains_key("openclaw.agents"));
+    assert!(report.source_breakdown.contains_key("qwen.projects"));
     assert!(
         !report
             .source_breakdown
@@ -624,6 +654,32 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
         "https://",
         "curl",
         "printf",
+        "openclaw-baseline-session",
+        "openclaw-uc001-tool-result",
+        "qwen-baseline-session",
+        "qwen-uc001-tool-result",
+        "tc-openclaw-baseline-001",
+        "tc-qwen-baseline-001",
+        "openclaw-fixture-model",
+        "qwen3-coder-plus",
+        "repo_status",
+        "OpenClaw repo_status",
+        "Qwen repo_status",
+        "src/lib.rs",
+        "Makefile",
+        "read .env",
+        "darkroastcyber.io",
+        "Show me the contents",
+        "Explain the purpose",
+        "Use the synthetic",
+        "I'll read the Makefile",
+        "Let me read the file first",
+        "The Makefile has three targets",
+        "The lib.rs file defines a simple",
+        "MCP tool result",
+        "cargo build --release",
+        "cargo test",
+        "cargo clean",
     ] {
         assert!(
             !serialized.contains(forbidden),

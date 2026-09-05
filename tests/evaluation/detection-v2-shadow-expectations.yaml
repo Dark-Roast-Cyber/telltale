@@ -21,3 +21,17 @@ expectations:
     classification: legacy_post_filter_difference
     reason_code: legacy_post_match_filter
     rationale: The canonical tool-result content contains the synthetic secret-access example, while the legacy post-match filter removes the same match.
+  - case_id: p15-openclaw-tool-result
+    session_reference: sha256:fc17a9e81e4fc771c1fa06ad176b900bb4b9ec939610609ccbe296ad1b65e488
+    rule_id: secret.env.read
+    expected_relation: v2_only
+    classification: legacy_post_filter_difference
+    reason_code: legacy_post_match_filter
+    rationale: The canonical OpenClaw tool-result observation matches the atomic rule, while the legacy post-match filter removes the corresponding tool-result match.
+  - case_id: p15-qwen-tool-result
+    session_reference: sha256:5017071e0403e133a0d64540c7bea7f5ed29cc59b790dd8d9603d8b8fab9ddb9
+    rule_id: secret.env.read
+    expected_relation: v2_only
+    classification: legacy_post_filter_difference
+    reason_code: legacy_post_match_filter
+    rationale: The canonical Qwen tool-result observation matches the atomic rule, while the legacy post-match filter removes the corresponding tool-result match.

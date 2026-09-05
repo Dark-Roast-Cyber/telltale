@@ -48,6 +48,39 @@ fn project_codex(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2>
     (directory, result)
 }
 
+fn project_openclaw(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2>, String>) {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("openclaw-vector.jsonl");
+    fs::write(&path, contents).expect("OpenClaw vector");
+    let result = super::openclaw::canonical::project_openclaw_canonical_observations(
+        &source(
+            ClientId::OpenClaw,
+            "openclaw.agents",
+            SourceKind::Jsonl,
+            path,
+        ),
+        super::openclaw::canonical::OpenClawCanonicalOptions::new(
+            ObservedAt::new(OBSERVED_AT).expect("observed time"),
+        ),
+    )
+    .map_err(|error| error.code().to_owned());
+    (directory, result)
+}
+
+fn project_qwen(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2>, String>) {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("qwen-vector.jsonl");
+    fs::write(&path, contents).expect("Qwen vector");
+    let result = super::qwen::canonical::project_qwen_canonical_observations(
+        &source(ClientId::Qwen, "qwen.projects", SourceKind::Jsonl, path),
+        super::qwen::canonical::QwenCanonicalOptions::new(
+            ObservedAt::new(OBSERVED_AT).expect("observed time"),
+        ),
+    )
+    .map_err(|error| error.code().to_owned());
+    (directory, result)
+}
+
 fn project_opencode(
     messages: &[(&str, &str, serde_json::Value)],
     parts: &[(&str, &str, i64, serde_json::Value)],
@@ -112,6 +145,24 @@ fn assert_semantically_equal(left: &CanonicalObservationV2, right: &CanonicalObs
     );
 }
 
+fn assert_partial_session_capabilities(observations: &[CanonicalObservationV2]) {
+    for observation in observations {
+        let capabilities = observation.capability_context().expect("capabilities");
+        assert_eq!(
+            capabilities.resolve(CapabilityId::ToolCall),
+            CapabilityAvailability::Supported
+        );
+        assert_eq!(
+            capabilities.resolve(CapabilityId::UserContext),
+            CapabilityAvailability::Supported
+        );
+        assert_eq!(
+            capabilities.resolve(CapabilityId::ToolExecution),
+            CapabilityAvailability::Unknown
+        );
+    }
+}
+
 #[test]
 fn equivalent_message_vectors_have_equal_canonical_meaning() {
     let (_claude_dir, claude) = project_claude(
@@ -122,12 +173,30 @@ fn equivalent_message_vectors_have_equal_canonical_meaning() {
         r#"{"type":"user","session_id":"codex-conformance","content":"Synthetic user message."}
 {"type":"assistant","session_id":"codex-conformance","content":"Synthetic assistant message."}"#,
     );
+    let (_openclaw_dir, openclaw) = project_openclaw(
+        r#"{"type":"user","sessionId":"openclaw-conformance","content":"Synthetic user message."}
+{"type":"assistant","sessionId":"openclaw-conformance","content":"Synthetic assistant message."}"#,
+    );
+    let (_qwen_dir, qwen) = project_qwen(
+        r#"{"type":"user","sessionId":"qwen-conformance","content":"Synthetic user message."}
+{"type":"assistant","sessionId":"qwen-conformance","content":"Synthetic assistant message."}"#,
+    );
     let claude = claude.expect("Claude message vector");
     let codex = codex.expect("Codex message vector");
+    let openclaw = openclaw.expect("OpenClaw message vector");
+    let qwen = qwen.expect("Qwen message vector");
     assert_eq!(claude.len(), 2);
     assert_eq!(codex.len(), 2);
+    assert_eq!(openclaw.len(), 2);
+    assert_eq!(qwen.len(), 2);
     for (left, right) in claude.iter().zip(&codex) {
         assert_semantically_equal(left, right);
+    }
+    for observations in [&openclaw, &qwen] {
+        for (left, right) in observations.iter().zip(&codex) {
+            assert_semantically_equal(left, right);
+        }
+        assert_partial_session_capabilities(observations);
     }
 }
 
@@ -141,8 +210,18 @@ fn equivalent_tool_request_and_result_vectors_preserve_linkage_and_values() {
         r#"{"type":"assistant","session_id":"codex-tool-conformance","content":[{"type":"tool_use","id":"call-conformance","name":"Read","input":{"file_path":"synthetic.txt"}}]}
 {"type":"assistant","session_id":"codex-tool-conformance","content":[{"type":"tool_result","call_id":"call-conformance","content":{"status":"ok"},"is_error":false}]}"#,
     );
+    let (_openclaw_dir, openclaw) = project_openclaw(
+        r#"{"type":"tool_call","sessionId":"openclaw-tool-conformance","call_id":"call-conformance","name":"Read","arguments":{"file_path":"synthetic.txt"}}
+{"type":"tool_result","sessionId":"openclaw-tool-conformance","call_id":"call-conformance","content":{"status":"ok"},"is_error":false}"#,
+    );
+    let (_qwen_dir, qwen) = project_qwen(
+        r#"{"type":"tool_call","sessionId":"qwen-tool-conformance","call_id":"call-conformance","name":"Read","arguments":{"file_path":"synthetic.txt"}}
+{"type":"tool_result","sessionId":"qwen-tool-conformance","call_id":"call-conformance","content":{"status":"ok"},"is_error":false}"#,
+    );
     let claude = claude.expect("Claude tool vector");
     let codex = codex.expect("Codex tool vector");
+    let openclaw = openclaw.expect("OpenClaw tool vector");
+    let qwen = qwen.expect("Qwen tool vector");
     let claude_tools = claude
         .iter()
         .filter(|item| item.kind() == ObservationFamily::Tool);
@@ -152,6 +231,17 @@ fn equivalent_tool_request_and_result_vectors_preserve_linkage_and_values() {
     for (left, right) in claude_tools.zip(codex_tools) {
         assert_semantically_equal(left, right);
     }
+    let openclaw_tools = openclaw
+        .iter()
+        .filter(|item| item.kind() == ObservationFamily::Tool);
+    let qwen_tools = qwen
+        .iter()
+        .filter(|item| item.kind() == ObservationFamily::Tool);
+    for (left, right) in openclaw_tools.zip(qwen_tools) {
+        assert_semantically_equal(left, right);
+    }
+    assert_partial_session_capabilities(&openclaw);
+    assert_partial_session_capabilities(&qwen);
 }
 
 #[test]
@@ -170,6 +260,108 @@ fn missing_call_id_is_absent_or_fails_closed_without_fabrication() {
         .find(|item| item.kind() == ObservationFamily::Tool)
         .expect("tool observation");
     assert_eq!(tool.correlation().call_id(), None);
+
+    let (_openclaw_dir, openclaw) = project_openclaw(
+        r#"{"type":"tool_call","sessionId":"openclaw-missing-call","name":"shell","input":{"command":"printf synthetic"}}"#,
+    );
+    let openclaw = openclaw.expect("OpenClaw missing-call vector");
+    let tool = openclaw
+        .iter()
+        .find(|item| item.kind() == ObservationFamily::Tool)
+        .expect("OpenClaw tool observation");
+    assert_eq!(tool.correlation().call_id(), None);
+
+    let (_qwen_dir, qwen) = project_qwen(
+        r#"{"type":"tool_call","sessionId":"qwen-missing-call","name":"shell","input":{"command":"printf synthetic"}}"#,
+    );
+    let qwen = qwen.expect("Qwen missing-call vector");
+    let tool = qwen
+        .iter()
+        .find(|item| item.kind() == ObservationFamily::Tool)
+        .expect("Qwen tool observation");
+    assert_eq!(tool.correlation().call_id(), None);
+}
+
+#[test]
+fn openclaw_and_qwen_tool_facts_keep_unknown_execution_and_parsed_facets() {
+    let (_openclaw_dir, openclaw) = project_openclaw(
+        r#"{"type":"tool_call","sessionId":"openclaw-facets","call_id":"call-facets","name":"shell","arguments":{"command":"printf synthetic","file_path":"synthetic.txt"}}"#,
+    );
+    let (_qwen_dir, qwen) = project_qwen(
+        r#"{"type":"tool_call","sessionId":"qwen-facets","call_id":"call-facets","name":"shell","arguments":{"command":"printf synthetic","file_path":"synthetic.txt"}}"#,
+    );
+    let openclaw = openclaw.expect("OpenClaw facet vector");
+    let qwen = qwen.expect("Qwen facet vector");
+    assert_semantically_equal(&openclaw[0], &qwen[0]);
+
+    for observations in [&openclaw, &qwen] {
+        assert_partial_session_capabilities(observations);
+        let tool = observations
+            .iter()
+            .find(|item| item.kind() == ObservationFamily::Tool)
+            .expect("tool observation");
+        assert_eq!(
+            tool.facets()["command.text"].value(),
+            &JsonValue::string("printf synthetic")
+        );
+        assert_eq!(
+            tool.facets()["resource.path"].value(),
+            &JsonValue::string("synthetic.txt")
+        );
+        assert_eq!(
+            tool.fact_metadata()["command.text"].provenance(),
+            telltale_schema::observation::FactProvenance::Parsed
+        );
+        assert_eq!(
+            tool.fact_metadata()["resource.path"].provenance(),
+            telltale_schema::observation::FactProvenance::Parsed
+        );
+        assert!(observations.iter().all(|observation| {
+            !matches!(
+                observation.kind(),
+                ObservationFamily::File | ObservationFamily::Process | ObservationFamily::Network
+            ) && !matches!(
+                observation.stage(),
+                ObservationStage::ToolProposed
+                    | ObservationStage::ToolExecutionStarted
+                    | ObservationStage::ToolExecutionCompleted
+            )
+        }));
+    }
+}
+
+#[test]
+fn openclaw_and_qwen_generic_tool_states_do_not_claim_execution_lifecycle() {
+    let vector = |session: &str| {
+        format!(
+            r#"{{"type":"tool","sessionId":"{session}","tool":"shell","callID":"call-running","state":{{"status":"running","input":{{"command":"printf synthetic"}}}}}}
+{{"type":"tool","sessionId":"{session}","tool":"shell","callID":"call-completed","state":{{"status":"completed","output":{{"status":"ok"}}}}}}
+{{"type":"tool","sessionId":"{session}","tool":"shell","callID":"call-error","state":{{"status":"error","error":{{"message":"synthetic failure"}}}}}}"#
+        )
+    };
+    let (_openclaw_dir, openclaw) = project_openclaw(&vector("openclaw-generic"));
+    let (_qwen_dir, qwen) = project_qwen(&vector("qwen-generic"));
+
+    for observations in [
+        openclaw.expect("OpenClaw generic tool vector"),
+        qwen.expect("Qwen generic tool vector"),
+    ] {
+        assert_partial_session_capabilities(&observations);
+        assert!(
+            observations
+                .iter()
+                .any(|observation| { observation.stage() == ObservationStage::ToolResultReturned })
+        );
+        assert!(observations.iter().all(|observation| {
+            observation.kind() == ObservationFamily::Tool
+                && !matches!(
+                    observation.stage(),
+                    ObservationStage::ToolProposed
+                        | ObservationStage::ToolExecutionStarted
+                        | ObservationStage::ToolExecutionCompleted
+                )
+        }));
+    }
 }
 
 #[test]

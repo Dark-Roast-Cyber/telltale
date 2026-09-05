@@ -89,6 +89,22 @@ pub fn project_source_canonical_observations(
             )
             .map_err(map_opencode_error)
         }
+        (ClientId::OpenClaw, "openclaw.agents") => {
+            crate::sources::openclaw::canonical::project_openclaw_canonical_observations(
+                source,
+                crate::sources::openclaw::canonical::OpenClawCanonicalOptions::new(
+                    options.observed_at,
+                ),
+            )
+            .map_err(map_openclaw_error)
+        }
+        (ClientId::Qwen, "qwen.projects") => {
+            crate::sources::qwen::canonical::project_qwen_canonical_observations(
+                source,
+                crate::sources::qwen::canonical::QwenCanonicalOptions::new(options.observed_at),
+            )
+            .map_err(map_qwen_error)
+        }
         _ => Err(CanonicalProjectionError::UnsupportedSourceIdentity),
     }
 }
@@ -148,6 +164,46 @@ fn map_opencode_error(
             }
         }
         crate::sources::opencode::canonical::OpenCodeCanonicalError::Observation(_) => {
+            CanonicalProjectionError::CanonicalValidation
+        }
+    }
+}
+
+fn map_openclaw_error(
+    error: crate::sources::openclaw::canonical::OpenClawCanonicalError,
+) -> CanonicalProjectionError {
+    match error {
+        crate::sources::openclaw::canonical::OpenClawCanonicalError::Source(_) => {
+            CanonicalProjectionError::SourceParse
+        }
+        crate::sources::openclaw::canonical::OpenClawCanonicalError::Mapping { code, .. } => {
+            if code == "unsupported_source_identity" {
+                CanonicalProjectionError::UnsupportedSourceIdentity
+            } else {
+                CanonicalProjectionError::CanonicalMapping
+            }
+        }
+        crate::sources::openclaw::canonical::OpenClawCanonicalError::Observation(_) => {
+            CanonicalProjectionError::CanonicalValidation
+        }
+    }
+}
+
+fn map_qwen_error(
+    error: crate::sources::qwen::canonical::QwenCanonicalError,
+) -> CanonicalProjectionError {
+    match error {
+        crate::sources::qwen::canonical::QwenCanonicalError::Source(_) => {
+            CanonicalProjectionError::SourceParse
+        }
+        crate::sources::qwen::canonical::QwenCanonicalError::Mapping { code, .. } => {
+            if code == "unsupported_source_identity" {
+                CanonicalProjectionError::UnsupportedSourceIdentity
+            } else {
+                CanonicalProjectionError::CanonicalMapping
+            }
+        }
+        crate::sources::qwen::canonical::QwenCanonicalError::Observation(_) => {
             CanonicalProjectionError::CanonicalValidation
         }
     }
@@ -226,6 +282,18 @@ mod tests {
                 SourceKind::Sqlite,
                 "session_stores/opencode/opencode.db",
             ),
+            source(
+                ClientId::OpenClaw,
+                "openclaw.agents",
+                SourceKind::Jsonl,
+                "session_stores/openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl",
+            ),
+            source(
+                ClientId::Qwen,
+                "qwen.projects",
+                SourceKind::Jsonl,
+                "session_stores/qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl",
+            ),
         ];
         assert!(sources.iter().all(|source| !project(source).is_empty()));
     }
@@ -271,6 +339,24 @@ mod tests {
         assert_eq!(error.to_string(), "unsupported_source_identity");
         assert!(!format!("{error:?}").contains("does-not-exist"));
         assert!(!format!("{error}").contains("does-not-exist"));
+
+        for (client, source_id) in [
+            (ClientId::OpenClaw, "openclaw.legacy_json"),
+            (ClientId::Qwen, "qwen.legacy_json"),
+        ] {
+            let source = Source {
+                client,
+                kind: SourceKind::LegacyJson,
+                source_id: source_id.to_owned(),
+                path: PathBuf::from("does-not-exist.json"),
+            };
+            let error = project_source_canonical_observations(
+                &source,
+                CanonicalProjectionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            )
+            .unwrap_err();
+            assert_eq!(error, CanonicalProjectionError::UnsupportedSourceIdentity);
+        }
     }
 
     #[test]
@@ -279,6 +365,10 @@ mod tests {
             (ClientId::Claude, "Claude.projects"),
             (ClientId::Codex, "codex.SESSIONS"),
             (ClientId::OpenCode, "opencode.SQLite"),
+            (ClientId::OpenClaw, "OpenClaw.agents"),
+            (ClientId::Qwen, "Qwen.projects"),
+            (ClientId::Claude, "openclaw.agents"),
+            (ClientId::Codex, "qwen.projects"),
         ] {
             let source = Source {
                 client,
@@ -299,13 +389,13 @@ mod tests {
 
     #[test]
     fn facade_preserves_fixed_observed_at_and_native_output_identity() {
-        let source = source(
+        let codex_source = source(
             ClientId::Codex,
             "codex.sessions",
             SourceKind::Jsonl,
             "session_stores/codex/sessions/2026/04/encoded-http-exfil.jsonl",
         );
-        let observations = project(&source);
+        let observations = project(&codex_source);
         assert!(
             observations
                 .iter()
@@ -313,7 +403,7 @@ mod tests {
         );
 
         let direct = crate::sources::codex::canonical::project_codex_canonical_observations(
-            &source,
+            &codex_source,
             crate::sources::codex::canonical::CodexCanonicalOptions::new(
                 ObservedAt::new(OBSERVED_AT).unwrap(),
             ),
@@ -329,5 +419,26 @@ mod tests {
                 .map(|observation| observation.observation_id())
                 .collect::<Vec<_>>()
         );
+
+        for source in [
+            source(
+                ClientId::OpenClaw,
+                "openclaw.agents",
+                SourceKind::Jsonl,
+                "session_stores/openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl",
+            ),
+            source(
+                ClientId::Qwen,
+                "qwen.projects",
+                SourceKind::Jsonl,
+                "session_stores/qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl",
+            ),
+        ] {
+            assert!(
+                project(&source)
+                    .iter()
+                    .all(|observation| observation.observed_at().as_str() == OBSERVED_AT)
+            );
+        }
     }
 }

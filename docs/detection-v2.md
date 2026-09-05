@@ -7,9 +7,12 @@
 > deterministic, immutable-fixture harness measures the current native
 > Canonical Observation v2 reference identities (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
-> `opencode.sqlite`) and has zero unexplained mismatches in the current reviewed
-> corpus. Live scanner shadow: **NO**. Production activation: **NO**. Adapter
-> coverage is incomplete, and Event3 remains frozen. Advanced detector runtime
+> `opencode.sqlite`; `openclaw.agents`; `qwen.projects`) and has zero
+> unexplained mismatches in the current reviewed 13-session corpus. The OpenClaw
+> and Qwen reference adapters are implemented as non-production projections.
+> Live scanner shadow: **NO**. Production activation: **NO**. Production remains
+> on `NormalizedRecordV1` and Rule v1; remaining adapter coverage is incomplete,
+> and Event3 remains frozen. Advanced detector runtime
 > and a Detection Content v2 loader are not implemented. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
@@ -17,16 +20,16 @@
 The current Rule v1, process-chain, and Event3 scoring behavior remains documented
 in [Detection model](detection-model.md). This page describes the accepted future
 model and identifies the implemented non-production foundation and fixture-only
-P13 measurement harness.
+offline measurement harness.
 
-## P13 shadow/equivalence boundary
+## Offline shadow/equivalence boundary
 
-The P13 harness reports three separate compatibility questions: atomic rule-set
+The offline harness reports three separate compatibility questions: atomic rule-set
 equivalence, modifier compatibility, and contribution/score compatibility. It
 does not combine those questions into a parity claim. The current reviewed
-reference corpus has exactly three observed atomic mismatches: one
-`execution.shell` legacy-only command-content broadening and two
-`secret.env.read` v2-only legacy post-match-filter cases; all three are
+reference corpus has exactly five observed atomic mismatches: one
+`execution.shell` legacy-only command-content broadening and four
+`secret.env.read` v2-only legacy post-match-filter cases; all five are
 explained, with zero unexplained mismatches. Separately, focused synthetic
 compatibility coverage proves `compat.v1.url` is compiler-supported but
 truthfully absent and demonstrates the compatibility gap; there is no

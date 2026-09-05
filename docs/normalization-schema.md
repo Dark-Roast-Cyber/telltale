@@ -8,7 +8,9 @@ Telltale's internal normalization contract is `NormalizedRecordV1` in `crates/te
 are implemented in `telltale-schema` but are not the active normalization path;
 A Claude Code (`claude.projects`) v2 reference projection and a Codex v2
 reference adapter family are implemented, and the OpenCode (`opencode.sqlite`)
-v2 reference projection is implemented as non-production. `opencode.legacy_json`
+v2 reference projection is implemented as non-production. OpenClaw
+(`openclaw.agents`) and Qwen (`qwen.projects`) v2 reference adapters are also
+implemented as non-production. `opencode.legacy_json`
 remains supported and its v2 migration has not started; `opencode.project_json`
 remains Candidate and its v2 migration has not started. `NormalizedRecordV1`
 plus its loss-aware compatibility path remain current in production.
@@ -16,11 +18,13 @@ plus its loss-aware compatibility path remain current in production.
 Detection v2 has only an experimental, non-production foundation: the
 `observation_match` detector, `DetectorResult` -> `Signal` -> atomic `Finding`,
 and Rule v1 compiler. It is not wired into this production path; the fixture-only
-P13 shadow harness is an offline measurement seam, not a production shadow or
+offline shadow harness is an offline measurement seam, not a production shadow or
 activation path. Advanced detector runtime and Detection Content v2 loader are
 not implemented. Event4 and telemetry/output v2 are not started, and Canonical
-Observation v2 production cutover has not started. Event 3.0 is frozen; the
-reference projections do not change its behavior or output. The
+Observation v2 production cutover has not started. Offline deterministic shadow
+coverage now includes OpenClaw and Qwen across the current reviewed 13-session
+corpus with zero unexplained mismatches. Event 3.0 is frozen; the reference
+projections do not change its behavior or output. The
 `compat.v1.url` view remains truthfully absent; focused synthetic harness
 coverage demonstrates the compatibility gap.
 

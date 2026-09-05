@@ -105,6 +105,42 @@ fn preserves_openclaw_metadata_inheritance_and_empty_jsonl() {
 }
 
 #[test]
+fn native_openclaw_projection_preserves_legacy_direct_tool_call_shape() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("native-parity.jsonl");
+    fs::write(
+        &path,
+        b"{\"type\":\"session_meta\",\"agent\":\"fixture-agent\",\"provider\":\"fixture-provider\",\"model\":\"fixture-model\"}\n{\"type\":\"assistant\",\"content\":\"Synthetic response.\",\"tool_calls\":[{\"id\":\"fixture-call\",\"name\":\"read_file\",\"arguments\":{\"path\":\"synthetic.txt\"}}]}\n",
+    )
+    .expect("native parity fixture");
+    let source = openclaw_source(path);
+
+    let native = super::native::extract_openclaw_native_records(&source).expect("native records");
+    assert_eq!(native.len(), 2);
+    assert_eq!(native[0].source_sequence, 0);
+    assert_eq!(native[1].source_sequence, 1);
+    assert_eq!(native[1].reported_agent, None);
+    assert_eq!(
+        native[1].legacy_effective_agent.as_deref(),
+        Some("fixture-agent")
+    );
+    assert_eq!(native[1].tool_calls.len(), 1);
+    assert_eq!(
+        native[1].tool_calls[0].call_id.as_deref(),
+        Some("fixture-call")
+    );
+
+    let records = parse_source_records(&source).expect("legacy records");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].kind, RecordKind::AssistantMessage);
+    assert_eq!(records[1].tool_name, None);
+    assert_eq!(records[1].arguments, None);
+    assert_eq!(records[1].agent.as_deref(), Some("fixture-agent"));
+    assert_eq!(records[1].provider.as_deref(), Some("fixture-provider"));
+    assert_eq!(records[1].model.as_deref(), Some("fixture-model"));
+}
+
+#[test]
 fn openclaw_parser_has_terminal_failure_and_unknown_boundaries() {
     let cases = [
         (

@@ -52,6 +52,14 @@ The matrix status above remains governed by the coverage gates below. A parser
 being modeled does not by itself establish live host validation, and a complete
 project-local parser fixture does not promote a candidate to Supported.
 
+Non-production Canonical Observation v2 reference adapters are implemented for
+`openclaw.agents` and `qwen.projects`. Offline deterministic shadow coverage now
+includes both sources across the current reviewed 13-session corpus with zero
+unexplained mismatches. In those reference projections, `ToolCall` and
+`UserContext` are **Supported** while `ToolExecution` is **Unknown**. These are
+not production-parity, live-shadow, or all-client migration claims; the support
+statuses in this matrix remain unchanged.
+
 ## Validation Matrix
 
 | Client | Source Identity | Discovery | Parse Benign | Parse Tool Call | Parse Tool Result | UC-001 | UC-002 | UC-003 | Support Status / Live Validation | Known Lossy Fields |

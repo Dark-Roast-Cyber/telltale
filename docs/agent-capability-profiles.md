@@ -169,6 +169,19 @@ session fallback is legacy-only and is not used for v2 session identity.
 
 ---
 
+### Canonical Observation v2 reference coverage
+
+The `openclaw.agents` and `qwen.projects` Canonical Observation v2 reference
+adapters are implemented as non-production projections. Their capability context
+marks `ToolCall` and `UserContext` as **Supported** and `ToolExecution` as
+**Unknown**; JSONL tool requests and results do not establish execution. Offline
+deterministic shadow coverage now includes both sources across the current
+reviewed 13-session corpus with zero unexplained mismatches. Production remains
+on `NormalizedRecordV1` and Rule v1; this is not live shadow, production parity,
+or an all-client migration.
+
+---
+
 ### RooCode
 
 **Source kinds**: `roocode.tasks`
@@ -258,11 +271,11 @@ has not started. Production remains `NormalizedRecordV1`; Canonical Observation
 v2 cutover and production Detection v2 have not started. The experimental
 Detection v2 foundation implements only `observation_match`,
 `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler; the
-fixture-only P13 shadow harness is an offline measurement seam, not a production
-shadow or activation path. Advanced detector runtime and Detection Content v2
-loader are not implemented. Event4 and telemetry/output v2 have not started. The
-`compat.v1.url` view remains truthfully absent; focused synthetic harness
-coverage demonstrates the compatibility gap.
+fixture-only offline shadow harness is an offline measurement seam, not a
+production shadow or activation path. Advanced detector runtime and Detection
+Content v2 loader are not implemented. Event4 and telemetry/output v2 have not
+started. The `compat.v1.url` view remains truthfully absent; focused synthetic
+harness coverage demonstrates the compatibility gap.
 
 ---
 

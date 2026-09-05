@@ -76,6 +76,12 @@ Release archives and CI smoke checks cover binary packaging and execution on
 Linux, macOS, and Windows; they do not establish broad live source-store
 validation. Fixture-backed-only clients remain preview/experimental for live use.
 
+Non-production Canonical Observation v2 reference adapters are implemented for
+`openclaw.agents` and `qwen.projects`. Offline deterministic shadow coverage now
+includes both sources across the current reviewed 13-session corpus with zero
+unexplained mismatches. Production remains on `NormalizedRecordV1` and Rule v1;
+there is no live shadow, production parity, or all-client migration.
+
 ## Quick start
 
 ```sh

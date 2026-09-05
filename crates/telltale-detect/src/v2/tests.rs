@@ -1681,6 +1681,40 @@ fn result_visibility_does_not_claim_tool_execution() {
 }
 
 #[test]
+fn unknown_tool_execution_is_not_a_clean_no_match() {
+    let observation = tool_with_result(ObservationStage::ToolResultReturned, "unknown-execution");
+    let observation = observation_with_capability(
+        &observation,
+        CapabilityContext::new()
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported)
+            .with_override(CapabilityId::ToolExecution, CapabilityAvailability::Unknown)
+            .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported),
+    );
+    let detector = ObservationMatchSpec::new(
+        DetectorIdentity::new(DetectorKind::ObservationMatch, "test.execution.unknown")
+            .expect("identity"),
+        ObservationFamily::Tool,
+        vec![ObservationStage::ToolResultReturned],
+        MatcherSpec::exists("tool.result.text"),
+        metadata(FindingKind::Informational, "synthetic"),
+    )
+    .with_required_capabilities(vec![CapabilityId::ToolExecution])
+    .compile()
+    .expect("execution detector");
+
+    let result = detector.evaluate(&observation);
+    assert_eq!(result.evaluation_status(), EvaluationStatus::NotEvaluated);
+    assert_eq!(
+        result.non_evaluation_reason(),
+        Some(NonEvaluationReason::RequiredCapabilityUnknown)
+    );
+    assert_ne!(
+        result.evaluation_status(),
+        EvaluationStatus::EvaluatedNoMatch
+    );
+}
+
+#[test]
 fn matcher_implements_all_typed_operators() {
     let observation = tool_with_result(ObservationStage::ToolResultReturned, "operators");
     let string_cases = [
