@@ -4,12 +4,17 @@
 > reviewed intended future internal evidence contract. **Current
 > implementation:** Canonical Observation v2 core domain types/scaffolding are
 > implemented in `telltale-schema`. Claude Code (`claude.projects`), Codex,
-> OpenCode (`opencode.sqlite`), OpenClaw (`openclaw.agents`), and Qwen
-> (`qwen.projects`) v2 reference projections are implemented as non-production
-> projections. The offline shadow/equivalence harness includes the OpenClaw and
-> Qwen projections and currently reports zero unexplained mismatches. These
+> OpenCode (`opencode.sqlite`), OpenClaw (`openclaw.agents`), Qwen
+> (`qwen.projects`), and Copilot (`copilot.process_log`) v2 reference
+> projections are implemented as non-production projections. The offline
+> shadow/equivalence harness includes Copilot across 15 cases, 17 reviewed
+> sessions, and 306 detector evaluations. It reports five reviewed match-set
+> differences plus 28 reviewed capability-driven indeterminate outcomes, with
+> zero unexplained differences. These
 > projections are not production detector input: production remains on
 > `NormalizedRecordV1` and Rule v1, with no live shadow or production parity.
+> Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
+> **Unsupported**, and ToolExecution **Unknown**.
 > OpenCode legacy JSON remains compatibility-only, and production adapter
 > cutover has not started. The P10B identity/conformance amendment is
 > implemented: stable identity is coordinate-only and semantic comparison is
@@ -27,7 +32,7 @@ Canonical Observation is the unit of evidence. It is local-first and richer
 than any export. Detection consumes it, not Event4 or a destination-specific
 projection.
 
-The Claude Code, Codex, OpenCode SQLite, OpenClaw, and Qwen v2 reference
+The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference
 projections are deliberately not active normalization paths. They preserve
 source call IDs, structured content parts, structured tool values, and truthful
 lifecycle stages while the production scanner continues to use

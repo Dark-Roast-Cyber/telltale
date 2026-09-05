@@ -67,8 +67,10 @@ documented as intended future work, not implemented capability. Detection v2
 has an experimental, non-production foundation: only `observation_match`, the
 `DetectorResult` -> `Signal` -> atomic `Finding` path, and the Rule v1 compiler
 are implemented. A fixture-only offline shadow/equivalence harness is
-implemented, now including `openclaw.agents` and `qwen.projects`
-across the current reviewed 13-session corpus with zero unexplained mismatches;
+implemented, now including `openclaw.agents`, `qwen.projects`, and Copilot
+`copilot.process_log` across 15 cases, 17 reviewed sessions, and 306 detector
+evaluations. The reviewed differences are five match-set differences plus 28
+capability-driven indeterminate outcomes, with zero unexplained differences;
 live scanner shadow, production activation,
 advanced detector runtimes, and a Detection Content v2 loader do not exist.
 Canonical Observation v2 core types/scaffolding are implemented, and the Claude
@@ -77,7 +79,8 @@ adapter family are implemented as non-production projections. The OpenCode
 (`opencode.sqlite`) v2 reference projection is also implemented as a
 non-production projection. OpenClaw (`openclaw.agents`) and Qwen
 (`qwen.projects`) v2 reference adapters are also implemented as non-production
-projections. `opencode.legacy_json` remains supported and its v2
+projections. Copilot native-v2 capabilities are ToolCall **Supported**,
+UserContext **Unsupported**, and ToolExecution **Unknown**. `opencode.legacy_json` remains supported and its v2
 migration has not started; `opencode.project_json` remains Candidate and its v2
 migration has not started. Production normalization/detection still uses
 `NormalizedRecordV1`. Canonical Observation v2 production cutover, production
@@ -116,6 +119,8 @@ release planning:
 - **OpenClaw** (`openclaw.agents`) and **Qwen** (`qwen.projects`): implemented
   non-production Canonical Observation v2 reference adapters; production
   remains `NormalizedRecordV1`.
+- **Copilot** (`copilot.process_log`): implemented non-production Canonical
+  Observation v2 reference adapter; production remains `NormalizedRecordV1`.
 - **Claude Desktop**: priority discovery and modeling are required before
   migration; it is not assumed equivalent to Claude Code.
 - **ChatGPT Desktop**: priority discovery and modeling are required before

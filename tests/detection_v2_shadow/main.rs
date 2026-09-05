@@ -115,6 +115,27 @@ const CASES: &[CaseDefinition] = &[
         kind: SourceKind::Jsonl,
         fixture: "tests/fixtures/session_stores/qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl",
     },
+    CaseDefinition {
+        id: "p16-copilot-mixed-format",
+        client: ClientId::Copilot,
+        source_id: "copilot.process_log",
+        kind: SourceKind::CopilotProcessLog,
+        fixture: "tests/fixtures/session_stores/copilot/process-mixed-format.log",
+    },
+    CaseDefinition {
+        id: "p16-copilot-multi-session",
+        client: ClientId::Copilot,
+        source_id: "copilot.process_log",
+        kind: SourceKind::CopilotProcessLog,
+        fixture: "tests/fixtures/session_stores/copilot/process-multi-session.log",
+    },
+    CaseDefinition {
+        id: "p16-copilot-uc001",
+        client: ClientId::Copilot,
+        source_id: "copilot.process_log",
+        kind: SourceKind::CopilotProcessLog,
+        fixture: "tests/fixtures/session_stores/copilot/process-uc001.log",
+    },
 ];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -590,16 +611,16 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
     let bytes = render(&report);
     write_requested_report(&bytes);
     assert_eq!(report.schema_version, "detection-v2-shadow-report.v1");
-    assert_eq!(report.case_count, 12);
-    assert_eq!(report.session_count, 13);
+    assert_eq!(report.case_count, 15);
+    assert_eq!(report.session_count, 17);
     assert_eq!(
         report.atomic_equivalence,
         AtomicEquivalenceCounts {
             both_match: 15,
-            both_no_match: 203,
+            both_no_match: 247,
             legacy_only: 1,
             v2_only: 4,
-            v2_indeterminate: 0,
+            v2_indeterminate: 28,
             v2_error: 0,
             v2_not_applicable: 11,
         }
@@ -607,8 +628,8 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
     assert_eq!(
         report.risk_equivalence,
         EquivalenceCounts {
-            equal: 8,
-            legacy_only: 1,
+            equal: 11,
+            legacy_only: 2,
             v2_only: 0,
             different: 4,
         }
@@ -616,22 +637,25 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
     assert_eq!(
         report.metadata_equivalence,
         EquivalenceCounts {
-            equal: 8,
-            legacy_only: 1,
+            equal: 11,
+            legacy_only: 2,
             v2_only: 0,
             different: 4,
         }
     );
-    assert_eq!(report.health.total_detector_session_evaluations, 234);
-    assert_eq!(report.health.indeterminate, 0);
+    assert_eq!(report.health.total_detector_session_evaluations, 306);
+    assert_eq!(report.health.indeterminate, 28);
+    assert_eq!(report.health.capability_unsupported, 63);
+    assert_eq!(report.health.capability_unknown, 0);
     assert_eq!(report.health.canonical_projection_errors, 0);
     assert!(!report.target_breakdown.is_empty());
     assert!(!report.rule_breakdown.is_empty());
-    assert_eq!(report.reviewed_exceptions.len(), 5);
-    assert_eq!(report.mismatches.len(), 5);
+    assert_eq!(report.reviewed_exceptions.len(), 33);
+    assert_eq!(report.mismatches.len(), 33);
     assert!(report.source_breakdown.contains_key("claude.projects"));
     assert!(report.source_breakdown.contains_key("openclaw.agents"));
     assert!(report.source_breakdown.contains_key("qwen.projects"));
+    assert!(report.source_breakdown.contains_key("copilot.process_log"));
     assert!(
         !report
             .source_breakdown
@@ -680,6 +704,33 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
         "cargo build --release",
         "cargo test",
         "cargo clean",
+        "copilot-mixed-format-session",
+        "copilot-multi-session-a",
+        "copilot-multi-session-b",
+        "copilot-uc001-tool-result",
+        "call_mixed_001",
+        "call_mixed_002",
+        "call_multi_001",
+        "call_multi_002",
+        "call_fixture_001",
+        "call_fixture_002",
+        "call_fixture_003",
+        "call_fixture_004",
+        "call_uc002_001",
+        "call_uc002_002",
+        "fixture-encrypted-reasoning",
+        "I will inspect synthetic files",
+        "Synthetic Cargo manifest excerpt",
+        "/home/user/project",
+        "README.md",
+        "Cargo.toml",
+        "src/main.rs",
+        "cargo test --quiet",
+        "cat ~/.aws/credentials",
+        "npm publish --access public",
+        "process-mixed-format.log",
+        "process-multi-session.log",
+        "process-uc001.log",
     ] {
         assert!(
             !serialized.contains(forbidden),

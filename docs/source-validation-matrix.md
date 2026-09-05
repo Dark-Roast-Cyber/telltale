@@ -53,12 +53,16 @@ being modeled does not by itself establish live host validation, and a complete
 project-local parser fixture does not promote a candidate to Supported.
 
 Non-production Canonical Observation v2 reference adapters are implemented for
-`openclaw.agents` and `qwen.projects`. Offline deterministic shadow coverage now
-includes both sources across the current reviewed 13-session corpus with zero
-unexplained mismatches. In those reference projections, `ToolCall` and
-`UserContext` are **Supported** while `ToolExecution` is **Unknown**. These are
-not production-parity, live-shadow, or all-client migration claims; the support
-statuses in this matrix remain unchanged.
+`openclaw.agents`, `qwen.projects`, and Copilot `copilot.process_log`. Offline
+deterministic shadow coverage includes Copilot across 15 cases, 17 reviewed
+sessions, and 306 detector evaluations. The reviewed differences are five
+match-set differences plus 28 capability-driven indeterminate outcomes, with
+zero unexplained differences. In those reference projections, `ToolCall` and
+`UserContext` are **Supported** while `ToolExecution` is **Unknown** for the
+OpenClaw and Qwen projections. Copilot native-v2 capabilities are ToolCall
+**Supported**, UserContext **Unsupported**, and ToolExecution **Unknown**. These
+are not production-parity, live-shadow, or all-client migration claims; the
+support statuses in this matrix remain unchanged.
 
 ## Validation Matrix
 

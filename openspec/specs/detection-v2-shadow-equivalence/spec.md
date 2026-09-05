@@ -3,8 +3,10 @@
 ## Purpose
 This specification defines a deterministic, fixture-only comparison of current
 Rule v1 session evaluation with the non-production Canonical Observation v2
-compatibility path. The reviewed 13-session corpus has zero unexplained
-mismatches. It does not activate Detection v2 or change Event 3.0.
+compatibility path. The reviewed 17-session corpus covers 15 cases and 306
+detector evaluations. It records five reviewed match-set differences plus 28
+reviewed capability-driven indeterminate outcomes, with zero unexplained
+differences. It does not activate Detection v2 or change Event 3.0.
 ## Requirements
 ### Requirement: Canonical projection facade
 
@@ -14,15 +16,22 @@ observation time, and returns only Canonical Observation v2 values or one of the
 bounded error codes `unsupported_source_identity`, `source_parse`,
 `canonical_mapping`, and `canonical_validation`. It MUST route Claude projects,
 the three supported Codex session identities, OpenCode SQLite, OpenClaw
-`openclaw.agents`, and Qwen `qwen.projects`; Codex project sessions MAY be
-characterized but MUST NOT be promoted. It MUST NOT route legacy JSON, project
-JSON, or unrelated source identities.
+`openclaw.agents`, Qwen `qwen.projects`, and Copilot `copilot.process_log`;
+Codex project sessions MAY be characterized but MUST NOT be promoted. It MUST
+NOT route legacy JSON, project JSON, or unrelated source identities.
 
 #### Scenario: Exact identity selects the native projector
 
 - **WHEN** a registered supported `(client, source_id)` pair is projected with a
   fixed observation time
 - **THEN** the existing native projector is invoked without NormalizedRecord
+  conversion and each returned observation retains that observation time.
+
+#### Scenario: Exact Copilot process-log identity selects its native projector
+
+- **WHEN** `(ClientId::Copilot, "copilot.process_log")` with
+  `SourceKind::CopilotProcessLog` is projected with a fixed observation time
+- **THEN** the Copilot native projector is invoked without NormalizedRecord
   conversion and each returned observation retains that observation time.
 
 #### Scenario: Unsupported identity fails closed

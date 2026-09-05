@@ -105,6 +105,15 @@ pub fn project_source_canonical_observations(
             )
             .map_err(map_qwen_error)
         }
+        (ClientId::Copilot, "copilot.process_log") => {
+            crate::sources::copilot::canonical::project_copilot_canonical_observations(
+                source,
+                crate::sources::copilot::canonical::CopilotCanonicalOptions::new(
+                    options.observed_at,
+                ),
+            )
+            .map_err(map_copilot_error)
+        }
         _ => Err(CanonicalProjectionError::UnsupportedSourceIdentity),
     }
 }
@@ -204,6 +213,26 @@ fn map_qwen_error(
             }
         }
         crate::sources::qwen::canonical::QwenCanonicalError::Observation(_) => {
+            CanonicalProjectionError::CanonicalValidation
+        }
+    }
+}
+
+fn map_copilot_error(
+    error: crate::sources::copilot::canonical::CopilotCanonicalError,
+) -> CanonicalProjectionError {
+    match error {
+        crate::sources::copilot::canonical::CopilotCanonicalError::Source(_) => {
+            CanonicalProjectionError::SourceParse
+        }
+        crate::sources::copilot::canonical::CopilotCanonicalError::Mapping { code, .. } => {
+            if code == "unsupported_source_identity" {
+                CanonicalProjectionError::UnsupportedSourceIdentity
+            } else {
+                CanonicalProjectionError::CanonicalMapping
+            }
+        }
+        crate::sources::copilot::canonical::CopilotCanonicalError::Observation(_) => {
             CanonicalProjectionError::CanonicalValidation
         }
     }
@@ -367,14 +396,56 @@ mod tests {
             (ClientId::OpenCode, "opencode.SQLite"),
             (ClientId::OpenClaw, "OpenClaw.agents"),
             (ClientId::Qwen, "Qwen.projects"),
+            (ClientId::Copilot, "Copilot.process_log"),
             (ClientId::Claude, "openclaw.agents"),
             (ClientId::Codex, "qwen.projects"),
+            (ClientId::Claude, "copilot.process_log"),
         ] {
             let source = Source {
                 client,
                 kind: SourceKind::Jsonl,
                 source_id: source_id.to_owned(),
                 path: PathBuf::from("not-read"),
+            };
+            assert_eq!(
+                project_source_canonical_observations(
+                    &source,
+                    CanonicalProjectionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap())
+                )
+                .unwrap_err(),
+                CanonicalProjectionError::UnsupportedSourceIdentity
+            );
+        }
+    }
+
+    #[test]
+    fn routes_copilot_process_log_and_preserves_observed_at() {
+        let source = source(
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+            "session_stores/copilot/process-uc001.log",
+        );
+        let observations = project(&source);
+        assert!(!observations.is_empty());
+        assert!(
+            observations
+                .iter()
+                .all(|observation| observation.observed_at().as_str() == OBSERVED_AT)
+        );
+    }
+
+    #[test]
+    fn rejects_copilot_wrong_client_or_case_before_reading() {
+        for (client, source_id) in [
+            (ClientId::Copilot, "Copilot.process_log"),
+            (ClientId::Claude, "copilot.process_log"),
+        ] {
+            let source = Source {
+                client,
+                kind: SourceKind::CopilotProcessLog,
+                source_id: source_id.to_owned(),
+                path: PathBuf::from("does-not-exist-copilot.log"),
             };
             assert_eq!(
                 project_source_canonical_observations(

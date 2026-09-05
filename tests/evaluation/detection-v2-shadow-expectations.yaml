@@ -35,3 +35,199 @@ expectations:
     classification: legacy_post_filter_difference
     reason_code: legacy_post_match_filter
     rationale: The canonical Qwen tool-result observation matches the atomic rule, while the legacy post-match filter removes the corresponding tool-result match.
+  - case_id: p16-copilot-mixed-format
+    session_reference: sha256:211a835526f0ebb7127aa3db2655cf987f9dbaedfe9edbb5ce81ef9047511a58
+    rule_id: approval.bypass.context
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-mixed-format
+    session_reference: sha256:211a835526f0ebb7127aa3db2655cf987f9dbaedfe9edbb5ce81ef9047511a58
+    rule_id: credential.api_key.pattern
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-mixed-format
+    session_reference: sha256:211a835526f0ebb7127aa3db2655cf987f9dbaedfe9edbb5ce81ef9047511a58
+    rule_id: mcp.server_enumeration
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-mixed-format
+    session_reference: sha256:211a835526f0ebb7127aa3db2655cf987f9dbaedfe9edbb5ce81ef9047511a58
+    rule_id: mcp.tool_metadata.prompt_injection
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-mixed-format
+    session_reference: sha256:211a835526f0ebb7127aa3db2655cf987f9dbaedfe9edbb5ce81ef9047511a58
+    rule_id: network.controlled_test_domain.darkroast
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-mixed-format
+    session_reference: sha256:211a835526f0ebb7127aa3db2655cf987f9dbaedfe9edbb5ce81ef9047511a58
+    rule_id: secret.env.read
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-mixed-format
+    session_reference: sha256:211a835526f0ebb7127aa3db2655cf987f9dbaedfe9edbb5ce81ef9047511a58
+    rule_id: tool.injection.shape
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:2c80b6cc96307b7fc6c8c7fc5cf17904c38bab1f21fe3cd598973425f57bbb00
+    rule_id: approval.bypass.context
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:2c80b6cc96307b7fc6c8c7fc5cf17904c38bab1f21fe3cd598973425f57bbb00
+    rule_id: credential.api_key.pattern
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:2c80b6cc96307b7fc6c8c7fc5cf17904c38bab1f21fe3cd598973425f57bbb00
+    rule_id: mcp.server_enumeration
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:2c80b6cc96307b7fc6c8c7fc5cf17904c38bab1f21fe3cd598973425f57bbb00
+    rule_id: mcp.tool_metadata.prompt_injection
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:2c80b6cc96307b7fc6c8c7fc5cf17904c38bab1f21fe3cd598973425f57bbb00
+    rule_id: network.controlled_test_domain.darkroast
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:2c80b6cc96307b7fc6c8c7fc5cf17904c38bab1f21fe3cd598973425f57bbb00
+    rule_id: secret.env.read
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:2c80b6cc96307b7fc6c8c7fc5cf17904c38bab1f21fe3cd598973425f57bbb00
+    rule_id: tool.injection.shape
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:d854b4bb59825bc6f106ab8a0604003a565550cd3ab1d7ebe369c8aaa630575c
+    rule_id: approval.bypass.context
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:d854b4bb59825bc6f106ab8a0604003a565550cd3ab1d7ebe369c8aaa630575c
+    rule_id: credential.api_key.pattern
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:d854b4bb59825bc6f106ab8a0604003a565550cd3ab1d7ebe369c8aaa630575c
+    rule_id: mcp.server_enumeration
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:d854b4bb59825bc6f106ab8a0604003a565550cd3ab1d7ebe369c8aaa630575c
+    rule_id: mcp.tool_metadata.prompt_injection
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:d854b4bb59825bc6f106ab8a0604003a565550cd3ab1d7ebe369c8aaa630575c
+    rule_id: network.controlled_test_domain.darkroast
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:d854b4bb59825bc6f106ab8a0604003a565550cd3ab1d7ebe369c8aaa630575c
+    rule_id: secret.env.read
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-multi-session
+    session_reference: sha256:d854b4bb59825bc6f106ab8a0604003a565550cd3ab1d7ebe369c8aaa630575c
+    rule_id: tool.injection.shape
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-uc001
+    session_reference: sha256:c91d03e79593955da8a74d48880757091ae78617d0bd48047c12031643029d23
+    rule_id: approval.bypass.context
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-uc001
+    session_reference: sha256:c91d03e79593955da8a74d48880757091ae78617d0bd48047c12031643029d23
+    rule_id: credential.api_key.pattern
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-uc001
+    session_reference: sha256:c91d03e79593955da8a74d48880757091ae78617d0bd48047c12031643029d23
+    rule_id: mcp.server_enumeration
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-uc001
+    session_reference: sha256:c91d03e79593955da8a74d48880757091ae78617d0bd48047c12031643029d23
+    rule_id: mcp.tool_metadata.prompt_injection
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-uc001
+    session_reference: sha256:c91d03e79593955da8a74d48880757091ae78617d0bd48047c12031643029d23
+    rule_id: network.controlled_test_domain.darkroast
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-uc001
+    session_reference: sha256:c91d03e79593955da8a74d48880757091ae78617d0bd48047c12031643029d23
+    rule_id: secret.env.read
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.
+  - case_id: p16-copilot-uc001
+    session_reference: sha256:c91d03e79593955da8a74d48880757091ae78617d0bd48047c12031643029d23
+    rule_id: tool.injection.shape
+    expected_relation: v2_indeterminate
+    classification: visibility_gap
+    reason_code: canonical_capability_unsupported
+    rationale: Copilot process logs do not establish user context, so the v2 evaluation remains indeterminate when the rule requires that capability.

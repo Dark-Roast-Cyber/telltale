@@ -33,9 +33,14 @@ Canonical Observation v2 core types/scaffolding are implemented in `telltale-sch
 (`claude.projects`) and Codex v2 reference projections are implemented, and the
 OpenCode (`opencode.sqlite`) v2 reference projection is implemented as
 non-production. OpenClaw (`openclaw.agents`) and Qwen (`qwen.projects`) v2
-reference adapters are also implemented as non-production projections. Offline
-deterministic shadow coverage now includes them across the current reviewed
-13-session corpus with zero unexplained mismatches. `opencode.legacy_json`
+reference adapters are also implemented as non-production projections. Copilot
+(`copilot.process_log`) is implemented as a non-production reference adapter.
+Offline deterministic shadow coverage includes Copilot across 15 cases, 17
+reviewed sessions, and 306 detector evaluations, with five reviewed match-set
+differences plus 28 reviewed capability-driven indeterminate outcomes and zero
+unexplained differences. Copilot native-v2 capabilities are ToolCall
+**Supported**, UserContext **Unsupported**, and ToolExecution **Unknown**.
+`opencode.legacy_json`
 remains supported and its v2 migration
 has not started; `opencode.project_json` remains Candidate and its v2 migration
 has not started. Production adapter migration/cutover has not started.
@@ -60,7 +65,7 @@ Telltale runs a repeatable batch pipeline:
 
 The current scanner still uses `NormalizedRecordV1`; production remains on this
 path and Canonical Observation v2 cutover has not started. The Claude Code,
-Codex, OpenCode SQLite, OpenClaw, and Qwen v2 reference projections are
+Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference projections are
 implemented but are not wired into production normalization, detection, CLI, or
 scan execution. The experimental Detection v2 foundation and fixture-only
 offline harness are likewise not wired into the scanner; production detection

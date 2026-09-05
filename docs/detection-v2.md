@@ -7,9 +7,13 @@
 > deterministic, immutable-fixture harness measures the current native
 > Canonical Observation v2 reference identities (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
-> `opencode.sqlite`; `openclaw.agents`; `qwen.projects`) and has zero
-> unexplained mismatches in the current reviewed 13-session corpus. The OpenClaw
-> and Qwen reference adapters are implemented as non-production projections.
+> `opencode.sqlite`; `openclaw.agents`; `qwen.projects`; `copilot.process_log`) and
+> has zero unexplained differences in the current reviewed 17-session corpus
+> (15 cases, 306 detector evaluations). The reviewed differences are five
+> match-set differences plus 28 capability-driven indeterminate outcomes. The
+> OpenClaw, Qwen, and Copilot reference adapters are implemented as non-production
+> projections. Copilot native-v2 capabilities are ToolCall **Supported**,
+> UserContext **Unsupported**, and ToolExecution **Unknown**.
 > Live scanner shadow: **NO**. Production activation: **NO**. Production remains
 > on `NormalizedRecordV1` and Rule v1; remaining adapter coverage is incomplete,
 > and Event3 remains frozen. Advanced detector runtime
@@ -27,11 +31,13 @@ offline measurement harness.
 The offline harness reports three separate compatibility questions: atomic rule-set
 equivalence, modifier compatibility, and contribution/score compatibility. It
 does not combine those questions into a parity claim. The current reviewed
-reference corpus has exactly five observed atomic mismatches: one
+reference corpus has exactly five reviewed match-set differences: one
 `execution.shell` legacy-only command-content broadening and four
 `secret.env.read` v2-only legacy post-match-filter cases; all five are
-explained, with zero unexplained mismatches. Separately, focused synthetic
-compatibility coverage proves `compat.v1.url` is compiler-supported but
+explained. Separately, 28 reviewed capability-driven indeterminate outcomes are
+reported as visibility evidence, not additional mismatches. The complete corpus
+has zero unexplained differences. Focused synthetic compatibility coverage proves
+`compat.v1.url` is compiler-supported but
 truthfully absent and demonstrates the compatibility gap; there is no
 end-to-end reference-corpus URL mismatch in the current corpus.
 

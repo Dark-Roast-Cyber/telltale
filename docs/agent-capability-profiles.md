@@ -174,9 +174,13 @@ session fallback is legacy-only and is not used for v2 session identity.
 The `openclaw.agents` and `qwen.projects` Canonical Observation v2 reference
 adapters are implemented as non-production projections. Their capability context
 marks `ToolCall` and `UserContext` as **Supported** and `ToolExecution` as
-**Unknown**; JSONL tool requests and results do not establish execution. Offline
-deterministic shadow coverage now includes both sources across the current
-reviewed 13-session corpus with zero unexplained mismatches. Production remains
+**Unknown**; JSONL tool requests and results do not establish execution. The
+Copilot `copilot.process_log` projection reports ToolCall **Supported**,
+UserContext **Unsupported**, and ToolExecution **Unknown**. Offline
+deterministic shadow coverage now covers 15 cases, 17 reviewed sessions, and 306
+detector evaluations with five
+reviewed match-set differences plus 28 reviewed capability-driven indeterminate
+outcomes and zero unexplained differences. Production remains
 on `NormalizedRecordV1` and Rule v1; this is not live shadow, production parity,
 or an all-client migration.
 
@@ -304,6 +308,15 @@ harness coverage demonstrates the compatibility gap.
 | Content parts | Absent | Process logs do not contain structured content arrays. |
 
 **Known gaps**: Copilot process logs are the most limited source. User intent is invisible — Telltale cannot tell what the user asked for. Only tool calls and workspace initialization events are logged. Model and provider fields are not always populated on every function call entry. Log lines without a leading RFC3339 timestamp token remain untimestamped.
+
+The implemented `copilot.process_log` Canonical Observation v2 reference
+projection is non-production. Its native capability context reports ToolCall
+**Supported**, UserContext **Unsupported**, and ToolExecution **Unknown**.
+Offline shadow coverage includes Copilot in 15 cases, 17 reviewed sessions, and
+306 detector evaluations. The reviewed differences are five match-set
+differences plus 28 capability-driven indeterminate outcomes, with zero
+unexplained differences. Production remains `NormalizedRecordV1`; there is no
+live shadow or Detection v2 production activation, and Event 3.0 is unchanged.
 
 ---
 

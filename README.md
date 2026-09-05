@@ -77,10 +77,14 @@ Linux, macOS, and Windows; they do not establish broad live source-store
 validation. Fixture-backed-only clients remain preview/experimental for live use.
 
 Non-production Canonical Observation v2 reference adapters are implemented for
-`openclaw.agents` and `qwen.projects`. Offline deterministic shadow coverage now
-includes both sources across the current reviewed 13-session corpus with zero
-unexplained mismatches. Production remains on `NormalizedRecordV1` and Rule v1;
-there is no live shadow, production parity, or all-client migration.
+`openclaw.agents`, `qwen.projects`, and Copilot `copilot.process_log`. Offline
+deterministic shadow coverage includes Copilot across 15 cases, 17 reviewed
+sessions, and 306 detector evaluations: five reviewed match-set differences plus
+28 reviewed capability-driven indeterminate outcomes, with zero unexplained
+differences. Copilot native-v2 capabilities are ToolCall **Supported**,
+UserContext **Unsupported**, and ToolExecution **Unknown**. Production remains on
+`NormalizedRecordV1` and Rule v1; there is no live shadow, Detection v2
+production activation, or all-client migration. Event 3.0 remains unchanged.
 
 ## Quick start
 

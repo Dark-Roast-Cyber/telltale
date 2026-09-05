@@ -3,8 +3,8 @@ use std::fs;
 use rusqlite::Connection;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
-    CanonicalObservationV2, CapabilityAvailability, CapabilityId, JsonValue, ObservationBody,
-    ObservationFamily, ObservationStage, ObservedAt, ToolStatus,
+    CanonicalObservationV2, CapabilityAvailability, CapabilityId, ContentPartKind, JsonValue,
+    MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt, ToolStatus,
 };
 use telltale_schema::source::Source;
 use tempfile::{TempDir, tempdir};
@@ -74,6 +74,25 @@ fn project_qwen(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2>,
     let result = super::qwen::canonical::project_qwen_canonical_observations(
         &source(ClientId::Qwen, "qwen.projects", SourceKind::Jsonl, path),
         super::qwen::canonical::QwenCanonicalOptions::new(
+            ObservedAt::new(OBSERVED_AT).expect("observed time"),
+        ),
+    )
+    .map_err(|error| error.code().to_owned());
+    (directory, result)
+}
+
+fn project_copilot(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2>, String>) {
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("copilot-vector.log");
+    fs::write(&path, contents).expect("Copilot vector");
+    let result = super::copilot::canonical::project_copilot_canonical_observations(
+        &source(
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+            path,
+        ),
+        super::copilot::canonical::CopilotCanonicalOptions::new(
             ObservedAt::new(OBSERVED_AT).expect("observed time"),
         ),
     )
@@ -328,6 +347,90 @@ fn openclaw_and_qwen_tool_facts_keep_unknown_execution_and_parsed_facets() {
             )
         }));
     }
+}
+
+#[test]
+fn copilot_vectors_preserve_assistant_tools_arguments_and_capability_gaps() {
+    let (_directory, result) = project_copilot(
+        "2026-09-02T12:00:00Z [INFO] Workspace initialized: copilot-conformance (checkpoints: 0)\n2026-09-02T12:00:01Z [INFO] Accumulated output items (2): [{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Synthetic assistant output.\"}]},{\"type\":\"function_call\",\"name\":\"shell\",\"call_id\":\"copilot-call\",\"arguments\":\"{\\\"command\\\":\\\"printf synthetic\\\",\\\"path\\\":\\\"synthetic.txt\\\"}\",\"status\":\"completed\",\"message\":\"Synthetic result.\"}]\n",
+    );
+    let observations = result.expect("Copilot conformance vector");
+    assert_eq!(observations.len(), 3);
+    assert_eq!(observations[0].kind(), ObservationFamily::Message);
+    assert_eq!(observations[0].stage(), ObservationStage::MessageObserved);
+    assert_eq!(observations[1].stage(), ObservationStage::ToolRequested);
+    assert_eq!(
+        observations[2].stage(),
+        ObservationStage::ToolResultReturned
+    );
+
+    for observation in &observations {
+        let capabilities = observation
+            .capability_context()
+            .expect("Copilot capabilities");
+        assert_eq!(
+            capabilities.resolve(CapabilityId::ToolCall),
+            CapabilityAvailability::Supported
+        );
+        assert_eq!(
+            capabilities.resolve(CapabilityId::UserContext),
+            CapabilityAvailability::Unsupported
+        );
+        assert_eq!(
+            capabilities.resolve(CapabilityId::ToolExecution),
+            CapabilityAvailability::Unknown
+        );
+        assert_eq!(observation.source().adapter_type(), "copilot");
+        assert_eq!(observation.source().adapter_id(), "copilot.process_log");
+    }
+
+    let ObservationBody::Message(message) = observations[0].body() else {
+        panic!("expected Copilot assistant message")
+    };
+    assert_eq!(message.role(), Some(MessageRole::Assistant));
+    assert_eq!(message.content_parts().len(), 1);
+    assert_eq!(message.content_parts()[0].kind(), ContentPartKind::Text);
+    let ObservationBody::Tool(tool) = observations[1].body() else {
+        panic!("expected Copilot tool request")
+    };
+    assert_eq!(tool.name(), Some("shell"));
+    assert_eq!(
+        observations[1].correlation().call_id().unwrap().value(),
+        "copilot-call"
+    );
+    assert_eq!(
+        tool.arguments(),
+        Some(
+            &JsonValue::object([
+                ("command".to_owned(), JsonValue::string("printf synthetic")),
+                ("path".to_owned(), JsonValue::string("synthetic.txt")),
+            ])
+            .unwrap(),
+        )
+    );
+    assert_eq!(
+        observations[1].fact_metadata()["tool.arguments"].provenance(),
+        telltale_schema::observation::FactProvenance::Parsed
+    );
+    assert_eq!(
+        observations[1].fact_metadata()["tool.searchable_arguments"].provenance(),
+        telltale_schema::observation::FactProvenance::Reported
+    );
+    assert_eq!(
+        observations[1].facets()["command.text"].value(),
+        &JsonValue::string("printf synthetic")
+    );
+    assert_eq!(
+        observations[1].facets()["resource.path"].value(),
+        &JsonValue::string("synthetic.txt")
+    );
+    let ObservationBody::Tool(result) = observations[2].body() else {
+        panic!("expected Copilot result")
+    };
+    assert_eq!(
+        result.result(),
+        Some(&JsonValue::string("Synthetic result."))
+    );
 }
 
 #[test]
