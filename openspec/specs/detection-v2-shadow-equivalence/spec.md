@@ -3,7 +3,8 @@
 ## Purpose
 This specification defines a deterministic, fixture-only comparison of current
 Rule v1 session evaluation with the non-production Canonical Observation v2
-compatibility path. It does not activate Detection v2 or change Event 3.0.
+compatibility path. The reviewed 13-session corpus has zero unexplained
+mismatches. It does not activate Detection v2 or change Event 3.0.
 ## Requirements
 ### Requirement: Canonical projection facade
 
@@ -12,9 +13,10 @@ routes by the exact registered client and source identity, accepts caller-owned
 observation time, and returns only Canonical Observation v2 values or one of the
 bounded error codes `unsupported_source_identity`, `source_parse`,
 `canonical_mapping`, and `canonical_validation`. It MUST route Claude projects,
-the three supported Codex session identities, and OpenCode SQLite; Codex project
-sessions MAY be characterized but MUST NOT be promoted. It MUST NOT route legacy
-JSON, project JSON, or unrelated source identities.
+the three supported Codex session identities, OpenCode SQLite, OpenClaw
+`openclaw.agents`, and Qwen `qwen.projects`; Codex project sessions MAY be
+characterized but MUST NOT be promoted. It MUST NOT route legacy JSON, project
+JSON, or unrelated source identities.
 
 #### Scenario: Exact identity selects the native projector
 
