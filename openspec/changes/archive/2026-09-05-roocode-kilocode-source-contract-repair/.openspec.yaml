@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-05
+goal: Replace the RooCode and KiloCode exact JSON-document fallbacks with evidence-bounded source-owned contracts while preserving legacy compatibility and leaving identity gaps explicit.
