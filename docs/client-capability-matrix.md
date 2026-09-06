@@ -18,8 +18,8 @@ Legend:
 | Gemini CLI | `gemini.tmp` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
 | OpenClaw | `openclaw.agents` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
 | Qwen CLI | `qwen.projects` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| RooCode | `roocode.tasks` | required | optional | optional | unsupported | unavailable | optional | derived | `call_id`, `is_error`, `content_parts`, and static MCP config inventory are unavailable through current support. |
-| KiloCode | `kilocode.tasks` | required | optional | optional | unsupported | unavailable | optional | derived | `call_id`, `is_error`, `content_parts`, and static MCP config inventory are unavailable through current support. |
+| RooCode | `roocode.tasks` | required | optional | optional | unsupported | bounded direct-history namespace | unavailable | direct source namespace plus compatibility fallback | Verified UI records do not report agent/provider/model; call IDs, error state, content parts, and canonical per-message identity are unavailable. A direct non-empty `history_item.json.id` is authoritative; `_index.json` only corroborates it. The parent directory is compatibility-only. |
+| KiloCode | `kilocode.tasks` | required | optional | optional | unsupported | unavailable | unavailable | compatibility fallback only | The pinned legacy writer reports ClineMessage subtype, timestamp, and MCP request/result facts, but no history/index companion, agent/provider/model, or stable per-message coordinate. The parent directory is not source identity. |
 | OpenCode | `opencode.sqlite`, `opencode.legacy_json` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, workspace, and `content_parts` are unavailable through the legacy flat record. |
 | GitHub Copilot | `copilot.process_log` | optional | optional | optional | unsupported | unavailable | optional | derived | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, static MCP config inventory, and `content_parts` are unavailable through the legacy flat record. |
 
@@ -27,12 +27,12 @@ Legend:
 
 | `NormalizedRecordV1` field | Status | Notes |
 | --- | --- | --- |
-| `meta.session_id` | required | Must be non-empty for every fixture-backed converted record. |
+| `meta.session_id` | required | The legacy field is required for grouping. For Roo it carries a valid direct history namespace when available and otherwise a compatibility fallback; for Kilo it is compatibility-only. Neither is a per-message coordinate. |
 | `meta.client` | required | Must match the source registry client id. |
 | `meta.agent` | optional | Preserved when the source exposes an agent or parser default. |
 | `meta.model` | optional | Preserved when the source exposes model metadata. |
 | `meta.provider` | optional | Preserved when the source exposes provider metadata. |
-| `meta.timestamp` | optional | Preserved as a source-native string when present. |
+| `meta.timestamp` | optional | Roo/Kilo require numeric source `ts` and convert it to deterministic UTC RFC3339; it is not an identity coordinate. |
 | `meta.provenance` | derived | The conformance test supplies deterministic fixture provenance for conversion coverage. |
 | `meta.extensions.legacy_record_kind` | derived | Required on every record converted through `from_legacy()`. |
 | `meta.extensions.lossy_fields` | derived | Present when legacy conversion cannot preserve canonical fields. |

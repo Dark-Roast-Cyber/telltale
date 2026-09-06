@@ -46,6 +46,9 @@ pub enum ParseError {
         source_id: String,
         detail: &'static str,
     },
+    SourceContract {
+        category: &'static str,
+    },
 }
 
 impl fmt::Display for ParseError {
@@ -87,6 +90,9 @@ impl fmt::Display for ParseError {
                 "schema drift for ({}, {source_id}): {detail}",
                 client.as_str()
             ),
+            ParseError::SourceContract { category } => {
+                write!(f, "source contract failure: {category}")
+            }
         }
     }
 }
@@ -170,52 +176,15 @@ fn extract_source_records(
 
 type SourceParser = fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, ParseError>;
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum ParserImplementationKind {
-    Modeled,
-    GenericJsonDocument,
-}
-
-#[derive(Clone, Copy)]
-enum GenericParser {
-    JsonDocument(SourceParser),
-}
-
 #[derive(Clone, Copy)]
 enum ParserImplementation {
     Modeled(SourceParser),
-    GenericFallback(GenericParser),
-}
-
-impl GenericParser {
-    fn parser(self) -> SourceParser {
-        match self {
-            Self::JsonDocument(parser) => parser,
-        }
-    }
-
-    #[cfg(test)]
-    fn kind(self) -> ParserImplementationKind {
-        match self {
-            Self::JsonDocument(_) => ParserImplementationKind::GenericJsonDocument,
-        }
-    }
 }
 
 impl ParserImplementation {
     fn parser(self) -> SourceParser {
         match self {
             Self::Modeled(parser) => parser,
-            Self::GenericFallback(parser) => parser.parser(),
-        }
-    }
-
-    #[cfg(test)]
-    fn kind(self) -> ParserImplementationKind {
-        match self {
-            Self::Modeled(_) => ParserImplementationKind::Modeled,
-            Self::GenericFallback(parser) => parser.kind(),
         }
     }
 }
@@ -283,17 +252,13 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ClientId::RooCode,
         "roocode.tasks",
         SourceKind::UiMessagesJson,
-        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
-            extract_json_document_registered,
-        )),
+        ParserImplementation::Modeled(crate::sources::roocode::parser::extract_roocode_source),
     ),
     registration(
         ClientId::KiloCode,
         "kilocode.tasks",
         SourceKind::UiMessagesJson,
-        ParserImplementation::GenericFallback(GenericParser::JsonDocument(
-            extract_json_document_registered,
-        )),
+        ParserImplementation::Modeled(crate::sources::kilocode::parser::extract_kilocode_source),
     ),
     registration(
         ClientId::OpenCode,
@@ -351,15 +316,6 @@ fn parser_registration(source: &Source) -> Result<&'static ParserRegistration, P
         })
 }
 
-fn extract_json_document_registered(
-    source: &Source,
-    _options: ParseOptions,
-) -> Result<ExtractedSourceRecords, ParseError> {
-    Ok(ExtractedSourceRecords::records(extract_json_source(
-        source,
-    )?))
-}
-
 fn normalize_source_records(source: &Source, records: Vec<ParsedRecord>) -> Vec<NormalizedRecord> {
     records
         .into_iter()
@@ -395,32 +351,12 @@ pub(crate) fn read_json_document(source: &Source) -> Result<Value, ParseError> {
     Ok(serde_json::from_str::<Value>(&raw)?)
 }
 
-pub(crate) fn extract_json_source(source: &Source) -> Result<Vec<ParsedRecord>, ParseError> {
-    let value = read_json_document(source)?;
-    let default_session_id = default_source_parent_name(source);
-
-    match value {
-        Value::Array(items) => Ok(items
-            .iter()
-            .filter(|item| item.is_object())
-            .map(|item| json_record(item, &default_session_id))
-            .collect()),
-        item => Ok(vec![json_record(&item, &default_session_id)]),
-    }
-}
-
-fn json_record(value: &Value, default_session_id: &str) -> ParsedRecord {
-    ParsedRecord {
-        session_id: session_id_with_fallback(value, default_session_id),
-        agent: string_field(value, "agent"),
-        model: model_field(value),
-        provider: provider_field(value),
-        timestamp: string_field(value, "timestamp").or_else(|| string_field(value, "time")),
-        kind: record_kind(value),
-        tool_name: tool_name(value),
-        arguments: arguments_field(value),
-        content: record_content(value),
-    }
+pub(crate) fn read_bounded_json_document(source: &Source) -> Result<Value, ParseError> {
+    read_json_document(source).map_err(|error| match error {
+        ParseError::Io(_) => source_contract_error("source_unavailable"),
+        ParseError::Json(_) => source_contract_error("malformed_json"),
+        error => error,
+    })
 }
 
 pub(crate) fn record_kind(value: &Value) -> RecordKind {
@@ -546,6 +482,25 @@ pub(crate) fn default_source_parent_name(source: &Source) -> String {
         .to_string()
 }
 
+pub(crate) fn epoch_millis_timestamp(value: &Value) -> Result<String, ParseError> {
+    let millis = value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .ok_or(source_contract_error("invalid_timestamp"))?;
+    let nanos = i128::from(millis)
+        .checked_mul(1_000_000)
+        .ok_or(source_contract_error("timestamp_out_of_range"))?;
+    let timestamp = time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .map_err(|_| source_contract_error("timestamp_out_of_range"))?;
+    timestamp
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|_| source_contract_error("timestamp_format"))
+}
+
+pub(crate) const fn source_contract_error(category: &'static str) -> ParseError {
+    ParseError::SourceContract { category }
+}
+
 pub(crate) fn session_id_field(value: &Value) -> Option<String> {
     string_field(value, "session_id")
         .or_else(|| string_field(value, "sessionID"))
@@ -647,8 +602,8 @@ mod tests {
     use telltale_schema::source::Source;
 
     use super::{
-        PARSER_REGISTRATIONS, ParsedRecord, ParserImplementationKind, RecordKind,
-        normalize_source_record, parse_source_records, parser_registration,
+        PARSER_REGISTRATIONS, ParsedRecord, RecordKind, normalize_source_record,
+        parse_source_records, parser_registration,
     };
 
     #[test]
@@ -823,19 +778,9 @@ mod tests {
     }
 
     #[test]
-    fn parser_registration_maturity_snapshot_has_twelve_modeled_and_two_fallbacks() {
+    fn parser_registration_maturity_snapshot_has_fourteen_modeled_and_no_fallbacks() {
         let modeled = PARSER_REGISTRATIONS
             .iter()
-            .filter(|registration| {
-                registration.implementation.kind() == ParserImplementationKind::Modeled
-            })
-            .map(|registration| registration.source_id)
-            .collect::<BTreeSet<_>>();
-        let json_documents = PARSER_REGISTRATIONS
-            .iter()
-            .filter(|registration| {
-                registration.implementation.kind() == ParserImplementationKind::GenericJsonDocument
-            })
             .map(|registration| registration.source_id)
             .collect::<BTreeSet<_>>();
 
@@ -853,16 +798,13 @@ mod tests {
                 "opencode.project_json",
                 "openclaw.agents",
                 "qwen.projects",
+                "roocode.tasks",
+                "kilocode.tasks",
                 "copilot.process_log",
             ])
         );
         assert_eq!(PARSER_REGISTRATIONS.len(), 14);
-        assert_eq!(modeled.len(), 12);
-        assert_eq!(
-            json_documents,
-            BTreeSet::from_iter(["roocode.tasks", "kilocode.tasks"])
-        );
-        assert_eq!(json_documents.len(), 2);
+        assert_eq!(modeled.len(), 14);
     }
 
     #[test]
@@ -909,7 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_fallback_parses_but_unknown_identity_does_not() {
+    fn registered_modeled_parser_parses_but_unknown_identity_does_not() {
         let path = crate::test_fixture_path(
             "parser_maturity/non_discovered/explicit-generic-fallback.json",
         );
@@ -919,7 +861,7 @@ mod tests {
             source_id: "opencode.legacy_json".to_string(),
             path: path.clone(),
         };
-        let records = parse_source_records(&registered).expect("registered fallback records");
+        let records = parse_source_records(&registered).expect("registered modeled records");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].kind, RecordKind::AssistantMessage);
 

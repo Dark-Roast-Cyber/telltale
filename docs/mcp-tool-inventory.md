@@ -23,7 +23,7 @@ Telltale does not connect to MCP servers during scan. That keeps the batch scann
 | OpenClaw | `.openclaw/config.json` | supported | Reads common JSON MCP server objects when present. |
 | Qwen CLI | `.qwen/settings.json` | supported | Reads common JSON MCP server objects when present. |
 | RooCode | VS Code extension settings | not yet supported | Configuration storage varies by VS Code profile and extension version; session parsing remains supported. |
-| KiloCode | VS Code extension settings | not yet supported | Configuration storage varies by VS Code profile and extension version; session parsing remains supported. |
+| KiloCode | VS Code extension settings | not yet supported | Configuration storage varies by VS Code profile and extension version; legacy UI-message session parsing is fixture-backed, but static config inventory is separate and not yet supported. |
 | GitHub Copilot | Copilot MCP configuration | not yet supported | Telltale currently supports Copilot process-log activity, but not static MCP config inventory. |
 
 ## Open Source Enumeration Reference

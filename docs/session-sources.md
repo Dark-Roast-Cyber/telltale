@@ -137,12 +137,44 @@ Qwen parser notes:
 RooCode parser notes:
 
 - `ui_messages.json` files can appear under task directories below the VS Code extension storage root.
-- `roocode.tasks` is a deliberate exact generic JSON-document fallback. Its
-  verified UI-message object/array shape is covered by positive, tool, malformed,
-  and explicit-unknown tests; it is not an implicit `SourceKind` selection.
+- `roocode.tasks` is a source-owned modeled `ClineMessage` parser. The root is
+  an ordered array of `ask`/`say` records with subtype-specific fields and
+  numeric epoch-millisecond `ts`; structural drift and unknown subtypes fail
+  closed. Roo completed MCP tool requests persist an inner JSON `use_mcp_tool`
+  object whose arguments field is a string; partial requests preserve the
+  arguments object. Resource requests use `access_mcp_resource` with
+  `serverName` and `uri`. MCP responses persist as plain result text with no
+  source tool name. `say:user_feedback`, assistant text, explicit
+  command/MCP requests, and explicit command/MCP output retain their bounded
+  legacy kinds without inferred correlation.
+- The pinned Roo `TaskHistoryStore` writes a full `history_item.json` per task;
+  its direct non-empty `id` is the source-reported session namespace. The
+  debounced `_index.json` is only a cache/corroboration file and never overrides
+  the direct history file. Missing history leaves only the parent-directory
+  compatibility grouping fallback; malformed, empty, or conflicting metadata
+  fails closed without selecting an index or path value. A renamed task
+  directory does not change a valid direct ID. Roo has no proven native
+  per-message coordinate, so protected assignment remains required for future
+  canonical projection. Agent, provider, and model remain absent.
 
 KiloCode parser notes:
 
 - `ui_messages.json` files can appear under task directories below the VS Code extension storage root.
-- `kilocode.tasks` is a deliberate exact generic JSON-document fallback with the
-  same verified UI-message shape and focused failure/unknown coverage as RooCode.
+- `kilocode.tasks` is a source-owned modeled parser for the legacy migration
+  store only. It keeps `ui_messages.json` as the body anchor. The pinned legacy
+  writer does not write Roo's `history_item.json` or `_index.json`; those files
+  are not read or promoted by this adapter.
+- The registered `kilocode.kilo-code` VS Code identity is written by
+  `Kilo-Org/kilocode-legacy@ae046acafd17993bdf12dce0f81d9ac948e17ee8`,
+  `src/core/task-persistence/taskMessages.ts`; current
+  `Kilo-Org/kilocode@31f1f3118ccba73e9d9fdc6cac78f6644e9c23ef` only reads and
+  diagnoses this legacy anchor.
+- `api_conversation_history.json` is a separate alternate body and is never
+  merged or used to rescue UI-message drift. Current Kilo SQLite/server/CLI
+  storage is outside this identity. The independently pinned legacy writer
+  records the `ClineMessage` ask/say MCP request and plain-text result shapes,
+  so tool-call, tool-result, and UC-001 fixture support is advertised for this
+  exact legacy anchor. The whole-array writer provides no middle-delete proof;
+  Kilo has no source-reported session namespace or per-message coordinate in
+  this adapter: its parent directory is a compatibility grouping fallback only,
+  and protected assignment remains required for future canonical projection.

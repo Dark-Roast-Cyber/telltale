@@ -186,22 +186,22 @@ fn registered_identities_preserve_normalized_record_shapes_and_order() {
             ("roocode-session-a", RecordKind::AssistantMessage),
         ],
     );
-    assert_eq!(records[0].agent.as_deref(), Some("roocode"));
-    assert_eq!(records[0].provider.as_deref(), Some("anthropic"));
-    assert_eq!(records[1].model.as_deref(), Some("claude-fixture-model"));
+    assert!(records.iter().all(|record| {
+        record.agent.is_none() && record.provider.is_none() && record.model.is_none()
+    }));
 
     let records = assert_sequence(
         &fixture_source(&session_root, "kilocode.tasks", "ui_messages.json"),
         ClientId::KiloCode,
         SourceKind::UiMessagesJson,
         &[
-            ("kilocode-session-a", RecordKind::UserMessage),
-            ("kilocode-session-a", RecordKind::AssistantMessage),
+            ("task-a", RecordKind::UserMessage),
+            ("task-a", RecordKind::AssistantMessage),
         ],
     );
-    assert_eq!(records[0].agent.as_deref(), Some("kilocode"));
-    assert_eq!(records[0].provider.as_deref(), Some("anthropic"));
-    assert_eq!(records[1].model.as_deref(), Some("claude-fixture-model"));
+    assert!(records.iter().all(|record| {
+        record.agent.is_none() && record.provider.is_none() && record.model.is_none()
+    }));
 
     let records = assert_sequence(
         &fixture_source(&session_root, "opencode.sqlite", "opencode.db"),
@@ -325,7 +325,7 @@ fn malformed_registered_jsonl_remains_json_error() {
 }
 
 #[test]
-fn registered_json_document_fallback_parses() {
+fn registered_modeled_json_parser_parses() {
     let source = non_discovered_source(
         ClientId::OpenCode,
         SourceKind::LegacyJson,
@@ -333,7 +333,7 @@ fn registered_json_document_fallback_parses() {
         "explicit-generic-fallback.json",
     );
 
-    let records = parse_source_records(&source).expect("registered JSON-document fallback records");
+    let records = parse_source_records(&source).expect("registered modeled JSON records");
 
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].session_id, "synthetic-generic-fallback");

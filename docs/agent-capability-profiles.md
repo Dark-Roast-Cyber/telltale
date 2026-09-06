@@ -194,51 +194,59 @@ or an all-client migration.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| User messages | Full | Objects with `role: user` in the message array. |
-| Assistant messages | Full | Objects with `role: assistant`. |
-| Tool calls | Full | Content blocks with tool call type. |
-| Tool results | Full | Content blocks with tool result type. |
-| Model | Full | `model` field on records. |
-| Provider | Full | `provider` field (typically `anthropic`). |
-| Agent | Full | Defaults to `roocode`. |
+| User messages | Full | `say:user_feedback` and `say:user_feedback_diff` are mapped as user content. |
+| Assistant messages | Full | `say:text`, completion/subtask results, and `ask:followup` are mapped as assistant content. |
+| Tool calls | Partial | Explicit `ask:command`, structured `ask:tool`, and the pinned `ask:use_mcp_server` JSON request; completed arguments are stringified and partial snapshots preserve the object. |
+| Tool results | Partial | Explicit command output and pinned `say:mcp_server_response` plain text only; no source tool name or execution outcome is inferred. |
+| Model | Absent | The verified `ClineMessage` shape does not report a model. |
+| Provider | Absent | The verified `ClineMessage` shape does not report a provider. |
+| Agent | Absent | The client name is not copied into source-reported agent provenance. |
 | Workspace | Absent | Not available. |
-| Timestamps | Partial | May be present on some entries. |
-| Session ID | Full | Derived from parent task directory name. |
+| Timestamps | Full | Required numeric epoch-millisecond `ts`, converted deterministically to UTC RFC3339. |
+| Session ID | Partial | READY from a direct non-empty `history_item.json.id`; `_index.json` only corroborates it. Without valid history metadata, the parent directory is a compatibility grouping fallback only. |
 | Process ID | Absent | Not recorded. |
 | Exit code | Absent | Not recorded. |
-| Call ID | Lossy | Not preserved through legacy conversion. |
-| Is error | Lossy | Not preserved through legacy conversion. |
+| Call ID | Absent | No stable native call/message ID is proven by the verified shape. |
+| Is error | Lossy | The legacy flat record does not preserve execution outcome. |
 | Content parts | Lossy | Flattened to text. |
 
-**Known gaps**: RooCode stores sessions as `ui_messages.json` files in VS Code extension task directories. Session ID is derived from the parent directory name.
+**Known gaps**: RooCode stores sessions as `ui_messages.json` files in VS Code extension task directories. The pinned `TaskHistoryStore` writes the direct `history_item.json` source of truth and a debounced `_index.json` cache. A valid direct history ID survives a renamed directory; malformed, empty, or conflicting metadata fails closed. The parent-directory value is a compatibility grouping key, not canonical identity. Array order, ordinal, timestamp, content, path, and tool payload values are not approved per-message identity. Protected assignment remains required for future canonical projection.
 
 ---
 
 ### KiloCode
 
 **Source kinds**: `kilocode.tasks`
-**Format**: JSON (array of message objects in `ui_messages.json`)
+**Format**: Legacy-writer `ClineMessage[]` in `ui_messages.json`, read within
+the current product's bounded migration-store layout.
 **Store location**: Linux `~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/`; macOS `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/tasks/`
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| User messages | Full | Objects with `role: user` in the message array. |
-| Assistant messages | Full | Objects with `role: assistant`. |
-| Tool calls | Full | Content blocks with tool call type. |
-| Tool results | Full | Content blocks with tool result type. |
-| Model | Full | `model` field on records. |
-| Provider | Full | `provider` field (typically `anthropic`). |
-| Agent | Full | Defaults to `kilocode`. |
+| User messages | Full | `say:user_feedback` and `say:user_feedback_diff` are mapped as user content. |
+| Assistant messages | Full | `say:text`, completion/subtask results, and `ask:followup` are mapped as assistant content. |
+| Tool calls | Partial | Explicit `ask:command`, structured `ask:tool`, and the independently pinned legacy `ask:use_mcp_server` request; completed arguments are stringified and partial snapshots preserve the object. |
+| Tool results | Partial | Explicit command output and legacy `say:mcp_server_response` plain text only; no source tool name or execution outcome is inferred. |
+| Model | Absent | The legacy `ClineMessage` shape does not report a model. |
+| Provider | Absent | The legacy `ClineMessage` shape does not report a provider. |
+| Agent | Absent | The client name is not copied into source-reported agent provenance. |
 | Workspace | Absent | Not available. |
-| Timestamps | Partial | May be present on some entries. |
-| Session ID | Full | Derived from parent task directory name. |
+| Timestamps | Full | Required numeric epoch-millisecond `ts`, converted deterministically to UTC RFC3339. |
+| Session ID | Partial | The legacy writer reports no session companion. The parent directory is a compatibility grouping fallback only; no source-reported namespace is READY. |
 | Process ID | Absent | Not recorded. |
 | Exit code | Absent | Not recorded. |
-| Call ID | Lossy | Not preserved through legacy conversion. |
-| Is error | Lossy | Not preserved through legacy conversion. |
+| Call ID | Absent | No stable native call/message ID is proven in the legacy migration UI store. |
+| Is error | Lossy | The legacy flat record does not preserve execution outcome. |
 | Content parts | Lossy | Flattened to text. |
 
-**Known gaps**: KiloCode uses the same `ui_messages.json` format as RooCode. Session ID is derived from the parent directory name.
+**Known gaps**: This support is bounded to the legacy-writer
+`ui_messages.json` anchor. The pinned writer does not write Roo's
+`history_item.json` or `_index.json`; current Kilo's migration reader is not
+source evidence for this adapter. `api_conversation_history.json` is a separate
+alternate body and is never merged. Current Kilo SQLite/server/CLI data is
+outside this source. No session namespace or per-message coordinate is approved:
+the writer rewrites the whole array and no middle-delete stability proof exists.
+Protected assignment remains required for future canonical projection.
 
 ---
 
@@ -326,24 +334,24 @@ live shadow or Detection v2 production activation, and Event 3.0 is unchanged.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | User messages | Full | Full | Full | Full | Full | Full | Full | Full | **Lossy** |
 | Assistant messages | Full | Full | Full | Full | Full | Full | Full | Full | **Lossy** |
-| Tool calls | Full | Full | Full | Full | Full | Full | Full | Full | Full |
-| Tool results | Full | Full | Full | Full | Full | Full | Full | Full | Partial |
-| Model | Full | Full | Full | Full | Full | Full | Full | Full | Partial |
-| Provider | Full | Partial | Full | Full | Full | Full | Full | Full | Partial |
-| Agent | Full | Partial | Full | Full | Full | Full | Full | Full | Full |
+| Tool calls | Full | Full | Full | Full | Full | **Partial** | **Partial** | Full | Full |
+| Tool results | Full | Full | Full | Full | Full | **Partial** | **Partial** | Full | Partial |
+| Model | Full | Full | Full | Full | Full | **Absent** | **Absent** | Full | Partial |
+| Provider | Full | Partial | Full | Full | Full | **Absent** | **Absent** | Full | Partial |
+| Agent | Full | Partial | Full | Full | Full | **Absent** | **Absent** | Full | Full |
 | Workspace | Partial | Absent | Absent | Absent | Absent | Absent | Absent | Lossy | Partial |
-| Timestamps | Full | Partial | Partial | Partial | Partial | Partial | Partial | Full | Partial |
-| Session ID | Full | Full | Full | Full | Full | Full | Full | Full | Full |
+| Timestamps | Full | Partial | Partial | Partial | Partial | **Full** | **Full** | Full | Partial |
+| Session ID | Full | Full | Full | Full | Full | **Partial** | **Partial** | Full | Full |
 | Process ID | Absent | Absent | Absent | Absent | Absent | Absent | Absent | Absent | Partial |
 | Exit code | Absent | Absent | Absent | Absent | Absent | Absent | Absent | Absent | Absent |
-| Call ID | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Full |
+| Call ID | Lossy | Lossy | Lossy | Lossy | Lossy | **Absent** | **Absent** | Lossy | Full |
 | Is error | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Absent |
 | Content parts | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Lossy | Absent |
 
 ## Implications for Detection
 
-- **User intent context**: Only available for 8 of 9 sources. Copilot detections cannot rely on user-context matching. Rules targeting `user_context` will silently skip Copilot records.
-- **Model/provider attribution**: Weaker for Copilot and Claude. Cross-session correlation by model/provider is unreliable for these sources.
+- **User intent context**: Available for 8 of 9 sources; Copilot detections cannot rely on user-context matching. Rules targeting `user_context` will silently skip records without that evidence.
+- **Model/provider attribution**: Weaker for Copilot, Claude, RooCode, and KiloCode. Cross-session correlation by model/provider is unreliable for these sources.
 - **Workspace correlation**: Only Codex and Copilot provide workspace hints. Other sources require session-level grouping.
 - **Error detection**: `is_error` is universally lossy through the legacy conversion. Error-based detection rules need a future schema upgrade to be effective.
 - **Call ID linking**: Only Copilot preserves `call_id` natively. Tool-call/tool-result pairing for other sources relies on ordering and tool name matching.

@@ -1,0 +1,11 @@
+{
+  "id": "roocode-uc001-tool-result",
+  "number": 2,
+  "ts": 1777314900000,
+  "task": "Synthetic Roo MCP task",
+  "tokensIn": 20,
+  "tokensOut": 22,
+  "totalCost": 0,
+  "workspace": "synthetic-workspace",
+  "futureField": "ignored"
+}

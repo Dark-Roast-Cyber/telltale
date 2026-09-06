@@ -1,0 +1,11 @@
+{
+  "id": "roocode-session-a",
+  "number": 1,
+  "ts": 1777314600000,
+  "task": "Synthetic benign Roo task",
+  "tokensIn": 10,
+  "tokensOut": 12,
+  "totalCost": 0,
+  "workspace": "synthetic-workspace",
+  "futureField": "ignored"
+}

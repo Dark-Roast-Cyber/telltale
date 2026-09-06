@@ -1,46 +1,26 @@
 [
   {
-    "type": "user",
-    "sessionId": "kilocode-baseline-session",
-    "timestamp": "2026-05-10T16:00:00Z",
-    "agent": "kilocode",
-    "provider": "anthropic",
-    "model": "claude-sonnet-4",
-    "content": "What version of Rust is installed?"
+    "type": "say",
+    "say": "user_feedback",
+    "ts": 1778428800000,
+    "text": "Check the synthetic Rust version."
   },
   {
-    "type": "assistant",
-    "sessionId": "kilocode-baseline-session",
-    "timestamp": "2026-05-10T16:00:01Z",
-    "agent": "kilocode",
-    "provider": "anthropic",
-    "model": "claude-sonnet-4",
-    "content": "Let me check the Rust version.",
-    "tool_calls": [
-      {
-        "id": "tc-kilocode-baseline-001",
-        "name": "execute_command",
-        "arguments": { "command": "rustc --version" }
-      }
-    ]
+    "type": "say",
+    "say": "text",
+    "ts": 1778428801000,
+    "text": "I will check the synthetic Rust version for you."
   },
   {
-    "type": "tool_result",
-    "sessionId": "kilocode-baseline-session",
-    "timestamp": "2026-05-10T16:00:02Z",
-    "agent": "kilocode",
-    "provider": "anthropic",
-    "model": "claude-sonnet-4",
-    "tool_call_id": "tc-kilocode-baseline-001",
-    "content": "rustc 1.87.0 (17067e9ac 2026-05-05)"
+    "type": "ask",
+    "ask": "command",
+    "ts": 1778428802000,
+    "text": "rustc --version"
   },
   {
-    "type": "assistant",
-    "sessionId": "kilocode-baseline-session",
-    "timestamp": "2026-05-10T16:00:03Z",
-    "agent": "kilocode",
-    "provider": "anthropic",
-    "model": "claude-sonnet-4",
-    "content": "Rust 1.87.0 is installed, released on May 5, 2026."
+    "type": "say",
+    "say": "command_output",
+    "ts": 1778428803000,
+    "text": "rustc synthetic-version"
   }
 ]

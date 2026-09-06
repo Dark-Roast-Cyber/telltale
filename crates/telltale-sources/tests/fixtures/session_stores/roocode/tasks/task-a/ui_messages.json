@@ -1,20 +1,15 @@
 [
   {
-    "type": "user",
-    "sessionId": "roocode-session-a",
-    "timestamp": "2026-04-27T18:30:00Z",
-    "agent": "roocode",
-    "provider": "anthropic",
-    "model": "claude-fixture-model",
-    "content": "Summarize the current task without reading files."
+    "type": "say",
+    "say": "user_feedback",
+    "ts": 1777314600000,
+    "text": "Summarize the synthetic task without reading files."
   },
   {
-    "type": "assistant",
-    "sessionId": "roocode-session-a",
-    "timestamp": "2026-04-27T18:30:01Z",
-    "agent": "roocode",
-    "provider": "anthropic",
-    "model": "claude-fixture-model",
-    "content": "This is a benign RooCode fixture response with no tool calls or sensitive access."
+    "type": "say",
+    "say": "text",
+    "ts": 1777314601000,
+    "text": "This is a benign RooCode fixture response with no tool calls or sensitive access.",
+    "partial": false
   }
 ]

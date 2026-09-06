@@ -40,8 +40,11 @@ compiled-in registry and parser change.
   generic parser. Explicit unknown variants become `RecordKind::Other` or the
   source's documented diagnostic. There is no secondary fallback after failure.
 
-The current table has 14 exact identities: 12 modeled parsers and two deliberate
-exact generic JSON-document fallbacks, `roocode.tasks` and `kilocode.tasks`.
+The current table has 14 exact identities, all using modeled source-owned
+parsers. `roocode.tasks` has a pinned native UI-message interpretation with
+direct task-history identity; `kilocode.tasks` has an independently pinned
+legacy-writer interpretation without Roo companion identity logic. Neither is a
+generic JSON-document fallback.
 Parser maturity is not the same claim as live validation or full public support;
 use the [validation matrix](source-validation-matrix.md) for that distinction.
 

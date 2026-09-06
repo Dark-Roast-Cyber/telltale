@@ -321,7 +321,7 @@ fn detects_uc001_positive_kilocode_tool_result_fixture() {
     let event = &detections[0].1;
     assert_eq!(event.event_type, "detection");
     assert_eq!(event.client, "kilocode");
-    assert_eq!(event.session_id, "kilocode-uc001-tool-result");
+    assert_eq!(event.session_id, "task-b");
     assert_eq!(event.severity, "critical");
     assert_eq!(event.tool_name.as_deref(), Some("repo_status"));
     assert!(

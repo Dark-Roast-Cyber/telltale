@@ -25,11 +25,12 @@ candidate status are documented in [Session Sources](session-sources.md).
 
 Parser maturity is an implementation/parity statement, not a public support or
 live-validation claim. All 14 registered identities have synthetic
-parser/parity fixture coverage, including the project-local candidates. Twelve
-identities are modeled source parsers. RooCode and KiloCode deliberately use
-the exact generic JSON-document fallback because their verified UI-message
-document shape is currently identical; they remain explicit fallbacks rather
-than implicit format dispatch.
+parser/parity fixture coverage, including the project-local candidates. All 14
+identities use source-owned modeled parsers. RooCode has a pinned native
+UI-message interpretation with direct `history_item.json` identity and cache-only
+index corroboration; KiloCode has an independently pinned legacy-writer
+interpretation with no generic JSON-document fallback or Roo companion identity
+logic. Current Kilo SQLite/server/CLI storage remains outside the identity.
 
 | Client | Exact source identity | Parser maturity | Parser/parity fixtures | Matrix support status |
 | --- | --- | --- | --- | --- |
@@ -41,8 +42,8 @@ than implicit format dispatch.
 | Gemini CLI | `gemini.tmp` | Modeled | ✅ | Supported |
 | OpenClaw | `openclaw.agents` | Modeled | ✅ | Supported |
 | Qwen CLI | `qwen.projects` | Modeled | ✅ | Supported |
-| RooCode | `roocode.tasks` | Exact generic JSON-document fallback | ✅ | Supported |
-| KiloCode | `kilocode.tasks` | Exact generic JSON-document fallback | ✅ | Supported |
+| RooCode | `roocode.tasks` | Modeled `ClineMessage` UI-message parser | ✅ | Supported |
+| KiloCode | `kilocode.tasks` | Modeled legacy-writer `ClineMessage` UI-message parser | ✅ | Supported |
 | OpenCode | `opencode.sqlite` | Modeled | ✅ | Supported |
 | OpenCode | `opencode.legacy_json` | Modeled | ✅ | Supported |
 | OpenCode | `opencode.project_json` | Modeled | ✅ | Candidate; project-local gates remain separate |
@@ -75,8 +76,8 @@ support statuses in this matrix remain unchanged.
 | Gemini CLI | `gemini.tmp` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| RooCode | `roocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| KiloCode | `kilocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
+| RooCode | `roocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Agent/provider/model are absent in the verified UI record; `call_id`, `is_error`, `content_parts`, and canonical per-message identity are unavailable. Direct non-empty `history_item.json.id` is the source session namespace; `_index.json` is cache-only corroboration and the parent directory is compatibility-only. Protected assignment remains required for messages. |
+| KiloCode | `kilocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Legacy writer reports `ClineMessage` subtype, numeric `ts`, and MCP request/result encodings; it writes no history/index companion and agent/provider/model, call IDs, session namespace, content parts, and canonical per-message identity are unavailable. The parent directory is compatibility-only. Protected assignment remains required. |
 | OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | `call_id`, `is_error`, workspace, `content_parts` unavailable via legacy flat record |
 | OpenCode | `opencode.legacy_json` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ Fixture-backed + bounded live validation | Same as `opencode.sqlite` |
 | Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ Fixture-backed + bounded live validation | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, `content_parts` unavailable |
@@ -165,7 +166,7 @@ registration, or external parser configuration.
 
 | Use Case | Description | Clients Covered | Status |
 | --- | --- | --- | --- |
-| UC-001 | Fake MCP prompt injection to controlled domain | All 9 clients (12 matrixed source identities) | ✅ Complete |
+| UC-001 | Fake MCP prompt injection to controlled domain | All 9 supported clients (12 matrixed source identities) | ✅ Complete |
 | UC-002 | Credential harvesting before package publish | Codex, OpenCode (legacy_json), Copilot | ✅ 3 clients |
 | UC-003 | DNS exfiltration with encoded payload | Codex | ✅ 1 client |
 

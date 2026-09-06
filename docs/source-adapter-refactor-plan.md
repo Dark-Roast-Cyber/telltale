@@ -40,9 +40,9 @@ fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, ParseError>
 
 The public `parse_source_records()` and
 `parse_source_records_with_options()` interfaces remain unchanged. Generic
-parsing is opt-in per exact registration. The only deliberate generic
-registrations are `roocode.tasks` and `kilocode.tasks` using the JSON-document
-fallback. There is no generic JSONL fallback.
+parsing is not used by any registered identity. All 14 exact registrations
+select a source-owned modeled parser; there is no generic JSON document or
+JSONL fallback.
 
 Neutral JSON decoding remains shared through `read_jsonl_values()` and
 `read_json_document()`. Source modules own semantic extraction and
@@ -77,10 +77,10 @@ preserving normalized and emitted-event parity:
 | Qwen | `qwen.projects` | Modeled JSONL parser with terminal schema and unknown boundaries. |
 | Copilot | `copilot.process_log` | Modeled tolerant process-log parser; truncated logs remain recoverable, reasoning/message items remain ignored, and unknown future items produce safe `Other` summaries. |
 | Gemini | `gemini.tmp` | Modeled JSON parser; missing `messages` remains the established `Empty` behavior. |
-| RooCode/KiloCode | `roocode.tasks`, `kilocode.tasks` | Deliberate exact JSON-document fallbacks; their verified UI-message document shape is identical and does not yet require source-specific semantics. |
+| RooCode | `roocode.tasks` | Modeled `ClineMessage` parser with direct `history_item.json.id` session namespace, cache-only `_index.json` corroboration, terminal subtype/schema failures, source timestamp conversion, exact MCP request/result text handling, and compatibility parent fallback. Per-message identity is not ready. |
+| KiloCode | `kilocode.tasks` | Modeled legacy-writer `ClineMessage` parser with independently parsed MCP request/result shapes and a separate alternate-body boundary. The pinned writer has no Roo history/index companions; current SQLite/server/CLI stores remain out of scope, parent-directory grouping is compatibility-only, and session/per-message identity is not ready. |
 
-Final parser maturity is 12 modeled identities and exactly two deliberate
-generic JSON-document fallbacks. All 14 registered identities, including the
+Final parser maturity is 14 modeled identities and no generic fallbacks. All 14 registered identities, including the
 project-local Codex and OpenCode candidates, have parser/parity fixture
 coverage. That fact is separate from the public support matrix and from live
 host validation.

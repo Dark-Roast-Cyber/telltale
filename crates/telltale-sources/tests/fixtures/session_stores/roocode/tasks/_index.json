@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "updatedAt": 1777314903000,
+  "entries": [
+    {
+      "id": "roocode-session-a",
+      "number": 1,
+      "ts": 1777314600000,
+      "task": "Synthetic benign Roo task",
+      "tokensIn": 10,
+      "tokensOut": 12,
+      "totalCost": 0,
+      "workspace": "synthetic-workspace"
+    },
+    {
+      "id": "roocode-uc001-tool-result",
+      "number": 2,
+      "ts": 1777314900000,
+      "task": "Synthetic Roo MCP task",
+      "tokensIn": 20,
+      "tokensOut": 22,
+      "totalCost": 0,
+      "workspace": "synthetic-workspace"
+    }
+  ],
+  "futureField": "ignored"
+}

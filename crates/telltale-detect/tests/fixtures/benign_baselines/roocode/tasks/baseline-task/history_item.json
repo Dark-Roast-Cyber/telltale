@@ -1,0 +1,10 @@
+{
+  "id": "roocode-baseline-session",
+  "number": 1,
+  "ts": 1777314000000,
+  "task": "Synthetic Roo baseline",
+  "tokensIn": 8,
+  "tokensOut": 9,
+  "totalCost": 0,
+  "workspace": "synthetic-workspace"
+}

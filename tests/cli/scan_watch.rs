@@ -248,7 +248,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 124);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 122);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -320,8 +320,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert!(
         !events
             .iter()
-            .any(|event| event["session_id"] == "kilocode-session-a"
-                && event["client"] == "kilocode")
+            .any(|event| event["session_id"] == "task-a" && event["client"] == "kilocode")
     );
     assert!(
         !events
@@ -888,7 +887,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
 
     let kilocode_tool_result = events
         .iter()
-        .find(|event| event["session_id"] == "kilocode-uc001-tool-result")
+        .find(|event| event["session_id"] == "task-b")
         .expect("kilocode tool result detection");
     assert!(
         validator.is_valid(kilocode_tool_result),
@@ -1940,7 +1939,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 36);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        124
+        122
     );
     assert!(
         !second_summary["diagnostic_warnings"]
