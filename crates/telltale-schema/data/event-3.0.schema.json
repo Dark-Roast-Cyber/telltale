@@ -1,0 +1,747 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Dark-Roast-Cyber/telltale/main/schemas/event.schema.json",
+  "title": "Telltale Native SIEM Event 3.0",
+  "$defs": {
+    "canonicalRuleId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$"
+    },
+    "canonicalRuleIds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/canonicalRuleId" }
+    },
+    "riskContribution": {
+      "type": "object",
+      "required": ["id", "type", "points", "rationale"],
+      "properties": {
+        "id": { "$ref": "#/$defs/canonicalRuleId" },
+        "type": {
+          "type": "string",
+          "enum": ["deterministic_rule", "chain_modifier", "baseline_deviation"]
+        },
+        "points": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "rationale": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ,_;:'()_-]*$",
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["field", "redacted_value"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "redacted_value": { "type": "string" },
+        "hash": { "type": "string" },
+        "rule_id": { "$ref": "#/$defs/canonicalRuleId" }
+      },
+      "additionalProperties": false
+    },
+    "timelineAnchor": {
+      "type": "object",
+      "required": ["entry_index", "rule_ids", "categories", "evidence_fields"],
+      "properties": {
+        "entry_index": { "type": "integer", "minimum": 0 },
+        "rule_ids": {
+          "$ref": "#/$defs/canonicalRuleIds",
+          "minItems": 1
+        },
+        "categories": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "evidence_fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "recommended_action",
+        "response_playbook",
+        "investigation_summary",
+        "escalation"
+      ],
+      "properties": {
+        "recommended_action": {
+          "type": "string",
+          "enum": ["monitor", "review", "investigate", "investigate_immediately"]
+        },
+        "response_playbook": {
+          "type": "string",
+          "pattern": "^telltale-playbook-[a-z0-9-]+$"
+        },
+        "investigation_summary": { "type": "string", "minLength": 1 },
+        "escalation": {
+          "type": "string",
+          "enum": ["routine_review", "security_review_required"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "thresholdConfig": {
+      "type": "object",
+      "required": ["low", "medium", "high", "critical"],
+      "properties": {
+        "low": { "type": "integer", "minimum": 0 },
+        "medium": { "type": "integer", "minimum": 0 },
+        "high": { "type": "integer", "minimum": 0 },
+        "critical": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "processContext": {
+      "type": "object",
+      "required": [
+        "source_process_name",
+        "target_process_name",
+        "source_process_inferred",
+        "rule_name",
+        "dedup_key",
+        "suppression_window_seconds",
+        "rule_severity"
+      ],
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "user": { "type": "string", "minLength": 1 },
+        "source_process_name": { "type": "string", "minLength": 1 },
+        "source_process_path": { "type": "string", "minLength": 1 },
+        "source_process_id": { "type": "integer", "minimum": 0 },
+        "source_process_command_line": { "type": "string", "minLength": 1 },
+        "target_process_name": { "type": "string", "minLength": 1 },
+        "target_process_path": { "type": "string", "minLength": 1 },
+        "target_process_id": { "type": "integer", "minimum": 0 },
+        "target_process_command_line": { "type": "string", "minLength": 1 },
+        "parent_process_name": { "type": "string", "minLength": 1 },
+        "parent_process_path": { "type": "string", "minLength": 1 },
+        "source_event_id": { "type": "string", "minLength": 1 },
+        "source_process_inferred": { "type": "boolean" },
+        "rule_name": { "type": "string", "minLength": 1 },
+        "secondary_rule_ids": { "$ref": "#/$defs/canonicalRuleIds" },
+        "investigation_fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "falsepositives": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "dedup_key": { "type": "string", "minLength": 1 },
+        "suppression_window_seconds": { "type": "integer", "minimum": 0 },
+        "rule_severity": {
+          "type": "string",
+          "enum": ["informational", "low", "medium", "high", "critical"]
+        },
+        "risk_adjustment": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "eventCore": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "event_id",
+        "telltale_version",
+        "timestamp",
+        "observed_at",
+        "ingested_at",
+        "time_source",
+        "time_confidence",
+        "severity",
+        "risk_score",
+        "risk_contributions",
+        "client",
+        "session_id",
+        "tags",
+        "evidence"
+      ],
+      "properties": {
+        "schema_version": { "const": "3.0" },
+        "event_id": {
+          "type": "string",
+          "pattern": "^telltale-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "telltale_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "observed_at": { "type": "string", "format": "date-time" },
+        "ingested_at": { "type": "string", "format": "date-time" },
+        "time_source": {
+          "type": "string",
+          "enum": ["observed", "source", "override"]
+        },
+        "time_confidence": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "time_override_reason": { "type": "string", "minLength": 1 },
+        "severity": {
+          "type": "string",
+          "enum": ["informational", "low", "medium", "high", "critical", "warning"]
+        },
+        "risk_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "risk_contributions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/riskContribution" }
+        },
+        "client": { "type": "string", "minLength": 1 },
+        "session_id": { "type": "string", "minLength": 1 },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "activityStandard": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": ["event_type", "source_path_hash"],
+          "properties": {
+            "event_type": { "const": "activity" },
+            "event_time": { "type": "string" },
+            "severity": {
+              "type": "string",
+              "enum": ["informational", "low", "medium", "high", "critical"]
+            },
+            "agent": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "provider": { "type": "string", "minLength": 1 },
+            "source_path_hash": { "type": "string", "minLength": 1 },
+            "tool_name": { "type": "string", "minLength": 1 }
+          }
+        }
+      ],
+      "not": {
+        "properties": {
+          "client": { "const": "install_inventory" }
+        }
+      },
+      "unevaluatedProperties": false
+    },
+    "installInventoryActivity": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": ["event_type", "client", "session_id", "component", "check_name", "status"],
+          "properties": {
+            "event_type": { "const": "activity" },
+            "severity": { "const": "informational" },
+            "client": { "const": "install_inventory" },
+            "session_id": { "const": "scanner" },
+            "risk_score": { "const": 0 },
+            "risk_contributions": {
+              "type": "array",
+              "maxItems": 0
+            },
+            "time_source": { "const": "observed" },
+            "time_confidence": { "const": "low" },
+            "tags": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 },
+              "allOf": [
+                { "contains": { "const": "scanner" } },
+                { "contains": { "const": "install_inventory" } },
+                { "contains": { "const": "metadata_only" } }
+              ]
+            },
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/evidence" }
+            },
+            "component": { "const": "scanner" },
+            "check_name": { "const": "install_inventory" },
+            "status": { "const": "ok" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "activity": {
+      "oneOf": [
+        { "$ref": "#/$defs/activityStandard" },
+        { "$ref": "#/$defs/installInventoryActivity" }
+      ],
+      "unevaluatedProperties": false
+    },
+    "detection": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": [
+            "event_type",
+            "source_path_hash",
+            "rule_ids",
+            "categories",
+            "detection_classes",
+            "signal_types",
+            "analytic_intents"
+          ],
+          "properties": {
+            "event_type": { "const": "detection" },
+            "event_time": { "type": "string" },
+            "severity": {
+              "type": "string",
+              "enum": ["informational", "low", "medium", "high", "critical"]
+            },
+            "agent": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "provider": { "type": "string", "minLength": 1 },
+            "source_path_hash": { "type": "string", "minLength": 1 },
+            "tool_name": { "type": "string", "minLength": 1 },
+            "rule_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/canonicalRuleId" }
+            },
+            "categories": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "detection_classes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "security_detection",
+                  "policy_violation",
+                  "threat_hunting",
+                  "compliance_observation",
+                  "operational_health",
+                  "baseline_deviation"
+                ]
+              }
+            },
+            "signal_types": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": ["atomic", "chain", "correlation", "baseline_deviation"]
+              }
+            },
+            "analytic_intents": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": ["alert", "hunt", "enrich", "baseline", "audit"]
+              }
+            },
+            "atlas_tags": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^atlas:" }
+            },
+            "timeline_anchors": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/timelineAnchor" }
+            },
+            "response": { "$ref": "#/$defs/response" }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": ["tags"],
+                "properties": {
+                  "tags": { "contains": { "const": "suppressed" } }
+                }
+              },
+              "then": {
+                "required": ["tags"],
+                "properties": {
+                  "severity": { "const": "informational" },
+                  "risk_score": { "const": 0 },
+                  "risk_contributions": { "maxItems": 0 },
+                  "timeline_anchors": { "maxItems": 0 }
+                },
+                "not": { "required": ["response"] }
+              },
+              "else": { "required": ["response"] }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "sessionRiskSummary": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": ["event_type"],
+          "properties": {
+            "event_type": { "const": "session_risk_summary" },
+            "event_time": { "type": "string" },
+            "severity": {
+              "type": "string",
+              "enum": ["informational", "low", "medium", "high", "critical"]
+            },
+            "agent": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "provider": { "type": "string", "minLength": 1 },
+            "source_path_hash": { "type": "string", "minLength": 1 },
+            "rule_ids": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/canonicalRuleId" }
+            },
+            "categories": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "detection_classes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "security_detection",
+                  "policy_violation",
+                  "threat_hunting",
+                  "compliance_observation",
+                  "operational_health",
+                  "baseline_deviation"
+                ]
+              }
+            },
+            "signal_types": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["atomic", "chain", "correlation", "baseline_deviation"]
+              }
+            },
+            "analytic_intents": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["alert", "hunt", "enrich", "baseline", "audit"]
+              }
+            },
+            "atlas_tags": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^atlas:" }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "health": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": [
+            "event_type",
+            "source_counts",
+            "component",
+            "check_name",
+            "status",
+            "scan_duration_ms",
+            "rule_count",
+            "threshold_config",
+            "emitted_count",
+            "suppressed_count",
+            "scanner_error_count"
+          ],
+          "properties": {
+            "event_type": { "const": "health" },
+            "severity": { "const": "informational" },
+            "session_id": { "const": "scanner" },
+            "source_counts": {
+              "type": "object",
+              "patternProperties": {
+                "^.+$": { "type": "integer", "minimum": 0 }
+              },
+              "additionalProperties": false
+            },
+            "component": { "const": "scanner" },
+            "check_name": { "const": "source_discovery" },
+            "status": { "const": "ok" },
+            "scan_duration_ms": { "type": "integer", "minimum": 0 },
+            "rule_count": { "type": "integer", "minimum": 0 },
+            "threshold_config": { "$ref": "#/$defs/thresholdConfig" },
+            "active_policy_name": { "type": "string", "minLength": 1 },
+            "emitted_count": { "type": "integer", "minimum": 0 },
+            "suppressed_count": { "type": "integer", "minimum": 0 },
+            "scanner_error_count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "scannerError": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": ["event_type", "source_path_hash", "component", "check_name", "status"],
+          "properties": {
+            "event_type": { "const": "scanner_error" },
+            "severity": { "const": "informational" },
+            "session_id": { "const": "scanner" },
+            "source_path_hash": { "type": "string", "minLength": 1 },
+            "component": { "const": "scanner" },
+            "check_name": { "const": "source_parse" },
+            "status": { "const": "degraded" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "operationalAlert": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": [
+            "event_type",
+            "categories",
+            "detection_classes",
+            "signal_types",
+            "analytic_intents",
+            "component",
+            "check_name",
+            "status"
+          ],
+          "properties": {
+            "event_type": { "const": "operational_alert" },
+            "severity": { "const": "warning" },
+            "client": { "const": "scanner" },
+            "session_id": { "const": "scanner" },
+            "categories": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "detection_classes": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "const": "operational_health" }
+            },
+            "signal_types": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "const": "atomic" }
+            },
+            "analytic_intents": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "const": "alert" }
+            },
+            "component": { "const": "scanner" },
+            "check_name": {
+              "type": "string",
+              "enum": ["scanner_error_threshold", "scan_duration_threshold", "sink_delivery", "operational_alert"]
+            },
+            "status": { "const": "degraded" },
+            "scan_duration_ms": { "type": "integer", "minimum": 0 },
+            "scanner_error_count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "processChain": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": [
+            "event_type",
+            "source_path_hash",
+            "rule_ids",
+            "categories",
+            "detection_classes",
+            "signal_types",
+            "analytic_intents",
+            "response",
+            "informational",
+            "confidence",
+            "detection_reason",
+            "risk_entity_type",
+            "risk_entity_value",
+            "process"
+          ],
+          "properties": {
+            "event_type": { "const": "process_chain" },
+            "event_time": { "type": "string" },
+            "severity": {
+              "type": "string",
+              "enum": ["informational", "low", "medium", "high", "critical"]
+            },
+            "agent": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "provider": { "type": "string", "minLength": 1 },
+            "source_path_hash": { "type": "string", "minLength": 1 },
+            "tool_name": { "type": "string", "minLength": 1 },
+            "rule_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/canonicalRuleId" }
+            },
+            "categories": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "detection_classes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "security_detection",
+                  "policy_violation",
+                  "threat_hunting",
+                  "compliance_observation",
+                  "operational_health",
+                  "baseline_deviation"
+                ]
+              }
+            },
+            "signal_types": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": ["atomic", "chain", "correlation", "baseline_deviation"]
+              }
+            },
+            "analytic_intents": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": ["alert", "hunt", "enrich", "baseline", "audit"]
+              }
+            },
+            "response": { "$ref": "#/$defs/response" },
+            "informational": { "type": "boolean" },
+            "confidence": {
+              "type": "string",
+              "enum": ["low", "medium", "high"]
+            },
+            "detection_reason": { "type": "string", "minLength": 1 },
+            "mitre_attack_techniques": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "risk_entity_type": {
+              "type": "string",
+              "enum": ["host", "user", "session"]
+            },
+            "risk_entity_value": { "type": "string", "minLength": 1 },
+            "process": { "$ref": "#/$defs/processContext" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "correlation": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCore" },
+        {
+          "type": "object",
+          "required": [
+            "event_type",
+            "event_time",
+            "rule_ids",
+            "categories",
+            "detection_classes",
+            "signal_types",
+            "analytic_intents"
+          ],
+          "properties": {
+            "event_type": { "const": "correlation" },
+            "event_time": { "type": "string", "minLength": 1 },
+            "severity": {
+              "type": "string",
+              "enum": ["informational", "low", "medium", "high", "critical"]
+            },
+            "agent": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "provider": { "type": "string", "minLength": 1 },
+            "session_id": { "const": "correlation" },
+            "rule_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/canonicalRuleId" }
+            },
+            "categories": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "const": "cross_session_correlation" }
+            },
+            "detection_classes": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "const": "security_detection" }
+            },
+            "signal_types": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "const": "correlation" }
+            },
+            "analytic_intents": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "const": "alert" }
+            },
+            "evidence": {
+              "type": "array",
+              "minItems": 4,
+              "items": { "$ref": "#/$defs/evidence" }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  },
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/activity" },
+    { "$ref": "#/$defs/detection" },
+    { "$ref": "#/$defs/sessionRiskSummary" },
+    { "$ref": "#/$defs/health" },
+    { "$ref": "#/$defs/scannerError" },
+    { "$ref": "#/$defs/operationalAlert" },
+    { "$ref": "#/$defs/processChain" },
+    { "$ref": "#/$defs/correlation" }
+  ],
+  "unevaluatedProperties": false
+}

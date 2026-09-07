@@ -1667,6 +1667,7 @@ name = "telltale-schema"
 version = "0.5.0"
 dependencies = [
  "hmac",
+ "jsonschema",
  "regex",
  "serde",
  "serde_json",

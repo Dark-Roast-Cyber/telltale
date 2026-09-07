@@ -60,6 +60,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
       - run: cargo test --quiet
+      - name: Run Event 3.0 consumer contract checks
+        run: make --silent event3-contract-check
 
   security:
     name: Security and supply chain

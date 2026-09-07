@@ -99,6 +99,8 @@ jobs:
         run: cargo test --locked --quiet
       - name: Check public documentation boundary
         run: make --silent CARGO_LOCKED=--locked release-public-docs-check
+      - name: Check Event 3.0 consumer contract
+        run: make --silent CARGO_LOCKED=--locked event3-contract-check
       - name: Check canonical release identity
         run: make --silent CARGO_LOCKED=--locked release-canonical-identity-check
       - name: Check package and public-boundary manifest

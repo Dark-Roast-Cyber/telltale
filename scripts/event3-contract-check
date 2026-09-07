@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+echo "== Event 3.0 schema freeze =="
+expected=9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754
+for schema in schemas/event.schema.json schemas/historical/event-3.0.schema.json; do
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$schema" | awk '{print $1}')
+    else
+        actual=$(shasum -a 256 "$schema" | awk '{print $1}')
+    fi
+    test "$actual" = "$expected" || {
+        echo "Event 3.0 schema hash drift: $schema" >&2
+        exit 1
+    }
+done
+cmp -s schemas/event.schema.json schemas/historical/event-3.0.schema.json
+
+echo "== Event 3.0 lower-level consumer positive/negative/privacy/history checks =="
+cargo test --locked -p telltale-schema consumer
+
+echo "== Native constructor inventory and terminal positive checks =="
+cargo test --locked -p telltale-schema event_constructor_family_registry
+cargo test --locked --test cli native_constructor_family_registry_covers_the_reviewed_current_corpus
+cargo test --locked --test cli every_native_event_constructor_emits_schema_valid_json
+
+echo "== Event 3.0 terminal privacy and historical checks =="
+cargo test --locked -p telltale-schema privacy
+cargo test --locked -p telltale-cli historical_schema_hashes_match_tagged_source_blobs
+
+echo "== Practical documentation boundary =="
+cargo test --locked --quiet public_docs_
+grep -q 'Event3Record' crates/telltale-schema/README.md
+grep -q 'Event 3.0 consumer boundary' docs/telemetry-output.md
+echo "Event 3.0 contract checks passed."

@@ -17,6 +17,30 @@ use telltale_schema::record::NormalizedRecord;
 let _record: Option<NormalizedRecord> = None;
 ```
 
+## Event 3.0 consumer
+
+External consumers can parse one complete terminal Event 3.0 object without
+deserializing the trusted producer `Event`:
+
+```rust
+use telltale_schema::event::Event3Record;
+
+let record = Event3Record::from_json(bytes)?;
+println!("{}", record.event_type());
+```
+
+The consumer parses JSON, requires exact `schema_version` `3.0`, validates the
+frozen strict schema, applies current identity/family/risk semantics, and then
+returns typed common and family projections. `Event3Family::Activity` keeps
+standard activity separate from install inventory even though both use the
+wire event type `activity`. `Event3ConsumerError` exposes stable categories and
+codes but never includes input JSON, values, paths, or serde diagnostics.
+
+This API reads terminal bytes; it does not reconstruct native producer state,
+perform delivery, infer ordering, or claim that response guidance was an
+executed action. See [Telemetry Output](../../docs/telemetry-output.md) for
+timing, identity, JSONL, replay, and sink boundaries.
+
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
 Canonical Observation v2 core types are local-only scaffolding and are not the

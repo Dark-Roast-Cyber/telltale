@@ -56,6 +56,9 @@ package)
             : > "$package_root/$schema"
         done
         printf '%s\n' '{"git":{"sha1":"0123456789012345678901234567890123456789"}}' > "$package_root/.cargo_vcs_info.json"
+    elif test "$package" = telltale-schema; then
+        mkdir -p "$package_root/data"
+        : > "$package_root/data/event-3.0.schema.json"
     fi
     ;;
 test|check)

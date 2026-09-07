@@ -16,6 +16,18 @@ mod inventory;
 mod redaction;
 mod time;
 
+pub mod consumer;
+
+pub use consumer::{
+    EVENT3_MAX_INPUT_BYTES, EVENT3_SCHEMA, EVENT3_SCHEMA_SHA256, Event3Activity,
+    Event3AnalyticIntent, Event3Common, Event3Confidence, Event3ConsumerError, Event3Correlation,
+    Event3Detection, Event3DetectionClass, Event3ErrorCategory, Event3Evidence, Event3Family,
+    Event3Health, Event3InstallInventoryActivity, Event3OperationalAlert, Event3ProcessChain,
+    Event3ProcessContext, Event3Record, Event3Response, Event3RiskEntityType, Event3ScannerError,
+    Event3SessionRiskSummary, Event3Severity, Event3SignalType, Event3StandardActivity,
+    Event3Thresholds, Event3TimeConfidence, Event3TimeSource, Event3TimelineAnchor,
+};
+
 pub use inventory::{evidence_hash, path_hash};
 pub use redaction::{
     ControlledMarker, PrivacySanitizer, SanitizationContext, SerializedMarkerCheckError,

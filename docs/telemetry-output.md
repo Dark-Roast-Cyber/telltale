@@ -44,6 +44,58 @@ cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests
 The JSONL sink is the stable interchange point. Each line is a complete event
 that follows [schemas/event.schema.json](../schemas/event.schema.json).
 
+### Event 3.0 consumer boundary
+
+The lower-level `telltale-schema` crate exposes `Event3Record` for external
+consumers that already have one terminal Event 3.0 JSON object. It parses the
+exact JSON object, requires `schema_version: "3.0"`, validates the frozen strict
+schema, applies the existing identity/family/risk semantics, and returns typed
+common and family projections. It does not deserialize native `Event`, read
+session stores, add provenance, reorder events, deduplicate, or execute the
+response guidance. Errors are stable classified codes and never include raw
+JSON or input-derived values. The current and historical Event 3.0 schema
+artifacts remain byte-identical at SHA-256
+`9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754`.
+
+Native `Event` is the trusted producer model. `Event3Record` is the consumer
+view of already terminal-safe bytes; it is not a producer, provenance record,
+session-store reader, or action executor.
+
+The identity fields have deliberately limited meanings:
+
+- `event_id` is the Event 3.0 record identity. It is not a session, source,
+  delivery-attempt, host, or device identity.
+- `session_id` is semantic agent-session correlation when present. It is not
+  globally unique across machines.
+- `source_path_hash` is privacy-safe source correlation when present. It is not
+  the path, is not reversible, and is not host identity.
+- `timeline_anchors.entry_index` locates the corresponding normalized session
+  timeline entry. It is not a canonical observation ID and does not guarantee
+  immutable source-history storage. If the source later disappears, Event 3.0
+  remains authoritative while rich session context may be unavailable.
+
+Event 3.0 has no public scan or run identity; health counters are operational
+observations, not scan IDs. Host, device, tenant, and collector metadata are
+outside Event 3.0.
+
+The timing fields retain their current coarse meanings: `timestamp` is valid
+source time normalized to UTC milliseconds when available, otherwise local
+observation time with `time_source`, `time_confidence`, and an optional
+`time_override_reason`; `event_time` retains source/derived event time; and
+`observed_at` and `ingested_at` are local scan/ingestion timestamps. Identity
+is carried by `event_id`, `session_id`, source-derived hash, and optional
+timeline anchors. Taxonomy, risk contributions, redacted/hashed evidence, and
+response fields retain their Event 3.0 meanings; response is guidance, not an
+executed action. Health counters are operational observations and are not scan
+identity.
+
+JSONL remains the complete-line durable first-write boundary, with
+at-least-once delivery. Receivers deduplicate by `event_id`: identical
+canonical-byte replay is valid, while conflicting canonical content for the
+same ID is an integrity failure. File order is not universal event ordering.
+The private outbox is not the public consumer query API, and future observation
+lifecycle semantics belong to Event4 rather than this contract.
+
 ## Scan Diagnostics
 
 Every scan also prints one JSON summary to stdout. This local diagnostic is not

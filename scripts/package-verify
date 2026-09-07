@@ -76,6 +76,10 @@ run_package telltale-sources telltale-schema
 run_package telltale-detect telltale-schema telltale-rules telltale-sources
 run_package telltale-core telltale-schema telltale-rules telltale-sources telltale-detect
 run_package telltale-cli telltale-schema telltale-rules telltale-sources telltale-detect telltale-core
+test -f "$(package_path telltale-schema)/data/event-3.0.schema.json" || {
+    echo "packaged telltale-schema is missing its Event 3.0 schema asset" >&2
+    exit 1
+}
 for schema_path in \
     schemas/event.schema.json \
     schemas/historical/README.md \
@@ -274,10 +278,11 @@ edition = "2024"
 
 [dependencies]
 telltale-schema = "=$VERSION"
+serde_json = "1.0"
 EOF
 
 cat > "$SCHEMA_CONSUMER_DIR/src/main.rs" <<'EOF'
-use telltale_schema::event::{health_event_with_metadata, HealthEventInput};
+use telltale_schema::event::{health_event_with_metadata, Event3Record, HealthEventInput};
 use telltale_schema::scoring::RiskThresholds;
 
 fn main() {
@@ -297,6 +302,9 @@ fn main() {
         suppressed_count: 0,
         scanner_error_count: 0,
     });
+    let bytes = serde_json::to_vec(&event).expect("terminal Event 3.0 bytes");
+    let record = Event3Record::from_json(&bytes).expect("typed Event 3.0 consumer");
+    assert_eq!(record.event_type(), "health");
     println!("{}", event.telltale_version);
 }
 EOF
