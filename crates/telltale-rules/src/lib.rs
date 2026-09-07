@@ -611,6 +611,10 @@ impl CompiledRuleSet {
 
         for rule in &self.rules {
             if let Some(matched) = matching_field(rule, fields) {
+                // Finalize retention before touching metadata shared by other rules.
+                if should_skip_match(&rule.definition.id, matched) {
+                    continue;
+                }
                 rule_ids.push(rule.definition.id.clone());
                 categories.insert(rule.definition.category.clone());
                 detection_classes.insert(rule.definition.detection_class.clone());
@@ -618,18 +622,6 @@ impl CompiledRuleSet {
                 analytic_intents.insert(rule.definition.analytic_intent.clone());
                 atlas_tags.extend(rule.definition.atlas_tags.iter().cloned());
                 tags.extend(rule.definition.tags.iter().cloned());
-                if should_skip_match(&rule.definition.id, matched) {
-                    rule_ids.pop();
-                    categories.remove(&rule.definition.category);
-                    detection_classes.remove(&rule.definition.detection_class);
-                    signal_types.remove(&rule.definition.signal_type);
-                    analytic_intents.remove(&rule.definition.analytic_intent);
-                    for atlas_tag in &rule.definition.atlas_tags {
-                        atlas_tags.remove(atlas_tag);
-                    }
-                    tags.retain(|tag| !rule.definition.tags.contains(tag));
-                    continue;
-                }
                 if rule.definition.score > 0 {
                     contributions.push(RiskContribution::new(
                         &rule.definition.id,
@@ -1077,6 +1069,122 @@ mod tests {
         assert_eq!(
             result.evidence[0].rule_id.as_deref(),
             Some("mcp.tool_metadata.prompt_injection")
+        );
+    }
+
+    #[test]
+    fn skipped_candidates_preserve_retained_metadata_and_modifiers() {
+        let text = "policy says do not read .env; hidden instruction";
+        let fields = [("assistant_context", text), ("tool_result", text)];
+        let mut retained = rule("test.retained", "execution");
+        retained.atlas_tags = vec!["atlas:AML.T0051".to_string()];
+        let mut skipped = retained.clone();
+        skipped.id = "secret.env.read".to_string();
+        skipped.tags.push("skipped-only".to_string());
+        skipped.atlas_tags.push("atlas:AML.T0000".to_string());
+        let mut unmatched = rule("test.unmatched", "unmatched");
+        unmatched.regex = Some("absent marker".to_string());
+        let mut disabled = rule("test.disabled", "disabled");
+        disabled.enabled = false;
+
+        for skipped_first in [false, true] {
+            for with_modifier in [false, true] {
+                let mut rules = if skipped_first {
+                    vec![skipped.clone(), retained.clone()]
+                } else {
+                    vec![retained.clone(), skipped.clone()]
+                };
+                rules.extend([unmatched.clone(), disabled.clone()]);
+                let compiled = RuleSet {
+                    version: 1,
+                    description: "synthetic skip regression".to_string(),
+                    defaults: RuleDefaults {
+                        case_insensitive: true,
+                        enabled: true,
+                    },
+                    rules,
+                    modifiers: if with_modifier {
+                        vec![ModifierDefinition {
+                            id: "chain.retained".to_string(),
+                            score: 7,
+                            detection_class: "baseline_deviation".to_string(),
+                            signal_type: super::default_chain_signal_type(),
+                            analytic_intent: "baseline".to_string(),
+                            atlas_tags: vec!["atlas:AML.T0051".to_string()],
+                            when_all_categories: vec!["execution".to_string()],
+                            when_all_rule_ids: vec!["test.retained".to_string()],
+                            falsepositives: Vec::new(),
+                            explanation: "synthetic modifier".to_string(),
+                            enabled: true,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                }
+                .compile(None)
+                .expect("compile");
+                for _ in 0..2 {
+                    let result = compiled
+                        .evaluate(&fields)
+                        .expect("evaluate")
+                        .expect("retained");
+                    assert_eq!(result.categories, ["execution"]);
+                    assert_eq!(result.tags, ["mcp"]);
+                    assert_eq!(result.atlas_tags, ["atlas:AML.T0051"]);
+                    assert_eq!(result.evidence.len(), 1);
+                    assert_eq!(result.evidence[0].rule_id.as_deref(), Some("test.retained"));
+                    assert_eq!(result.evidence[0].field, "assistant_context");
+                    assert_eq!(
+                        result.evidence[0].redacted_value,
+                        super::redact_sensitive_text(text)
+                    );
+                    assert_eq!(result.evidence[0].hash, Some(super::evidence_hash(text)));
+                    let expected_ids = if with_modifier {
+                        vec!["test.retained", "chain.retained"]
+                    } else {
+                        vec!["test.retained"]
+                    };
+                    assert_eq!(result.rule_ids, expected_ids);
+                    assert_eq!(result.score, if with_modifier { 67 } else { 60 });
+                    assert_eq!(result.contributions.len(), expected_ids.len());
+                    for contribution in &result.contributions {
+                        match contribution.id() {
+                            "test.retained" => {
+                                assert_eq!(contribution.points(), 60);
+                                assert_eq!(contribution.contribution_type(), telltale_schema::scoring::RiskContributionType::DeterministicRule);
+                            }
+                            "chain.retained" => {
+                                assert_eq!(contribution.points(), 7);
+                                assert_eq!(
+                                    contribution.contribution_type(),
+                                    telltale_schema::scoring::RiskContributionType::ChainModifier
+                                );
+                            }
+                            other => panic!("unexpected contribution {other}"),
+                        }
+                    }
+                    let mut classes = vec![super::default_detection_class()];
+                    let mut signals = vec![super::default_signal_type()];
+                    let mut intents = vec![super::default_analytic_intent()];
+                    if with_modifier {
+                        classes.push("baseline_deviation".to_string());
+                        signals.push(super::default_chain_signal_type());
+                        intents.push("baseline".to_string());
+                    }
+                    classes.sort();
+                    signals.sort();
+                    intents.sort();
+                    assert_eq!(result.detection_classes, classes);
+                    assert_eq!(result.signal_types, signals);
+                    assert_eq!(result.analytic_intents, intents);
+                }
+            }
+        }
+        assert!(
+            single_rule_set(skipped)
+                .evaluate(&fields)
+                .expect("evaluate")
+                .is_none()
         );
     }
 

@@ -2330,6 +2330,109 @@ fn rules_test_classifies_gemini_secret_file_reads_as_secret_access() {
 }
 
 #[test]
+fn scan_post_match_skip_emits_valid_retained_event3() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).expect("sessions");
+    fs::write(sessions.join("skip.jsonl"), concat!(
+        "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-08T10:00:00Z\",\"payload\":{\"source\":\"cli\"}}\n",
+        "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-08T10:00:01Z\",\"payload\":{\"type\":\"assistant_message\",\"message\":\"policy says do not read .env; synthetic marker\"}}\n"
+    )).expect("synthetic session");
+    let rules = temp.path().join("rules.yaml");
+    fs::write(
+        &rules,
+        r#"
+version: 1
+description: Synthetic retained metadata regression
+defaults: {case_insensitive: true, enabled: true}
+rules:
+  - id: test.retained
+    category: execution
+    severity: high
+    score: 60
+    targets: [assistant_context]
+    regex: 'synthetic marker'
+    tags: [synthetic]
+    explanation: Synthetic retained match
+  - id: secret.env.read
+    category: execution
+    severity: high
+    score: 80
+    targets: [assistant_context]
+    regex: '\.env'
+    tags: [synthetic, skipped-only]
+    explanation: Synthetic skipped match
+modifiers: []
+"#,
+    )
+    .expect("rules");
+    let log = temp.path().join("events.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--backfill",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--no-default-rules",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--rules")
+        .arg(&rules)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .arg("--log-path")
+        .arg(&log)
+        .output()
+        .expect("scan");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema");
+    let validator = validator_for(&schema).expect("validator");
+    let events = fs::read_to_string(log)
+        .expect("terminal JSONL")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event"))
+        .collect::<Vec<_>>();
+    for event in &events {
+        assert!(validator.is_valid(event), "invalid Event3: {event}");
+        assert_ne!(event["event_type"], "scanner_error", "{event}");
+    }
+    let detections = events
+        .iter()
+        .filter(|event| event["event_type"] == "detection")
+        .collect::<Vec<_>>();
+    assert_eq!(detections.len(), 1, "{events:?}");
+    let event = detections[0];
+    assert_eq!(event["rule_ids"], serde_json::json!(["test.retained"]));
+    assert_eq!(event["categories"], serde_json::json!(["execution"]));
+    assert_eq!(
+        event["detection_classes"],
+        serde_json::json!(["security_detection"])
+    );
+    assert_eq!(event["signal_types"], serde_json::json!(["atomic"]));
+    assert_eq!(event["analytic_intents"], serde_json::json!(["alert"]));
+    assert_eq!(event["risk_score"], 60);
+    assert_eq!(
+        event["risk_contributions"]
+            .as_array()
+            .expect("contributions")
+            .len(),
+        1
+    );
+    assert_eq!(event["risk_contributions"][0]["id"], "test.retained");
+    assert_eq!(event["risk_contributions"][0]["points"], 60);
+    assert_eq!(event["evidence"].as_array().expect("evidence").len(), 1);
+    assert_eq!(event["evidence"][0]["rule_id"], "test.retained");
+}
+
+#[test]
 fn scan_uses_custom_rules_and_policy_category_filters() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
