@@ -1621,10 +1621,17 @@ dependencies = [
 name = "telltale-core"
 version = "0.5.0"
 dependencies = [
+ "fs4",
+ "getrandom 0.3.4",
+ "hmac",
+ "libc",
+ "rusqlite",
+ "sha2",
  "telltale-detect",
  "telltale-rules",
  "telltale-schema",
  "telltale-sources",
+ "tempfile",
 ]
 
 [[package]]

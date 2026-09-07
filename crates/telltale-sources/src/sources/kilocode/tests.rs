@@ -1,5 +1,6 @@
 use std::fs;
 
+use serde_json::json;
 use tempfile::tempdir;
 
 use crate::discovery::discover_sources_best_effort;
@@ -237,6 +238,71 @@ fn preserves_partial_order_and_does_not_promote_array_ordinal_to_identity() {
     assert_eq!(native[0].partial, Some(true));
     assert_eq!(native[1].partial, Some(false));
     assert_eq!(native[0].timestamp, native[1].timestamp);
+}
+
+#[test]
+fn identity_readiness_vectors_reject_unsafe_kilocode_coordinates() {
+    let temp = tempdir().expect("tempdir");
+    let base = vec![
+        json!({"type":"say","say":"text","ts":1,"text":"first"}),
+        json!({"type":"say","say":"text","ts":2,"text":"duplicate"}),
+        json!({"type":"say","say":"text","ts":2,"text":"duplicate"}),
+        json!({"type":"say","say":"text","ts":3,"text":"last"}),
+    ];
+    let variants = [
+        base.clone(),
+        vec![
+            base[0].clone(),
+            json!({"type":"say","say":"text","ts":4,"text":"inserted"}),
+            base[1].clone(),
+            base[2].clone(),
+            base[3].clone(),
+        ],
+        vec![base[0].clone(), base[2].clone(), base[3].clone()],
+        vec![
+            base[3].clone(),
+            base[1].clone(),
+            base[2].clone(),
+            base[0].clone(),
+        ],
+        vec![
+            json!({"type":"say","say":"text","ts":1,"text":"edited"}),
+            base[1].clone(),
+        ],
+        vec![base[0].clone(), base[1].clone()],
+        vec![
+            base[0].clone(),
+            base[1].clone(),
+            base[2].clone(),
+            base[3].clone(),
+            json!({"type":"say","say":"text","ts":5,"text":"appended"}),
+        ],
+    ];
+    for (index, variant) in variants.into_iter().enumerate() {
+        let task = temp.path().join(format!("task-{index}"));
+        fs::create_dir_all(&task).expect("task directory");
+        let path = task.join("ui_messages.json");
+        fs::write(&path, serde_json::to_vec(&variant).expect("JSON")).expect("source");
+        let native = super::native::extract_kilocode_native_records(&source(path)).expect("native");
+        assert!(native.iter().enumerate().all(|(ordinal, record)| {
+            record.source_sequence == ordinal && record.subtype == "text"
+        }));
+    }
+
+    let first_task = temp.path().join("move-a");
+    let second_task = temp.path().join("move-b");
+    fs::create_dir_all(&first_task).expect("first task");
+    fs::create_dir_all(&second_task).expect("second task");
+    let body = serde_json::to_vec(&base).expect("JSON");
+    fs::write(first_task.join("ui_messages.json"), &body).expect("first source");
+    fs::write(second_task.join("ui_messages.json"), body).expect("second source");
+    let first =
+        parse_source_records(&source(first_task.join("ui_messages.json"))).expect("first records");
+    let second = parse_source_records(&source(second_task.join("ui_messages.json")))
+        .expect("second records");
+    assert_eq!(first[1].content, first[2].content);
+    assert_eq!(first[0].content, second[0].content);
+    assert_ne!(first[0].session_id, second[0].session_id);
 }
 
 #[test]

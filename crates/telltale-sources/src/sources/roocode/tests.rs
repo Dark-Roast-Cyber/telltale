@@ -292,6 +292,7 @@ fn identity_readiness_vectors_reject_unsafe_roocode_coordinates() {
     let base = vec![
         json!({"type":"say","say":"text","ts":1,"text":"first"}),
         json!({"type":"say","say":"text","ts":2,"text":"second"}),
+        json!({"type":"say","say":"text","ts":2,"text":"second"}),
         json!({"type":"say","say":"text","ts":3,"text":"third"}),
     ];
     let variants = [
@@ -303,15 +304,22 @@ fn identity_readiness_vectors_reject_unsafe_roocode_coordinates() {
         vec![
             json!({"type":"say","say":"text","ts":1,"text":"edited"}),
             base[1].clone(),
+            base[2].clone(),
         ],
-        vec![base[0].clone(), base[1].clone()],
-        vec![base[0].clone(), base[2].clone()],
+        vec![base[0].clone(), base[1].clone(), base[2].clone()],
+        vec![base[0].clone(), base[3].clone()],
         vec![
             base[0].clone(),
             json!({"type":"say","say":"text","ts":3,"text":"inserted"}),
             base[1].clone(),
+            base[2].clone(),
         ],
-        vec![base[2].clone(), base[1].clone(), base[0].clone()],
+        vec![
+            base[3].clone(),
+            base[2].clone(),
+            base[1].clone(),
+            base[0].clone(),
+        ],
         vec![base[1].clone()],
     ];
     for (index, variant) in variants.into_iter().enumerate() {
@@ -331,6 +339,7 @@ fn identity_readiness_vectors_reject_unsafe_roocode_coordinates() {
                 .all(|record| record.semantic == super::native::RooSemantic::AssistantMessage)
         );
     }
+    assert_eq!(base[1], base[2]);
 
     let first_task = temp.path().join("move-a");
     let second_task = temp.path().join("move-b");

@@ -187,16 +187,37 @@ differ. Unavailable versus unavailable is not equivalent, and an epoch mismatch
 is not mutation. Comparison material has no generic serde/export path and is
 redacted from Debug/Display.
 
-Keys and commitments never enter the observation or an export. Key
-unavailability on the persisted-assignment path remains fail-closed and must
-not be presented as a deterministic source-coordinate ID.
+Keys and commitments never enter an export. Key unavailability on the
+persisted-assignment path remains fail-closed and must not be presented as a
+deterministic source-coordinate ID.
 
-Persisted assignment state is durable replay state, not source identity. It must
-contain protected comparison state. Matching assignment and commitment is an
-idempotent replay; changed content is a replay collision. Missing assignment
-state or comparison key is `replay_unverifiable`. Without a stable coordinate or
-protected assignment, normalization fails closed rather than creating an
-ephemeral identity.
+Persisted assignment state is durable replay state, not source identity. The
+optional local store in `telltale_core::assignment` requires a caller-proven,
+versioned replay association that remains attached to exactly one source fact
+across every supported mutation. It HMAC-protects raw association material
+before lookup or persistence and atomically binds the protected replay key,
+adapter domain, child ordinal, random opaque assignment reference, protected
+commitment, comparison-key reference, and assigned observation ID. The random
+seed used for first allocation is not a source coordinate; the committed
+assignment is the identity authority. Initialization and reopen are separate:
+reopen never recreates missing state. An authenticated append-only local receipt
+chain outside SQLite detects assignment-row/database deletion or rollback before
+absence can be interpreted as a first claim.
+
+Matching bound assignment and commitment is an idempotent replay; changed
+complete content is `replay_collision`. Missing, ambiguous, corrupt, or
+unverifiable assignment/key state is `replay_unverifiable` or a bounded local
+store error. Without both a safe replay association and durable assignment,
+normalization fails closed rather than creating an ephemeral identity. Paths,
+timestamps, mutable ordinals, bare producer coordinates, semantic values, and
+unkeyed content hashes remain invalid reassociation substitutes even though the
+store is local.
+
+The current RooCode and legacy KiloCode UI-message contracts do not satisfy the
+replay-association requirement. Their canonical projectors remain blocked:
+Roo's validated history ID is session correlation only, while Kilo has no
+validated source session namespace. Assignment identity does not fill either
+source's `session_id`.
 
 ## Provenance, fidelity, and capability
 

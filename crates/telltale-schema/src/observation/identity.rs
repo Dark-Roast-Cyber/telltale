@@ -61,7 +61,7 @@ impl IdentityCoordinateKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum IdentityBasis {
     StableSourceCoordinate {
         domain: String,
@@ -76,6 +76,19 @@ pub enum IdentityBasis {
         child_ordinal: u32,
         fingerprint_key_epoch_ref: String,
     },
+}
+
+impl fmt::Debug for IdentityBasis {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StableSourceCoordinate { .. } => {
+                formatter.write_str("IdentityBasis::StableSourceCoordinate { .. }")
+            }
+            Self::PersistedAssignment { .. } => {
+                formatter.write_str("IdentityBasis::PersistedAssignment { .. }")
+            }
+        }
+    }
 }
 
 impl IdentityBasis {
@@ -746,10 +759,16 @@ pub trait AssignmentStore {
     fn comparison_key(&self, key_ref: &str) -> Result<Option<Vec<u8>>, ObservationError>;
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct InMemoryAssignmentStore {
     assignments: BTreeMap<String, AssignmentRecord>,
     keys: BTreeMap<String, Vec<u8>>,
+}
+
+impl fmt::Debug for InMemoryAssignmentStore {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("InMemoryAssignmentStore { .. }")
+    }
 }
 
 impl InMemoryAssignmentStore {
@@ -773,13 +792,10 @@ impl InMemoryAssignmentStore {
     pub fn insert_assignment(
         &mut self,
         assignment_ref: impl AsRef<str>,
-        observation_id: impl AsRef<str>,
-        comparison_key_ref: impl AsRef<str>,
-        commitment: impl AsRef<str>,
+        record: AssignmentRecord,
     ) -> Result<(), ObservationError> {
         let assignment_ref =
             opaque_text(assignment_ref.as_ref(), ValidationCode::InvalidReference)?;
-        let record = AssignmentRecord::new(observation_id, comparison_key_ref, commitment)?;
         self.assignments.insert(assignment_ref, record);
         Ok(())
     }

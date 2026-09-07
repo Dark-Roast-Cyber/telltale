@@ -813,15 +813,26 @@ impl FactMetadata {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AssignmentRecord {
+    domain: String,
+    replay_key: String,
+    child_ordinal: u32,
     observation_id: String,
     comparison_key_ref: String,
     comparison_domain: String,
     commitment: String,
 }
+impl fmt::Debug for AssignmentRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AssignmentRecord { .. }")
+    }
+}
 impl AssignmentRecord {
     pub fn new(
+        domain: impl AsRef<str>,
+        replay_key: impl AsRef<str>,
+        child_ordinal: u32,
         observation_id: impl AsRef<str>,
         comparison_key_ref: impl AsRef<str>,
         commitment: impl AsRef<str>,
@@ -831,16 +842,31 @@ impl AssignmentRecord {
         {
             return Err(ObservationError::new(ValidationCode::InvalidAssignment));
         }
+        let domain = value::non_empty(domain.as_ref(), ValidationCode::InvalidAssignment)?;
+        let replay_key =
+            value::opaque_text(replay_key.as_ref(), ValidationCode::InvalidAssignment)?;
         let comparison_key_ref = value::opaque_text(
             comparison_key_ref.as_ref(),
             ValidationCode::InvalidAssignment,
         )?;
         Ok(Self {
+            domain,
+            replay_key,
+            child_ordinal,
             observation_id: observation_id.as_ref().to_owned(),
             comparison_key_ref,
             comparison_domain: identity::ASSIGNMENT_COMPARISON_DOMAIN.to_owned(),
             commitment: commitment.as_ref().to_owned(),
         })
+    }
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+    pub fn replay_key(&self) -> &str {
+        &self.replay_key
+    }
+    pub fn child_ordinal(&self) -> u32 {
+        self.child_ordinal
     }
     pub fn observation_id(&self) -> &str {
         &self.observation_id
@@ -851,6 +877,48 @@ impl AssignmentRecord {
     pub fn comparison_domain(&self) -> &str {
         &self.comparison_domain
     }
+    pub fn commitment(&self) -> &str {
+        &self.commitment
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct AssignmentClaimMaterial {
+    adapter_type: String,
+    adapter_id: String,
+    domain: String,
+    child_ordinal: u32,
+    fingerprint_key_epoch_ref: String,
+    commitment: String,
+}
+
+impl fmt::Debug for AssignmentClaimMaterial {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AssignmentClaimMaterial { .. }")
+    }
+}
+
+impl AssignmentClaimMaterial {
+    pub fn adapter_type(&self) -> &str {
+        &self.adapter_type
+    }
+
+    pub fn adapter_id(&self) -> &str {
+        &self.adapter_id
+    }
+
+    pub fn domain(&self) -> &str {
+        &self.domain
+    }
+
+    pub fn child_ordinal(&self) -> u32 {
+        self.child_ordinal
+    }
+
+    pub fn fingerprint_key_epoch_ref(&self) -> &str {
+        &self.fingerprint_key_epoch_ref
+    }
+
     pub fn commitment(&self) -> &str {
         &self.commitment
     }
@@ -924,6 +992,9 @@ pub struct ObservationError {
 }
 impl ObservationError {
     pub(crate) fn new(code: ValidationCode) -> Self {
+        Self { code }
+    }
+    pub fn from_validation_code(code: ValidationCode) -> Self {
         Self { code }
     }
     pub fn code(&self) -> &'static str {
@@ -1068,6 +1139,49 @@ impl ObservationBuilder {
             key,
         )
     }
+    pub fn prepare_assignment_claim(
+        &self,
+        comparison_key: &[u8],
+    ) -> Result<AssignmentClaimMaterial, ObservationError> {
+        if comparison_key.is_empty() {
+            return Err(ObservationError::new(ValidationCode::ReplayUnverifiable));
+        }
+        let mut canonical = self.clone();
+        canonical.canonicalize_json()?;
+        canonical.validate_shape()?;
+        if canonical.identity_basis.is_some() || canonical.source.selected_coordinate().is_some() {
+            return Err(ObservationError::new(ValidationCode::InvalidIdentityBasis));
+        }
+        let fingerprint_state = validate_fingerprints(
+            &canonical.body,
+            &canonical.facets,
+            &canonical.fact_metadata,
+            canonical.local.as_ref(),
+            &canonical.source,
+            FingerprintPolicy::StableCoordinate,
+        )?;
+        let commitment = identity::assignment_commitment(
+            canonical.body.kind(),
+            canonical.stage,
+            &canonical.body,
+            &canonical.facets,
+            &canonical.fact_metadata,
+            canonical.local.as_ref(),
+            comparison_key,
+        )?;
+        Ok(AssignmentClaimMaterial {
+            adapter_type: canonical.source.adapter_type().to_owned(),
+            adapter_id: canonical.source.adapter_id().to_owned(),
+            domain: format!(
+                "{}:{}",
+                canonical.source.adapter_type(),
+                canonical.source.adapter_id()
+            ),
+            child_ordinal: canonical.child_ordinal,
+            fingerprint_key_epoch_ref: fingerprint_state.epoch,
+            commitment,
+        })
+    }
     pub fn build(self) -> Result<CanonicalObservationV2, ObservationError> {
         self.build_with_store(None)
     }
@@ -1190,7 +1304,9 @@ impl ObservationBuilder {
                     fingerprint_key_epoch_ref,
                 }),
             ) => {
-                if domain != expected_domain || fingerprint_key_epoch_ref != fingerprint_state.epoch
+                if domain != expected_domain
+                    || child_ordinal != self.child_ordinal
+                    || fingerprint_key_epoch_ref != fingerprint_state.epoch
                 {
                     return Err(ObservationError::new(ValidationCode::InvalidIdentityBasis));
                 }
@@ -1199,6 +1315,12 @@ impl ObservationBuilder {
                 let record = store
                     .lookup(assignment_ref.handle())?
                     .ok_or_else(|| ObservationError::new(ValidationCode::ReplayUnverifiable))?;
+                if record.domain != expected_domain
+                    || record.replay_key != replay_key
+                    || record.child_ordinal != child_ordinal
+                {
+                    return Err(ObservationError::new(ValidationCode::ReplayUnverifiable));
+                }
                 if record.comparison_domain != identity::ASSIGNMENT_COMPARISON_DOMAIN {
                     return Err(ObservationError::new(ValidationCode::ReplayUnverifiable));
                 }

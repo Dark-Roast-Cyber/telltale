@@ -19,6 +19,8 @@
 use telltale_detect::detection::evaluate_session_matches;
 use telltale_rules::CompiledRuleSet;
 
+pub mod assignment;
+
 pub use telltale_rules::MatchResult;
 pub use telltale_schema::clients::{ClientId, SourceKind};
 pub use telltale_schema::event::Event;

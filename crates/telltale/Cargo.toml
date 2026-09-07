@@ -14,7 +14,18 @@ categories = ["development-tools"]
 include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/examples/**", "/src/**"]
 
 [dependencies]
+fs4 = "0.13"
+getrandom.workspace = true
+hmac.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2.workspace = true
 telltale-schema.workspace = true
 telltale-rules.workspace = true
 telltale-sources.workspace = true
 telltale-detect.workspace = true
+
+[dev-dependencies]
+tempfile = "3.14"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
