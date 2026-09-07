@@ -199,24 +199,29 @@ coordinate ID.
 Persisted assignment MUST continue to verify the complete semantic commitment
 with its protected comparison key. Missing assignment state, missing key, or a
 commitment mismatch MUST return `replay_unverifiable` or `replay_collision` as
-currently defined. The coordinate identity amendment MUST NOT weaken assignment
-verification or make an unkeyed assignment comparison appear equivalent.
+currently defined. The assignment record MUST additionally bind the expected
+adapter domain, protected replay key, and child ordinal; a wrong assignment
+reference MUST NOT alias another assignment merely because complete semantics
+match. This amendment MUST NOT weaken assignment verification or make an unkeyed
+assignment comparison appear equivalent.
 
 #### Scenario: Matching assignment replays idempotently
 
-- **WHEN** a persisted assignment contains the same observation ID and
-  protected semantic commitment as the incoming observation
+- **WHEN** a persisted assignment contains the same observation ID, adapter
+  domain, protected replay key, child ordinal, and protected semantic commitment
+  as the incoming observation
 - **THEN** replay is accepted as idempotent
 
 #### Scenario: Assignment state is unverifiable
 
 - **WHEN** no stable coordinate exists and assignment state or its comparison
-  key is missing
+  key is missing, or the loaded assignment has a different domain, replay key,
+  or child ordinal
 - **THEN** construction returns `replay_unverifiable`
 
 #### Scenario: Changed assignment content collides
 
-- **WHEN** complete semantic content changes under an existing assignment
+- **WHEN** complete semantic content changes under an existing bound assignment
 - **THEN** construction returns `replay_collision` without exposing content
 
 ### Requirement: Event 3.0 and export boundary remain frozen
@@ -310,3 +315,56 @@ filesystem, provider, lifecycle, adapter registry, or export abstractions.
   shared helper
 - **THEN** the equivalent bounded `JsonValue` is produced, while unsupported
   numeric values return a code-only observation error
+
+### Requirement: Protected assignment is a separate durable identity authority
+
+When no stable source coordinate exists, first protected-assignment allocation
+MAY create a domain-separated observation ID from cryptographically appropriate
+random seed material only when the ID, assignment reference, protected replay
+association, complete semantic commitment, and comparison-key reference are
+persisted atomically by the assignment authority. The random seed is not a
+source coordinate and MUST NOT be inserted into or reinterpret the published
+stable-coordinate tuple.
+
+The resulting observation ID MUST retain the external
+`obs:v2:sha256:<64 lowercase hexadecimal digits>` form, MUST NOT be regenerated
+for an existing assignment, and MUST NOT encode source path, timestamp, semantic
+value/hash, mutable ordinal, task directory, adapter version, or public content.
+Absent safe replay association or durable assignment authority MUST remain
+`replay_unverifiable` rather than triggering random fallback.
+
+#### Scenario: Durable allocation is not random source identity
+
+- **WHEN** a coordinate-less fact has a caller-proven replay association and an
+  atomic local assignment authority allocates and commits its observation ID
+- **THEN** the durable assignment is the identity authority and the stable
+  source-coordinate tuple remains unchanged
+
+#### Scenario: Random fallback remains forbidden
+
+- **WHEN** a coordinate-less fact has no safe replay association or durable
+  assignment state
+- **THEN** construction returns `replay_unverifiable` and no random observation
+  ID is returned
+
+### Requirement: First-assignment preparation remains I/O-free and source-neutral
+
+The schema MAY expose only the bounded source-neutral preflight material needed
+by an external assignment authority: validated adapter domain, canonical child
+ordinal, semantic-fingerprint epoch reference, and protected complete semantic
+commitment. It MUST reject a builder that already has a stable coordinate or
+identity basis. It MUST NOT perform storage, randomness, locking, path handling,
+key persistence, adapter lookup, session correlation, export, or telemetry.
+
+#### Scenario: External store prepares a coordinate-less claim
+
+- **WHEN** a valid basis-less builder with no stable coordinate is supplied with
+  a non-empty comparison key
+- **THEN** schema returns only bounded protected claim material and performs no
+  I/O
+
+#### Scenario: Coordinate preference cannot be bypassed
+
+- **WHEN** a builder already has a stable source coordinate
+- **THEN** assignment preflight rejects it with the existing identity-basis
+  failure rather than preparing a protected claim
