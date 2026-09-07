@@ -1,4 +1,5 @@
 schemas/event.schema.json text eol=lf
 schemas/historical/*.json text eol=lf
+crates/telltale-schema/data/event-3.0.schema.json text eol=lf
 tests/evaluation/*.yaml text eol=lf
 tests/evaluation/*.json text eol=lf
