@@ -651,12 +651,12 @@ impl ProtectedAssignmentStore {
         validate_same_file(&self.database_path, &self.database_file)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn fail_next_before_commit(&mut self) {
         self.fail_before_commit = true;
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     fn fail_next_after_commit(&mut self) {
         self.fail_after_commit = true;
     }
