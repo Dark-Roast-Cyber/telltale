@@ -2326,14 +2326,14 @@ fn acquire_store_lock(path: &Path) -> Result<StoreLock, ProtectedAssignmentError
     }
 }
 
-fn validate_same_file(path: &Path, file: &File) -> Result<(), ProtectedAssignmentError> {
+fn validate_same_file(path: &Path, _file: &File) -> Result<(), ProtectedAssignmentError> {
     validate_private_file(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let path_metadata =
             fs::metadata(path).map_err(|_| error(ProtectedAssignmentErrorCode::UnsafeStorage))?;
-        let file_metadata = file
+        let file_metadata = _file
             .metadata()
             .map_err(|_| error(ProtectedAssignmentErrorCode::UnsafeStorage))?;
         if path_metadata.dev() != file_metadata.dev() || path_metadata.ino() != file_metadata.ino()
@@ -2376,11 +2376,16 @@ fn sync_directory(path: &Path) -> Result<(), ProtectedAssignmentError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
     use std::fs;
+    #[cfg(target_os = "linux")]
     use std::sync::{Arc, Barrier};
+    #[cfg(target_os = "linux")]
     use std::thread;
 
+    #[cfg(target_os = "linux")]
     use rusqlite::Connection;
+    #[cfg(target_os = "linux")]
     use telltale_schema::observation::{
         FactMetadata, FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation,
         MessageRole, ObservationBody, ObservationStage, ObservedAt, Sensitivity, SourceProvenance,
@@ -2389,12 +2394,15 @@ mod tests {
 
     use super::*;
 
+    #[cfg(target_os = "linux")]
     const OBSERVED_AT: &str = "2026-09-06T12:00:00Z";
 
+    #[cfg(target_os = "linux")]
     fn private_root(temp: &tempfile::TempDir) -> PathBuf {
         temp.path().join("protected-assignment")
     }
 
+    #[cfg(target_os = "linux")]
     fn tool_builder(name: &str) -> ObservationBuilder {
         CanonicalObservationV2::builder(
             ObservationBody::Tool(ToolObservation::new().with_name(name).unwrap()),
@@ -2411,6 +2419,7 @@ mod tests {
         .fact_metadata("tool.name", FactMetadata::reported().unwrap())
     }
 
+    #[cfg(target_os = "linux")]
     fn association(locator: &[u8]) -> ReplayAssociation {
         ReplayAssociation::new(
             AssignmentAdapterDomain::registered("synthetic", "coordinate-less").unwrap(),
@@ -2420,6 +2429,7 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn claim_replay_reopen_and_mutation_are_deterministic() {
         let temp = tempfile::tempdir().unwrap();
@@ -2450,6 +2460,7 @@ mod tests {
         assert_eq!(replay.observation_id(), first_id);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn distinct_stable_associations_can_represent_semantic_duplicates() {
         let temp = tempfile::tempdir().unwrap();
@@ -2463,6 +2474,7 @@ mod tests {
         assert_ne!(first.observation_id(), second.observation_id());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn child_ordinal_is_part_of_transactional_uniqueness() {
         let temp = tempfile::tempdir().unwrap();
@@ -2482,6 +2494,7 @@ mod tests {
         assert_ne!(first.observation_id(), second.observation_id());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn claim_rejects_coordinate() {
         let temp = tempfile::tempdir().unwrap();
@@ -2511,6 +2524,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn concurrent_first_claims_converge() {
         let temp = tempfile::tempdir().unwrap();
@@ -2599,6 +2613,7 @@ mod tests {
         assert_eq!(count, 1);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn concurrent_commitment_disagreement_has_one_winner() {
         let temp = tempfile::tempdir().unwrap();
@@ -2641,6 +2656,7 @@ mod tests {
         assert_eq!(count, 1);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn transaction_fault_boundaries_preserve_claim_semantics() {
         let temp = tempfile::tempdir().unwrap();
@@ -2679,6 +2695,7 @@ mod tests {
         assert_eq!(first.observation_id(), second.observation_id());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn rotation_keeps_old_assignments_replayable() {
         let temp = tempfile::tempdir().unwrap();
@@ -2709,6 +2726,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn association_ambiguity_across_epochs_fails_without_selection() {
         let temp = tempfile::tempdir().unwrap();
@@ -2782,6 +2800,7 @@ mod tests {
         assert_eq!(count, 2);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn key_epoch_limit_blocks_rotation_not_replay() {
         let temp = tempfile::tempdir().unwrap();
@@ -2807,6 +2826,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn row_tamper_and_missing_key_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
@@ -2844,6 +2864,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn deleted_or_lost_assignment_state_never_allocates_a_replacement() {
         let temp = tempfile::tempdir().unwrap();
@@ -2917,6 +2938,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn same_version_wrong_schema_and_ambiguous_adapter_components_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
@@ -2970,6 +2992,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn live_database_path_replacement_fails_before_another_claim() {
         let temp = tempfile::tempdir().unwrap();
@@ -2997,6 +3020,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn key_metadata_tamper_and_missing_key_each_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
@@ -3053,6 +3077,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn authority_and_receipt_tamper_each_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
@@ -3095,6 +3120,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn privacy_markers_do_not_reach_errors_debug_or_database() {
         let marker = "synthetic-secret-marker://credential@example.invalid";
@@ -3160,6 +3186,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn unsafe_modes_newer_schema_and_windows_fail_before_use() {
         let temp = tempfile::tempdir().unwrap();
@@ -3194,6 +3221,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn foreign_corrupt_and_linked_storage_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
@@ -3261,6 +3289,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn closed_store_root_can_move_without_changing_assignment() {
         let temp = tempfile::tempdir().unwrap();
@@ -3337,5 +3366,24 @@ mod tests {
 
         assert_ne!(before, ["last", "middle", "first"]);
         assert_eq!(before[0], "first");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn unsupported_platforms_fail_before_state_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("protected-assignment");
+        assert_eq!(
+            ProtectedAssignmentStore::initialize(&root)
+                .unwrap_err()
+                .code(),
+            "unsupported_platform"
+        );
+        assert!(!root.exists());
+        assert_eq!(
+            ProtectedAssignmentStore::open(&root).unwrap_err().code(),
+            "unsupported_platform"
+        );
+        assert!(!root.exists());
     }
 }
