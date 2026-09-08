@@ -349,6 +349,29 @@ struct RecentState {
     max_events: usize,
     max_bytes: usize,
     boundary_established: bool,
+    floor_seen_non_active: bool,
+}
+
+impl RecentState {
+    fn authentic_floor_index(&self, generations: &[JournalGeneration]) -> Option<usize> {
+        let floor_index = generations
+            .iter()
+            .position(|generation| generation.identity == self.floor_identity)?;
+        if self.floor_seen_non_active && generations[floor_index].is_active {
+            return None;
+        }
+        // A startup floor cannot sort after a generation already eligible for scan/live reads.
+        // Such an identity now belongs to a later file, not the original startup floor.
+        if generations[..floor_index].iter().any(|generation| {
+            !self.excluded.contains(&generation.identity)
+                && (self.live_seen.contains(&generation.identity)
+                    || self.scan_identities.contains(&generation.identity))
+        }) {
+            None
+        } else {
+            Some(floor_index)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -644,7 +667,8 @@ impl LocalEventFeed {
                 continue;
             };
             let minimum_offset = self.recent.as_ref().and_then(|recent| {
-                (recent.floor_identity == generation.identity).then_some(recent.floor_offset)
+                (recent.authentic_floor_index(generations) == Some(index))
+                    .then_some(recent.floor_offset)
             });
             process_generation(
                 cursor,
@@ -675,10 +699,7 @@ impl LocalEventFeed {
         if recent.excluded.contains(&generation.identity) {
             return false;
         }
-        let allowed = if let Some(floor_index) = generations
-            .iter()
-            .position(|candidate| candidate.identity == recent.floor_identity)
-        {
+        let allowed = if let Some(floor_index) = recent.authentic_floor_index(generations) {
             index >= floor_index
         } else if let Some(first_known) = generations.iter().position(|candidate| {
             (recent.scan_identities.contains(&candidate.identity)
@@ -722,6 +743,9 @@ impl LocalEventFeed {
         recent
             .excluded
             .retain(|identity| current.contains(identity.as_str()));
+        recent.floor_seen_non_active |= generations.iter().any(|generation| {
+            generation.identity == recent.floor_identity && !generation.is_active
+        });
     }
 
     fn scan_recent(&mut self, generations: &[JournalGeneration], context: &mut PollContext) {
@@ -732,7 +756,8 @@ impl LocalEventFeed {
         if !recent.boundary_established {
             return;
         }
-        for generation in generations {
+        let floor_index = recent.authentic_floor_index(generations);
+        for (index, generation) in generations.iter().enumerate() {
             if !recent.scan_identities.contains(&generation.identity)
                 || recent.excluded.contains(&generation.identity)
             {
@@ -761,8 +786,7 @@ impl LocalEventFeed {
                 .scan_targets
                 .get_mut(&generation.identity)
                 .and_then(|target| target.as_mut());
-            let minimum_offset =
-                (recent.floor_identity == generation.identity).then_some(recent.floor_offset);
+            let minimum_offset = (floor_index == Some(index)).then_some(recent.floor_offset);
             process_generation(
                 cursor,
                 context,
@@ -927,6 +951,9 @@ impl LocalEventFeed {
 
         recent.floor_identity = recent.scan_order[floor_index].clone();
         recent.floor_offset = floor_offset;
+        recent.floor_seen_non_active |= generations.iter().any(|generation| {
+            generation.identity == recent.floor_identity && !generation.is_active
+        });
         recent.excluded = recent.scan_order[..floor_index].iter().cloned().collect();
         recent.scan_identities = recent.scan_order[floor_index..].iter().cloned().collect();
         recent.boundary_established = true;
@@ -1251,6 +1278,7 @@ impl LocalEventFeed {
             max_events,
             max_bytes,
             boundary_established: false,
+            floor_seen_non_active: false,
         });
         if !boundary_established {
             context
@@ -2401,6 +2429,17 @@ mod tests {
 
     #[test]
     fn recent_live_rotated_generation_survives_floor_disappearance() {
+        assert_recent_live_rotated_generation_survives_floor_disappearance(false);
+    }
+
+    #[test]
+    fn recent_live_rotated_generation_survives_reused_floor_identity() {
+        assert_recent_live_rotated_generation_survives_floor_disappearance(true);
+    }
+
+    fn assert_recent_live_rotated_generation_survives_floor_disappearance(
+        inject_floor_identity_collision: bool,
+    ) {
         let directory = tempdir().expect("tempdir");
         let path = directory.path().join("events.jsonl");
         let first_rotated = directory.path().join("events-2026-01-01.jsonl");
@@ -2411,7 +2450,13 @@ mod tests {
         let fourth_id = "telltale-40404040-4040-4040-8040-404040404040";
         let mut first = valid_record(first_id);
         first.push(b'\n');
-        fs::write(&path, &first).expect("initial generation");
+        if inject_floor_identity_collision {
+            let mut initial_generation = first.clone();
+            initial_generation.extend_from_slice(&first);
+            fs::write(&path, initial_generation).expect("initial generation with startup prefix");
+        } else {
+            fs::write(&path, &first).expect("initial generation");
+        }
 
         let limits = FeedLimits {
             max_events_per_poll: 1,
@@ -2465,6 +2510,14 @@ mod tests {
         fourth.push(b'\n');
         fs::write(&path, &fourth).expect("third generation");
 
+        if inject_floor_identity_collision {
+            assert!(feed.recent.as_ref().expect("recent state").floor_offset > 0);
+            feed.recent.as_mut().expect("recent state").floor_identity = JournalFile::open(&path)
+                .expect("new active")
+                .identity()
+                .to_owned();
+        }
+
         let mut emitted = Vec::new();
         for _ in 0..16 {
             let batch = feed.poll().expect("post-floor poll");
@@ -2487,6 +2540,68 @@ mod tests {
                 .iter()
                 .all(|identity| feed.cursors.contains_key(identity))
         );
+    }
+
+    #[test]
+    fn recent_reused_floor_identity_does_not_clip_sole_new_active() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("events.jsonl");
+        let rotated = directory.path().join("events-2026-01-01.jsonl");
+        let first_id = "telltale-10101010-1010-4010-8010-101010101010";
+        let second_id = "telltale-20202020-2020-4020-8020-202020202020";
+        let fourth_id = "telltale-40404040-4040-4040-8040-404040404040";
+        let first = line(first_id);
+        fs::write(&path, [first.as_slice(), first.as_slice()].concat())
+            .expect("initial generation");
+
+        let limits = FeedLimits {
+            max_events_per_poll: 1,
+            max_bytes_per_poll: 4096,
+            ..FeedLimits::default()
+        };
+        let mut feed = LocalEventFeed::new(
+            LocalEventFeedConfig::new(
+                &path,
+                StartupMode::Recent {
+                    max_events: 1,
+                    max_bytes: first.len(),
+                },
+            )
+            .with_limits(limits),
+        )
+        .expect("config");
+
+        let mut initial_emitted = Vec::new();
+        for _ in 0..16 {
+            let batch = feed.poll().expect("initial poll");
+            initial_emitted.extend(event_ids(&batch));
+            if feed.recent.as_ref().expect("recent state").phase == RecentPhase::Live {
+                break;
+            }
+        }
+        assert_eq!(initial_emitted, vec![first_id.to_owned()]);
+        assert!(feed.recent.as_ref().expect("recent state").floor_offset > 0);
+
+        fs::rename(&path, &rotated).expect("rotate first generation");
+        fs::write(&path, line(second_id)).expect("second generation");
+        let _ = feed.poll().expect("second generation poll");
+        assert!(
+            feed.recent
+                .as_ref()
+                .expect("recent state")
+                .floor_seen_non_active
+        );
+
+        fs::remove_file(&rotated).expect("remove floor generation");
+        fs::remove_file(&path).expect("remove second generation");
+        fs::write(&path, line(fourth_id)).expect("new active generation");
+        feed.recent.as_mut().expect("recent state").floor_identity = JournalFile::open(&path)
+            .expect("new active")
+            .identity()
+            .to_owned();
+
+        let batch = feed.poll().expect("sole new active poll");
+        assert_eq!(event_ids(&batch), vec![fourth_id.to_owned()]);
     }
 
     #[test]
