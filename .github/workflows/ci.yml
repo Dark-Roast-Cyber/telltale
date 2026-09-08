@@ -91,6 +91,8 @@ jobs:
         run: make --silent producer-provenance-check
       - name: Run LocalEventFeed checks
         run: make --silent local-event-feed-check
+      - name: Run OpenCode native export checks
+        run: make --silent opencode-export-check
 
   security:
     name: Security and supply chain

@@ -16,6 +16,9 @@ pub mod paths;
 pub mod projects;
 pub mod sources;
 
+/// Opt-in native OpenCode export primitive; internal canonical records are not public transcripts.
+pub use sources::opencode::export as opencode_export;
+
 #[cfg(test)]
 pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

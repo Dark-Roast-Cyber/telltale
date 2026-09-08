@@ -25,6 +25,7 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect 
 .PHONY: build install uninstall clean test fmt clippy check event3-contract-check producer-provenance-check local-event-feed-check evaluation-check evaluation-report detection-v2-shadow-check detection-v2-shadow-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 .PHONY: telltale-console-check
+.PHONY: opencode-export-check
 
 ## Show this help
 help:
@@ -91,6 +92,9 @@ producer-provenance-check:
 ## Verify the bounded, read-only LocalEventFeed consumer
 local-event-feed-check:
 	@scripts/local-event-feed-check
+
+opencode-export-check:
+	@scripts/opencode-export-check
 
 ## Install the exact security gate tool versions
 security-tools:
@@ -293,7 +297,7 @@ release-canonical-identity-check:
 	@grep -q 'telltale-scan.service' .github/workflows/release.yml
 
 ## Public release preflight
-release-preflight: release-context-check release-tag-review release-crate-manifest release-canonical-identity-check event3-contract-check producer-provenance-check local-event-feed-check package-verify release-public-docs-check release-artifact-manifest check release-fixture-smoke
+release-preflight: release-context-check release-tag-review release-crate-manifest release-canonical-identity-check event3-contract-check producer-provenance-check local-event-feed-check opencode-export-check package-verify release-public-docs-check release-artifact-manifest check release-fixture-smoke
 
 ## Show timer status
 status:

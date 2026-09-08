@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+echo "== OpenCode native export focused checks =="
+cargo test --locked --test opencode_export
+git diff --check
+echo "OpenCode native export checks passed."

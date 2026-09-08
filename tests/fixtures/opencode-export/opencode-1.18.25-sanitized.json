@@ -1,0 +1,46 @@
+{
+  "info": {
+    "id": "ses_0123456789abcdefghijklmn",
+    "slug": "synthetic-audit",
+    "projectID": "global",
+    "directory": "[redacted:session-directory:ses_0123456789abcdefghijklmn]",
+    "path": "synthetic/project",
+    "title": "[redacted:session-title:ses_0123456789abcdefghijklmn]",
+    "version": "1.18.25",
+    "cost": 0,
+    "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+    "time": {"created": 1700000000000, "updated": 1700000000000}
+  },
+  "messages": [{
+    "info": {
+      "role": "assistant",
+      "time": {"created": 1700000000000},
+      "parentID": "msg_synthetic_parent",
+      "modelID": "synthetic-model",
+      "providerID": "synthetic-provider",
+      "mode": "build",
+      "agent": "build",
+      "path": {"cwd": "[redacted:cwd:msg_synthetic]", "root": "[redacted:root:msg_synthetic]"},
+      "cost": 0,
+      "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+      "id": "msg_synthetic",
+      "sessionID": "ses_0123456789abcdefghijklmn"
+    },
+    "parts": [{
+      "type": "tool",
+      "callID": "call_synthetic_explicit",
+      "tool": "synthetic_tool",
+      "state": {
+        "status": "completed",
+        "input": {"redacted": "tool-input:prt_synthetic"},
+        "output": "[redacted:tool-output:prt_synthetic]",
+        "title": "[redacted:tool-title:prt_synthetic]",
+        "metadata": {},
+        "time": {"start": 1700000000001, "end": 1700000000002}
+      },
+      "id": "prt_synthetic",
+      "sessionID": "ses_0123456789abcdefghijklmn",
+      "messageID": "msg_synthetic"
+    }]
+  }]
+}

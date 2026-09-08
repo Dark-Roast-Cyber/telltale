@@ -105,6 +105,8 @@ jobs:
         run: make --silent CARGO_LOCKED=--locked producer-provenance-check
       - name: Check LocalEventFeed consumer
         run: make --silent CARGO_LOCKED=--locked local-event-feed-check
+      - name: Run OpenCode native export checks
+        run: make --silent opencode-export-check
       - name: Check canonical release identity
         run: make --silent CARGO_LOCKED=--locked release-canonical-identity-check
       - name: Check package and public-boundary manifest

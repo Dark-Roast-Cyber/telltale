@@ -30,6 +30,7 @@ tempfile = "3.14"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
 ] }
 
 [target.'cfg(unix)'.dependencies]
