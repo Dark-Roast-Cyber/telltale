@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+echo "== Telltale Console tests (including display-free UI/feed harness) =="
+cargo test --locked -p telltale-console
+cargo check --locked -p telltale-console --all-targets
+cargo clippy --locked -p telltale-console --all-targets -- -D warnings
+cargo run --locked -p telltale-console -- --help
+cargo run --locked -p telltale-console -- --version
+
+echo "== Headless default-member dependency protection =="
+default_members="$(sed -n '/^default-members = \[/,/^]/p' Cargo.toml)"
+if printf '%s\n' "$default_members" | grep -q 'apps/telltale-console'; then
+    echo "GUI package entered Cargo default-members" >&2
+    exit 1
+fi
+tree="$(mktemp)"
+trap 'rm -f "$tree"' 0 INT TERM
+cargo tree --locked --edges normal,build --prefix none > "$tree"
+cargo tree --locked --edges normal,build --prefix none --all-features \
+    -p telltale-cli -p telltale-core -p telltale-schema -p telltale-rules \
+    -p telltale-sources -p telltale-detect >> "$tree"
+if grep -E '^(telltale-console|eframe|egui|egui-winit|egui_glow|winit|glutin|wgpu) v' "$tree"; then
+    echo "GUI package entered the headless default-member build graph" >&2
+    exit 1
+fi
+git diff --check
+echo "Telltale Console checks passed. No native window was launched."

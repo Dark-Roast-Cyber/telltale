@@ -18,7 +18,7 @@
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
 
-> **Runtime contract:** `telltale` (`telltale.exe`) is the sole Cargo binary and
+> **Runtime contract:** `telltale` (`telltale.exe`) is the headless scanner binary and
 > CLI identity. Runtime configuration uses `TELLTALE_*` names only; unknown
 > inherited non-canonical variables are ignored. Native paths are
 > `telltale-events.jsonl` and
@@ -54,6 +54,10 @@ Organizations may define policies for what agents should never do, but those pol
 Set it up around your agent session stores and point the output at your alerting pipeline. Telltale is detection-first today: it gives builders and SOCs concrete, redacted telemetry to inspect during or after long-running agent tasks, and it exports that telemetry for downstream response workflows.
 
 ## What it does
+
+The optional [Telltale Console](docs/telltale-console.md) is a separate read-only
+local Event3 viewer (`cargo run -p telltale-console`). It does not start the
+scanner and is excluded from headless default builds and installs.
 
 - Discovers supported agent session stores on disk.
 - Parses heterogeneous transcript formats into a shared event model.

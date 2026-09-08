@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "apps/telltale-console",
     "crates/telltale-schema",
     "crates/telltale-rules",
     "crates/telltale-sources",
