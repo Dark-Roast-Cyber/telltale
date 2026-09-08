@@ -19,6 +19,7 @@ const DEFAULT_MAX_DIRECTORY_ENTRIES: usize = 4096;
 const DEFAULT_MAX_RECONCILIATIONS: usize = 16;
 const DEFAULT_MAX_DEDUP_ENTRIES: usize = 256;
 const DEFAULT_MAX_NOTICES: usize = 64;
+const GENERATION_HEAD_BYTES: usize = 64;
 
 /// Startup position for a feed.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -257,6 +258,7 @@ impl NoticeSink {
 struct Cursor {
     identity: String,
     path: PathBuf,
+    head: Option<Vec<u8>>,
     is_active: bool,
     offset: u64,
     safe_offset: u64,
@@ -277,6 +279,7 @@ impl fmt::Debug for Cursor {
             .debug_struct("Cursor")
             .field("identity", &self.identity)
             .field("path", &self.path)
+            .field("head_len", &self.head.as_ref().map_or(0, |head| head.len()))
             .field("is_active", &self.is_active)
             .field("offset", &self.offset)
             .field("safe_offset", &self.safe_offset)
@@ -298,6 +301,7 @@ impl Cursor {
         Self {
             identity: generation.identity.clone(),
             path: generation.path.clone(),
+            head: None,
             is_active: generation.is_active,
             offset: 0,
             safe_offset: 0,
@@ -432,6 +436,7 @@ pub struct LocalEventFeed {
     started: bool,
     active_identity: Option<String>,
     recent: Option<RecentState>,
+    replacement_notice_pending: bool,
 }
 
 impl LocalEventFeed {
@@ -452,6 +457,7 @@ impl LocalEventFeed {
             started: false,
             active_identity: None,
             recent: None,
+            replacement_notice_pending: false,
         })
     }
 
@@ -468,6 +474,7 @@ impl LocalEventFeed {
             Ok(discovery) => discovery,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 context.notices.add(FeedNoticeCode::JournalUnavailable);
+                self.reset_waiting_state();
                 return Ok(self.finish(context, false));
             }
             Err(error) => {
@@ -485,10 +492,15 @@ impl LocalEventFeed {
         let generations = self.limit_generations(discovery, &mut context);
         if generations.is_empty() {
             context.notices.add(FeedNoticeCode::JournalUnavailable);
+            self.reset_waiting_state();
             return Ok(self.finish(context, false));
         }
 
         self.reconcile_missing(&generations, &mut context);
+        if self.replacement_notice_pending {
+            context.notices.add(FeedNoticeCode::ReplacedGeneration);
+            self.replacement_notice_pending = false;
+        }
         self.cursors.retain(|identity, _| {
             generations
                 .iter()
@@ -1261,6 +1273,18 @@ impl LocalEventFeed {
             dedup_evictions: context.dedup_evictions,
         }
     }
+
+    fn reset_waiting_state(&mut self) {
+        self.replacement_notice_pending = self.started
+            || self.active_identity.is_some()
+            || self.recent.is_some()
+            || !self.cursors.is_empty()
+            || self.replacement_notice_pending;
+        self.cursors.clear();
+        self.active_identity = None;
+        self.recent = None;
+        self.started = false;
+    }
 }
 
 fn validate_config(config: &LocalEventFeedConfig) -> Result<(), LocalEventFeedError> {
@@ -1403,6 +1427,62 @@ fn process_generation(
         }
         stop_offset = Some(*target);
     }
+    let head_changed = match cursor.head.as_ref() {
+        None => match read_generation_head(&mut file, length) {
+            Ok(head) => {
+                cursor.head = Some(head);
+                false
+            }
+            Err(_) => {
+                cursor.unresolved = true;
+                context.notices.add(FeedNoticeCode::ReadRace);
+                if !context.reconcile() {
+                    return;
+                }
+                return;
+            }
+        },
+        Some(head) if length >= head.len() as u64 => match file.read_at(0, head.len()) {
+            Ok(current) => current.as_slice() != head.as_slice(),
+            Err(_) => {
+                cursor.unresolved = true;
+                context.notices.add(FeedNoticeCode::ReadRace);
+                if !context.reconcile() {
+                    return;
+                }
+                return;
+            }
+        },
+        Some(_) => false,
+    };
+    if head_changed {
+        context.notices.add(FeedNoticeCode::ReplacedGeneration);
+        let reset = options.minimum_offset.unwrap_or(0);
+        cursor.offset = reset;
+        cursor.safe_offset = reset;
+        cursor.frame_start = reset;
+        cursor.frame.clear();
+        cursor.discarding = false;
+        cursor.skipping_until_lf = false;
+        cursor.complete = false;
+        cursor.unresolved = false;
+        cursor.partial_reported = false;
+        cursor.missing_reported = false;
+        match read_generation_head(&mut file, length) {
+            Ok(head) => cursor.head = Some(head),
+            Err(_) => {
+                cursor.unresolved = true;
+                context.notices.add(FeedNoticeCode::ReadRace);
+                if !context.reconcile() {
+                    return;
+                }
+                return;
+            }
+        }
+        if reset > 0 {
+            set_minimum_boundary(cursor, reset, &mut file, context);
+        }
+    }
     let snapshot_length = stop_offset.map_or(length, |stop| length.min(stop));
     while cursor.offset < snapshot_length
         && if options.scanning_recent {
@@ -1453,6 +1533,10 @@ fn process_generation(
         context.budget_exhausted = true;
     }
     update_partial_state(cursor, context);
+}
+
+fn read_generation_head(file: &mut JournalFile, length: u64) -> std::io::Result<Vec<u8>> {
+    file.read_at(0, length.min(GENERATION_HEAD_BYTES as u64) as usize)
 }
 
 fn set_minimum_boundary(
@@ -3267,6 +3351,30 @@ mod tests {
         feed.poll().expect("initial poll");
         fs::remove_file(&path).expect("remove old active");
         fs::write(&path, line(replacement_id)).expect("replacement active");
+
+        let batch = feed.poll().expect("replacement poll");
+
+        assert_eq!(event_ids(&batch), vec![replacement_id.to_owned()]);
+        assert!(has_notice(&batch, FeedNoticeCode::ReplacedGeneration));
+    }
+
+    #[test]
+    fn lifecycle_same_identity_same_size_rewrite_is_not_treated_as_append() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("events.jsonl");
+        let first_id = "telltale-77787980-8182-4083-8084-858687888990";
+        let replacement_id = "telltale-91929394-9596-4097-8098-990001020304";
+        let first = line(first_id);
+        let replacement = line(replacement_id);
+        assert_eq!(first.len(), replacement.len());
+        fs::write(&path, &first).expect("initial journal");
+        let mut feed = LocalEventFeed::from_path(&path, StartupMode::Beginning).expect("config");
+        assert_eq!(
+            event_ids(&feed.poll().expect("initial poll")),
+            vec![first_id.to_owned()]
+        );
+
+        fs::write(&path, &replacement).expect("same-identity replacement");
 
         let batch = feed.poll().expect("replacement poll");
 
