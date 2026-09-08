@@ -79,7 +79,13 @@ install)
     write_binary() {
         path=$1
         version=$2
-        printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'telltale $version (012345678901)'" > "$path"
+        printf '%s\n' \
+            '#!/bin/sh' \
+            'if test "${1:-}" = config && test "${2:-}" = provenance; then' \
+            "  printf '%s\\n' '{\"schema\":\"producer_provenance_manifest\",\"version\":1,\"producer_manifest_id\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"telltale_version\":\"$version\",\"event3\":{\"schema_version\":\"3.0\"},\"suppression\":{\"canonicalization\":\"suppression-v1-effective-v1\",\"state\":\"none\",\"fingerprint\":null,\"count\":0}}'" \
+            'else' \
+            "  printf '%s\\n' 'telltale $version (012345678901)'" \
+            'fi' > "$path"
         chmod 755 "$path"
     }
     case "${FAKE_PACKAGE_VERIFY_CASE:-success}" in

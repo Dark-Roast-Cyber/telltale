@@ -25,6 +25,15 @@ inherited non-canonical variables are ignored. Native events use
 `sourcetype=telltale:json`, `source=telltale`; historical schemas and records
 remain immutable.
 
+`telltale config provenance --no-local-config` prints a deterministic,
+privacy-safe `ProducerProvenanceManifestV1` for the effective compiled rules,
+suppression semantics, thresholds, and audited producer switches. It writes no
+event, state, sidecar, journal, or manifest file; the manifest is not Event 3.0
+telemetry, authentication, attestation, or proof that an event used it.
+This command uses the same scan configuration and rule resolvers; the public
+Rust assembler consumes the resulting effective values and does not resolve
+configuration paths itself.
+
 Installer, service, archive, and release-workflow examples use the canonical
 Telltale identity. The Linux installer is limited to the current user's
 install and user units; managed system paths remain deployment-specific.

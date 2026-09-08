@@ -17,4 +17,6 @@ include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/data/**", "/ex
 telltale-schema.workspace = true
 regex.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde_yaml.workspace = true
+sha2.workspace = true

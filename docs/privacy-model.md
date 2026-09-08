@@ -22,6 +22,40 @@ For a percent-encoded URL candidate, the sanitizer decodes the whole candidate o
 
 The synthetic controlled-marker corpus serializes detection, activity (including install inventory), health, scanner error, operational alert, session risk summary, correlation, and process-chain Event 3.0 families. It also covers MCP inventory/config errors, delivery diagnostics, and canonical JSONL persistence. The serialized marker checker compares exact decoded JSON keys and string values; it does not normalize arbitrary encodings. Encoding-specific assurance comes from separate adversarial sanitizer cases for the supported escaped and bounded percent-encoded representations. The corpus proves those specific cases and markers are absent; it does not claim perfect classification of every possible secret or host identifier.
 
+## Producer Provenance Boundary
+
+`ProducerProvenanceManifestV1`, emitted by `telltale config provenance` or the
+`telltale-core` assembly API, is separate from Event 3.0 telemetry. It exposes
+only the effective compiled Rule v1 output identity/count/opaque policy label, Event 3.0
+contract identity, risk and operational thresholds, suppression
+canonicalization/state/fingerprint/count, and a closed set of
+audited producer switches. Rule policy names are represented separately from
+the Rule v1 fingerprint. Rule titles, descriptions, and rule/modifier
+false-positive guidance are descriptive metadata and are excluded from that
+fingerprint.
+The CLI resolves configuration paths and tiers; the Rust assembler accepts an
+already effective `CompiledRuleSet` and resolved values and does not resolve
+paths or policy files. It never serializes rule YAML, regexes, paths,
+suppression criteria, scan identity, host/user/tenant identity, endpoints, or
+credentials. Criteria are used only in the suppression digest preimage and are
+not recoverable from the manifest by design, although a digest is not encryption
+and low-entropy criteria may be guessable.
+
+The manifest is a deterministic content-integrity comparison aid. It is not
+authentication, attestation, telemetry, an Event 3.0 field, a sidecar or
+journal, a scan/run identity, or proof that an arbitrary event used the named
+configuration. The command prints JSON to stdout and performs no event, state,
+delivery, or manifest-file writes. Embedded process-chain, parser, MCP,
+timeline/correlation/baseline, and schema assets remain binary-version or
+frozen-contract identified rather than creating a broad public asset graph;
+scan-local observations remain outside the manifest.
+
+Semver alone does not distinguish same-version custom binaries, so consumers
+need package or artifact identity alongside the manifest when immutable
+embedded detector assets matter. Client-scoped scans may also suppress
+install-inventory observations; client and source selection are intentionally
+outside this manifest, reinforcing that it is not per-scan or per-event proof.
+
 ## Privacy Surface Matrix
 
 The matrix records every Event 3.0 and diagnostic text surface. "Controlled" means a generated enum, fixed schema value, or validated rule/configuration identifier rather than session content. It remains readable because preserving these values is necessary for filtering and compatibility; arbitrary values in the same field class are sanitized or made opaque at the terminal owner.

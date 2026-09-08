@@ -259,6 +259,11 @@ fn main() {
     .expect("validated contribution");
     assert_eq!(contribution.points(), 1);
     let pipeline = telltale_core::Pipeline::builder().build().expect("pipeline");
+    let manifest = pipeline
+        .producer_provenance_manifest(&Default::default())
+        .expect("producer provenance manifest");
+    let manifest_bytes = manifest.to_json_bytes().expect("producer provenance JSON");
+    assert!(manifest_bytes.starts_with(b"{\"schema\":\"producer_provenance_manifest\""));
     let missing = std::env::temp_dir().join(format!(
         "telltale-core-consumer-missing-{}",
         std::process::id()
@@ -320,12 +325,14 @@ telltale-rules = "=$VERSION"
 EOF
 
 cat > "$RULES_CONSUMER_DIR/src/main.rs" <<'EOF'
-use telltale_rules::{bundled_default_rule_yaml, CompiledRuleSet, MatchResult};
+use telltale_rules::{bundled_default_rule_yaml, load_default_rule_set, CompiledRuleSet, MatchResult};
 
 fn main() {
     let _: Option<CompiledRuleSet> = None;
     let _: Option<MatchResult> = None;
     assert!(!bundled_default_rule_yaml().is_empty());
+    let rules = load_default_rule_set().expect("rules");
+    assert!(rules.compatibility_export().fingerprint().starts_with("sha256:"));
 }
 EOF
 
@@ -506,6 +513,20 @@ for binary_path in "$INSTALL_ROOT/bin"/*; do
             exit 1
             ;;
     esac
+    provenance_json=$("$binary_path" config provenance --no-local-config)
+    PROVENANCE_JSON="$provenance_json" PROVENANCE_VERSION="$VERSION" python3 - <<'PY'
+import json
+import os
+import re
+
+manifest = json.loads(os.environ["PROVENANCE_JSON"])
+assert manifest["schema"] == "producer_provenance_manifest"
+assert manifest["version"] == 1
+assert manifest["telltale_version"] == os.environ["PROVENANCE_VERSION"]
+assert re.fullmatch(r"sha256:[0-9a-f]{64}", manifest["producer_manifest_id"])
+assert manifest["event3"]["schema_version"] == "3.0"
+assert manifest["suppression"]["canonicalization"] == "suppression-v1-effective-v1"
+PY
 done
 test "$expected_binary_count" -eq 1 || {
     echo "packaged install does not contain exactly the canonical executable set" >&2

@@ -41,6 +41,16 @@ perform delivery, infer ordering, or claim that response guidance was an
 executed action. See [Telemetry Output](../../docs/telemetry-output.md) for
 timing, identity, JSONL, replay, and sink boundaries.
 
+## Producer provenance
+
+`ProducerProvenanceManifestV1` is a separate, closed contract for comparing
+effective producer configuration. It includes compiled Rule v1 and suppression
+fingerprints, the declared suppression canonicalization
+`suppression-v1-effective-v1`, thresholds, audited feature switches, and the
+frozen Event 3.0 identity. It does not contain rule YAML, regexes, paths,
+suppression criteria, scan identity, or telemetry linkage. Its hashes are
+content-integrity aids, not encryption or attestation.
+
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
 Canonical Observation v2 core types are local-only scaffolding and are not the

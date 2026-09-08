@@ -163,6 +163,7 @@ Run a fixture-safe dry run before scanning real local session stores:
 
 ```sh
 cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+cargo run --bin telltale -- config provenance --no-local-config
 cargo run --bin telltale -- config validate --no-local-config
 cargo run --bin telltale -- rules validate --no-local-config
 cargo run --bin telltale -- rules export-default > /tmp/telltale-default-rules.yaml

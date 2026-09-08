@@ -11,6 +11,12 @@ caller.
 let _events = telltale_detect::detection::detect_sources(&[]);
 ```
 
+`allowlist::Allowlist::suppression_provenance()` provides the separate
+domain-separated suppression identity used by the provenance manifest. It
+declares canonicalization `suppression-v1-effective-v1`. Criteria remain in the
+digest preimage only; public materialization exposes only suppression state,
+count, canonicalization, and fingerprint, not names or criteria.
+
 The default `source-io` feature enables filesystem-backed detection, source
 parsing, MCP inventory, SQLite, and `walkdir`. Consumers that already have
 normalized records can use `default-features = false` to omit source discovery,

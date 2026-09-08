@@ -19,8 +19,9 @@ use telltale_schema::event::{
     DetectionEventInput, Evidence, HealthEventInput, OperationalAlertInput, ProcessChainEventInput,
     ProcessContext, SessionRiskSummaryEventInput, TELLTALE_VERSION, activity_event,
     check_serialized_event_markers, correlation_event, detection_event, evidence_hash,
-    health_event_with_metadata, install_inventory_event, operational_alert_event, path_hash,
-    process_chain_event, scanner_error_event, session_risk_summary_event,
+    health_event_with_metadata, install_inventory_event, opaque_identifier,
+    operational_alert_event, path_hash, process_chain_event, scanner_error_event,
+    session_risk_summary_event,
 };
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use telltale_schema::source::Source;
@@ -718,6 +719,9 @@ mod export;
 mod migration;
 #[path = "cli/parser_maturity.rs"]
 mod parser_maturity;
+
+#[path = "cli/provenance.rs"]
+mod provenance;
 #[path = "cli/release_public_boundary.rs"]
 mod release_public_boundary;
 #[path = "cli/rules_config.rs"]

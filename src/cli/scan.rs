@@ -51,7 +51,6 @@ use telltale_schema::source::Source;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
-pub(crate) const DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS: u64 = 24 * 60 * 60;
 
 /// Options that resolve identically for `scan` and `watch`.
 ///
@@ -1644,10 +1643,7 @@ enum PolicyMatchAccountingState {
 /// `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn them off.
 fn load_process_chain_rules_if_enabled()
 -> Option<telltale_rules::process_chain::CompiledProcessChainRules> {
-    let enabled = std::env::var("TELLTALE_PROCESS_CHAIN_DETECTIONS")
-        .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
-        .unwrap_or(true);
-    if !enabled {
+    if !crate::config::process_chain_detections_enabled() {
         return None;
     }
     telltale_rules::process_chain::load_default_process_chain_rules().ok()

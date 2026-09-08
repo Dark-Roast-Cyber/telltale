@@ -29,5 +29,15 @@ configuration. The systemd service/timer and Windows task files are examples;
 risk mappings for Elasticsearch-compatible consumers. None are enabled by
 extracting this archive.
 
+To compare the effective packaged configuration without writing telemetry or
+state, run:
+
+```sh
+telltale config provenance --no-local-config
+```
+
+This produces a separate content-integrity manifest, not an Event 3.0 record or
+attestation of individual events.
+
 Explicit Telltale state and historical-event inputs remain outside the active
 release identity and are handled only by their migration commands.

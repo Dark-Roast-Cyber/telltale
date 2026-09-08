@@ -61,6 +61,64 @@ Native `Event` is the trusted producer model. `Event3Record` is the consumer
 view of already terminal-safe bytes; it is not a producer, provenance record,
 session-store reader, or action executor.
 
+## Producer / Detector Provenance Manifest
+
+The separate `telltale config provenance` command prints one compact
+`ProducerProvenanceManifestV1` JSON object. It identifies the effective compiled
+Rule v1 output semantics, its active rule count and separately represented opaque
+policy label, the exact Event 3.0 contract, risk and operational-alert thresholds,
+allowlist suppression semantics, and the audited activity, session-summary,
+baseline, process-chain, and install-inventory switches. The CLI uses the same
+`resolve_scan_config` and rule resolver as scan. The public Rust assembler is
+`assemble_producer_provenance_manifest` (also available through
+`Pipeline::producer_provenance_manifest`) in `telltale-core`; it takes an
+already effective `CompiledRuleSet` and resolved values and does not resolve
+filesystem paths, managed tiers, policy files, or allowlist paths.
+
+`PipelineBuilder` is an in-memory convenience for bundled/explicit rule and
+policy documents, not a replacement for the CLI path resolver. A future
+`LocalEventFeed` integration must reuse the scan resolver or provide equivalent
+effective values before calling the assembler.
+
+The manifest has three distinct SHA-256 identities. Rule and suppression
+fingerprints identify their own effective content; the full
+`producer_manifest_id` hashes the canonical manifest payload without that ID.
+All are rendered as `sha256:` plus 64 lowercase hexadecimal characters. Rule
+identity is derived from compiled output semantics, so policy names, source YAML
+formatting, line endings, paths, and descriptive rule title/description or
+rule/modifier false-positive guidance do not affect it. Rule and modifier order
+remain identity-bearing because evaluation emits ordered rule IDs and evidence.
+Suppression provenance declares
+canonicalization `suppression-v1-effective-v1`; suppression criteria are
+included only in the domain-separated digest preimage. The manifest exposes
+state, count, and fingerprint, never suppression names or criteria.
+
+The fixed digest domains are `telltale:producer-rule-v1-fingerprint:v1`,
+`telltale:producer-suppression-v1-fingerprint:v1`, and
+`telltale:producer-provenance-manifest-v1-id:v1`, each followed by a NUL
+separator before its canonical JSON payload.
+
+This is a content-integrity comparison aid, not authentication, attestation,
+encryption, telemetry, a scan/run/host/tenant identity, or a claim that any
+historical Event 3.0 record was produced under the manifest. Digests can have
+guessable preimages for low-entropy configuration. The command performs no event,
+state, sidecar, journal, outbox, or manifest-file writes. Event 3.0 remains
+unchanged and has no manifest linkage.
+
+The embedded process-chain rules, parser registry, MCP detector definitions,
+timeline/correlation/baseline algorithms, and Event 3.0 schema are immutable
+binary or frozen-contract assets for this v1 manifest. They are identified by
+the normal Telltale package/build identity rather than an open-ended asset graph;
+the process-chain enablement switch is represented. Scan-local roots, source
+files, MCP/session observations, state, and delivery destinations are deliberately
+excluded.
+
+Semver alone does not distinguish same-version custom binaries, so package or
+artifact identity is still required alongside the manifest when immutable
+embedded detector assets matter. Client-scoped scans may suppress
+install-inventory observations; client and source selection remain intentionally
+outside the manifest, so it is not per-scan or per-event proof.
+
 The identity fields have deliberately limited meanings:
 
 - `event_id` is the Event 3.0 record identity. It is not a session, source,

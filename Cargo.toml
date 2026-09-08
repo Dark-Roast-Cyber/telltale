@@ -78,6 +78,7 @@ telltale-schema.workspace = true
 telltale-rules.workspace = true
 telltale-sources.workspace = true
 telltale-detect.workspace = true
+telltale-core.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 notify = "8.0"
 regex.workspace = true

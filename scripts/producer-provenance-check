@@ -1,0 +1,83 @@
+#!/bin/sh
+set -eu
+
+REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+CHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/telltale-producer-provenance.XXXXXX")
+RUN_DIR="$CHECK_DIR/run"
+MANIFEST="$CHECK_DIR/manifest.json"
+REPEAT="$CHECK_DIR/manifest-repeat.json"
+
+cleanup() {
+    rm -rf "$CHECK_DIR"
+}
+trap cleanup 0 HUP INT TERM
+
+cd "$REPO_ROOT"
+
+echo "== Producer provenance focused tests =="
+cargo test --locked -p telltale-schema provenance
+cargo test --locked -p telltale-rules provenance
+cargo test --locked -p telltale-detect allowlist
+cargo test --locked -p telltale-core provenance
+cargo test --locked --test cli provenance
+
+mkdir "$RUN_DIR"
+echo "== Producer provenance CLI determinism and no-write check =="
+(
+    cd "$RUN_DIR"
+    CARGO_TARGET_DIR="$REPO_ROOT/target" cargo run --locked --quiet \
+        --manifest-path "$REPO_ROOT/Cargo.toml" --bin telltale -- \
+        config provenance --no-local-config
+) >"$MANIFEST"
+(
+    cd "$RUN_DIR"
+    CARGO_TARGET_DIR="$REPO_ROOT/target" cargo run --locked --quiet \
+        --manifest-path "$REPO_ROOT/Cargo.toml" --bin telltale -- \
+        config provenance --no-local-config
+) >"$REPEAT"
+cmp -s "$MANIFEST" "$REPEAT"
+test -z "$(find "$RUN_DIR" -mindepth 1 -print -quit)"
+
+python3 - "$MANIFEST" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+assert list(manifest) == [
+    "schema",
+    "version",
+    "producer_manifest_id",
+    "telltale_version",
+    "event3",
+    "rules",
+    "risk_thresholds",
+    "operational_alert_thresholds",
+    "suppression",
+    "features",
+]
+assert manifest["schema"] == "producer_provenance_manifest"
+assert manifest["version"] == 1
+assert re.fullmatch(r"sha256:[0-9a-f]{64}", manifest["producer_manifest_id"])
+assert manifest["event3"] == {
+    "schema_version": "3.0",
+    "schema_sha256": "9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754",
+}
+assert manifest["suppression"] == {
+    "canonicalization": "suppression-v1-effective-v1",
+    "state": "none",
+    "fingerprint": None,
+    "count": 0,
+}
+assert set(manifest["features"]) == {
+    "emit_activity",
+    "emit_session_risk_summary",
+    "baseline_deviation_scoring",
+    "process_chain_detections",
+    "install_inventory",
+    "install_inventory_interval_seconds",
+}
+print("Producer provenance checks passed.")
+PY

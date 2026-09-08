@@ -8,6 +8,7 @@ pub mod canonical;
 pub mod clients;
 pub mod event;
 pub mod observation;
+pub mod provenance;
 pub mod record;
 pub mod scoring;
 pub mod source;

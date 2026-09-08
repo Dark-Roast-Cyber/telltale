@@ -104,6 +104,7 @@ make release-context-check
 make release-tag-review
 make release-crate-manifest
 make package-verify
+make producer-provenance-check
 make release-public-docs-check
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
@@ -180,9 +181,16 @@ crate or tagged source release.
 dependency order using temporary local crates.io patches for unpublished
 workspace packages. It then compiles a registry-style external consumer and
 installs the normalized `telltale-cli` package into a temporary root, checking
-the canonical `telltale` install and `telltale --version`. The target supports
-Linux and macOS and cleans
+the canonical `telltale` install, `telltale --version`, and packaged provenance
+materialization. The target supports Linux and macOS and cleans
 its temporary workspace on exit.
+
+`make producer-provenance-check` is the authoritative focused gate for the
+closed manifest. It validates the schema/rules/allowlist/core/CLI tests, runs
+the command twice from an isolated directory, checks byte determinism and the
+closed top-level fields, and verifies that the command creates no application
+files. Keep it separate from `event3-contract-check`; the latter remains the
+authoritative frozen Event 3.0 gate.
 
 Cargo package readiness from those targets remains a mandatory GitHub
 stable-release gate. It is not crates.io publication authorization and does

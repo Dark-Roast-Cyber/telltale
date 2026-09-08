@@ -62,6 +62,8 @@ jobs:
       - run: cargo test --quiet
       - name: Run Event 3.0 consumer contract checks
         run: make --silent event3-contract-check
+      - name: Run producer provenance checks
+        run: make --silent producer-provenance-check
 
   security:
     name: Security and supply chain

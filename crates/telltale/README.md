@@ -40,6 +40,13 @@ println!("{} rules", pipeline.rule_count());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+Use `Pipeline::producer_provenance_manifest` to materialize the deterministic
+`ProducerProvenanceManifestV1` for the same already compiled rules and resolved
+producer values. The Rust assembler does not resolve filesystem paths, managed
+tiers, policy files, or allowlist paths; the CLI performs that resolution with
+the scan resolver before assembly. The manifest is separate from Event 3.0
+telemetry and is not an attestation or per-event claim.
+
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
 > **Crates.io name warning:** The package named `telltale` is an unrelated

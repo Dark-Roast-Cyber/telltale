@@ -1,10 +1,16 @@
 use std::fs;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use telltale_schema::event::{Event, Evidence};
+use telltale_schema::provenance::{
+    ProducerSuppressionProvenance, ProducerSuppressionState, SUPPRESSION_V1_CANONICALIZATION,
+};
 use telltale_schema::source::Source;
+
+const SUPPRESSION_FINGERPRINT_DOMAIN: &[u8] = b"telltale:producer-suppression-v1-fingerprint:v1\0";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +21,8 @@ pub struct Allowlist {
     pub description: Option<String>,
     #[serde(default)]
     suppressions: Vec<Suppression>,
+    #[serde(skip)]
+    configured: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -46,10 +54,40 @@ pub fn load_allowlist(path: Option<&Path>) -> Result<Allowlist, Box<dyn std::err
         return Ok(Allowlist::default());
     };
     let raw = fs::read_to_string(path)?;
-    Ok(serde_yaml::from_str::<Allowlist>(&raw)?)
+    Allowlist::from_yaml(&raw)
 }
 
 impl Allowlist {
+    pub fn from_yaml(raw: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut allowlist = serde_yaml::from_str::<Allowlist>(raw)?;
+        allowlist.configured = true;
+        Ok(allowlist)
+    }
+
+    pub fn suppression_provenance(&self) -> ProducerSuppressionProvenance {
+        if !self.configured {
+            return ProducerSuppressionProvenance::none();
+        }
+
+        let entries = self
+            .suppressions
+            .iter()
+            .map(CanonicalSuppression::from)
+            .collect::<Vec<_>>();
+        let canonical = serde_json::to_vec(&CanonicalSuppressions { entries })
+            .expect("suppression provenance payload is serializable");
+        let mut hasher = Sha256::new();
+        hasher.update(SUPPRESSION_FINGERPRINT_DOMAIN);
+        hasher.update(canonical);
+        let fingerprint = format!("sha256:{:x}", hasher.finalize());
+        ProducerSuppressionProvenance {
+            canonicalization: SUPPRESSION_V1_CANONICALIZATION.to_string(),
+            state: ProducerSuppressionState::Configured,
+            fingerprint: Some(fingerprint),
+            count: self.suppressions.len() as u64,
+        }
+    }
+
     pub fn suppression_for(&self, source: &Source, event: &Event) -> Option<SuppressionMatch> {
         if event.event_type != "detection" {
             return None;
@@ -64,6 +102,48 @@ impl Allowlist {
                     .unwrap_or_else(|| "unnamed_suppression".to_string()),
             })
     }
+}
+
+#[derive(Serialize)]
+struct CanonicalSuppressions {
+    entries: Vec<CanonicalSuppression>,
+}
+
+#[derive(Serialize)]
+struct CanonicalSuppression {
+    name: String,
+    clients: Vec<String>,
+    session_ids: Vec<String>,
+    tool_names: Vec<String>,
+    rule_ids: Vec<String>,
+    categories: Vec<String>,
+    source_path_hashes: Vec<String>,
+}
+
+impl From<&Suppression> for CanonicalSuppression {
+    fn from(suppression: &Suppression) -> Self {
+        Self {
+            name: canonical_suppression_name(suppression),
+            clients: sorted_unique(&suppression.clients),
+            session_ids: sorted_unique(&suppression.session_ids),
+            tool_names: sorted_unique(&suppression.tool_names),
+            rule_ids: sorted_unique(&suppression.rule_ids),
+            categories: sorted_unique(&suppression.categories),
+            source_path_hashes: sorted_unique(&suppression.source_path_hashes),
+        }
+    }
+}
+
+fn canonical_suppression_name(suppression: &Suppression) -> String {
+    let name = suppression.name.as_deref().unwrap_or("unnamed_suppression");
+    telltale_schema::event::opaque_identifier("suppression", name)
+}
+
+fn sorted_unique(values: &[String]) -> Vec<String> {
+    let mut values = values.to_vec();
+    values.sort_unstable();
+    values.dedup();
+    values
 }
 
 impl Suppression {
@@ -297,5 +377,90 @@ mod tests {
         assert_eq!(event.risk_score, original.risk_score);
         assert_eq!(event.tags, original.tags);
         assert_eq!(event.response, original.response);
+    }
+
+    #[test]
+    fn suppression_provenance_is_explicit_and_does_not_include_criteria() {
+        let markers = [
+            "TT_PRIVACY_SUPPRESSION_CLIENT_39",
+            "TT_PRIVACY_SUPPRESSION_SESSION_39",
+            "TT_PRIVACY_SUPPRESSION_TOOL_39",
+            "TT_PRIVACY_SUPPRESSION_RULE_39",
+            "TT_PRIVACY_SUPPRESSION_CATEGORY_39",
+            "TT_PRIVACY_SUPPRESSION_PATH_39",
+        ];
+        let allowlist = Allowlist::from_yaml(&format!(
+            "version: 1\nsuppressions:\n  - name: known-fixture\n    clients: [{client}]\n    session_ids: [{session}]\n    tool_names: [{tool}]\n    rule_ids: [{rule}]\n    categories: [{category}]\n    source_path_hashes: [{path}]\n",
+            client = markers[0],
+            session = markers[1],
+            tool = markers[2],
+            rule = markers[3],
+            category = markers[4],
+            path = markers[5],
+        ))
+        .expect("allowlist");
+        let provenance = allowlist.suppression_provenance();
+        assert_eq!(
+            provenance.state,
+            telltale_schema::provenance::ProducerSuppressionState::Configured
+        );
+        assert_eq!(
+            provenance.canonicalization,
+            telltale_schema::provenance::SUPPRESSION_V1_CANONICALIZATION
+        );
+        assert_eq!(provenance.count, 1);
+        let serialized = serde_json::to_vec(&provenance).expect("provenance JSON");
+        let serialized = String::from_utf8_lossy(&serialized);
+        for marker in markers {
+            assert!(!serialized.contains(marker));
+        }
+        assert_eq!(
+            Allowlist::default().suppression_provenance(),
+            telltale_schema::provenance::ProducerSuppressionProvenance::none()
+        );
+    }
+
+    #[test]
+    fn criterion_order_is_ignored_but_entry_order_is_preserved() {
+        let first = Allowlist::from_yaml(
+            "version: 1\nsuppressions:\n  - name: first\n    clients: [codex, claude, codex]\n  - name: second\n    categories: [b, a]\n",
+        )
+        .expect("allowlist")
+        .suppression_provenance();
+        let reordered_criteria = Allowlist::from_yaml(
+            "version: 1\nsuppressions:\n  - name: first\n    clients: [codex, claude]\n  - name: second\n    categories: [a, b]\n",
+        )
+        .expect("allowlist")
+        .suppression_provenance();
+        assert_eq!(first.fingerprint, reordered_criteria.fingerprint);
+
+        let changed_name = Allowlist::from_yaml(
+            "version: 1\nsuppressions:\n  - name: renamed\n    clients: [claude, codex]\n  - name: second\n    categories: [a, b]\n",
+        )
+        .expect("allowlist")
+        .suppression_provenance();
+        assert_ne!(first.fingerprint, changed_name.fingerprint);
+
+        let reordered_entries = Allowlist::from_yaml(
+            "version: 1\nsuppressions:\n  - name: second\n    categories: [a, b]\n  - name: first\n    clients: [claude, codex]\n",
+        )
+        .expect("allowlist")
+        .suppression_provenance();
+        assert_ne!(first.fingerprint, reordered_entries.fingerprint);
+    }
+
+    #[test]
+    fn suppression_names_are_absent_from_public_provenance() {
+        let marker = "TT_PRIVACY_SUPPRESSION_NAME_39";
+        let allowlist = Allowlist::from_yaml(&format!(
+            "version: 1\nsuppressions:\n  - name: '{marker}'\n    clients: [codex]\n"
+        ))
+        .expect("allowlist");
+        let provenance = allowlist.suppression_provenance();
+        assert!(
+            !serde_json::to_string(&provenance)
+                .expect("JSON")
+                .contains(marker)
+        );
     }
 }

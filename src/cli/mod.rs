@@ -457,6 +457,48 @@ enum ConfigCommand {
         #[arg(long)]
         allowlist: Option<PathBuf>,
     },
+
+    /// Print the deterministic effective producer and detector provenance manifest.
+    Provenance {
+        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
+        #[arg(long = "rules")]
+        rule_paths: Vec<PathBuf>,
+
+        #[command(flatten)]
+        local_config: LocalConfigCliArgs,
+
+        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
+        #[arg(long)]
+        no_default_rules: bool,
+
+        /// YAML policy file that selects active rule categories and rule ids.
+        #[arg(long)]
+        policy: Option<PathBuf>,
+
+        /// YAML allowlist file that marks matching detections as suppressed.
+        #[arg(long)]
+        allowlist: Option<PathBuf>,
+
+        /// Include per-session activity events in the represented producer configuration.
+        #[arg(long)]
+        emit_activity: bool,
+
+        /// Include per-session risk summary events in the represented producer configuration.
+        #[arg(long)]
+        emit_session_risk_summary: bool,
+
+        /// Include opt-in baseline deviation scoring in the represented producer configuration.
+        #[arg(long)]
+        baseline_deviation_scoring: bool,
+
+        /// Seconds between represented installed-agent inventory observations.
+        #[arg(long, allow_hyphen_values = true)]
+        install_inventory_interval_seconds: Option<String>,
+
+        /// Disable represented installed-agent inventory observations.
+        #[arg(long)]
+        install_inventory_disabled: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1162,6 +1204,75 @@ fn run_config_validate(
     Ok(())
 }
 
+struct ConfigProvenanceArgs<'a> {
+    local_config: &'a LocalConfigCliArgs,
+    rule_paths: &'a [PathBuf],
+    no_default_rules: bool,
+    policy: Option<&'a Path>,
+    allowlist: Option<&'a Path>,
+    emit_activity: bool,
+    emit_session_risk_summary: bool,
+    baseline_deviation_scoring: bool,
+    install_inventory_interval_seconds: Option<String>,
+    install_inventory_disabled: bool,
+}
+
+fn run_config_provenance(args: ConfigProvenanceArgs<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    let resolved_config = resolve_scan_config(
+        args.local_config,
+        args.rule_paths,
+        args.policy,
+        args.allowlist,
+    )
+    .map_err(|_| private_provenance_error())?;
+    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        &resolved_config.rule_pack_paths,
+        &resolved_config.explicit_rule_paths,
+        resolved_config.policy_path.as_deref(),
+        rule_load_mode(args.no_default_rules),
+        &resolved_config.override_paths,
+        &[],
+    )
+    .map_err(|_| private_provenance_error())?;
+    let allowlist_document = resolved_config
+        .allowlist_path
+        .as_deref()
+        .map(fs::read_to_string)
+        .transpose()
+        .map_err(|_| private_provenance_error())?;
+    let requested_inventory_interval = args
+        .install_inventory_interval_seconds
+        .map(|value| value.parse::<u64>().map_err(|_| private_provenance_error()))
+        .transpose()?;
+    let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
+        requested_inventory_interval,
+        args.install_inventory_disabled,
+    );
+    let mut options = telltale_core::ProducerProvenanceOptions::from_environment();
+    options.allowlist_document = allowlist_document;
+    options.features.emit_activity = args.emit_activity;
+    options.features.emit_session_risk_summary = args.emit_session_risk_summary;
+    options.features.baseline_deviation_scoring = args.baseline_deviation_scoring;
+    options.features.install_inventory = install_inventory_interval_seconds.is_some();
+    options.features.install_inventory_interval_seconds = install_inventory_interval_seconds;
+
+    let manifest =
+        telltale_core::assemble_producer_provenance_manifest(&resolution.rule_set, &options)
+            .map_err(|_| private_provenance_error())?;
+    let bytes = manifest
+        .to_json_bytes()
+        .map_err(|_| private_provenance_error())?;
+    println!(
+        "{}",
+        String::from_utf8(bytes).map_err(|_| "manifest is not UTF-8")?
+    );
+    Ok(())
+}
+
+fn private_provenance_error() -> Box<dyn std::error::Error> {
+    Box::new(telltale_schema::provenance::ProducerProvenanceError::InvalidFormat)
+}
+
 fn run_rules_export_default(
     output: Option<&Path>,
     force: bool,
@@ -1238,15 +1349,7 @@ fn resolve_install_inventory_interval_seconds(
     interval_seconds: Option<u64>,
     disabled: bool,
 ) -> Option<u64> {
-    if disabled {
-        return None;
-    }
-    Some(interval_seconds.unwrap_or_else(|| {
-        std::env::var("TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(scan::DEFAULT_INSTALL_INVENTORY_INTERVAL_SECONDS)
-    }))
+    telltale_core::resolve_install_inventory_interval_seconds(interval_seconds, disabled)
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -1623,6 +1726,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 policy.as_deref(),
                 allowlist.as_deref(),
             )?,
+            ConfigCommand::Provenance {
+                rule_paths,
+                local_config,
+                no_default_rules,
+                policy,
+                allowlist,
+                emit_activity,
+                emit_session_risk_summary,
+                baseline_deviation_scoring,
+                install_inventory_interval_seconds,
+                install_inventory_disabled,
+            } => run_config_provenance(ConfigProvenanceArgs {
+                local_config: &local_config,
+                rule_paths: &rule_paths,
+                no_default_rules,
+                policy: policy.as_deref(),
+                allowlist: allowlist.as_deref(),
+                emit_activity,
+                emit_session_risk_summary,
+                baseline_deviation_scoring,
+                install_inventory_interval_seconds,
+                install_inventory_disabled,
+            })?,
         },
         Command::Watch {
             root,

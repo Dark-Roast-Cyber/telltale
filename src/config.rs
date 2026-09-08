@@ -21,6 +21,12 @@ pub enum LocalConfigDiscoveryKind {
     Scan,
 }
 
+pub(crate) fn process_chain_detections_enabled() -> bool {
+    std::env::var("TELLTALE_PROCESS_CHAIN_DETECTIONS")
+        .map(|value| !matches!(value.trim(), "0" | "false" | "off" | "no"))
+        .unwrap_or(true)
+}
+
 pub fn discover_local_config_files(
     explicit_roots: &[PathBuf],
     no_local_config: bool,

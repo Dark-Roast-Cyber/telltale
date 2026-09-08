@@ -7,6 +7,7 @@
 //! batch session scanning and future inline inference-proxy evaluation alike.
 
 pub mod process_chain;
+pub mod provenance;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -696,6 +697,10 @@ impl CompiledRuleSet {
 }
 
 impl RuleV1CompatibilityExport {
+    pub fn fingerprint(&self) -> String {
+        provenance::rule_v1_fingerprint(self)
+    }
+
     pub fn policy_name(&self) -> Option<&str> {
         self.policy_name.as_deref()
     }

@@ -1658,7 +1658,9 @@ version = "0.5.0"
 dependencies = [
  "regex",
  "serde",
+ "serde_json",
  "serde_yaml",
+ "sha2",
  "telltale-schema",
 ]
 

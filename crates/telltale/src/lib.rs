@@ -20,10 +20,20 @@ use telltale_detect::detection::evaluate_session_matches;
 use telltale_rules::CompiledRuleSet;
 
 pub mod assignment;
+pub mod provenance;
 
+pub use provenance::{
+    ProducerProvenanceOptions, assemble_producer_provenance_manifest,
+    resolve_install_inventory_interval_seconds,
+};
 pub use telltale_rules::MatchResult;
 pub use telltale_schema::clients::{ClientId, SourceKind};
 pub use telltale_schema::event::Event;
+pub use telltale_schema::provenance::{
+    Event3ContractIdentity, ProducerFeatureSwitches, ProducerOperationalAlertThresholds,
+    ProducerProvenanceError, ProducerProvenanceManifestV1, ProducerRiskThresholds,
+    ProducerRuleProvenance, ProducerSuppressionProvenance, ProducerSuppressionState,
+};
 pub use telltale_schema::record::{NormalizedRecord, RecordKind};
 pub use telltale_schema::scoring::{RiskAccountingError, RiskContribution, RiskContributionType};
 pub use telltale_schema::source::Source;
@@ -39,8 +49,9 @@ pub struct Pipeline {
     rule_set: CompiledRuleSet,
 }
 
-/// Builder for [`Pipeline`]. Defaults mirror the `telltale` CLI: bundled default
-/// rules are included, and extra rule documents are additive.
+/// Builder for [`Pipeline`]. This in-memory convenience includes bundled default
+/// rules and makes extra rule documents additive; it is not the CLI's path and
+/// managed-tier configuration resolver.
 #[derive(Default)]
 pub struct PipelineBuilder {
     extra_rule_documents: Vec<String>,
@@ -84,6 +95,18 @@ impl Pipeline {
         records: &[NormalizedRecord],
     ) -> Result<Option<MatchResult>, RiskAccountingError> {
         evaluate_session_matches(&self.rule_set, records)
+    }
+
+    /// Materialize a deterministic, privacy-safe identity for this pipeline's
+    /// already effective producer configuration. This method does not resolve
+    /// configuration paths or policy files; callers provide resolved values in
+    /// `options`. It is not Event 3 telemetry or an attestation of any
+    /// individual event.
+    pub fn producer_provenance_manifest(
+        &self,
+        options: &ProducerProvenanceOptions,
+    ) -> Result<ProducerProvenanceManifestV1, ProducerProvenanceError> {
+        assemble_producer_provenance_manifest(&self.rule_set, options)
     }
 }
 

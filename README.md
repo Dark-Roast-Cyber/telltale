@@ -90,6 +90,7 @@ production activation, or all-client migration. Event 3.0 remains unchanged.
 
 ```sh
 cargo run --bin telltale -- scan --once --dry-run --no-local-config --root tests/fixtures/session_stores
+cargo run --bin telltale -- config provenance --no-local-config
 cargo test
 ```
 
@@ -150,6 +151,17 @@ Use `--config-dir <path>` for explicit config roots, or `--no-local-config` to
 disable discovery. Run `telltale config validate` as the local config preflight
 before scans with custom content, and `telltale rules export-default` to inspect
 or fork the bundled default rules.
+
+`telltale config provenance` prints a deterministic, privacy-safe manifest of the
+effective compiled rules, suppression semantics, thresholds, and audited producer
+switches. It is a content-integrity identity for configuration, not an Event 3.0
+field, scan identity, telemetry record, attestation, or proof that an event used
+that configuration. The command uses the same scan configuration and rule
+resolvers. The public Rust assembler accepts an already effective compiled rule
+set and resolved values; it does not resolve configuration paths or policy files.
+Source YAML formatting, paths, policy labels, and descriptive rule metadata are
+not part of the ruleset identity; hashes remain guessable for low-entropy inputs
+and are not encryption.
 
 See [Install](docs/install.md) for the full directory layout, rule-pack
 precedence, trust-boundary guidance, override YAML format, and flag behavior.
