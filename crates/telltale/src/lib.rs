@@ -20,7 +20,13 @@ use telltale_detect::detection::evaluate_session_matches;
 use telltale_rules::CompiledRuleSet;
 
 pub mod assignment;
+pub mod local_event_feed;
 pub mod provenance;
+
+pub use local_event_feed::{
+    FeedBatch, FeedLimits, FeedNotice, FeedNoticeCode, LocalEventFeed, LocalEventFeedConfig,
+    LocalEventFeedError, LocalEventFeedErrorCode, StartupMode,
+};
 
 pub use provenance::{
     ProducerProvenanceOptions, assemble_producer_provenance_manifest,
@@ -29,6 +35,7 @@ pub use provenance::{
 pub use telltale_rules::MatchResult;
 pub use telltale_schema::clients::{ClientId, SourceKind};
 pub use telltale_schema::event::Event;
+pub use telltale_schema::event::Event3Record;
 pub use telltale_schema::provenance::{
     Event3ContractIdentity, ProducerFeatureSwitches, ProducerOperationalAlertThresholds,
     ProducerProvenanceError, ProducerProvenanceManifestV1, ProducerRiskThresholds,
@@ -38,6 +45,7 @@ pub use telltale_schema::record::{NormalizedRecord, RecordKind};
 pub use telltale_schema::scoring::{RiskAccountingError, RiskContribution, RiskContributionType};
 pub use telltale_schema::source::Source;
 pub use telltale_sources::discovery::DiscoveryError;
+pub use telltale_sources::paths::PathProfile;
 
 use std::path::Path;
 

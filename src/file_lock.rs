@@ -445,28 +445,7 @@ pub(crate) fn safe_path_info(path: &Path) -> Result<Option<FileInfo>, Box<dyn st
 /// rename preserves a JSONL generation while replacement or recreation does
 /// not. The raw platform identity never leaves this module.
 pub(crate) fn stable_file_identity(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let info = safe_path_info(path)?.ok_or("file identity target does not exist")?;
-    file_identity_token(info)
-}
-
-fn file_identity_token(info: FileInfo) -> Result<String, Box<dyn std::error::Error>> {
-    let mut hasher = Sha256::new();
-    hasher.update(b"telltale-file-identity-v1\0");
-    #[cfg(unix)]
-    {
-        hasher.update(info.identity.device.to_le_bytes());
-        hasher.update(info.identity.inode.to_le_bytes());
-    }
-    #[cfg(windows)]
-    {
-        hasher.update(info.identity.value.to_le_bytes());
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = info;
-        return Err("file identity is unsupported on this platform".into());
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(telltale_sources::journal::stable_file_identity(path)?)
 }
 
 /// Remove one previously discovered regular file only after reopening and
@@ -478,7 +457,7 @@ pub(crate) fn remove_verified_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let pinned = open_pinned_read(path)?;
     let expected_info = pinned.info;
-    if file_identity_token(expected_info)? != expected_identity
+    if stable_file_identity(path)? != expected_identity
         || safe_path_info(path)? != Some(expected_info)
     {
         return Err("persistence target changed during verified deletion".into());

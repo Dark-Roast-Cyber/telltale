@@ -61,6 +61,54 @@ Native `Event` is the trusted producer model. `Event3Record` is the consumer
 view of already terminal-safe bytes; it is not a producer, provenance record,
 session-store reader, or action executor.
 
+### Runtime-neutral local journal polling
+
+Embedding hosts that need a typed local journal view can opt into
+`telltale_core::LocalEventFeed`. It is below the CLI and uses the same public
+path-profile resolution semantics through `LocalEventFeedConfig::for_profile`.
+The host calls `poll` on its own timer or event loop; no background runtime,
+watcher, busy-loop, sidecar lock, persistent cursor, database, or outbox access
+is involved.
+
+```rust,no_run
+use telltale_core::{LocalEventFeed, LocalEventFeedConfig, StartupMode};
+use telltale_sources::paths::PathProfile;
+
+let config = LocalEventFeedConfig::for_profile(
+    PathProfile::User,
+    None,
+    StartupMode::Beginning,
+);
+let mut feed = LocalEventFeed::new(config)?;
+// The host chooses when to poll; this is not a watcher or a scheduler.
+let batch = feed.poll()?;
+assert!(batch.bytes_read <= 1024 * 1024);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`Beginning` reads discoverable generations oldest-to-newest. `End` skips
+historical complete lines while retaining the active partial frame, and
+`Recent` is bounded by both event count and bytes; it never searches unbounded
+history for a requested count. Only LF-complete records are parsed through the
+existing `Event3Record` consumer. Malformed, oversized, partial, replaced,
+truncated, unsafe, and uncertain generations appear as bounded static-code
+notices with no paths, OS text, raw JSON, or evidence. Deduplication retains
+only a bounded FIFO map of public event IDs and exact-line SHA-256 values;
+identical replay is suppressed, conflicting bytes fail closed, and eviction or
+restart ends the suppression guarantee. Physical order is the journal order,
+not timestamp order. The feed recognizes only Telltale's built-in rotation
+namespace; external rotation is surfaced as bounded uncertainty. The private
+durable outbox remains a separate delivery mechanism and is not a query API.
+
+For each result, `FeedBatch.bytes_read` is the actual journal payload bytes
+physically read/processed during that poll. It is not a cursor substitute; a
+drain-only poll that emits pending records may report zero. `caught_up` means
+the currently discoverable eligible bytes and records were drained consistently
+with the startup floor and a stable observation. It is false when a budget,
+bound, partial frame, unresolved condition, or generation gap remains. It does
+not mean no future events, complete sessions, current event time, or that
+excluded Recent history does not exist.
+
 ## Producer / Detector Provenance Manifest
 
 The separate `telltale config provenance` command prints one compact
@@ -76,9 +124,9 @@ already effective `CompiledRuleSet` and resolved values and does not resolve
 filesystem paths, managed tiers, policy files, or allowlist paths.
 
 `PipelineBuilder` is an in-memory convenience for bundled/explicit rule and
-policy documents, not a replacement for the CLI path resolver. A future
-`LocalEventFeed` integration must reuse the scan resolver or provide equivalent
-effective values before calling the assembler.
+policy documents, not a replacement for the CLI path resolver. `LocalEventFeed`
+uses the public path-profile resolver for journal selection and remains separate
+from provenance assembly.
 
 The manifest has three distinct SHA-256 identities. Rule and suppression
 fingerprints identify their own effective content; the full

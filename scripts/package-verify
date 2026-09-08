@@ -230,8 +230,9 @@ EOF
 
 cat > "$CORE_CONSUMER_DIR/src/main.rs" <<'EOF'
 use telltale_core::{
-    ClientId, DiscoveryError, Event, MatchResult, NormalizedRecord, RecordKind,
-    RiskAccountingError, RiskContribution, RiskContributionType, Source, SourceKind,
+    ClientId, DiscoveryError, Event, Event3Record, LocalEventFeed, LocalEventFeedConfig,
+    MatchResult, NormalizedRecord, RecordKind, RiskAccountingError, RiskContribution,
+    RiskContributionType, Source, SourceKind, StartupMode,
 };
 
 fn is_discovery_error(error: &(dyn std::error::Error + 'static)) -> bool {
@@ -240,6 +241,7 @@ fn is_discovery_error(error: &(dyn std::error::Error + 'static)) -> bool {
 
 fn main() {
     let _: Option<Event> = None;
+    let _: Option<Event3Record> = None;
     let _: Option<Source> = None;
     let _: Option<NormalizedRecord> = None;
     let _: Option<MatchResult> = None;
@@ -271,6 +273,13 @@ fn main() {
     let _ = std::fs::remove_dir_all(&missing);
     let error = pipeline.scan_root(&missing).expect_err("missing root");
     assert!(is_discovery_error(error.as_ref()));
+    let feed_path = missing.join("events.jsonl");
+    let mut feed = LocalEventFeed::new(LocalEventFeedConfig::new(
+        &feed_path,
+        StartupMode::Beginning,
+    ))
+    .expect("local event feed");
+    assert!(feed.poll().expect("local event feed poll").records.is_empty());
     println!("{}", pipeline.rule_count());
 }
 EOF

@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,10 +6,9 @@ use crate::event::{
     Event, PrivacySanitizer, SanitizationContext, append_jsonl_bytes, ensure_jsonl_tail,
     serialize_jsonl_events,
 };
-use crate::file_lock::{
-    RotationNamespace, SidecarLock, atomic_rename_no_replace, stable_file_identity, sync_parent,
-};
+use crate::file_lock::{RotationNamespace, SidecarLock, atomic_rename_no_replace, sync_parent};
 use crate::sink::EventSink;
+use telltale_sources::journal;
 
 /// Built-in size-based log rotation configuration.
 ///
@@ -154,66 +152,15 @@ pub(crate) struct JsonlGeneration {
 pub(crate) fn discover_jsonl_generations(
     active: &Path,
 ) -> Result<Vec<JsonlGeneration>, Box<dyn std::error::Error>> {
-    let mut generations = Vec::new();
-    match fs::symlink_metadata(active) {
-        Ok(_) => {
-            generations.push(JsonlGeneration {
-                path: active.to_path_buf(),
-                identity: stable_file_identity(active)?,
-                is_active: true,
-            });
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-
-    let components = match rotation_components(active) {
-        Ok(components) => components,
-        Err(_) => return Ok(generations),
-    };
-    let parent = active.parent().unwrap_or_else(|| Path::new("."));
-    let entries: Vec<_> = fs::read_dir(parent)?.collect::<Result<_, _>>()?;
-    let mut rotated = Vec::new();
-    for entry in entries {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        let Some((date, counter)) = parse_rotated_name(name, &components.0, &components.1) else {
-            continue;
-        };
-        let file_type = entry.file_type()?;
-        if !file_type.is_file() {
-            return Err(format!(
-                "durable JSONL generation {} is not a regular file",
-                entry.path().display()
-            )
-            .into());
-        }
-        rotated.push(RotatedFileEntry {
-            date,
-            counter,
-            path: entry.path(),
-        });
-    }
-    rotated.sort();
-    let mut discovered = Vec::with_capacity(rotated.len() + generations.len());
-    for entry in rotated {
-        discovered.push(JsonlGeneration {
-            identity: stable_file_identity(&entry.path)?,
-            path: entry.path,
-            is_active: false,
-        });
-    }
-    discovered.extend(generations);
-
-    let mut identities = std::collections::BTreeSet::new();
-    for generation in &discovered {
-        if !identities.insert(generation.identity.clone()) {
-            return Err("durable JSONL generation identity is ambiguous".into());
-        }
-    }
-    Ok(discovered)
+    Ok(journal::discover_generations(active, usize::MAX)?
+        .generations
+        .into_iter()
+        .map(|generation| JsonlGeneration {
+            path: generation.path,
+            identity: generation.identity,
+            is_active: generation.is_active,
+        })
+        .collect())
 }
 
 /// Check if the active file exceeds the rotation threshold and rotate if so.
@@ -280,15 +227,7 @@ fn rotated_with_counter(
 }
 
 fn rotation_components(active: &Path) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let stem = active
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .ok_or("built-in rotation requires a UTF-8 active filename")?;
-    let ext = active
-        .extension()
-        .and_then(OsStr::to_str)
-        .ok_or("built-in rotation requires a UTF-8 active filename")?;
-    Ok((stem.to_string(), ext.to_string()))
+    Ok(journal::rotation_components(active)?)
 }
 
 /// A parsed rotated file name, e.g. `telltale-events-2026-06-21.3.jsonl` → (date, counter).
@@ -304,49 +243,7 @@ struct RotatedFileEntry {
 /// Returns None if the name does not match the exact built-in rotation pattern:
 /// `<stem>-YYYY-MM-DD.<ext>` or `<stem>-YYYY-MM-DD.<counter>.<ext>`
 fn parse_rotated_name(name: &str, stem: &str, ext: &str) -> Option<(String, usize)> {
-    let suffix = format!(".{ext}");
-    let prefix = format!("{stem}-");
-    let name = name.strip_prefix(&prefix)?;
-    let name = name.strip_suffix(&suffix)?;
-    // name is now "YYYY-MM-DD" or "YYYY-MM-DD.N"
-    if let Some((date, counter_str)) = name.rsplit_once('.') {
-        if is_valid_date(date) {
-            let counter = counter_str.parse::<usize>().ok()?;
-            return Some((date.to_string(), counter));
-        }
-        None
-    } else if is_valid_date(name) {
-        // Base date-stamped file, no counter → counter 0.
-        Some((name.to_string(), 0))
-    } else {
-        None
-    }
-}
-
-/// Check if a string is a valid `YYYY-MM-DD` date with plausible month/day values.
-fn is_valid_date(s: &str) -> bool {
-    if s.len() != 10 {
-        return false;
-    }
-    let bytes = s.as_bytes();
-    if bytes[4] != b'-' || bytes[7] != b'-' {
-        return false;
-    }
-    let year = &s[..4];
-    let month = &s[5..7];
-    let day = &s[8..10];
-    if !year.chars().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    if !month.chars().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    if !day.chars().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    let month: u32 = month.parse().unwrap_or(0);
-    let day: u32 = day.parse().unwrap_or(0);
-    (1..=12).contains(&month) && (1..=31).contains(&day)
+    journal::parse_rotated_name(name, stem, ext)
 }
 
 /// Delete rotated files beyond `keep`, oldest-first.

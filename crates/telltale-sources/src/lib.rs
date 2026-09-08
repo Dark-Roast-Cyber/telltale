@@ -10,6 +10,7 @@ pub mod canonical;
 pub mod clients;
 pub mod discovery;
 pub mod install_inventory;
+pub mod journal;
 pub mod parser;
 pub mod paths;
 pub mod projects;

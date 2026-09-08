@@ -7,6 +7,49 @@ parsing, and detection while returning events to the host application. It does
 not write JSONL, connect to a SIEM, or exit the process. The source directory
 remains `crates/telltale` for repository compatibility.
 
+## LocalEventFeed
+
+`LocalEventFeed` is an opt-in, synchronous, read-only consumer for the local
+canonical Event 3.0 JSONL journal. The host owns the cadence; the feed does not
+start a thread, watcher, runtime, database, cursor file, lock, or outbox
+operation.
+
+```rust,no_run
+use std::path::PathBuf;
+use telltale_core::{LocalEventFeed, LocalEventFeedConfig, StartupMode};
+
+let config = LocalEventFeedConfig::new(
+    PathBuf::from("logs/telltale-events.jsonl"),
+    StartupMode::Recent { max_events: 100, max_bytes: 256 * 1024 },
+);
+let mut feed = LocalEventFeed::new(config)?;
+// A host timer or event loop calls this at its chosen cadence.
+let batch = feed.poll()?;
+for record in batch.records {
+    println!("{}", record.common().event_id);
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`Beginning`, `End`, and `Recent` use physical built-in rotation order, not
+event timestamps. Polling, framing, directory discovery, and deduplication are
+bounded. Recent is a bounded suffix view; in-memory deduplication uses a FIFO
+window of exact-line SHA-256 values, so restart and eviction can replay an
+identical event. The feed recognizes only Telltale's built-in rotation names;
+external rotators and uncertain replacement races produce safe notices rather
+than a universal recovery claim. It reads complete LF-terminated lines and
+returns typed `Event3Record` values without re-redaction. Durable outbox state
+is private and is not exposed by this API.
+
+`FeedBatch.bytes_read` is the actual journal payload bytes physically
+read/processed during that poll. It is not a cursor substitute; a poll that
+only emits pending records while draining may report zero. `FeedBatch.caught_up`
+means the currently discoverable eligible bytes and records were drained
+consistently with the startup floor and a stable observation. It is false when
+a budget, bound, partial frame, unresolved race, or generation gap remains. It
+does not mean that no future events will arrive, that sessions are complete,
+that event time is current, or that excluded Recent history does not exist.
+
 The opt-in `assignment` module owns a local protected-assignment SQLite store
 for Canonical Observation v2 facts that lack a stable source coordinate. It is
 not wired into production scanning or adapter projection. Callers must provide

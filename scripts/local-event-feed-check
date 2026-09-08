@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+echo "== LocalEventFeed focused checks =="
+cargo test --locked -p telltale-sources journal
+cargo test --locked -p telltale-core local_event_feed
+cargo test --locked --test cli rotation
+cargo test --locked -p telltale-schema consumer
+
+echo "== LocalEventFeed diff safety =="
+git diff --check
+echo "LocalEventFeed checks passed."
