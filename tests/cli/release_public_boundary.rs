@@ -2068,8 +2068,9 @@ fn public_docs_github_release_is_independent_of_crates_io_publication() {
         "versioning must retain the current registry pin"
     );
 
-    let readiness =
-        fs::read_to_string("docs/release-readiness.md").expect("release readiness docs");
+    let readiness = normalize_line_endings(
+        fs::read_to_string("docs/release-readiness.md").expect("release readiness docs"),
+    );
     assert!(
         readiness.contains("For the actual publication pass"),
         "release readiness must keep the crates.io publication-pass marker"
@@ -2615,6 +2616,10 @@ fn read_release_workflow() -> String {
     fs::read_to_string(".github/workflows/release.yml")
         .expect("release workflow")
         .replace("\r\n", "\n")
+}
+
+fn normalize_line_endings(text: String) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn public_text_surfaces() -> Vec<std::path::PathBuf> {
