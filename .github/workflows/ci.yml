@@ -86,8 +86,13 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - name: Check development version and release contracts
-        run: make --silent version-consistency-check
+      - name: Check package metadata and synthetic release contracts
+        run: |
+          # The published RC tag is intentionally present in complete history;
+          # CI validates package/lock metadata here, while release preflight and
+          # the publication workflow retain the immutable tag-floor check.
+          python3 scripts/version-consistency-check --publication-order
+          python3 tests/version_consistency_test.py
       - run: cargo test --quiet
       - name: Run Event 3.0 consumer contract checks
         run: make --silent event3-contract-check

@@ -1780,6 +1780,23 @@ fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
 }
 
 #[test]
+fn ci_keeps_metadata_gate_after_candidate_publication() {
+    let workflow = fs::read_to_string(".github/workflows/ci.yml")
+        .expect("CI workflow")
+        .replace("\r\n", "\n");
+    let test_job = workflow
+        .split_once("\n  test:\n")
+        .and_then(|(_, rest)| rest.split_once("\n  security:\n").map(|(job, _)| job))
+        .expect("CI test job");
+    assert!(test_job.contains("python3 scripts/version-consistency-check --publication-order"));
+    assert!(test_job.contains("python3 tests/version_consistency_test.py"));
+    assert!(
+        !test_job.contains("make --silent version-consistency-check"),
+        "CI must not reject the already-published RC solely because its tag exists"
+    );
+}
+
+#[test]
 fn release_workflow_existing_release_guard_is_fail_closed_without_live_calls() {
     let workflow = read_release_workflow();
     let start = workflow
