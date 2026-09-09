@@ -19,7 +19,9 @@ sinks:
 
   # Splunk HTTP Event Collector delivery. Events are wrapped in HEC envelopes
   # (time/index/sourcetype/source/host) and batched per request; the canonical
-  # Telltale event body is never modified.
+  # Telltale event body is never modified. This sink is disabled for the
+  # repository's UF-primary example. Before enabling it as HEC-primary, disable
+  # any Universal Forwarder monitor of this canonical JSONL to avoid duplicates.
   - name: corp-splunk
     type: splunk_hec
     enabled: false

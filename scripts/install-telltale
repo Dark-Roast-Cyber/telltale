@@ -4,6 +4,9 @@
 #
 # Usage:
 #   ./scripts/install-telltale [--from-source] [--release-tag TAG] [--install-dir DIR] [--with-timer]
+#   ./scripts/install-telltale --development-archive FILE --development-sha SHA \
+#     --development-sha256 SHA256 --development-binary-sha256 SHA256 \
+#     --development-version VERSION [--install-dir DIR] [--with-timer]
 
 set -euo pipefail
 umask 077
@@ -15,6 +18,12 @@ WITH_TIMER=0
 SKIP_CHECKSUM=0
 RELEASE_TAG=""
 RELEASE_TAG_SET=0
+DEVELOPMENT_ARCHIVE=""
+DEVELOPMENT_SHA=""
+DEVELOPMENT_SHA256=""
+DEVELOPMENT_BINARY_SHA256=""
+DEVELOPMENT_VERSION=""
+DEVELOPMENT_MODE=0
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 RELEASE_BASE_URL="https://github.com/${REPO}/releases/download"
 
@@ -37,14 +46,25 @@ Telltale Linux installer — current-user, staged, recoverable transaction.
 
 Usage:
   ./scripts/install-telltale [--from-source] [--release-tag TAG] [--install-dir DIR] [--with-timer]
+  ./scripts/install-telltale --development-archive FILE --development-sha SHA --development-sha256 SHA256 --development-binary-sha256 SHA256 --development-version VERSION [--install-dir DIR] [--with-timer]
 
 Options:
   --from-source       Build the exact validated release tag with locked Cargo dependencies.
-  --release-tag TAG   Select one exact published RC tag (for example v0.5.0-rc.N).
+  --release-tag TAG   Select one exact published stable or v0.5.0 RC tag.
   --install-dir DIR  Install the canonical telltale binary below the current user's home.
   --with-timer        Install and enable the canonical telltale-scan.timer user schedule.
   --no-timer          Do not enable the canonical timer.
   --skip-checksum     Explicitly bypass SHA256SUMS verification.
+  --development-archive FILE
+                       Install one local canonical development bundle.
+  --development-sha SHA
+                       Require the exact clean 40-character source commit SHA.
+  --development-sha256 SHA256
+                       Require the exact SHA-256 of the development bundle.
+  --development-binary-sha256 SHA256
+                       Require the exact SHA-256 of its extracted binary.
+  --development-version VERSION
+                       Require the candidate's reported Cargo package version.
   --version, -V       Print installer version information.
   --help, -h          Print this help.
 EOF
@@ -68,15 +88,66 @@ while [[ $# -gt 0 ]]; do
         --with-timer) WITH_TIMER=1; shift ;;
         --no-timer) WITH_TIMER=0; shift ;;
         --skip-checksum) SKIP_CHECKSUM=1; shift ;;
+        --development-archive)
+            [[ $# -ge 2 ]] || die "--development-archive requires a file"
+            [[ -z "$DEVELOPMENT_ARCHIVE" ]] || die "--development-archive may be passed only once"
+            DEVELOPMENT_ARCHIVE="$2"
+            shift 2
+            ;;
+        --development-sha)
+            [[ $# -ge 2 ]] || die "--development-sha requires a SHA"
+            [[ -z "$DEVELOPMENT_SHA" ]] || die "--development-sha may be passed only once"
+            DEVELOPMENT_SHA="$2"
+            shift 2
+            ;;
+        --development-sha256)
+            [[ $# -ge 2 ]] || die "--development-sha256 requires a digest"
+            [[ -z "$DEVELOPMENT_SHA256" ]] || die "--development-sha256 may be passed only once"
+            DEVELOPMENT_SHA256="$2"
+            shift 2
+            ;;
+        --development-binary-sha256)
+            [[ $# -ge 2 ]] || die "--development-binary-sha256 requires a digest"
+            [[ -z "$DEVELOPMENT_BINARY_SHA256" ]] || die "--development-binary-sha256 may be passed only once"
+            DEVELOPMENT_BINARY_SHA256="$2"
+            shift 2
+            ;;
+        --development-version)
+            [[ $# -ge 2 ]] || die "--development-version requires a version"
+            [[ -z "$DEVELOPMENT_VERSION" ]] || die "--development-version may be passed only once"
+            DEVELOPMENT_VERSION="$2"
+            shift 2
+            ;;
         --version|-V) print_version; exit 0 ;;
         --help|-h) print_help; exit 0 ;;
         *) die "Unknown option: $1" ;;
     esac
 done
 
+if [[ -n "$DEVELOPMENT_ARCHIVE$DEVELOPMENT_SHA$DEVELOPMENT_SHA256$DEVELOPMENT_BINARY_SHA256$DEVELOPMENT_VERSION" ]]; then
+    [[ -n "$DEVELOPMENT_ARCHIVE" && -n "$DEVELOPMENT_SHA" \
+        && -n "$DEVELOPMENT_SHA256" && -n "$DEVELOPMENT_BINARY_SHA256" \
+        && -n "$DEVELOPMENT_VERSION" ]] \
+        || die "development install requires archive, source SHA, archive SHA-256, binary SHA-256, and version"
+    DEVELOPMENT_MODE=1
+    [[ "$FROM_SOURCE" -eq 0 && "$RELEASE_TAG_SET" -eq 0 && "$SKIP_CHECKSUM" -eq 0 ]] \
+        || die "development install cannot use --from-source, --release-tag, or --skip-checksum"
+    [[ "$DEVELOPMENT_ARCHIVE" == /* ]] \
+        || die "--development-archive must be an absolute path"
+    [[ "$DEVELOPMENT_SHA" =~ ^[0-9a-f]{40}$ ]] \
+        || die "--development-sha must be an exact lowercase 40-character Git SHA"
+    [[ "$DEVELOPMENT_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || die "--development-sha256 must be an exact lowercase SHA-256"
+    [[ "$DEVELOPMENT_BINARY_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || die "--development-binary-sha256 must be an exact lowercase SHA-256"
+    [[ "$DEVELOPMENT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+        || die "--development-version must be a strict stable package version"
+fi
+
 if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
-    [[ "$RELEASE_TAG" =~ ^v0\.5\.0-rc\.(0|[1-9][0-9]*)$ ]] \
-        || die "--release-tag must be an exact v0.5.0-rc.<n> tag"
+    [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ \
+        || "$RELEASE_TAG" =~ ^v0\.5\.0-rc\.(0|[1-9][0-9]*)$ ]] \
+        || die "--release-tag must be an exact stable tag or exact v0.5.0-rc.<n> tag"
     [[ "$SKIP_CHECKSUM" -eq 0 ]] \
         || die "--skip-checksum is not permitted with --release-tag"
 fi
@@ -1354,10 +1425,26 @@ verify_binary_version() {
     validate_binary_file "$binary"
     version_output="$(run_bounded "$binary" --version 2>/dev/null)" \
         || die "canonical binary failed bounded version verification"
-    case "$version_output" in
-        "telltale ${expected_version}"|"telltale ${expected_version}"$'\n'|"telltale ${expected_version}"\ *) ;;
-        *) die "binary version does not match telltale ${version_tag}" ;;
-    esac
+    if [[ "$DEVELOPMENT_MODE" -eq 1 ]]; then
+        [[ "$version_output" == "telltale ${expected_version} (${DEVELOPMENT_SHA:0:12})" ]] \
+            || die "development binary identity does not match the required version and source SHA"
+    else
+        case "$version_output" in
+            "telltale ${expected_version}"|"telltale ${expected_version}"$'\n'|"telltale ${expected_version}"\ *) ;;
+            *) die "binary version does not match telltale ${version_tag}" ;;
+        esac
+    fi
+}
+
+sha256_file() {
+    local path="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$path" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$path" | awk '{print $1}'
+    else
+        die "neither sha256sum nor shasum is available"
+    fi
 }
 
 verify_checksum() {
@@ -1373,13 +1460,7 @@ verify_checksum() {
     expected="$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; found=1; exit } END { if (!found) exit 1 }' "$sums_file")" \
         || die "no exact SHA256SUMS entry for ${archive_name}"
     [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || die "invalid SHA256SUMS entry for ${archive_name}"
-    if command -v sha256sum >/dev/null 2>&1; then
-        actual="$(sha256sum "$archive" | awk '{print $1}')"
-    elif command -v shasum >/dev/null 2>&1; then
-        actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
-    else
-        die "neither sha256sum nor shasum is available"
-    fi
+    actual="$(sha256_file "$archive")"
     [[ "$expected" == "$actual" ]] || die "checksum mismatch for ${archive_name}"
     info "checksum verified: ${archive_name}"
 }
@@ -1621,17 +1702,30 @@ case "$arch" in
     *) die "unsupported Linux architecture: ${arch}" ;;
 esac
 
-if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
-    API_URL="https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}"
+if [[ "$DEVELOPMENT_MODE" -eq 1 ]]; then
+    development_archive_real="$(realpath -e -- "$DEVELOPMENT_ARCHIVE")" \
+        || die "could not resolve development archive"
+    [[ "$development_archive_real" == "$DEVELOPMENT_ARCHIVE" ]] \
+        || die "development archive path must be canonical"
+    owned_path "$development_archive_real" \
+        || die "development archive is not owned by the current user"
+    safe_file_mode "$development_archive_real" unit \
+        || die "development archive has unsafe mode or link count"
+else
+    if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
+        API_URL="https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}"
+    fi
+    release_json="$(download_stdout "$API_URL")" \
+        || die "could not fetch selected release metadata"
+    [[ -n "$release_json" ]] || die "selected release metadata was empty"
 fi
-release_json="$(download_stdout "$API_URL")" \
-    || die "could not fetch selected release metadata"
-[[ -n "$release_json" ]] || die "selected release metadata was empty"
+
 metadata_tag_kind=stable
-if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
+if [[ "$RELEASE_TAG_SET" -eq 1 && "$RELEASE_TAG" == *-rc.* ]]; then
     metadata_tag_kind=rc
 fi
-metadata_fields="$(printf '%s' "$release_json" | python3 -c '
+if [[ "$DEVELOPMENT_MODE" -eq 0 ]]; then
+    metadata_fields="$(printf '%s' "$release_json" | python3 -c '
 import json
 import re
 import sys
@@ -1677,16 +1771,14 @@ IFS=$'\t' read -r version_tag draft_flag prerelease_flag <<< "$metadata_fields"
     && ( "$prerelease_flag" == 0 || "$prerelease_flag" == 1 ) ]] \
     || die "selected release metadata was not a valid GitHub Release object"
 if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
-    [[ "$version_tag" =~ ^v0\.5\.0-rc\.(0|[1-9][0-9]*)$ ]] \
-        || die "selected release metadata did not contain a validated RC tag"
+    [[ "$version_tag" == "$RELEASE_TAG" ]] \
+        || die "selected release metadata tag does not match --release-tag"
 else
     [[ "$version_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
         || die "latest release metadata did not contain a strict stable tag"
 fi
 
-if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
-    [[ "$version_tag" == "$RELEASE_TAG" ]] \
-        || die "selected release metadata tag does not match --release-tag"
+if [[ "$RELEASE_TAG_SET" -eq 1 && "$version_tag" == *-rc.* ]]; then
     [[ "$draft_flag" == 0 ]] \
         || die "selected candidate release must not be a draft"
     [[ "$prerelease_flag" == 1 ]] \
@@ -1699,6 +1791,11 @@ else
 fi
 expected_version="${version_tag#v}"
 
+else
+    version_tag="development-${DEVELOPMENT_SHA}"
+    expected_version="$DEVELOPMENT_VERSION"
+fi
+
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/telltale-installer.XXXXXX")"
 trap cleanup_provenance_tmpdir EXIT
 staged_dir="$tmpdir/staged"
@@ -1706,15 +1803,31 @@ mkdir -p -- "$staged_dir"
 archive_name="telltale-${version_tag}-${target}.tar.gz"
 archive="$tmpdir/$archive_name"
 
-download_to "${RELEASE_BASE_URL}/${version_tag}/${archive_name}" "$archive" \
-    || die "no exact canonical release asset for ${target}: ${archive_name}"
-[[ -s "$archive" ]] || die "downloaded release asset was empty"
-verify_checksum "$archive" "$archive_name" "$tmpdir"
+if [[ "$DEVELOPMENT_MODE" -eq 1 ]]; then
+    install -m 0600 "$development_archive_real" "$archive" \
+        || die "could not stage development archive"
+    actual_development_sha256="$(sha256_file "$archive")"
+    [[ "$actual_development_sha256" == "$DEVELOPMENT_SHA256" ]] \
+        || die "development archive checksum mismatch"
+    info "development archive verified: source ${DEVELOPMENT_SHA}, sha256 ${DEVELOPMENT_SHA256}"
+else
+    download_to "${RELEASE_BASE_URL}/${version_tag}/${archive_name}" "$archive" \
+        || die "no exact canonical release asset for ${target}: ${archive_name}"
+    [[ -s "$archive" ]] || die "downloaded release asset was empty"
+    verify_checksum "$archive" "$archive_name" "$tmpdir"
+fi
 verify_release_archive "$archive"
 extract_dir="$tmpdir/extract"
 mkdir -p -- "$extract_dir"
-tar xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions -- telltale \
+tar xzf "$archive" -C "$extract_dir" --no-same-owner --no-same-permissions -- telltale README.md \
     || die "could not extract canonical release binary"
+if [[ "$DEVELOPMENT_MODE" -eq 1 ]]; then
+    grep -Fqx "Development-Source-SHA: ${DEVELOPMENT_SHA}" "$extract_dir/README.md" \
+        || die "development archive manifest does not bind the required full source SHA"
+    actual_development_binary_sha256="$(sha256_file "$extract_dir/telltale")"
+    [[ "$actual_development_binary_sha256" == "$DEVELOPMENT_BINARY_SHA256" ]] \
+        || die "development binary checksum mismatch"
+fi
 install -m 0755 "$extract_dir/telltale" "$staged_dir/telltale"
 validate_binary_file "$staged_dir/telltale"
 verify_binary_version "$staged_dir/telltale"

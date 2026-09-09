@@ -2295,6 +2295,29 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
     assert!(readiness_baseline.contains("Telltale"));
 }
 
+#[test]
+fn controlled_deployment_docs_require_exact_identity_and_one_remote_route() {
+    let procedure = fs::read_to_string("docs/controlled-deployment.md")
+        .expect("read controlled deployment procedure");
+    assert!(procedure.contains("full clean Git commit SHA"));
+    assert!(procedure.contains("SHA-256 of the exact candidate archive"));
+    assert!(procedure.contains("version output alone cannot distinguish"));
+    assert!(procedure.contains("UF-primary"));
+    assert!(procedure.contains("HEC-primary"));
+    assert!(procedure.contains("sends the same canonical events twice"));
+    assert!(procedure.contains("Production should remain on official `v0.5.0`"));
+
+    let outputs =
+        fs::read_to_string("config/examples/telltale-outputs.yaml").expect("read output example");
+    let hec = text_between(&outputs, "- name: corp-splunk", "- name: corp-elastic");
+    assert!(hec.contains("enabled: false"));
+    assert!(outputs.contains("UF-primary"));
+
+    let uf = fs::read_to_string("config/examples/splunk-inputs.conf")
+        .expect("read Universal Forwarder example");
+    assert!(uf.contains("[monitor:///var/log/telltale/telltale-events.jsonl]"));
+}
+
 fn text_between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
     let start = text
         .find(start)

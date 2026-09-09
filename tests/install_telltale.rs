@@ -122,6 +122,39 @@ fn archive(root: &Path, name: &str, version: &str, extra_member: Option<&str>) -
     )
 }
 
+fn development_archive(root: &Path, name: &str, version: &str, sha: &str) -> PathBuf {
+    let archive = archive(root, name, version, None);
+    let payload = root.join(format!("payload-{name}"));
+    executable(
+        &payload.join("telltale"),
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' 'telltale {version} ({})'; fi\nif [ -n \"${{FAKE_EVENT_LOG:-}}\" ]; then printf 'binary:%s:%s\\n' \"$0\" \"$*\" >> \"$FAKE_EVENT_LOG\"; fi\nif [ \"${{FAKE_DEVELOPMENT_SCAN_FAIL:-0}}\" = 1 ] && [ \"$1\" = scan ]; then exit 71; fi\nexit 0\n",
+            &sha[..12]
+        ),
+    );
+    fs::write(
+        payload.join("README.md"),
+        format!("Synthetic development bundle\nDevelopment-Source-SHA: {sha}\n"),
+    )
+    .expect("write development manifest");
+    fs::remove_file(&archive).expect("replace development archive");
+    let mut command = Command::new("tar");
+    command
+        .args(["-czf"])
+        .arg(&archive)
+        .args(["-C", payload.to_str().unwrap()]);
+    for member in CANONICAL_ARCHIVE_MEMBERS {
+        command.arg(member);
+    }
+    let output = command.output().expect("create development archive");
+    assert!(
+        output.status.success(),
+        "tar failed: {}",
+        output_text(&output)
+    );
+    archive
+}
+
 fn archive_with_link_member(root: &Path, name: &str, version: &str, link_member: &str) -> PathBuf {
     let archive = archive(root, name, version, None);
     let payload = root.join(format!("payload-{name}"));
@@ -164,6 +197,19 @@ fn checksum(archive: &Path, sums: &Path) {
         ),
     )
     .expect("write sums");
+}
+
+fn sha256(path: &Path) -> String {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .expect("checksum");
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .expect("digest")
+        .to_owned()
 }
 
 fn assert_archive_rejected(root: &Path, archive: &Path, message: &str) {
@@ -735,6 +781,135 @@ fn installer_script_is_executable() {
 }
 
 #[test]
+fn exact_development_archive_is_validated_before_transaction_and_installed() {
+    let temp = tempdir().unwrap();
+    let sha = "270bca79f6aa6529e883a0191f66f467b4a28015";
+    let name = format!("telltale-dev-{sha}-{}.tar.gz", target());
+    let archive = development_archive(temp.path(), &name, "0.5.0", sha);
+    let digest = sha256(&archive);
+    let binary_digest = sha256(&temp.path().join(format!("payload-{name}/telltale")));
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let tools = tools(temp.path(), true);
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+    command.args([
+        "--development-archive",
+        archive.to_str().unwrap(),
+        "--development-sha",
+        sha,
+        "--development-sha256",
+        &digest,
+        "--development-binary-sha256",
+        &binary_digest,
+        "--development-version",
+        "0.5.0",
+        "--no-timer",
+        "--install-dir",
+        install.to_str().unwrap(),
+    ]);
+
+    let output = command.output().unwrap();
+    assert_success(&output);
+    assert_eq!(
+        sha256(&install.join("telltale")),
+        sha256(&temp.path().join(format!("payload-{name}/telltale")))
+    );
+    assert!(
+        !temp.path().join("curl.log").exists(),
+        "local development mode must not fetch release metadata"
+    );
+    let events = fs::read_to_string(temp.path().join("events.log")).unwrap();
+    let first_binary = events.find("binary:").expect("candidate validation event");
+    let first_systemctl = events
+        .find("systemctl:")
+        .expect("systemd transaction event");
+    assert!(
+        first_binary < first_systemctl,
+        "candidate validation must precede systemd mutation: {events}"
+    );
+}
+
+#[test]
+fn development_archive_identity_failures_do_not_start_transaction() {
+    let temp = tempdir().unwrap();
+    let sha = "270bca79f6aa6529e883a0191f66f467b4a28015";
+    let name = format!("telltale-dev-{sha}-{}.tar.gz", target());
+    let archive = development_archive(temp.path(), &name, "0.5.0", sha);
+    let binary_digest = sha256(&temp.path().join(format!("payload-{name}/telltale")));
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let tools = tools(temp.path(), true);
+    let install = temp.path().join("home/bin");
+
+    for (candidate_sha, digest) in [
+        ("270bca79f6aa6529e883a0191f66f467b4a28014", sha256(&archive)),
+        (sha, "0".repeat(64)),
+    ] {
+        let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+        command.args([
+            "--development-archive",
+            archive.to_str().unwrap(),
+            "--development-sha",
+            candidate_sha,
+            "--development-sha256",
+            &digest,
+            "--development-binary-sha256",
+            &binary_digest,
+            "--development-version",
+            "0.5.0",
+            "--no-timer",
+            "--install-dir",
+            install.to_str().unwrap(),
+        ]);
+        let output = command.output().unwrap();
+        assert!(!output.status.success(), "identity mismatch must fail");
+        assert!(!install.join("telltale").exists());
+        assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+        assert!(!temp.path().join("systemctl.log").exists());
+    }
+}
+
+#[test]
+fn development_canary_failure_restores_previous_binary() {
+    let temp = tempdir().unwrap();
+    let sha = "270bca79f6aa6529e883a0191f66f467b4a28015";
+    let name = format!("telltale-dev-{sha}-{}.tar.gz", target());
+    let archive = development_archive(temp.path(), &name, "0.5.0", sha);
+    let digest = sha256(&archive);
+    let binary_digest = sha256(&temp.path().join(format!("payload-{name}/telltale")));
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let tools = tools(temp.path(), true);
+    let install = temp.path().join("home/bin");
+    fs::create_dir_all(&install).unwrap();
+    let previous = install.join("telltale");
+    telltale_binary(&previous, "0.5.0", false);
+    let previous_bytes = fs::read(&previous).unwrap();
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+    command.env("FAKE_DEVELOPMENT_SCAN_FAIL", "1").args([
+        "--development-archive",
+        archive.to_str().unwrap(),
+        "--development-sha",
+        sha,
+        "--development-sha256",
+        &digest,
+        "--development-binary-sha256",
+        &binary_digest,
+        "--development-version",
+        "0.5.0",
+        "--no-timer",
+        "--install-dir",
+        install.to_str().unwrap(),
+    ]);
+
+    let output = command.output().unwrap();
+    assert!(
+        !output.status.success(),
+        "failed canary must fail installation"
+    );
+    assert_eq!(fs::read(&previous).unwrap(), previous_bytes);
+    assert!(!install.join(".telltale-install").exists());
+}
+
+#[test]
 fn installer_requires_no_copy_no_replace_capability_before_installation() {
     let temp = tempdir().unwrap();
     let name = format!("telltale-v0.5.0-{}.tar.gz", target());
@@ -783,6 +958,30 @@ fn explicit_rc_selection_uses_only_the_exact_tag_and_preserves_stable_default() 
     assert!(urls.contains("/releases/tags/v0.5.0-rc.1"));
     assert!(!urls.contains("/releases/latest"));
     assert!(urls.contains("/releases/download/v0.5.0-rc.1/"));
+}
+
+#[test]
+fn explicit_stable_selection_supports_pinned_rollback() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.5.0";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, false);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert_success(&output);
+    let urls = fs::read_to_string(temp.path().join("curl.log")).unwrap();
+    assert!(urls.contains("/releases/tags/v0.5.0"));
+    assert!(!urls.contains("/releases/latest"));
+    assert!(urls.contains("/releases/download/v0.5.0/"));
 }
 
 #[test]

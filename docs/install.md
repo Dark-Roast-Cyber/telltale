@@ -8,6 +8,9 @@ fixture-safe scan before pointing the scanner at real agent session stores. See
 the [Source Validation Matrix](source-validation-matrix.md) for the canonical
 source-support claims and their evidence.
 
+For an exact, non-production development canary and tested rollback from the
+official `v0.5.0` release, use [Controlled development deployment](controlled-deployment.md).
+
 ## Prerequisites
 
 - Rust toolchain with `cargo` when building from source

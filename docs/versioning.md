@@ -9,19 +9,18 @@ format.
 
 - `v0.1.0` is the first public binary release.
 - `0.2.0` is the prior maturity release.
-- `0.3.0` is the current released line for the event and scoring contract.
+- `0.3.0` is the prior released line for the event and scoring contract.
 - `0.4.0` is an unpublished API-hardening line and will not be released
   separately. Its completed work is folded into `0.5.0`.
-- `0.3.x` remains the current released maintenance line until `0.5.0` ships.
-- `0.5.0` is the approved coherent breaking milestone for the hard Telltale
-  technical migration, embedded-triage removal, schema/configuration changes,
-  and install-to-SIEM reliability proof. Follow-up compatible fixes use `0.5.x`.
-- The current preparation value is `0.5.0`. It is the stable package version
-  prepared from accepted immutable `v0.5.0-rc.7`; the matching `v0.5.0` tag
-  and GitHub Release remain absent until release-preflight, artifact-boundary,
-  and GitHub publication-prerequisite gates pass. Crates.io publication is a
-  separate later distribution action and does not block stable GitHub
-  `v0.5.0`. The immutable
+- `v0.5.0` is the current official stable GitHub Release. It completed the hard
+  Telltale technical migration, embedded-triage removal, schema/configuration
+  changes, and install-to-SIEM reliability proof.
+- Development `main` has advanced beyond that release while workspace packages
+  still declare `0.5.0`. Untagged builds therefore require full Git SHA and
+  binary/package SHA-256 identity and are not `v0.5.0` release artifacts. The
+  workspace must move to the next release version before another official tag;
+  that migration is separate release-readiness work. Crates.io publication is
+  a separate distribution action. The immutable
   `v0.5.0-rc.5` publication passed provenance checks, but its G-SERVICE gate
   failed on canonical optional `EnvironmentFile` validation. The immutable rc.6
   publication/provenance passed and repaired that defect, but G-SERVICE then
@@ -179,4 +178,5 @@ before any user install or schedule mutation. `--from-source` uses that same
 exact tag, validates its archive provenance, resolves its immutable commit, and
 builds that source revision. Binary
 GitHub Releases and later crates.io publication are separate operations;
-neither an RC workflow nor the stable GitHub Release workflow publishes crates.
+deferring crates.io does not block stable GitHub publication, and neither an RC
+workflow nor the stable GitHub Release workflow publishes crates.

@@ -24,12 +24,11 @@ families, schema checks, or aggregate results without exposing workstation
 paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
-[Versioning and Releases](versioning.md). The workspace is preparing stable
-`0.5.0` from the accepted immutable `v0.5.0-rc.7` candidate for the approved
-`0.5.0` Event 3.0 migration; compatible maintenance fixes remain on the prior
-`0.3.x` line until stable publication. Do not create `0.5.x` for a round of
-small tasks; follow-up fixes belong there only after the reviewed `0.5.0`
-milestone ships.
+[Versioning and Releases](versioning.md). Official `v0.5.0` is published and
+immutable. Development `main` has advanced while workspace packages still
+declare `0.5.0`; distinguish every untagged candidate with full Git SHA and
+binary/package SHA-256. Move the workspace to the selected next release version
+before another official tag. Do not reuse `v0.5.0` for development artifacts.
 
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
@@ -46,15 +45,16 @@ publication/provenance passed and repaired that defect, but G-SERVICE then faile
 before binary replacement on user-manager `WorkingDirectory` normalization.
 `rc.7` is published and immutable at reviewed commit
 `6696888cd5d559fa47b8252e3495524da9fbd1eb`; its GitHub Release and assets are
-the accepted candidate artifacts. The current workspace package version is
-`0.5.0`; the matching `v0.5.0` tag remains absent.
+the accepted candidate artifacts. The resulting `v0.5.0` tag and stable GitHub
+Release are now published and immutable. The current workspace package version
+remains `0.5.0`, which is a release-readiness ambiguity for later development.
 
-## RC Candidate Handoff
+## Historical RC Candidate Handoff
 
-The `v0.5.0-rc.7` handoff is complete: the reviewed commit is tagged and its
+The `v0.5.0-rc.7` handoff completed before stable publication: the reviewed commit was tagged and its
 immutable GitHub Release is explicitly marked `prerelease=true`. Native
-validation used those published artifacts. Final stable preflight runs against
-the reviewed `0.5.0` commit while `v0.5.0` is absent.
+validation used those published artifacts. Final stable preflight ran against
+the reviewed `0.5.0` commit before the now-published `v0.5.0` tag existed.
 If code, package metadata, installer behavior, workflow, archive, checksum, or
 attestation provenance changes, use a new reviewed commit and the next unused
 RC tag; do not overwrite a published candidate. A transient environment

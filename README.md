@@ -181,6 +181,7 @@ additive — home-relative sources are still discovered from `--root`.
 See [Install](docs/install.md) for the YAML format and `--project-config` usage.
 
 - Install and setup guide: [docs/install.md](docs/install.md)
+- Controlled development upgrade and rollback: [docs/controlled-deployment.md](docs/controlled-deployment.md)
 
 Tagged GitHub releases publish platform-specific `telltale-*` binary archives
 when available. Source builds remain supported; the install guide covers the
