@@ -25,13 +25,25 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
-immutable. Development `main` declares `0.6.0-rc.1`; the published immutable
-`v0.6.0-rc.1` candidate is a separate qualification input and is not an official
-stable release. Distinguish every untagged candidate with full Git SHA and
-archive/binary SHA-256. Run `make version-consistency-check` with complete
+immutable. Development `main` declares prospective `0.6.0-rc.2`; no matching tag
+or GitHub Release exists yet. The published immutable `v0.6.0-rc.1` candidate
+passed publication/provenance and failed G-SERVICE because the current-user
+generated `EnvironmentFile` declaration was ignored as a non-absolute quoted
+path. It is historical failed-candidate evidence, not an official stable release
+or a qualification input to retry. The real systemd parser consumes this
+directive's complete value without shell-unquoting it; the repaired canonical
+shape is `EnvironmentFile=-/absolute/path`, including when the path contains
+spaces. Distinguish every untagged candidate with full Git SHA and archive/binary
+SHA-256. Run `make version-consistency-check` with complete
 fetched tag history. The [version gate contract](versioning.md#authoritative-version-gate)
 owns package, RC/stable tag and published-version separation. Do not reuse
 `v0.5.0` artifacts.
+
+A separate rc.1 synthetic qualification invocation used the environment file as
+an override channel and started with the ordinary user scan root instead of the
+intended synthetic-only root. That is a qualification-tooling defect and did not
+establish additional candidate behavior. No raw event content is retained as
+release evidence, and state/log consistency was preserved.
 
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
@@ -71,8 +83,9 @@ the exact `SHA256SUMS` line, archive attestation subject, Release ID/URL and
 tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
-After artifact review, downstream validation is dependency-ordered: G-SERVICE
-with the exact `v0.6.0-rc.1` tag and canonical unit/drop-in preflight, then
+After an rc.2 publication is separately authorized and completed, downstream
+validation is dependency-ordered: G-SERVICE with the exact `v0.6.0-rc.2` tag and
+canonical unit/drop-in preflight, then
 native Windows, Linux, and macOS. After G-SERVICE, each native gate may be satisfied by an
 authorized native host or appropriate GitHub-hosted native runners. The gate
 must download and execute the final published Release artifact for that
@@ -206,7 +219,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.6.0-rc.1` registry packages while that remains the workspace version, before
+`=0.6.0-rc.2` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not
@@ -292,6 +305,29 @@ The candidate path verifies exact Release metadata, the canonical archive
 manifest, the tag-derived `SHA256SUMS` entry, and the extracted binary version
 before acquiring its installer lock. It never uses `--skip-checksum` for the
 G-SERVICE procedure and never falls back to `releases/latest`.
+
+For a synthetic G-SERVICE run, install the candidate with `--no-timer`, then add
+the temporary qualification drop-in before the first candidate service start.
+Do not use `telltale.env` as the synthetic override channel. Reset the base
+environment-file list in the drop-in and set the three qualification paths as
+unit-level values:
+
+```ini
+[Service]
+EnvironmentFile=
+Environment="TELLTALE_SCAN_ROOT=/tmp/telltale-qualification/sessions"
+Environment="TELLTALE_LOG_PATH=/tmp/telltale-qualification/events.jsonl"
+Environment="TELLTALE_STATE_PATH=/tmp/telltale-qualification/state.json"
+```
+
+Run `systemctl --user daemon-reload`, then verify both the empty
+`EnvironmentFiles` property and the three effective `Environment` values with
+`systemctl --user show telltale-scan.service --property=EnvironmentFiles --property=Environment`
+before starting the service. The installer intentionally rejects unit-specific
+drop-ins, so create this qualification-only override only after installation,
+remove it during qualification cleanup, reload the manager, and confirm the
+canonical unit has no remaining drop-ins before any installer rerun. This
+procedure changes no production defaults.
 
 ## Post-Release Smoke Test
 

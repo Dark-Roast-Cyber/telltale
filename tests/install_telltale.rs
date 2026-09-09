@@ -5,7 +5,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tempfile::tempdir;
 
@@ -45,6 +45,20 @@ fn rc4_generated_service(install: &Path, state_root: &Path, config_root: &Path) 
 fn rc5_rc6_generated_service(install: &Path, state_root: &Path, config_root: &Path) -> String {
     format!(
         "[Unit]\nDescription=Telltale one-shot agent session scan\n\n[Service]\nType=oneshot\nEnvironment=\"TELLTALE_LOG_PATH={}/telltale/logs/telltale-events.jsonl\"\nEnvironment=\"TELLTALE_STATE_PATH={}/telltale/telltale-state.json\"\nEnvironment=\"TELLTALE_SCAN_ROOT=%h\"\nEnvironmentFile=-\"{}/telltale/telltale.env\"\nExecStart=/usr/bin/env -- \"{}/telltale\" scan --once --emit-activity --root \"${{TELLTALE_SCAN_ROOT}}\" --path-profile user\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=no\n\n[Install]\nWantedBy=default.target\n",
+        state_root.display(),
+        state_root.display(),
+        config_root.display(),
+        install.display(),
+    )
+}
+
+fn official_v0_5_generated_service(
+    install: &Path,
+    state_root: &Path,
+    config_root: &Path,
+) -> String {
+    format!(
+        "[Unit]\nDescription=Telltale one-shot agent session scan\n\n[Service]\nType=oneshot\nEnvironment=\"TELLTALE_LOG_PATH={}/telltale/logs/telltale-events.jsonl\"\nEnvironment=\"TELLTALE_STATE_PATH={}/telltale/telltale-state.json\"\nEnvironment=\"TELLTALE_SCAN_ROOT=%h\"\nEnvironmentFile=-{}/telltale/telltale.env\nExecStart=/usr/bin/env -- \"{}/telltale\" scan --once --emit-activity --root \"${{TELLTALE_SCAN_ROOT}}\" --path-profile user\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=no\n\n[Install]\nWantedBy=default.target\n",
         state_root.display(),
         state_root.display(),
         config_root.display(),
@@ -592,7 +606,10 @@ case "$command" in
     if [ -f "$unit_dir/telltale-scan.service" ] && [ -n "${FAKE_MUTATE_GENERATED_UNIT:-}" ]; then
       case "$FAKE_MUTATE_GENERATED_UNIT" in
         omit) sed -i '/^EnvironmentFile=/d' "$unit_dir/telltale-scan.service";;
-        alternate) sed -i 's|^EnvironmentFile=.*|EnvironmentFile=-"/tmp/alternate.env"|' "$unit_dir/telltale-scan.service";;
+        alternate) sed -i 's|^EnvironmentFile=.*|EnvironmentFile=-/tmp/alternate.env|' "$unit_dir/telltale-scan.service";;
+        rc1-bad) sed -i 's|^EnvironmentFile=-\(.*\)$|EnvironmentFile=-"\1"|' "$unit_dir/telltale-scan.service";;
+        duplicate) sed -i '/^EnvironmentFile=/p' "$unit_dir/telltale-scan.service";;
+        reset) sed -i 's|^EnvironmentFile=.*|EnvironmentFile=|' "$unit_dir/telltale-scan.service";;
         *) exit 98;;
       esac
     fi
@@ -1398,6 +1415,11 @@ fn fresh_install_is_canonical_and_journaled() {
     let units = temp.path().join("home/.config/systemd/user");
     assert!(units.join("telltale-scan.service").is_file());
     assert!(units.join("telltale-scan.timer").is_file());
+    let service = fs::read_to_string(units.join("telltale-scan.service")).unwrap();
+    let env_path = temp.path().join("home/.config/telltale/telltale.env");
+    assert!(service.contains(&format!("EnvironmentFile=-{}", env_path.display())));
+    assert!(!service.contains(&format!("EnvironmentFile=-\"{}\"", env_path.display())));
+    assert!(!service.contains(&format!("EnvironmentFile=\"-{}\"", env_path.display())));
     let systemctl_state = fs::read_to_string(temp.path().join("systemctl.state")).unwrap();
     assert!(systemctl_state.contains("telltale-scan.service 1 0 0"));
     assert!(systemctl_state.contains("telltale-scan.timer 1 0 0"));
@@ -1627,7 +1649,7 @@ fn absent_optional_environment_file_accepts_empty_effective_report_after_declara
     )
     .unwrap();
     assert!(service.contains(&format!(
-        "EnvironmentFile=-\"{}\"",
+        "EnvironmentFile=-{}",
         temp.path()
             .join("home/.config/telltale/telltale.env")
             .display()
@@ -1730,7 +1752,7 @@ fn effective_environment_file_reports_reject_unknown_alternate_and_extra_forms()
 
 #[test]
 fn canonical_service_declaration_omission_or_mutation_fails_closed() {
-    for mutation in ["omit", "alternate"] {
+    for mutation in ["omit", "alternate", "rc1-bad", "duplicate", "reset"] {
         let temp = tempdir().unwrap();
         let name = format!("telltale-v0.5.0-{}.tar.gz", target());
         let selected = archive(temp.path(), &name, "0.5.0", None);
@@ -1780,7 +1802,7 @@ fn base_working_directory_declarations_fail_before_staging() {
         } else {
             declaration
         };
-        let service = rc5_rc6_generated_service(
+        let service = official_v0_5_generated_service(
             &temp.path().join("home/bin"),
             &temp.path().join("home/.local/state"),
             &temp.path().join("home/.config"),
@@ -1914,7 +1936,7 @@ fn inherited_same_home_working_directory_is_rejected_before_quiescing_active_uni
     let units = temp.path().join("home/.config/systemd/user");
     fs::create_dir_all(&install).unwrap();
     fs::create_dir_all(&units).unwrap();
-    let service = rc5_rc6_generated_service(
+    let service = official_v0_5_generated_service(
         &install,
         &temp.path().join("home/.local/state"),
         &temp.path().join("home/.config"),
@@ -2035,7 +2057,7 @@ fn prevalidation_failure_quiesces_only_retained_uncommitted_transactions() {
         let units = temp.path().join("home/.config/systemd/user");
         fs::create_dir_all(&install).unwrap();
         fs::create_dir_all(&units).unwrap();
-        let service = rc5_rc6_generated_service(
+        let service = official_v0_5_generated_service(
             &install,
             &temp.path().join("home/.local/state"),
             &temp.path().join("home/.config"),
@@ -2171,7 +2193,7 @@ fn post_stage_working_directory_failure_restores_units_without_binary_or_activat
     fs::create_dir_all(state.parent().unwrap()).unwrap();
     telltale_binary(&install.join("telltale"), "0.4.0", false);
     let old_binary = fs::read(install.join("telltale")).unwrap();
-    let old_service = rc5_rc6_generated_service(
+    let old_service = official_v0_5_generated_service(
         &install,
         &temp.path().join("home/.local/state"),
         &temp.path().join("home/.config"),
@@ -3553,7 +3575,7 @@ fn failed_unit_copy_restores_preexisting_units_after_partial_stage() {
     let install = temp.path().join("home/bin");
     let units = temp.path().join("home/.config/systemd/user");
     fs::create_dir_all(&units).unwrap();
-    let old_service = rc5_rc6_generated_service(
+    let old_service = official_v0_5_generated_service(
         &install,
         &temp.path().join("home/.local/state"),
         &temp.path().join("home/.config"),
@@ -3697,7 +3719,7 @@ fn committed_recovery_keeps_new_install_and_cleans_staging() {
 }
 
 #[test]
-fn retained_rc4_transaction_with_actual_service_bytes_recovers_without_activation() {
+fn retained_valid_pre_protecthome_transaction_recovers_without_activation() {
     let temp = tempdir().unwrap();
     let install = temp.path().join("home/bin");
     let units = temp.path().join("home/.config/systemd/user");
@@ -3712,6 +3734,16 @@ fn retained_rc4_transaction_with_actual_service_bytes_recovers_without_activatio
         &install,
         &temp.path().join("home/.local/state"),
         &temp.path().join("home/.config"),
+    )
+    .replace(
+        &format!(
+            "EnvironmentFile=-\"{}/telltale/telltale.env\"",
+            temp.path().join("home/.config").display()
+        ),
+        &format!(
+            "EnvironmentFile=-{}/telltale/telltale.env",
+            temp.path().join("home/.config").display()
+        ),
     );
     let rc5_rc6_service = rc5_rc6_generated_service(
         &install,
@@ -3800,13 +3832,13 @@ fn retained_rc4_transaction_with_actual_service_bytes_recovers_without_activatio
     );
     assert!(
         !events.contains("enable --now"),
-        "retained rc4 recovery must not activate a schedule"
+        "retained pre-ProtectHome recovery must not activate a schedule"
     );
 }
 
 #[test]
-fn retained_rc5_and_rc6_transactions_recover_past_historical_policy_failures() {
-    for historical_version in ["rc5", "rc6"] {
+fn retained_v0_5_transactions_recover_across_optional_file_states() {
+    for optional_file_state in ["absent", "present"] {
         let temp = tempdir().unwrap();
         let install = temp.path().join("home/bin");
         let units = temp.path().join("home/.config/systemd/user");
@@ -3818,8 +3850,11 @@ fn retained_rc5_and_rc6_transactions_recover_past_historical_policy_failures() {
         fs::create_dir_all(&journal_dir).unwrap();
         regular_file(&journal_dir.join("telltale-state.json"), state_bytes, 0o600);
 
-        let service =
-            rc5_rc6_generated_service(&install, &temp.path().join("home/.local/state"), &config);
+        let service = official_v0_5_generated_service(
+            &install,
+            &temp.path().join("home/.local/state"),
+            &config,
+        );
         assert!(service.contains("EnvironmentFile=-"));
         assert!(service.contains("ProtectHome=no"));
         assert!(
@@ -3836,7 +3871,7 @@ fn retained_rc5_and_rc6_transactions_recover_past_historical_policy_failures() {
         regular_file(&units.join("telltale-scan.timer"), timer.as_bytes(), 0o644);
 
         let optional_environment_file = config.join("telltale/telltale.env");
-        let environment_files = if historical_version == "rc5" {
+        let environment_files = if optional_file_state == "absent" {
             String::new()
         } else {
             fs::create_dir_all(optional_environment_file.parent().unwrap()).unwrap();
@@ -3848,12 +3883,12 @@ fn retained_rc5_and_rc6_transactions_recover_past_historical_policy_failures() {
         };
         assert_eq!(
             optional_environment_file.exists(),
-            historical_version == "rc6"
+            optional_file_state == "present"
         );
         let working_directory = format!("!{}", temp.path().join("home").display());
 
-        let install_stage = install.join(format!(".telltale-install.{historical_version}"));
-        let unit_stage = units.join(format!(".telltale-units.{historical_version}"));
+        let install_stage = install.join(format!(".telltale-install.{optional_file_state}"));
+        let unit_stage = units.join(format!(".telltale-units.{optional_file_state}"));
         for stage in [&install_stage, &unit_stage] {
             fs::create_dir_all(stage).unwrap();
             regular_file(
@@ -3929,27 +3964,27 @@ fn retained_rc5_and_rc6_transactions_recover_past_historical_policy_failures() {
             properties
                 .lines()
                 .any(|line| line == environment_files_response),
-            "{historical_version} EnvironmentFiles response differed: {properties}"
+            "{optional_file_state} EnvironmentFiles response differed: {properties}"
         );
         assert!(
             properties
                 .lines()
                 .filter(|line| line.starts_with("EnvironmentFiles\t"))
                 .all(|line| line == environment_files_response),
-            "{historical_version} returned more than its expected EnvironmentFiles value: {properties}"
+            "{optional_file_state} returned more than its expected EnvironmentFiles value: {properties}"
         );
         assert!(
             properties
                 .lines()
                 .any(|line| line == working_directory_response),
-            "{historical_version} WorkingDirectory response differed: {properties}"
+            "{optional_file_state} WorkingDirectory response differed: {properties}"
         );
         assert!(
             properties
                 .lines()
                 .filter(|line| line.starts_with("WorkingDirectory\t"))
                 .all(|line| line == working_directory_response),
-            "{historical_version} returned more than its expected WorkingDirectory value: {properties}"
+            "{optional_file_state} returned more than its expected WorkingDirectory value: {properties}"
         );
 
         let events = fs::read_to_string(temp.path().join("events.log")).unwrap();
@@ -4157,9 +4192,11 @@ fn xdg_override_and_space_path_generate_safe_canonical_unit() {
     let escaped_install = install.to_string_lossy().replace('%', "%%");
     let escaped_config = config.to_string_lossy().replace('%', "%%");
     assert!(service.contains(&format!(
-        "EnvironmentFile=-\"{}/telltale/telltale.env\"",
+        "EnvironmentFile=-{}/telltale/telltale.env",
         escaped_config
     )));
+    assert!(!service.contains("EnvironmentFile=-\""));
+    assert!(!service.contains("EnvironmentFile=\"-"));
     assert!(service.contains(&format!(
         "ExecStart=/usr/bin/env -- \"{}/telltale\"",
         escaped_install
@@ -4167,26 +4204,318 @@ fn xdg_override_and_space_path_generate_safe_canonical_unit() {
     assert!(service.contains("50%%"));
     assert!(service.contains("--root \"${TELLTALE_SCAN_ROOT}\""));
     assert!(!service.contains("ExecStart=:"));
-    if Command::new("systemd-analyze")
+    let version = Command::new("systemd-analyze")
         .arg("--version")
         .output()
-        .is_ok_and(|version| version.status.success())
-    {
-        let parsed = Command::new("systemd-analyze")
-            .args([
-                "verify",
-                units.join("telltale-scan.service").to_str().unwrap(),
-            ])
-            .output()
-            .expect("systemd-analyze");
-        assert!(
-            parsed.status.success(),
-            "generated user unit did not parse: {}",
-            output_text(&parsed)
-        );
-    }
+        .expect("systemd-analyze is required for the Linux installer regression");
+    assert!(version.status.success(), "systemd-analyze --version failed");
+
+    let service_path = units.join("telltale-scan.service");
+    let parsed = Command::new("systemd-analyze")
+        .args(["verify", service_path.to_str().unwrap()])
+        .output()
+        .expect("systemd-analyze");
+    assert!(
+        parsed.status.success(),
+        "generated user unit did not parse: {}",
+        output_text(&parsed)
+    );
+    assert!(
+        !output_text(&parsed).contains("EnvironmentFile= path is not absolute"),
+        "generated EnvironmentFile was ignored by the real parser: {}",
+        output_text(&parsed)
+    );
+
+    let rc1_broken = service.replacen(
+        &format!("EnvironmentFile=-{}/telltale/telltale.env", escaped_config),
+        &format!(
+            "EnvironmentFile=-\"{}/telltale/telltale.env\"",
+            escaped_config
+        ),
+        1,
+    );
+    let rc1_broken_path = units.join("telltale-scan-rc1-broken.service");
+    fs::write(&rc1_broken_path, rc1_broken).unwrap();
+    let broken_parse = Command::new("systemd-analyze")
+        .args(["verify", rc1_broken_path.to_str().unwrap()])
+        .output()
+        .expect("systemd-analyze rc.1 regression");
+    assert!(
+        output_text(&broken_parse).contains("EnvironmentFile= path is not absolute"),
+        "real parser did not detect the rc.1-broken form: {}",
+        output_text(&broken_parse)
+    );
+
+    let whole_item_quoted = service.replacen(
+        &format!("EnvironmentFile=-{}/telltale/telltale.env", escaped_config),
+        &format!(
+            "EnvironmentFile=\"-{}/telltale/telltale.env\"",
+            escaped_config
+        ),
+        1,
+    );
+    let whole_item_quoted_path = units.join("telltale-scan-whole-item-quoted.service");
+    fs::write(&whole_item_quoted_path, whole_item_quoted).unwrap();
+    let whole_item_parse = Command::new("systemd-analyze")
+        .args(["verify", whole_item_quoted_path.to_str().unwrap()])
+        .output()
+        .expect("systemd-analyze whole-item quote regression");
+    assert!(
+        output_text(&whole_item_parse).contains("EnvironmentFile= path is not absolute"),
+        "real parser unexpectedly unquoted EnvironmentFile: {}",
+        output_text(&whole_item_parse)
+    );
     assert!(state.join("telltale/installer-transaction.json").is_file());
     assert!(!temp.path().join("home/.config/telltale").exists());
+}
+
+#[test]
+fn ambiguous_environment_file_paths_are_rejected() {
+    for config_name in [
+        "config\nroot",
+        "config\rroot",
+        "config\troot",
+        "config\\root",
+    ] {
+        let temp = tempdir().unwrap();
+        let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+        let selected = archive(temp.path(), &name, "0.5.0", None);
+        let metadata = release_metadata(temp.path(), "v0.5.0");
+        let sums = temp.path().join("SHA256SUMS");
+        checksum(&selected, &sums);
+        let install = temp.path().join("home/bin");
+        let config = temp.path().join("home").join(config_name);
+        let mut command = installer_command(
+            temp.path(),
+            &metadata,
+            temp.path(),
+            Some(&sums),
+            &tools(temp.path(), true),
+        );
+        command.env("XDG_CONFIG_HOME", config).args([
+            "--no-timer",
+            "--install-dir",
+            install.to_str().unwrap(),
+        ]);
+        let output = command.output().unwrap();
+        assert!(
+            !output.status.success(),
+            "ambiguous path must fail: {config_name:?}"
+        );
+        assert!(
+            output_text(&output)
+                .contains("environment-file path cannot be represented safely in a systemd unit")
+        );
+        assert!(!install.join("telltale").exists());
+        assert!(!temp.path().join("systemctl.log").exists());
+    }
+}
+
+#[test]
+fn official_v0_5_service_upgrades_transactionally_without_manual_rewrite() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.6.0-rc.2";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.6.0-rc.2", None);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+
+    let install = temp.path().join("home/bin");
+    let state_root = temp.path().join("home/.local/state");
+    let config_root = temp.path().join("home/.config");
+    let units = config_root.join("systemd/user");
+    fs::create_dir_all(&install).unwrap();
+    fs::create_dir_all(&units).unwrap();
+    telltale_binary(&install.join("telltale"), "0.5.0", false);
+    let old_binary = fs::read(install.join("telltale")).unwrap();
+    let v0_5_service = official_v0_5_generated_service(&install, &state_root, &config_root);
+    regular_file(
+        &units.join("telltale-scan.service"),
+        v0_5_service.as_bytes(),
+        0o644,
+    );
+    regular_file(
+        &units.join("telltale-scan.timer"),
+        rc4_generated_timer().as_bytes(),
+        0o644,
+    );
+
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert_success(&output);
+    assert_ne!(fs::read(install.join("telltale")).unwrap(), old_binary);
+    let upgraded = fs::read_to_string(units.join("telltale-scan.service")).unwrap();
+    assert_eq!(upgraded, v0_5_service);
+    assert!(upgraded.contains(&format!(
+        "EnvironmentFile=-{}/telltale/telltale.env",
+        config_root.display()
+    )));
+    assert!(!upgraded.contains("EnvironmentFile=-\""));
+    assert!(
+        fs::read_to_string(state_root.join("telltale/installer-transaction.json"))
+            .unwrap()
+            .contains("\"phase\": \"committed\"")
+    );
+}
+
+#[test]
+fn preexisting_rc1_broken_environment_file_form_fails_closed() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.6.0-rc.2";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.6.0-rc.2", None);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+
+    let install = temp.path().join("home/bin");
+    let state_root = temp.path().join("home/.local/state");
+    let config_root = temp.path().join("home/.config");
+    let units = config_root.join("systemd/user");
+    let journal_dir = state_root.join("telltale");
+    fs::create_dir_all(&install).unwrap();
+    fs::create_dir_all(&units).unwrap();
+    fs::create_dir_all(&journal_dir).unwrap();
+    telltale_binary(&install.join("telltale"), "0.5.0", false);
+    let old_binary = fs::read(install.join("telltale")).unwrap();
+    let canonical = official_v0_5_generated_service(&install, &state_root, &config_root);
+    let bad_line = format!(
+        "EnvironmentFile=-\"{}/telltale/telltale.env\"",
+        config_root.display()
+    );
+    let broken = canonical.replacen(
+        &format!(
+            "EnvironmentFile=-{}/telltale/telltale.env",
+            config_root.display()
+        ),
+        &bad_line,
+        1,
+    );
+    regular_file(
+        &units.join("telltale-scan.service"),
+        broken.as_bytes(),
+        0o644,
+    );
+    regular_file(
+        &units.join("telltale-scan.timer"),
+        rc4_generated_timer().as_bytes(),
+        0o644,
+    );
+
+    let install_stage = install.join(".telltale-install.fabricated");
+    let unit_stage = units.join(".telltale-units.fabricated");
+    for stage in [&install_stage, &unit_stage] {
+        fs::create_dir_all(stage).unwrap();
+        regular_file(
+            &stage.join("transaction.marker"),
+            b"telltale-installer-transaction-v1\n",
+            0o600,
+        );
+    }
+    telltale_binary(&install_stage.join("telltale.new"), "0.6.0-rc.2", false);
+    regular_file(
+        &unit_stage.join("telltale-scan.service.new"),
+        broken.as_bytes(),
+        0o644,
+    );
+    regular_file(
+        &unit_stage.join("telltale-scan.timer.new"),
+        rc4_generated_timer().as_bytes(),
+        0o644,
+    );
+    let failed_journal = br#"{
+  "version": "1.0",
+  "phase": "failed",
+  "identity": "telltale",
+  "schedule": "telltale-scan.timer"
+}
+"#;
+    regular_file(
+        &journal_dir.join("installer-transaction.json"),
+        failed_journal,
+        0o600,
+    );
+
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("generated canonical service declaration"));
+    assert_eq!(fs::read(install.join("telltale")).unwrap(), old_binary);
+    assert_eq!(
+        fs::read(units.join("telltale-scan.service")).unwrap(),
+        broken.as_bytes()
+    );
+    assert!(install_stage.exists());
+    assert!(unit_stage.exists());
+    assert_eq!(
+        fs::read(journal_dir.join("installer-transaction.json")).unwrap(),
+        failed_journal
+    );
+}
+
+#[test]
+#[ignore = "requires an active systemd user manager"]
+fn systemd_environment_file_runtime_loads_present_and_ignores_absent() {
+    let temp = tempdir().unwrap();
+    let config = temp.path().join("runtime config");
+    fs::create_dir_all(&config).unwrap();
+    let env_file = config.join("telltale.env");
+    regular_file(
+        &env_file,
+        b"TELLTALE_SYSTEMD_ENV_PROBE=synthetic-rc2-marker\n",
+        0o600,
+    );
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+
+    let present = Command::new("systemd-run")
+        .args(["--user", "--wait", "--pipe", "--collect", "--unit"])
+        .arg(format!("telltale-rc2-env-present-{nonce}"))
+        .arg(format!(
+            "--property=EnvironmentFile=-{}",
+            env_file.display()
+        ))
+        .args([
+            "/usr/bin/sh",
+            "-c",
+            "test \"$TELLTALE_SYSTEMD_ENV_PROBE\" = synthetic-rc2-marker",
+        ])
+        .output()
+        .expect("run present environment-file probe");
+    assert!(
+        present.status.success(),
+        "present environment file was not loaded: {}",
+        output_text(&present)
+    );
+
+    let absent = Command::new("systemd-run")
+        .args(["--user", "--wait", "--pipe", "--collect", "--unit"])
+        .arg(format!("telltale-rc2-env-absent-{nonce}"))
+        .arg(format!(
+            "--property=EnvironmentFile=-{}",
+            config.join("missing.env").display()
+        ))
+        .arg("/usr/bin/true")
+        .output()
+        .expect("run absent environment-file probe");
+    assert!(
+        absent.status.success(),
+        "absent optional environment file was not ignored: {}",
+        output_text(&absent)
+    );
 }
 
 #[test]

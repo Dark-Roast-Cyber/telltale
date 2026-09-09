@@ -15,10 +15,14 @@ format.
 - `v0.5.0` is the current official stable GitHub Release. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
-- Development `main` declares **`0.6.0-rc.1`**. The immutable published
-  `v0.6.0-rc.1` candidate at reviewed commit
-  `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` is the current qualification input,
-  not an official stable release. Package version identifies the release line;
+- Development `main` declares **`0.6.0-rc.2`** for prospective candidate
+  preparation. No `v0.6.0-rc.2` tag or GitHub Release has been created. The
+  immutable published `v0.6.0-rc.1` candidate at reviewed commit
+  `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
+  failed G-SERVICE because systemd ignored its quoted current-user
+  `EnvironmentFile` path as non-absolute. It is historical failed-candidate
+  evidence and must not be retried or mutated. Package version identifies the
+  release line;
   full Git SHA plus archive and binary SHA-256 identify an exact artifact.
   Neither version output nor a package build proves official release provenance.
   Crates.io publication remains a separate distribution action.
@@ -113,8 +117,9 @@ The Cargo/package version is not the version of every data contract:
 versions, exact internal requirements (including optional, target, dev and build
 dependencies), and member lock entries. It also tests the gate's failure cases.
 `--pre-tag` validates a prospective candidate tag, including its required
-absence; the already-published `v0.6.0-rc.1` tag is therefore not a prospective
-tag to recreate. Plain `--tag` is the release-workflow mode and permits that
+absence. `v0.6.0-rc.2` is the prospective tag for the current preparation; the
+already-published `v0.6.0-rc.1` tag is not a prospective tag to recreate. Plain
+`--tag` is the release-workflow mode and permits that
 exact tag at HEAD. An RC tag requires
 the **full matching RC package version**, not
 `0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation is
@@ -199,7 +204,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.6.0-rc.1` registry dependencies while that remains the workspace package
+`=0.6.0-rc.2` registry dependencies while that remains the workspace package
 version. Advance the pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.

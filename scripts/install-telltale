@@ -1166,12 +1166,33 @@ systemd_escape() {
     printf '%s' "$escaped"
 }
 
+systemd_environment_file_path() {
+    python3 - "$1" <<'PY'
+import sys
+import unicodedata
+
+path = sys.argv[1]
+if (
+    not path.startswith("/")
+    or "\\" in path
+    or path[-1].isspace()
+    or any(unicodedata.category(char) == "Cc" for char in path)
+):
+    raise SystemExit(1)
+
+# EnvironmentFile= consumes its complete RHS and does not shell-unquote it.
+# Preserve the path verbatim while escaping only systemd's '%' specifier marker.
+sys.stdout.write(path.replace("%", "%%"))
+PY
+}
+
 render_canonical_units() {
     local executable log_value state_value env_value
     executable="$(systemd_escape "$INSTALL_DIR/telltale")"
     log_value="$(systemd_escape "$canonical_log")"
     state_value="$(systemd_escape "$canonical_state")"
-    env_value="$(systemd_escape "$canonical_env")"
+    env_value="$(systemd_environment_file_path "$canonical_env")" \
+        || die "environment-file path cannot be represented safely in a systemd unit"
 
     canonical_service_template="$tmpdir/telltale-scan.service.generated"
     canonical_timer_template="$tmpdir/telltale-scan.timer.generated"
@@ -1184,7 +1205,7 @@ Type=oneshot
 Environment="TELLTALE_LOG_PATH=${log_value}"
 Environment="TELLTALE_STATE_PATH=${state_value}"
 Environment="TELLTALE_SCAN_ROOT=%h"
-EnvironmentFile=-"${env_value}"
+EnvironmentFile=-${env_value}
 ExecStart=/usr/bin/env -- "${executable}" scan --once --emit-activity --root "\${TELLTALE_SCAN_ROOT}" --path-profile user
 NoNewPrivileges=true
 PrivateTmp=true
@@ -1212,7 +1233,8 @@ EOF
 }
 
 validate_generated_service_declaration() {
-    local fragment expected_env_line generated_before generated_after fragment_before fragment_after
+    local fragment expected_env_line
+    local generated_before generated_after fragment_before fragment_after
     [[ -n "$canonical_service_template" ]] || return 1
     safe_file_mode "$canonical_service_template" unit || return 1
     fragment="$(systemctl_show telltale-scan.service FragmentPath)" || return 1

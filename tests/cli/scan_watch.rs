@@ -3304,7 +3304,9 @@ fn systemd_examples_run_periodic_scan_with_env_defaults() {
 
     let service_template = include_str!("../../config/examples/telltale-scan.service.in");
     assert!(service_template.contains("Environment=\"TELLTALE_SCAN_ROOT=%h\""));
-    assert!(service_template.contains("EnvironmentFile=-\"__TELLTALE_ENV_PATH__\""));
+    assert!(service_template.contains("EnvironmentFile=-__TELLTALE_ENV_PATH__"));
+    assert!(!service_template.contains("EnvironmentFile=-\"__TELLTALE_ENV_PATH__\""));
+    assert!(!service_template.contains("EnvironmentFile=\"-__TELLTALE_ENV_PATH__\""));
     assert!(service_template.contains("ExecStart=/usr/bin/env -- \"__BINDIR__/telltale\""));
     assert!(service_template.contains("--root \"${TELLTALE_SCAN_ROOT}\""));
     assert!(!service_template.contains("ExecStart=:"));

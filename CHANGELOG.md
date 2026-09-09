@@ -1,6 +1,6 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.5.0`. The `0.6.0-rc.1` section records prepared candidate metadata; it does not itself claim that the immutable candidate was published. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.5.0`. The `0.6.0-rc.2` section is prospective preparation, not a publication claim. The published immutable `v0.6.0-rc.1` section is retained as failed-candidate evidence. Retained weekly development notes are historical snapshots, not current release status.
 
 ---
 
@@ -38,7 +38,36 @@
 
 ---
 
-## 0.6.0-rc.1 — candidate metadata prepared
+## 0.6.0-rc.2 — prospective candidate preparation
+
+- Repair the current-user systemd `EnvironmentFile=` declaration so the
+  optional prefix and absolute path are parsed as one valid path value, including
+  supported paths containing whitespace. The real parser consumes the complete
+  directive value without shell-unquoting it, so the canonical form is
+  `EnvironmentFile=-/absolute/path`, not either quoted variant.
+- Preserve exact generated-unit and effective-policy validation. The known valid
+  v0.5.0 current-user declaration upgrades transactionally; alternate paths,
+  resets, multiple directives, the rc.1 quoted form, and unit-specific drop-ins
+  still fail closed.
+- Add a real `systemd-analyze verify` regression that distinguishes the valid
+  generated form from the rc.1 failure, plus a bounded live-user-manager test for
+  present and absent optional environment files.
+- No `v0.6.0-rc.2` tag or GitHub Release exists as part of this preparation.
+
+---
+
+## 0.6.0-rc.1 — published immutable failed candidate
+
+- Publication and provenance: **PASS**.
+- G-SERVICE: **FAIL**. Current-user generated `EnvironmentFile` quoting placed
+  quote characters around the absolute path while leaving the optional `-`
+  outside. Fedora/systemd treated the resulting path as non-absolute and ignored
+  the optional environment file.
+- A separate synthetic qualification invocation used the wrong override
+  mechanism and scanned the ordinary user root rather than the intended
+  synthetic-only root. No raw event content was retained as release evidence,
+  state/log consistency was preserved, and this is a qualification-tooling
+  finding rather than an additional candidate-behavior finding.
 
 **Detection quality**
 - Add a deterministic labeled evaluation contract. The current corpus contains

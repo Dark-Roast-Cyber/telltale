@@ -2070,6 +2070,23 @@ fn release_readiness_documents_public_docs_check_commands() {
 }
 
 #[test]
+fn public_docs_synthetic_service_qualification_uses_a_drop_in_override() {
+    let docs = normalize_line_endings(
+        fs::read_to_string("docs/release-readiness.md").expect("release readiness docs"),
+    );
+
+    assert!(
+        docs.contains("Do not use `telltale.env` as the synthetic override channel")
+            && docs.contains("EnvironmentFile=\n")
+            && docs.contains(
+                "Environment=\"TELLTALE_SCAN_ROOT=/tmp/telltale-qualification/sessions\""
+            )
+            && docs.contains("--property=EnvironmentFiles --property=Environment"),
+        "synthetic G-SERVICE guidance must reset EnvironmentFile and verify the drop-in values"
+    );
+}
+
+#[test]
 fn public_docs_github_release_is_independent_of_crates_io_publication() {
     let versioning = fs::read_to_string("docs/versioning.md").expect("versioning docs");
     assert!(

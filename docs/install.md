@@ -64,8 +64,9 @@ configuration.
 
 ### Selecting an RC candidate
 
-Official stable remains `v0.5.0`; the published `v0.6.0-rc.1` candidate uses
-package version `0.6.0-rc.1` and is not a stable release. The [versioning
+Official stable remains `v0.5.0`. Published `v0.6.0-rc.1` is immutable failed
+candidate evidence and must not be retried. Development `main` prepares
+`0.6.0-rc.2`, but no `v0.6.0-rc.2` tag or Release exists yet. The [versioning
 contract](versioning.md) requires RC package/tag equality and separate exact
 SHA/checksum identity for candidate artifacts.
 
@@ -73,7 +74,7 @@ The no-argument installer selects the latest stable GitHub Release. For
 approved candidate validation, select the exact immutable RC tag:
 
 ```sh
-RC_TAG='v0.6.0-rc.1' # exact published candidate; use only with approval
+RC_TAG='v0.6.0-rc.N' # replace N with an exact published candidate; use only with approval
 ./scripts/install-telltale --release-tag "$RC_TAG" --no-timer
 ./scripts/install-telltale --release-tag "$RC_TAG" --from-source --no-timer
 ```
