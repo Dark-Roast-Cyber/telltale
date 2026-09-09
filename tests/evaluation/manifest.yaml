@@ -571,7 +571,7 @@ cases:
         - rule_id: exfil.outbound_upload
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 130
+      expected_score: 75
       expected_contributions:
         - id: execution.shell
           type: deterministic_rule
@@ -579,12 +579,6 @@ cases:
         - id: exfil.outbound_upload
           type: deterministic_rule
           points: 60
-        - id: network.download
-          type: deterministic_rule
-          points: 20
-        - id: chain.download_then_execute
-          type: chain_modifier
-          points: 35
     tags: [regex_coverage, efficacy, characterization]
 
   - id: RX-ENCODED-HTTP-001
@@ -718,7 +712,7 @@ cases:
         - rule_id: chain.harvest_then_exfil
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 215
+      expected_score: 160
       expected_contributions:
         - id: credential.cloud_harvest
           type: deterministic_rule
@@ -729,12 +723,6 @@ cases:
         - id: exfil.outbound_upload
           type: deterministic_rule
           points: 60
-        - id: network.download
-          type: deterministic_rule
-          points: 20
-        - id: chain.download_then_execute
-          type: chain_modifier
-          points: 35
         - id: chain.harvest_then_exfil
           type: chain_modifier
           points: 35
@@ -1293,23 +1281,17 @@ cases:
     expected_detection:
       rule_expectations:
         - rule_id: exfil.encoded_http
-          expectation: expected_match
+          expectation: expected_absent
         - rule_id: exfil.outbound_upload
           expectation: expected_match
         - rule_id: network.download
-          expectation: expected_match
+          expectation: expected_absent
       exact_rule_set: true
-      expected_score: 130
+      expected_score: 60
       expected_contributions:
-        - id: exfil.encoded_http
-          type: deterministic_rule
-          points: 50
         - id: exfil.outbound_upload
           type: deterministic_rule
           points: 60
-        - id: network.download
-          type: deterministic_rule
-          points: 20
     tags: [benign_confounder, efficacy, characterization, overlap]
 
   - id: BC-MCP-INJECTION-DOC-001

@@ -68,7 +68,7 @@ The table covers every bundled rule, chain modifier, and example rule in the rep
 | `credential.api_key.pattern` | `credential_pattern` | `threat_hunting` | `atomic` | `hunt` | `atlas:AML.T0057` | Credential-shaped tokens in agent context. |
 | `execution.shell` | `execution` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0050` | Shell or interpreter invocation. |
 | `execution.encoded_payload` | `execution` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0050` | Decoded/encoded payload before execution. |
-| `network.download` | `download` | `security_detection` | `atomic` | `alert` | none | Download client invocation; no specific ATLAS technique. |
+| `network.download` | `download` | `security_detection` | `atomic` | `alert` | none | HTTP/FTP retrieval by a download client; outbound POST/`--data` is not a download. |
 | `install.package_manager` | `install` | `security_detection` | `atomic` | `alert` | none | Package manager install; no specific ATLAS technique. |
 | `exfil.outbound_upload` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Outbound upload or object-store copy. |
 | `persistence.shell_profile` | `persistence` | `security_detection` | `atomic` | `alert` | none | Shell profile/service persistence; traditional, not AI-specific. |
@@ -77,7 +77,7 @@ The table covers every bundled rule, chain modifier, and example rule in the rep
 | `mcp.tool_metadata.prompt_injection` | `mcp_prompt_injection` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0051` | MCP metadata/tool result contains injection instructions. |
 | `network.controlled_test_domain.darkroast` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Controlled tester domain contact. |
 | `exfil.dns_encoding` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Base64-encoded DNS exfiltration. |
-| `exfil.encoded_http` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Encoded data sent to external HTTP endpoint. |
+| `exfil.encoded_http` | `exfiltration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0025` | Encoded hostname or base64 request material sent through an HTTP client. |
 | `credential.cloud_harvest` | `credential_harvesting` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0055` | Cloud provider credential files. |
 | `supply_chain.publish` | `supply_chain` | `security_detection` | `atomic` | `alert` | none | Package publishing command; the act itself is not an ATLAS technique. |
 | `mcp.server_enumeration` | `mcp_enumeration` | `security_detection` | `atomic` | `alert` | `atlas:AML.T0084` | MCP server/tool enumeration and probing. |

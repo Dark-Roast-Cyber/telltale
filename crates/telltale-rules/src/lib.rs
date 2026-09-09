@@ -939,8 +939,54 @@ fn should_skip_match(rule_id: &str, matched: MatchedField<'_>) -> bool {
     match rule_id {
         "approval.bypass.context" => approval_bypass_match_should_skip(matched),
         "secret.env.read" => secret_env_read_match_should_skip(matched),
+        "network.download" => network_download_match_should_skip(matched),
         _ => false,
     }
+}
+
+fn network_download_match_should_skip(matched: MatchedField<'_>) -> bool {
+    let raw = matched.value;
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("--data")
+        || lower.contains("--upload-file")
+        || lower.contains("--post-data")
+        || lower.contains("--post-file")
+        || lower.contains("--form")
+        || lower.contains("-x post")
+        || lower.contains("-xpost")
+        || lower.contains("-x put")
+        || lower.contains("-xput")
+        || lower.contains("-x\tpost")
+        || lower.contains("-x\tput")
+        || lower.contains("--request post")
+        || lower.contains("--request put")
+        || lower.contains("--method post")
+        || lower.contains("--method=post")
+        || lower.contains("-t ")
+        || lower.contains("-t\t")
+    {
+        return true;
+    }
+    if raw.contains("-F ") || raw.contains("-F\t") || raw.contains("-F@") {
+        return true;
+    }
+    has_curl_data_short_flag(raw)
+}
+
+fn has_curl_data_short_flag(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'-' && bytes[index + 1] == b'd' {
+            let flag_start = index == 0 || bytes[index - 1].is_ascii_whitespace();
+            let not_long_option = index == 0 || bytes[index - 1] != b'-';
+            if flag_start && not_long_option {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
 }
 
 fn approval_bypass_match_should_skip(matched: MatchedField<'_>) -> bool {
@@ -1002,6 +1048,9 @@ fn secret_env_read_match_should_skip(matched: MatchedField<'_>) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod bundled_http_direction;
 
 #[cfg(test)]
 mod tests {

@@ -113,14 +113,18 @@ fn detects_outbound_upload_exfiltration_in_codex_fixture() {
     assert_eq!(detections.len(), 1);
     let event = &detections[0].1;
     assert_eq!(event.session_id, "outbound-upload-exfil");
-    assert_eq!(event.severity, "critical");
-    assert!(event.rule_ids.contains(&"network.download".to_string()));
+    assert_eq!(event.severity, "high");
+    assert!(
+        !event.rule_ids.contains(&"network.download".to_string()),
+        "outbound POST must not be classified as a download: {:?}",
+        event.rule_ids
+    );
     assert!(
         event
             .rule_ids
             .contains(&"exfil.outbound_upload".to_string())
     );
-    assert!(event.categories.contains(&"download".to_string()));
+    assert!(!event.categories.contains(&"download".to_string()));
     assert!(event.categories.contains(&"exfiltration".to_string()));
     assert!(event.tags.contains(&"exfiltration".to_string()));
     assert!(

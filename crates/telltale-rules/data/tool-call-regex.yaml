@@ -79,9 +79,10 @@ rules:
     targets: [command, arguments, url]
     regex: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
     tags: [network, download]
-    explanation: Network download from a tool call.
+    explanation: HTTP or FTP retrieval by a download client, not outbound upload.
     falsepositives:
       - Installing tools, fetching release artifacts, or following documented setup steps can require expected downloads.
+      - Outbound POST, PUT, form, or --data transfers are scored by exfil.outbound_upload rather than this rule.
 
   - id: install.package_manager
     category: install
@@ -104,7 +105,7 @@ rules:
     severity: high
     score: 60
     targets: [command, arguments, url]
-    regex: '(curl|wget).*(-X\s*POST|-F\s|--data|--data-binary|--upload-file|PUT\s)|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    regex: '(curl|wget).*(-X\s*POST|(?-i:-F\s)|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?:^|[\s])-d(?:[\s=@A-Za-z0-9])|-T\s|PUT\s)|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
     tags: [network, exfiltration]
     explanation: Outbound upload or object-storage copy in a tool call.
     falsepositives:
@@ -202,11 +203,12 @@ rules:
     severity: high
     score: 50
     targets: [command, arguments]
-    regex: '(curl|wget|fetch|Invoke-WebRequest)\s+.*[A-Za-z0-9+/]{60,}={0,2}.*https?://|(curl|wget|fetch)\s+.*https?://[A-Za-z0-9+/]{20,}\.[a-z]{2,}'
+    regex: '(curl|wget|fetch|Invoke-WebRequest)\s+.*([A-Za-z0-9+/]*[+/=][A-Za-z0-9+/=]{39,}|[A-Za-z0-9+/]{40,}[+/=][A-Za-z0-9+/=]*).*https?://|(curl|wget|fetch|Invoke-WebRequest)\s+.*https?://.*(?:--data|--data-binary|--data-raw|[\s]-d(?:[\s=@A-Za-z0-9])).*(?:[A-Za-z0-9+/]*[+/=][A-Za-z0-9+/=]{39,}|[A-Za-z0-9+/]{40,}[+/=][A-Za-z0-9+/=]*)|(curl|wget|fetch)\s+.*https?://[A-Za-z0-9+/]{20,}\.[a-z]{2,}'
     tags: [exfiltration, encoding, network]
-    explanation: Encoded data being sent to external HTTP endpoint.
+    explanation: Encoded hostname or base64 request material sent through an HTTP client.
     falsepositives:
       - Tests or API calls may send encoded payloads over HTTP when the destination and data are expected.
+      - Long unencoded tokens, IDs, or test vectors without base64 special characters are not encoded HTTP.
 
   - id: credential.cloud_harvest
     category: credential_harvesting

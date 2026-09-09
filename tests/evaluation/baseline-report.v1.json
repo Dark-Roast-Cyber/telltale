@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "fa397b4eb62078bd8f6bce5edb4f0582fb8d169282490b705d19a3ecba1c8890",
+    "manifest_sha256": "37250f4cd8e870cab3f0958ec17fea886c9d433594149be3e149751841eea8f8",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -59,21 +59,21 @@
       "value": 0.45454545454545453
     },
     "security_review_required": {
-      "numerator": 13,
-      "denominator": 44,
-      "value": 0.29545454545454547
-    },
-    "critical": {
       "numerator": 12,
       "denominator": 44,
       "value": 0.2727272727272727
     },
+    "critical": {
+      "numerator": 10,
+      "denominator": 44,
+      "value": 0.22727272727272727
+    },
     "severity_distribution": {
-      "critical": 12,
-      "high": 1,
+      "critical": 10,
+      "high": 2,
       "informational": 15,
       "low": 9,
-      "medium": 7
+      "medium": 8
     }
   },
   "efficacy": {
@@ -88,13 +88,13 @@
     "not_scored_cases": 14,
     "session_security_review_confusion": {
       "tp": 11,
-      "fp": 1,
-      "tn": 18,
+      "fp": 0,
+      "tn": 19,
       "fn": 0,
       "precision": {
         "numerator": 11,
-        "denominator": 12,
-        "value": 0.9166666666666666
+        "denominator": 11,
+        "value": 1.0
       },
       "recall": {
         "numerator": 11,
@@ -120,14 +120,14 @@
         "value": 0.42105263157894735
       },
       "benign_security_review_rate": {
-        "numerator": 1,
+        "numerator": 0,
         "denominator": 19,
-        "value": 0.05263157894736842
+        "value": 0.0
       },
       "benign_critical_rate": {
-        "numerator": 1,
+        "numerator": 0,
         "denominator": 19,
-        "value": 0.05263157894736842
+        "value": 0.0
       }
     }
   },
@@ -181,7 +181,6 @@
         "RX-UC003-001"
       ],
       "exfil.encoded_http": [
-        "BC-ENCODED-HTTP-001",
         "RX-ENCODED-HTTP-001"
       ],
       "exfil.outbound_upload": [
@@ -212,7 +211,6 @@
       ],
       "network.download": [
         "BC-DOWNLOAD-001",
-        "BC-ENCODED-HTTP-001",
         "RX-DOWNLOAD-EXEC-001",
         "RX-SECRET-NET-001"
       ],
@@ -425,9 +423,9 @@
       "fn": 0
     },
     "exfil.encoded_http": {
-      "tp": 2,
+      "tp": 1,
       "fp": 0,
-      "tn": 29,
+      "tn": 30,
       "fn": 0
     },
     "exfil.outbound_upload": {
@@ -461,9 +459,9 @@
       "fn": 0
     },
     "network.download": {
-      "tp": 4,
+      "tp": 3,
       "fp": 0,
-      "tn": 28,
+      "tn": 29,
       "fn": 0
     },
     "persistence.shell_profile": {
@@ -499,7 +497,7 @@
   },
   "contribution_conformance": {
     "exact_expected_total_checks": 44,
-    "contribution_id_point_checks": 69,
+    "contribution_id_point_checks": 63,
     "failures": []
   },
   "source_coverage": {
@@ -789,32 +787,20 @@
       "disposition": "benign",
       "expected_security_review": "not_required",
       "label_rationale": "Sending a synthetic encoded test vector to a documented test API should not require security review.",
-      "observed_security_review": true,
-      "observed_severity": "critical",
-      "score": 130,
+      "observed_security_review": false,
+      "observed_severity": "medium",
+      "score": 60,
       "matched_rule_ids": [
-        "exfil.encoded_http",
-        "exfil.outbound_upload",
-        "network.download"
+        "exfil.outbound_upload"
       ],
       "contributions": [
-        {
-          "id": "exfil.encoded_http",
-          "type": "deterministic_rule",
-          "points": 50
-        },
         {
           "id": "exfil.outbound_upload",
           "type": "deterministic_rule",
           "points": 60
-        },
-        {
-          "id": "network.download",
-          "type": "deterministic_rule",
-          "points": 20
         }
       ],
-      "efficacy_result": "fp",
+      "efficacy_result": "tn",
       "conformance_failures": []
     },
     {
@@ -1221,14 +1207,12 @@
       "label_rationale": "Cloud credential harvesting followed by outbound upload is an exfiltration scenario that should require security review.",
       "observed_security_review": true,
       "observed_severity": "critical",
-      "score": 215,
+      "score": 160,
       "matched_rule_ids": [
-        "chain.download_then_execute",
         "chain.harvest_then_exfil",
         "credential.cloud_harvest",
         "execution.shell",
-        "exfil.outbound_upload",
-        "network.download"
+        "exfil.outbound_upload"
       ],
       "contributions": [
         {
@@ -1245,16 +1229,6 @@
           "id": "exfil.outbound_upload",
           "type": "deterministic_rule",
           "points": 60
-        },
-        {
-          "id": "network.download",
-          "type": "deterministic_rule",
-          "points": 20
-        },
-        {
-          "id": "chain.download_then_execute",
-          "type": "chain_modifier",
-          "points": 35
         },
         {
           "id": "chain.harvest_then_exfil",
@@ -1368,13 +1342,11 @@
       "expected_security_review": "required",
       "label_rationale": "Outbound upload of session data to an external destination is an exfiltration scenario that should require security review.",
       "observed_security_review": true,
-      "observed_severity": "critical",
-      "score": 130,
+      "observed_severity": "high",
+      "score": 75,
       "matched_rule_ids": [
-        "chain.download_then_execute",
         "execution.shell",
-        "exfil.outbound_upload",
-        "network.download"
+        "exfil.outbound_upload"
       ],
       "contributions": [
         {
@@ -1386,16 +1358,6 @@
           "id": "exfil.outbound_upload",
           "type": "deterministic_rule",
           "points": 60
-        },
-        {
-          "id": "network.download",
-          "type": "deterministic_rule",
-          "points": 20
-        },
-        {
-          "id": "chain.download_then_execute",
-          "type": "chain_modifier",
-          "points": 35
         }
       ],
       "efficacy_result": "tp",

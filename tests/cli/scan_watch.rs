@@ -248,7 +248,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 122);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 120);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -1939,7 +1939,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     assert_detection_flow_accounting(&second_summary, 0, 36);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        122
+        120
     );
     assert!(
         !second_summary["diagnostic_warnings"]
