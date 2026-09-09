@@ -2304,7 +2304,7 @@ fn controlled_deployment_docs_require_exact_identity_and_one_remote_route() {
     assert!(procedure.contains("version output alone cannot distinguish"));
     assert!(procedure.contains("UF-primary"));
     assert!(procedure.contains("HEC-primary"));
-    assert!(procedure.contains("sends the same canonical events twice"));
+    assert!(procedure.contains("same canonical events twice"));
     assert!(procedure.contains("Production should remain on official `v0.5.0`"));
 
     let outputs =
@@ -2313,9 +2313,7 @@ fn controlled_deployment_docs_require_exact_identity_and_one_remote_route() {
     assert!(hec.contains("enabled: false"));
     assert!(outputs.contains("UF-primary"));
 
-    let uf = fs::read_to_string("config/examples/splunk-inputs.conf")
-        .expect("read Universal Forwarder example");
-    assert!(uf.contains("[monitor:///var/log/telltale/telltale-events.jsonl]"));
+    assert!(procedure.contains("monitor:///var/log/telltale/telltale-events.jsonl"));
 }
 
 fn text_between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {

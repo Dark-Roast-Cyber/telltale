@@ -67,11 +67,13 @@ exactly one canonical remote ingestion path for that JSONL:
 | UF-primary (repository operational default) | Disabled | Enabled |
 | HEC-primary | Enabled | Disabled |
 
-`config/examples/telltale-outputs.yaml` ships direct HEC disabled.
-`config/examples/splunk-inputs.conf` monitors the system-profile JSONL, matching
-the existing local SIEM guidance. Enabling direct HEC
-without removing that UF monitor sends the same canonical events twice. It is
-allowed only when duplicate ingestion is an explicit, separately named test.
+`config/examples/telltale-outputs.yaml` ships direct HEC disabled. The
+deployment-managed UF-primary stanza must monitor
+`monitor:///var/log/telltale/telltale-events.jsonl` for the system profile (or
+the exact selected user-profile path). No UF configuration is part of the
+release archive. Enabling direct HEC without removing that UF monitor sends the
+same canonical events twice. It is allowed only when duplicate ingestion is an
+explicit, separately named test.
 
 HEC uses rustls certificate verification and public roots by default. `ca_file`
 replaces the default roots with the configured corporate certificates.
