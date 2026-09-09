@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 
 use tempfile::tempdir;
 
-const FIXTURE_VERSION: &str = "0.5.0";
+const FIXTURE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const FAKE_CARGO: &str = r##"#!/bin/sh
 set -eu
@@ -20,7 +20,7 @@ metadata)
         test "$argument" = "--no-deps" && no_deps=1
     done
     if test "$no_deps" -eq 1; then
-        printf '%s\n' '{"packages":[{"name":"telltale-cli","version":"@@VERSION@@"}]}'
+        cat "$FAKE_WORKSPACE_METADATA"
     else
         printf '%s\n' '{"packages":[{"id":"consumer","name":"telltale-detect-light-consumer"}],"resolve":{"nodes":[{"id":"consumer","deps":[]}]}}'
     fi
@@ -160,6 +160,14 @@ fn package_verifier_enforces_the_canonical_executable_set() {
 
 fn run_package_verifier(root: &Path, case: &str) -> Output {
     let fixture = tempdir().expect("fake cargo fixture directory");
+    let metadata = Command::new(env!("CARGO"))
+        .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
+        .current_dir(root)
+        .output()
+        .expect("workspace metadata");
+    assert!(metadata.status.success(), "{}", output_text(&metadata));
+    let metadata_path = fixture.path().join("metadata.json");
+    fs::write(&metadata_path, metadata.stdout).expect("metadata fixture");
     let cargo = fixture.path().join("cargo");
     fs::write(&cargo, FAKE_CARGO.replace("@@VERSION@@", FIXTURE_VERSION))
         .expect("fake cargo script");
@@ -169,6 +177,7 @@ fn run_package_verifier(root: &Path, case: &str) -> Output {
     Command::new(root.join("scripts/package-verify"))
         .current_dir(root)
         .env("CARGO", &cargo)
+        .env("FAKE_WORKSPACE_METADATA", metadata_path)
         .env("FAKE_PACKAGE_VERIFY_CASE", case)
         .output()
         .expect("run package verifier")

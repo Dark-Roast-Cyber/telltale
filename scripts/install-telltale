@@ -50,7 +50,7 @@ Usage:
 
 Options:
   --from-source       Build the exact validated release tag with locked Cargo dependencies.
-  --release-tag TAG   Select one exact published stable or v0.5.0 RC tag.
+  --release-tag TAG   Select one exact published stable or numeric RC tag.
   --install-dir DIR  Install the canonical telltale binary below the current user's home.
   --with-timer        Install and enable the canonical telltale-scan.timer user schedule.
   --no-timer          Do not enable the canonical timer.
@@ -146,8 +146,8 @@ fi
 
 if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
     [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ \
-        || "$RELEASE_TAG" =~ ^v0\.5\.0-rc\.(0|[1-9][0-9]*)$ ]] \
-        || die "--release-tag must be an exact stable tag or exact v0.5.0-rc.<n> tag"
+        || "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]] \
+        || die "--release-tag must be an exact stable tag or exact v<major>.<minor>.<patch>-rc.<n> tag"
     [[ "$SKIP_CHECKSUM" -eq 0 ]] \
         || die "--skip-checksum is not permitted with --release-tag"
 fi
@@ -1758,7 +1758,7 @@ prerelease = release.get("prerelease")
 if not isinstance(tag, str) or not tag or type(draft) is not bool or type(prerelease) is not bool:
     sys.exit(1)
 patterns = {
-    "rc": r"v0\.5\.0-rc\.(0|[1-9][0-9]*)",
+    "rc": r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)",
     "stable": r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
 }
 if len(sys.argv) != 2 or sys.argv[1] not in patterns or not re.fullmatch(patterns[sys.argv[1]], tag):

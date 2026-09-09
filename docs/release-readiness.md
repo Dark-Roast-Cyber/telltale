@@ -25,10 +25,11 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
-immutable. Development `main` has advanced while workspace packages still
-declare `0.5.0`; distinguish every untagged candidate with full Git SHA and
-binary/package SHA-256. Move the workspace to the selected next release version
-before another official tag. Do not reuse `v0.5.0` for development artifacts.
+immutable. Development `main` declares `0.6.0`, not an official release;
+distinguish every untagged candidate with full Git SHA and archive/binary SHA-256.
+Run `make version-consistency-check` with complete fetched tag history. The
+[version gate contract](versioning.md#authoritative-version-gate) owns package,
+RC/stable tag and published-version separation. Do not reuse `v0.5.0` artifacts.
 
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
@@ -46,8 +47,8 @@ before binary replacement on user-manager `WorkingDirectory` normalization.
 `rc.7` is published and immutable at reviewed commit
 `6696888cd5d559fa47b8252e3495524da9fbd1eb`; its GitHub Release and assets are
 the accepted candidate artifacts. The resulting `v0.5.0` tag and stable GitHub
-Release are now published and immutable. The current workspace package version
-remains `0.5.0`, which is a release-readiness ambiguity for later development.
+Release are now published and immutable. Subsequent development version alignment
+does not replace those artifacts or the separately pinned controlled-development lab.
 
 ## Historical RC Candidate Handoff
 
@@ -203,10 +204,11 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.5.0` registry packages before publication is declared complete. That
+`=0.6.0` registry packages while that remains the workspace version, before
+publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not
-block stable GitHub `v0.5.0`. When crates.io publication is later attempted,
+block a stable GitHub Release. When crates.io publication is later attempted,
 those registry-specific safety requirements remain mandatory.
 
 ## Artifact Boundary

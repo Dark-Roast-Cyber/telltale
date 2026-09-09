@@ -355,14 +355,33 @@ fn release_tag_review_matches_package_version_and_rejects_mismatch() {
     fs::create_dir(repo.join("src")).expect("create src");
     fs::write(
         repo.join("Cargo.toml"),
-        r#"[package]
-name = "tag-review-fixture"
+        r#"[workspace.package]
 version = "1.2.3"
+
+[package]
+name = "tag-review-fixture"
+version.workspace = true
 edition = "2021"
 "#,
     )
     .expect("write Cargo.toml");
     fs::write(repo.join("src").join("lib.rs"), "pub fn fixture() {}\n").expect("write lib.rs");
+    fs::create_dir(repo.join("scripts")).expect("scripts directory");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/version-consistency-check"),
+        repo.join("scripts/version-consistency-check"),
+    )
+    .expect("copy authoritative version gate");
+    let lock = Command::new(env!("CARGO"))
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(repo)
+        .output()
+        .expect("generate fixture lockfile");
+    assert!(
+        lock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
 
     let init = Command::new("git")
         .args(["init", "--quiet", "--initial-branch=main"])
@@ -377,6 +396,8 @@ edition = "2021"
     configure_git_user(repo);
     git_expect(repo, &["add", "Cargo.toml", "src/lib.rs"]);
     git_expect(repo, &["commit", "--quiet", "-m", "Initial fixture"]);
+
+    git_expect(repo, &["tag", "-m", "prior stable fixture", "v1.2.2"]);
 
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
     let output = release_fixture_make_command()
@@ -420,7 +441,7 @@ edition = "2021"
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("Expected public release tag v1.2.3"),
+        combined.contains("tag v1.2.4 does not match package 1.2.3"),
         "unexpected output: {combined}"
     );
 
@@ -604,7 +625,7 @@ fn release_crate_manifest_excludes_host_only_release_material() {
         .find("cargo package --locked --list --allow-dirty")
         .expect("release-preflight should review Cargo package contents");
     let tag_pos = preflight_stdout
-        .find("cargo metadata --no-deps --locked --format-version 1")
+        .find("python3 scripts/version-consistency-check --pre-tag")
         .expect("release-preflight should review the public release tag");
     let fmt_pos = preflight_stdout
         .find("cargo fmt --check")
@@ -1686,9 +1707,9 @@ fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
         "fetch-depth: 0",
         "git fetch --no-tags --force origin main:refs/remotes/origin/main",
         "git merge-base --is-ancestor",
-        "expected_tag=\"v${package_version}\"",
+        "python3 scripts/version-consistency-check --tag \"${GITHUB_REF_NAME}\"",
         "cargo fmt --all --check",
-        "cargo metadata --no-deps --locked --format-version 1",
+        "python3 tests/version_consistency_test.py",
         "cargo clippy --locked --all-targets -- -D warnings",
         "cargo test --locked --quiet",
         "make --silent CARGO_LOCKED=--locked release-public-docs-check",
@@ -2043,7 +2064,7 @@ fn public_docs_github_release_is_independent_of_crates_io_publication() {
         "versioning must say deferring crates.io does not block stable GitHub publication"
     );
     assert!(
-        versioning.contains("`=0.5.0`"),
+        versioning.contains(&format!("`={}`", env!("CARGO_PKG_VERSION"))),
         "versioning must retain the current registry pin"
     );
 
@@ -2054,8 +2075,8 @@ fn public_docs_github_release_is_independent_of_crates_io_publication() {
         "release readiness must keep the crates.io publication-pass marker"
     );
     assert!(
-        readiness.contains("does not block stable GitHub `v0.5.0`"),
-        "release readiness must say deferring crates.io does not block stable GitHub v0.5.0"
+        readiness.contains("Deferring it does not\nblock a stable GitHub Release"),
+        "release readiness must say deferring crates.io does not block a stable GitHub Release"
     );
     assert!(
         readiness.contains("not crates.io publication authorization"),

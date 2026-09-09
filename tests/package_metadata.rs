@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-const VERSION: &str = "0.5.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PACKAGES: &[(&str, &str)] = &[
     ("telltale-schema", "crates/telltale-schema/Cargo.toml"),
     ("telltale-rules", "crates/telltale-rules/Cargo.toml"),
@@ -83,7 +83,7 @@ fn registry_consumer_docs_follow_current_package_version() {
     for relative in ["docs/versioning.md", "docs/release-readiness.md"] {
         let document = fs::read_to_string(root.join(relative)).expect("versioning document");
         assert!(
-            document.contains("`=0.5.0`"),
+            document.contains(&format!("`={VERSION}`")),
             "{relative} does not name the current registry pin"
         );
         assert!(

@@ -782,10 +782,19 @@ fn installer_script_is_executable() {
 
 #[test]
 fn exact_development_archive_is_validated_before_transaction_and_installed() {
+    assert_exact_development_archive_is_installed("0.6.0");
+}
+
+#[test]
+fn historical_exact_development_archive_remains_validated_and_installed() {
+    assert_exact_development_archive_is_installed("0.5.0");
+}
+
+fn assert_exact_development_archive_is_installed(version: &str) {
     let temp = tempdir().unwrap();
     let sha = "270bca79f6aa6529e883a0191f66f467b4a28015";
     let name = format!("telltale-dev-{sha}-{}.tar.gz", target());
-    let archive = development_archive(temp.path(), &name, "0.5.0", sha);
+    let archive = development_archive(temp.path(), &name, version, sha);
     let digest = sha256(&archive);
     let binary_digest = sha256(&temp.path().join(format!("payload-{name}/telltale")));
     let metadata = release_metadata(temp.path(), "v0.5.0");
@@ -802,7 +811,7 @@ fn exact_development_archive_is_validated_before_transaction_and_installed() {
         "--development-binary-sha256",
         &binary_digest,
         "--development-version",
-        "0.5.0",
+        version,
         "--no-timer",
         "--install-dir",
         install.to_str().unwrap(),
@@ -827,6 +836,77 @@ fn exact_development_archive_is_validated_before_transaction_and_installed() {
         first_binary < first_systemctl,
         "candidate validation must precede systemd mutation: {events}"
     );
+}
+
+#[test]
+fn development_0_6_archive_rolls_back_to_explicit_v0_5_without_main_or_latest_lookup() {
+    let temp = tempdir().unwrap();
+    let sha = "270bca79f6aa6529e883a0191f66f467b4a28015";
+    let development_name = format!("telltale-dev-{sha}-{}.tar.gz", target());
+    let development = development_archive(temp.path(), &development_name, "0.6.0", sha);
+    let development_digest = sha256(&development);
+    let development_binary_digest = sha256(
+        &temp
+            .path()
+            .join(format!("payload-{development_name}/telltale")),
+    );
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let tools = tools(temp.path(), true);
+    let install = temp.path().join("home/bin");
+    let mut development_command =
+        installer_command(temp.path(), &metadata, temp.path(), None, &tools);
+    development_command.args([
+        "--development-archive",
+        development.to_str().unwrap(),
+        "--development-sha",
+        sha,
+        "--development-sha256",
+        &development_digest,
+        "--development-binary-sha256",
+        &development_binary_digest,
+        "--development-version",
+        "0.6.0",
+        "--no-timer",
+        "--install-dir",
+        install.to_str().unwrap(),
+    ]);
+    let output = development_command.output().unwrap();
+    assert_success(&output);
+    let installed_development = Command::new(install.join("telltale"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&installed_development.stdout),
+        "telltale 0.6.0 (270bca79f6aa)\n"
+    );
+
+    let tag = "v0.5.0";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert_success(&output);
+    let installed_rollback = Command::new(install.join("telltale"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&installed_rollback.stdout),
+        "telltale 0.5.0 (synthetic)\n"
+    );
+    let urls = fs::read_to_string(temp.path().join("curl.log")).unwrap();
+    assert!(urls.contains("/releases/tags/v0.5.0"));
+    assert!(urls.contains("/releases/download/v0.5.0/"));
+    assert!(!urls.contains("/releases/latest"));
+    assert!(!urls.contains("/main"));
 }
 
 #[test]
@@ -958,6 +1038,53 @@ fn explicit_rc_selection_uses_only_the_exact_tag_and_preserves_stable_default() 
     assert!(urls.contains("/releases/tags/v0.5.0-rc.1"));
     assert!(!urls.contains("/releases/latest"));
     assert!(urls.contains("/releases/download/v0.5.0-rc.1/"));
+}
+
+#[test]
+fn explicit_future_rc_selection_requires_exact_rc_package_identity() {
+    let temp = tempdir().unwrap();
+    let tag = "v0.6.0-rc.1";
+    let name = format!("telltale-{tag}-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.6.0-rc.1", None);
+    let metadata = release_metadata_with_flags(temp.path(), tag, false, true);
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert_success(&output);
+    assert!(temp.path().join("home/bin/telltale").is_file());
+
+    let urls = fs::read_to_string(temp.path().join("curl.log")).unwrap();
+    assert!(urls.contains("/releases/tags/v0.6.0-rc.1"));
+    assert!(urls.contains("/releases/download/v0.6.0-rc.1/"));
+    assert!(!urls.contains("/releases/latest"));
+
+    let wrong_package = tempdir().unwrap();
+    let selected = archive(wrong_package.path(), &name, "0.6.0", None);
+    let metadata = release_metadata_with_flags(wrong_package.path(), tag, false, true);
+    let sums = wrong_package.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let output = run_release(
+        wrong_package.path(),
+        &metadata,
+        wrong_package.path(),
+        Some(&sums),
+        &["--release-tag", tag, "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("binary version does not match"));
+    assert!(
+        !wrong_package
+            .path()
+            .join("home/.telltale-installer.lock")
+            .exists()
+    );
 }
 
 #[test]
@@ -1138,7 +1265,7 @@ fn release_tag_validation_rejects_misclassified_or_ambiguous_candidates() {
         &["--release-tag", "v0.5.0-rc.01", "--no-timer"],
     );
     assert!(!output.status.success());
-    assert!(output_text(&output).contains("exact v0.5.0-rc.<n>"));
+    assert!(output_text(&output).contains("exact v<major>.<minor>.<patch>-rc.<n>"));
     assert!(
         !invalid
             .path()
@@ -1156,7 +1283,7 @@ fn release_tag_validation_rejects_misclassified_or_ambiguous_candidates() {
         &["--release-tag", "", "--no-timer"],
     );
     assert!(!output.status.success());
-    assert!(output_text(&output).contains("exact v0.5.0-rc.<n>"));
+    assert!(output_text(&output).contains("exact v<major>.<minor>.<patch>-rc.<n>"));
     let urls = fs::read_to_string(empty.path().join("curl.log")).unwrap_or_default();
     assert!(!urls.contains("/releases/latest"));
     assert!(!empty.path().join("home/.telltale-installer.lock").exists());

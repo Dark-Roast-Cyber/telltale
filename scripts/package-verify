@@ -11,6 +11,8 @@ esac
 
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 CARGO_BIN=${CARGO:-cargo}
+python3 "$REPO_ROOT/scripts/version-consistency-check" --check-publication-order \
+    telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 VERSION=$("$CARGO_BIN" metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "telltale-cli"))')
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/telltale-package-verify.XXXXXX")
 TARGET_DIR="$WORK_DIR/target"

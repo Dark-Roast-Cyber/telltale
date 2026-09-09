@@ -5,6 +5,12 @@ from the repository root. They do not publish, tag, or mutate GitHub.
 
 ## Local security checks
 
+Release-line metadata is governed by the single
+[version-consistency gate](../versioning.md#authoritative-version-gate).
+Run `make version-consistency-check` after version/lock changes; release preflight
+and tag workflows use that same implementation. Package verification is readiness
+evidence, not authorization for a GitHub Release or separate crates.io publication.
+
 Install the exact tool versions declared by the Makefile, with Cargo's locked
 tool dependency resolution, then run the common gate:
 

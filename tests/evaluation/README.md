@@ -6,7 +6,7 @@ This corpus measures two different things. Neither is a production detection rat
 
 What does the current deterministic detector do?
 
-Exact matched and forbidden rule IDs, exact scores, exact contribution ledgers, parser/source identity, and visibility checks characterize current `main` / v0.5.0 behavior. The golden characterization snapshot is a behavioral drift detector. It is not efficacy ground truth.
+Exact matched and forbidden rule IDs, exact scores, exact contribution ledgers, parser/source identity, and visibility checks characterize development `main` behavior, not the immutable official v0.5.0 release. The golden characterization snapshot is a behavioral drift detector. It is not efficacy ground truth.
 
 Positive-risk (`score > 0`) is signal characterization only. It is not a false-positive rate and is not the primary efficacy classifier.
 

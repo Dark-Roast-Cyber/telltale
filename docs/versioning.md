@@ -15,12 +15,12 @@ format.
 - `v0.5.0` is the current official stable GitHub Release. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
-- Development `main` has advanced beyond that release while workspace packages
-  still declare `0.5.0`. Untagged builds therefore require full Git SHA and
-  binary/package SHA-256 identity and are not `v0.5.0` release artifacts. The
-  workspace must move to the next release version before another official tag;
-  that migration is separate release-readiness work. Crates.io publication is
-  a separate distribution action. The immutable
+- Development `main` declares **`0.6.0`**, the accepted next minor program,
+  not an official release. Package version identifies the release line;
+  full Git SHA plus archive and binary SHA-256 identify an exact development
+  artifact. Neither version output nor a package build proves official release
+  provenance. Crates.io publication remains a separate distribution action.
+- Historical 0.5.0 release validation: the immutable
   `v0.5.0-rc.5` publication passed provenance checks, but its G-SERVICE gate
   failed on canonical optional `EnvironmentFile` validation. The immutable rc.6
   publication/provenance passed and repaired that defect, but G-SERVICE then
@@ -40,9 +40,9 @@ format.
   `6696888cd5d559fa47b8252e3495524da9fbd1eb`.
 - The six functional Cargo packages are `telltale-schema`, `telltale-rules`,
   `telltale-sources`, `telltale-detect`, `telltale-core`, and `telltale-cli`.
-  The planned publication order is schema → rules → sources → detect → core →
-  cli. Recheck crates.io availability immediately before any future
-  publication.
+  `telltale-console` also inherits the workspace version but has `publish = false`
+  and is excluded from default/headless builds and release archives. Its version
+  alignment does not change Console behavior or packaging.
 - **Crates.io name warning:** The package named `telltale` is an unrelated
   active session-types crate. It is not this project; the embedding package is
   `telltale-core` and its Rust import is `telltale_core`.
@@ -84,7 +84,7 @@ release review are maintained in the internal execution plan.
 
 The Cargo/package version is not the version of every data contract:
 
-- **Package and CLI version:** the workspace root and all five library crates
+- **Package and CLI version:** the workspace root, five library crates and Console
   move in lockstep. Internal workspace dependency requirements must be updated
   together. The root binary and library crates use the same release version.
 - **Event schema version:** `schema_version` and named schema types such as
@@ -105,12 +105,44 @@ The Cargo/package version is not the version of every data contract:
 
 ## Release Process
 
+### Authoritative version gate
+
+`make version-consistency-check` checks all Cargo workspace members, inherited
+versions, exact internal requirements (including optional, target, dev and build
+dependencies), and member lock entries. It also tests the gate's failure cases.
+`python3 scripts/version-consistency-check --pre-tag --tag v0.6.0` validates a
+prospective stable tag, including its required absence. Plain `--tag` is the
+release-workflow mode and permits that exact tag at HEAD. An RC tag requires
+the **full matching RC package version**, not
+`0.6.0`. This preserves the 0.5.0 RC convention. No RC exists on the 0.6 line yet.
+
+Fetched immutable stable Git tags are the conservative published-version floor.
+No manually maintained latest-release constant or live GitHub Release lookup is
+needed. CI uses a full-history/tag checkout; before local release review, fetch
+trusted origin history and tags. Shallow history or no prior stable tags fails
+closed. Development must be newer than every stable tag, including a tag whose
+Release creation failed. When a future `v0.6.0` tag appears, subsequent development
+at `0.6.0` fails automatically until metadata advances. Development also rejects
+reuse of an already-tagged exact RC package version. Release validation may
+exclude its own exact tag only if it resolves to HEAD; `release-tag-review`
+separately rejects any existing prospective tag. Offline checks cannot discover
+remote tags that have not been fetched.
+
+The same implementation runs in CI, `release-tag-review` (and therefore
+`release-preflight`), and the release workflow before builds/publication.
+Metadata-only `--publication-order` and `--check-publication-order` validate the
+actual Cargo graph without requiring Git history. Package verification validates
+its explicit sequence against that graph; Console is not in the publishable set.
+
+### Authorized release preparation
+
 1. Release only from a reviewed commit on `main`.
 2. Update the workspace package version and every internal workspace dependency
    version together. For stable promotion from an accepted RC, prepare that
-   reviewed reversible `0.5.0` commit before final preflight; it is not itself
+   reviewed reversible stable-version commit before final preflight; it is not itself
    tagging or publication.
-3. For an RC, use the exact matching `v0.5.0-rc.N` tag. The tag, Release
+3. For an RC, first prepare matching `0.6.0-rc.N` package metadata, then use
+   the exact matching `v0.6.0-rc.N` tag only after authorization. The tag, Release
    metadata, archive names, checksums, attestations, and installer selection
    are immutable evidence; a validation-relevant change requires the next
    reviewed RC rather than reusing a tag or asset.
@@ -121,9 +153,8 @@ The Cargo/package version is not the version of every data contract:
    file boundary.
 6. Create the matching `v<version>` tag only after preflight, artifact-boundary,
    and GitHub publication-prerequisite gates pass. Crates.io publication is not
-   part of this GitHub tagging step. For example, a compatible maintenance
-   release `0.3.1` requires tag `v0.3.1`; the approved breaking milestone
-   requires `v0.5.0` only after all migration and reliability gates pass.
+   part of this GitHub tagging step. The next minor requires `v0.6.0` with
+   package `0.6.0` only after all release-readiness gates pass.
 7. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
@@ -135,13 +166,15 @@ unpublished API hardening work folded into this release.
 
 Crates.io publication is a separate later distribution action from stable
 GitHub tagging and GitHub binary Release. Deferring crates.io does not block
-stable GitHub `v0.5.0` and does not weaken Cargo package-readiness gates.
+a stable GitHub Release and does not weaken Cargo package-readiness gates.
 When crates.io publication is later attempted, the registry-specific safety
 requirements in this section remain mandatory.
 
 Publish functional packages only after `cargo package --list`, package-boundary
 checks, and a workspace-independent consumer build pass. Recheck crates.io name
-availability immediately before publication. Publish dependencies first:
+availability immediately before publication. Obtain the authoritative graph-derived
+order with `python3 scripts/version-consistency-check --publication-order`.
+It currently is:
 
 1. `telltale-schema`
 2. `telltale-rules`
@@ -156,24 +189,24 @@ crates.io cannot be republished; increment the package version deliberately
 instead of reusing it.
 
 Before publication, recheck registry ownership and availability for every name.
-Publish schema → rules → sources → detect → core → cli, waiting after each
+Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.5.0` registry dependencies while that remains the workspace package
-version. Advance this pin with the lockstep package version before 0.5.0
-publication. Do not declare publication complete before those unpatched checks
+`=0.6.0` registry dependencies while that remains the workspace package
+version. Advance the pin with each reviewed lockstep package version.
+Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
 
 ## Pre-Releases
 
-Use Cargo-compatible pre-release versions such as `0.5.0-alpha.1`,
-`0.5.0-beta.1`, or `0.5.0-rc.N` only when external validation is useful. A
+The established supported candidate convention is `0.6.0-rc.N` (a canonical
+nonnegative integer N without leading zeros), only when external validation is useful. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees. GitHub Release metadata must set
 `prerelease=true`; an RC must never be made the normal latest stable Release.
 The checked-in installer keeps no-argument selection on `releases/latest`, while
-`--release-tag v0.5.0-rc.N` selects and validates one exact published candidate
+`--release-tag v0.6.0-rc.N` selects and validates one exact published candidate
 before any user install or schedule mutation. `--from-source` uses that same
 exact tag, validates its archive provenance, resolves its immutable commit, and
 builds that source revision. Binary

@@ -26,6 +26,7 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect 
 
 .PHONY: telltale-console-check
 .PHONY: opencode-export-check
+.PHONY: version-consistency-check
 
 ## Show this help
 help:
@@ -33,6 +34,11 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@grep -h '^## ' $(MAKEFILE_LIST) | sed 's/^## //' | sort
+
+## Verify workspace versions, immutable release floor, and version gate regressions
+version-consistency-check:
+	@python3 scripts/version-consistency-check
+	@python3 tests/version_consistency_test.py
 
 ## Check the optional console without opening a native window
 telltale-console-check:
@@ -219,20 +225,7 @@ release-context-check:
 
 ## Verify the public release tag matches the Cargo package version
 release-tag-review:
-	@package_version="$$(cargo metadata --no-deps $(CARGO_LOCKED) --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"; \
-	test -n "$$package_version" || { echo "Could not determine Cargo package version."; exit 1; }; \
-	expected_tag="v$$package_version"; \
-	release_tag="$(PUBLIC_RELEASE_TAG)"; \
-	if [ -z "$$release_tag" ]; then release_tag="$$expected_tag"; fi; \
-	if [ "$$release_tag" != "$$expected_tag" ]; then \
-		echo "Expected public release tag $$expected_tag for package version $$package_version, got $$release_tag."; \
-		exit 1; \
-	fi; \
-	if git rev-parse --verify --quiet "refs/tags/$$release_tag" >/dev/null; then \
-		echo "Public release tag $$release_tag already exists locally."; \
-		exit 1; \
-	fi; \
-	echo "Public release tag: $$release_tag (package $$package_version)"
+	@python3 scripts/version-consistency-check --pre-tag $(if $(PUBLIC_RELEASE_TAG),--tag "$(PUBLIC_RELEASE_TAG)")
 
 ## List and validate Cargo source package contents
 release-crate-manifest:
@@ -240,6 +233,7 @@ release-crate-manifest:
 
 ## List and validate all Phase 0.6 Cargo package inventories
 package-manifest:
+	@python3 scripts/version-consistency-check --check-publication-order $(PACKAGE_ORDER)
 	@set -eu; \
 	for package in $(PACKAGE_ORDER); do \
 		echo "=== $$package ==="; \

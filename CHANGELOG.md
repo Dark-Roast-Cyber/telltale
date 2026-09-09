@@ -1,15 +1,15 @@
 # Changelog
 
-> **Note:** The change log will eventually move over to [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) as the project cuts versioned releases. For now, this file is a high-level weekly summary of the current development phase.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.5.0`; development uses `0.6.0`, not a new official release. Retained preparation and weekly development notes below are historical snapshots, not current release status.
 
 ---
 
-## 0.5.0 — prepared, unpublished
+## 0.5.0 — published stable (2026-08-19)
 
-- Promote the accepted immutable `v0.5.0-rc.7` candidate to the stable
+- Promoted the accepted immutable `v0.5.0-rc.7` candidate to the stable
   package version `0.5.0` without changing runtime, Event 3.0, detection,
   installer, or service behavior.
-- No stable tag, GitHub Release, or crate publication has occurred.
+- The immutable [v0.5.0 tag and GitHub Release](https://github.com/Dark-Roast-Cyber/telltale/releases/tag/v0.5.0) are published. Crates.io publication remains a separate distribution action.
 
 ---
 

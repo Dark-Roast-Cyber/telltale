@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Offline lockstep version, immutable-tag floor, and publication graph gate."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tomllib
+
+NUMBER = r"(0|[1-9][0-9]*)"
+STABLE = re.compile(rf"{NUMBER}\.{NUMBER}\.{NUMBER}")
+VERSION = re.compile(rf"{STABLE.pattern}(?:-rc\.{NUMBER})?")
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def validate_release(version, prior_tags, tag=None):
+    require(VERSION.fullmatch(version), f"unsupported package version: {version}")
+    if tag is not None:
+        require(tag == f"v{version}", f"tag {tag} does not match package {version}")
+    require(f"v{version}" not in prior_tags,
+            f"package {version} already has an immutable release tag")
+    stable_versions = [tuple(map(int, match.groups())) for name in prior_tags
+                       if name.startswith("v") and (match := STABLE.fullmatch(name[1:]))]
+    require(stable_versions, "no prior stable tags; fetch trusted complete release history")
+    base = tuple(map(int, version.split("-", 1)[0].split(".")))
+    require(base > max(stable_versions),
+            f"development/release line {version} must exceed immutable stable tag floor "
+            + ".".join(map(str, max(stable_versions))))
+
+
+def release_history(tags, head, tag):
+    if tag in tags:
+        require(tags[tag] == head, "supplied release tag exists at a different commit")
+    return [name for name in tags if name != tag]
+
+
+def validate_packages(version, packages, lock):
+    graph = {name: set() for name in packages}
+    for name, package in packages.items():
+        require(package["version"] == version, f"member version drift: {name}")
+        entries = [entry for entry in lock["package"] if entry["name"] == name]
+        require(len(entries) == 1 and entries[0]["version"] == version
+                and "source" not in entries[0] and "checksum" not in entries[0],
+                f"workspace lock identity drift: {name}")
+        for dependency in package["dependencies"]:
+            target = dependency["name"]
+            if target in packages:
+                require(dependency["req"] == f"={version}",
+                        f"internal exact requirement drift: {name} -> {target}")
+                require(dependency.get("path") is not None
+                        and Path(dependency["path"]).resolve()
+                        == Path(packages[target]["manifest_path"]).resolve().parent,
+                        f"internal path drift: {name} -> {target}")
+                graph[name].add(target)
+            else:
+                require(not dependency.get("path"),
+                        f"path dependency outside workspace: {name} -> {target}")
+    return graph
+
+
+def publication_order(packages, graph):
+    pending = {name for name, package in packages.items() if package.get("publish") != []}
+    for name in pending:
+        require(graph[name] <= pending, f"publishable {name} depends on non-publishable member")
+    ordered = []
+    while pending:
+        ready = sorted(name for name in pending if not graph[name] & pending)
+        require(ready, "internal publication dependency cycle")
+        ordered.extend(ready)
+        pending.difference_update(ready)
+    return ordered
+
+
+def validate_order(order, packages, graph):
+    expected = publication_order(packages, graph)
+    require(len(order) == len(expected) and set(order) == set(expected),
+            "publication order must contain every publishable member exactly once")
+    seen = set()
+    for name in order:
+        require(graph[name] <= seen, f"publication prerequisite missing before {name}")
+        seen.add(name)
+
+
+def run(root, *command):
+    return subprocess.check_output(command, cwd=root, text=True).strip()
+
+
+def load_workspace(root):
+    manifest = tomllib.loads((root / "Cargo.toml").read_text())
+    version = manifest["workspace"]["package"]["version"]
+    metadata = json.loads(run(root, os.environ.get("CARGO", "cargo"), "metadata",
+                              "--locked", "--no-deps", "--format-version", "1"))
+    members = set(metadata["workspace_members"])
+    packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+    require(len(packages) == len(members), "workspace member inventory is incomplete")
+    for name, package in packages.items():
+        member = tomllib.loads(Path(package["manifest_path"]).read_text())
+        require(member["package"]["version"] == {"workspace": True},
+                f"member must inherit workspace version: {name}")
+    # Include shared declarations even if no member currently consumes them.
+    for alias, dependency in manifest["workspace"].get("dependencies", {}).items():
+        if not isinstance(dependency, dict):
+            continue
+        name = dependency.get("package", alias)
+        if name in packages or "path" in dependency:
+            require(name in packages and dependency.get("version") == f"={version}"
+                    and "path" in dependency
+                    and (root / dependency["path"]).resolve()
+                    == Path(packages[name]["manifest_path"]).resolve().parent,
+                    f"shared internal requirement/path drift: {alias}")
+    lock = tomllib.loads((root / "Cargo.lock").read_text())
+    return version, packages, validate_packages(version, packages, lock)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tag", help="prospective or current exact release tag")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--pre-tag", action="store_true",
+                      help="review a prospective tag, which must not already exist")
+    mode.add_argument("--publication-order", action="store_true",
+                        help="print graph-derived publishable package order (metadata only)")
+    mode.add_argument("--check-publication-order", nargs="+",
+                        help="validate an explicit packaging order (metadata only)")
+    args = parser.parse_args()
+    require(args.tag is None or not (args.publication_order or args.check_publication_order),
+            "release tag validation cannot use a metadata-only mode")
+    root = Path(__file__).resolve().parents[1]
+    version, packages, graph = load_workspace(root)
+    if args.pre_tag and args.tag is None:
+        args.tag = f"v{version}"
+    order = publication_order(packages, graph)
+    if args.check_publication_order:
+        validate_order(args.check_publication_order, packages, graph)
+    if not (args.publication_order or args.check_publication_order):
+        # Validate tag syntax/equality before any tag exception is considered.
+        require(VERSION.fullmatch(version), f"unsupported package version: {version}")
+        if args.tag is not None:
+            require(args.tag == f"v{version}",
+                    f"tag {args.tag} does not match package {version}")
+        require(run(root, "git", "rev-parse", "--is-shallow-repository") == "false",
+                "shallow history; fetch trusted complete release history and tags")
+        names = run(root, "git", "tag", "--list", "v*").splitlines()
+        tags = {name: run(root, "git", "rev-parse", f"refs/tags/{name}^{{commit}}")
+                for name in names if VERSION.fullmatch(name[1:]) or name == args.tag}
+        if args.pre_tag:
+            require(args.tag not in tags,
+                    f"Public release tag {args.tag} already exists locally.")
+        prior = release_history(tags, run(root, "git", "rev-parse", "HEAD"), args.tag)
+        validate_release(version, prior, args.tag)
+    if args.publication_order:
+        print(" ".join(order))
+    else:
+        print(f"Version consistency passed: {len(packages)} members at {version}; "
+              + "publication order: " + " -> ".join(order))
+        if args.pre_tag:
+            print(f"Public release tag: {args.tag} (package {version})")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
+        print(f"version consistency failed: {error}", file=sys.stderr)
+        sys.exit(1)

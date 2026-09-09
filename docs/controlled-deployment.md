@@ -20,9 +20,13 @@ SHA-256 of the exact candidate archive and extracted binary
 
 The embedded short Git hash from `telltale --version`, package verification,
 producer manifest, and rules fingerprint are corroborating evidence. They do
-not replace the full SHA and checksums. Development `main` currently reports
-Cargo version `0.5.0`, so version output alone cannot distinguish it from the
-official release.
+not replace the full SHA and checksums. Development `main` now reports package
+`0.6.0`; that is a release line, not proof of an official release. The exact
+version output alone cannot distinguish an untagged build from an eventual
+official release on that same line. The
+historical Issue #37 artifact from `dd3ef2dc2fa0c7ab256f43a62ce3e0b183957248`
+still reports `0.5.0` and retains its original archive/binary checksums. Never
+substitute a newer build into that evidence. See the [versioning contract](versioning.md).
 
 Use `telltale-dev-<40-character-sha>-<target>.tar.gz` for the archive name.
 Never name it `telltale-v0.5.0-*`, attach it to the `v0.5.0` Release, or call it
@@ -32,9 +36,11 @@ stable.
 
 This matrix compares official tag `v0.5.0` at
 `2d37bd52bd004ddad4956f2fa4f6f3c791e7ee9e` with development `main` after
-Issue #29. Re-run the gates below for the exact selected candidate.
+Issue #29, as recorded for the Issue #37 lab. This is historical compatibility
+evidence, not a claim that every later build was exercised. Re-run the gates below
+only for an explicitly approved exact candidate.
 
-| Surface | v0.5.0 release | Current development | Classification and rollback effect |
+| Surface | v0.5.0 release | Historical #37 development candidate | Classification and rollback effect |
 | --- | --- | --- | --- |
 | Binary identity | Tag, release archive/checksum, `0.5.0 (2d37bd52bd00)` | Full source SHA, archive/binary SHA-256, `0.5.0 (<short-sha>)` | Same reported version is ambiguous. Retain or recover the release archive and checksum. |
 | Event schema | Event 3.0 | Event 3.0, byte-identical schema | Backward and forward compatible. Event4 draft is irrelevant and not runtime-supported. |
@@ -198,7 +204,7 @@ All five development identity arguments are mandatory and cannot be combined wit
 release-tag, from-source, or checksum-bypass modes.
 
 ```sh
-package_version='0.5.0' # obtain from the exact candidate workspace metadata
+package_version='0.6.0' # obtain from exact candidate metadata; the historical #37 artifact uses 0.5.0
 ./scripts/install-telltale \
   --development-archive "$archive" \
   --development-sha "$candidate" \

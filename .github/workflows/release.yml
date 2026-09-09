@@ -48,14 +48,8 @@ jobs:
           set -euo pipefail
           git fetch --no-tags --force origin main:refs/remotes/origin/main
 
-          package_version="$({
-            cargo metadata --no-deps --locked --format-version 1
-          } | python3 -c 'import json, sys; metadata = json.load(sys.stdin); root = metadata["workspace_root"] + "/Cargo.toml"; print(next(package["version"] for package in metadata["packages"] if package["manifest_path"] == root))')"
-          expected_tag="v${package_version}"
-          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
-            echo "Release tag ${GITHUB_REF_NAME} does not match workspace package version ${expected_tag}." >&2
-            exit 1
-          fi
+          python3 scripts/version-consistency-check --tag "${GITHUB_REF_NAME}"
+          python3 tests/version_consistency_test.py
 
           tag_commit="$(git rev-parse "${GITHUB_SHA}^{commit}")"
           if ! git merge-base --is-ancestor "${tag_commit}" refs/remotes/origin/main; then
