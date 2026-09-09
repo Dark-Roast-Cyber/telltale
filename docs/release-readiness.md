@@ -25,7 +25,8 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
-immutable. Development `main` declares `0.6.0`, not an official release;
+immutable. Development `main` declares prepared `0.6.0-rc.1` candidate metadata,
+not proof of a published immutable candidate or official release;
 distinguish every untagged candidate with full Git SHA and archive/binary SHA-256.
 Run `make version-consistency-check` with complete fetched tag history. The
 [version gate contract](versioning.md#authoritative-version-gate) owns package,
@@ -204,7 +205,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.6.0` registry packages while that remains the workspace version, before
+`=0.6.0-rc.1` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not

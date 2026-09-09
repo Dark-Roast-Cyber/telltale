@@ -15,8 +15,8 @@ format.
 - `v0.5.0` is the current official stable GitHub Release. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
-- Development `main` declares **`0.6.0`**, the accepted next minor program,
-  not an official release. Package version identifies the release line;
+- Development `main` declares **`0.6.0-rc.1`** as prepared candidate metadata,
+  not proof of a published immutable candidate or official stable release. Package version identifies the release line;
   full Git SHA plus archive and binary SHA-256 identify an exact development
   artifact. Neither version output nor a package build proves official release
   provenance. Crates.io publication remains a separate distribution action.
@@ -110,11 +110,12 @@ The Cargo/package version is not the version of every data contract:
 `make version-consistency-check` checks all Cargo workspace members, inherited
 versions, exact internal requirements (including optional, target, dev and build
 dependencies), and member lock entries. It also tests the gate's failure cases.
-`python3 scripts/version-consistency-check --pre-tag --tag v0.6.0` validates a
-prospective stable tag, including its required absence. Plain `--tag` is the
+`python3 scripts/version-consistency-check --pre-tag --tag v0.6.0-rc.1` validates
+the currently prepared prospective candidate tag, including its required absence. Plain `--tag` is the
 release-workflow mode and permits that exact tag at HEAD. An RC tag requires
 the **full matching RC package version**, not
-`0.6.0`. This preserves the 0.5.0 RC convention. No RC exists on the 0.6 line yet.
+`0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation does not
+create the tag or GitHub Release.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is
@@ -193,7 +194,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.6.0` registry dependencies while that remains the workspace package
+`=0.6.0-rc.1` registry dependencies while that remains the workspace package
 version. Advance the pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
