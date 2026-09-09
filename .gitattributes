@@ -3,3 +3,4 @@ schemas/historical/*.json text eol=lf
 crates/telltale-schema/data/event-3.0.schema.json text eol=lf
 tests/evaluation/*.yaml text eol=lf
 tests/evaluation/*.json text eol=lf
+scripts/release-native-verify-rc*.json text eol=lf

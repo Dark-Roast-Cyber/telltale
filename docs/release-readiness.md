@@ -25,12 +25,13 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
-immutable. Development `main` declares prepared `0.6.0-rc.1` candidate metadata,
-not proof of a published immutable candidate or official release;
-distinguish every untagged candidate with full Git SHA and archive/binary SHA-256.
-Run `make version-consistency-check` with complete fetched tag history. The
-[version gate contract](versioning.md#authoritative-version-gate) owns package,
-RC/stable tag and published-version separation. Do not reuse `v0.5.0` artifacts.
+immutable. Development `main` declares `0.6.0-rc.1`; the published immutable
+`v0.6.0-rc.1` candidate is a separate qualification input and is not an official
+stable release. Distinguish every untagged candidate with full Git SHA and
+archive/binary SHA-256. Run `make version-consistency-check` with complete
+fetched tag history. The [version gate contract](versioning.md#authoritative-version-gate)
+owns package, RC/stable tag and published-version separation. Do not reuse
+`v0.5.0` artifacts.
 
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
@@ -71,8 +72,8 @@ tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
 After artifact review, downstream validation is dependency-ordered: G-SERVICE
-with the exact RC tag and canonical unit/drop-in preflight, then native Windows
-and native macOS. After G-SERVICE, each native gate may be satisfied by an
+with the exact `v0.6.0-rc.1` tag and canonical unit/drop-in preflight, then
+native Windows, Linux, and macOS. After G-SERVICE, each native gate may be satisfied by an
 authorized native host or appropriate GitHub-hosted native runners. The gate
 must download and execute the final published Release artifact for that
 architecture; cross-compilation, archive inspection, Linux source-unit tests,

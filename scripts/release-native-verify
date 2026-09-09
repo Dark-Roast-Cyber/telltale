@@ -19,8 +19,52 @@ from pathlib import Path
 
 
 DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+SEMVER = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+SOURCE_SHA = re.compile(r"[0-9a-f]{40}")
+SHA256 = re.compile(r"[0-9a-f]{64}")
 FIXTURE = Path("tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl")
 SESSION_STORE_ROOT = Path("tests/fixtures/session_stores")
+
+TARGET_CONTRACTS = {
+    "x86_64-pc-windows-msvc": {
+        "runner": "windows-latest",
+        "expected_os": "Windows",
+        "expected_unames": ["AMD64", "x86_64"],
+        "binary": "telltale.exe",
+        "archive_suffix": ".zip",
+    },
+    "x86_64-apple-darwin": {
+        "runner": "macos-15-intel",
+        "expected_os": "macOS",
+        "expected_unames": ["x86_64"],
+        "binary": "telltale",
+        "archive_suffix": ".tar.gz",
+    },
+    "aarch64-apple-darwin": {
+        "runner": "macos-latest",
+        "expected_os": "macOS",
+        "expected_unames": ["arm64", "aarch64"],
+        "binary": "telltale",
+        "archive_suffix": ".tar.gz",
+    },
+    "x86_64-unknown-linux-gnu": {
+        "runner": "ubuntu-latest",
+        "expected_os": "Linux",
+        "expected_unames": ["x86_64"],
+        "binary": "telltale",
+        "archive_suffix": ".tar.gz",
+    },
+    "aarch64-unknown-linux-gnu": {
+        "runner": "ubuntu-24.04-arm",
+        "expected_os": "Linux",
+        "expected_unames": ["aarch64", "arm64"],
+        "binary": "telltale",
+        "archive_suffix": ".tar.gz",
+    },
+}
 
 
 def fail(message: str) -> None:
@@ -97,6 +141,81 @@ def run_checked(command: list[str], description: str, *, cwd: Path | None = None
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
     return result
+
+
+def _pin_string(pin: dict, field: str) -> str:
+    value = pin.get(field)
+    if not isinstance(value, str) or not value:
+        fail(f"Release pin field {field} is missing or not a non-empty string")
+    return value
+
+
+def validate_pin(pin: object) -> dict:
+    """Validate the checked-in pin's shape and target contracts.
+
+    Candidate identity is deliberately supplied by the workflow's exact pin
+    binding. This function validates the reviewed pin generically, while
+    refusing unknown target contracts or internally inconsistent identities.
+    """
+    if not isinstance(pin, dict):
+        fail("Release pin must be a JSON object")
+
+    release_tag = _pin_string(pin, "release_tag")
+    package_version = _pin_string(pin, "package_version")
+    if not SEMVER.fullmatch(package_version):
+        fail("Release pin package_version is not a supported SemVer value")
+    if release_tag != f"v{package_version}":
+        fail("Release pin tag and package version do not agree")
+
+    source_sha = _pin_string(pin, "source_sha")
+    if not SOURCE_SHA.fullmatch(source_sha):
+        fail("Release pin source_sha is not a lowercase full Git SHA")
+    version_prefix = _pin_string(pin, "version_prefix")
+    expected_prefix = f"telltale {package_version} ({source_sha[:12]}"
+    if version_prefix != expected_prefix:
+        fail("Release pin version_prefix does not match the package and source identity")
+
+    release_id = pin.get("release_id")
+    if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
+        fail("Release pin release_id is not a positive integer")
+
+    targets = pin.get("targets")
+    if not isinstance(targets, dict) or not targets:
+        fail("Release pin targets must be a non-empty object")
+    for target_name, target in targets.items():
+        contract = TARGET_CONTRACTS.get(target_name)
+        if contract is None:
+            fail(f"Release pin contains an unsupported target: {target_name}")
+        if not isinstance(target, dict):
+            fail(f"Release pin target is not an object: {target_name}")
+        for field in (
+            "archive",
+            "archive_sha256",
+            "binary",
+            "binary_sha256",
+            "runner",
+            "expected_os",
+            "expected_unames",
+        ):
+            if field not in target:
+                fail(f"Release pin target {target_name} is missing {field}")
+        expected_archive = f"telltale-{release_tag}-{target_name}{contract['archive_suffix']}"
+        if target.get("archive") != expected_archive:
+            fail(f"Release pin archive does not match target {target_name}")
+        if target.get("binary") != contract["binary"]:
+            fail(f"Release pin binary does not match target {target_name}")
+        if target.get("runner") != contract["runner"]:
+            fail(f"Release pin runner does not match target {target_name}")
+        if target.get("expected_os") != contract["expected_os"]:
+            fail(f"Release pin OS does not match target {target_name}")
+        if target.get("expected_unames") != contract["expected_unames"]:
+            fail(f"Release pin native architecture forms do not match target {target_name}")
+        for field in ("archive_sha256", "binary_sha256"):
+            value = target.get(field)
+            if not isinstance(value, str) or not SHA256.fullmatch(value):
+                fail(f"Release pin target {target_name} has an invalid {field}")
+
+    return pin
 
 
 def validate_release_metadata(metadata_path: Path, pin: dict, archive_name: str, archive_hash: str) -> None:
@@ -202,8 +321,7 @@ def main() -> int:
         pin = json.loads(args.pin.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         fail(f"Could not load release pin: {error}")
-    if not isinstance(pin, dict) or pin.get("release_tag") != "v0.5.0-rc.7":
-        fail("Release pin is not the immutable v0.5.0-rc.7 pin")
+    pin = validate_pin(pin)
     targets = pin.get("targets")
     target = targets.get(args.target) if isinstance(targets, dict) else None
     if not isinstance(target, dict):
@@ -327,6 +445,8 @@ def main() -> int:
             else platform.machine()
         )
         print("NATIVE_RELEASE_EVIDENCE")
+        print(f"verification_workflow_sha={os.environ.get('GITHUB_SHA', 'not-provided')}")
+        print(f"candidate_source_sha={pin['source_sha']}")
         print(f"target={args.target}")
         print(f"runner_os={target['expected_os']}")
         print(f"runner_arch={runner_arch}")

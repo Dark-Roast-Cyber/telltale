@@ -15,11 +15,13 @@ format.
 - `v0.5.0` is the current official stable GitHub Release. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
-- Development `main` declares **`0.6.0-rc.1`** as prepared candidate metadata,
-  not proof of a published immutable candidate or official stable release. Package version identifies the release line;
-  full Git SHA plus archive and binary SHA-256 identify an exact development
-  artifact. Neither version output nor a package build proves official release
-  provenance. Crates.io publication remains a separate distribution action.
+- Development `main` declares **`0.6.0-rc.1`**. The immutable published
+  `v0.6.0-rc.1` candidate at reviewed commit
+  `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` is the current qualification input,
+  not an official stable release. Package version identifies the release line;
+  full Git SHA plus archive and binary SHA-256 identify an exact artifact.
+  Neither version output nor a package build proves official release provenance.
+  Crates.io publication remains a separate distribution action.
 - Historical 0.5.0 release validation: the immutable
   `v0.5.0-rc.5` publication passed provenance checks, but its G-SERVICE gate
   failed on canonical optional `EnvironmentFile` validation. The immutable rc.6
@@ -110,12 +112,15 @@ The Cargo/package version is not the version of every data contract:
 `make version-consistency-check` checks all Cargo workspace members, inherited
 versions, exact internal requirements (including optional, target, dev and build
 dependencies), and member lock entries. It also tests the gate's failure cases.
-`python3 scripts/version-consistency-check --pre-tag --tag v0.6.0-rc.1` validates
-the currently prepared prospective candidate tag, including its required absence. Plain `--tag` is the
-release-workflow mode and permits that exact tag at HEAD. An RC tag requires
+`--pre-tag` validates a prospective candidate tag, including its required
+absence; the already-published `v0.6.0-rc.1` tag is therefore not a prospective
+tag to recreate. Plain `--tag` is the release-workflow mode and permits that
+exact tag at HEAD. An RC tag requires
 the **full matching RC package version**, not
-`0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation does not
-create the tag or GitHub Release.
+`0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation is
+separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1`
+candidate is immutable; native qualification verifies those existing artifacts
+and does not create or modify them.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is
