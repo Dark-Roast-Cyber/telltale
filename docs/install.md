@@ -37,6 +37,13 @@ for Linux, macOS, and Windows. Download the canonical archive that matches your
 platform, extract the sole `telltale` binary, and use it (`telltale.exe` on
 Windows).
 
+The selected policy for official `x86_64-pc-windows-msvc` release builds is to
+statically link the applicable MSVC CRT. These binaries do not require a
+separately installed Microsoft Visual C++ Redistributable. This policy is
+implemented for the prospective `v0.6.0-rc.3`; that candidate is not yet
+published or clean-Windows qualified. It does not apply retroactively to
+`v0.6.0-rc.2` or the current stable `v0.5.0` artifact.
+
 The v0.3.0 release archives and CI smoke checks establish binary packaging and
 execution support for Linux, macOS, and Windows. They do not establish broad
 live validation of agent source stores on those platforms; source-store support
@@ -65,8 +72,10 @@ configuration.
 ### Selecting an RC candidate
 
 Official stable remains `v0.5.0`. Published `v0.6.0-rc.1` is immutable failed
-candidate evidence and must not be retried. Development `main` prepares
-`0.6.0-rc.2`, but no `v0.6.0-rc.2` tag or Release exists yet. The [versioning
+candidate evidence and must not be retried. Published `v0.6.0-rc.2` is immutable
+and passed publication, G-SERVICE, and five-platform native verification, but it
+predates the selected static-CRT policy. Development `main` prepares
+`0.6.0-rc.3`; no `v0.6.0-rc.3` tag or Release exists yet. The [versioning
 contract](versioning.md) requires RC package/tag equality and separate exact
 SHA/checksum identity for candidate artifacts.
 

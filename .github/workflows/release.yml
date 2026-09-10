@@ -152,8 +152,15 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - name: Build
+      - name: Build release binary (unix)
+        if: matrix.archive == 'tar.gz'
         run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Build release binary with static MSVC CRT (windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-C target-feature=+crt-static'
+          cargo build --locked --release --target x86_64-pc-windows-msvc
       - name: Stage and package release bundle (unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
@@ -201,7 +208,7 @@ jobs:
               echo "Skipping native --version smoke for cross-compiled target ${{ matrix.target }} on ${runner}."
               ;;
           esac
-      - name: Stage and package release bundle (windows)
+      - name: Stage release bundle (windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
@@ -226,7 +233,16 @@ jobs:
           foreach ($example in $examples) {
             Copy-Item "config\examples\$example" (Join-Path $bundleDir "config/examples/$example")
           }
-
+      - name: Verify staged Windows binary has no redistributable MSVC runtime imports
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: .\scripts\verify-windows-runtime.ps1 -BinaryPath (Join-Path $env:RUNNER_TEMP 'telltale-bundle\telltale.exe')
+      - name: Package release bundle (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = Join-Path $env:RUNNER_TEMP 'telltale-bundle'
           $archive = "telltale-${{ github.ref_name }}-${{ matrix.target }}.zip"
           $archivePath = Join-Path (Get-Location) $archive
           & .\scripts\release-windows-zip.ps1 -BundleDirectory $bundleDir -OutputArchive $archivePath

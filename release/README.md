@@ -23,6 +23,11 @@ On Windows, place `telltale.exe` in a user-writable directory such as
 `config/examples/telltale-scan-task.xml` is a Scheduled Task template; replace
 its `YOUR_WINDOWS_USERNAME` values before importing it.
 
+The `telltale.exe` packaged in the `x86_64-pc-windows-msvc` archive for this
+release is statically linked against the applicable MSVC CRT and does not require
+a separately installed Microsoft Visual C++ Redistributable. Microsoft runtime
+DLLs are not bundled.
+
 The included `config/examples/telltale-outputs.yaml` is optional output
 configuration. The systemd service/timer and Windows task files are examples;
 `config/examples/elastic-telltale-index-template.json` provides unsigned 64-bit

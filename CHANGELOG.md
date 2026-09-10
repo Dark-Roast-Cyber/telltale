@@ -1,6 +1,6 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.5.0`. The immutable `v0.6.0-rc.2` prerelease is published; native qualification is pending. The published immutable `v0.6.0-rc.1` section is retained as failed-candidate evidence. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.5.0`. The immutable `v0.6.0-rc.2` prerelease passed publication, G-SERVICE, and five-platform native verification. `v0.6.0-rc.3` is prepared but not published; clean-Windows acceptance remains pending. The published immutable `v0.6.0-rc.1` section is retained as failed-candidate evidence. Retained weekly development notes are historical snapshots, not current release status.
 
 ---
 
@@ -38,6 +38,21 @@
 
 ---
 
+## 0.6.0-rc.3 — prepared, not published
+
+- Configure the official `x86_64-pc-windows-msvc` release build to statically
+  link the applicable MSVC CRT without changing the Windows target or bundling
+  Microsoft DLLs.
+- Add a fail-closed `dumpbin /DEPENDENTS` gate for the exact staged Windows
+  binary and reject redistributable MSVC runtime imports before packaging,
+  attestation, or upload.
+- Exercise the same static-CRT build, PE import check, and `--version` smoke in
+  Windows CI while retaining the normal Rust suite and release ZIP tests.
+- Publication and clean-Windows acceptance are pending. This does not change or
+  make a static-linkage claim for immutable `v0.6.0-rc.2`.
+
+---
+
 ## 0.6.0-rc.2 — published candidate
 
 - Repair the current-user systemd `EnvironmentFile=` declaration so the
@@ -54,8 +69,8 @@
   present and absent optional environment files.
 - The immutable `v0.6.0-rc.2` prerelease is published as Release ID `385903701`
   from source SHA `158b18ce78c6f503c38619e816790035f88b09db`.
-  Publication/provenance and G-SERVICE passed. Native qualification remains
-  pending; official stable remains `v0.5.0`, and Issues #23 and #37 remain open.
+  Publication/provenance, G-SERVICE, and five-platform native verification
+  passed; official stable remains `v0.5.0`, and Issues #23 and #37 remain open.
 
 ---
 

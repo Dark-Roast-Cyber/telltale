@@ -1454,8 +1454,14 @@ fn release_workflow_packages_only_canonical_identity() {
 #[test]
 fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
     let workflow = read_release_workflow();
+    let stage = workflow
+        .find("- name: Stage release bundle (windows)")
+        .expect("Windows stage step");
+    let runtime = workflow
+        .find("- name: Verify staged Windows binary has no redistributable MSVC runtime imports")
+        .expect("Windows runtime linkage step");
     let package = workflow
-        .find("- name: Stage and package release bundle (windows)")
+        .find("- name: Package release bundle (windows)")
         .expect("Windows package step");
     let smoke = workflow
         .find("- name: Mandatory Windows staged binary --version smoke")
@@ -1466,7 +1472,8 @@ fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
     let upload = workflow
         .find("- name: Upload artifact")
         .expect("artifact upload step");
-    assert!(package < smoke && smoke < attestation && attestation < upload);
+    assert!(stage < runtime && runtime < package && package < smoke);
+    assert!(smoke < attestation && attestation < upload);
 
     let package_block = &workflow[package..smoke];
     assert!(package_block.contains("$archivePath = Join-Path (Get-Location) $archive"));
@@ -1486,10 +1493,18 @@ fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
     assert!(workflow.contains(
         "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
     ));
+    let runtime_block = &workflow[runtime..package];
+    assert!(runtime_block.contains("scripts\\verify-windows-runtime.ps1"));
+    assert!(runtime_block.contains("telltale-bundle\\telltale.exe"));
+    let stage_block = &workflow[stage..runtime];
+    assert!(stage_block.contains(
+        "Copy-Item \"target\\${{ matrix.target }}\\release\\telltale.exe\" (Join-Path $bundleDir 'telltale.exe')"
+    ));
+    assert!(package_block.contains("-BundleDirectory $bundleDir"));
 }
 
 #[test]
-fn windows_ci_runs_release_zip_helper_before_rust_suite() {
+fn windows_ci_runs_release_zip_helper_runtime_gate_and_rust_suite() {
     let workflow = fs::read_to_string(".github/workflows/ci.yml")
         .expect("CI workflow")
         .replace("\r\n", "\n");
@@ -1507,6 +1522,97 @@ fn windows_ci_runs_release_zip_helper_before_rust_suite() {
         .expect("Rust suite");
     assert!(helper < rust);
     assert!(job.contains("shell: pwsh\n        run: .\\tests\\release_windows_zip.ps1"));
+    assert!(job.contains("run: .\\tests\\verify_windows_runtime.ps1"));
+    assert!(job.contains("$env:RUSTFLAGS = '-C target-feature=+crt-static'"));
+    assert!(job.contains("cargo build --locked --release --target x86_64-pc-windows-msvc"));
+    let build = job
+        .find("- name: Build official Windows release configuration")
+        .expect("static CRT release build");
+    let runtime = job
+        .find("- name: Verify Windows release runtime imports")
+        .expect("PE runtime verifier");
+    let smoke = job
+        .find("- name: Smoke-test Windows release binary")
+        .expect("Windows release binary smoke");
+    assert!(rust < build && build < runtime && runtime < smoke);
+    assert!(job.contains(
+        "run: .\\scripts\\verify-windows-runtime.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe"
+    ));
+    assert!(job.contains("telltale.exe --version"));
+}
+
+#[test]
+fn release_static_crt_is_scoped_to_windows_and_pe_check_fails_closed() {
+    let workflow = read_release_workflow();
+    assert_eq!(workflow.matches("target-feature=+crt-static").count(), 1);
+    let unix_build = text_between(
+        &workflow,
+        "- name: Build release binary (unix)",
+        "- name: Build release binary with static MSVC CRT (windows)",
+    );
+    assert!(!unix_build.contains("crt-static"));
+    let windows_build = text_between(
+        &workflow,
+        "- name: Build release binary with static MSVC CRT (windows)",
+        "- name: Stage and package release bundle (unix)",
+    );
+    assert!(windows_build.contains("if: matrix.target == 'x86_64-pc-windows-msvc'"));
+    assert!(windows_build.contains("$env:RUSTFLAGS = '-C target-feature=+crt-static'"));
+    assert!(
+        windows_build.contains("cargo build --locked --release --target x86_64-pc-windows-msvc")
+    );
+
+    let verifier =
+        fs::read_to_string("scripts/verify-windows-runtime.ps1").expect("Windows runtime verifier");
+    for family in ["VCRUNTIME", "MSVCP", "MSVCR", "CONCRT"] {
+        assert!(
+            verifier.contains(family),
+            "missing forbidden DLL family {family}"
+        );
+    }
+    assert!(verifier.contains("dumpbin.exe"));
+    assert!(!verifier.contains("Get-Command dumpbin.exe"));
+    assert!(verifier.contains("Image has the following dependencies:"));
+    assert!(verifier.contains("$LASTEXITCODE -ne 0"));
+    assert!(!verifier.contains("continue-on-error"));
+    for forbidden in ["vc_redist", "VCRUNTIME140.dll", "MSVCP140.dll"] {
+        assert!(
+            !workflow.contains(forbidden),
+            "release workflow must not bundle or install {forbidden}"
+        );
+    }
+    assert!(!workflow.contains("-DumpbinPath"));
+}
+
+#[test]
+fn public_docs_distinguish_prepared_static_crt_policy_from_clean_host_proof() {
+    let install = fs::read_to_string("docs/install.md").expect("install docs");
+    let install_flat = normalize_line_endings(install).replace('\n', " ");
+    assert!(install_flat.contains("statically link the applicable MSVC CRT"));
+    assert!(
+        install_flat
+            .contains("do not require a separately installed Microsoft Visual C++ Redistributable")
+    );
+    assert!(install_flat.contains("not yet published or clean-Windows qualified"));
+    assert!(install_flat.contains("does not apply retroactively"));
+
+    let readiness = fs::read_to_string("docs/release-readiness.md").expect("readiness docs");
+    let readiness_flat = normalize_line_endings(readiness).replace('\n', " ");
+    assert!(readiness_flat.contains("-C target-feature=+crt-static"));
+    assert!(readiness_flat.contains("dumpbin /DEPENDENTS"));
+    assert!(readiness_flat.contains("exact staged `telltale.exe`"));
+    assert!(
+        readiness_flat
+            .contains("published rc.3 artifact and clean-Windows acceptance remain pending")
+    );
+
+    let release_readme = fs::read_to_string("release/README.md").expect("release README");
+    let release_readme_flat = normalize_line_endings(release_readme).replace('\n', " ");
+    assert!(release_readme_flat.contains(
+        "`telltale.exe` packaged in the `x86_64-pc-windows-msvc` archive for this release"
+    ));
+    assert!(release_readme_flat.contains("does not require a separately installed Microsoft"));
+    assert!(release_readme_flat.contains("Microsoft runtime DLLs are not bundled"));
 }
 
 #[cfg(unix)]

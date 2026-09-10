@@ -28,8 +28,11 @@ Version selection and package/tag alignment follow
 immutable. The immutable `v0.6.0-rc.2` prerelease is published as Release ID
 `385903701` from source SHA
 `158b18ce78c6f503c38619e816790035f88b09db`. Publication/provenance and
-G-SERVICE passed; native qualification is pending. Official stable remains
-`v0.5.0`, and Issues #23 and #37 remain open. The published immutable
+G-SERVICE passed; five-platform native verification passed in run `34444628698`
+using verifier tooling SHA `8b65c1f517a9910b0dc197633d6bebd41859ee46`.
+Official stable remains `v0.5.0`, and Issues #23 and #37 remain open. The
+prospective `v0.6.0-rc.3` implements the selected static MSVC CRT release policy
+but is not published or clean-Windows qualified. The published immutable
 `v0.6.0-rc.1` candidate passed publication/provenance and failed G-SERVICE
 because the current-user generated `EnvironmentFile` declaration was ignored as
 a non-absolute quoted path. It is historical failed-candidate evidence, not an
@@ -99,10 +102,10 @@ the exact `SHA256SUMS` line, archive attestation subject, Release ID/URL and
 tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
-For the published rc.2 candidate, downstream validation remains
-dependency-ordered. G-SERVICE with the exact `v0.6.0-rc.2` tag and canonical
-unit/drop-in preflight has passed; native Windows, Linux, and macOS qualification
-is pending separate dispatch authorization. Each native gate may be satisfied by
+For the published rc.2 candidate, G-SERVICE with the exact `v0.6.0-rc.2` tag and
+canonical unit/drop-in preflight passed, and five-platform native verification
+passed in run `34444628698`. That evidence remains immutable and is not rebound
+to the unpublished rc.3 preparation. Each future native gate may be satisfied by
 an authorized native host or appropriate GitHub-hosted native runners. The gate
 must download and execute the final published Release artifact for that
 architecture; cross-compilation, archive inspection, Linux source-unit tests,
@@ -235,7 +238,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.6.0-rc.2` registry packages while that remains the workspace version, before
+`=0.6.0-rc.3` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not
@@ -307,6 +310,15 @@ The Windows release job uses `scripts/release-windows-zip.ps1` for both package
 creation and finalized-archive validation. It reopens the serialized ZIP
 read-only and reads every canonical member before the staged binary smoke test,
 attestation, or upload.
+
+The official `x86_64-pc-windows-msvc` release build sets
+`-C target-feature=+crt-static`. Before packaging, the release job runs
+`scripts/verify-windows-runtime.ps1` with `dumpbin /DEPENDENTS` against the exact
+staged `telltale.exe` that the ZIP helper consumes. The verifier fails closed if
+inspection fails or if imports include `VCRUNTIME*.dll`, `MSVCP*.dll`,
+`MSVCR*.dll`, or `CONCRT*.dll`. Linux and macOS release builds do not receive
+this Windows target feature. This implementation is prepared for rc.3; a
+published rc.3 artifact and clean-Windows acceptance remain pending.
 
 The default installer selects the latest stable Release. For candidate
 validation, pass the exact tag, for example:

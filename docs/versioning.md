@@ -17,7 +17,10 @@ format.
   changes, and install-to-SIEM reliability proof.
 - The immutable `v0.6.0-rc.2` prerelease is published as Release ID `385903701`
   from source SHA `158b18ce78c6f503c38619e816790035f88b09db`.
-  Publication/provenance and G-SERVICE passed; native qualification is pending.
+  Publication/provenance, G-SERVICE, and five-platform native verification
+  passed. The prospective `v0.6.0-rc.3` package and release workflow implement
+  the selected static MSVC CRT policy for official Windows artifacts, but no
+  rc.3 tag or Release exists and clean-Windows acceptance remains pending.
   Official stable remains `v0.5.0`, and Issues #23 and #37 remain open. The
   immutable published `v0.6.0-rc.1` candidate at reviewed commit
   `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
@@ -127,7 +130,8 @@ the **full matching RC package version**, not
 `0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation is
 separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1` and
 `v0.6.0-rc.2` candidates are immutable; native qualification verifies existing
-artifacts and does not create or modify them.
+artifacts and does not create or modify them. Preparing `v0.6.0-rc.3` does not
+retarget the rc.2 native verifier or create prospective artifact hashes.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is
@@ -206,7 +210,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.6.0-rc.2` registry dependencies while that remains the workspace package
+`=0.6.0-rc.3` registry dependencies while that remains the workspace package
 version. Advance the pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
