@@ -1539,6 +1539,12 @@ fn windows_ci_runs_release_zip_helper_runtime_gate_and_rust_suite() {
         "run: .\\scripts\\verify-windows-runtime.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe"
     ));
     assert!(job.contains("telltale.exe --version"));
+    let verifier_tests =
+        fs::read_to_string("tests/verify_windows_runtime.ps1").expect("runtime verifier tests");
+    assert!(
+        verifier_tests.trim_end().ends_with("exit 0"),
+        "expected native-tool failures must not leak through PowerShell LASTEXITCODE after all assertions pass"
+    );
 }
 
 #[test]

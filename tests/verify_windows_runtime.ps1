@@ -63,3 +63,5 @@ exit /b 0
 finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+exit 0
