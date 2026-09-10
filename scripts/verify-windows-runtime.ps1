@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$global:LASTEXITCODE = 0
 
 function Resolve-RegularFile {
     param(

@@ -1579,6 +1579,7 @@ fn release_static_crt_is_scoped_to_windows_and_pe_check_fails_closed() {
     assert!(verifier.contains("dumpbin.exe"));
     assert!(!verifier.contains("Get-Command dumpbin.exe"));
     assert!(verifier.contains("Image has the following dependencies:"));
+    assert!(verifier.contains("$global:LASTEXITCODE = 0"));
     assert!(verifier.contains("$LASTEXITCODE -ne 0"));
     assert!(!verifier.contains("continue-on-error"));
     for forbidden in ["vc_redist", "VCRUNTIME140.dll", "MSVCP140.dll"] {
