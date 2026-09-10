@@ -15,8 +15,10 @@ format.
 - `v0.5.0` is the current official stable GitHub Release. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
-- Development `main` declares **`0.6.0-rc.2`** for prospective candidate
-  preparation. No `v0.6.0-rc.2` tag or GitHub Release has been created. The
+- The immutable `v0.6.0-rc.2` prerelease is published as Release ID `385903701`
+  from source SHA `158b18ce78c6f503c38619e816790035f88b09db`.
+  Publication/provenance and G-SERVICE passed; native qualification is pending.
+  Official stable remains `v0.5.0`, and Issues #23 and #37 remain open. The
   immutable published `v0.6.0-rc.1` candidate at reviewed commit
   `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
   failed G-SERVICE because systemd ignored its quoted current-user
@@ -117,15 +119,15 @@ The Cargo/package version is not the version of every data contract:
 versions, exact internal requirements (including optional, target, dev and build
 dependencies), and member lock entries. It also tests the gate's failure cases.
 `--pre-tag` validates a prospective candidate tag, including its required
-absence. `v0.6.0-rc.2` is the prospective tag for the current preparation; the
-already-published `v0.6.0-rc.1` tag is not a prospective tag to recreate. Plain
-`--tag` is the release-workflow mode and permits that
-exact tag at HEAD. An RC tag requires
+absence. Neither the already-published `v0.6.0-rc.2` nor `v0.6.0-rc.1` tag is a
+prospective tag to recreate. Plain `--tag` is the release-workflow mode and
+permits its exact tag at HEAD; post-publication metadata checks use
+`--publication-order` without requiring an existing tag to be absent. An RC tag requires
 the **full matching RC package version**, not
 `0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation is
-separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1`
-candidate is immutable; native qualification verifies those existing artifacts
-and does not create or modify them.
+separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1` and
+`v0.6.0-rc.2` candidates are immutable; native qualification verifies existing
+artifacts and does not create or modify them.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is

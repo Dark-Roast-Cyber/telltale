@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Immutable release tag to verify
         required: true
-        default: v0.6.0-rc.1
+        default: v0.6.0-rc.2
         type: string
 
 permissions: {}
@@ -24,22 +24,22 @@ jobs:
         include:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            archive: telltale-v0.6.0-rc.1-aarch64-unknown-linux-gnu.tar.gz
+            archive: telltale-v0.6.0-rc.2-aarch64-unknown-linux-gnu.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: telltale-v0.6.0-rc.1-x86_64-pc-windows-msvc.zip
+            archive: telltale-v0.6.0-rc.2-x86_64-pc-windows-msvc.zip
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            archive: telltale-v0.6.0-rc.1-x86_64-apple-darwin.tar.gz
+            archive: telltale-v0.6.0-rc.2-x86_64-apple-darwin.tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: telltale-v0.6.0-rc.1-aarch64-apple-darwin.tar.gz
+            archive: telltale-v0.6.0-rc.2-aarch64-apple-darwin.tar.gz
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive: telltale-v0.6.0-rc.1-x86_64-unknown-linux-gnu.tar.gz
+            archive: telltale-v0.6.0-rc.2-x86_64-unknown-linux-gnu.tar.gz
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
-      PIN_FILE: scripts/release-native-verify-rc1.json
+      PIN_FILE: scripts/release-native-verify-rc2.json
       TARGET: ${{ matrix.target }}
       ARCHIVE: ${{ matrix.archive }}
       RUNNER_LABEL: ${{ matrix.os }}
@@ -73,13 +73,13 @@ jobs:
           RELEASE_METADATA="${RUNNER_TEMP}/telltale-release.json"
           printf 'DOWNLOAD_DIR=%s\n' "${DOWNLOAD_DIR}" >> "${GITHUB_ENV}"
           printf 'RELEASE_METADATA=%s\n' "${RELEASE_METADATA}" >> "${GITHUB_ENV}"
-          test "${RELEASE_TAG}" = "v0.6.0-rc.1"
-          test "${PIN_FILE}" = "scripts/release-native-verify-rc1.json"
+          test "${RELEASE_TAG}" = "v0.6.0-rc.2"
+          test "${PIN_FILE}" = "scripts/release-native-verify-rc2.json"
           test "${GITHUB_REF}" = "refs/heads/main"
           git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           test "$(git rev-parse HEAD^{commit})" = "${GITHUB_SHA}"
           tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
-          test "${tag_commit}" = "ed6c6946656132c0fe9af6aef5fdb3efec29dc68"
+          test "${tag_commit}" = "158b18ce78c6f503c38619e816790035f88b09db"
           printf 'verification_workflow_sha=%s\n' "${GITHUB_SHA}"
           printf 'candidate_source_sha=%s\n' "${tag_commit}"
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "${RELEASE_METADATA}"
@@ -91,10 +91,10 @@ jobs:
           with open(pin_path, encoding="utf-8") as stream:
               pin = json.load(stream)
           if (
-              pin.get("release_tag") != "v0.6.0-rc.1"
-              or pin.get("package_version") != "0.6.0-rc.1"
-              or pin.get("source_sha") != "ed6c6946656132c0fe9af6aef5fdb3efec29dc68"
-              or pin.get("release_id") != 385669047
+              pin.get("release_tag") != "v0.6.0-rc.2"
+              or pin.get("package_version") != "0.6.0-rc.2"
+              or pin.get("source_sha") != "158b18ce78c6f503c38619e816790035f88b09db"
+              or pin.get("release_id") != 385903701
           ):
               raise SystemExit("release pin has been changed")
           if tag != pin["release_tag"] or source_sha != pin["source_sha"]:

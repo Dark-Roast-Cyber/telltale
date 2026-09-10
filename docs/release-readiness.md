@@ -25,17 +25,21 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
-immutable. Development `main` declares prospective `0.6.0-rc.2`; no matching tag
-or GitHub Release exists yet. The published immutable `v0.6.0-rc.1` candidate
-passed publication/provenance and failed G-SERVICE because the current-user
-generated `EnvironmentFile` declaration was ignored as a non-absolute quoted
-path. It is historical failed-candidate evidence, not an official stable release
-or a qualification input to retry. The real systemd parser consumes this
-directive's complete value without shell-unquoting it; the repaired canonical
-shape is `EnvironmentFile=-/absolute/path`, including when the path contains
-spaces. Distinguish every untagged candidate with full Git SHA and archive/binary
-SHA-256. Run `make version-consistency-check` with complete
-fetched tag history. The [version gate contract](versioning.md#authoritative-version-gate)
+immutable. The immutable `v0.6.0-rc.2` prerelease is published as Release ID
+`385903701` from source SHA
+`158b18ce78c6f503c38619e816790035f88b09db`. Publication/provenance and
+G-SERVICE passed; native qualification is pending. Official stable remains
+`v0.5.0`, and Issues #23 and #37 remain open. The published immutable
+`v0.6.0-rc.1` candidate passed publication/provenance and failed G-SERVICE
+because the current-user generated `EnvironmentFile` declaration was ignored as
+a non-absolute quoted path. It is historical failed-candidate evidence, not an
+official stable release or a qualification input to retry. The real systemd
+parser consumes this directive's complete value without shell-unquoting it; the
+repaired canonical shape is `EnvironmentFile=-/absolute/path`, including when
+the path contains spaces. Distinguish every untagged candidate with full Git SHA
+and archive/binary SHA-256. Use the post-publication-safe metadata gates for an
+already published candidate; do not run a pre-tag check that requires the rc.2
+tag to be absent. The [version gate contract](versioning.md#authoritative-version-gate)
 owns package, RC/stable tag and published-version separation. Do not reuse
 `v0.5.0` artifacts.
 
@@ -44,6 +48,18 @@ an override channel and started with the ordinary user scan root instead of the
 intended synthetic-only root. That is a qualification-tooling defect and did not
 establish additional candidate behavior. No raw event content is retained as
 release evidence, and state/log consistency was preserved.
+
+The authoritative rc.2 G-SERVICE result is **PASS** on Fedora 44 x86_64 under
+`systemd --user`. The one-shot and timer-triggered executions retained
+`PrivateTmp=yes`, used `--no-local-config`, proved `remote_sink_count=0`, did not
+scan the normal user root, did not enable remote delivery, and passed Event3
+validation against schema SHA-256
+`9014a15c010bc613b4deb7e0195ec56f702e9e950fb13a12c6937a733e38d754`.
+Aggregate synthetic Event3 evidence was activity 2 / detection 1 / health 1 for
+the one-shot execution and activity 1 / detection 1 / health 1 newly appended by
+the timer, for totals of activity 3 / detection 2 / health 2. The expected
+detection occurred in both executions, and every emitted event reported
+`telltale_version=0.6.0-rc.2`. No raw event payload is repository evidence.
 
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
@@ -83,11 +99,11 @@ the exact `SHA256SUMS` line, archive attestation subject, Release ID/URL and
 tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
-After an rc.2 publication is separately authorized and completed, downstream
-validation is dependency-ordered: G-SERVICE with the exact `v0.6.0-rc.2` tag and
-canonical unit/drop-in preflight, then
-native Windows, Linux, and macOS. After G-SERVICE, each native gate may be satisfied by an
-authorized native host or appropriate GitHub-hosted native runners. The gate
+For the published rc.2 candidate, downstream validation remains
+dependency-ordered. G-SERVICE with the exact `v0.6.0-rc.2` tag and canonical
+unit/drop-in preflight has passed; native Windows, Linux, and macOS qualification
+is pending separate dispatch authorization. Each native gate may be satisfied by
+an authorized native host or appropriate GitHub-hosted native runners. The gate
 must download and execute the final published Release artifact for that
 architecture; cross-compilation, archive inspection, Linux source-unit tests,
 and staged or rebuilt binaries are not native-release evidence. Run the
@@ -308,26 +324,44 @@ G-SERVICE procedure and never falls back to `releases/latest`.
 
 For a synthetic G-SERVICE run, install the candidate with `--no-timer`, then add
 the temporary qualification drop-in before the first candidate service start.
+Keep the base unit's `PrivateTmp=true`; host `/tmp` is a different namespace and
+must not hold the qualification inputs. Instead create a service-visible
+directory under the current user's runtime directory, conceptually
+`${XDG_RUNTIME_DIR}/telltale-qualification`, and render its concrete absolute
+path into the drop-in. Do not expect shell-variable expansion inside unit
+`Environment=` values. Keep the session store, JSONL log, and scanner state
+synthetic and confined to that directory.
+
 Do not use `telltale.env` as the synthetic override channel. Reset the base
-environment-file list in the drop-in and set the three qualification paths as
-unit-level values:
+environment-file list and `ExecStart`, set the three qualification paths as
+unit-level values, and reproduce the canonical installed command with
+`--no-local-config` added for qualification. In this generalized example,
+replace `<qualification-root>` and `<installed-candidate>` with reviewed concrete
+absolute paths:
 
 ```ini
 [Service]
 EnvironmentFile=
-Environment="TELLTALE_SCAN_ROOT=/tmp/telltale-qualification/sessions"
-Environment="TELLTALE_LOG_PATH=/tmp/telltale-qualification/events.jsonl"
-Environment="TELLTALE_STATE_PATH=/tmp/telltale-qualification/state.json"
+Environment="TELLTALE_SCAN_ROOT=<qualification-root>/sessions"
+Environment="TELLTALE_LOG_PATH=<qualification-root>/events.jsonl"
+Environment="TELLTALE_STATE_PATH=<qualification-root>/state.json"
+ExecStart=
+ExecStart=/usr/bin/env -- "<installed-candidate>" scan --once --emit-activity --root "${TELLTALE_SCAN_ROOT}" --path-profile user --no-local-config
+PrivateTmp=true
 ```
 
 Run `systemctl --user daemon-reload`, then verify both the empty
 `EnvironmentFiles` property and the three effective `Environment` values with
 `systemctl --user show telltale-scan.service --property=EnvironmentFiles --property=Environment`
-before starting the service. The installer intentionally rejects unit-specific
-drop-ins, so create this qualification-only override only after installation,
-remove it during qualification cleanup, reload the manager, and confirm the
-canonical unit has no remaining drop-ins before any installer rerun. This
-procedure changes no production defaults.
+before starting the service. Also verify the effective command includes
+`--no-local-config`, the service property reports `PrivateTmp=yes`, and effective
+configuration reports `remote_sink_count = 0` before the first candidate scan
+execution. Only then run the one-shot and timer-triggered synthetic checks. The
+installer intentionally rejects unit-specific drop-ins, so create this
+qualification-only override only after installation. After the test, remove the
+temporary qualification drop-in and synthetic runtime directory, reload the
+manager, and confirm the canonical unit has no remaining drop-ins before any
+installer rerun. This procedure changes no production defaults.
 
 ## Post-Release Smoke Test
 

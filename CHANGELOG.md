@@ -1,6 +1,6 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.5.0`. The `0.6.0-rc.2` section is prospective preparation, not a publication claim. The published immutable `v0.6.0-rc.1` section is retained as failed-candidate evidence. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.5.0`. The immutable `v0.6.0-rc.2` prerelease is published; native qualification is pending. The published immutable `v0.6.0-rc.1` section is retained as failed-candidate evidence. Retained weekly development notes are historical snapshots, not current release status.
 
 ---
 
@@ -38,7 +38,7 @@
 
 ---
 
-## 0.6.0-rc.2 — prospective candidate preparation
+## 0.6.0-rc.2 — published candidate
 
 - Repair the current-user systemd `EnvironmentFile=` declaration so the
   optional prefix and absolute path are parsed as one valid path value, including
@@ -52,7 +52,10 @@
 - Add a real `systemd-analyze verify` regression that distinguishes the valid
   generated form from the rc.1 failure, plus a bounded live-user-manager test for
   present and absent optional environment files.
-- No `v0.6.0-rc.2` tag or GitHub Release exists as part of this preparation.
+- The immutable `v0.6.0-rc.2` prerelease is published as Release ID `385903701`
+  from source SHA `158b18ce78c6f503c38619e816790035f88b09db`.
+  Publication/provenance and G-SERVICE passed. Native qualification remains
+  pending; official stable remains `v0.5.0`, and Issues #23 and #37 remain open.
 
 ---
 
