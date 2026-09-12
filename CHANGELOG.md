@@ -1,18 +1,18 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable remains `v0.5.0` until the prepared `v0.6.0` source is tagged and published. Published `v0.6.0-rc.3` passed publication/provenance, its static-CRT publication gate, five-platform native verification, Issue #23 clean-Windows acceptance, and the Issue #37 live Linux canary. Issue #23 is closed; Issue #37 remains open pending stable publication and live upgrade. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.6.0`; `v0.5.0` is the previous stable release. Published `v0.6.0-rc.3` passed publication/provenance, its static-CRT publication gate, five-platform native verification, Issue #23 clean-Windows acceptance, and the Issue #37 live Linux canary. Stable `v0.6.0` is deployed and healthy on the live host; Issues #23 and #37 are complete. Retained weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## 0.6.0 — stable release preparation
+## 0.6.0 — published stable (2026-09-12)
 
-- Promote the accepted `v0.6.0-rc.3` release line to stable package metadata.
+- Promoted the accepted `v0.6.0-rc.3` release line to stable package metadata.
   Changes on `main` after rc.3 are limited to CI, release-verifier evidence,
   documentation, and tests; runtime and release archive construction remain
   materially equivalent to the live-qualified candidate.
 - Exact rc.3 passed manual and timer-triggered scans on the authorized live
   Linux host, with valid Event3 local output and successful configured HEC
-  delivery. The candidate remains running until the stable release is published.
+  delivery. Stable `v0.6.0` subsequently passed the same live checks.
 - Crates.io publication remains a separate, intentionally deferred distribution
   action.
 

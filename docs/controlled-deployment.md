@@ -21,10 +21,10 @@ SHA-256 of the exact candidate archive and extracted binary
 The embedded short Git hash from `telltale --version`, package verification,
 producer manifest, and rules fingerprint are corroborating evidence. They do
 not replace the full SHA and checksums. The published candidate source on
-release-preparation `main` reports package `0.6.0`; that is not proof of an
-official stable release until `v0.6.0` is published. The exact
-version output alone cannot distinguish an untagged build from an eventual
-official release on that same line. The
+stable `main` reports package `0.6.0`; the official `v0.6.0` GitHub Release is
+published. The exact
+version output alone cannot distinguish an untagged build from the official
+release artifact on that same line. The
 historical Issue #37 artifact from `dd3ef2dc2fa0c7ab256f43a62ce3e0b183957248`
 still reports `0.5.0` and retains its original archive/binary checksums. Never
 substitute a newer build into that evidence. See the [versioning contract](versioning.md).
