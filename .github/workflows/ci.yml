@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -32,11 +36,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-console-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - name: Display-free native console checks
         shell: bash
         run: sh scripts/telltale-console-check
-      - run: cargo fmt --all --check
 
   fmt:
     name: Format
@@ -47,7 +51,7 @@ jobs:
         with:
           toolchain: 1.95.0
           components: rustfmt
-      - run: cargo fmt --check
+      - run: make --silent fmt
 
   clippy:
     name: Clippy
@@ -66,7 +70,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: make --silent CARGO_LOCKED=--locked clippy
 
   test:
     name: Test
@@ -86,22 +90,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - name: Check package metadata and synthetic release contracts
-        run: |
-          # The published RC tag is intentionally present in complete history;
-          # CI validates package/lock metadata here, while release preflight and
-          # the publication workflow retain the immutable tag-floor check.
-          python3 scripts/version-consistency-check --publication-order
-          python3 tests/version_consistency_test.py
-      - run: cargo test --quiet
-      - name: Run Event 3.0 consumer contract checks
-        run: make --silent event3-contract-check
-      - name: Run producer provenance checks
-        run: make --silent producer-provenance-check
-      - name: Run LocalEventFeed checks
-        run: make --silent local-event-feed-check
-      - name: Run OpenCode native export checks
-        run: make --silent opencode-export-check
+      - name: Run Linux tests and contract checks
+        run: make --silent CARGO_LOCKED=--locked ci-linux-test
 
   security:
     name: Security and supply chain
@@ -116,7 +106,6 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: ${{ runner.os }}-cargo-security-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-security-
       - name: Install pinned security tools
@@ -157,13 +146,20 @@ jobs:
           toolchain: 1.95.0
           components: clippy,rustfmt
           targets: x86_64-pc-windows-msvc
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - name: Validate Windows release ZIP helper
         shell: pwsh
         run: .\tests\release_windows_zip.ps1
       - name: Test Windows runtime verifier
         shell: pwsh
         run: .\tests\verify_windows_runtime.ps1
-      - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Build official Windows release configuration
@@ -200,7 +196,6 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Build staged native binaries

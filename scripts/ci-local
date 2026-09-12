@@ -1,0 +1,47 @@
+#!/bin/sh
+set -eu
+
+case "$(uname -s)" in
+    Linux) ;;
+    *)
+        echo "ci-local is a Linux gate; use GitHub Actions for Windows and macOS verification." >&2
+        exit 2
+        ;;
+esac
+
+# Keep protected-store tests outside the writable checkout and package builds off tmpfs.
+CI_CACHE_ROOT=${XDG_CACHE_HOME:-"$HOME/.cache"}
+CI_TMPDIR=${TELLTALE_CI_TMPDIR:-"$CI_CACHE_ROOT/opencode/telltale-ci-local"}
+mkdir -p "$CI_TMPDIR"
+chmod 700 "$CI_TMPDIR"
+export TMPDIR="$CI_TMPDIR"
+
+run_stage() {
+    label=$1
+    shift
+    printf '\n==> %s\n' "$label"
+    "$@"
+}
+
+run_make() {
+    make --no-print-directory --silent CARGO_LOCKED=--locked "$@"
+}
+
+printf '%s\n' 'Telltale local Linux CI'
+printf '%s\n' 'Uses the locked dependency graph and repository-owned verification commands.'
+
+run_stage 'Rust formatting' run_make fmt
+run_stage 'Rust Clippy' run_make clippy
+run_stage 'Linux tests and contract checks' run_make ci-linux-test
+run_stage 'Linux console/headless checks' run_make telltale-console-check
+run_stage 'Public documentation boundary checks' run_make release-public-docs-check
+run_stage 'Security, supply-chain, and workflow-pin checks' run_make security-check
+run_stage 'Fixture-safe release smoke' run_make release-fixture-smoke
+run_stage 'Package verification' run_make package-verify
+
+printf '\n%s\n' 'Local Linux CI passed.'
+printf '%s\n' 'Validated locally: formatting, Clippy, Rust tests, version metadata, Event 3.0,'
+printf '%s\n' 'producer provenance, LocalEventFeed, OpenCode export, console/headless behavior,'
+printf '%s\n' 'public documentation boundaries, security/supply-chain pins, fixture smoke, and packages.'
+printf '%s\n' 'Not validated locally: Windows behavior, macOS behavior, GitHub clean-room state,'
+printf '%s\n' 'published/native release artifacts, immutable release operations, or native qualification.'

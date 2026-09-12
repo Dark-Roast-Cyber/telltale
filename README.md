@@ -105,6 +105,25 @@ synthetic writes in CI or local development, not normal scans. See
 real-session-store setup. Explicit state and historical-event
 migration guidance is in the [migration contract](docs/migration-contract.md).
 
+## Development verification
+
+Use the smallest gate that answers the current question:
+
+```sh
+make check-fast   # repeated local feedback: format, Clippy, library tests
+make check        # broader Rust developer verification
+make ci-local     # locked Linux pre-push CI gate
+```
+
+`make ci-local` also runs the repository-owned contract, console/headless,
+documentation-boundary, security/supply-chain, fixture-smoke, and package checks.
+It is Linux-only and does not replace GitHub validation for Windows, macOS,
+clean-room behavior, published/native release artifacts, or release candidates.
+Use `make security-tools` once to install the pinned local security tools before
+the security portion of the gate. Release work remains separate: use
+`make release-preflight` and the release/native workflows when preparing an RC or
+release.
+
 ## Cargo packages
 
 Cargo publication is in current release preparation; these packages should not

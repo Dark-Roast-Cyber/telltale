@@ -22,7 +22,7 @@ CARGO_DENY_VERSION ?= 0.20.2
 RUST_TOOLCHAIN_VERSION ?= 1.95.0
 PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
 
-.PHONY: build install uninstall clean test fmt clippy check event3-contract-check producer-provenance-check local-event-feed-check evaluation-check evaluation-report detection-v2-shadow-check detection-v2-shadow-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
+.PHONY: build install uninstall clean test fmt clippy check check-fast ci-local ci-linux-test ci-version-consistency-check event3-contract-check producer-provenance-check local-event-feed-check evaluation-check evaluation-report detection-v2-shadow-check detection-v2-shadow-report security-tools security-tool-versions security-audit security-deny security-sbom-test workflow-pins-check security-check release-sbom public-push-review release-context-check release-tag-review release-crate-manifest release-artifact-manifest release-canonical-identity-check release-public-docs-check release-fixture-smoke release-preflight package-manifest package-verify status logs scan-dry scan help
 
 .PHONY: telltale-console-check
 .PHONY: opencode-export-check
@@ -77,15 +77,37 @@ test:
 
 ## Format check
 fmt:
-	cargo fmt --check
+	cargo fmt --all --check
 
 ## Lint
 clippy:
 	cargo clippy $(CARGO_LOCKED) --all-targets -- -D warnings
 
+## Fast local feedback: format, strict Clippy, and default-member library tests
+check-fast: fmt clippy
+	@echo "Running default-member library tests (integration/package/release gates are excluded)."
+	cargo test $(CARGO_LOCKED) --lib --quiet
+
 ## Full verification
 check: fmt clippy test
 	@echo "All checks passed."
+
+## Verify the Linux CI test and contract slice used by local CI and GitHub CI
+ci-linux-test: ci-version-consistency-check
+	cargo test $(CARGO_LOCKED) --quiet
+	$(MAKE) --no-print-directory --silent CARGO_LOCKED=$(CARGO_LOCKED) event3-contract-check
+	$(MAKE) --no-print-directory --silent CARGO_LOCKED=$(CARGO_LOCKED) producer-provenance-check
+	$(MAKE) --no-print-directory --silent CARGO_LOCKED=$(CARGO_LOCKED) local-event-feed-check
+	$(MAKE) --no-print-directory --silent CARGO_LOCKED=$(CARGO_LOCKED) opencode-export-check
+
+## Verify package metadata without release-tag or public-branch preflight semantics
+ci-version-consistency-check:
+	@python3 scripts/version-consistency-check --publication-order
+	@python3 tests/version_consistency_test.py
+
+## Run the canonical locked Linux pre-push CI gate
+ci-local:
+	@scripts/ci-local
 
 ## Verify the frozen Event 3.0 consumer contract
 event3-contract-check:

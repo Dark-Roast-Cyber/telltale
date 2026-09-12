@@ -628,7 +628,7 @@ fn release_crate_manifest_excludes_host_only_release_material() {
         .find("python3 scripts/version-consistency-check --pre-tag")
         .expect("release-preflight should review the public release tag");
     let fmt_pos = preflight_stdout
-        .find("cargo fmt --check")
+        .find("cargo fmt --all --check")
         .expect("release-preflight should still run format checks");
     let public_docs_pos = preflight_stdout
         .find("cargo test --locked --quiet public_docs_")
@@ -1518,7 +1518,7 @@ fn windows_ci_runs_release_zip_helper_runtime_gate_and_rust_suite() {
         .find("- name: Validate Windows release ZIP helper")
         .expect("Windows helper test step");
     let rust = job
-        .find("- run: cargo fmt --all --check")
+        .find("- run: cargo clippy --all-targets -- -D warnings")
         .expect("Rust suite");
     assert!(helper < rust);
     assert!(job.contains("shell: pwsh\n        run: .\\tests\\release_windows_zip.ps1"));
@@ -1544,6 +1544,21 @@ fn windows_ci_runs_release_zip_helper_runtime_gate_and_rust_suite() {
     assert!(
         verifier_tests.trim_end().ends_with("exit 0"),
         "expected native-tool failures must not leak through PowerShell LASTEXITCODE after all assertions pass"
+    );
+}
+
+#[test]
+fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
+    let workflow = fs::read_to_string(".github/workflows/ci.yml")
+        .expect("CI workflow")
+        .replace("\r\n", "\n");
+    let makefile = fs::read_to_string("Makefile").expect("Makefile");
+    assert!(workflow.contains("  fmt:\n"));
+    assert!(workflow.contains("- run: make --silent fmt"));
+    assert!(makefile.contains("fmt:\n\tcargo fmt --all --check"));
+    assert!(
+        !workflow.contains("cargo fmt"),
+        "platform jobs must not duplicate the centralized format command"
     );
 }
 
@@ -1901,11 +1916,10 @@ fn ci_keeps_metadata_gate_after_candidate_publication() {
         .split_once("\n  test:\n")
         .and_then(|(_, rest)| rest.split_once("\n  security:\n").map(|(job, _)| job))
         .expect("CI test job");
-    assert!(test_job.contains("python3 scripts/version-consistency-check --publication-order"));
-    assert!(test_job.contains("python3 tests/version_consistency_test.py"));
+    assert!(test_job.contains("make --silent CARGO_LOCKED=--locked ci-linux-test"));
     assert!(
         !test_job.contains("make --silent version-consistency-check"),
-        "CI must not reject the already-published RC solely because its tag exists"
+        "CI must use the publication-safe metadata target rather than release-tag preflight"
     );
 }
 
