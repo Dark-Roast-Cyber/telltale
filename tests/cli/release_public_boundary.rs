@@ -1552,7 +1552,7 @@ fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
     let workflow = fs::read_to_string(".github/workflows/ci.yml")
         .expect("CI workflow")
         .replace("\r\n", "\n");
-    let makefile = fs::read_to_string("Makefile").expect("Makefile");
+    let makefile = normalize_line_endings(fs::read_to_string("Makefile").expect("Makefile"));
     assert!(workflow.contains("  fmt:\n"));
     assert!(workflow.contains("- run: make --silent fmt"));
     assert!(makefile.contains("fmt:\n\tcargo fmt --all --check"));
