@@ -29,8 +29,10 @@ immutable. The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from
 source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`.
 Publication/provenance, the static-CRT publication gate, and five-platform native
 verification passed. Issue #23 clean-Windows static-CRT qualification and functional
-acceptance passed. Official stable remains `v0.5.0`; Issue #23 is closed and Issue
-#37 remains open. The previous immutable
+acceptance passed, followed by a successful live Linux canary. Official stable
+remains `v0.5.0` until the prepared `v0.6.0` source is tagged and published;
+Issue #23 is closed and Issue #37 remains open pending stable publication and
+live upgrade. The previous immutable
 `v0.6.0-rc.2` prerelease is Release ID `385903701` from source SHA
 `158b18ce78c6f503c38619e816790035f88b09db`; G-SERVICE and five-platform native
 verification passed, with native run `34444628698` using verifier tooling SHA
@@ -251,7 +253,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.6.0-rc.3` registry packages while that remains the workspace version, before
+`=0.6.0` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not
