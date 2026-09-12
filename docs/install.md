@@ -40,9 +40,9 @@ Windows).
 The selected policy for official `x86_64-pc-windows-msvc` release builds is to
 statically link the applicable MSVC CRT. These binaries do not require a
 separately installed Microsoft Visual C++ Redistributable. The exact
-`v0.6.0-rc.3` candidate is published, but native and clean-Windows qualification
-are pending. This policy does not apply retroactively to `v0.6.0-rc.2` or the
-current stable `v0.5.0` artifact.
+`v0.6.0-rc.3` candidate passed five-platform native verification and clean-Windows
+static-CRT and functional acceptance. This policy does not apply retroactively to
+`v0.6.0-rc.2` or the current stable `v0.5.0` artifact.
 
 The v0.3.0 release archives and CI smoke checks establish binary packaging and
 execution support for Linux, macOS, and Windows. They do not establish broad
@@ -76,8 +76,9 @@ candidate evidence and must not be retried. Published `v0.6.0-rc.2` is immutable
 and passed publication, G-SERVICE, and five-platform native verification, but it
 predates the selected static-CRT policy. Published `v0.6.0-rc.3` is Release ID
 `386482697` from source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`;
-publication/provenance and its static-CRT publication gate passed, while native
-and clean-Windows qualification remain pending. The [versioning
+publication/provenance, its static-CRT publication gate, five-platform native
+verification, and Issue #23 clean-Windows static-CRT and functional acceptance
+passed. The [versioning
 contract](versioning.md) requires RC package/tag equality and separate exact
 SHA/checksum identity for candidate artifacts.
 

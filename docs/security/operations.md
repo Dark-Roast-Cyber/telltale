@@ -117,10 +117,9 @@ Use `make release-artifact-manifest` for local downloaded archive review. The
 release workflow additionally sets `REQUIRE_SBOM=1` so a missing or substituted
 SBOM fails closed.
 
-## Independent Windows gate
+## Windows release qualification
 
-Issue #23 remains a later, independent release gate while Windows is an
-advertised target. It owns clean-host execution and the VC++ runtime/CRT
-decision. Issue #27 does not implement or claim to solve that Windows runtime
-requirement; use the native verification and release-readiness procedures when
-that gate is selected.
+Issue #23 closed after the exact rc.3 Windows artifact passed clean-host
+execution with its static MSVC CRT policy. Issue #27 does not implement or claim
+to solve that Windows runtime requirement; retain the native-verification and
+release-readiness procedures for future candidate qualification.

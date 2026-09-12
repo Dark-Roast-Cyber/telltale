@@ -1615,9 +1615,9 @@ fn public_docs_distinguish_published_static_crt_policy_from_clean_host_proof() {
         install_flat
             .contains("do not require a separately installed Microsoft Visual C++ Redistributable")
     );
-    assert!(
-        install_flat.contains("published, but native and clean-Windows qualification are pending")
-    );
+    assert!(install_flat.contains(
+        "candidate passed five-platform native verification and clean-Windows static-CRT and functional acceptance"
+    ));
     assert!(install_flat.contains("does not apply retroactively"));
 
     let readiness = fs::read_to_string("docs/release-readiness.md").expect("readiness docs");
@@ -1625,10 +1625,9 @@ fn public_docs_distinguish_published_static_crt_policy_from_clean_host_proof() {
     assert!(readiness_flat.contains("-C target-feature=+crt-static"));
     assert!(readiness_flat.contains("dumpbin /DEPENDENTS"));
     assert!(readiness_flat.contains("exact staged `telltale.exe`"));
-    assert!(
-        readiness_flat
-            .contains("rc.3 native verification and clean-Windows acceptance remain pending")
-    );
+    assert!(readiness_flat.contains(
+        "publication-time gate, five-platform native verification, and clean-Windows static-CRT and functional acceptance"
+    ));
 
     let release_readme = fs::read_to_string("release/README.md").expect("release README");
     let release_readme_flat = normalize_line_endings(release_readme).replace('\n', " ");

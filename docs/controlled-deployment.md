@@ -312,7 +312,7 @@ pre-replacement ordering are covered by the installer regression suite.
 A successful development canary means only that the selected commit is ready
 for release preparation. Production should remain on official `v0.5.0` until a
 newer stable release passes its own version, Windows, package, CI, CodeQL, and
-publication gates. Issue #23's Windows VC++ runtime dependency remains open and
-is a Windows release caveat; it does not block this Linux lab procedure, but its
-clean-host policy must be resolved before claiming a self-contained Windows
-artifact.
+publication gates. Issue #23 closed after the rc.3 static-CRT clean-Windows
+qualification and functional acceptance passed. That Windows artifact evidence
+does not authorize this Linux lab procedure, a deployment, or a newer stable
+release.

@@ -17,12 +17,12 @@ format.
   changes, and install-to-SIEM reliability proof.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
-  static-CRT publication gate passed. Five-platform native verification and
-  clean-Windows qualification remain pending. The previous immutable
+  static-CRT publication gate, five-platform native verification, and Issue #23
+  clean-Windows static-CRT and functional acceptance passed. The previous immutable
   `v0.6.0-rc.2` prerelease at source SHA
   `158b18ce78c6f503c38619e816790035f88b09db` passed publication/provenance,
   G-SERVICE, and five-platform native verification. Official stable remains
-  `v0.5.0`, and Issues #23 and #37 remain open. The
+  `v0.5.0`; Issue #23 is closed and Issue #37 remains open. The
   immutable published `v0.6.0-rc.1` candidate at reviewed commit
   `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
   failed G-SERVICE because systemd ignored its quoted current-user

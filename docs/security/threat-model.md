@@ -72,9 +72,9 @@ reviewable release provenance. It does not promise perfect redaction,
 exactly-once delivery, production detection efficacy, prevention at an
 observation-only boundary, or protection from actors excluded above.
 
-Windows clean-host runtime/CRT validation remains the independent Issue #23
-release gate. Issue #27 pins and verifies the release supply chain but does not
-claim to solve the Windows runtime prerequisite.
+Issue #23 completed rc.3 clean-host runtime/CRT validation. Issue #27 pins and
+verifies the release supply chain but does not itself establish Windows runtime
+qualification for future candidates.
 
 ## Related controls
 

@@ -27,9 +27,10 @@ Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
 immutable. The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from
 source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`.
-Publication/provenance and the static-CRT publication gate passed; rc.3 native
-verification and clean-Windows acceptance remain pending. Official stable
-remains `v0.5.0`, and Issues #23 and #37 remain open. The previous immutable
+Publication/provenance, the static-CRT publication gate, and five-platform native
+verification passed. Issue #23 clean-Windows static-CRT qualification and functional
+acceptance passed. Official stable remains `v0.5.0`; Issue #23 is closed and Issue
+#37 remains open. The previous immutable
 `v0.6.0-rc.2` prerelease is Release ID `385903701` from source SHA
 `158b18ce78c6f503c38619e816790035f88b09db`; G-SERVICE and five-platform native
 verification passed, with native run `34444628698` using verifier tooling SHA
@@ -64,6 +65,15 @@ the one-shot execution and activity 1 / detection 1 / health 1 newly appended by
 the timer, for totals of activity 3 / detection 2 / health 2. The expected
 detection occurred in both executions, and every emitted event reported
 `telltale_version=0.6.0-rc.2`. No raw event payload is repository evidence.
+
+The rc.3 five-platform native verification passed in workflow run `34678037610`
+using verifier revision `be81e8ef048f623096cd8680c89acabe738e7eb9`. Clean-Windows
+qualification passed for the exact published rc.3 artifact without the VC++
+Redistributable or relevant redistributable runtime DLLs present. The Windows
+acceptance helper exercised the canonical fixture and reported the expected Event3
+detection. The project owner accepted that captured helper output as Windows
+functional evidence; frozen Event3 schema conformance was independently revalidated
+from the exact rc.3 source and canonical fixture.
 
 The prior `v0.5.0-rc.1` tag is immutable history at reviewed commit
 `8f261317022352ebc812c30814aa776964c84e6b`. Windows packaging failed; no
@@ -103,10 +113,10 @@ the exact `SHA256SUMS` line, archive attestation subject, Release ID/URL and
 tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
-For the published rc.3 candidate, publication/provenance and the static-CRT
-publication gate passed. Five-platform native verification is pending separate
-dispatch authorization, and clean-Windows qualification remains separate under
-Issue #23. The previous rc.2 G-SERVICE and native run `34444628698` remain
+For the published rc.3 candidate, publication/provenance, the static-CRT
+publication gate, and five-platform native verification passed. Issue #23
+clean-Windows static-CRT qualification and functional acceptance passed. The
+previous rc.2 G-SERVICE and native run `34444628698` remain
 historical evidence and are not rebound to rc.3. Each native gate may be
 satisfied by an authorized native host or appropriate GitHub-hosted native runners.
 The gate
@@ -321,8 +331,8 @@ staged `telltale.exe` that the ZIP helper consumes. The verifier fails closed if
 inspection fails or if imports include `VCRUNTIME*.dll`, `MSVCP*.dll`,
 `MSVCR*.dll`, or `CONCRT*.dll`. Linux and macOS release builds do not receive
 this Windows target feature. The published rc.3 artifact passed this
-publication-time gate; rc.3 native verification and clean-Windows acceptance
-remain pending.
+publication-time gate, five-platform native verification, and clean-Windows
+static-CRT and functional acceptance.
 
 The default installer selects the latest stable Release. For candidate
 validation, pass the exact tag, for example:
