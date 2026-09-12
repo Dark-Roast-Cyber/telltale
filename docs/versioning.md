@@ -15,13 +15,14 @@ format.
 - `v0.5.0` is the current official stable GitHub Release. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
-- The immutable `v0.6.0-rc.2` prerelease is published as Release ID `385903701`
-  from source SHA `158b18ce78c6f503c38619e816790035f88b09db`.
-  Publication/provenance, G-SERVICE, and five-platform native verification
-  passed. The prospective `v0.6.0-rc.3` package and release workflow implement
-  the selected static MSVC CRT policy for official Windows artifacts, but no
-  rc.3 tag or Release exists and clean-Windows acceptance remains pending.
-  Official stable remains `v0.5.0`, and Issues #23 and #37 remain open. The
+- The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
+  SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
+  static-CRT publication gate passed. Five-platform native verification and
+  clean-Windows qualification remain pending. The previous immutable
+  `v0.6.0-rc.2` prerelease at source SHA
+  `158b18ce78c6f503c38619e816790035f88b09db` passed publication/provenance,
+  G-SERVICE, and five-platform native verification. Official stable remains
+  `v0.5.0`, and Issues #23 and #37 remain open. The
   immutable published `v0.6.0-rc.1` candidate at reviewed commit
   `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
   failed G-SERVICE because systemd ignored its quoted current-user
@@ -122,16 +123,17 @@ The Cargo/package version is not the version of every data contract:
 versions, exact internal requirements (including optional, target, dev and build
 dependencies), and member lock entries. It also tests the gate's failure cases.
 `--pre-tag` validates a prospective candidate tag, including its required
-absence. Neither the already-published `v0.6.0-rc.2` nor `v0.6.0-rc.1` tag is a
-prospective tag to recreate. Plain `--tag` is the release-workflow mode and
+absence. The already-published `v0.6.0-rc.3`, `v0.6.0-rc.2`, and `v0.6.0-rc.1`
+tags are not prospective tags to recreate. Plain `--tag` is the release-workflow mode and
 permits its exact tag at HEAD; post-publication metadata checks use
 `--publication-order` without requiring an existing tag to be absent. An RC tag requires
 the **full matching RC package version**, not
 `0.6.0`. This preserves the 0.5.0 RC convention. Candidate preparation is
-separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1` and
-`v0.6.0-rc.2` candidates are immutable; native qualification verifies existing
-artifacts and does not create or modify them. Preparing `v0.6.0-rc.3` does not
-retarget the rc.2 native verifier or create prospective artifact hashes.
+separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1`,
+`v0.6.0-rc.2`, and `v0.6.0-rc.3` candidates retain separate evidence; native
+qualification verifies existing artifacts and does not create or modify them.
+The active rc.3 native verifier does not alter the historical rc.2 pin or
+evidence.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is

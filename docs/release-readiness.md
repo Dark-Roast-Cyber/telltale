@@ -25,23 +25,24 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
-immutable. The immutable `v0.6.0-rc.2` prerelease is published as Release ID
-`385903701` from source SHA
-`158b18ce78c6f503c38619e816790035f88b09db`. Publication/provenance and
-G-SERVICE passed; five-platform native verification passed in run `34444628698`
-using verifier tooling SHA `8b65c1f517a9910b0dc197633d6bebd41859ee46`.
-Official stable remains `v0.5.0`, and Issues #23 and #37 remain open. The
-prospective `v0.6.0-rc.3` implements the selected static MSVC CRT release policy
-but is not published or clean-Windows qualified. The published immutable
+immutable. The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from
+source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`.
+Publication/provenance and the static-CRT publication gate passed; rc.3 native
+verification and clean-Windows acceptance remain pending. Official stable
+remains `v0.5.0`, and Issues #23 and #37 remain open. The previous immutable
+`v0.6.0-rc.2` prerelease is Release ID `385903701` from source SHA
+`158b18ce78c6f503c38619e816790035f88b09db`; G-SERVICE and five-platform native
+verification passed, with native run `34444628698` using verifier tooling SHA
+`8b65c1f517a9910b0dc197633d6bebd41859ee46`. The published immutable
 `v0.6.0-rc.1` candidate passed publication/provenance and failed G-SERVICE
 because the current-user generated `EnvironmentFile` declaration was ignored as
 a non-absolute quoted path. It is historical failed-candidate evidence, not an
 official stable release or a qualification input to retry. The real systemd
 parser consumes this directive's complete value without shell-unquoting it; the
 repaired canonical shape is `EnvironmentFile=-/absolute/path`, including when
-the path contains spaces. Distinguish every untagged candidate with full Git SHA
+the path contains spaces. Distinguish every candidate with full Git SHA
 and archive/binary SHA-256. Use the post-publication-safe metadata gates for an
-already published candidate; do not run a pre-tag check that requires the rc.2
+already published candidate; do not run a pre-tag check that requires the rc.3
 tag to be absent. The [version gate contract](versioning.md#authoritative-version-gate)
 owns package, RC/stable tag and published-version separation. Do not reuse
 `v0.5.0` artifacts.
@@ -102,11 +103,13 @@ the exact `SHA256SUMS` line, archive attestation subject, Release ID/URL and
 tagged installer blob and executable-mode result. Do not record credentials,
 endpoints, local paths, raw service output, or session contents.
 
-For the published rc.2 candidate, G-SERVICE with the exact `v0.6.0-rc.2` tag and
-canonical unit/drop-in preflight passed, and five-platform native verification
-passed in run `34444628698`. That evidence remains immutable and is not rebound
-to the unpublished rc.3 preparation. Each future native gate may be satisfied by
-an authorized native host or appropriate GitHub-hosted native runners. The gate
+For the published rc.3 candidate, publication/provenance and the static-CRT
+publication gate passed. Five-platform native verification is pending separate
+dispatch authorization, and clean-Windows qualification remains separate under
+Issue #23. The previous rc.2 G-SERVICE and native run `34444628698` remain
+historical evidence and are not rebound to rc.3. Each native gate may be
+satisfied by an authorized native host or appropriate GitHub-hosted native runners.
+The gate
 must download and execute the final published Release artifact for that
 architecture; cross-compilation, archive inspection, Linux source-unit tests,
 and staged or rebuilt binaries are not native-release evidence. Run the
@@ -317,8 +320,9 @@ The official `x86_64-pc-windows-msvc` release build sets
 staged `telltale.exe` that the ZIP helper consumes. The verifier fails closed if
 inspection fails or if imports include `VCRUNTIME*.dll`, `MSVCP*.dll`,
 `MSVCR*.dll`, or `CONCRT*.dll`. Linux and macOS release builds do not receive
-this Windows target feature. This implementation is prepared for rc.3; a
-published rc.3 artifact and clean-Windows acceptance remain pending.
+this Windows target feature. The published rc.3 artifact passed this
+publication-time gate; rc.3 native verification and clean-Windows acceptance
+remain pending.
 
 The default installer selects the latest stable Release. For candidate
 validation, pass the exact tag, for example:
