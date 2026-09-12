@@ -12,10 +12,11 @@ format.
 - `0.3.0` is the prior released line for the event and scoring contract.
 - `0.4.0` is an unpublished API-hardening line and will not be released
   separately. Its completed work is folded into `0.5.0`.
-- `v0.5.0` remains the official stable GitHub Release until the prepared
-  `v0.6.0` source is tagged and published. It completed the hard
+- `v0.5.0` is the previous stable GitHub Release. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
+- `v0.6.0` is the current official stable GitHub Release, published from
+  `f8e00162a3f9ac1cf8d2f270e6db078d3917d186` after the rc.3 live Linux canary.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -23,8 +24,8 @@ format.
   `v0.6.0-rc.2` prerelease at source SHA
   `158b18ce78c6f503c38619e816790035f88b09db` passed publication/provenance,
   G-SERVICE, and five-platform native verification. Its live Linux canary also
-  passed. Issue #23 is closed and Issue #37 remains open pending stable
-  publication and live upgrade. The
+  passed. Stable `v0.6.0` was subsequently deployed successfully. Issues #23
+  and #37 are complete. The
   immutable published `v0.6.0-rc.1` candidate at reviewed commit
   `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
   failed G-SERVICE because systemd ignored its quoted current-user
