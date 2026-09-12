@@ -12,7 +12,8 @@ format.
 - `0.3.0` is the prior released line for the event and scoring contract.
 - `0.4.0` is an unpublished API-hardening line and will not be released
   separately. Its completed work is folded into `0.5.0`.
-- `v0.5.0` is the current official stable GitHub Release. It completed the hard
+- `v0.5.0` remains the official stable GitHub Release until the prepared
+  `v0.6.0` source is tagged and published. It completed the hard
   Telltale technical migration, embedded-triage removal, schema/configuration
   changes, and install-to-SIEM reliability proof.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
@@ -21,8 +22,9 @@ format.
   clean-Windows static-CRT and functional acceptance passed. The previous immutable
   `v0.6.0-rc.2` prerelease at source SHA
   `158b18ce78c6f503c38619e816790035f88b09db` passed publication/provenance,
-  G-SERVICE, and five-platform native verification. Official stable remains
-  `v0.5.0`; Issue #23 is closed and Issue #37 remains open. The
+  G-SERVICE, and five-platform native verification. Its live Linux canary also
+  passed. Issue #23 is closed and Issue #37 remains open pending stable
+  publication and live upgrade. The
   immutable published `v0.6.0-rc.1` candidate at reviewed commit
   `ed6c6946656132c0fe9af6aef5fdb3efec29dc68` passed publication/provenance but
   failed G-SERVICE because systemd ignored its quoted current-user
@@ -212,7 +214,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.6.0-rc.3` registry dependencies while that remains the workspace package
+`=0.6.0` registry dependencies while that remains the workspace package
 version. Advance the pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
