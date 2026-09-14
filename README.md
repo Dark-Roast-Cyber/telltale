@@ -126,8 +126,13 @@ release.
 
 ## Cargo packages
 
-Cargo publication is in current release preparation; these packages should not
-be treated as already published. The six official packages are:
+The repository remains a Cargo workspace with six official packages, but crates.io
+publication is intentionally deferred while the 0.6.x architecture is still
+converging. The project will revisit registry publication after the 0.7.0
+architecture and supported embedding surface are stable enough for deliberate
+external Rust consumers.
+
+The six official packages are:
 
 - `telltale-schema`
 - `telltale-rules`
@@ -136,16 +141,10 @@ be treated as already published. The six official packages are:
 - `telltale-core` — the supported embedding surface (`telltale_core` in Rust)
 - `telltale-cli`
 
-See [Versioning and releases](docs/versioning.md) for the dependency-ordered
-publication sequence and `0.x` compatibility policy.
-
-Install the CLI from crates.io after publication with:
-
-```sh
-cargo install telltale-cli
-```
-
-That package installs the canonical `telltale` binary only.
+See [Versioning and releases](docs/versioning.md) for the package and `0.x`
+compatibility policy. Until crates.io publication begins, install or build from
+GitHub releases or source rather than assuming these package names are available
+from the registry.
 
 > **Crates.io name warning:** The package named `telltale` is an unrelated
 > active session-types crate, not this project. Telltale uses `telltale-core`
@@ -365,6 +364,9 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 - `config/rules/tool-call-regex.yaml` — bundled detection rules
 - `config/allowlists.yaml` — suppression examples
 - `docs/` — public technical documentation
+- `openspec/specs/` — durable public behavioral requirements
+
+For project direction and planning ownership, see [ROADMAP.md](ROADMAP.md). Detailed active implementation planning and scratch context are intentionally kept out of the public release boundary.
 
 ## Related resources
 
@@ -374,6 +376,7 @@ For approachable guides on agentic forensics, Telltale, and the broader Agent Ar
 
 These files are the source-of-truth for Telltale's current implementation, rules, schemas, and accepted future architecture:
 
+- [Roadmap](ROADMAP.md) — milestone-level project direction and planning/source-of-truth ownership
 - [Install](docs/install.md) — build, verify, and deploy
 - [Architecture](docs/architecture.md) — pipeline stages and module boundaries
 - [Semantic foundation](docs/semantic-foundation.md) — accepted future semantic boundaries
