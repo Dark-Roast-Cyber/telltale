@@ -60,10 +60,11 @@ external-default-features = "allow"
 skip = [
     { crate = "getrandom@0.2.17", reason = "Live Cargo.lock: ring requires the 0.2 line while tempfile/uuid require newer lines." },
     { crate = "getrandom@0.3.4", reason = "Live Cargo.lock: the 0.3 line is retained by ahash/rusqlite while uuid uses 0.4." },
-    { crate = "hashbrown@0.14.5", reason = "Live Cargo.lock: rusqlite/hashlink requires 0.14 while serde/indexmap requires a newer line." },
+    { crate = "hashbrown@0.16.1", reason = "Live Cargo.lock: rusqlite's rsqlite-vfs path requires 0.16 while hashlink/indexmap use 0.17." },
     { crate = "r-efi@5.3.0", reason = "Live Cargo.lock: getrandom 0.3 and 0.4 require incompatible r-efi lines." },
     { crate = "windows-sys@0.52.0", reason = "Live Cargo.lock: ring requires 0.52 while direct and notify paths require newer lines." },
-    { crate = "windows-sys@0.59.0", reason = "Live Cargo.lock: fs4 and direct Windows support retain 0.59 while other paths use newer lines." },
+    { crate = "syn@3.0.5", reason = "Live Cargo.lock: clap derive and rusqlite's SQLite WASM path require syn 3 while the broader derive ecosystem retains syn 2." },
+    { crate = "windows-sys@0.59.0", reason = "Live Cargo.lock: direct Windows support and rustix 0.38 retain 0.59 while other paths use newer lines." },
     { crate = "windows-sys@0.60.2", reason = "Live Cargo.lock: notify retains 0.60 while direct and terminal dependencies use 0.61." },
     { crate = "windows-targets@0.52.6", reason = "Live Cargo.lock: windows-sys 0.52 and 0.59 retain the 0.52 target family." },
     { crate = "windows_aarch64_gnullvm@0.52.6", reason = "Live Cargo.lock: retained by the 0.52 Windows target family." },

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use flate2::Compression;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
-use fs4::fs_std::FileExt;
+use fs4::FileExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -157,7 +157,7 @@ fn migration_lock_holder() {
         .write(true)
         .open(path)
         .expect("lock file");
-    file.lock_exclusive().expect("exclusive lock");
+    FileExt::lock(&file).expect("exclusive lock");
     File::create(ready)
         .expect("ready file")
         .write_all(b"ready")
