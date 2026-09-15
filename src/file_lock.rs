@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use fs4::fs_std::FileExt;
+use fs4::{FileExt, TryLockError};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -100,8 +100,8 @@ impl SidecarLock {
             fs::create_dir_all(parent)?;
         }
         let file = open_lock(&lock_path)?;
-        match file.try_lock_exclusive() {
-            Ok(true) => {
+        match FileExt::try_lock(&file) {
+            Ok(()) => {
                 set_file_mode(&file, 0o600)?;
                 let lock_info = safe_file_info(&file, true)?;
                 let (target_info, target_digest) = match verification {
@@ -120,9 +120,9 @@ impl SidecarLock {
                 lock.verify_target_metadata()?;
                 Ok(lock)
             }
-            Ok(false) => Err(LOCK_BUSY.into()),
-            Err(error) if is_busy(&error) => Err(LOCK_BUSY.into()),
-            Err(error) => Err(error.into()),
+            Err(TryLockError::WouldBlock) => Err(LOCK_BUSY.into()),
+            Err(TryLockError::Error(error)) if is_busy(&error) => Err(LOCK_BUSY.into()),
+            Err(TryLockError::Error(error)) => Err(error.into()),
         }
     }
 
@@ -169,7 +169,7 @@ fn sidecar_path(path: &Path) -> PathBuf {
 
 impl Drop for SidecarLock {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        let _ = FileExt::unlock(&self.file);
     }
 }
 

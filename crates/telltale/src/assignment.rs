@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fs4::fs_std::FileExt;
+use fs4::{FileExt, TryLockError};
 use hmac::{Hmac, Mac};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -2307,17 +2307,18 @@ fn acquire_store_lock(path: &Path) -> Result<StoreLock, ProtectedAssignmentError
     validate_same_file(path, &file)?;
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
-        match file.try_lock_exclusive() {
-            Ok(true) => {
+        match FileExt::try_lock(&file) {
+            Ok(()) => {
                 validate_same_file(path, &file)?;
                 return Ok(StoreLock {
                     file,
                     path: path.to_path_buf(),
                 });
             }
-            Ok(false) => {}
-            Err(io_error) if io_error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => return Err(error(ProtectedAssignmentErrorCode::StorageUnavailable)),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(_)) => {
+                return Err(error(ProtectedAssignmentErrorCode::StorageUnavailable));
+            }
         }
         if Instant::now() >= deadline {
             return Err(error(ProtectedAssignmentErrorCode::StorageUnavailable));
