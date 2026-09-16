@@ -26,8 +26,9 @@ Detection v2 has only an experimental, non-production foundation: the
 and Rule v1 compiler. It is not wired into this production path; the fixture-only
 offline shadow harness is an offline measurement seam, not a production shadow or
 activation path. Advanced detector runtime and Detection Content v2 loader are
-not implemented. Event4 and telemetry/output v2 are not started, and Canonical
-Observation v2 production cutover has not started. Offline deterministic shadow
+not implemented. The Event4 contract foundation is implemented but has no
+production projection or output path; telemetry/output v2 is not started, and
+Canonical Observation v2 production cutover has not started. Offline deterministic shadow
 coverage now includes OpenClaw, Qwen, and Copilot. Event 3.0 is frozen; the reference
 projections do not change its behavior or output. The
 `compat.v1.url` view remains truthfully absent; focused synthetic harness

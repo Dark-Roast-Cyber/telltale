@@ -1,8 +1,11 @@
 # Telemetry and Output Architecture
 
 > **Status:** **Accepted architecture.** This is the reviewed intended future
-> telemetry/output contract. **Current implementation:** Event4, CanonicalPayload,
-> telemetry profiles, and dual Event3/Event4 output are **not implemented**.
+> telemetry/output contract. **Current implementation:** the non-production
+> Event4 contract, validation kernel, and canonical encoder are implemented in
+> `telltale-schema`. CanonicalPayload, production privacy/export projection,
+> telemetry profiles, durability integration, and dual Event3/Event4 output are
+> **not implemented**.
 > **Existing compatibility:** Event 3.0 remains the current frozen external
 > compatibility and output contract.
 
@@ -113,27 +116,30 @@ performs its own weaker privacy pass.
 
 ## Event4 terminal boundary
 
-The future terminal boundary is conceptually:
+The schema crate now provides this non-production validation boundary for a
+caller-supplied post-privacy, once-materialized candidate:
 
 ```text
 validate_terminal(candidate, context) -> AcceptedTerminalEvent | Event4ValidationError
 ```
 
-An emitter constructs a semantic candidate without rerunning detection,
-inferring facts, or adding destination metadata. Selection and export policy
-choose eligibility; privacy transformation produces an idempotent safe
-candidate; then schema, format, Event4 semantic, reference, extension, 65,536
-byte, and depth-8 checks run. `materialized_at` is assigned once and retained on
-replay. The incremental validation context is updated only after acceptance.
+No production emitter calls this boundary. A future emitter constructs a
+semantic candidate without rerunning detection, inferring facts, or adding
+destination metadata. Selection and export policy choose eligibility; privacy
+transformation produces an idempotent safe candidate; then schema, format,
+Event4 semantic, reference, extension, 65,536 byte, and depth-8 checks run.
+`materialized_at` is assigned once and retained on replay. The incremental
+validation context is updated only after acceptance.
 
-Invalid or unsafe output fails closed before durable write. No terminal bytes or
-partial durable record are returned. Terminal privacy is a required boundary,
-not a destination feature.
+Invalid candidates fail closed without returning terminal bytes. The current
+context implementation is in-memory; persistence across restarts and durable
+write remain future integration. Terminal privacy is a required boundary, not a
+destination feature, and is not implemented by the schema validator.
 
 ## Canonical serialization and CanonicalPayload
 
-Future canonical JSON is deterministic compact UTF-8 JSON. For
-`event4-json-v1`, closed objects use Event4 contract property order; open maps
+Implemented `event4-json-v1` JSON is deterministic compact UTF-8 JSON. Closed
+objects use Event4 contract property order; open maps
 normalize keys to NFC and sort them; arrays preserve item order; absent optional
 keys are omitted. Non-finite numbers are rejected. Destination wrappers are not
 part of canonical bytes.

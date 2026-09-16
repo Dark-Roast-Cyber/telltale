@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "Accepted Event 4.0 architecture contract; not a production schema and not runtime-supported. Body objects are closed; semantic validation, terminal privacy, reserved aggregate-risk aliases, extension subtree limits, and terminal byte/depth limits are required in addition to this structural schema. approval_id syntax bounds are not proof of semantic opacity.",
-  "title": "Telltale Event 4.0 Accepted Architecture Contract",
+  "$comment": "Authoritative Event 4.0 structural contract. Event4 remains non-production. Body objects are closed; semantic validation, prior terminal privacy projection, reserved aggregate-risk aliases, extension subtree limits, and terminal byte/depth limits are required in addition to this schema. approval_id syntax bounds are not proof of semantic opacity.",
+  "title": "Telltale Event 4.0 Structural Contract",
   "type": "object",
   "required": ["schema_version", "event_id", "type", "event_action", "observed_at", "materialized_at"],
   "not": {"anyOf": [
@@ -136,6 +136,10 @@
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
     },
+    "canonical_observation_id": {
+      "type": "string",
+      "pattern": "^obs:v2:sha256:[0-9a-f]{64}$"
+    },
     "safe_reason_code": {
       "type": "string",
       "minLength": 1,
@@ -172,7 +176,13 @@
         "allOf": [
           {"type": "string", "maxLength": 64},
           {"pattern": "^[a-z][a-z0-9_]{0,63}$"},
-          {"not": {"enum": ["event_id", "id", "type", "event_type", "schema_version", "received_at", "timestamp", "emitted_at", "severity", "confidence"]}},
+          {"not": {"enum": [
+            "event_id", "id", "type", "event_type", "schema_version", "event_action",
+            "occurred_at", "observed_at", "materialized_at", "received_at", "timestamp", "emitted_at",
+            "sequence", "session_id", "workflow_id", "trace_id", "span_id", "extensions",
+            "session", "observation", "finding", "decision", "action", "state", "health", "summary",
+            "severity", "confidence"
+          ]}},
           {"not": {"$ref": "#/$defs/aggregate_risk_extension_name"}}
         ]
       },
@@ -232,7 +242,7 @@
         "response_id": {"$ref": "#/$defs/opaque_reference"},
         "turn_id": {"$ref": "#/$defs/opaque_reference"},
         "call_id": {"$ref": "#/$defs/opaque_reference"},
-        "parent_observation_id": {"$ref": "#/$defs/opaque_reference"},
+        "parent_observation_id": {"$ref": "#/$defs/canonical_observation_id"},
         "process_instance_id": {"$ref": "#/$defs/opaque_reference"},
         "delegation_id": {"$ref": "#/$defs/opaque_reference"}
       },
@@ -263,7 +273,7 @@
       "type": "object",
       "required": ["observation_id", "kind", "stage"],
       "properties": {
-        "observation_id": {"$ref": "#/$defs/opaque_reference"},
+        "observation_id": {"$ref": "#/$defs/canonical_observation_id"},
         "kind": {"enum": ["message", "inference", "tool", "tool_definition", "mcp", "process", "file", "network", "browser", "runtime", "session", "other"]},
         "stage": {"enum": ["observed", "requested", "completed", "failed", "proposed", "execution_started", "execution_completed", "result_returned", "changed", "inventory_changed"]},
         "provenance": {"enum": ["reported", "parsed", "derived", "inferred", "observed"]},
@@ -333,7 +343,7 @@
         "reason": {"type": "string", "minLength": 1},
         "rule_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "detector": {"$ref": "#/$defs/detector"},
-        "related_observation_ids": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/opaque_reference"}},
+        "related_observation_ids": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/canonical_observation_id"}},
         "runtime_ref": {"$ref": "#/$defs/opaque_reference"},
         "ruleset_ref": {"$ref": "#/$defs/opaque_reference"},
         "policy_ref": {"$ref": "#/$defs/opaque_reference"},
@@ -361,7 +371,7 @@
             "type": "object",
             "required": ["representation"],
             "properties": {
-              "observation_id": {"type": "string", "minLength": 1},
+              "observation_id": {"$ref": "#/$defs/canonical_observation_id"},
               "field": {"type": "string", "minLength": 1, "maxLength": 256},
               "representation": {"enum": ["redacted_excerpt", "hash", "classification", "count", "reference"]},
               "value": {"$ref": "#/$defs/extension_scalar"}

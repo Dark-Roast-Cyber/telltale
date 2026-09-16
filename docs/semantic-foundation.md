@@ -4,10 +4,12 @@
 > contracts are reviewed future architecture. **Current implementation:** the
 > non-production Detection v2 foundation implements only `observation_match`,
 > `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
-> Event4 and Telemetry/Output v2 are not implemented. The fixture-only offline
-> shadow harness is an offline measurement seam, not a production shadow or
-> activation path. Advanced detector runtime and Detection Content v2 loader are
-> not implemented.
+> The non-production Event4 contract, validator, and canonical encoder are
+> implemented in `telltale-schema`; production projection, privacy, persistence,
+> and output are not. Telemetry/Output v2 is not implemented. The fixture-only
+> offline shadow harness is an offline measurement seam, not a production shadow
+> or activation path. Advanced detector runtime and Detection Content v2 loader
+> are not implemented.
 > Canonical Observation v2 core types/scaffolding are implemented in
 > `telltale-schema`. Claude Code (`claude.projects`) and Codex v2 Canonical
 > Observation v2 reference adapter families are implemented. The OpenCode
@@ -38,9 +40,10 @@ remains the scanner's adapter contract, Rule v1 remains the production
 detection path, and Canonical Observation v2 cutover has not started.
 `opencode.legacy_json` remains supported and `opencode.project_json` remains
 Candidate; neither source's v2 migration has started. Production Detection v2,
-Event4, and Telemetry/Output v2 remain not started, and Event 3.0 remains
-frozen. The `compat.v1.url` view is intentionally visibility-limited to truthful
-absence; focused synthetic harness coverage demonstrates the compatibility gap.
+Event4 emission/integration, and Telemetry/Output v2 remain not started, and
+Event 3.0 remains frozen. The `compat.v1.url` view is intentionally
+visibility-limited to truthful absence; focused synthetic harness coverage
+demonstrates the compatibility gap.
 
 ## The semantic path
 
@@ -178,10 +181,11 @@ Current implementation documentation:
 - [Current normalization schema](normalization-schema.md) — current
   `NormalizedRecordV1` compatibility contract.
 
-Architecture-only machine-readable references:
+Machine-readable references:
 
-- [Event4 draft schema](../schemas/event4-draft.schema.json) (**architecture
-  draft / not runtime-supported**).
+- Event4 4.0 structural schema at
+  `crates/telltale-schema/data/event-4.0.schema.json` (**authoritative
+  non-production runtime schema**).
 - [Detection Content v2 draft schema](../schemas/detection-content-v2-draft.schema.json)
   (**architecture draft / not runtime-supported**).
 - [Telemetry profile draft schema](../schemas/telemetry-profile-draft.schema.json)

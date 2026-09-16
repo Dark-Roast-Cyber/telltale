@@ -38,8 +38,9 @@ source call IDs, structured content parts, structured tool values, and truthful
 lifecycle stages while the production scanner continues to use
 `NormalizedRecordV1`. `opencode.legacy_json` remains compatibility-only and
 `opencode.project_json` remains Candidate; neither source's v2 migration has
-started. Detection v2 runtime, Event4, and telemetry/output v2 are not started,
-and Event 3.0 remains frozen.
+started. Detection v2 runtime and telemetry/output v2 are not started. The
+Event4 contract foundation is implemented without a Canonical Observation v2
+projection or production output path, and Event 3.0 remains frozen.
 
 ## Conceptual contract
 
@@ -328,6 +329,6 @@ backported. Event3 and Event4 are independent projections from common accepted
 internal semantics, not canonical conversions of each other.
 
 See the [Event4 architecture](event4.md) and the [current normalization
-schema](normalization-schema.md). The [Event4 draft schema](../schemas/event4-draft.schema.json)
-is an **architecture draft / not runtime-supported** and is not the internal
-observation schema.
+schema](normalization-schema.md). The authoritative packaged Event4 4.0
+structural schema at `crates/telltale-schema/data/event-4.0.schema.json` is an
+external contract boundary, not the internal observation schema.

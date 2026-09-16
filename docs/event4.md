@@ -1,14 +1,20 @@
 # Event4 Architecture
 
 > **Status:** **Accepted architecture.** Event4 is the reviewed intended future
-> external contract. **Current implementation:** Event4 is **not implemented**
-> and is not runtime-supported. **Existing compatibility:** Event 3.0 remains
-> the current frozen external compatibility and output contract.
+> external contract. **Current implementation:** the non-production Event4 4.0
+> contract foundation is implemented in `telltale-schema`: typed bodies, the
+> authoritative structural schema, stateless and persistence-neutral contextual
+> validation, and `event4-json-v1` encoding. Production privacy projection,
+> emission, persistence, replay, and transport are not implemented. **Existing
+> compatibility:** Event 3.0 remains the current frozen external compatibility
+> and output contract.
 
 > **Event 3.0: FROZEN / CURRENT COMPATIBILITY CONTRACT**
 
-This page describes a future projection. It does not activate an Event4
-serializer, validator, emitter, adapter, collector, sink, or policy runtime.
+This page describes the contract foundation and future projection. The schema
+crate can validate and encode caller-supplied post-privacy candidates, but it
+does not activate an Event4 emitter, adapter, collector, sink, policy runtime,
+or production output path.
 
 ## Shape
 
@@ -76,9 +82,10 @@ open-ended extension fields.
 The initial `event_action` registry is type-scoped: session lifecycle;
 message, inference, tool, definition, MCP, process, file, network, browser,
 and runtime observations; rule, sequence, correlation, baseline, and guard-model
-findings; policy and approval decisions; enforcement actions; state changes and
-heartbeats; health changes; and `summary.emitted`. The semantic validator checks
-the action/body pairing and the minimum kind/stage pairing. For example,
+and classifier findings; policy and approval decisions; enforcement actions;
+state changes and heartbeats; health changes; and `summary.emitted`. The
+semantic validator checks the action/body pairing and the minimum kind/stage
+pairing. For example,
 `tool.proposed`, `tool.requested`, `tool.execution_started`,
 `tool.execution_completed`, and `tool.result_returned` remain distinct facts.
 
@@ -212,8 +219,9 @@ counting the root as level 1. Both limits are mandatory semantic checks because
 portable JSON Schema cannot express them fully. A violation fails closed before
 bytes are emitted, persisted, projected, or transported.
 
-Structural JSON Schema validation is necessary but insufficient. A future
-terminal boundary must, in order:
+Structural JSON Schema validation is necessary but insufficient. The
+non-production schema foundation implements steps 2 through 5 for a candidate
+supplied after step 1; a future production terminal boundary must, in order:
 
 1. select a privacy-safe projection and assign `materialized_at` once;
 2. run the pinned Draft 2020-12 schema with RFC3339 format checking;
@@ -222,15 +230,17 @@ terminal boundary must, in order:
 4. enforce extension, byte, and depth limits; and
 5. encode deterministic canonical UTF-8 JSON.
 
-No bytes are returned or persisted on terminal failure. Validation context is
-incremental across restarts and independent input batches: action references,
-basis event IDs, approval transitions, and same-ID content hashes are not valid
-merely because records share one file. Identical same-ID bytes are idempotent;
-different bytes are an integrity collision.
+No bytes are returned on terminal failure. The implemented pure context
+interface and acceptance effect support independent validator calls; its test
+implementation is in-memory only. A later persistent owner must preserve that
+state across restarts and batches before production activation. Action
+references, basis event IDs, approval transitions, and same-ID content hashes
+are not valid merely because records share one file. Identical same-ID bytes are
+idempotent; different bytes are an integrity collision.
 
-See the [Event4 draft schema](../schemas/event4-draft.schema.json)
-(**architecture draft / not runtime-supported**) for the structural shape. The
-schema does not replace semantic or terminal validation.
+The authoritative packaged Event4 4.0 structural schema is
+`crates/telltale-schema/data/event-4.0.schema.json`. The schema does not replace
+semantic or terminal validation.
 
 ## Event3 coexistence and managed boundary
 

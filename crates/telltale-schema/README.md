@@ -11,6 +11,15 @@ Native serialized events use Event 3.0, package-only `telltale_version`,
 1.0/2.0 fields are historical compatibility data and are read by the CLI's
 strict historical dispatcher rather than emitted by native builders.
 
+The crate also owns a non-production Event4 4.0 foundation under
+`telltale_schema::event4`: all eight closed body families, the packaged
+structural schema, caller-supplied one-time materialization, deterministic
+stateless validation, a persistence-neutral contextual kernel with an in-memory
+test context, and `event4-json-v1` canonical encoding. It assumes a future
+privacy/export projection has already selected and sanitized the candidate. It
+does not emit Event4 from the production pipeline or implement persistence,
+replay, CanonicalPayload, or transport.
+
 ```rust
 use telltale_schema::record::NormalizedRecord;
 

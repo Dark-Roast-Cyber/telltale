@@ -23,8 +23,10 @@ The accepted future semantic contracts are documented in the [semantic
 foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
 v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
 [telemetry/output architecture](telemetry-output-architecture.md) pages. They
-are accepted architecture, with an experimental Detection v2 foundation now
-implemented non-production. Event4 and Telemetry/Output v2 are not implemented.
+are accepted architecture, with experimental Detection v2 and Event4 contract
+foundations now implemented non-production. Event4 production projection,
+privacy, persistence, and output are not implemented; neither is
+Telemetry/Output v2.
 Only `observation_match`, `DetectorResult` -> `Signal` -> atomic `Finding`, and
 the Rule v1 compiler are implemented for Detection v2. The fixture-only offline
 shadow harness is an offline measurement seam, not a scanner or activation path;

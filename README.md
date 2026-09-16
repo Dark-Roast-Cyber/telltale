@@ -380,7 +380,7 @@ These files are the source-of-truth for Telltale's current implementation, rules
 - [Install](docs/install.md) — build, verify, and deploy
 - [Architecture](docs/architecture.md) — pipeline stages and module boundaries
 - [Semantic foundation](docs/semantic-foundation.md) — accepted future semantic boundaries
-- [Event4 architecture](docs/event4.md) — accepted future Event4 contract
+- [Event4 architecture](docs/event4.md) — accepted contract with a non-production foundation
 - [Canonical Observation v2](docs/canonical-observation-v2.md) — accepted future evidence contract
 - [Detection v2](docs/detection-v2.md) — experimental non-production foundation
 - [Telemetry/output architecture](docs/telemetry-output-architecture.md) — accepted future output boundary

@@ -18,6 +18,7 @@ include = [
     "build.rs",
     "/src/**",
     "/data/event-3.0.schema.json",
+    "/data/event-4.0.schema.json",
 ]
 
 [dependencies]

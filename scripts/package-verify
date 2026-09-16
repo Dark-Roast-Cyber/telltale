@@ -82,6 +82,10 @@ test -f "$(package_path telltale-schema)/data/event-3.0.schema.json" || {
     echo "packaged telltale-schema is missing its Event 3.0 schema asset" >&2
     exit 1
 }
+test -f "$(package_path telltale-schema)/data/event-4.0.schema.json" || {
+    echo "packaged telltale-schema is missing its Event 4.0 schema asset" >&2
+    exit 1
+}
 for schema_path in \
     schemas/event.schema.json \
     schemas/historical/README.md \

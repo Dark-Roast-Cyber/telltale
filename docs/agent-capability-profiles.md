@@ -285,9 +285,10 @@ Detection v2 foundation implements only `observation_match`,
 `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler; the
 fixture-only offline shadow harness is an offline measurement seam, not a
 production shadow or activation path. Advanced detector runtime and Detection
-Content v2 loader are not implemented. Event4 and telemetry/output v2 have not
-started. The `compat.v1.url` view remains truthfully absent; focused synthetic
-harness coverage demonstrates the compatibility gap.
+Content v2 loader are not implemented. The Event4 contract foundation is
+implemented without production projection or output; telemetry/output v2 has
+not started. The `compat.v1.url` view remains truthfully absent; focused
+synthetic harness coverage demonstrates the compatibility gap.
 
 ---
 

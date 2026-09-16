@@ -18,8 +18,10 @@ The accepted semantic-foundation contracts are documented in [Semantic
 foundation](semantic-foundation.md) and its related [Event4](event4.md),
 [Canonical Observation v2](canonical-observation-v2.md), [Detection v2](detection-v2.md),
 and [telemetry/output architecture](telemetry-output-architecture.md) pages.
-Those pages describe accepted future architecture, not implemented capability;
-these principles remain the direction for evaluating future work.
+Those pages distinguish accepted future architecture from any implemented
+non-production foundation; they do not authorize production activation or
+additional work. These principles remain the direction for evaluating future
+work.
 
 ## Product Direction
 

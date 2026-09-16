@@ -44,7 +44,7 @@ only for an explicitly approved exact candidate.
 | Surface | v0.5.0 release | Historical #37 development candidate | Classification and rollback effect |
 | --- | --- | --- | --- |
 | Binary identity | Tag, release archive/checksum, `0.5.0 (2d37bd52bd00)` | Full source SHA, archive/binary SHA-256, `0.5.0 (<short-sha>)` | Same reported version is ambiguous. Retain or recover the release archive and checksum. |
-| Event schema | Event 3.0 | Event 3.0, byte-identical schema | Backward and forward compatible. Event4 draft is irrelevant and not runtime-supported. |
+| Event schema | Event 3.0 | Event 3.0, byte-identical schema | Backward and forward compatible. The non-production Event4 foundation is not active in this path. |
 | Rules fingerprint | No public producer-manifest surface | Rule v1 fingerprint and producer manifest; bundled rule content has advanced | Detection output may differ. Do not copy development bundled rules over release rules. |
 | Configuration format | Outputs version 1 | Outputs version 1 with additive delivery settings | Existing v0.5.0 config is backward-compatible. Development-only keys are not downgrade-compatible. |
 | Output configuration | JSONL, HEC, and Elastic sink entries | Same entries plus durable delivery policy/outbox | Existing files validate on both. `delivery:` is rejected by v0.5.0 and must be restored or removed on rollback. |
