@@ -7,8 +7,8 @@ delivery policy, and persistence role distinct.
 
 The public boundary is normative: `telltale-core::Pipeline` yields an `Event`
 and the host owns I/O. The durable sequence is `terminal Event 3.0 -> durable
-canonical JSONL -> future vendor-neutral collector transport`; Issue #26
-implements only terminal serialization, the JSONL first write, and current
+canonical JSONL -> future vendor-neutral collector transport`; the current
+capability implements terminal serialization, the JSONL first write, and
 SQLite downstream replay state.
 ## Requirements
 ### Requirement: Delivery semantics are transport-neutral
@@ -80,7 +80,7 @@ configured identity. Remote-only output SHALL remain BestEffort in this change.
 ### Requirement: Durable private storage has an explicit platform and threat boundary
 
 Persistent Durable delivery SHALL use the private local-storage profile
-implemented by Issue #26. On Windows, every persistent durable-delivery/storage
+defined here. On Windows, every persistent durable-delivery/storage
 entry point MUST fail closed deterministically before creating, opening,
 inspecting, or mutating an outbox or its sidecars, before a prospective
 canonical JSONL append, and before scanner-state progress. The diagnostic MUST
@@ -100,7 +100,8 @@ principal and privileged/root/admin actors are outside this threat model.
 Path, advisory-lock, and stable-identity checks remain integrity defenses for
 cooperating writers, but MUST NOT be described as an atomic pathname-to-opened
 SQLite-object binding against excluded actors. A stronger opened-object-aware
-SQLite/VFS design is required for that defense and is outside Issue #26.
+SQLite/VFS design is required for that stronger defense and is outside this
+capability.
 
 #### Scenario: Windows durable configuration is rejected before initialization
 
@@ -476,7 +477,7 @@ eligibility helper is insufficient.
 
 Capacity inspection has a bounded unread-byte scan, but reconciliation currently
 loads complete discovered JSONL generations and their complete payload plan in
-memory. Issue #26 SHALL NOT claim an arbitrary-size or streaming reconciliation
+memory. This capability SHALL NOT claim an arbitrary-size or streaming reconciliation
 guarantee; deployments must keep generation sizes within available process
 resources, and an oversized generation remains a local operational failure
 boundary rather than permission to advance an unverified cursor.
@@ -497,7 +498,7 @@ storage configurations.
 
 - **WHEN** a complete JSONL generation is larger than the process can safely
   reconcile in memory
-- **THEN** Issue #26 provides no arbitrary-size or streaming guarantee, and an
+- **THEN** the capability provides no arbitrary-size or streaming guarantee, and an
   incomplete reconciliation does not authorize advancing an unverified cursor
 
 #### Scenario: Terminal payloads remain outside pending capacity
@@ -549,12 +550,12 @@ ABIs, adopter-specific implementations, and Emusary branding. A future
 collector's received time MUST remain distinct from Event `ingested_at`, and
 Event `session_id` MUST NOT be treated as a Windows session identity.
 
-Issue #26 MUST NOT add `emusary_local`, named pipes, adopter-specific
+This capability MUST NOT add `emusary_local`, named pipes, adopter-specific
 protocol/concepts, collector framing or ACK behavior, collector
 configuration/identity/security, protocol versioning, or protocol-only error
 classes. Those future generic local-collector concerns are deferred to a
-separately versioned effort. Issue #28 is deferred; JSONL-only is not its final
-client-adoption architecture and its acceptance criteria remain unfrozen.
+separately versioned effort. JSONL-only is not the final managed-adoption
+architecture; that work requires separately accepted requirements.
 Any future transport extension SHALL reuse the generic structured delivery
 classification and outbox dispatch seam without requiring a foundational sink
 refactor.
@@ -565,6 +566,33 @@ refactor.
   later uses an independently versioned local collector transport
 - **THEN** it can supply its own deployment/tenant/receipt metadata outside the
   event without requiring Telltale to become a multi-tenant identity boundary
+
+### Requirement: Deployment routing and TLS remain explicit
+
+Local durable Event 3.0 JSONL SHALL remain the first write. A deployment MUST
+select either direct HEC or Universal Forwarder monitoring of that JSONL as its
+canonical remote ingestion route and MUST NOT enable both for the same event
+stream unless intentional duplicate ingestion is explicitly documented. HEC
+certificate verification SHALL remain enabled by default. Any insecure opt-out
+MUST be explicit, lab-only, and reported as risk. Tests and evidence MUST use
+synthetic credentials and MUST report only credential/configuration presence
+and request results.
+
+#### Scenario: HEC-primary deployment
+
+- **WHEN** direct HEC is selected as canonical remote delivery
+- **THEN** Universal Forwarder does not monitor the canonical Telltale JSONL
+
+#### Scenario: UF-primary deployment
+
+- **WHEN** Universal Forwarder is selected as canonical remote delivery
+- **THEN** the direct HEC sink is disabled
+
+#### Scenario: Mock HEC validation
+
+- **WHEN** request behavior is validated without production credentials
+- **THEN** a local endpoint and synthetic token are used and no token value is
+  written to operator evidence
 
 ### Requirement: Fault-injection and platform evidence is required
 
@@ -663,5 +691,5 @@ The following fourteen scenarios are individually normative acceptance cases:
 - **WHEN** a durable-delivery change lacks evidence for one required crash,
   retry, storage, capacity, rotation, sink-isolation, or applicable platform
   case
-- **THEN** the Issue #26 acceptance gate remains incomplete and the durable
+- **THEN** the durable-delivery acceptance gate remains incomplete and the durable
   capability is not represented as fully validated

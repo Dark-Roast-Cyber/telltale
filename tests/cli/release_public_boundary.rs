@@ -10,6 +10,7 @@ const HOST_ONLY_REPO_PATHS: &[&str] = &[
     "PLAN.md",
     "VISION.md",
     "IDEAS.md",
+    "DETECTION-IDEAS.md",
     "docs/internal/",
     "docs/CHANGELOG.md",
     "docs/research-urls.md",

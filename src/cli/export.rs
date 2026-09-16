@@ -45,6 +45,31 @@ struct ExportSummaryCounts {
     rule_ids: BTreeMap<String, usize>,
 }
 
+struct EventBackedTimelineSummary {
+    detection_count: usize,
+    max_severity: String,
+    has_triage: bool,
+    record_status: &'static str,
+    risk_summary: serde_json::Value,
+}
+
+#[derive(serde::Serialize)]
+struct SourceBackedRiskSummary {
+    tool_call_count: u64,
+    risky_action_count: u64,
+    top_rule_ids: Option<Vec<String>>,
+    top_categories: Option<Vec<String>>,
+    max_severity: &'static str,
+    triage_ran: bool,
+}
+
+struct SourceBackedSessionRecord {
+    timestamp: String,
+    source_index: usize,
+    canonical: NormalizedRecordV1,
+    parsed: telltale_schema::record::NormalizedRecord,
+}
+
 pub(crate) fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     validate_export_config(&config)?;
     let range = parse_export_range(&config)?;
@@ -757,42 +782,7 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
             })
             .collect();
 
-        // Compute session summary.
-        let detection_count = session_events
-            .iter()
-            .filter(|e| {
-                e.get("event_type")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|t| t == "detection")
-            })
-            .count();
-        let max_severity = session_events
-            .iter()
-            .filter_map(|e| e.get("severity").and_then(|v| v.as_str()))
-            .map(terminal_export_severity)
-            .max_by_key(|severity| severity_rank(severity))
-            .unwrap_or_else(|| "informational".to_string());
-        // Native events have no triage field. Historical records may retain a
-        // terminal model verdict, which is shown only in this derived view.
-        let has_triage = session_events
-            .iter()
-            .any(|event| triage_ran_from_event(event));
-        let risk_summary = build_session_risk_summary(&session_events);
-        let record_status = session_events
-            .iter()
-            .map(|event| {
-                if event.get("schema_version").and_then(|value| value.as_str()) == Some("3.0") {
-                    "native"
-                } else {
-                    "historical"
-                }
-            })
-            .collect::<BTreeSet<_>>();
-        let record_status = match record_status.len() {
-            1 if record_status.contains("native") => "native",
-            1 => "historical",
-            _ => "mixed",
-        };
+        let summary = build_event_backed_timeline_summary(&session_events);
 
         let timeline = serde_json::json!({
             "event_type": "timeline",
@@ -805,11 +795,11 @@ fn build_session_timelines(events: &[&serde_json::Value]) -> Vec<serde_json::Val
             "model": model,
             "provider": provider,
             "entry_count": entries.len(),
-            "detection_count": detection_count,
-            "max_severity": max_severity,
-            "has_triage": has_triage,
-            "record_status": record_status,
-            "risk_summary": risk_summary,
+            "detection_count": summary.detection_count,
+            "max_severity": summary.max_severity,
+            "has_triage": summary.has_triage,
+            "record_status": summary.record_status,
+            "risk_summary": summary.risk_summary,
             "entries": entries,
         });
 
@@ -933,12 +923,9 @@ fn build_source_backed_session_timelines(
     client_filters: &BTreeSet<String>,
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     type SessionKey = (String, String);
-    type CanonicalSessionRecord = (String, usize, NormalizedRecordV1);
-    type LegacySessionRecord = (String, usize, telltale_schema::record::NormalizedRecord);
 
     let rule_set = load_default_rule_set()?;
-    let mut by_session: BTreeMap<SessionKey, Vec<CanonicalSessionRecord>> = BTreeMap::new();
-    let mut legacy_by_session: BTreeMap<SessionKey, Vec<LegacySessionRecord>> = BTreeMap::new();
+    let mut by_session: BTreeMap<SessionKey, Vec<SourceBackedSessionRecord>> = BTreeMap::new();
     let mut sources = crate::discovery::discover_sources_best_effort(source_root);
     if !client_filters.is_empty() {
         sources.retain(|source| client_filters.contains(source.client.as_str()));
@@ -956,12 +943,8 @@ fn build_source_backed_session_timelines(
             }
             let session_id = record.session_id.clone();
             let timestamp = record.timestamp.clone().unwrap_or_default();
-            legacy_by_session
-                .entry((session_id.clone(), client.clone()))
-                .or_default()
-                .push((timestamp.clone(), index, record.clone()));
             let canonical = NormalizedRecordV1::from_legacy(
-                record,
+                record.clone(),
                 Provenance {
                     source_path_hash: source_path_hash.clone(),
                     source_event_id: None,
@@ -971,25 +954,29 @@ fn build_source_backed_session_timelines(
             by_session
                 .entry((session_id, client.clone()))
                 .or_default()
-                .push((timestamp, index, canonical));
+                .push(SourceBackedSessionRecord {
+                    timestamp,
+                    source_index: index,
+                    canonical,
+                    parsed: record,
+                });
         }
     }
 
     let timelines = by_session
-        .into_iter()
-        .map(|(session_key, mut records)| {
-            records.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-            let mut legacy_records = legacy_by_session.remove(&session_key).unwrap_or_default();
-            legacy_records
-                .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-            let canonical_records = records
-                .into_iter()
-                .map(|(_, _, record)| record)
-                .collect::<Vec<_>>();
-            let parsed_records = legacy_records
-                .into_iter()
-                .map(|(_, _, record)| record)
-                .collect::<Vec<_>>();
+        .into_values()
+        .map(|mut records| {
+            records.sort_by(|left, right| {
+                left.timestamp
+                    .cmp(&right.timestamp)
+                    .then_with(|| left.source_index.cmp(&right.source_index))
+            });
+            let mut canonical_records = Vec::with_capacity(records.len());
+            let mut parsed_records = Vec::with_capacity(records.len());
+            for record in records {
+                canonical_records.push(record.canonical);
+                parsed_records.push(record.parsed);
+            }
             build_source_backed_timeline_value(&canonical_records, &parsed_records, &rule_set)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1006,37 +993,33 @@ fn build_source_backed_timeline_value(
     };
     let mut timeline = serde_json::to_value(session_timeline)?;
     let summary = build_source_backed_risk_summary(parsed_records, rule_set)?;
-    let max_severity = summary
-        .get("max_severity")
-        .and_then(|value| value.as_str())
-        .unwrap_or("informational");
-    let has_triage = summary
-        .get("triage_ran")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    let detection_count = summary
-        .get("risky_action_count")
-        .and_then(|value| value.as_u64())
-        .unwrap_or(0);
 
-    timeline["detection_count"] = serde_json::Value::from(detection_count);
-    timeline["max_severity"] = serde_json::Value::String(max_severity.to_string());
-    timeline["has_triage"] = serde_json::Value::Bool(has_triage);
+    timeline["detection_count"] = serde_json::Value::from(summary.risky_action_count);
+    timeline["max_severity"] = serde_json::Value::String(summary.max_severity.to_string());
+    timeline["has_triage"] = serde_json::Value::Bool(summary.triage_ran);
     timeline["record_status"] = serde_json::Value::String("source_derived".to_string());
-    timeline["risk_summary"] = summary;
+    timeline["risk_summary"] = serde_json::to_value(summary)?;
     Ok(Some(timeline))
 }
 
 fn build_source_backed_risk_summary(
     parsed_records: &[telltale_schema::record::NormalizedRecord],
     rule_set: &CompiledRuleSet,
-) -> Result<serde_json::Value, RiskAccountingError> {
+) -> Result<SourceBackedRiskSummary, RiskAccountingError> {
     let tool_call_count = parsed_records
         .iter()
         .filter(|record| matches!(record.kind, telltale_schema::record::RecordKind::ToolCall))
         .count() as u64;
-    let matches = crate::detection::evaluate_session_matches(rule_set, parsed_records)?;
-    let risk_score = matches.as_ref().map(|matches| matches.score).unwrap_or(0);
+    let (risk_score, top_rule_ids, top_categories, risky_action_count) =
+        match crate::detection::evaluate_session_matches(rule_set, parsed_records)? {
+            Some(matches) => (
+                matches.score,
+                Some(matches.rule_ids),
+                Some(matches.categories),
+                1,
+            ),
+            None => (0, None, None, 0),
+        };
     let max_severity = if risk_score == 0 {
         "informational"
     } else {
@@ -1044,41 +1027,54 @@ fn build_source_backed_risk_summary(
             .severity
             .as_str()
     };
-    let risky_action_count = u64::from(matches.is_some());
-
-    Ok(serde_json::json!({
-        "tool_call_count": tool_call_count,
-        "risky_action_count": risky_action_count,
-        "top_rule_ids": matches
-            .as_ref()
-            .map(|matches| serde_json::json!(matches.rule_ids))
-            .unwrap_or(serde_json::Value::Null),
-        "top_categories": matches
-            .as_ref()
-            .map(|matches| serde_json::json!(matches.categories))
-            .unwrap_or(serde_json::Value::Null),
-        "max_severity": max_severity,
-        "triage_ran": false,
-    }))
+    Ok(SourceBackedRiskSummary {
+        tool_call_count,
+        risky_action_count,
+        top_rule_ids,
+        top_categories,
+        max_severity,
+        triage_ran: false,
+    })
 }
 
-fn build_session_risk_summary(session_events: &[&serde_json::Value]) -> serde_json::Value {
+fn build_event_backed_timeline_summary(
+    session_events: &[&serde_json::Value],
+) -> EventBackedTimelineSummary {
     let mut tool_call_count = None;
     let mut detection_count = 0_usize;
-    let mut max_severity = "informational".to_string();
+    let mut timeline_max_severity = None;
+    let mut risk_max_severity = "informational".to_string();
+    let mut has_triage = false;
     let mut triage_ran = false;
+    let mut saw_native = false;
+    let mut saw_historical = false;
     let mut rule_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut category_counts: BTreeMap<String, usize> = BTreeMap::new();
 
     for event in session_events {
+        if event.get("schema_version").and_then(|value| value.as_str()) == Some("3.0") {
+            saw_native = true;
+        } else {
+            saw_historical = true;
+        }
         if let Some(severity) = event
             .get("severity")
             .and_then(|value| value.as_str())
             .map(terminal_export_severity)
-            && severity_rank(&severity) > severity_rank(&max_severity)
         {
-            max_severity = severity;
+            let rank = severity_rank(&severity);
+            if timeline_max_severity
+                .as_ref()
+                .is_none_or(|(current_rank, _)| rank >= *current_rank)
+            {
+                timeline_max_severity = Some((rank, severity.clone()));
+            }
+            if rank > severity_rank(&risk_max_severity) {
+                risk_max_severity = severity;
+            }
         }
+        let event_triage_ran = triage_ran_from_event(event);
+        has_triage |= event_triage_ran;
 
         match event.get("event_type").and_then(|value| value.as_str()) {
             Some("activity") if tool_call_count.is_none() => {
@@ -1086,7 +1082,7 @@ fn build_session_risk_summary(session_events: &[&serde_json::Value]) -> serde_js
             }
             Some("detection") => {
                 detection_count += 1;
-                triage_ran |= triage_ran_from_event(event);
+                triage_ran |= event_triage_ran;
 
                 if let Some(values) = event.get("rule_ids").and_then(|value| value.as_array()) {
                     for value in values.iter().filter_map(|value| value.as_str()) {
@@ -1109,14 +1105,28 @@ fn build_session_risk_summary(session_events: &[&serde_json::Value]) -> serde_js
         }
     }
 
-    serde_json::json!({
+    let risk_summary = serde_json::json!({
         "tool_call_count": tool_call_count,
         "risky_action_count": detection_count,
         "top_rule_ids": ranked_summary_values(rule_counts),
         "top_categories": ranked_summary_values(category_counts),
-        "max_severity": max_severity,
+        "max_severity": risk_max_severity,
         "triage_ran": triage_ran,
-    })
+    });
+    let record_status = match (saw_native, saw_historical) {
+        (true, false) => "native",
+        (false, true) => "historical",
+        _ => "mixed",
+    };
+    EventBackedTimelineSummary {
+        detection_count,
+        max_severity: timeline_max_severity
+            .map(|(_, severity)| severity)
+            .unwrap_or_else(|| "informational".to_string()),
+        has_triage,
+        record_status,
+        risk_summary,
+    }
 }
 
 fn ranked_summary_values(counts: BTreeMap<String, usize>) -> serde_json::Value {
@@ -1592,6 +1602,47 @@ mod tests {
     }
 
     #[test]
+    fn historical_timeline_preserves_outer_summary_semantics() {
+        let severity = "historical-custom-severity";
+        let historical = serde_json::json!({
+            "schema_version": "1.0",
+            "event_id": "historical-summary-semantics",
+            "timestamp": "2026-05-01T00:00:00Z",
+            "event_type": "activity",
+            "severity": severity,
+            "risk_score": 0,
+            "client": "codex",
+            "session_id": "historical-summary-session",
+            "rule_ids": [],
+            "categories": [],
+            "evidence": [],
+            "triage": {"verdict": "benign"},
+        });
+        let timelines = build_session_timelines(&[&historical]);
+        let timeline = timelines.first().expect("historical timeline");
+
+        assert_eq!(
+            timeline["max_severity"],
+            opaque_identifier("severity", severity)
+        );
+        assert_eq!(timeline["risk_summary"]["max_severity"], "informational");
+        assert_eq!(timeline["has_triage"], true);
+        assert_eq!(timeline["risk_summary"]["triage_ran"], false);
+        assert_eq!(timeline["record_status"], "historical");
+
+        let native = canonical_detection(
+            "telltale-00000000-0000-4000-8000-000000000003",
+            "historical-summary-session",
+            "codex",
+            "gpt-5",
+            "openai",
+            "2026-05-01T00:01:00Z",
+        );
+        let mixed = build_session_timelines(&[&historical, &native]);
+        assert_eq!(mixed[0]["record_status"], "mixed");
+    }
+
+    #[test]
     fn historical_timeline_and_correlation_preserve_exact_canonical_links() {
         let first_session = opaque_identifier("session", "first source session");
         let second_session = opaque_identifier("session", "second source session");
@@ -1618,6 +1669,11 @@ mod tests {
 
         let timelines = build_session_timelines(&events);
         assert_eq!(timelines.len(), 2);
+        assert!(
+            timelines
+                .iter()
+                .all(|timeline| timeline["record_status"] == "native")
+        );
         assert!(timelines.iter().any(|timeline| {
             timeline["session_id"] == first_session
                 && timeline["agent"] == agent

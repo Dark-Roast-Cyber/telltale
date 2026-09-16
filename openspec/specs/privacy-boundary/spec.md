@@ -137,7 +137,7 @@ The change SHALL preserve Event 3.0 shape, parser/source identity, explicit pars
 
 #### Scenario: Evaluation baseline is rerun
 
-- **WHEN** the Issue #24 evaluation contract runs after privacy hardening
+- **WHEN** the canonical evaluation contract runs after privacy hardening
 - **THEN** efficacy outcomes and detector semantics are unchanged; any characterization-byte change is limited to reviewed sanitized output
 
 ### Requirement: Historical opaque labels remain stable without gaining trust
@@ -158,4 +158,3 @@ For historical Event 3.0 export and derived timeline/correlation output, the sys
 
 - **WHEN** an untrusted historical Event 3.0 record contains an exact recognized marker
 - **THEN** the label may be preserved for idempotence and correlation linkage but is not authenticated or trusted provenance
-

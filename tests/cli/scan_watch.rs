@@ -1,16 +1,5 @@
 use super::*;
 
-fn source_inventory_change_value(event: &Value) -> &str {
-    event["evidence"]
-        .as_array()
-        .expect("evidence array")
-        .iter()
-        .find(|item| item["field"] == "source_inventory_change")
-        .expect("source inventory change evidence")["redacted_value"]
-        .as_str()
-        .expect("source inventory change value")
-}
-
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn watch_process_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -478,96 +467,47 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             })
     );
 
-    let server_instructions = events
-        .iter()
-        .find(|event| event["session_id"] == "uc001-positive-server-instructions")
-        .expect("server instructions detection");
-    assert!(
-        validator.is_valid(server_instructions),
-        "server instructions event failed schema validation"
-    );
-    assert_eq!(server_instructions["event_type"], "detection");
-    assert_eq!(server_instructions["severity"], "critical");
-    assert!(
-        server_instructions["rule_ids"]
-            .as_array()
-            .expect("rule ids")
+    for session_id in [
+        "uc001-positive-server-instructions",
+        "uc001-positive-tool-description",
+        "uc001-positive-parameter-description",
+    ] {
+        let event = events
             .iter()
-            .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
-    );
-    assert!(
-        server_instructions["categories"]
-            .as_array()
-            .expect("categories")
-            .iter()
-            .any(|category| category == "mcp_prompt_injection")
-    );
-    assert!(
-        server_instructions["evidence"]
-            .as_array()
-            .expect("evidence")
-            .iter()
-            .all(|item| {
-                let value = item["redacted_value"].as_str().expect("redacted value");
-                !value.contains(".env") && !value.contains("mcp-lab")
-            })
-    );
-
-    let tool_description = events
-        .iter()
-        .find(|event| event["session_id"] == "uc001-positive-tool-description")
-        .expect("tool description detection");
-    assert!(
-        validator.is_valid(tool_description),
-        "tool description event failed schema validation"
-    );
-    assert_eq!(tool_description["event_type"], "detection");
-    assert_eq!(tool_description["severity"], "critical");
-    assert!(
-        tool_description["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
-    );
-    assert!(
-        tool_description["evidence"]
-            .as_array()
-            .expect("evidence")
-            .iter()
-            .all(|item| {
-                let value = item["redacted_value"].as_str().expect("redacted value");
-                !value.contains(".env") && !value.contains("mcp-lab")
-            })
-    );
-
-    let parameter_description = events
-        .iter()
-        .find(|event| event["session_id"] == "uc001-positive-parameter-description")
-        .expect("parameter description detection");
-    assert!(
-        validator.is_valid(parameter_description),
-        "parameter description event failed schema validation"
-    );
-    assert_eq!(parameter_description["event_type"], "detection");
-    assert_eq!(parameter_description["severity"], "critical");
-    assert!(
-        parameter_description["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
-    );
-    assert!(
-        parameter_description["evidence"]
-            .as_array()
-            .expect("evidence")
-            .iter()
-            .all(|item| {
-                let value = item["redacted_value"].as_str().expect("redacted value");
-                !value.contains(".env") && !value.contains("mcp-lab")
-            })
-    );
+            .find(|event| event["session_id"] == session_id)
+            .unwrap_or_else(|| panic!("missing detection for {session_id}"));
+        assert!(validator.is_valid(event), "invalid event for {session_id}");
+        assert_eq!(event["event_type"], "detection", "{session_id}");
+        assert_eq!(event["severity"], "critical", "{session_id}");
+        assert!(
+            event["rule_ids"]
+                .as_array()
+                .expect("rule ids")
+                .iter()
+                .any(|rule| rule == "mcp.tool_metadata.prompt_injection"),
+            "{session_id}"
+        );
+        if session_id == "uc001-positive-server-instructions" {
+            assert!(
+                event["categories"]
+                    .as_array()
+                    .expect("categories")
+                    .iter()
+                    .any(|category| category == "mcp_prompt_injection")
+            );
+        }
+        assert!(
+            event["evidence"]
+                .as_array()
+                .expect("evidence")
+                .iter()
+                .all(|item| {
+                    let value = item["redacted_value"].as_str().expect("redacted value");
+                    !value.contains(".env") && !value.contains("mcp-lab")
+                }),
+            "unredacted evidence for {session_id}"
+        );
+    }
 
     let compliance_tool = events
         .iter()
@@ -1686,25 +1626,26 @@ fn scan_once_accepts_repeated_client_filters() {
 }
 
 #[test]
-fn scan_once_rejects_unknown_client_filter() {
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--dry-run",
-            "--root",
-            "tests/fixtures/session_stores",
-            "--client",
-            "unknown-agent",
-        ])
-        .output()
-        .expect("run telltale");
+fn scan_and_watch_reject_unknown_client_filter() {
+    for args in [vec!["scan", "--once"], vec!["watch"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(&args)
+            .args([
+                "--dry-run",
+                "--root",
+                "tests/fixtures/session_stores",
+                "--client",
+                "unknown-agent",
+            ])
+            .output()
+            .expect("run telltale");
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unsupported client 'unknown-agent'"));
-    assert!(stderr.contains("codex"));
-    assert!(stderr.contains("gemini"));
+        assert!(!output.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected in ["unsupported client 'unknown-agent'", "codex", "gemini"] {
+            assert!(stderr.contains(expected), "{args:?}: {stderr}");
+        }
+    }
 }
 
 #[test]
@@ -1759,51 +1700,6 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .find(|event| event["event_type"] == "health")
         .expect("health event");
     assert_eq!(health["source_counts"]["gemini.json"], 1);
-}
-
-#[test]
-fn scan_once_health_reports_unchanged_source_inventory() {
-    let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("telltale-events.jsonl");
-    let state_path = temp.path().join("telltale-state.json");
-
-    for _ in 0..2 {
-        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-            .args([
-                "scan",
-                "--once",
-                "--allow-fixtures",
-                "--root",
-                "tests/fixtures/session_stores",
-                "--client",
-                "gemini",
-                "--log-path",
-            ])
-            .arg(&log_path)
-            .args(["--state-path"])
-            .arg(&state_path)
-            .output()
-            .expect("run telltale");
-
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let lines = fs::read_to_string(log_path).expect("log file");
-    let health_events = lines
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
-        .filter(|event| event["event_type"] == "health")
-        .collect::<Vec<_>>();
-    assert_eq!(health_events.len(), 1);
-
-    assert_eq!(
-        source_inventory_change_value(&health_events[0]),
-        "baseline=true; added=3; removed=0; unchanged=0"
-    );
 }
 
 #[test]
@@ -1886,53 +1782,37 @@ fn repeated_scans_suppress_duplicate_detections() {
     let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("telltale-state.json");
 
-    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--root",
-            "tests/fixtures/session_stores",
-            "--log-path",
-        ])
-        .arg(&log_path)
-        .args(["--state-path"])
-        .arg(&state_path)
-        .output()
-        .expect("run telltale");
-    assert!(
-        first.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&first.stderr)
-    );
-    let first_summary: Value = serde_json::from_slice(&first.stdout).expect("summary json");
+    let run_scan = |extra: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--root",
+                "tests/fixtures/session_stores",
+                "--log-path",
+            ])
+            .arg(&log_path)
+            .arg("--state-path")
+            .arg(&state_path)
+            .args(extra)
+            .output()
+            .expect("run telltale");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("scan summary json")
+    };
+    let first_summary = run_scan(&[]);
     assert_eq!(first_summary["detection_count"], 36);
     assert_eq!(first_summary["emitted_count"], 37);
     assert_source_processing_accounting(&first_summary);
     assert_detection_flow_accounting(&first_summary, 36, 0);
 
-    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--root",
-            "tests/fixtures/session_stores",
-            "--log-path",
-        ])
-        .arg(&log_path)
-        .args(["--state-path"])
-        .arg(&state_path)
-        .output()
-        .expect("run telltale");
-    assert!(
-        second.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&second.stderr)
-    );
-    let second_summary: Value = serde_json::from_slice(&second.stdout).expect("summary json");
+    let second_summary = run_scan(&[]);
     assert_eq!(second_summary["detection_count"], 36);
     assert_eq!(second_summary["emitted_count"], 0);
     assert_source_processing_accounting(&second_summary);
@@ -1953,30 +1833,7 @@ fn repeated_scans_suppress_duplicate_detections() {
         .expect("log file before backfill")
         .lines()
         .count();
-    let backfill = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--dry-run",
-            "--backfill",
-            "--no-local-config",
-            "--root",
-            "tests/fixtures/session_stores",
-            "--log-path",
-        ])
-        .arg(&log_path)
-        .args(["--state-path"])
-        .arg(&state_path)
-        .output()
-        .expect("run backfill scan");
-    assert!(
-        backfill.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&backfill.stderr)
-    );
-    let backfill_summary: Value =
-        serde_json::from_slice(&backfill.stdout).expect("backfill summary json");
+    let backfill_summary = run_scan(&["--dry-run", "--backfill"]);
     assert_eq!(backfill_summary["detection_count"], 36);
     assert_eq!(
         backfill_summary["detection_flow"]["effective_detection_candidate_count"],
@@ -3552,6 +3409,118 @@ fn scan_once_continues_after_malformed_source() {
 }
 
 #[test]
+fn scan_preserves_process_chain_correlation_then_ordinary_detection_order_with_policy() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("session_stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let mut records =
+        include_str!("../fixtures/custom_rules/custom-agent-behavior.jsonl").to_string();
+    for (index, command) in [
+        "cmd.exe /c hostname",
+        "cmd.exe /c ipconfig /all",
+        "cmd.exe /c net user /domain",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        records.push_str(
+            &serde_json::json!({
+                "type": "response_item",
+                "timestamp": format!("2026-05-08T10:0{index}:02Z"),
+                "payload": {"type": "tool_call", "name": "shell", "arguments": command}
+            })
+            .to_string(),
+        );
+        records.push('\n');
+    }
+    fs::write(sessions.join("analysis.jsonl"), records).unwrap();
+    let policy = temp.path().join("policy.yaml");
+    fs::write(&policy, "name: analysis-order\n").unwrap();
+    let log = temp.path().join("events.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--no-local-config",
+            "--client",
+            "codex",
+            "--no-default-rules",
+            "--rules",
+        ])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/custom_rules/sigma-inspired-agent-behavior.yaml"
+        ))
+        .arg("--policy")
+        .arg(&policy)
+        .arg("--root")
+        .arg(&root)
+        .arg("--log-path")
+        .arg(&log)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .env("TELLTALE_PROCESS_CHAIN_DETECTIONS", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events: Vec<Value> = fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let analysis: Vec<&Value> = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event["event_type"].as_str(),
+                Some("process_chain" | "correlation" | "detection" | "scanner_error")
+            )
+        })
+        .collect();
+    assert_eq!(
+        analysis
+            .iter()
+            .map(|event| event["event_type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "process_chain",
+            "process_chain",
+            "process_chain",
+            "process_chain",
+            "detection"
+        ]
+    );
+    assert_eq!(
+        analysis[3]["rule_ids"][0],
+        "procchain.correlation.host_then_account_discovery"
+    );
+    assert_eq!(
+        analysis[3]["signal_types"],
+        serde_json::json!(["correlation"])
+    );
+    assert_eq!(
+        analysis[4]["rule_ids"][0],
+        "custom.agent.malicious_behavior"
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        summary["detection_flow"]["policy_match_accounting"],
+        serde_json::json!({
+            "status": "available",
+            "pre_policy_detection_candidate_count": 1,
+            "fully_filtered_detection_candidate_count": 0,
+            "filtered_rule_id_count": 0
+        })
+    );
+}
+
+#[test]
 fn scan_once_refuses_fixture_root_without_allow_fixtures() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
@@ -3696,10 +3665,16 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
     let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("telltale-state.json");
     let session_path = root.join("codex/sessions/2026/04/session-a.jsonl");
+    fs::write(
+        root.join(".mcp.json"),
+        r#"{"mcpServers":{"watch-boundary":{"command":"synthetic-mcp"}}}"#,
+    )
+    .expect("synthetic host-wide MCP config");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "watch",
+            "--emit-activity",
             "--allow-fixtures",
             "--no-local-config",
             "--iterations",
@@ -3787,6 +3762,17 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("watch event json"))
         .collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| { event["event_type"] == "activity" && event["client"] == "codex" })
+    );
+    let has_mcp_inventory = events.iter().any(|event| {
+        event["session_id"] == "mcp_inventory" && event["tool_name"] == "mcp::watch-boundary"
+    });
+    // The Windows trigger forces a full scan; other platforms target the
+    // known changed source and must not walk host-wide MCP configuration.
+    assert_eq!(has_mcp_inventory, cfg!(windows));
     let changed_detection = events
         .iter()
         .find(|event| {
@@ -4517,27 +4503,6 @@ fn watch_exits_cleanly_on_sigterm() {
         }
         thread::sleep(Duration::from_millis(100));
     }
-}
-
-#[test]
-fn watch_rejects_unknown_client_filter() {
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "watch",
-            "--dry-run",
-            "--root",
-            "tests/fixtures/session_stores",
-            "--client",
-            "unknown-agent",
-        ])
-        .output()
-        .expect("run telltale watch");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unsupported client 'unknown-agent'"));
-    assert!(stderr.contains("codex"));
-    assert!(stderr.contains("gemini"));
 }
 
 #[test]

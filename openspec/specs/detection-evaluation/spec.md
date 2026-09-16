@@ -156,3 +156,24 @@ Committed inputs and reports SHALL NOT contain real customer transcripts, live c
 
 - **WHEN** a case uses controlled test material
 - **THEN** it remains synthetic and does not introduce real credentials or customer data
+
+### Requirement: Intentional HTTP-transfer correction updates characterization only
+
+An intentional bundled-rule correction for HTTP transfer direction or encoded-HTTP
+evidence SHALL update golden characterization (matched rules, scores, and
+contribution ledgers) and SHALL NOT change independently authored efficacy labels
+for `BC-ENCODED-HTTP-001` or `RX-ENCODED-HTTP-001`.
+
+#### Scenario: Benign encoded API case
+
+- **WHEN** the detector correction is applied
+- **THEN** `BC-ENCODED-HTTP-001` remains `expected_security_review: not_required`
+- **AND** observed security review is false
+- **AND** characterization expectations are updated to the new exact ledger
+
+#### Scenario: Malicious encoded egress case
+
+- **WHEN** the detector correction is applied
+- **THEN** `RX-ENCODED-HTTP-001` remains `expected_security_review: required`
+- **AND** observed security review is true
+- **AND** `exfil.encoded_http` remains an expected match

@@ -1,34 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use notify::{
-    Config as NotifyConfig, Event as NotifyEvent, EventKind, RecommendedWatcher, RecursiveMode,
-    Watcher,
-};
 use time::OffsetDateTime;
 
 use crate::allowlist::{load_allowlist, suppress_detection};
-use crate::baseline::{BaselineDeviationConfig, build_baseline_summaries};
+use crate::baseline::{BaselineDeviationConfig, BaselineSnapshotStore, build_baseline_summaries};
+use crate::cli::historical::{EventRecordKind, JsonlEventRecord, read_jsonl_records};
 use crate::detection::{
     EffectiveMatchSnapshot, PolicyMatchAccounting, account_policy_matches,
     detect_parsed_source_records, detect_parsed_source_records_with_snapshot,
     summarize_parsed_source_activity,
 };
-use crate::discovery::{
-    DiscoveryError, discover_sources_with_projects, discover_sources_with_projects_best_effort,
-    discover_watch_roots_with_projects, is_fixture_root,
-};
+use crate::discovery::is_fixture_root;
 use crate::event::{
-    Event, Evidence, HealthEventInput, OperationalAlertInput, PrivacySanitizer,
-    SanitizationContext, SessionRiskSummaryEventInput, evidence_hash, health_event_with_metadata,
-    load_operational_alert_config, opaque_identifier, operational_alert_event,
-    sanitize_serialized_event, scanner_error_event, session_risk_summary_event,
-    terminal_identifier,
+    Event, Evidence, HealthEventInput, OperationalAlertConfig, OperationalAlertInput,
+    PrivacySanitizer, SanitizationContext, SessionRiskSummaryEventInput, evidence_hash,
+    health_event_with_metadata, load_operational_alert_config, opaque_identifier,
+    operational_alert_event, sanitize_serialized_event, scanner_error_event,
+    session_risk_summary_event, terminal_identifier,
 };
 use crate::file_lock::validate_runtime_paths;
 use crate::install_inventory::{
@@ -51,6 +42,13 @@ use telltale_schema::source::Source;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
+
+mod discovery;
+pub(super) mod watch;
+
+use discovery::{
+    SourceDiscoveryAccounting, discover_operational_sources, load_project_configuration,
+};
 
 /// Options that resolve identically for `scan` and `watch`.
 ///
@@ -90,32 +88,6 @@ pub(crate) struct ScanConfig<'a> {
     pub(crate) max_sources: Option<usize>,
 }
 
-/// When `watch` decides to run a scan. Watch never backfills, rebuilds
-/// baselines, or caps sources, so those options are absent by construction
-/// rather than pinned to a default at conversion time.
-#[derive(Clone, Copy)]
-pub(crate) struct WatchTriggerConfig {
-    pub(crate) iterations: Option<u32>,
-    pub(crate) debounce: Duration,
-    pub(crate) min_scan_interval: Duration,
-}
-
-/// A shared scan plus the triggering behavior only `watch` accepts.
-#[derive(Clone, Copy)]
-pub(crate) struct WatchConfig<'a> {
-    pub(crate) execution: ScanExecutionConfig<'a>,
-    pub(crate) trigger: WatchTriggerConfig,
-}
-
-fn watch_scan_config<'a>(config: &WatchConfig<'a>) -> ScanConfig<'a> {
-    ScanConfig {
-        execution: config.execution,
-        backfill: false,
-        rebuild_baselines: false,
-        max_sources: None,
-    }
-}
-
 pub(crate) fn run_scan_loop(
     config: ScanConfig<'_>,
     iterations: Option<u32>,
@@ -135,466 +107,8 @@ pub(crate) fn run_scan_loop(
     Ok(())
 }
 
-const WATCH_SHUTDOWN_POLL: Duration = Duration::from_millis(200);
-
-pub(crate) fn run_watch(config: WatchConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
-    ensure_durable_scan_platform(
-        config.execution.sinks,
-        crate::sink::outbox::current_platform_is_windows(),
-    )?;
-    if !config.execution.dry_run
-        && !config.execution.allow_fixtures
-        && is_fixture_root(config.execution.root)
-    {
-        return Err(
-            "refusing to write fixture/demo data to log path; use --dry-run or --allow-fixtures"
-                .into(),
-        );
-    }
-    let _rule_set = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-        config.execution.rule_pack_paths,
-        config.execution.rule_paths,
-        config.execution.policy_path,
-        config.execution.rule_load_mode,
-        config.execution.override_paths,
-        &[],
-    )?;
-
-    // Note: structural changes to project YAML (new projects, new roots) require a process
-    // restart; the notify watcher is not rebuilt at runtime.
-    let (project_configs, project_configuration) =
-        load_project_configuration(config.execution.root, config.execution.project_config_paths);
-    let watch_roots = discover_watch_roots_with_projects(
-        config.execution.root,
-        config.execution.clients,
-        &project_configs,
-    );
-    if watch_roots.is_empty() {
-        return Err("no existing Telltale session-store roots found".into());
-    }
-
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_handler = Arc::clone(&shutdown);
-    ctrlc::set_handler(move || shutdown_handler.store(true, Ordering::SeqCst))?;
-
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = RecommendedWatcher::new(
-        move |result| {
-            let _ = tx.send(result);
-        },
-        NotifyConfig::default(),
-    )?;
-    for root in &watch_roots {
-        watcher.watch(root, RecursiveMode::Recursive)?;
-    }
-
-    let (mut source_index, mut watch_discovery) =
-        build_watch_source_index(&config, &project_configs, &project_configuration);
-    let mut remaining = config.trigger.iterations;
-    let mut last_scan_completed: Option<Instant> = None;
-
-    'watch: loop {
-        // Block until the first relevant change, waking periodically to honor shutdown.
-        let mut pending = PendingWatchChanges::default();
-        while pending.is_empty() {
-            if shutdown.load(Ordering::SeqCst) {
-                break 'watch;
-            }
-            match rx.recv_timeout(WATCH_SHUTDOWN_POLL) {
-                Ok(Ok(event)) => pending.absorb(&event),
-                Ok(Err(error)) => return Err(Box::new(error)),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break 'watch,
-            }
-        }
-
-        // Debounce window: coalesce rapid writes into one scan.
-        collect_watch_events_for(&rx, &mut pending, config.trigger.debounce, &shutdown)?;
-        // Rate limit: keep coalescing until the minimum scan interval has passed.
-        if let Some(completed) = last_scan_completed {
-            let elapsed = completed.elapsed();
-            if elapsed < config.trigger.min_scan_interval {
-                collect_watch_events_for(
-                    &rx,
-                    &mut pending,
-                    config.trigger.min_scan_interval - elapsed,
-                    &shutdown,
-                )?;
-            }
-        }
-        if shutdown.load(Ordering::SeqCst) {
-            break;
-        }
-
-        match pending.scan_action(&source_index) {
-            WatchScanAction::Skip => continue,
-            WatchScanAction::Targeted(targets) => {
-                run_scan(
-                    watch_scan_config(&config),
-                    ScanTargets::Targeted {
-                        sources: targets,
-                        discovery: watch_discovery.clone(),
-                    },
-                    StateSavePolicy::OnChange,
-                )?;
-            }
-            WatchScanAction::Full => {
-                let result = run_scan(
-                    watch_scan_config(&config),
-                    ScanTargets::Full,
-                    StateSavePolicy::OnChange,
-                )?;
-                if let Some((sources, discovery)) = result.full_scan_discovery {
-                    (source_index, watch_discovery) = watch_index_from_sources(sources, discovery);
-                }
-            }
-        }
-        last_scan_completed = Some(Instant::now());
-
-        if let Some(value) = remaining.as_mut() {
-            if *value == 1 {
-                break;
-            }
-            *value -= 1;
-        }
-    }
-    Ok(())
-}
-
-fn collect_watch_events_for(
-    rx: &Receiver<notify::Result<NotifyEvent>>,
-    pending: &mut PendingWatchChanges,
-    window: Duration,
-    shutdown: &AtomicBool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + window;
-    loop {
-        if shutdown.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(());
-        }
-        let timeout = (deadline - now).min(WATCH_SHUTDOWN_POLL);
-        match rx.recv_timeout(timeout) {
-            Ok(Ok(event)) => pending.absorb(&event),
-            Ok(Err(error)) => return Err(Box::new(error)),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return Ok(()),
-        }
-    }
-}
-
-enum WatchScanAction {
-    /// No watched source is affected; do not scan.
-    Skip,
-    /// Every changed path maps to a known source; scan only those sources.
-    Targeted(Vec<Source>),
-    /// A path was removed or does not map to a known source; rediscover and scan everything.
-    Full,
-}
-
-#[derive(Default)]
-struct PendingWatchChanges {
-    paths: BTreeSet<PathBuf>,
-    saw_remove: bool,
-}
-
-impl PendingWatchChanges {
-    fn absorb(&mut self, event: &NotifyEvent) {
-        if !watch_event_should_scan(event) {
-            return;
-        }
-        if matches!(event.kind, EventKind::Remove(_)) {
-            self.saw_remove = true;
-        }
-        for path in &event.paths {
-            if let Some(path) = normalize_watch_event_path(path) {
-                self.paths.insert(path);
-            }
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.paths.is_empty() && !self.saw_remove
-    }
-
-    fn scan_action(&self, source_index: &BTreeMap<PathBuf, Source>) -> WatchScanAction {
-        if self.saw_remove {
-            return WatchScanAction::Full;
-        }
-        let mut targets = Vec::new();
-        let mut seen_paths = BTreeSet::new();
-        for path in &self.paths {
-            let lookup = path.canonicalize().unwrap_or_else(|_| path.clone());
-            let Some(source) = source_index.get(&lookup) else {
-                return WatchScanAction::Full;
-            };
-            if seen_paths.insert(source.path.clone()) {
-                targets.push(source.clone());
-            }
-        }
-        if targets.is_empty() {
-            WatchScanAction::Skip
-        } else {
-            WatchScanAction::Targeted(targets)
-        }
-    }
-}
-
-/// Map SQLite WAL sidecar events onto the main database file and drop `-shm` /
-/// `-journal` sidecar events, which fire on reader activity without new
-/// persisted data.
-fn normalize_watch_event_path(path: &Path) -> Option<PathBuf> {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Some(path.to_path_buf());
-    };
-    if let Some(base) = name.strip_suffix("-wal")
-        && base.ends_with(".db")
-    {
-        return Some(path.with_file_name(base));
-    }
-    for suffix in ["-shm", "-journal"] {
-        if let Some(base) = name.strip_suffix(suffix)
-            && base.ends_with(".db")
-        {
-            return None;
-        }
-    }
-    Some(path.to_path_buf())
-}
-
-#[derive(Clone)]
-struct ProjectConfigurationAccounting {
-    mode: &'static str,
-    document_attempt_count: usize,
-    document_success_count: usize,
-    document_failure_count: usize,
-    loaded_project_count: usize,
-}
-
-impl ProjectConfigurationAccounting {
-    fn none() -> Self {
-        Self {
-            mode: "none",
-            document_attempt_count: 0,
-            document_success_count: 0,
-            document_failure_count: 0,
-            loaded_project_count: 0,
-        }
-    }
-
-    fn json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "mode": self.mode,
-            "document_attempt_count": self.document_attempt_count,
-            "document_success_count": self.document_success_count,
-            "document_failure_count": self.document_failure_count,
-            "loaded_project_count": self.loaded_project_count,
-        })
-    }
-}
-
-fn load_project_configuration(
-    root: &Path,
-    paths: &[PathBuf],
-) -> (
-    Vec<crate::projects::ProjectDef>,
-    ProjectConfigurationAccounting,
-) {
-    if paths.is_empty() && root == Path::new(".") {
-        let projects = crate::projects::load_default_projects();
-        return (
-            projects.clone(),
-            ProjectConfigurationAccounting {
-                mode: "default_roots",
-                document_attempt_count: 0,
-                document_success_count: 0,
-                document_failure_count: 0,
-                loaded_project_count: projects.len(),
-            },
-        );
-    }
-    if paths.is_empty() {
-        return (Vec::new(), ProjectConfigurationAccounting::none());
-    }
-
-    let mut projects = Vec::new();
-    let mut document_success_count = 0;
-    let mut document_failure_count = 0;
-    for path in paths {
-        match crate::projects::load_project_config(path) {
-            Ok(loaded) => {
-                document_success_count += 1;
-                projects.extend(loaded);
-            }
-            Err(_) => document_failure_count += 1,
-        }
-    }
-    (
-        projects.clone(),
-        ProjectConfigurationAccounting {
-            mode: "configured_documents",
-            document_attempt_count: paths.len(),
-            document_success_count,
-            document_failure_count,
-            loaded_project_count: projects.len(),
-        },
-    )
-}
-
-#[derive(Clone)]
-pub(crate) struct SourceDiscoveryAccounting {
-    checked_status: &'static str,
-    first_error_category: Option<&'static str>,
-    best_effort_fallback_used: bool,
-    returned_source_count: usize,
-    operational_source_count: usize,
-    project_configuration: ProjectConfigurationAccounting,
-}
-
-impl SourceDiscoveryAccounting {
-    fn json(&self, basis: &'static str, performed_for_current_scan: bool) -> serde_json::Value {
-        serde_json::json!({
-            "basis": basis,
-            "performed_for_current_scan": performed_for_current_scan,
-            "checked_status": self.checked_status,
-            "first_error_category": self.first_error_category,
-            "best_effort_fallback_used": self.best_effort_fallback_used,
-            "returned_source_count": self.returned_source_count,
-            "operational_source_count": self.operational_source_count,
-            "project_configuration": self.project_configuration.json(),
-        })
-    }
-}
-
-fn discovery_error_category(error: &DiscoveryError) -> &'static str {
-    match error {
-        DiscoveryError::InvalidRoot { .. } => "invalid_root",
-        DiscoveryError::Traversal { .. } => "traversal",
-        _ => "other",
-    }
-}
-
-struct DiscoveryResolution {
-    sources: Vec<Source>,
-    checked_status: &'static str,
-    first_error_category: Option<&'static str>,
-    best_effort_fallback_used: bool,
-}
-
-fn resolve_discovery_result(
-    checked: Result<Vec<Source>, DiscoveryError>,
-    best_effort: impl FnOnce() -> Vec<Source>,
-) -> DiscoveryResolution {
-    match checked {
-        Ok(sources) => DiscoveryResolution {
-            sources,
-            checked_status: "succeeded",
-            first_error_category: None,
-            best_effort_fallback_used: false,
-        },
-        Err(error) => DiscoveryResolution {
-            sources: best_effort(),
-            checked_status: "first_error",
-            first_error_category: Some(discovery_error_category(&error)),
-            best_effort_fallback_used: true,
-        },
-    }
-}
-
-/// Index discovered sources by canonical path so notify event paths can be
-/// mapped back to the source that changed. Mirrors the discovery filtering
-/// applied by full scans.
-fn source_index_from_sources(sources: Vec<Source>) -> BTreeMap<PathBuf, Source> {
-    sources
-        .into_iter()
-        .map(|source| {
-            let key = source
-                .path
-                .canonicalize()
-                .unwrap_or_else(|_| source.path.clone());
-            (key, source)
-        })
-        .collect()
-}
-
-fn watch_index_from_sources(
-    sources: Vec<Source>,
-    mut discovery: SourceDiscoveryAccounting,
-) -> (BTreeMap<PathBuf, Source>, SourceDiscoveryAccounting) {
-    let index = source_index_from_sources(sources);
-    discovery.operational_source_count = index.len();
-    (index, discovery)
-}
-
-fn build_watch_source_index(
-    config: &WatchConfig<'_>,
-    project_configs: &[crate::projects::ProjectDef],
-    project_configuration: &ProjectConfigurationAccounting,
-) -> (BTreeMap<PathBuf, Source>, SourceDiscoveryAccounting) {
-    let (sources, discovery) = discover_operational_sources(
-        config.execution.root,
-        config.execution.clients,
-        None,
-        project_configs,
-        project_configuration,
-    );
-    watch_index_from_sources(sources, discovery)
-}
-
-fn discover_operational_sources(
-    root: &Path,
-    clients: &[ClientId],
-    max_sources: Option<usize>,
-    project_configs: &[crate::projects::ProjectDef],
-    project_configuration: &ProjectConfigurationAccounting,
-) -> (Vec<Source>, SourceDiscoveryAccounting) {
-    let resolution = resolve_discovery_result(
-        discover_sources_with_projects(root, project_configs),
-        || discover_sources_with_projects_best_effort(root, project_configs),
-    );
-    let DiscoveryResolution {
-        mut sources,
-        checked_status,
-        first_error_category,
-        best_effort_fallback_used,
-    } = resolution;
-    let returned_source_count = sources.len();
-    if !clients.is_empty() {
-        let allowed_clients = clients.iter().copied().collect::<BTreeSet<_>>();
-        sources.retain(|source| allowed_clients.contains(&source.client));
-    }
-    if !is_fixture_root(root) {
-        prefer_opencode_sqlite_over_legacy_json(&mut sources);
-    }
-    if let Some(max_sources) = max_sources {
-        sources.truncate(max_sources);
-    }
-    let operational_source_count = sources.len();
-    (
-        sources,
-        SourceDiscoveryAccounting {
-            checked_status,
-            first_error_category,
-            best_effort_fallback_used,
-            returned_source_count,
-            operational_source_count,
-            project_configuration: project_configuration.clone(),
-        },
-    )
-}
-
-fn watch_event_should_scan(event: &NotifyEvent) -> bool {
-    matches!(
-        event.kind,
-        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-    )
-}
-
 /// Which sources a scan should parse and detect against.
-pub(crate) enum ScanTargets {
+enum ScanTargets {
     /// Discover and scan every source under the configured root.
     Full,
     /// Scan only the given pre-discovered sources (watch-mode targeted scan).
@@ -606,7 +120,7 @@ pub(crate) enum ScanTargets {
 
 /// When to persist scanner state after a scan.
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum StateSavePolicy {
+enum StateSavePolicy {
     /// Save on every scan (batch mode behavior).
     Always,
     /// Save only when the scan emitted events or advanced durable state
@@ -748,26 +262,11 @@ fn run_scan_for_platform(
             enabled: config.execution.baseline_deviation_scoring,
             ..BaselineDeviationConfig::default()
         };
-        let mut activities = parsed_sources
-            .iter()
-            .filter_map(|parsed_source| {
-                parsed_source
-                    .records
-                    .as_ref()
-                    .ok()
-                    .map(|records| (parsed_source, records))
-            })
-            .flat_map(|(parsed_source, records)| {
-                summarize_parsed_source_activity(
-                    &parsed_source.source,
-                    records,
-                    &baseline_snapshots,
-                    baseline_deviation_config,
-                )
-                .into_iter()
-                .map(|event| (parsed_source.source.clone(), event))
-            })
-            .collect::<Vec<_>>();
+        let mut activities = summarize_scan_source_activity(
+            &parsed_sources,
+            &baseline_snapshots,
+            baseline_deviation_config,
+        );
         // MCP discovery walks host-wide config directories; targeted scans only
         // re-examine changed session sources, so leave it to full scans.
         if !targeted {
@@ -782,49 +281,18 @@ fn run_scan_for_platform(
     let mut detections = Vec::new();
     let process_chain_rules = load_process_chain_rules_if_enabled();
     for parsed_source in &parsed_sources {
-        if let (Some(rules), Ok(records)) = (process_chain_rules.as_ref(), &parsed_source.records) {
-            match detect_process_chains(
-                &parsed_source.source,
-                rules,
-                records,
-                &ProcessChainConfig::default(),
-            ) {
-                Ok(events) => detections.extend(
-                    events
-                        .into_iter()
-                        .map(|event| (parsed_source.source.clone(), event)),
-                ),
-                Err(error) => detections.push((
-                    parsed_source.source.clone(),
-                    scanner_error_event(&parsed_source.source, &error),
-                )),
-            }
-        }
-        match &parsed_source.records {
-            Ok(records) if policy_active => {
-                let (events, snapshot) = detect_parsed_source_records_with_snapshot(
-                    &parsed_source.source,
-                    &rule_set,
-                    records,
-                );
-                detections.extend(
-                    events
-                        .into_iter()
-                        .map(|event| (parsed_source.source.clone(), event)),
-                );
-                effective_match_snapshots.push(snapshot);
-            }
-            Ok(records) => detections.extend(
-                detect_parsed_source_records(&parsed_source.source, &rule_set, records)
-                    .into_iter()
-                    .map(|event| (parsed_source.source.clone(), event)),
-            ),
-            Err(ParseError::Empty) => {}
-            Err(error) => detections.push((
-                parsed_source.source.clone(),
-                scanner_error_event(&parsed_source.source, error),
-            )),
-        }
+        let (events, snapshot) = analyze_parsed_source(
+            parsed_source,
+            &rule_set,
+            policy_active,
+            process_chain_rules.as_ref(),
+        );
+        detections.extend(
+            events
+                .into_iter()
+                .map(|event| (parsed_source.source.clone(), event)),
+        );
+        effective_match_snapshots.extend(snapshot);
     }
     let mut detection_flow = detection_flow_accounting(&detections);
     let mut suppressed_count = 0_usize;
@@ -856,31 +324,13 @@ fn run_scan_for_platform(
         Some(state.source_inventory_change_summary(&sources))
     };
 
-    // Operational alerting: emit alerts when scanner health thresholds are exceeded.
     let op_config = load_operational_alert_config();
     let scanner_error_count = detections
         .iter()
         .filter(|(_, event)| event.event_type == "scanner_error")
         .count() as u64;
-    let mut operational_alerts = Vec::new();
-    if scanner_error_count > u64::from(op_config.max_scanner_errors) {
-        operational_alerts.push(operational_alert_event(OperationalAlertInput {
-            alert_type: "scanner_error_threshold_exceeded".to_string(),
-            threshold: format!("max_scanner_errors={}", op_config.max_scanner_errors),
-            actual_value: format!("scanner_error_count={scanner_error_count}"),
-            scan_duration_ms: Some(scan_duration_ms),
-            scanner_error_count: Some(scanner_error_count as u32),
-        }));
-    }
-    if scan_duration_ms > op_config.max_scan_duration_ms {
-        operational_alerts.push(operational_alert_event(OperationalAlertInput {
-            alert_type: "scan_duration_threshold_exceeded".to_string(),
-            threshold: format!("max_scan_duration_ms={}", op_config.max_scan_duration_ms),
-            actual_value: format!("scan_duration_ms={scan_duration_ms}"),
-            scan_duration_ms: Some(scan_duration_ms),
-            scanner_error_count: Some(scanner_error_count as u32),
-        }));
-    }
+    let operational_alerts =
+        scanner_health_alerts(&op_config, scanner_error_count, scan_duration_ms);
     let has_operational_alerts = !operational_alerts.is_empty();
 
     let pre_policy_rule_set = if policy_active {
@@ -916,37 +366,21 @@ fn run_scan_for_platform(
             state.install_inventory = Some(snapshot);
         }
     }
-    for (source, activity) in activities {
-        if config.backfill || state.should_emit(&source, &activity) {
-            emitted_events.push(activity);
-        }
-    }
-    let mut scanner_error_emitted = false;
-    for (source, detection) in detections {
-        let is_detection = detection.event_type == "detection";
-        let should_emit = config.backfill || state.should_emit(&source, &detection);
-        if is_detection {
-            if should_emit {
-                detection_flow.emitted_detection_count += 1;
-            } else {
-                detection_flow.state_deduplicated_detection_count += 1;
-            }
-        }
-        if should_emit {
-            scanner_error_emitted |= detection.event_type == "scanner_error";
-            emitted_events.push(detection);
-        }
-    }
-    for (source, summary) in session_risk_summaries {
-        if config.backfill || state.should_emit(&source, &summary) {
-            emitted_events.push(summary);
-        }
-    }
+    let selected = select_source_events(
+        &mut state,
+        config.backfill,
+        activities,
+        detections,
+        session_risk_summaries,
+    );
+    detection_flow.emitted_detection_count += selected.emitted_detection_count;
+    detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
+    emitted_events.extend(selected.events);
 
     let health_emitted = config.execution.dry_run
         || config.backfill
         || inventory_health_change
-        || scanner_error_emitted
+        || selected.scanner_error_emitted
         || has_operational_alerts;
     let emitted_count = emitted_events.len() as u64;
     let health = health_event_with_metadata(HealthEventInput {
@@ -989,20 +423,17 @@ fn run_scan_for_platform(
         None
     };
     if !config.execution.dry_run {
-        state_lock
+        let state_lock = state_lock
             .as_ref()
-            .ok_or("state lock missing before durable delivery")?
-            .verify()?;
+            .ok_or("state lock missing before durable delivery")?;
+        state_lock.verify()?;
         if config.execution.sinks.has_persistent_replay() {
             sink_failures = config
                 .execution
                 .sinks
                 .persist_for_durable_replay_with_failures(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
-                state_lock
-                    .as_ref()
-                    .ok_or("state lock missing for durable scan")?
-                    .verify()?;
+                state_lock.verify()?;
                 prepared_state.install_replace(config.execution.state_path)?;
             }
             sink_failures.extend(config.execution.sinks.deliver_durable()?);
@@ -1015,10 +446,7 @@ fn run_scan_for_platform(
         } else {
             sink_failures = config.execution.sinks.deliver(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
-                state_lock
-                    .as_ref()
-                    .ok_or("state lock missing for durable scan")?
-                    .verify()?;
+                state_lock.verify()?;
                 prepared_state.install_replace(config.execution.state_path)?;
             }
         }
@@ -1053,8 +481,7 @@ fn run_scan_for_platform(
 
     let summary = scan_summary_json(ScanSummaryInput {
         health_event: &health,
-        emitted_events: &emitted_events,
-        health_emitted,
+        emitted_count,
         activity_count,
         detection_count,
         session_risk_summary_count,
@@ -1075,7 +502,6 @@ fn run_scan_for_platform(
             rule_count,
         ),
         targeted,
-        policy_active,
         runtime: config.execution.runtime,
         effective_configuration: &effective_configuration,
         durable_health: config.execution.sinks.durable_health_json(),
@@ -1084,6 +510,143 @@ fn run_scan_for_platform(
     Ok(ScanRunResult {
         full_scan_discovery,
     })
+}
+
+fn summarize_scan_source_activity(
+    parsed_sources: &[ParsedScanSource],
+    baseline_snapshots: &BaselineSnapshotStore,
+    baseline_deviation_config: BaselineDeviationConfig,
+) -> Vec<(Source, Event)> {
+    let mut activities = Vec::new();
+    for parsed_source in parsed_sources {
+        let Ok(records) = &parsed_source.records else {
+            continue;
+        };
+        activities.extend(
+            summarize_parsed_source_activity(
+                &parsed_source.source,
+                records,
+                baseline_snapshots,
+                baseline_deviation_config,
+            )
+            .into_iter()
+            .map(|event| (parsed_source.source.clone(), event)),
+        );
+    }
+    activities
+}
+
+fn analyze_parsed_source(
+    parsed_source: &ParsedScanSource,
+    rule_set: &telltale_rules::CompiledRuleSet,
+    policy_active: bool,
+    process_chain_rules: Option<&telltale_rules::process_chain::CompiledProcessChainRules>,
+) -> (Vec<Event>, Option<EffectiveMatchSnapshot>) {
+    let source = &parsed_source.source;
+    let records = match &parsed_source.records {
+        Ok(records) => records,
+        Err(ParseError::Empty) => return (Vec::new(), None),
+        Err(error) => return (vec![scanner_error_event(source, error)], None),
+    };
+    let mut events = Vec::new();
+    if let Some(rules) = process_chain_rules {
+        match detect_process_chains(source, rules, records, &ProcessChainConfig::default()) {
+            Ok(chain_events) => events.extend(chain_events),
+            Err(error) => events.push(scanner_error_event(source, &error)),
+        }
+    }
+    // Chain output (or its scanner error) precedes the ordinary detection pass.
+    let (detections, snapshot) = if policy_active {
+        let (detections, snapshot) =
+            detect_parsed_source_records_with_snapshot(source, rule_set, records);
+        (detections, Some(snapshot))
+    } else {
+        (
+            detect_parsed_source_records(source, rule_set, records),
+            None,
+        )
+    };
+    events.extend(detections);
+    (events, snapshot)
+}
+
+fn scanner_health_alerts(
+    config: &OperationalAlertConfig,
+    scanner_error_count: u64,
+    scan_duration_ms: u64,
+) -> Vec<Event> {
+    let mut alerts = Vec::new();
+    if scanner_error_count > u64::from(config.max_scanner_errors) {
+        alerts.push(operational_alert_event(OperationalAlertInput {
+            alert_type: "scanner_error_threshold_exceeded".to_string(),
+            threshold: format!("max_scanner_errors={}", config.max_scanner_errors),
+            actual_value: format!("scanner_error_count={scanner_error_count}"),
+            scan_duration_ms: Some(scan_duration_ms),
+            scanner_error_count: Some(scanner_error_count as u32),
+        }));
+    }
+    if scan_duration_ms > config.max_scan_duration_ms {
+        alerts.push(operational_alert_event(OperationalAlertInput {
+            alert_type: "scan_duration_threshold_exceeded".to_string(),
+            threshold: format!("max_scan_duration_ms={}", config.max_scan_duration_ms),
+            actual_value: format!("scan_duration_ms={scan_duration_ms}"),
+            scan_duration_ms: Some(scan_duration_ms),
+            scanner_error_count: Some(scanner_error_count as u32),
+        }));
+    }
+    alerts
+}
+
+struct SelectedSourceEvents {
+    events: Vec<Event>,
+    emitted_detection_count: usize,
+    deduplicated_detection_count: usize,
+    scanner_error_emitted: bool,
+}
+
+/// Select in emission order, recording fingerprints only in the in-memory state.
+/// Backfill bypasses both deduplication and fingerprint recording.
+fn select_source_events(
+    state: &mut ScanState,
+    backfill: bool,
+    activities: Vec<(Source, Event)>,
+    detections: Vec<(Source, Event)>,
+    session_risk_summaries: Vec<(Source, Event)>,
+) -> SelectedSourceEvents {
+    let mut selected = SelectedSourceEvents {
+        events: Vec::with_capacity(
+            activities.len() + detections.len() + session_risk_summaries.len(),
+        ),
+        emitted_detection_count: 0,
+        deduplicated_detection_count: 0,
+        scanner_error_emitted: false,
+    };
+    for (source, activity) in activities {
+        if backfill || state.should_emit(&source, &activity) {
+            selected.events.push(activity);
+        }
+    }
+    for (source, detection) in detections {
+        let is_detection = detection.event_type == "detection";
+        let should_emit = backfill || state.should_emit(&source, &detection);
+        if is_detection {
+            if should_emit {
+                selected.emitted_detection_count += 1;
+            } else {
+                selected.deduplicated_detection_count += 1;
+            }
+        }
+        if should_emit {
+            selected.scanner_error_emitted |= detection.event_type == "scanner_error";
+            selected.events.push(detection);
+        }
+    }
+    for (source, summary) in session_risk_summaries {
+        if backfill || state.should_emit(&source, &summary) {
+            selected.events.push(summary);
+        }
+    }
+    selected
 }
 
 fn sink_failure_alert_event(failure: &SinkFailure) -> Event {
@@ -1279,27 +842,10 @@ fn is_opencode_sqlite_source(source: &Source) -> bool {
     source.client == ClientId::OpenCode && source.kind == SourceKind::Sqlite
 }
 
-fn prefer_opencode_sqlite_over_legacy_json(sources: &mut Vec<Source>) {
-    let has_opencode_sqlite = sources.iter().any(is_opencode_sqlite_source);
-    if !has_opencode_sqlite {
-        return;
-    }
-    sources.retain(|source| {
-        !(source.client == ClientId::OpenCode
-            && source.kind == SourceKind::LegacyJson
-            && source.source_id == "opencode.legacy_json")
-    });
-}
-
 #[derive(Debug)]
-struct SessionRiskSummaryAccumulator {
-    source: Source,
-    client: String,
-    agent: Option<String>,
-    model: Option<String>,
-    provider: Option<String>,
-    session_id: String,
-    source_path_hash: Option<String>,
+struct SessionRiskSummaryAccumulator<'a> {
+    source: &'a Source,
+    first_event: &'a Event,
     contributions:
         BTreeMap<(telltale_schema::scoring::RiskContributionType, String), RiskContribution>,
     event_time: Option<String>,
@@ -1318,7 +864,7 @@ fn summarize_session_risk_events(
     activities: &[(Source, Event)],
     detections: &[(Source, Event)],
 ) -> Result<Vec<(Source, Event)>, RiskAccountingError> {
-    let mut summaries: BTreeMap<(String, String, String), SessionRiskSummaryAccumulator> =
+    let mut summaries: BTreeMap<(&str, &str, &str), SessionRiskSummaryAccumulator<'_>> =
         BTreeMap::new();
 
     for (source, event) in activities.iter().chain(detections.iter()) {
@@ -1338,20 +884,15 @@ fn summarize_session_risk_events(
             });
         }
         let key = (
-            event.client.clone(),
-            source.source_id.clone(),
-            event.session_id.clone(),
+            event.client.as_str(),
+            source.source_id.as_str(),
+            event.session_id.as_str(),
         );
         let summary = summaries
             .entry(key)
             .or_insert_with(|| SessionRiskSummaryAccumulator {
-                source: source.clone(),
-                client: event.client.clone(),
-                agent: event.agent.clone(),
-                model: event.model.clone(),
-                provider: event.provider.clone(),
-                session_id: event.session_id.clone(),
-                source_path_hash: event.source_path_hash.clone(),
+                source,
+                first_event: event,
                 contributions: BTreeMap::new(),
                 event_time: None,
                 event_counts: BTreeMap::new(),
@@ -1415,12 +956,12 @@ fn summarize_session_risk_events(
                 summary.contributions.into_values().collect::<Vec<_>>(),
             )?;
             let event = session_risk_summary_event(SessionRiskSummaryEventInput {
-                client: summary.client,
-                agent: summary.agent,
-                model: summary.model,
-                provider: summary.provider,
-                session_id: summary.session_id,
-                source_path_hash: summary.source_path_hash,
+                client: summary.first_event.client.clone(),
+                agent: summary.first_event.agent.clone(),
+                model: summary.first_event.model.clone(),
+                provider: summary.first_event.provider.clone(),
+                session_id: summary.first_event.session_id.clone(),
+                source_path_hash: summary.first_event.source_path_hash.clone(),
                 rule_ids: summary.rule_ids.into_iter().collect(),
                 categories: summary.categories.into_iter().collect(),
                 detection_classes: summary.detection_classes.into_iter().collect(),
@@ -1451,7 +992,7 @@ fn extract_tool_call_count_from_evidence(evidence: &[Evidence]) -> Option<u64> {
     counts.get("tool_call").and_then(|value| value.as_u64())
 }
 
-fn session_risk_summary_tags(summary: &SessionRiskSummaryAccumulator) -> Vec<String> {
+fn session_risk_summary_tags(summary: &SessionRiskSummaryAccumulator<'_>) -> Vec<String> {
     let mut tags = vec!["risk_summary".to_string(), "session".to_string()];
     if summary.detection_count > 0 {
         tags.push("risky_action".to_string());
@@ -1464,7 +1005,7 @@ fn session_risk_summary_tags(summary: &SessionRiskSummaryAccumulator) -> Vec<Str
     tags
 }
 
-fn session_risk_summary_evidence(summary: &SessionRiskSummaryAccumulator) -> Vec<Evidence> {
+fn session_risk_summary_evidence(summary: &SessionRiskSummaryAccumulator<'_>) -> Vec<Evidence> {
     let mut evidence = Vec::new();
     let event_counts = serde_json::to_string(&summary.event_counts).unwrap_or_default();
     evidence.push(Evidence {
@@ -1523,28 +1064,18 @@ pub(crate) fn run_status(
     if !log_path.exists() {
         return Err("no_native_health".into());
     }
-    let records = crate::cli::historical::read_jsonl_records(log_path)?;
+    let records = read_jsonl_records(log_path)?;
     if records.is_empty() {
         return Err("no_native_health".into());
     }
     let native_health_index = records.iter().rposition(|record| {
-        record.kind == crate::cli::historical::EventRecordKind::Native
-            && record
-                .value
-                .get("event_type")
-                .and_then(|value| value.as_str())
-                == Some("health")
+        record.kind == EventRecordKind::Native && event_record_has_type(record, "health")
     });
     let status = if let Some(health_index) = native_health_index {
         let detection_count = records[health_index + 1..]
             .iter()
             .filter(|record| {
-                record.kind == crate::cli::historical::EventRecordKind::Native
-                    && record
-                        .value
-                        .get("event_type")
-                        .and_then(|value| value.as_str())
-                        == Some("detection")
+                record.kind == EventRecordKind::Native && event_record_has_type(record, "detection")
             })
             .count();
         status_json(
@@ -1557,24 +1088,15 @@ pub(crate) fn run_status(
         )
     } else if records
         .iter()
-        .all(|record| record.kind == crate::cli::historical::EventRecordKind::Historical)
+        .all(|record| record.kind == EventRecordKind::Historical)
     {
-        let health = records.iter().rev().find(|record| {
-            record
-                .value
-                .get("event_type")
-                .and_then(|value| value.as_str())
-                == Some("health")
-        });
+        let health = records
+            .iter()
+            .rev()
+            .find(|record| event_record_has_type(record, "health"));
         let detection_count = records
             .iter()
-            .filter(|record| {
-                record
-                    .value
-                    .get("event_type")
-                    .and_then(|value| value.as_str())
-                    == Some("detection")
-            })
+            .filter(|record| event_record_has_type(record, "detection"))
             .count();
         status_json(
             "historical_only",
@@ -1591,10 +1113,17 @@ pub(crate) fn run_status(
     Ok(())
 }
 
+fn event_record_has_type(record: &JsonlEventRecord, expected: &str) -> bool {
+    record
+        .value
+        .get("event_type")
+        .and_then(|value| value.as_str())
+        == Some(expected)
+}
+
 struct ScanSummaryInput<'a> {
     health_event: &'a Event,
-    emitted_events: &'a [Event],
-    health_emitted: bool,
+    emitted_count: u64,
     activity_count: usize,
     detection_count: usize,
     session_risk_summary_count: usize,
@@ -1610,7 +1139,6 @@ struct ScanSummaryInput<'a> {
     source_discovery: &'a SourceDiscoveryAccounting,
     diagnostic_warnings: &'a [serde_json::Value],
     targeted: bool,
-    policy_active: bool,
     runtime: &'a serde_json::Value,
     effective_configuration: &'a serde_json::Value,
     durable_health: serde_json::Value,
@@ -1667,6 +1195,22 @@ fn detection_flow_accounting(detections: &[(Source, Event)]) -> DetectionFlowAcc
     accounting
 }
 
+fn checked_add_policy_match_accounting(
+    total: &mut PolicyMatchAccounting,
+    accounting: PolicyMatchAccounting,
+) -> Option<()> {
+    total.pre_policy_detection_candidate_count = total
+        .pre_policy_detection_candidate_count
+        .checked_add(accounting.pre_policy_detection_candidate_count)?;
+    total.fully_filtered_detection_candidate_count = total
+        .fully_filtered_detection_candidate_count
+        .checked_add(accounting.fully_filtered_detection_candidate_count)?;
+    total.filtered_rule_id_count = total
+        .filtered_rule_id_count
+        .checked_add(accounting.filtered_rule_id_count)?;
+    Some(())
+}
+
 fn compute_policy_match_accounting(
     policy_active: bool,
     pre_policy_rule_set: Option<
@@ -1690,27 +1234,9 @@ fn compute_policy_match_accounting(
         let Ok(accounting) = account_policy_matches(snapshot, pre_policy_rule_set) else {
             return PolicyMatchAccountingState::Unavailable;
         };
-        let Some(value) = total
-            .pre_policy_detection_candidate_count
-            .checked_add(accounting.pre_policy_detection_candidate_count)
-        else {
+        if checked_add_policy_match_accounting(&mut total, accounting).is_none() {
             return PolicyMatchAccountingState::Unavailable;
-        };
-        total.pre_policy_detection_candidate_count = value;
-        let Some(value) = total
-            .fully_filtered_detection_candidate_count
-            .checked_add(accounting.fully_filtered_detection_candidate_count)
-        else {
-            return PolicyMatchAccountingState::Unavailable;
-        };
-        total.fully_filtered_detection_candidate_count = value;
-        let Some(value) = total
-            .filtered_rule_id_count
-            .checked_add(accounting.filtered_rule_id_count)
-        else {
-            return PolicyMatchAccountingState::Unavailable;
-        };
-        total.filtered_rule_id_count = value;
+        }
     }
     PolicyMatchAccountingState::Available(total)
 }
@@ -1729,26 +1255,11 @@ impl SourceProcessingAccounting {
 }
 
 impl DetectionFlowAccounting {
-    fn json(&self, _policy_active: bool) -> serde_json::Value {
-        let policy_match_accounting = match &self.policy_match_accounting {
-            PolicyMatchAccountingState::NotApplicable => serde_json::json!({
-                "status": "not_applicable",
-                "pre_policy_detection_candidate_count": null,
-                "fully_filtered_detection_candidate_count": null,
-                "filtered_rule_id_count": null,
-            }),
-            PolicyMatchAccountingState::Available(accounting) => serde_json::json!({
-                "status": "available",
-                "pre_policy_detection_candidate_count": accounting.pre_policy_detection_candidate_count,
-                "fully_filtered_detection_candidate_count": accounting.fully_filtered_detection_candidate_count,
-                "filtered_rule_id_count": accounting.filtered_rule_id_count,
-            }),
-            PolicyMatchAccountingState::Unavailable => serde_json::json!({
-                "status": "unavailable",
-                "pre_policy_detection_candidate_count": null,
-                "fully_filtered_detection_candidate_count": null,
-                "filtered_rule_id_count": null,
-            }),
+    fn json(&self) -> serde_json::Value {
+        let (status, accounting) = match &self.policy_match_accounting {
+            PolicyMatchAccountingState::NotApplicable => ("not_applicable", None),
+            PolicyMatchAccountingState::Available(accounting) => ("available", Some(accounting)),
+            PolicyMatchAccountingState::Unavailable => ("unavailable", None),
         };
         serde_json::json!({
             "effective_detection_candidate_count": self.effective_detection_candidate_count,
@@ -1756,7 +1267,12 @@ impl DetectionFlowAccounting {
             "allowlist_marked_detection_count": self.allowlist_marked_detection_count,
             "state_deduplicated_detection_count": self.state_deduplicated_detection_count,
             "emitted_detection_count": self.emitted_detection_count,
-            "policy_match_accounting": policy_match_accounting,
+            "policy_match_accounting": {
+                "status": status,
+                "pre_policy_detection_candidate_count": accounting.map(|value| value.pre_policy_detection_candidate_count),
+                "fully_filtered_detection_candidate_count": accounting.map(|value| value.fully_filtered_detection_candidate_count),
+                "filtered_rule_id_count": accounting.map(|value| value.filtered_rule_id_count),
+            },
         })
     }
 }
@@ -1891,7 +1407,7 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
         "detection_count": summary.detection_count,
         "session_risk_summary_count": summary.session_risk_summary_count,
         "suppressed_count": summary.suppressed_count,
-        "emitted_count": summary.emitted_events.len().saturating_sub(usize::from(summary.health_emitted)),
+        "emitted_count": summary.emitted_count,
         "rule_count": summary.rule_count,
         "policy": summary.active_policy_name.map(|value| opaque_identifier("policy", value)),
         "log_path": if summary.dry_run {
@@ -1920,7 +1436,7 @@ fn scan_summary_json(summary: ScanSummaryInput<'_>) -> serde_json::Value {
             !summary.targeted,
         ),
         "source_processing": summary.source_processing.json(),
-        "detection_flow": summary.detection_flow.json(summary.policy_active),
+        "detection_flow": summary.detection_flow.json(),
         "diagnostic_warnings": summary.diagnostic_warnings,
         "runtime": summary.runtime,
         "effective_configuration": summary.effective_configuration,
@@ -1935,52 +1451,35 @@ fn status_json(
     state_path: &Path,
     durable_health: serde_json::Value,
 ) -> serde_json::Value {
-    let health = health.map(|health| {
-        let mut terminal = health.clone();
-        sanitize_serialized_event(&mut terminal);
-        terminal
-    });
-    let field_or_null = |key: &str| {
-        health
-            .as_ref()
-            .map(|health| json_field_or_null(health, key))
-            .unwrap_or(serde_json::Value::Null)
-    };
-    let field_or_empty_object = |key: &str| {
-        health
-            .as_ref()
-            .map(|health| json_field_or_empty_object(health, key))
-            .unwrap_or_else(|| serde_json::json!({}))
-    };
+    let mut health_fields = health
+        .map(|health| {
+            let mut terminal = health.clone();
+            sanitize_serialized_event(&mut terminal);
+            terminal
+        })
+        .and_then(|value| match value {
+            serde_json::Value::Object(fields) => Some(fields),
+            _ => None,
+        })
+        .unwrap_or_default();
     serde_json::json!({
         "status": status,
-        "last_scan_time": field_or_null("timestamp"),
+        "last_scan_time": health_fields.remove("timestamp"),
         "log_path": PrivacySanitizer::sanitize(SanitizationContext::Path, &log_path.to_string_lossy()),
         "state_path": PrivacySanitizer::sanitize(SanitizationContext::Path, &state_path.to_string_lossy()),
-        "health_component": field_or_null("component"),
-        "health_check_name": field_or_null("check_name"),
-        "health_check_status": field_or_null("status"),
-        "active_policy_name": field_or_null("active_policy_name"),
-        "rule_count": field_or_null("rule_count"),
+        "health_component": health_fields.remove("component"),
+        "health_check_name": health_fields.remove("check_name"),
+        "health_check_status": health_fields.remove("status"),
+        "active_policy_name": health_fields.remove("active_policy_name"),
+        "rule_count": health_fields.remove("rule_count"),
         "detection_count": detection_count,
-        "threshold_config": field_or_null("threshold_config"),
-        "source_counts": field_or_empty_object("source_counts"),
-        "emitted_count": field_or_null("emitted_count"),
-        "suppressed_count": field_or_null("suppressed_count"),
-        "scanner_error_count": field_or_null("scanner_error_count"),
+        "threshold_config": health_fields.remove("threshold_config"),
+        "source_counts": health_fields.remove("source_counts").unwrap_or_else(|| serde_json::json!({})),
+        "emitted_count": health_fields.remove("emitted_count"),
+        "suppressed_count": health_fields.remove("suppressed_count"),
+        "scanner_error_count": health_fields.remove("scanner_error_count"),
         "durable_queue_health": durable_health,
     })
-}
-
-fn json_field_or_null(value: &serde_json::Value, key: &str) -> serde_json::Value {
-    value.get(key).cloned().unwrap_or(serde_json::Value::Null)
-}
-
-fn json_field_or_empty_object(value: &serde_json::Value, key: &str) -> serde_json::Value {
-    value
-        .get(key)
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}))
 }
 
 #[cfg(test)]
@@ -1989,125 +1488,118 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use super::discovery::ProjectConfigurationAccounting;
     use super::*;
     use crate::install_inventory::InstallInventorySnapshot;
     use crate::sink::{
         DeliveryError, DeliveryErrorClass, EventSink, LocalJsonlSink, RotationConfig,
     };
 
-    fn assert_same_execution_config(
-        left: &ScanExecutionConfig<'_>,
-        right: &ScanExecutionConfig<'_>,
-    ) {
-        assert!(std::ptr::eq(left.root, right.root), "root");
-        assert!(std::ptr::eq(left.log_path, right.log_path), "log_path");
-        assert!(std::ptr::eq(left.sinks, right.sinks), "sinks");
-        assert!(
-            std::ptr::eq(left.state_path, right.state_path),
-            "state_path"
-        );
-        assert_eq!(left.dry_run, right.dry_run, "dry_run");
-        assert_eq!(left.emit_activity, right.emit_activity, "emit_activity");
-        assert_eq!(
-            left.emit_session_risk_summary, right.emit_session_risk_summary,
-            "emit_session_risk_summary"
-        );
-        assert_eq!(left.allow_fixtures, right.allow_fixtures, "allow_fixtures");
-        assert!(
-            std::ptr::eq(left.rule_pack_paths, right.rule_pack_paths),
-            "rule_pack_paths"
-        );
-        assert_eq!(left.rule_paths, right.rule_paths, "rule_paths");
-        assert_eq!(left.override_paths, right.override_paths, "override_paths");
-        assert_eq!(left.rule_load_mode, right.rule_load_mode, "rule_load_mode");
-        assert_eq!(left.policy_path, right.policy_path, "policy_path");
-        assert_eq!(left.allowlist_path, right.allowlist_path, "allowlist_path");
-        assert_eq!(
-            left.baseline_deviation_scoring, right.baseline_deviation_scoring,
-            "baseline_deviation_scoring"
-        );
-        assert_eq!(left.clients, right.clients, "clients");
-        assert_eq!(
-            left.project_config_paths, right.project_config_paths,
-            "project_config_paths"
-        );
-        assert_eq!(
-            left.install_inventory_interval_seconds, right.install_inventory_interval_seconds,
-            "install_inventory_interval_seconds"
-        );
-        assert!(std::ptr::eq(left.runtime, right.runtime), "runtime");
-        assert!(
-            std::ptr::eq(left.effective_configuration, right.effective_configuration),
-            "effective_configuration"
-        );
+    #[test]
+    fn scanner_health_alert_thresholds_are_strict_and_error_alert_precedes_duration_alert() {
+        let config = OperationalAlertConfig {
+            max_scanner_errors: 3,
+            max_scan_duration_ms: 100,
+        };
+        for (errors, duration, expected) in [
+            (2, 99, vec![]),
+            (3, 100, vec![]),
+            (4, 100, vec!["scanner_error_threshold"]),
+            (3, 101, vec!["scan_duration_threshold"]),
+            (
+                4,
+                101,
+                vec!["scanner_error_threshold", "scan_duration_threshold"],
+            ),
+        ] {
+            let alerts = scanner_health_alerts(&config, errors, duration);
+            assert_eq!(
+                alerts
+                    .iter()
+                    .map(|event| event.check_name.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                expected,
+                "errors={errors}, duration={duration}",
+            );
+        }
     }
 
-    /// Equivalent options must resolve identically whether they arrive through
-    /// `scan` or through `watch`. Watch runs the same scan, so the only
-    /// permitted differences are the scan-only options watch does not accept.
     #[test]
-    fn scan_and_watch_resolve_equivalent_options_identically() {
-        let root = PathBuf::from("/tmp/telltale-root");
-        let log_path = PathBuf::from("/tmp/telltale.jsonl");
-        let state_path = PathBuf::from("/tmp/telltale-state.json");
-        let policy_path = PathBuf::from("/tmp/policy.yaml");
-        let allowlist_path = PathBuf::from("/tmp/allowlist.yaml");
-        let sinks = SinkSet::default();
-        let rule_pack_paths = RulePackPaths::default();
-        let rule_paths = vec![PathBuf::from("/tmp/rules.yaml")];
-        let override_paths = vec![PathBuf::from("/tmp/overrides.d")];
-        let clients = vec![ClientId::Claude, ClientId::OpenCode];
-        let project_config_paths = vec![PathBuf::from("/tmp/projects.yaml")];
-        let runtime = serde_json::json!({});
-        let effective_configuration = serde_json::json!({});
-
-        let execution = ScanExecutionConfig {
-            root: &root,
-            log_path: &log_path,
-            sinks: &sinks,
-            state_path: &state_path,
-            dry_run: true,
-            emit_activity: true,
-            emit_session_risk_summary: true,
-            allow_fixtures: true,
-            rule_pack_paths: &rule_pack_paths,
-            rule_paths: &rule_paths,
-            override_paths: &override_paths,
-            rule_load_mode: RuleLoadMode::IncludeDefault,
-            policy_path: Some(&policy_path),
-            allowlist_path: Some(&allowlist_path),
-            baseline_deviation_scoring: true,
-            clients: &clients,
-            project_config_paths: &project_config_paths,
-            install_inventory_interval_seconds: Some(3_600),
-            runtime: &runtime,
-            effective_configuration: &effective_configuration,
+    fn source_event_selection_preserves_order_accounting_and_backfill_state() {
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "synthetic-selection".to_string(),
+            path: PathBuf::from("synthetic-selection.db"),
         };
-
-        let scan = ScanConfig {
-            execution,
-            backfill: false,
-            rebuild_baselines: false,
-            max_sources: None,
+        let error = scanner_error_event(&source, &ParseError::Empty);
+        let event = |kind: &str| {
+            let mut event = error.clone();
+            event.event_type = kind.to_string();
+            (source.clone(), event)
         };
-        let watch = WatchConfig {
-            execution,
-            trigger: WatchTriggerConfig {
-                iterations: Some(3),
-                debounce: Duration::from_millis(250),
-                min_scan_interval: Duration::from_millis(1_000),
-            },
-        };
+        let activities = vec![event("activity")];
+        let detections = vec![
+            event("detection"),
+            event("detection"),
+            event("scanner_error"),
+            event("process_chain"),
+        ];
+        let summaries = vec![event("session_risk_summary")];
+        let mut state = ScanState::default();
+        let first = select_source_events(
+            &mut state,
+            false,
+            activities.clone(),
+            detections.clone(),
+            summaries.clone(),
+        );
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|event| event.event_type.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "activity",
+                "detection",
+                "scanner_error",
+                "process_chain",
+                "session_risk_summary"
+            ],
+        );
+        assert_eq!(first.emitted_detection_count, 1);
+        assert_eq!(first.deduplicated_detection_count, 1);
+        assert!(first.scanner_error_emitted);
+        let recorded_state = state.canonical_bytes().unwrap();
+        let repeated = select_source_events(
+            &mut state,
+            false,
+            activities.clone(),
+            detections.clone(),
+            summaries.clone(),
+        );
+        assert!(repeated.events.is_empty());
+        assert_eq!(repeated.emitted_detection_count, 0);
+        assert_eq!(repeated.deduplicated_detection_count, 2);
+        assert!(!repeated.scanner_error_emitted);
+        assert_eq!(state.canonical_bytes().unwrap(), recorded_state);
 
-        let watch_derived_scan = watch_scan_config(&watch);
-
-        assert_same_execution_config(&scan.execution, &watch_derived_scan.execution);
-        assert_same_execution_config(&watch.execution, &watch_derived_scan.execution);
-
-        // Watch never backfills, rebuilds baselines, or caps sources.
-        assert!(!watch_derived_scan.backfill);
-        assert!(!watch_derived_scan.rebuild_baselines);
-        assert_eq!(watch_derived_scan.max_sources, None);
+        for mut state in [state, ScanState::default()] {
+            let before = state.canonical_bytes().unwrap();
+            let backfill = select_source_events(
+                &mut state,
+                true,
+                activities.clone(),
+                detections.clone(),
+                summaries.clone(),
+            );
+            assert_eq!(backfill.events.len(), 6);
+            assert_eq!(backfill.emitted_detection_count, 2);
+            assert_eq!(backfill.deduplicated_detection_count, 0);
+            assert!(backfill.scanner_error_emitted);
+            assert_eq!(state.canonical_bytes().unwrap(), before);
+        }
     }
 
     #[test]
@@ -2277,122 +1769,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn normalize_watch_event_path_handles_sqlite_sidecars() {
-        let wal = Path::new("/data/opencode/opencode.db-wal");
-        assert_eq!(
-            normalize_watch_event_path(wal),
-            Some(PathBuf::from("/data/opencode/opencode.db"))
-        );
-
-        assert_eq!(
-            normalize_watch_event_path(Path::new("/data/opencode/opencode.db-shm")),
-            None
-        );
-        assert_eq!(
-            normalize_watch_event_path(Path::new("/data/opencode/opencode.db-journal")),
-            None
-        );
-
-        let jsonl = Path::new("/home/user/.codex/sessions/session-a.jsonl");
-        assert_eq!(normalize_watch_event_path(jsonl), Some(jsonl.to_path_buf()));
-
-        // Non-SQLite names that merely end in a sidecar-like suffix are kept.
-        let lookalike = Path::new("/home/user/.codex/sessions/notes-wal");
-        assert_eq!(
-            normalize_watch_event_path(lookalike),
-            Some(lookalike.to_path_buf())
-        );
-    }
-
-    fn watch_test_source(path: &str) -> Source {
+    fn test_source(path: &str) -> Source {
         Source {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,
             source_id: "codex.sessions".to_string(),
             path: PathBuf::from(path),
         }
-    }
-
-    #[test]
-    fn pending_changes_map_known_paths_to_targeted_scan() {
-        let source = watch_test_source("/watch-test/codex/sessions/session-a.jsonl");
-        let index = BTreeMap::from([(source.path.clone(), source.clone())]);
-
-        let mut pending = PendingWatchChanges::default();
-        pending
-            .paths
-            .insert(PathBuf::from("/watch-test/codex/sessions/session-a.jsonl"));
-
-        match pending.scan_action(&index) {
-            WatchScanAction::Targeted(targets) => assert_eq!(targets, vec![source]),
-            _ => panic!("expected targeted scan"),
-        }
-    }
-
-    #[test]
-    fn pending_changes_dedupe_sqlite_db_and_wal_to_one_target() {
-        let db_source = Source {
-            client: ClientId::OpenCode,
-            kind: SourceKind::Sqlite,
-            source_id: "opencode.sqlite".to_string(),
-            path: PathBuf::from("/watch-test/opencode/opencode.db"),
-        };
-        let index = BTreeMap::from([(db_source.path.clone(), db_source.clone())]);
-
-        let mut pending = PendingWatchChanges::default();
-        let event = NotifyEvent {
-            kind: EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![
-                PathBuf::from("/watch-test/opencode/opencode.db"),
-                PathBuf::from("/watch-test/opencode/opencode.db-wal"),
-                PathBuf::from("/watch-test/opencode/opencode.db-shm"),
-            ],
-            attrs: Default::default(),
-        };
-        pending.absorb(&event);
-
-        match pending.scan_action(&index) {
-            WatchScanAction::Targeted(targets) => assert_eq!(targets, vec![db_source]),
-            _ => panic!("expected targeted scan"),
-        }
-    }
-
-    #[test]
-    fn pending_changes_fall_back_to_full_scan_for_unknown_paths_and_removes() {
-        let source = watch_test_source("/watch-test/codex/sessions/session-a.jsonl");
-        let index = BTreeMap::from([(source.path.clone(), source)]);
-
-        let mut unknown = PendingWatchChanges::default();
-        unknown
-            .paths
-            .insert(PathBuf::from("/watch-test/codex/sessions/new-file.jsonl"));
-        assert!(matches!(unknown.scan_action(&index), WatchScanAction::Full));
-
-        let removed = PendingWatchChanges {
-            saw_remove: true,
-            ..Default::default()
-        };
-        assert!(matches!(removed.scan_action(&index), WatchScanAction::Full));
-
-        let idle = PendingWatchChanges::default();
-        assert!(matches!(idle.scan_action(&index), WatchScanAction::Skip));
-    }
-
-    #[test]
-    fn pending_changes_ignore_access_events_and_sidecar_only_writes() {
-        let mut pending = PendingWatchChanges::default();
-        pending.absorb(&NotifyEvent {
-            kind: EventKind::Access(notify::event::AccessKind::Any),
-            paths: vec![PathBuf::from("/watch-test/codex/sessions/session-a.jsonl")],
-            attrs: Default::default(),
-        });
-        pending.absorb(&NotifyEvent {
-            kind: EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![PathBuf::from("/watch-test/opencode/opencode.db-shm")],
-            attrs: Default::default(),
-        });
-        assert!(pending.is_empty());
     }
 
     #[test]
@@ -2420,7 +1803,7 @@ mod tests {
 
         // A newly observed source is durable.
         let probe = StateChangeProbe::capture(&state);
-        let new_source = watch_test_source("/watch-test/codex/sessions/session-b.jsonl");
+        let new_source = test_source("/watch-test/codex/sessions/session-b.jsonl");
         state.observe_sources(std::slice::from_ref(&new_source), 3_000);
         assert!(probe.changed(&state));
 
@@ -2490,7 +1873,7 @@ mod tests {
             emitted_detection_count: 0,
             policy_match_accounting: state,
         };
-        let accounting = flow.json(true)["policy_match_accounting"].clone();
+        let accounting = flow.json()["policy_match_accounting"].clone();
         assert_eq!(accounting["status"], "unavailable");
         assert!(accounting["pre_policy_detection_candidate_count"].is_null());
         assert!(accounting["fully_filtered_detection_candidate_count"].is_null());
@@ -2592,65 +1975,8 @@ mod tests {
     }
 
     #[test]
-    fn discovery_error_categories_are_stable_and_do_not_use_error_text() {
-        assert_eq!(
-            discovery_error_category(&DiscoveryError::InvalidRoot {
-                root: PathBuf::from("private-root"),
-            }),
-            "invalid_root"
-        );
-        assert_eq!(
-            discovery_error_category(&DiscoveryError::Traversal {
-                root: PathBuf::from("private-root"),
-                source_id: "private-source".to_string(),
-            }),
-            "traversal"
-        );
-    }
-
-    #[test]
-    fn checked_traversal_uses_fallback_without_serializing_error_details() {
-        let fallback_source = Source {
-            client: ClientId::Codex,
-            kind: SourceKind::Jsonl,
-            source_id: "fallback-source-sentinel".to_string(),
-            path: PathBuf::from("fallback-path-sentinel.jsonl"),
-        };
-        let resolution = resolve_discovery_result(
-            Err(DiscoveryError::Traversal {
-                root: PathBuf::from("private-root-sentinel"),
-                source_id: "private-source-sentinel".to_string(),
-            }),
-            || vec![fallback_source],
-        );
-        assert_eq!(resolution.checked_status, "first_error");
-        assert_eq!(resolution.first_error_category, Some("traversal"));
-        assert!(resolution.best_effort_fallback_used);
-        assert_eq!(resolution.sources.len(), 1);
-
-        let accounting = SourceDiscoveryAccounting {
-            checked_status: resolution.checked_status,
-            first_error_category: resolution.first_error_category,
-            best_effort_fallback_used: resolution.best_effort_fallback_used,
-            returned_source_count: resolution.sources.len(),
-            operational_source_count: resolution.sources.len(),
-            project_configuration: ProjectConfigurationAccounting::none(),
-        };
-        let serialized = accounting.json("current_full_scan", true).to_string();
-        assert!(!serialized.contains("private-root-sentinel"));
-        assert!(!serialized.contains("private-source-sentinel"));
-        assert!(!serialized.contains("fallback-source-sentinel"));
-        assert!(!serialized.contains("fallback-path-sentinel"));
-        let serialized_value: serde_json::Value =
-            serde_json::from_str(&serialized).expect("discovery accounting json");
-        assert!(serialized_value.get("root").is_none());
-        assert!(serialized_value.get("source_id").is_none());
-        assert!(serialized_value.get("error").is_none());
-    }
-
-    #[test]
     fn parsed_empty_result_is_a_parse_success() {
-        let source = watch_test_source("empty-success.jsonl");
+        let source = test_source("empty-success.jsonl");
         let parsed = ParsedScanSource {
             source: source.clone(),
             records: Ok(Vec::new()),
@@ -2662,108 +1988,6 @@ mod tests {
         assert_eq!(accounting.empty_source_count, 0);
         assert_eq!(accounting.parse_error_source_count, 0);
         assert_eq!(accounting.parsed_record_count, 0);
-    }
-
-    #[test]
-    fn watch_snapshot_count_matches_canonical_path_index_for_duplicate_projects() {
-        let path = PathBuf::from("duplicate-project/.codex-worktree/session.jsonl");
-        let first = Source {
-            client: ClientId::Codex,
-            kind: SourceKind::Jsonl,
-            source_id: "project-one".to_string(),
-            path: path.clone(),
-        };
-        let second = Source {
-            source_id: "project-two".to_string(),
-            ..first.clone()
-        };
-        let discovery = SourceDiscoveryAccounting {
-            checked_status: "succeeded",
-            first_error_category: None,
-            best_effort_fallback_used: false,
-            returned_source_count: 2,
-            operational_source_count: 2,
-            project_configuration: ProjectConfigurationAccounting::none(),
-        };
-        let (index, snapshot) = watch_index_from_sources(vec![first, second], discovery);
-        assert_eq!(index.len(), 1);
-        assert_eq!(snapshot.operational_source_count, index.len());
-    }
-
-    #[test]
-    fn collect_watch_events_coalesces_within_min_interval() {
-        // Pre-queue two modify events for the same source path, then drop the
-        // sender so the channel disconnects. `collect_watch_events_for`
-        // absorbs both into `pending` and returns on disconnect. Because both
-        // events map to the same normalized path, `pending.paths` holds
-        // exactly one entry — proving rapid events within the coalescing
-        // window are merged into a single targeted scan rather than two.
-        let (tx, rx) = mpsc::channel();
-        let mut pending = PendingWatchChanges::default();
-        let shutdown = AtomicBool::new(false);
-
-        let event = NotifyEvent {
-            kind: EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![PathBuf::from("/watch-test/codex/sessions/session-a.jsonl")],
-            attrs: Default::default(),
-        };
-        tx.send(Ok(event.clone())).expect("send first event");
-        tx.send(Ok(event)).expect("send second event");
-        drop(tx);
-
-        collect_watch_events_for(&rx, &mut pending, Duration::from_secs(5), &shutdown)
-            .expect("collect should succeed");
-
-        assert_eq!(pending.paths.len(), 1);
-        assert!(
-            pending
-                .paths
-                .contains(Path::new("/watch-test/codex/sessions/session-a.jsonl"))
-        );
-        assert!(!pending.saw_remove);
-    }
-
-    #[test]
-    fn prefers_opencode_sqlite_over_host_legacy_json() {
-        let data_root = PathBuf::from("home")
-            .join("user")
-            .join(".local")
-            .join("share");
-        let sqlite = Source {
-            client: ClientId::OpenCode,
-            kind: SourceKind::Sqlite,
-            source_id: "opencode.sqlite".to_string(),
-            path: data_root.join("opencode").join("opencode.db"),
-        };
-        let legacy = Source {
-            client: ClientId::OpenCode,
-            kind: SourceKind::LegacyJson,
-            source_id: "opencode.legacy_json".to_string(),
-            path: data_root
-                .join("opencode")
-                .join("storage")
-                .join("message")
-                .join("session")
-                .join("message.json"),
-        };
-        let codex = Source {
-            client: ClientId::Codex,
-            kind: SourceKind::Jsonl,
-            source_id: "codex.sessions".to_string(),
-            path: PathBuf::from("home")
-                .join("user")
-                .join(".codex")
-                .join("sessions")
-                .join("session.jsonl"),
-        };
-        let mut sources = vec![legacy.clone(), sqlite.clone(), codex.clone()];
-        let returned_source_count = sources.len();
-
-        prefer_opencode_sqlite_over_legacy_json(&mut sources);
-
-        assert_eq!(sources, vec![sqlite, codex]);
-        assert_eq!(returned_source_count, 3);
-        assert_eq!(sources.len(), 2);
     }
 
     #[test]
@@ -2811,17 +2035,27 @@ mod tests {
             path: PathBuf::from("alias.jsonl"),
             ..source_a.clone()
         };
+        let mut first_event = event();
+        first_event.agent = Some("first-agent".to_string());
+        first_event.timestamp = "2026-05-01T00:00:00Z".to_string();
+        let mut later_event = event();
+        later_event.agent = Some("later-agent".to_string());
+        later_event.timestamp = "2026-05-02T00:00:00Z".to_string();
 
         let summaries = summarize_session_risk_events(
             &[
-                (source_a.clone(), event()),
-                (source_alias, event()),
                 (source_b, event()),
+                (source_a.clone(), first_event),
+                (source_alias, later_event),
             ],
             &[],
         )
         .expect("summary");
         assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].0, source_a);
+        assert_eq!(summaries[1].0.source_id, "source-b");
+        assert_eq!(summaries[0].1.agent.as_deref(), Some("first-agent"));
+        assert_eq!(summaries[0].1.timestamp, "2026-05-02T00:00:00.000Z");
         assert!(
             summaries
                 .iter()

@@ -1,7 +1,8 @@
 # security-release Specification
 
 ## Purpose
-TBD - created by archiving change 2026-08-30-v060-security-release. Update Purpose after archive.
+Defines the repository security-reporting, dependency, supply-chain, SBOM, and
+release-integrity requirements.
 ## Requirements
 ### Requirement: Actionable security reporting
 
@@ -29,7 +30,7 @@ with links to existing privacy, durable-delivery, installer, and release docs.
 - **WHEN** a maintainer reviews the threat model
 - **THEN** each listed boundary SHALL identify its threat, current mitigation,
   and residual or excluded condition without claiming perfect redaction,
-  exactly-once delivery, or Issue #23 completion
+  exactly-once delivery, or unsupported platform behavior
 
 ### Requirement: Locked dependency gates
 
@@ -116,5 +117,42 @@ and have an attestation subject without changing archive members.
 #### Scenario: Windows runtime support is considered
 
 - **WHEN** a maintainer evaluates Windows clean-host execution or CRT behavior
-- **THEN** that work SHALL remain the independent Issue #23 release gate and
-  SHALL not be claimed as solved by this security-release change
+- **THEN** the release process SHALL require independent clean-host/runtime
+  evidence and SHALL not treat general security-release checks as that evidence
+
+### Requirement: Workspace package identity remains lockstep
+
+The repository SHALL validate every workspace member's inherited version, exact
+internal requirements, and lock identity against the workspace version.
+
+#### Scenario: Metadata drift
+
+- **WHEN** a member, internal requirement, or lock entry disagrees
+- **THEN** validation fails before publication
+
+### Requirement: Release and development versions remain distinct
+
+Stable and RC tags MUST exactly equal the Cargo version with a `v` prefix.
+Development versions MUST exceed the fetched immutable stable-tag floor.
+Shallow or empty history MUST fail; only release validation of an exact tag at
+HEAD may exclude that tag from the prior-release floor.
+
+#### Scenario: Mismatched tag
+
+- **WHEN** the supplied stable or RC tag differs from the full package version
+- **THEN** validation fails, including RC tags with stable-base packages
+
+#### Scenario: Published version is reused
+
+- **WHEN** development packages equal or precede an immutable stable tag
+- **THEN** validation fails without querying GitHub Releases
+
+### Requirement: Publication ordering follows the dependency graph
+
+Publication order SHALL respect Cargo's internal dependency graph and exclude
+non-publishable packages. GitHub Release workflows MUST NOT publish crates.
+
+#### Scenario: Dependency order is reversed
+
+- **WHEN** a dependent precedes its prerequisite
+- **THEN** validation fails before packaging or later publication

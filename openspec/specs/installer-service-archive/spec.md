@@ -4,9 +4,7 @@
 
 Define the canonical current-user Telltale install, archive, and service safety
 contract.
-
 ## Requirements
-
 ### Requirement: Canonical clean-install identity
 
 The user installer SHALL install only the platform-canonical `telltale`
@@ -321,3 +319,94 @@ canonical user destinations.
 - **WHEN** it determines its install scope
 - **THEN** it acts only within the current user's home and user-unit directory
 - **AND** it refuses any system or unmanaged path
+
+### Requirement: Parser-valid current-user environment file and migration
+
+The current-user service SHALL declare exactly one optional absolute environment
+file in the representation accepted by the target systemd parser. The optional
+prefix and path SHALL remain one directive value, paths containing supported
+whitespace SHALL remain one path, and malformed or ambiguous representations
+SHALL fail closed. The installer SHALL accept the exact known valid v0.5.0 host
+representation as bounded migration input only when the remaining declaration
+and effective policy are canonical.
+
+#### Scenario: Parser-valid optional path
+
+- **WHEN** the installer generates a current-user service under a supported path containing whitespace
+- **THEN** the real systemd parser accepts one optional absolute environment-file path without warning
+
+#### Scenario: Published rc.1 form
+
+- **WHEN** an existing service uses the quoted rc.1 environment-file form
+- **THEN** canonical validation fails before staging, replacement, or activation
+
+#### Scenario: v0.5.0 upgrade
+
+- **WHEN** the exact valid official v0.5.0 host declaration and canonical effective policy exist
+- **THEN** the installer accepts and transactionally rewrites the canonical unit without manual editing
+
+#### Scenario: Alternate or ambiguous declarations
+
+- **WHEN** a declaration uses another path, reset, multiple directives, malformed quoting, or a unit-specific drop-in
+- **THEN** canonical validation fails closed before replacement or activation
+
+### Requirement: Exact development installation identity
+
+A development canary MUST be identified by its full clean source commit SHA and
+the SHA-256 of the exact candidate binary or package. Reported package version
+MUST NOT be accepted as sole identity. The installer SHALL retain exact
+SHA/checksum development identity and stable rollback, and SHALL permit strict
+RC tags only with exact package-version validation.
+
+#### Scenario: Release and development report the same package version
+
+- **WHEN** an official release and development candidate report the same package version
+- **THEN** the procedure distinguishes them using source SHA and artifact SHA-256
+
+#### Scenario: Development rollback to v0.5.0
+
+- **WHEN** a development installation is followed by explicit `v0.5.0` selection
+- **THEN** only the official `v0.5.0` endpoint and matching binary are accepted
+
+### Requirement: Controlled replacement requires prior validation
+
+Candidate source cleanliness, package shape, checksum, executable target,
+version/build provenance, Event 3.0 contract, producer provenance, evaluation,
+and relevant installer checks MUST pass before canonical binary replacement.
+
+#### Scenario: Candidate validation fails
+
+- **WHEN** any candidate identity, checksum, package, or contract check fails
+- **THEN** replacement, service activation, and timer activation do not occur
+
+### Requirement: Controlled rollback is compatibility-aware
+
+A controlled deployment procedure SHALL classify configuration and persistent
+state for upgrade and downgrade. Rollback MUST restore every state/config
+component whose downgrade compatibility is not proven, then restore and verify
+the exact prior binary and prior service/timer state.
+
+#### Scenario: Development state is not downgrade-compatible
+
+- **WHEN** a development canary writes state that the prior release cannot safely reuse
+- **THEN** rollback restores the pre-upgrade state before the post-rollback scan
+
+#### Scenario: Replacement or canary fails
+
+- **WHEN** replacement succeeds but service, timer, scan, local output, Event 3.0,
+  or configured remote-delivery validation fails
+- **THEN** the retained prior artifact and required state are restored and a
+  post-rollback synthetic canary verifies recovery
+
+### Requirement: Controlled deployment requires explicit authorization
+
+Repository and lab validation MUST NOT mutate a live host without an explicit
+approved target and scope. Successful lab validation MUST NOT be represented as
+live operational canary evidence when that evidence remains required.
+
+#### Scenario: No approved target
+
+- **WHEN** repository and lab validation pass but no explicit deployment target
+  is authorized
+- **THEN** no live deployment occurs and the handoff is ready for an approved
+  deployment canary, not for stable promotion

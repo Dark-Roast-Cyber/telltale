@@ -1288,6 +1288,7 @@ fn export_timeline_produces_redacted_session_timeline() {
     assert_eq!(codex_timeline["detection_count"], 2);
     assert_eq!(codex_timeline["max_severity"], "critical");
     assert_eq!(codex_timeline["has_triage"], true);
+    assert_eq!(codex_timeline["record_status"], "historical");
     assert_eq!(codex_timeline["risk_summary"]["tool_call_count"], 2);
     assert_eq!(codex_timeline["risk_summary"]["risky_action_count"], 2);
     assert_eq!(codex_timeline["risk_summary"]["max_severity"], "critical");
@@ -2417,7 +2418,7 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
             .to_string(),
             serde_json::json!({
                 "type": "user",
-                "timestamp": "2026-05-01T00:01:00Z",
+                "timestamp": "2026-05-01T00:02:00Z",
                 "session_id": "source-session",
                 "agent": "codex",
                 "model": "gpt-5",
@@ -2535,8 +2536,9 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
     );
     let entries = timeline["entries"].as_array().expect("entries array");
     assert_eq!(entries[0]["event_type"], "user_message");
-    assert_eq!(entries[0]["timestamp"], "2026-05-01T00:01:00Z");
+    assert_eq!(entries[0]["timestamp"], "2026-05-01T00:02:00Z");
     assert_eq!(entries[1]["event_type"], "tool_call");
+    assert_eq!(entries[1]["timestamp"], "2026-05-01T00:02:00Z");
     assert_eq!(entries[1]["tool_name"], "shell");
     assert_eq!(entries[2]["event_type"], "tool_result");
     assert_eq!(entries[2]["tool_name"], "shell");
@@ -2563,6 +2565,32 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
     assert!(redacted_result.contains("[sensitive-path]"));
     assert!(redacted_result.contains("[redacted-secret]"));
     assert!(!redacted_result.contains("ghp_1234567890abcdefghijklmnop"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .arg("export")
+        .arg("--timeline")
+        .arg("--source-root")
+        .arg(temp.path())
+        .args(["--session-id", "source-session"])
+        .args(["--client", "opencode"])
+        .output()
+        .expect("run unmatched source-backed timeline export");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let timeline: Value = serde_json::from_slice(&output.stdout).expect("unmatched timeline json");
+    assert_eq!(timeline["record_status"], "source_derived");
+    assert_eq!(timeline["detection_count"], 0);
+    assert_eq!(timeline["max_severity"], "informational");
+    assert_eq!(timeline["has_triage"], false);
+    assert_eq!(timeline["risk_summary"]["tool_call_count"], 0);
+    assert_eq!(timeline["risk_summary"]["risky_action_count"], 0);
+    assert_eq!(timeline["risk_summary"]["max_severity"], "informational");
+    assert_eq!(timeline["risk_summary"]["triage_ran"], false);
+    assert_eq!(timeline["risk_summary"]["top_rule_ids"], Value::Null);
+    assert_eq!(timeline["risk_summary"]["top_categories"], Value::Null);
 }
 
 #[test]

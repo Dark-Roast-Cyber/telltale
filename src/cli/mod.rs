@@ -43,231 +43,10 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     /// Discover supported local session sources.
-    Scan {
-        /// Run one batch scan and exit.
-        #[arg(long)]
-        once: bool,
-
-        /// Seconds to wait between periodic scans.
-        #[arg(long)]
-        interval_seconds: Option<u64>,
-
-        /// Cap periodic scans after this many iterations.
-        #[arg(long)]
-        iterations: Option<u32>,
-
-        /// Root containing codex/ and opencode/ session stores.
-        #[arg(long, default_value = ".")]
-        root: PathBuf,
-
-        /// Default path profile used when --log-path or --state-path is not set.
-        #[arg(long, value_enum, default_value = "user")]
-        path_profile: CliPathProfile,
-
-        /// Append-only JSONL event path. Defaults to TELLTALE_LOG_PATH or the selected path profile.
-        #[arg(long)]
-        log_path: Option<PathBuf>,
-
-        /// Optional Splunk HEC collector URL. Requires --splunk-hec-token.
-        #[arg(long)]
-        splunk_hec_endpoint: Option<String>,
-
-        /// Optional Splunk HEC token. Requires --splunk-hec-endpoint.
-        #[arg(long)]
-        splunk_hec_token: Option<String>,
-
-        /// JSON state path for duplicate suppression. Defaults to TELLTALE_STATE_PATH or the selected path profile.
-        #[arg(long)]
-        state_path: Option<PathBuf>,
-
-        /// Print the event summary without writing JSONL.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Emit per-session activity summary events in addition to detections.
-        #[arg(long)]
-        emit_activity: bool,
-
-        /// Emit per-session risk summary events derived from activity and detection events.
-        #[arg(long)]
-        emit_session_risk_summary: bool,
-
-        /// Allow scanning fixture/demo roots and writing events to log paths.
-        /// Without this flag, non-dry-run scans refuse fixture roots to prevent
-        /// synthetic data from mixing into production telemetry.
-        #[arg(long)]
-        allow_fixtures: bool,
-
-        /// Skip duplicate suppression for a one-time retroactive backfill.
-        /// All events are emitted regardless of state file contents.
-        #[arg(long)]
-        backfill: bool,
-
-        /// Reparse all discovered sources to rebuild precise baseline/source-observation state.
-        /// Detection duplicate suppression still uses existing state.
-        #[arg(long)]
-        rebuild_baselines: bool,
-
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
-        #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
-
-        /// YAML allowlist file that marks matching detections as suppressed.
-        #[arg(long)]
-        allowlist: Option<PathBuf>,
-
-        /// Opt in to bounded risk-score modifiers for model baseline deviations in activity events.
-        /// Has effect only when --emit-activity is also set.
-        #[arg(long)]
-        baseline_deviation_scoring: bool,
-
-        /// Limit scan discovery to one supported client. Repeat to include multiple clients.
-        #[arg(long = "client", value_parser = parse_client_id)]
-        clients: Vec<ClientId>,
-
-        /// Deterministically cap discovered sources after client filtering.
-        #[arg(long, value_parser = parse_nonzero_usize)]
-        max_sources: Option<usize>,
-
-        /// Project config YAML file listing project roots. Repeat for multiple files.
-        #[arg(long = "project-config")]
-        project_config_paths: Vec<PathBuf>,
-
-        /// Maximum size in bytes before the active JSONL file is rotated.
-        /// Defaults to TELLTALE_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
-        #[arg(long)]
-        log_rotate_max_size: Option<u64>,
-
-        /// Number of rotated files to keep. Defaults to TELLTALE_LOG_ROTATE_KEEP or 5.
-        #[arg(long)]
-        log_rotate_keep: Option<usize>,
-
-        /// Disable built-in rotation. Use when an external rotator (logrotate, newsyslog) manages the file.
-        #[arg(long)]
-        log_rotate_disabled: bool,
-
-        /// Seconds between metadata-only installed-agent inventory observations.
-        /// Defaults to TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
-        #[arg(long)]
-        install_inventory_interval_seconds: Option<u64>,
-
-        /// Disable installed-agent inventory observations for this scan.
-        #[arg(long)]
-        install_inventory_disabled: bool,
-    },
+    Scan(ScanCommandArgs),
 
     /// Watch local session stores and scan when files change.
-    Watch {
-        /// Root containing codex/ and opencode/ session stores.
-        #[arg(long, default_value = ".")]
-        root: PathBuf,
-
-        /// Default path profile used when --log-path or --state-path is not set.
-        #[arg(long, value_enum, default_value = "user")]
-        path_profile: CliPathProfile,
-
-        /// Append-only JSONL event path. Defaults to TELLTALE_LOG_PATH or the selected path profile.
-        #[arg(long)]
-        log_path: Option<PathBuf>,
-
-        /// JSON state path for duplicate suppression. Defaults to TELLTALE_STATE_PATH or the selected path profile.
-        #[arg(long)]
-        state_path: Option<PathBuf>,
-
-        /// Print event summaries without writing JSONL.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Emit per-session activity summary events in addition to detections.
-        #[arg(long)]
-        emit_activity: bool,
-
-        /// Emit per-session risk summary events derived from activity and detection events.
-        #[arg(long)]
-        emit_session_risk_summary: bool,
-
-        /// Allow scanning fixture/demo roots and writing events to log paths.
-        #[arg(long)]
-        allow_fixtures: bool,
-
-        /// Cap watch-triggered scans after this many iterations.
-        #[arg(long)]
-        iterations: Option<u32>,
-
-        /// Milliseconds to wait after a filesystem event before scanning.
-        #[arg(long, default_value_t = 500)]
-        debounce_ms: u64,
-
-        /// Minimum milliseconds between watch-triggered scans. Events arriving
-        /// sooner are coalesced into the next scan.
-        #[arg(long, default_value_t = 10_000)]
-        min_scan_interval_ms: u64,
-
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
-        #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
-
-        /// YAML allowlist file that marks matching detections as suppressed.
-        #[arg(long)]
-        allowlist: Option<PathBuf>,
-
-        /// Opt in to bounded risk-score modifiers for model baseline deviations in activity events.
-        /// Has effect only when --emit-activity is also set.
-        #[arg(long)]
-        baseline_deviation_scoring: bool,
-
-        /// Limit watched scan discovery to one supported client. Repeat to include multiple clients.
-        #[arg(long = "client", value_parser = parse_client_id)]
-        clients: Vec<ClientId>,
-
-        /// Project config YAML file listing project roots. Repeat for multiple files.
-        #[arg(long = "project-config")]
-        project_config_paths: Vec<PathBuf>,
-
-        /// Maximum size in bytes before the active JSONL file is rotated.
-        /// Defaults to TELLTALE_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
-        #[arg(long)]
-        log_rotate_max_size: Option<u64>,
-
-        /// Number of rotated files to keep. Defaults to TELLTALE_LOG_ROTATE_KEEP or 5.
-        #[arg(long)]
-        log_rotate_keep: Option<usize>,
-
-        /// Disable built-in rotation. Use when an external rotator (logrotate, newsyslog) manages the file.
-        #[arg(long)]
-        log_rotate_disabled: bool,
-
-        /// Seconds between metadata-only installed-agent inventory observations.
-        /// Defaults to TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
-        #[arg(long)]
-        install_inventory_interval_seconds: Option<u64>,
-
-        /// Disable installed-agent inventory observations for watched scans.
-        #[arg(long)]
-        install_inventory_disabled: bool,
-    },
+    Watch(WatchCommandArgs),
 
     /// Inspect and validate Telltale detection rules.
     Rules {
@@ -366,6 +145,154 @@ enum Command {
     },
 }
 
+#[derive(ClapArgs)]
+struct ScanCommandArgs {
+    #[command(flatten)]
+    execution: ScanExecutionArgs,
+
+    /// Run one batch scan and exit.
+    #[arg(long)]
+    once: bool,
+
+    /// Seconds to wait between periodic scans.
+    #[arg(long)]
+    interval_seconds: Option<u64>,
+
+    /// Cap periodic scans after this many iterations.
+    #[arg(long)]
+    iterations: Option<u32>,
+
+    /// Optional Splunk HEC collector URL. Requires --splunk-hec-token.
+    #[arg(long)]
+    splunk_hec_endpoint: Option<String>,
+
+    /// Optional Splunk HEC token. Requires --splunk-hec-endpoint.
+    #[arg(long)]
+    splunk_hec_token: Option<String>,
+
+    /// Skip duplicate suppression for a one-time retroactive backfill.
+    /// All events are emitted regardless of state file contents.
+    #[arg(long)]
+    backfill: bool,
+
+    /// Reparse all discovered sources to rebuild precise baseline/source-observation state.
+    /// Detection duplicate suppression still uses existing state.
+    #[arg(long)]
+    rebuild_baselines: bool,
+
+    /// Deterministically cap discovered sources after client filtering.
+    #[arg(long, value_parser = parse_nonzero_usize)]
+    max_sources: Option<usize>,
+}
+
+#[derive(ClapArgs)]
+struct WatchCommandArgs {
+    #[command(flatten)]
+    execution: ScanExecutionArgs,
+
+    /// Cap watch-triggered scans after this many iterations.
+    #[arg(long)]
+    iterations: Option<u32>,
+
+    /// Milliseconds to wait after a filesystem event before scanning.
+    #[arg(long, default_value_t = 500)]
+    debounce_ms: u64,
+
+    /// Minimum milliseconds between watch-triggered scans. Events arriving
+    /// sooner are coalesced into the next scan.
+    #[arg(long, default_value_t = 10_000)]
+    min_scan_interval_ms: u64,
+}
+
+#[derive(ClapArgs)]
+struct ScanExecutionArgs {
+    /// Root containing supported local session stores.
+    #[arg(long, default_value = ".")]
+    root: PathBuf,
+
+    /// Default path profile used when --log-path or --state-path is not set.
+    #[arg(long, value_enum, default_value = "user")]
+    path_profile: CliPathProfile,
+
+    /// Append-only JSONL event path. Defaults to TELLTALE_LOG_PATH or the selected path profile.
+    #[arg(long)]
+    log_path: Option<PathBuf>,
+
+    /// JSON state path for duplicate suppression. Defaults to TELLTALE_STATE_PATH or the selected path profile.
+    #[arg(long)]
+    state_path: Option<PathBuf>,
+
+    /// Print event summaries without writing JSONL.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Emit per-session activity summary events in addition to detections.
+    #[arg(long)]
+    emit_activity: bool,
+
+    /// Emit per-session risk summary events derived from activity and detection events.
+    #[arg(long)]
+    emit_session_risk_summary: bool,
+
+    /// Allow scanning fixture/demo roots and writing events to log paths.
+    #[arg(long)]
+    allow_fixtures: bool,
+
+    /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
+    #[arg(long = "rules")]
+    rule_paths: Vec<PathBuf>,
+
+    #[command(flatten)]
+    local_config: LocalConfigCliArgs,
+
+    /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
+    #[arg(long)]
+    no_default_rules: bool,
+
+    /// YAML policy file that selects active rule categories and rule ids.
+    #[arg(long)]
+    policy: Option<PathBuf>,
+
+    /// YAML allowlist file that marks matching detections as suppressed.
+    #[arg(long)]
+    allowlist: Option<PathBuf>,
+
+    /// Opt in to bounded risk-score modifiers for model baseline deviations in activity events.
+    /// Has effect only when --emit-activity is also set.
+    #[arg(long)]
+    baseline_deviation_scoring: bool,
+
+    /// Limit discovery to one supported client. Repeat to include multiple clients.
+    #[arg(long = "client", value_parser = parse_client_id)]
+    clients: Vec<ClientId>,
+
+    /// Project config YAML file listing project roots. Repeat for multiple files.
+    #[arg(long = "project-config")]
+    project_config_paths: Vec<PathBuf>,
+
+    /// Maximum size in bytes before the active JSONL file is rotated.
+    /// Defaults to TELLTALE_LOG_ROTATE_MAX_SIZE or 104857600 (100 MB). 0 disables rotation.
+    #[arg(long)]
+    log_rotate_max_size: Option<u64>,
+
+    /// Number of rotated files to keep. Defaults to TELLTALE_LOG_ROTATE_KEEP or 5.
+    #[arg(long)]
+    log_rotate_keep: Option<usize>,
+
+    /// Disable built-in rotation. Use when an external rotator manages the file.
+    #[arg(long)]
+    log_rotate_disabled: bool,
+
+    /// Seconds between metadata-only installed-agent inventory observations.
+    /// Defaults to TELLTALE_INSTALL_INVENTORY_INTERVAL_SECONDS or 86400. Use 0 to collect every scan.
+    #[arg(long)]
+    install_inventory_interval_seconds: Option<u64>,
+
+    /// Disable installed-agent inventory observations.
+    #[arg(long)]
+    install_inventory_disabled: bool,
+}
+
 #[derive(Debug, Subcommand)]
 enum MigrateCommand {
     /// Convert legacy unversioned state or relocate native 1.0 state.
@@ -438,46 +365,14 @@ pub(crate) enum ExportFormat {
 enum ConfigCommand {
     /// Validate effective rules, policy, and allowlist configuration.
     Validate {
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
         #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
-
-        /// YAML allowlist file that marks matching detections as suppressed.
-        #[arg(long)]
-        allowlist: Option<PathBuf>,
+        config: ConfigRuleCliArgs,
     },
 
     /// Print the deterministic effective producer and detector provenance manifest.
     Provenance {
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
         #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
-
-        /// YAML allowlist file that marks matching detections as suppressed.
-        #[arg(long)]
-        allowlist: Option<PathBuf>,
+        config: ConfigRuleCliArgs,
 
         /// Include per-session activity events in the represented producer configuration.
         #[arg(long)]
@@ -501,6 +396,28 @@ enum ConfigCommand {
     },
 }
 
+#[derive(Debug, ClapArgs)]
+struct ConfigRuleCliArgs {
+    /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
+    #[arg(long = "rules")]
+    rule_paths: Vec<PathBuf>,
+
+    #[command(flatten)]
+    local_config: LocalConfigCliArgs,
+
+    /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
+    #[arg(long)]
+    no_default_rules: bool,
+
+    /// YAML policy file that selects active rule categories and rule ids.
+    #[arg(long)]
+    policy: Option<PathBuf>,
+
+    /// YAML allowlist file that marks matching detections as suppressed.
+    #[arg(long)]
+    allowlist: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 enum RulesCommand {
     /// List loaded rules.
@@ -509,38 +426,14 @@ enum RulesCommand {
         #[arg(long)]
         verbose: bool,
 
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
         #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
+        config: RuleConfigCliArgs,
     },
 
     /// Validate rule and policy YAML.
     Validate {
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
         #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
+        config: RuleConfigCliArgs,
     },
 
     /// Evaluate one Codex-shaped JSONL fixture with the loaded rules.
@@ -548,20 +441,8 @@ enum RulesCommand {
         /// Fixture file to evaluate.
         fixture: PathBuf,
 
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
         #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
+        config: RuleConfigCliArgs,
     },
 
     /// Serve a read-only local rule editor shell.
@@ -570,20 +451,8 @@ enum RulesCommand {
         #[arg(long, default_value = "127.0.0.1:8787")]
         addr: std::net::SocketAddr,
 
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
         #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
+        config: RuleConfigCliArgs,
 
         /// Handle one HTTP request and exit. Intended for CLI integration tests.
         #[arg(long, hide = true)]
@@ -596,20 +465,8 @@ enum RulesCommand {
         #[arg(long, default_value = "tests/fixtures/session_stores")]
         root: PathBuf,
 
-        /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
-        #[arg(long = "rules")]
-        rule_paths: Vec<PathBuf>,
-
         #[command(flatten)]
-        local_config: LocalConfigCliArgs,
-
-        /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
-        #[arg(long)]
-        no_default_rules: bool,
-
-        /// YAML policy file that selects active rule categories and rule ids.
-        #[arg(long)]
-        policy: Option<PathBuf>,
+        config: RuleConfigCliArgs,
     },
 
     /// Export the bundled default rule YAML for inspection or local forking.
@@ -622,6 +479,24 @@ enum RulesCommand {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(Debug, ClapArgs)]
+struct RuleConfigCliArgs {
+    /// YAML rule file to add. Repeat to load multiple files in addition to bundled rules.
+    #[arg(long = "rules")]
+    rule_paths: Vec<PathBuf>,
+
+    #[command(flatten)]
+    local_config: LocalConfigCliArgs,
+
+    /// Do not load bundled defaults. Managed packs remain active; --rules files stay additive.
+    #[arg(long)]
+    no_default_rules: bool,
+
+    /// YAML policy file that selects active rule categories and rule ids.
+    #[arg(long)]
+    policy: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, ClapArgs)]
@@ -642,6 +517,7 @@ struct ResolvedRuleConfig {
     editable_rule_paths: Vec<PathBuf>,
     override_paths: Vec<PathBuf>,
     policy_path: Option<PathBuf>,
+    rule_load_mode: RuleLoadMode,
 }
 
 struct ResolvedScanConfig {
@@ -654,6 +530,149 @@ struct ResolvedScanConfig {
     allowlist_path: Option<PathBuf>,
     allowlist_origin: Option<&'static str>,
     discovered: crate::config::LocalConfigFiles,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SplunkCliOverrides<'a> {
+    endpoint: Option<&'a str>,
+    token: Option<&'a str>,
+}
+
+struct PreparedScanExecution {
+    root: PathBuf,
+    log_path: PathBuf,
+    sink_set: crate::sink::SinkSet,
+    state_path: PathBuf,
+    dry_run: bool,
+    emit_activity: bool,
+    emit_session_risk_summary: bool,
+    allow_fixtures: bool,
+    resolved_config: ResolvedScanConfig,
+    rule_load_mode: RuleLoadMode,
+    baseline_deviation_scoring: bool,
+    clients: Vec<ClientId>,
+    project_config_paths: Vec<PathBuf>,
+    install_inventory_interval_seconds: Option<u64>,
+    effective_configuration: serde_json::Value,
+}
+
+impl ScanExecutionArgs {
+    fn prepare(
+        self,
+        splunk: SplunkCliOverrides<'_>,
+    ) -> Result<PreparedScanExecution, Box<dyn std::error::Error>> {
+        let path_profile = self.path_profile.into();
+        let log_origin = path_origin(self.log_path.as_deref(), paths::LOG_PATH_ENV);
+        let state_origin = path_origin(self.state_path.as_deref(), paths::STATE_PATH_ENV);
+        let log_path = paths::resolve_log_path(path_profile, self.log_path);
+        let state_path = paths::resolve_state_path(path_profile, self.state_path);
+        let rotation = resolve_rotation_config(
+            self.log_rotate_max_size,
+            self.log_rotate_keep,
+            self.log_rotate_disabled,
+        );
+        let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
+            self.install_inventory_interval_seconds,
+            self.install_inventory_disabled,
+        );
+        let project_config_paths = if self.project_config_paths.is_empty() {
+            crate::projects::project_config_paths_from_env()
+        } else {
+            self.project_config_paths
+        };
+        let resolved_config = resolve_scan_config(
+            &self.local_config,
+            &self.rule_paths,
+            self.policy.as_deref(),
+            self.allowlist.as_deref(),
+        )?;
+        let loaded_outputs = sink_config::load_outputs_config_with_delivery(
+            &resolved_config.discovered.output_paths,
+        )?;
+        let output_specs = &loaded_outputs.sinks;
+        let outputs_config_present = !resolved_config.discovered.output_paths.is_empty();
+        let sink_set = sink_config::build_sink_set_with_presence_and_delivery_for_activation(
+            output_specs,
+            outputs_config_present,
+            &sink_config::CliSinkOverrides {
+                log_path: &log_path,
+                rotation,
+                splunk_hec_endpoint: splunk.endpoint,
+                splunk_hec_token: splunk.token,
+            },
+            &loaded_outputs.delivery,
+            true,
+            !self.dry_run,
+        )?;
+        let outputs = output_snapshot_value(
+            output_specs,
+            &resolved_config.discovered.output_paths,
+            outputs_config_present,
+            &log_path,
+            splunk.endpoint,
+            splunk.token,
+            &sink_set,
+        );
+        let effective_configuration = effective_configuration_base(
+            &self.local_config,
+            EffectiveConfigurationPaths {
+                profile: path_profile,
+                log_path: &log_path,
+                state_path: &state_path,
+                log_origin,
+                state_origin,
+            },
+            &resolved_config,
+            self.no_default_rules,
+            &project_config_paths,
+            outputs,
+        );
+
+        Ok(PreparedScanExecution {
+            root: self.root,
+            log_path,
+            sink_set,
+            state_path,
+            dry_run: self.dry_run,
+            emit_activity: self.emit_activity,
+            emit_session_risk_summary: self.emit_session_risk_summary,
+            allow_fixtures: self.allow_fixtures,
+            resolved_config,
+            rule_load_mode: rule_load_mode(self.no_default_rules),
+            baseline_deviation_scoring: self.baseline_deviation_scoring,
+            clients: self.clients,
+            project_config_paths,
+            install_inventory_interval_seconds,
+            effective_configuration,
+        })
+    }
+}
+
+impl PreparedScanExecution {
+    fn config<'a>(&'a self, runtime: &'a serde_json::Value) -> scan::ScanExecutionConfig<'a> {
+        scan::ScanExecutionConfig {
+            root: &self.root,
+            log_path: &self.log_path,
+            sinks: &self.sink_set,
+            state_path: &self.state_path,
+            dry_run: self.dry_run,
+            emit_activity: self.emit_activity,
+            emit_session_risk_summary: self.emit_session_risk_summary,
+            allow_fixtures: self.allow_fixtures,
+            rule_pack_paths: &self.resolved_config.rule_pack_paths,
+            rule_paths: &self.resolved_config.explicit_rule_paths,
+            override_paths: &self.resolved_config.override_paths,
+            rule_load_mode: self.rule_load_mode,
+            policy_path: self.resolved_config.policy_path.as_deref(),
+            allowlist_path: self.resolved_config.allowlist_path.as_deref(),
+            baseline_deviation_scoring: self.baseline_deviation_scoring,
+            clients: &self.clients,
+            project_config_paths: &self.project_config_paths,
+            install_inventory_interval_seconds: self.install_inventory_interval_seconds,
+            runtime,
+            effective_configuration: &self.effective_configuration,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -960,28 +979,47 @@ fn rule_load_mode(no_default_rules: bool) -> RuleLoadMode {
     }
 }
 
-fn resolve_rule_config(
-    local_config: &LocalConfigCliArgs,
-    rule_paths: &[PathBuf],
-    policy: Option<&Path>,
-) -> Result<ResolvedRuleConfig, Box<dyn std::error::Error>> {
-    let discovered = crate::config::discover_local_config_files(
-        &local_config.config_dirs,
-        local_config.no_local_config,
-        crate::config::LocalConfigDiscoveryKind::Rules,
-    )?;
-    let rule_pack_paths = RulePackPaths {
-        organization: discovered.organization_rule_paths.clone(),
-        deployment: discovered.deployment_rule_paths.clone(),
-        local: discovered.local_rule_paths.clone(),
-    };
-    Ok(ResolvedRuleConfig {
-        explicit_rule_paths: rule_paths.to_vec(),
-        rule_pack_paths,
-        editable_rule_paths: rule_paths.to_vec(),
-        override_paths: discovered.override_paths.clone(),
-        policy_path: crate::config::resolve_policy_path(policy, &discovered.policy_paths)?,
-    })
+impl RuleConfigCliArgs {
+    fn resolve(&self) -> Result<ResolvedRuleConfig, Box<dyn std::error::Error>> {
+        let discovered = crate::config::discover_local_config_files(
+            &self.local_config.config_dirs,
+            self.local_config.no_local_config,
+            crate::config::LocalConfigDiscoveryKind::Rules,
+        )?;
+        let rule_pack_paths = RulePackPaths {
+            organization: discovered.organization_rule_paths.clone(),
+            deployment: discovered.deployment_rule_paths.clone(),
+            local: discovered.local_rule_paths.clone(),
+        };
+        Ok(ResolvedRuleConfig {
+            explicit_rule_paths: self.rule_paths.clone(),
+            rule_pack_paths,
+            editable_rule_paths: self.rule_paths.clone(),
+            override_paths: discovered.override_paths.clone(),
+            policy_path: crate::config::resolve_policy_path(
+                self.policy.as_deref(),
+                &discovered.policy_paths,
+            )?,
+            rule_load_mode: rule_load_mode(self.no_default_rules),
+        })
+    }
+
+    fn resolve_rule_set(&self) -> Result<crate::rules::RuleResolution, Box<dyn std::error::Error>> {
+        self.resolve()?.resolve_rule_set()
+    }
+}
+
+impl ResolvedRuleConfig {
+    fn resolve_rule_set(&self) -> Result<crate::rules::RuleResolution, Box<dyn std::error::Error>> {
+        resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+            &self.rule_pack_paths,
+            &self.explicit_rule_paths,
+            self.policy_path.as_deref(),
+            self.rule_load_mode,
+            &self.override_paths,
+            &[],
+        )
+    }
 }
 
 fn resolve_scan_config(
@@ -1041,6 +1079,30 @@ fn resolve_scan_config(
     })
 }
 
+impl ConfigRuleCliArgs {
+    fn resolve_rules(
+        &self,
+    ) -> Result<(ResolvedScanConfig, crate::rules::RuleResolution), Box<dyn std::error::Error>>
+    {
+        let resolved_config = resolve_scan_config(
+            &self.local_config,
+            &self.rule_paths,
+            self.policy.as_deref(),
+            self.allowlist.as_deref(),
+        )?;
+        let resolution =
+            resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                &resolved_config.rule_pack_paths,
+                &resolved_config.explicit_rule_paths,
+                resolved_config.policy_path.as_deref(),
+                rule_load_mode(self.no_default_rules),
+                &resolved_config.override_paths,
+                &[],
+            )?;
+        Ok((resolved_config, resolution))
+    }
+}
+
 fn display_paths(paths: &[PathBuf]) -> Vec<String> {
     paths
         .iter()
@@ -1052,22 +1114,8 @@ fn display_path(path: Option<&Path>) -> Option<String> {
     path.map(|path| PrivacySanitizer::sanitize(SanitizationContext::Path, &path.to_string_lossy()))
 }
 
-fn run_config_validate(
-    local_config: &LocalConfigCliArgs,
-    rule_paths: &[PathBuf],
-    no_default_rules: bool,
-    policy: Option<&Path>,
-    allowlist: Option<&Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let resolved_config = resolve_scan_config(local_config, rule_paths, policy, allowlist)?;
-    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-        &resolved_config.rule_pack_paths,
-        &resolved_config.explicit_rule_paths,
-        resolved_config.policy_path.as_deref(),
-        rule_load_mode(no_default_rules),
-        &resolved_config.override_paths,
-        &[],
-    )?;
+fn run_config_validate(config: &ConfigRuleCliArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (resolved_config, resolution) = config.resolve_rules()?;
     let rule_set = &resolution.rule_set;
     crate::allowlist::load_allowlist(resolved_config.allowlist_path.as_deref())?;
     let loaded_outputs =
@@ -1155,14 +1203,14 @@ fn run_config_validate(
         serde_json::to_string(&serde_json::json!({
             "status": "ok",
             "rule_count": rule_set.rule_count(),
-            "default_rules": !no_default_rules,
+            "default_rules": !config.no_default_rules,
             "policy_name": rule_set.policy_name().map(|name| opaque_identifier("policy", name)),
             "local_config": {
-                "enabled": !local_config.no_local_config,
-                "explicit_config_dirs": if local_config.no_local_config {
+                "enabled": !config.local_config.no_local_config,
+                "explicit_config_dirs": if config.local_config.no_local_config {
                     Vec::<String>::new()
                 } else {
-                    display_paths(&local_config.config_dirs)
+                    display_paths(&config.local_config.config_dirs)
                 },
                 "discovered_rule_count": resolved_config.discovered.rule_paths.len(),
                 "discovered_override_count": resolved_config.discovered.override_paths.len(),
@@ -1187,7 +1235,7 @@ fn run_config_validate(
             },
             "rules": {
                 "paths": display_paths(&resolved_config.rule_paths),
-                "explicit_count": rule_paths.len(),
+                "explicit_count": config.rule_paths.len(),
                 "discovered_count": resolved_config.discovered.rule_paths.len(),
                 "provenance": rule_diagnostics["provenance"],
                 "sources": rule_diagnostics["sources"],
@@ -1205,11 +1253,7 @@ fn run_config_validate(
 }
 
 struct ConfigProvenanceArgs<'a> {
-    local_config: &'a LocalConfigCliArgs,
-    rule_paths: &'a [PathBuf],
-    no_default_rules: bool,
-    policy: Option<&'a Path>,
-    allowlist: Option<&'a Path>,
+    config: &'a ConfigRuleCliArgs,
     emit_activity: bool,
     emit_session_risk_summary: bool,
     baseline_deviation_scoring: bool,
@@ -1218,22 +1262,10 @@ struct ConfigProvenanceArgs<'a> {
 }
 
 fn run_config_provenance(args: ConfigProvenanceArgs<'_>) -> Result<(), Box<dyn std::error::Error>> {
-    let resolved_config = resolve_scan_config(
-        args.local_config,
-        args.rule_paths,
-        args.policy,
-        args.allowlist,
-    )
-    .map_err(|_| private_provenance_error())?;
-    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-        &resolved_config.rule_pack_paths,
-        &resolved_config.explicit_rule_paths,
-        resolved_config.policy_path.as_deref(),
-        rule_load_mode(args.no_default_rules),
-        &resolved_config.override_paths,
-        &[],
-    )
-    .map_err(|_| private_provenance_error())?;
+    let (resolved_config, resolution) = args
+        .config
+        .resolve_rules()
+        .map_err(|_| private_provenance_error())?;
     let allowlist_document = resolved_config
         .allowlist_path
         .as_deref()
@@ -1358,121 +1390,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::from_arg_matches(&command.get_matches())?;
 
     match args.command {
-        Command::Scan {
+        Command::Scan(ScanCommandArgs {
+            execution,
             once,
             interval_seconds,
             iterations,
-            root,
-            path_profile,
-            log_path,
             splunk_hec_endpoint,
             splunk_hec_token,
-            state_path,
-            dry_run,
-            emit_activity,
-            emit_session_risk_summary,
-            allow_fixtures,
             backfill,
             rebuild_baselines,
-            rule_paths,
-            local_config,
-            no_default_rules,
-            policy,
-            allowlist,
-            baseline_deviation_scoring,
-            clients,
             max_sources,
-            project_config_paths,
-            log_rotate_max_size,
-            log_rotate_keep,
-            log_rotate_disabled,
-            install_inventory_interval_seconds,
-            install_inventory_disabled,
-        } => {
-            let path_profile = path_profile.into();
-            let log_origin = path_origin(log_path.as_deref(), paths::LOG_PATH_ENV);
-            let state_origin = path_origin(state_path.as_deref(), paths::STATE_PATH_ENV);
-            let log_path = paths::resolve_log_path(path_profile, log_path);
-            let state_path = paths::resolve_state_path(path_profile, state_path);
-            let rotation =
-                resolve_rotation_config(log_rotate_max_size, log_rotate_keep, log_rotate_disabled);
-            let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
-                install_inventory_interval_seconds,
-                install_inventory_disabled,
-            );
-            let mut project_paths = project_config_paths.clone();
-            if project_paths.is_empty() {
-                project_paths = crate::projects::project_config_paths_from_env();
-            }
-            let resolved_config = resolve_scan_config(
-                &local_config,
-                &rule_paths,
-                policy.as_deref(),
-                allowlist.as_deref(),
-            )?;
-            let loaded_outputs = sink_config::load_outputs_config_with_delivery(
-                &resolved_config.discovered.output_paths,
-            )?;
-            let output_specs = &loaded_outputs.sinks;
-            let sink_set = sink_config::build_sink_set_with_presence_and_delivery_for_activation(
-                output_specs,
-                !resolved_config.discovered.output_paths.is_empty(),
-                &sink_config::CliSinkOverrides {
-                    log_path: &log_path,
-                    rotation,
-                    splunk_hec_endpoint: splunk_hec_endpoint.as_deref(),
-                    splunk_hec_token: splunk_hec_token.as_deref(),
-                },
-                &loaded_outputs.delivery,
-                true,
-                !dry_run,
-            )?;
-            let outputs = output_snapshot_value(
-                output_specs,
-                &resolved_config.discovered.output_paths,
-                !resolved_config.discovered.output_paths.is_empty(),
-                &log_path,
-                splunk_hec_endpoint.as_deref(),
-                splunk_hec_token.as_deref(),
-                &sink_set,
-            );
-            let effective_configuration = effective_configuration_base(
-                &local_config,
-                EffectiveConfigurationPaths {
-                    profile: path_profile,
-                    log_path: &log_path,
-                    state_path: &state_path,
-                    log_origin,
-                    state_origin,
-                },
-                &resolved_config,
-                no_default_rules,
-                &project_paths,
-                outputs,
-            );
+        }) => {
+            let prepared = execution.prepare(SplunkCliOverrides {
+                endpoint: splunk_hec_endpoint.as_deref(),
+                token: splunk_hec_token.as_deref(),
+            })?;
             let scan_config = scan::ScanConfig {
-                execution: scan::ScanExecutionConfig {
-                    root: &root,
-                    log_path: &log_path,
-                    sinks: &sink_set,
-                    state_path: &state_path,
-                    dry_run,
-                    emit_activity,
-                    emit_session_risk_summary,
-                    allow_fixtures,
-                    rule_pack_paths: &resolved_config.rule_pack_paths,
-                    rule_paths: &resolved_config.explicit_rule_paths,
-                    override_paths: &resolved_config.override_paths,
-                    rule_load_mode: rule_load_mode(no_default_rules),
-                    policy_path: resolved_config.policy_path.as_deref(),
-                    allowlist_path: resolved_config.allowlist_path.as_deref(),
-                    baseline_deviation_scoring,
-                    clients: &clients,
-                    project_config_paths: &project_paths,
-                    install_inventory_interval_seconds,
-                    runtime: &runtime.value,
-                    effective_configuration: &effective_configuration,
-                },
+                execution: prepared.config(&runtime.value),
                 backfill,
                 rebuild_baselines,
                 max_sources,
@@ -1512,24 +1446,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Command::Rules { command } => match command {
-            RulesCommand::List {
-                verbose,
-                rule_paths,
-                local_config,
-                no_default_rules,
-                policy,
-            } => {
-                let resolved_config =
-                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let resolution =
-                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-                        &resolved_config.rule_pack_paths,
-                        &resolved_config.explicit_rule_paths,
-                        resolved_config.policy_path.as_deref(),
-                        rule_load_mode(no_default_rules),
-                        &resolved_config.override_paths,
-                        &[],
-                    )?;
+            RulesCommand::List { verbose, config } => {
+                let resolution = config.resolve_rule_set()?;
                 let provenance = resolution
                     .diagnostics
                     .provenance
@@ -1575,23 +1493,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            RulesCommand::Validate {
-                rule_paths,
-                local_config,
-                no_default_rules,
-                policy,
-            } => {
-                let resolved_config =
-                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let resolution =
-                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-                        &resolved_config.rule_pack_paths,
-                        &resolved_config.explicit_rule_paths,
-                        resolved_config.policy_path.as_deref(),
-                        rule_load_mode(no_default_rules),
-                        &resolved_config.override_paths,
-                        &[],
-                    )?;
+            RulesCommand::Validate { config } => {
+                let resolution = config.resolve_rule_set()?;
                 let diagnostics = rule_diagnostics_value(&resolution.diagnostics);
                 println!(
                     "{}",
@@ -1604,24 +1507,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }))?
                 );
             }
-            RulesCommand::Test {
-                fixture,
-                rule_paths,
-                local_config,
-                no_default_rules,
-                policy,
-            } => {
-                let resolved_config =
-                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
-                let resolution =
-                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-                        &resolved_config.rule_pack_paths,
-                        &resolved_config.explicit_rule_paths,
-                        resolved_config.policy_path.as_deref(),
-                        rule_load_mode(no_default_rules),
-                        &resolved_config.override_paths,
-                        &[],
-                    )?;
+            RulesCommand::Test { fixture, config } => {
+                let resolution = config.resolve_rule_set()?;
                 let source = Source {
                     client: ClientId::Codex,
                     kind: SourceKind::Jsonl,
@@ -1667,16 +1554,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }))?
                 );
             }
-            RulesCommand::Serve {
-                addr,
-                rule_paths,
-                local_config,
-                no_default_rules,
-                policy,
-                once,
-            } => {
-                let resolved_config =
-                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
+            RulesCommand::Serve { addr, config, once } => {
+                let resolved_config = config.resolve()?;
                 rules_server::run_rules_server(
                     addr,
                     rules_server::RuleServerConfig {
@@ -1685,27 +1564,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         editable_rule_paths: &resolved_config.editable_rule_paths,
                         override_paths: &resolved_config.override_paths,
                         policy_path: resolved_config.policy_path.as_deref(),
-                        rule_load_mode: rule_load_mode(no_default_rules),
+                        rule_load_mode: resolved_config.rule_load_mode,
                     },
                     once,
                 )?;
             }
-            RulesCommand::Coverage {
-                root,
-                rule_paths,
-                local_config,
-                no_default_rules,
-                policy,
-            } => {
-                let resolved_config =
-                    resolve_rule_config(&local_config, &rule_paths, policy.as_deref())?;
+            RulesCommand::Coverage { root, config } => {
+                let resolved_config = config.resolve()?;
                 coverage::run_rules_coverage(
                     &root,
                     &resolved_config.rule_pack_paths,
                     &resolved_config.explicit_rule_paths,
                     &resolved_config.override_paths,
                     resolved_config.policy_path.as_deref(),
-                    rule_load_mode(no_default_rules),
+                    resolved_config.rule_load_mode,
                 )?;
             }
             RulesCommand::ExportDefault { output, force } => {
@@ -1713,36 +1585,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
         Command::Config { command } => match command {
-            ConfigCommand::Validate {
-                rule_paths,
-                local_config,
-                no_default_rules,
-                policy,
-                allowlist,
-            } => run_config_validate(
-                &local_config,
-                &rule_paths,
-                no_default_rules,
-                policy.as_deref(),
-                allowlist.as_deref(),
-            )?,
+            ConfigCommand::Validate { config } => run_config_validate(&config)?,
             ConfigCommand::Provenance {
-                rule_paths,
-                local_config,
-                no_default_rules,
-                policy,
-                allowlist,
+                config,
                 emit_activity,
                 emit_session_risk_summary,
                 baseline_deviation_scoring,
                 install_inventory_interval_seconds,
                 install_inventory_disabled,
             } => run_config_provenance(ConfigProvenanceArgs {
-                local_config: &local_config,
-                rule_paths: &rule_paths,
-                no_default_rules,
-                policy: policy.as_deref(),
-                allowlist: allowlist.as_deref(),
+                config: &config,
                 emit_activity,
                 emit_session_risk_summary,
                 baseline_deviation_scoring,
@@ -1750,123 +1602,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 install_inventory_disabled,
             })?,
         },
-        Command::Watch {
-            root,
-            path_profile,
-            log_path,
-            state_path,
-            dry_run,
-            emit_activity,
-            emit_session_risk_summary,
-            allow_fixtures,
+        Command::Watch(WatchCommandArgs {
+            execution,
             iterations,
             debounce_ms,
             min_scan_interval_ms,
-            rule_paths,
-            local_config,
-            no_default_rules,
-            policy,
-            allowlist,
-            baseline_deviation_scoring,
-            clients,
-            project_config_paths,
-            log_rotate_max_size,
-            log_rotate_keep,
-            log_rotate_disabled,
-            install_inventory_interval_seconds,
-            install_inventory_disabled,
-        } => {
-            let path_profile = path_profile.into();
-            let log_origin = path_origin(log_path.as_deref(), paths::LOG_PATH_ENV);
-            let state_origin = path_origin(state_path.as_deref(), paths::STATE_PATH_ENV);
-            let log_path = paths::resolve_log_path(path_profile, log_path);
-            let state_path = paths::resolve_state_path(path_profile, state_path);
-            let rotation =
-                resolve_rotation_config(log_rotate_max_size, log_rotate_keep, log_rotate_disabled);
-            let install_inventory_interval_seconds = resolve_install_inventory_interval_seconds(
-                install_inventory_interval_seconds,
-                install_inventory_disabled,
-            );
-            let mut project_paths = project_config_paths.clone();
-            if project_paths.is_empty() {
-                project_paths = crate::projects::project_config_paths_from_env();
-            }
-            let resolved_config = resolve_scan_config(
-                &local_config,
-                &rule_paths,
-                policy.as_deref(),
-                allowlist.as_deref(),
-            )?;
-            let loaded_outputs = sink_config::load_outputs_config_with_delivery(
-                &resolved_config.discovered.output_paths,
-            )?;
-            let output_specs = &loaded_outputs.sinks;
-            let sink_set = sink_config::build_sink_set_with_presence_and_delivery_for_activation(
-                output_specs,
-                !resolved_config.discovered.output_paths.is_empty(),
-                &sink_config::CliSinkOverrides {
-                    log_path: &log_path,
-                    rotation,
-                    splunk_hec_endpoint: None,
-                    splunk_hec_token: None,
-                },
-                &loaded_outputs.delivery,
-                true,
-                !dry_run,
-            )?;
-            let outputs = output_snapshot_value(
-                output_specs,
-                &resolved_config.discovered.output_paths,
-                !resolved_config.discovered.output_paths.is_empty(),
-                &log_path,
-                None,
-                None,
-                &sink_set,
-            );
-            let effective_configuration = effective_configuration_base(
-                &local_config,
-                EffectiveConfigurationPaths {
-                    profile: path_profile,
-                    log_path: &log_path,
-                    state_path: &state_path,
-                    log_origin,
-                    state_origin,
-                },
-                &resolved_config,
-                no_default_rules,
-                &project_paths,
-                outputs,
-            );
-            let watch_config = scan::WatchConfig {
-                execution: scan::ScanExecutionConfig {
-                    root: &root,
-                    log_path: &log_path,
-                    sinks: &sink_set,
-                    state_path: &state_path,
-                    dry_run,
-                    emit_activity,
-                    emit_session_risk_summary,
-                    allow_fixtures,
-                    rule_pack_paths: &resolved_config.rule_pack_paths,
-                    rule_paths: &resolved_config.explicit_rule_paths,
-                    override_paths: &resolved_config.override_paths,
-                    rule_load_mode: rule_load_mode(no_default_rules),
-                    policy_path: resolved_config.policy_path.as_deref(),
-                    allowlist_path: resolved_config.allowlist_path.as_deref(),
-                    baseline_deviation_scoring,
-                    clients: &clients,
-                    project_config_paths: &project_paths,
-                    install_inventory_interval_seconds,
-                    runtime: &runtime.value,
-                    effective_configuration: &effective_configuration,
-                },
-                trigger: scan::WatchTriggerConfig {
+        }) => {
+            let prepared = execution.prepare(SplunkCliOverrides::default())?;
+            let watch_config = scan::watch::WatchConfig {
+                execution: prepared.config(&runtime.value),
+                trigger: scan::watch::WatchTriggerConfig {
                     iterations,
                     debounce: std::time::Duration::from_millis(debounce_ms),
                     min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
                 },
             };
-            scan::run_watch(watch_config)?;
+            scan::watch::run_watch(watch_config)?;
         }
         Command::Status {
             path_profile,
