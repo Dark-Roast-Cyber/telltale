@@ -3,11 +3,8 @@
 pub enum ClientId {
     Codex,
     Claude,
-    Gemini,
     OpenClaw,
     Qwen,
-    RooCode,
-    KiloCode,
     OpenCode,
     Copilot,
 }
@@ -17,11 +14,8 @@ impl ClientId {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
-            Self::Gemini => "gemini",
             Self::OpenClaw => "openclaw",
             Self::Qwen => "qwen",
-            Self::RooCode => "roocode",
-            Self::KiloCode => "kilocode",
             Self::OpenCode => "opencode",
             Self::Copilot => "copilot",
         }
@@ -36,8 +30,6 @@ pub enum SourceKind {
     ArchivedJsonl,
     HeadlessJsonl,
     Sqlite,
-    LegacyJson,
-    UiMessagesJson,
     CopilotProcessLog,
 }
 
@@ -49,8 +41,6 @@ impl SourceKind {
             Self::ArchivedJsonl => "archived_jsonl",
             Self::HeadlessJsonl => "headless_jsonl",
             Self::Sqlite => "sqlite",
-            Self::LegacyJson => "legacy_json",
-            Self::UiMessagesJson => "ui_messages_json",
             Self::CopilotProcessLog => "copilot_process_log",
         }
     }

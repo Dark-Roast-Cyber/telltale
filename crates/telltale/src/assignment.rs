@@ -142,13 +142,10 @@ impl AssignmentAdapterDomain {
             ("codex", "codex.sessions") => ("codex", "codex.sessions"),
             ("codex", "codex.archived_sessions") => ("codex", "codex.archived_sessions"),
             ("codex", "codex.headless_sessions") => ("codex", "codex.headless_sessions"),
-            ("codex", "codex.project_sessions") => ("codex", "codex.project_sessions"),
             ("copilot", "copilot.process_log") => ("copilot", "copilot.process_log"),
-            ("kilocode", "kilocode.tasks") => ("kilocode", "kilocode.tasks"),
             ("openclaw", "openclaw.agents") => ("openclaw", "openclaw.agents"),
             ("opencode", "opencode.sqlite") => ("opencode", "opencode.sqlite"),
             ("qwen", "qwen.projects") => ("qwen", "qwen.projects"),
-            ("roocode", "roocode.tasks") => ("roocode", "roocode.tasks"),
             #[cfg(test)]
             ("synthetic", "coordinate-less") => ("synthetic", "coordinate-less"),
             _ => return Err(error(ProtectedAssignmentErrorCode::InvalidClaim)),

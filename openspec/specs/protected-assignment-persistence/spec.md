@@ -233,24 +233,11 @@ coordinates, Event IDs, adapter identity, or source provenance. A caller may set
 session correlation only from its independently truthful source/configuration
 contract.
 
-RooCode's validated direct history ID MAY remain its session namespace but MUST
-NOT become a per-message assignment association without new evidence. Legacy
-KiloCode remains without a source session namespace. Both adapters MUST remain
-blocked from canonical projection until a validated, mutation-stable,
-duplicate-safe per-message replay association exists.
-
 #### Scenario: Assignment does not fill session identity
 
 - **WHEN** a coordinate-less observation receives a durable protected
   assignment and its source supplies no session namespace
 - **THEN** observation identity is available but `session_id` remains absent
-
-#### Scenario: Roo and Kilo remain blocked
-
-- **WHEN** their current UI-message contracts are tested across edit,
-  insertion, deletion, duplicate, reorder, and truncation
-- **THEN** mutable ordinal, timestamp, content, path, and compatibility grouping
-  fail the association contract and no projector is enabled
 
 ### Requirement: Existing production contracts do not regress
 

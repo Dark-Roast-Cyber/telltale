@@ -3,21 +3,22 @@ use std::{fs, path::PathBuf};
 use super::*;
 
 #[test]
-fn empty_gemini_source_produces_no_events() {
+fn empty_copilot_source_produces_no_events() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("empty-copilot.log");
+    fs::write(&path, b"").expect("empty synthetic source");
     let source = Source {
-        client: ClientId::Gemini,
-        kind: SourceKind::Json,
-        source_id: "gemini.tmp".to_string(),
-        path: PathBuf::from(crate::test_fixture_path(
-            "session_stores/gemini/tmp/empty-session.json",
-        )),
+        client: ClientId::Copilot,
+        kind: SourceKind::CopilotProcessLog,
+        source_id: "copilot.process_log".to_string(),
+        path,
     };
 
     let detections = detect_sources(&[source]);
 
     assert!(
         detections.is_empty(),
-        "empty Gemini source should produce no events, not scanner_error events"
+        "empty source should produce no events, not scanner_error events"
     );
 }
 

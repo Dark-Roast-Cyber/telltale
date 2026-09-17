@@ -40,11 +40,9 @@ compiled-in registry and parser change.
   generic parser. Explicit unknown variants become `RecordKind::Other` or the
   source's documented diagnostic. There is no secondary fallback after failure.
 
-The current table has 14 exact identities, all using modeled source-owned
-parsers. `roocode.tasks` has a pinned native UI-message interpretation with
-direct task-history identity; `kilocode.tasks` has an independently pinned
-legacy-writer interpretation without Roo companion identity logic. Neither is a
-generic JSON-document fallback.
+The current table has eight exact identities across six agent families, all
+using modeled source-owned parsers. There are no candidate or compatibility
+registrations and no generic parser fallback.
 Parser maturity is not the same claim as live validation or full public support;
 use the [validation matrix](source-validation-matrix.md) for that distinction.
 
@@ -181,7 +179,7 @@ Run the narrowest relevant tests first, then the source and detection suites:
 cargo test -p telltale-sources <agent-or-parser-filter>
 cargo test -p telltale-sources
 cargo test -p telltale-detect
-cargo test --test cli parser_maturity
+cargo test --test cli scan_watch::scan_once_writes_schema_shaped_health_jsonl -- --exact
 cargo run --bin telltale -- scan --once --dry-run --no-local-config \
   --root tests/fixtures/session_stores --client <client-id>
 cargo fmt --check
@@ -195,7 +193,7 @@ read-only or use an explicit development sink.
 
 Run or retain Linux, Windows, and macOS CI coverage for path roots, discovery,
 fixture parsing, and relevant source tests. Do not claim live source-store
-support merely because a parser maturity test passes.
+support merely because a fixture parser test passes.
 
 ## Definition of done
 

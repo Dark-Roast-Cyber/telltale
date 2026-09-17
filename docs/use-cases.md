@@ -43,7 +43,10 @@ Fixture guidance:
 - Include one positive fixture that chains MCP injection, secret access, and controlled-domain egress.
 - Include one negative fixture where a reserved test-domain string appears in benign user text without MCP injection or tool execution.
 - Include one negative fixture where MCP metadata is normal and contains no instruction override language.
-- Keep at least one positive fixture in each supported session client shape so parser differences cannot hide UC-001 detections. Current positive coverage includes Codex, OpenCode legacy JSON, OpenCode SQLite, Copilot process logs, Claude, Gemini, Qwen, OpenClaw, RooCode, and KiloCode synthetic shapes.
+- Keep at least one positive fixture in each supported session client shape so
+  parser differences cannot hide UC-001 detections. Current positive coverage
+  includes Claude Code, the three Codex identities, OpenCode SQLite, OpenClaw,
+  Qwen, and Copilot process logs.
 
 Example synthetic string:
 

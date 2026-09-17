@@ -2,9 +2,8 @@
 
 ## Functional Requirements
 
-- Discover local sessions for supported coding-agent sources such as Codex,
-  OpenCode, Copilot, Claude Code, Gemini CLI, Qwen CLI, RooCode, KiloCode, and
-  OpenClaw as adapters mature.
+- Discover local sessions for the supported Claude Code, Codex, OpenCode,
+  OpenClaw, Qwen, and GitHub Copilot source contracts.
 - Parse transcripts into ordered user, assistant, tool-call, and tool-result records.
 - Detect tool calls and suspicious context with static regex rules.
 - Support multiple simultaneous rule matches and cumulative scoring.

@@ -2293,43 +2293,6 @@ modifiers: []
 }
 
 #[test]
-fn rules_test_classifies_gemini_secret_file_reads_as_secret_access() {
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "rules",
-            "test",
-            "tests/fixtures/rule_samples/gemini-secret-file-read.jsonl",
-            "--no-local-config",
-            "--rules",
-            "config/rules/tool-call-regex.yaml",
-        ])
-        .output()
-        .expect("run telltale rules test");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
-    assert_eq!(summary["match_count"], 1);
-    assert!(
-        summary["matches"][0]["rule_ids"]
-            .as_array()
-            .expect("rule ids array")
-            .iter()
-            .any(|rule| rule == "secret.env.read")
-    );
-    assert!(
-        summary["matches"][0]["categories"]
-            .as_array()
-            .expect("categories array")
-            .iter()
-            .any(|category| category == "secret_access")
-    );
-}
-
-#[test]
 fn scan_post_match_skip_emits_valid_retained_event3() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");

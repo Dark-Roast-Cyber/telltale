@@ -2260,29 +2260,33 @@ fn export_source_root_rejects_jsonl_only_filters() {
 }
 
 #[test]
-fn export_source_root_rejects_unknown_client_filter() {
+fn export_source_root_rejects_unknown_and_retired_client_filters() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");
     fs::write(&log_path, "").expect("write empty log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .arg("export")
-        .arg("--log-path")
-        .arg(&log_path)
-        .arg("--timeline")
-        .arg("--source-root")
-        .arg(temp.path())
-        .args(["--session-id", "source-session"])
-        .args(["--client", "unknown-agent"])
-        .output()
-        .expect("run telltale export source-root with unknown client");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("--source-root does not support unknown client 'unknown-agent'"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("codex"), "{stderr}");
+    for rejected in ["unknown-agent", "gemini", "roocode", "kilocode"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .arg("export")
+            .arg("--log-path")
+            .arg(&log_path)
+            .arg("--timeline")
+            .arg("--source-root")
+            .arg(temp.path())
+            .args(["--session-id", "source-session"])
+            .args(["--client", rejected])
+            .output()
+            .expect("run telltale export source-root with rejected client");
+        assert!(!output.status.success(), "{rejected}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "--source-root does not support unknown client '{rejected}'"
+            )),
+            "{stderr}"
+        );
+        assert!(stderr.contains("codex"), "{stderr}");
+    }
 }
 
 #[test]
@@ -2449,26 +2453,22 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         .join("\n"),
     )
     .expect("write source fixture");
-    let opencode_dir = temp
-        .path()
-        .join("opencode/storage/message/session-source-session");
-    fs::create_dir_all(&opencode_dir).expect("create opencode fixture dir");
+    let qwen_dir = temp.path().join("qwen/projects/project/chats");
+    fs::create_dir_all(&qwen_dir).expect("create qwen fixture dir");
     fs::write(
-        opencode_dir.join("messages.json"),
-        serde_json::json!([
-            {
-                "type": "assistant",
-                "timestamp": "2026-05-01T00:01:30Z",
-                "session_id": "source-session",
-                "agent": "opencode",
-                "model": "claude-sonnet",
-                "provider": "anthropic",
-                "content": "OpenCode session sharing the same id should require client disambiguation"
-            }
-        ])
+        qwen_dir.join("source-backed-timeline.jsonl"),
+        serde_json::json!({
+            "type": "assistant",
+            "timestamp": "2026-05-01T00:01:30Z",
+            "sessionId": "source-session",
+            "agent": "qwen",
+            "model": "qwen3-coder-plus",
+            "provider": "qwen",
+            "content": "Qwen session sharing the same id should require client disambiguation"
+        })
         .to_string(),
     )
-    .expect("write opencode source fixture");
+    .expect("write qwen source fixture");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .arg("export")
@@ -2572,7 +2572,7 @@ fn export_timeline_from_source_root_uses_parsed_session_records() {
         .arg("--source-root")
         .arg(temp.path())
         .args(["--session-id", "source-session"])
-        .args(["--client", "opencode"])
+        .args(["--client", "qwen"])
         .output()
         .expect("run unmatched source-backed timeline export");
     assert!(

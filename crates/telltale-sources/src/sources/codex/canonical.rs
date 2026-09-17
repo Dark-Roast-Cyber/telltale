@@ -132,10 +132,7 @@ pub(crate) fn project_codex_canonical_observations(
 fn is_registered_source_id(source_id: &str) -> bool {
     matches!(
         source_id,
-        "codex.sessions"
-            | "codex.archived_sessions"
-            | "codex.headless_sessions"
-            | "codex.project_sessions"
+        "codex.sessions" | "codex.archived_sessions" | "codex.headless_sessions"
     )
 }
 
@@ -145,7 +142,6 @@ fn matching_source_kind(source_id: &str, kind: SourceKind) -> bool {
         ("codex.sessions", SourceKind::Jsonl)
             | ("codex.archived_sessions", SourceKind::ArchivedJsonl)
             | ("codex.headless_sessions", SourceKind::HeadlessJsonl)
-            | ("codex.project_sessions", SourceKind::Jsonl)
     )
 }
 
@@ -1152,14 +1148,13 @@ mod tests {
     }
 
     #[test]
-    fn provenance_capabilities_and_four_source_identities_are_explicit() {
+    fn provenance_capabilities_and_three_source_identities_are_explicit() {
         let contents =
             r#"{"type":"user","session_id":"same-shape","content":"Synthetic message."}"#;
         let identities = [
             ("codex.sessions", SourceKind::Jsonl),
             ("codex.archived_sessions", SourceKind::ArchivedJsonl),
             ("codex.headless_sessions", SourceKind::HeadlessJsonl),
-            ("codex.project_sessions", SourceKind::Jsonl),
         ];
         let mut ids = Vec::new();
         for (source_id, kind) in identities {
@@ -1198,7 +1193,7 @@ mod tests {
     #[test]
     fn command_and_resource_facets_do_not_create_activity_families() {
         let (_directory, source) = temp_source(
-            "codex.project_sessions",
+            "codex.sessions",
             SourceKind::Jsonl,
             r#"{"type":"tool_call","session_id":"facet-session","arguments":{"command":"git status","file_path":"README.md"},"message":"synthetic command"}"#,
         );
@@ -1277,17 +1272,14 @@ mod tests {
     #[test]
     fn all_projected_families_are_bounded_to_messages_and_tools() {
         let (_directory, source) = temp_source(
-            "codex.project_sessions",
+            "codex.sessions",
             SourceKind::Jsonl,
             r#"{"type":"session_meta","payload":{"session_id":"synthetic-project-session"}}
 {"type":"event_msg","payload":{"type":"assistant_message","message":"Synthetic response."}}"#,
         );
         let observations = project(&source);
         assert_eq!(observations.len(), 1);
-        assert_eq!(
-            observations[0].source().adapter_id(),
-            "codex.project_sessions"
-        );
+        assert_eq!(observations[0].source().adapter_id(), "codex.sessions");
         assert!(observations.iter().all(|observation| matches!(
             observation.kind(),
             ObservationFamily::Message | ObservationFamily::Tool

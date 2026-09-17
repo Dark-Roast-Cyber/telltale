@@ -36,9 +36,8 @@ The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 referenc
 projections are deliberately not active normalization paths. They preserve
 source call IDs, structured content parts, structured tool values, and truthful
 lifecycle stages while the production scanner continues to use
-`NormalizedRecordV1`. `opencode.legacy_json` remains compatibility-only and
-`opencode.project_json` remains Candidate; neither source's v2 migration has
-started. Detection v2 runtime and telemetry/output v2 are not started. The
+`NormalizedRecordV1`. Detection v2 runtime and telemetry/output v2 are not
+started. The
 Event4 contract foundation is implemented without a Canonical Observation v2
 projection or production output path, and Event 3.0 remains frozen.
 
@@ -213,12 +212,6 @@ normalization fails closed rather than creating an ephemeral identity. Paths,
 timestamps, mutable ordinals, bare producer coordinates, semantic values, and
 unkeyed content hashes remain invalid reassociation substitutes even though the
 store is local.
-
-The current RooCode and legacy KiloCode UI-message contracts do not satisfy the
-replay-association requirement. Their canonical projectors remain blocked:
-Roo's validated history ID is session correlation only, while Kilo has no
-validated source session namespace. Assignment identity does not fill either
-source's `session_id`.
 
 ## Provenance, fidelity, and capability
 

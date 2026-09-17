@@ -232,8 +232,8 @@ fn mismatches_prevent_spawn() {
         let mut source = h.source.clone();
         match which {
             0 => source.client = ClientId::Codex,
-            1 => source.kind = SourceKind::LegacyJson,
-            _ => source.source_id = "opencode.legacy_json".into(),
+            1 => source.kind = SourceKind::Json,
+            _ => source.source_id = "opencode.retired_json".into(),
         }
         assert_eq!(
             export_session(&event(&h.source, SESSION, "opencode"), &source, &h.config).unwrap_err(),

@@ -7,7 +7,6 @@ use telltale_schema::clients::{ClientId, SourceKind};
 pub enum PathRoot {
     CodexHome,
     Home,
-    ConfigHome,
     DataHome,
     ProjectLocal,
 }
@@ -72,19 +71,8 @@ mod tests {
 
         assert!(source_keys.contains(&(ClientId::Codex, SourceKind::Jsonl, "codex/sessions")));
         assert!(source_keys.contains(&(ClientId::Claude, SourceKind::Jsonl, "claude/projects")));
-        assert!(source_keys.contains(&(ClientId::Gemini, SourceKind::Json, "gemini/tmp")));
         assert!(source_keys.contains(&(ClientId::OpenClaw, SourceKind::Jsonl, "openclaw/agents")));
         assert!(source_keys.contains(&(ClientId::Qwen, SourceKind::Jsonl, "qwen/projects")));
-        assert!(source_keys.contains(&(
-            ClientId::RooCode,
-            SourceKind::UiMessagesJson,
-            "roocode/tasks"
-        )));
-        assert!(source_keys.contains(&(
-            ClientId::KiloCode,
-            SourceKind::UiMessagesJson,
-            "kilocode/tasks"
-        )));
         assert!(source_keys.contains(&(
             ClientId::Codex,
             SourceKind::ArchivedJsonl,
@@ -99,11 +87,6 @@ mod tests {
             ClientId::OpenCode,
             SourceKind::Sqlite,
             "opencode/opencode.db"
-        )));
-        assert!(source_keys.contains(&(
-            ClientId::OpenCode,
-            SourceKind::LegacyJson,
-            "opencode/storage/message"
         )));
     }
 
@@ -121,10 +104,6 @@ mod tests {
             .iter()
             .find(|client| client.id == ClientId::OpenCode)
             .expect("opencode client");
-        let gemini = supported_clients()
-            .iter()
-            .find(|client| client.id == ClientId::Gemini)
-            .expect("gemini client");
         let openclaw = supported_clients()
             .iter()
             .find(|client| client.id == ClientId::OpenClaw)
@@ -133,14 +112,6 @@ mod tests {
             .iter()
             .find(|client| client.id == ClientId::Qwen)
             .expect("qwen client");
-        let roocode = supported_clients()
-            .iter()
-            .find(|client| client.id == ClientId::RooCode)
-            .expect("roocode client");
-        let kilocode = supported_clients()
-            .iter()
-            .find(|client| client.id == ClientId::KiloCode)
-            .expect("kilocode client");
 
         let codex_home = std::path::Path::new("/tmp/.codex");
         assert_eq!(
@@ -157,14 +128,9 @@ mod tests {
         );
 
         let home = std::path::Path::new("/tmp/home");
-        let config_home = std::path::Path::new("/tmp/home/.config");
         assert_eq!(
             resolved_path(home, claude.sources[0].relative_path),
             home.join(".claude/projects")
-        );
-        assert_eq!(
-            resolved_path(home, gemini.sources[0].relative_path),
-            home.join(".gemini/tmp")
         );
         assert_eq!(
             resolved_path(home, openclaw.sources[0].relative_path),
@@ -174,23 +140,11 @@ mod tests {
             resolved_path(home, qwen.sources[0].relative_path),
             home.join(".qwen/projects")
         );
-        assert_eq!(
-            resolved_path(config_home, roocode.sources[0].relative_path),
-            config_home.join("Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks")
-        );
-        assert_eq!(
-            resolved_path(config_home, kilocode.sources[0].relative_path),
-            config_home.join("Code/User/globalStorage/kilocode.kilo-code/tasks")
-        );
 
         let data_home = std::path::Path::new("/tmp/.local/share");
         assert_eq!(
             resolved_path(data_home, opencode.sources[0].relative_path),
             data_home.join("opencode/opencode.db")
-        );
-        assert_eq!(
-            resolved_path(data_home, opencode.sources[1].relative_path),
-            data_home.join("opencode/storage/message")
         );
     }
 }

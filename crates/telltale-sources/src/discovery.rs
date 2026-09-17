@@ -462,7 +462,6 @@ enum HostPlatform {
 struct RootResolutionContext {
     home: PathBuf,
     codex_home: Option<PathBuf>,
-    config_home: Option<PathBuf>,
     data_home: Option<PathBuf>,
 }
 
@@ -538,10 +537,6 @@ fn resolve_path_root_from_context(context: &RootResolutionContext, path_root: Pa
             .codex_home
             .clone()
             .unwrap_or_else(|| context.home.join(".codex")),
-        PathRoot::ConfigHome => context
-            .config_home
-            .clone()
-            .unwrap_or_else(|| default_config_home(current_host_platform(), &context.home)),
         PathRoot::DataHome => context
             .data_home
             .clone()
@@ -569,7 +564,6 @@ fn environment_root_context(platform: HostPlatform, fallback_root: &Path) -> Roo
     RootResolutionContext {
         home: home.clone(),
         codex_home: env::var_os("CODEX_HOME").map(PathBuf::from),
-        config_home: env_config_home(platform, &home),
         data_home: env_data_home(platform, &home),
     }
 }
@@ -579,20 +573,7 @@ fn rooted_path_context(platform: HostPlatform, root: &Path) -> RootResolutionCon
     RootResolutionContext {
         home: home.clone(),
         codex_home: Some(home.join(".codex")),
-        config_home: Some(default_config_home(platform, &home)),
         data_home: Some(default_data_home(platform, &home)),
-    }
-}
-
-fn env_config_home(platform: HostPlatform, home: &Path) -> Option<PathBuf> {
-    match platform {
-        HostPlatform::Linux => env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| Some(default_config_home(platform, home))),
-        HostPlatform::MacOs => Some(default_config_home(platform, home)),
-        HostPlatform::Windows => env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .or_else(|| Some(default_config_home(platform, home))),
     }
 }
 
@@ -606,14 +587,6 @@ fn env_data_home(platform: HostPlatform, home: &Path) -> Option<PathBuf> {
             .or_else(|| env::var_os("APPDATA"))
             .map(PathBuf::from)
             .or_else(|| Some(default_data_home(platform, home))),
-    }
-}
-
-fn default_config_home(platform: HostPlatform, home: &Path) -> PathBuf {
-    match platform {
-        HostPlatform::Linux => home.join(".config"),
-        HostPlatform::MacOs => home.join("Library/Application Support"),
-        HostPlatform::Windows => home.join("AppData/Roaming"),
     }
 }
 
@@ -764,11 +737,10 @@ mod tests {
 
     use super::{
         DiscoveryError, DiscoveryMode, HostPlatform, RootResolutionContext, collect_walk_entries,
-        current_host_platform, default_config_home, default_data_home,
-        discover_source_from_context, discover_sources, discover_sources_best_effort,
-        discover_sources_with_projects, discover_watch_roots, discover_watch_roots_for_clients,
-        discover_watch_roots_with_projects, resolve_path_root_from_context,
-        source_search_root_from_context,
+        current_host_platform, default_data_home, discover_source_from_context, discover_sources,
+        discover_sources_best_effort, discover_sources_with_projects, discover_watch_roots,
+        discover_watch_roots_for_clients, discover_watch_roots_with_projects,
+        resolve_path_root_from_context, source_search_root_from_context,
     };
     use crate::clients::supported_clients;
 
@@ -803,23 +775,12 @@ mod tests {
 
         assert!(keys.contains(&(ClientId::Codex, SourceKind::Jsonl, Some("session-a.jsonl"))));
         assert!(keys.contains(&(ClientId::Claude, SourceKind::Jsonl, Some("session-a.jsonl"))));
-        assert!(keys.contains(&(ClientId::Gemini, SourceKind::Json, Some("session-a.json"))));
         assert!(keys.contains(&(
             ClientId::OpenClaw,
             SourceKind::Jsonl,
             Some("session-a.jsonl.deleted")
         )));
         assert!(keys.contains(&(ClientId::Qwen, SourceKind::Jsonl, Some("session-a.jsonl"))));
-        assert!(keys.contains(&(
-            ClientId::RooCode,
-            SourceKind::UiMessagesJson,
-            Some("ui_messages.json")
-        )));
-        assert!(keys.contains(&(
-            ClientId::KiloCode,
-            SourceKind::UiMessagesJson,
-            Some("ui_messages.json")
-        )));
         assert!(keys.contains(&(
             ClientId::Codex,
             SourceKind::ArchivedJsonl,
@@ -829,11 +790,6 @@ mod tests {
             ClientId::Codex,
             SourceKind::HeadlessJsonl,
             Some("headless-a.jsonl")
-        )));
-        assert!(keys.contains(&(
-            ClientId::OpenCode,
-            SourceKind::LegacyJson,
-            Some("message-a.json")
         )));
         assert!(keys.contains(&(ClientId::OpenCode, SourceKind::Sqlite, Some("opencode.db"))));
     }
@@ -923,14 +879,6 @@ mod tests {
         )
         .expect("copilot log");
 
-        let opencode_dir = project.join(".opencode");
-        fs::create_dir_all(&opencode_dir).expect("opencode dir");
-        fs::write(opencode_dir.join("message.json"), b"{}").expect("opencode json");
-
-        let codex_dir = project.join(".codex-worktree");
-        fs::create_dir_all(&codex_dir).expect("codex dir");
-        fs::write(codex_dir.join("session.jsonl"), b"{}\n").expect("codex jsonl");
-
         let projects = vec![crate::projects::ProjectDef {
             name: "myproject".to_string(),
             path: project,
@@ -953,109 +901,6 @@ mod tests {
             SourceKind::CopilotProcessLog,
             Some("process.log")
         )));
-        assert!(keys.contains(&(
-            ClientId::OpenCode,
-            SourceKind::LegacyJson,
-            Some("message.json")
-        )));
-        assert!(keys.contains(&(ClientId::Codex, SourceKind::Jsonl, Some("session.jsonl"))));
-    }
-
-    #[test]
-    fn discovers_and_parses_codex_and_opencode_project_identities_portably() {
-        let temp = tempdir().expect("tempdir");
-        let discovery_root = temp.path().join("discovery-root");
-        let project = temp.path().join("project-root");
-        fs::create_dir_all(&discovery_root).expect("discovery root");
-
-        let codex_path = project
-            .join(".codex-worktree")
-            .join("project-session.jsonl");
-        fs::create_dir_all(codex_path.parent().expect("codex parent")).expect("codex dir");
-        fs::write(
-            &codex_path,
-            b"{\"type\":\"session_meta\",\"payload\":{\"agent_nickname\":\"fixture-agent\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"assistant_message\",\"message\":\"project response\"}}\n",
-        )
-        .expect("codex project fixture");
-
-        let opencode_path = project.join(".opencode").join("project-message.json");
-        fs::create_dir_all(opencode_path.parent().expect("opencode parent")).expect("opencode dir");
-        fs::write(
-            &opencode_path,
-            b"{\"sessionID\":\"opencode-project\",\"role\":\"assistant\",\"agent\":\"build\",\"content\":\"project response\"}",
-        )
-        .expect("opencode project fixture");
-
-        let projects = vec![crate::projects::ProjectDef {
-            name: "project-root".to_string(),
-            path: project,
-        }];
-        let sources =
-            discover_sources_with_projects(&discovery_root, &projects).expect("discovery");
-
-        let codex = sources
-            .iter()
-            .find(|source| source.source_id == "codex.project_sessions")
-            .expect("codex project source");
-        assert_eq!(codex.client, ClientId::Codex);
-        assert_eq!(codex.kind, SourceKind::Jsonl);
-        assert_eq!(
-            codex.path.file_name().and_then(|name| name.to_str()),
-            Some("project-session.jsonl")
-        );
-        assert!(
-            codex
-                .path
-                .ends_with(PathBuf::from(".codex-worktree").join("project-session.jsonl"))
-        );
-        assert!(
-            codex
-                .path
-                .components()
-                .any(|component| component.as_os_str() == "project-root")
-        );
-        let codex_records = crate::parser::parse_source_records(codex).expect("codex records");
-        assert_eq!(codex_records.len(), 2);
-        assert_eq!(
-            codex_records[0].kind,
-            telltale_schema::record::RecordKind::SessionMeta
-        );
-        assert_eq!(
-            codex_records[1].kind,
-            telltale_schema::record::RecordKind::AssistantMessage
-        );
-        assert_eq!(codex_records[0].agent.as_deref(), Some("fixture-agent"));
-
-        let opencode = sources
-            .iter()
-            .find(|source| source.source_id == "opencode.project_json")
-            .expect("opencode project source");
-        assert_eq!(opencode.client, ClientId::OpenCode);
-        assert_eq!(opencode.kind, SourceKind::LegacyJson);
-        assert_eq!(
-            opencode.path.file_name().and_then(|name| name.to_str()),
-            Some("project-message.json")
-        );
-        assert!(
-            opencode
-                .path
-                .ends_with(PathBuf::from(".opencode").join("project-message.json"))
-        );
-        assert!(
-            opencode
-                .path
-                .components()
-                .any(|component| component.as_os_str() == "project-root")
-        );
-        let opencode_records =
-            crate::parser::parse_source_records(opencode).expect("opencode records");
-        assert_eq!(opencode_records.len(), 1);
-        assert_eq!(
-            opencode_records[0].kind,
-            telltale_schema::record::RecordKind::AssistantMessage
-        );
-        assert_eq!(opencode_records[0].session_id, "opencode-project");
-        assert_eq!(opencode_records[0].agent.as_deref(), Some("build"));
     }
 
     #[test]
@@ -1090,11 +935,8 @@ mod tests {
             .strip_prefix(home)
             .expect("data home relative path")
             .to_path_buf();
-        let legacy_dir = data_home.join("storage/message/session-a");
-
-        fs::create_dir_all(&legacy_dir).expect("legacy dir");
+        fs::create_dir_all(&data_home).expect("data home");
         fs::write(data_home.join("opencode.db"), b"sqlite fixture").expect("sqlite fixture");
-        fs::write(legacy_dir.join("message-a.json"), b"{}").expect("legacy fixture");
 
         let sources = discover_sources(home).expect("discovery");
         let keys: HashSet<_> = sources
@@ -1116,11 +958,6 @@ mod tests {
             ClientId::OpenCode,
             SourceKind::Sqlite,
             data_home_relative.join("opencode.db")
-        )));
-        assert!(keys.contains(&(
-            ClientId::OpenCode,
-            SourceKind::LegacyJson,
-            data_home_relative.join("storage/message/session-a/message-a.json")
         )));
     }
 
@@ -1145,7 +982,7 @@ mod tests {
     fn filters_fixture_watch_roots_by_client() {
         let roots = discover_watch_roots_for_clients(
             &crate::test_fixture_path("session_stores"),
-            &[ClientId::Gemini],
+            &[ClientId::Claude],
         );
         let fixture_root = Path::new("tests").join("fixtures").join("session_stores");
 
@@ -1153,7 +990,7 @@ mod tests {
         assert!(
             roots
                 .iter()
-                .all(|path| path.ends_with(fixture_root.join("gemini").join("tmp")))
+                .all(|path| path.ends_with(fixture_root.join("claude").join("projects")))
         );
     }
 
@@ -1162,7 +999,6 @@ mod tests {
         let context = RootResolutionContext {
             home: PathBuf::from("/home/tester"),
             codex_home: Some(PathBuf::from("/srv/codex")),
-            config_home: Some(PathBuf::from("/xdg/config")),
             data_home: Some(PathBuf::from("/xdg/data")),
         };
 
@@ -1173,10 +1009,6 @@ mod tests {
         assert_eq!(
             resolve_path_root_from_context(&context, PathRoot::CodexHome),
             PathBuf::from("/srv/codex")
-        );
-        assert_eq!(
-            resolve_path_root_from_context(&context, PathRoot::ConfigHome),
-            PathBuf::from("/xdg/config")
         );
         assert_eq!(
             resolve_path_root_from_context(&context, PathRoot::DataHome),
@@ -1190,17 +1022,12 @@ mod tests {
         let context = RootResolutionContext {
             home: home.clone(),
             codex_home: None,
-            config_home: Some(default_config_home(HostPlatform::MacOs, &home)),
             data_home: Some(default_data_home(HostPlatform::MacOs, &home)),
         };
 
         assert_eq!(
             resolve_path_root_from_context(&context, PathRoot::CodexHome),
             PathBuf::from("/Users/tester/.codex")
-        );
-        assert_eq!(
-            resolve_path_root_from_context(&context, PathRoot::ConfigHome),
-            PathBuf::from("/Users/tester/Library/Application Support")
         );
         assert_eq!(
             resolve_path_root_from_context(&context, PathRoot::DataHome),
@@ -1214,7 +1041,6 @@ mod tests {
         let context = RootResolutionContext {
             home: home.clone(),
             codex_home: None,
-            config_home: Some(default_config_home(HostPlatform::Windows, &home)),
             data_home: Some(default_data_home(HostPlatform::Windows, &home)),
         };
 
@@ -1223,25 +1049,19 @@ mod tests {
             PathBuf::from(r#"C:\Users\tester/.codex"#)
         );
         assert_eq!(
-            resolve_path_root_from_context(&context, PathRoot::ConfigHome),
-            PathBuf::from(r#"C:\Users\tester/AppData/Roaming"#)
-        );
-        assert_eq!(
             resolve_path_root_from_context(&context, PathRoot::DataHome),
             PathBuf::from(r#"C:\Users\tester/AppData/Local"#)
         );
     }
 
     #[test]
-    fn discovers_experimental_windows_confirmed_source_candidates() {
+    fn discovers_windows_codex_source_candidates() {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("Users/tester");
         let codex_home = home.join(".codex");
-        let config_home = home.join("AppData/Roaming");
         let context = RootResolutionContext {
             home: home.clone(),
             codex_home: None,
-            config_home: Some(config_home.clone()),
             data_home: Some(home.join("AppData/Local")),
         };
 
@@ -1258,21 +1078,10 @@ mod tests {
         fs::write(codex_home.join("headless/headless-a.jsonl"), b"{}\n")
             .expect("codex headless fixture");
 
-        let roocode_task =
-            config_home.join("Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/task-a");
-        let kilocode_task =
-            config_home.join("Code/User/globalStorage/kilocode.kilo-code/tasks/task-a");
-        fs::create_dir_all(&roocode_task).expect("roocode task dir");
-        fs::create_dir_all(&kilocode_task).expect("kilocode task dir");
-        fs::write(roocode_task.join("ui_messages.json"), b"[]").expect("roocode fixture");
-        fs::write(kilocode_task.join("ui_messages.json"), b"[]").expect("kilocode fixture");
-
         let source_ids = [
             "codex.sessions",
             "codex.archived_sessions",
             "codex.headless_sessions",
-            "roocode.tasks",
-            "kilocode.tasks",
         ];
         let sources = source_ids
             .into_iter()
@@ -1311,20 +1120,6 @@ mod tests {
             SourceKind::HeadlessJsonl,
             PathBuf::from(".codex/headless/headless-a.jsonl")
         )));
-        assert!(keys.contains(&(
-            ClientId::RooCode,
-            SourceKind::UiMessagesJson,
-            PathBuf::from(
-                "AppData/Roaming/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/task-a/ui_messages.json"
-            )
-        )));
-        assert!(keys.contains(&(
-            ClientId::KiloCode,
-            SourceKind::UiMessagesJson,
-            PathBuf::from(
-                "AppData/Roaming/Code/User/globalStorage/kilocode.kilo-code/tasks/task-a/ui_messages.json"
-            )
-        )));
     }
 
     #[test]
@@ -1333,7 +1128,6 @@ mod tests {
         let context = RootResolutionContext {
             home: home.clone(),
             codex_home: None,
-            config_home: Some(default_config_home(HostPlatform::MacOs, &home)),
             data_home: Some(default_data_home(HostPlatform::MacOs, &home)),
         };
 
@@ -1348,10 +1142,6 @@ mod tests {
             PathBuf::from("/Users/tester/.claude/projects")
         );
         assert_eq!(
-            source_search_root_from_context(&context, lookup("gemini.tmp")),
-            PathBuf::from("/Users/tester/.gemini/tmp")
-        );
-        assert_eq!(
             source_search_root_from_context(&context, lookup("qwen.projects")),
             PathBuf::from("/Users/tester/.qwen/projects")
         );
@@ -1360,24 +1150,8 @@ mod tests {
             PathBuf::from("/Users/tester/.openclaw/agents")
         );
         assert_eq!(
-            source_search_root_from_context(&context, lookup("roocode.tasks")),
-            PathBuf::from(
-                "/Users/tester/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks"
-            )
-        );
-        assert_eq!(
-            source_search_root_from_context(&context, lookup("kilocode.tasks")),
-            PathBuf::from(
-                "/Users/tester/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/tasks"
-            )
-        );
-        assert_eq!(
             source_search_root_from_context(&context, lookup("opencode.sqlite")),
             PathBuf::from("/Users/tester/Library/Application Support/opencode/opencode.db")
-        );
-        assert_eq!(
-            source_search_root_from_context(&context, lookup("opencode.legacy_json")),
-            PathBuf::from("/Users/tester/Library/Application Support/opencode/storage/message")
         );
     }
 }

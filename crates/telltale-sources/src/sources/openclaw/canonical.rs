@@ -1568,7 +1568,7 @@ mod tests {
 
         let wrong_kind = Source {
             client: ClientId::OpenClaw,
-            kind: SourceKind::LegacyJson,
+            kind: SourceKind::Json,
             source_id: "openclaw.agents".to_owned(),
             path: "does-not-exist.jsonl".into(),
         };

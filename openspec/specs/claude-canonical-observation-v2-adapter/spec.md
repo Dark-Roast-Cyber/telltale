@@ -231,8 +231,7 @@ and observations MUST NOT be logged.
 
 This capability MUST NOT modify Event 3.0 schemas, IDs, serialization, privacy,
 detection, durable output, or other source adapters. No other adapter migration
-is included. Gemini MUST remain legacy compatibility only and MUST NOT be
-renamed or migrated by this change.
+is included.
 
 #### Scenario: Existing compatibility hashes remain fixed
 

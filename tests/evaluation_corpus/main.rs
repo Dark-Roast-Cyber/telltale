@@ -111,8 +111,8 @@ fn manifest_schema_validation_failures() {
     assert!(validate_manifest_bytes(&duplicate, &root).is_err());
 
     let duplicate_tags = base.replacen(
-        "tags: [seed, opencode, source_conformance, characterization]",
-        "tags: [seed, seed, opencode, source_conformance, characterization]",
+        "tags: [seed, opencode, routine, efficacy, characterization]",
+        "tags: [seed, seed, opencode, routine, efficacy, characterization]",
         1,
     );
     assert!(validate_manifest_bytes(&duplicate_tags, &root).is_err());
@@ -125,7 +125,7 @@ fn manifest_schema_validation_failures() {
     assert!(validate_manifest_bytes(&unknown_enum, &root).is_err());
 
     let output_derived_rationale = base.replacen(
-        "Uneventful assistant-only activity has no independent analyst security-review contract; it is a parser and visibility seed.",
+        "Routine user-authorized repository inspection should not require security review.",
         "Expected because the current score is 0.",
         1,
     );
@@ -154,13 +154,6 @@ fn manifest_schema_validation_failures() {
         1,
     );
     assert!(validate_manifest_bytes(&source_tag_on_normalized_input, &root).is_err());
-
-    let candidate_tag_contradiction = base.replacen(
-        "source_id: codex.project_sessions",
-        "source_id: codex.sessions",
-        1,
-    );
-    assert!(validate_manifest_bytes(&candidate_tag_contradiction, &root).is_err());
 }
 
 #[test]

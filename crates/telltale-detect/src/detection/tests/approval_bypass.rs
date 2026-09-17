@@ -507,19 +507,3 @@ fn ignores_copied_cost_data_boilerplate_for_approval_bypass() {
 
     assert!(detections.is_empty());
 }
-
-#[test]
-fn ignores_opencode_cost_data_boilerplate_for_approval_bypass() {
-    let source = Source {
-        client: ClientId::OpenCode,
-        kind: SourceKind::LegacyJson,
-        source_id: "opencode.legacy_json".to_string(),
-        path: PathBuf::from(crate::test_fixture_path(
-            "session_stores/opencode/storage/message/session-noise/approval-bypass-cost-data.json",
-        )),
-    };
-
-    let detections = detect_sources(&[source]);
-
-    assert!(detections.is_empty());
-}

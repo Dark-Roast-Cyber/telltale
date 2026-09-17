@@ -89,12 +89,16 @@ Each case-rule relationship SHALL be `expected_match`, `expected_absent`, or `no
 
 ### Requirement: Supported sources are represented without padding efficacy
 
-The report SHALL represent all supported exact source identities, verify exact client/source identity and visibility, and report candidate identities separately. Source-conformance-only and candidate cases SHALL normally be `not_scored`, and synthetic fixtures SHALL NOT imply live-host support.
+The report SHALL represent all eight supported exact source identities and
+verify exact client/source identity and visibility. Source-conformance-only
+cases SHALL normally be `not_scored`, and synthetic fixtures SHALL NOT imply
+live-host support.
 
-#### Scenario: Candidate fixture parses
+#### Scenario: Support denominator is complete
 
-- **WHEN** `codex.project_sessions` or `opencode.project_json` parses
-- **THEN** it remains candidate representation and does not increment supported coverage or efficacy denominators
+- **WHEN** source coverage is evaluated
+- **THEN** it contains exactly the eight registered identities across Claude
+  Code, Codex, OpenCode, OpenClaw, Qwen, and Copilot
 
 ### Requirement: Bundled regex and modifier coverage is explicit
 

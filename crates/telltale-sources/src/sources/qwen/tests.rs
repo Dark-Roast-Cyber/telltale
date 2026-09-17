@@ -923,7 +923,7 @@ fn qwen_canonical_rejects_wrong_identity_without_reading_path() {
     let error = super::canonical::project_qwen_canonical_observations(
         &Source {
             client: ClientId::Qwen,
-            kind: SourceKind::LegacyJson,
+            kind: SourceKind::Json,
             source_id: "qwen.projects".to_owned(),
             path: "does-not-exist.jsonl".into(),
         },

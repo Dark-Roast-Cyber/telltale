@@ -3,9 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::discovery::{
     DiscoveryError, discover_sources_with_projects, discover_sources_with_projects_best_effort,
-    is_fixture_root,
 };
-use telltale_schema::clients::{ClientId, SourceKind};
+use telltale_schema::clients::ClientId;
 use telltale_schema::source::Source;
 
 #[derive(Clone)]
@@ -175,9 +174,6 @@ pub(super) fn discover_operational_sources(
         let allowed_clients = clients.iter().copied().collect::<BTreeSet<_>>();
         sources.retain(|source| allowed_clients.contains(&source.client));
     }
-    if !is_fixture_root(root) {
-        prefer_opencode_sqlite_over_legacy_json(&mut sources);
-    }
     if let Some(max_sources) = max_sources {
         sources.truncate(max_sources);
     }
@@ -195,25 +191,10 @@ pub(super) fn discover_operational_sources(
     )
 }
 
-fn is_opencode_sqlite_source(source: &Source) -> bool {
-    source.client == ClientId::OpenCode && source.kind == SourceKind::Sqlite
-}
-
-fn prefer_opencode_sqlite_over_legacy_json(sources: &mut Vec<Source>) {
-    let has_opencode_sqlite = sources.iter().any(is_opencode_sqlite_source);
-    if !has_opencode_sqlite {
-        return;
-    }
-    sources.retain(|source| {
-        !(source.client == ClientId::OpenCode
-            && source.kind == SourceKind::LegacyJson
-            && source.source_id == "opencode.legacy_json")
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use telltale_schema::clients::SourceKind;
 
     #[test]
     fn discovery_error_categories_are_stable_and_do_not_use_error_text() {
@@ -270,48 +251,5 @@ mod tests {
         assert!(serialized_value.get("root").is_none());
         assert!(serialized_value.get("source_id").is_none());
         assert!(serialized_value.get("error").is_none());
-    }
-
-    #[test]
-    fn prefers_opencode_sqlite_over_host_legacy_json() {
-        let data_root = PathBuf::from("home")
-            .join("user")
-            .join(".local")
-            .join("share");
-        let sqlite = Source {
-            client: ClientId::OpenCode,
-            kind: SourceKind::Sqlite,
-            source_id: "opencode.sqlite".to_string(),
-            path: data_root.join("opencode").join("opencode.db"),
-        };
-        let legacy = Source {
-            client: ClientId::OpenCode,
-            kind: SourceKind::LegacyJson,
-            source_id: "opencode.legacy_json".to_string(),
-            path: data_root
-                .join("opencode")
-                .join("storage")
-                .join("message")
-                .join("session")
-                .join("message.json"),
-        };
-        let codex = Source {
-            client: ClientId::Codex,
-            kind: SourceKind::Jsonl,
-            source_id: "codex.sessions".to_string(),
-            path: PathBuf::from("home")
-                .join("user")
-                .join(".codex")
-                .join("sessions")
-                .join("session.jsonl"),
-        };
-        let mut sources = vec![legacy.clone(), sqlite.clone(), codex.clone()];
-        let returned_source_count = sources.len();
-
-        prefer_opencode_sqlite_over_legacy_json(&mut sources);
-
-        assert_eq!(sources, vec![sqlite, codex]);
-        assert_eq!(returned_source_count, 3);
-        assert_eq!(sources.len(), 2);
     }
 }

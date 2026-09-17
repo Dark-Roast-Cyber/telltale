@@ -121,7 +121,7 @@ mod tests {
         let expected_clients: BTreeSet<_> =
             supported_clients().iter().map(|client| client.id).collect();
         assert_eq!(covered_clients, expected_clients);
-        assert_eq!(covered_clients.len(), 9);
+        assert_eq!(covered_clients.len(), 6);
         assert!(covered_clients.contains(&ClientId::Codex));
         assert!(covered_clients.contains(&ClientId::Copilot));
     }

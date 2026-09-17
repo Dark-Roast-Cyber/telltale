@@ -62,18 +62,13 @@ pub fn project_source_canonical_observations(
         (ClientId::Claude, "claude.projects") => {
             crate::sources::claude::canonical::project_claude_canonical_observations(
                 source,
-                crate::sources::claude::canonical::ClaudeCanonicalOptions::new(
-                    options.observed_at,
-                ),
+                crate::sources::claude::canonical::ClaudeCanonicalOptions::new(options.observed_at),
             )
             .map_err(map_claude_error)
         }
         (ClientId::Codex, "codex.sessions")
         | (ClientId::Codex, "codex.archived_sessions")
-        | (ClientId::Codex, "codex.headless_sessions")
-        // This is intentionally routable for characterization only. It is not
-        // part of the supported-source equivalence denominator.
-        | (ClientId::Codex, "codex.project_sessions") => {
+        | (ClientId::Codex, "codex.headless_sessions") => {
             crate::sources::codex::canonical::project_codex_canonical_observations(
                 source,
                 crate::sources::codex::canonical::CodexCanonicalOptions::new(options.observed_at),
@@ -328,35 +323,11 @@ mod tests {
     }
 
     #[test]
-    fn candidate_project_sessions_is_routable_but_not_promoted() {
-        let temporary = tempdir().unwrap();
-        let path = temporary.path().join("synthetic-project-session.jsonl");
-        fs::write(
-            &path,
-            r#"{"type":"user","session_id":"synthetic-project-session","content":"Synthetic candidate fixture."}"#,
-        )
-        .unwrap();
-        let source = Source {
-            client: ClientId::Codex,
-            kind: SourceKind::Jsonl,
-            source_id: "codex.project_sessions".to_owned(),
-            path,
-        };
-        assert!(
-            project_source_canonical_observations(
-                &source,
-                CanonicalProjectionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap())
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
     fn non_v2_identities_are_rejected_without_path_in_error() {
         let source = source(
             ClientId::OpenCode,
             "opencode.legacy_json",
-            SourceKind::LegacyJson,
+            SourceKind::Json,
             "does-not-exist.json",
         );
         let error = project_source_canonical_observations(
@@ -375,7 +346,7 @@ mod tests {
         ] {
             let source = Source {
                 client,
-                kind: SourceKind::LegacyJson,
+                kind: SourceKind::Json,
                 source_id: source_id.to_owned(),
                 path: PathBuf::from("does-not-exist.json"),
             };

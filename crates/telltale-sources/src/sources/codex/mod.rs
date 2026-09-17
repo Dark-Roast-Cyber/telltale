@@ -45,16 +45,6 @@ pub(crate) const SOURCES: &[ClientSourceDef] = &[
         recursive: true,
         project_relative_path: None,
     },
-    ClientSourceDef {
-        id: "codex.project_sessions",
-        kind: SourceKind::Jsonl,
-        root: PathRoot::ProjectLocal,
-        relative_path: ".codex-worktree",
-        fixture_relative_path: "codex/project_sessions",
-        pattern: SourcePattern::Extension("jsonl"),
-        recursive: true,
-        project_relative_path: Some(".codex-worktree"),
-    },
 ];
 
 #[cfg(test)]

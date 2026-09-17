@@ -22,15 +22,15 @@ projection and MUST NOT call v2.
 - **THEN** legacy record count, order, metadata, kind, flattened arguments,
   content, and filename-stem session fallback remain unchanged
 
-### Requirement: Four source identities remain distinct
+### Requirement: Three source identities remain distinct
 
 The canonical projection MUST accept only `ClientId::Codex` with the matching
 source identities and kinds `codex.sessions`/`Jsonl`,
-`codex.archived_sessions`/`ArchivedJsonl`, `codex.headless_sessions`/`HeadlessJsonl`,
-and `codex.project_sessions`/`Jsonl`. It MUST use adapter type `codex`, the
+`codex.archived_sessions`/`ArchivedJsonl`, and
+`codex.headless_sessions`/`HeadlessJsonl`. It MUST use adapter type `codex`, the
 actual source ID as adapter ID, `SessionStore` ingestion, no adapter version or
-path identity, and `PartialStructured` fidelity. It MUST NOT upgrade the
-project-local source's maturity or deduplicate observations across source IDs.
+path identity, and `PartialStructured` fidelity. It MUST NOT deduplicate
+observations across source IDs.
 
 #### Scenario: Source identity is represented
 

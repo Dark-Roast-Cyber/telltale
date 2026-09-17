@@ -1,3 +1,5 @@
+use std::fs;
+
 use super::*;
 
 #[test]
@@ -360,23 +362,37 @@ fn ignores_copied_auth_failure_boilerplate_for_secret_access() {
 }
 
 #[test]
-fn ignores_opencode_auth_failure_boilerplate_for_secret_access() {
+fn detects_shell_secret_file_variants_on_retained_source() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("secret-file-variants.jsonl");
+    fs::write(
+        &path,
+        concat!(
+            r#"{"type":"session_meta","timestamp":"2026-05-08T12:00:00Z","payload":{"source":"codex","model_provider":"openai","agent_nickname":"codex","model":"synthetic"}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-05-08T12:00:01Z","payload":{"type":"tool_result","tool_name":"ReadFile","message":"ReadFile /home/example/.bash_secrets\nReadFile /home/example/.zsh_secrets"}}"#,
+            "\n"
+        ),
+    )
+    .expect("write synthetic source");
     let source = Source {
-        client: ClientId::OpenCode,
-        kind: SourceKind::LegacyJson,
-        source_id: "opencode.legacy_json".to_string(),
-        path: PathBuf::from(crate::test_fixture_path(
-            "session_stores/opencode/storage/message/session-noise/secret-access-auth-log.json",
-        )),
+        client: ClientId::Codex,
+        kind: SourceKind::Jsonl,
+        source_id: "codex.sessions".to_string(),
+        path,
     };
 
     let detections = detect_sources(&[source]);
 
-    assert!(
-        !detections
-            .iter()
-            .any(|(_, event)| event.event_type == "detection")
-    );
+    assert_eq!(detections.len(), 1);
+    let event = &detections[0].1;
+    assert!(event.rule_ids.contains(&"secret.env.read".to_string()));
+    assert!(event.categories.contains(&"secret_access".to_string()));
+    assert!(event.evidence.iter().all(|item| {
+        item.hash.is_some()
+            && !item.redacted_value.contains(".bash_secrets")
+            && !item.redacted_value.contains(".zsh_secrets")
+    }));
 }
 
 #[test]

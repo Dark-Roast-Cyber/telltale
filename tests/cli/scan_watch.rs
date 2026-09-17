@@ -164,7 +164,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
-    assert_eq!(summary["detection_count"], 36);
+    assert_eq!(summary["detection_count"], 31);
     assert_runtime_snapshot(&summary);
     assert_eq!(
         summary["effective_configuration"]["local_config"]["mode"],
@@ -190,8 +190,8 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         1
     );
     assert_source_processing_accounting(&summary);
-    assert_detection_flow_accounting(&summary, 36, 0);
-    assert_eq!(summary["source_processing"]["selected_source_count"], 69);
+    assert_detection_flow_accounting(&summary, 31, 0);
+    assert_eq!(summary["source_processing"]["selected_source_count"], 57);
     assert_eq!(summary["source_discovery"]["basis"], "current_full_scan");
     assert_eq!(
         summary["source_discovery"]["performed_for_current_scan"],
@@ -206,8 +206,8 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         summary["source_discovery"]["best_effort_fallback_used"],
         false
     );
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 69);
-    assert_eq!(summary["source_discovery"]["operational_source_count"], 69);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 57);
     assert_eq!(
         summary["source_discovery"]["project_configuration"],
         serde_json::json!({
@@ -221,34 +221,30 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(summary["diagnostic_warnings"], serde_json::json!([]));
     assert_eq!(
         summary["source_processing"]["parse_success_source_count"],
-        68
+        57
     );
-    assert_eq!(summary["source_processing"]["empty_source_count"], 1);
+    assert_eq!(summary["source_processing"]["empty_source_count"], 0);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
-    assert_eq!(summary["source_processing"]["parsed_record_count"], 147);
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 126);
     assert_eq!(
         summary["source_processing"]["record_kind_counts"],
         serde_json::json!({
-            "user_message": 25,
-            "assistant_message": 27,
-            "tool_call": 31,
-            "tool_result": 20,
+            "user_message": 19,
+            "assistant_message": 23,
+            "tool_call": 26,
+            "tool_result": 14,
             "session_meta": 44,
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 120);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 102);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
     assert_eq!(summary["source_counts"]["codex.headless_jsonl"], 2);
-    assert_eq!(summary["source_counts"]["gemini.json"], 3);
     assert_eq!(summary["source_counts"]["openclaw.jsonl"], 2);
     assert_eq!(summary["source_counts"]["qwen.jsonl"], 2);
-    assert_eq!(summary["source_counts"]["roocode.ui_messages_json"], 2);
-    assert_eq!(summary["source_counts"]["kilocode.ui_messages_json"], 2);
     assert_eq!(summary["source_counts"]["opencode.sqlite"], 1);
-    assert_eq!(summary["source_counts"]["opencode.legacy_json"], 5);
     assert_eq!(summary["source_counts"]["copilot.copilot_process_log"], 5);
 
     let lines = fs::read_to_string(log_path).expect("log file");
@@ -256,7 +252,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
         .collect::<Vec<_>>();
-    assert_eq!(events.len(), 38);
+    assert_eq!(events.len(), 33);
     assert!(events.iter().all(|event| {
         event.get("source_processing").is_none()
             && event.get("detection_flow").is_none()
@@ -288,11 +284,6 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert!(
         !events
             .iter()
-            .any(|event| event["session_id"] == "gemini-session-a" && event["client"] == "gemini")
-    );
-    assert!(
-        !events
-            .iter()
             .any(|event| event["session_id"] == "qwen-session-a" && event["client"] == "qwen")
     );
     assert!(
@@ -300,16 +291,6 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             .iter()
             .any(|event| event["session_id"] == "openclaw-session-a"
                 && event["client"] == "openclaw")
-    );
-    assert!(
-        !events.iter().any(
-            |event| event["session_id"] == "roocode-session-a" && event["client"] == "roocode"
-        )
-    );
-    assert!(
-        !events
-            .iter()
-            .any(|event| event["session_id"] == "task-a" && event["client"] == "kilocode")
     );
     assert!(
         !events
@@ -393,7 +374,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["telltale_version"], env!("CARGO_PKG_VERSION"));
     assert!(event["scan_duration_ms"].as_u64().is_some());
     assert_eq!(event["rule_count"], 18);
-    assert_eq!(event["emitted_count"], 37);
+    assert_eq!(event["emitted_count"], 32);
     assert_eq!(event["suppressed_count"], 0);
     assert_eq!(event["scanner_error_count"], 0);
     assert_eq!(event["threshold_config"]["low"], 20);
@@ -413,7 +394,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][0]["field"], "source_inventory");
     assert_eq!(
         event["evidence"][0]["redacted_value"],
-        "sources=69; client_source_kinds=12"
+        "sources=57; client_source_kinds=8"
     );
     assert!(
         event["evidence"][0]["hash"]
@@ -423,7 +404,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["evidence"][1]["field"], "source_inventory_change");
     assert_eq!(
         event["evidence"][1]["redacted_value"],
-        "baseline=true; added=69; removed=0; unchanged=0"
+        "baseline=true; added=57; removed=0; unchanged=0"
     );
     assert!(
         event["evidence"][1]["hash"]
@@ -669,45 +650,6 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             })
     );
 
-    let gemini_tool_result = events
-        .iter()
-        .find(|event| event["session_id"] == "gemini-uc001-tool-result")
-        .expect("gemini tool result detection");
-    assert!(
-        validator.is_valid(gemini_tool_result),
-        "gemini tool result event failed schema validation"
-    );
-    assert_eq!(gemini_tool_result["event_type"], "detection");
-    assert_eq!(gemini_tool_result["client"], "gemini");
-    assert_eq!(gemini_tool_result["severity"], "critical");
-    assert_eq!(gemini_tool_result["tool_name"], "repo_status");
-    assert!(
-        gemini_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
-    );
-    assert!(
-        gemini_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "chain.mcp_injection_then_egress")
-    );
-    assert!(
-        gemini_tool_result["evidence"]
-            .as_array()
-            .expect("evidence")
-            .iter()
-            .all(|item| {
-                let value = item["redacted_value"].as_str().expect("redacted value");
-                !value.contains(".env")
-                    && !value.contains("darkroastcyber.io")
-                    && !value.contains("mcp-lab")
-            })
-    );
-
     let qwen_tool_result = events
         .iter()
         .find(|event| event["session_id"] == "qwen-uc001-tool-result")
@@ -775,123 +717,6 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     );
     assert!(
         openclaw_tool_result["evidence"]
-            .as_array()
-            .expect("evidence")
-            .iter()
-            .all(|item| {
-                let value = item["redacted_value"].as_str().expect("redacted value");
-                !value.contains(".env")
-                    && !value.contains("darkroastcyber.io")
-                    && !value.contains("mcp-lab")
-            })
-    );
-
-    let roocode_tool_result = events
-        .iter()
-        .find(|event| event["session_id"] == "roocode-uc001-tool-result")
-        .expect("roocode tool result detection");
-    assert!(
-        validator.is_valid(roocode_tool_result),
-        "roocode tool result event failed schema validation"
-    );
-    assert_eq!(roocode_tool_result["event_type"], "detection");
-    assert_eq!(roocode_tool_result["client"], "roocode");
-    assert_eq!(roocode_tool_result["severity"], "critical");
-    assert_eq!(roocode_tool_result["tool_name"], "repo_status");
-    assert!(
-        roocode_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
-    );
-    assert!(
-        roocode_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "chain.mcp_injection_then_egress")
-    );
-    assert!(
-        roocode_tool_result["evidence"]
-            .as_array()
-            .expect("evidence")
-            .iter()
-            .all(|item| {
-                let value = item["redacted_value"].as_str().expect("redacted value");
-                !value.contains(".env")
-                    && !value.contains("darkroastcyber.io")
-                    && !value.contains("mcp-lab")
-            })
-    );
-
-    let kilocode_tool_result = events
-        .iter()
-        .find(|event| event["session_id"] == "task-b")
-        .expect("kilocode tool result detection");
-    assert!(
-        validator.is_valid(kilocode_tool_result),
-        "kilocode tool result event failed schema validation"
-    );
-    assert_eq!(kilocode_tool_result["event_type"], "detection");
-    assert_eq!(kilocode_tool_result["client"], "kilocode");
-    assert_eq!(kilocode_tool_result["severity"], "critical");
-    assert_eq!(kilocode_tool_result["tool_name"], "repo_status");
-    assert!(
-        kilocode_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
-    );
-    assert!(
-        kilocode_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "chain.mcp_injection_then_egress")
-    );
-    assert!(
-        kilocode_tool_result["evidence"]
-            .as_array()
-            .expect("evidence")
-            .iter()
-            .all(|item| {
-                let value = item["redacted_value"].as_str().expect("redacted value");
-                !value.contains(".env")
-                    && !value.contains("darkroastcyber.io")
-                    && !value.contains("mcp-lab")
-            })
-    );
-
-    let opencode_tool_result = events
-        .iter()
-        .find(|event| event["session_id"] == "opencode-uc001-legacy-tool-result")
-        .expect("opencode legacy tool result detection");
-    assert!(
-        validator.is_valid(opencode_tool_result),
-        "opencode legacy tool result event failed schema validation"
-    );
-    assert_eq!(opencode_tool_result["event_type"], "detection");
-    assert_eq!(opencode_tool_result["client"], "opencode");
-    assert_eq!(opencode_tool_result["severity"], "critical");
-    assert_eq!(opencode_tool_result["tool_name"], "repo_status");
-    assert!(
-        opencode_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "mcp.tool_metadata.prompt_injection")
-    );
-    assert!(
-        opencode_tool_result["rule_ids"]
-            .as_array()
-            .expect("rule ids")
-            .iter()
-            .any(|rule| rule == "chain.mcp_injection_then_egress")
-    );
-    assert!(
-        opencode_tool_result["evidence"]
             .as_array()
             .expect("evidence")
             .iter()
@@ -1549,7 +1374,7 @@ fn scan_once_client_filter_limits_discovered_sources() {
             "--root",
             "tests/fixtures/session_stores",
             "--client",
-            "gemini",
+            "qwen",
             "--log-path",
         ])
         .arg(&log_path)
@@ -1569,9 +1394,9 @@ fn scan_once_client_filter_limits_discovered_sources() {
         .as_object()
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
-    assert_eq!(source_counts["gemini.json"], 3);
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 69);
-    assert_eq!(summary["source_discovery"]["operational_source_count"], 3);
+    assert_eq!(source_counts["qwen.jsonl"], 2);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 2);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -1582,7 +1407,7 @@ fn scan_once_client_filter_limits_discovered_sources() {
     assert!(
         events
             .iter()
-            .all(|event| event["client"] == "scanner" || event["client"] == "gemini")
+            .all(|event| event["client"] == "scanner" || event["client"] == "qwen")
     );
 }
 
@@ -1601,7 +1426,7 @@ fn scan_once_accepts_repeated_client_filters() {
             "--client",
             "codex",
             "--client",
-            "gemini",
+            "qwen",
         ])
         .arg("--state-path")
         .arg(&state_path)
@@ -1622,28 +1447,37 @@ fn scan_once_accepts_repeated_client_filters() {
     assert_eq!(source_counts["codex.jsonl"], 40);
     assert_eq!(source_counts["codex.archived_jsonl"], 2);
     assert_eq!(source_counts["codex.headless_jsonl"], 2);
-    assert_eq!(source_counts["gemini.json"], 3);
+    assert_eq!(source_counts["qwen.jsonl"], 2);
 }
 
 #[test]
-fn scan_and_watch_reject_unknown_client_filter() {
-    for args in [vec!["scan", "--once"], vec!["watch"]] {
-        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-            .args(&args)
-            .args([
-                "--dry-run",
-                "--root",
-                "tests/fixtures/session_stores",
-                "--client",
-                "unknown-agent",
-            ])
-            .output()
-            .expect("run telltale");
+fn scan_and_watch_reject_unknown_and_retired_client_filters() {
+    for rejected in ["unknown-agent", "gemini", "roocode", "kilocode"] {
+        for args in [vec!["scan", "--once"], vec!["watch"]] {
+            let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+                .args(&args)
+                .args([
+                    "--dry-run",
+                    "--root",
+                    "tests/fixtures/session_stores",
+                    "--client",
+                    rejected,
+                ])
+                .output()
+                .expect("run telltale");
 
-        assert!(!output.status.success(), "{args:?}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        for expected in ["unsupported client 'unknown-agent'", "codex", "gemini"] {
-            assert!(stderr.contains(expected), "{args:?}: {stderr}");
+            assert!(!output.status.success(), "{args:?}: {rejected}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for expected in [
+                format!("unsupported client '{rejected}'"),
+                "codex".to_string(),
+                "qwen".to_string(),
+            ] {
+                assert!(stderr.contains(&expected), "{args:?}: {stderr}");
+            }
+            for retired in ["gemini,", "roocode,", "kilocode,"] {
+                assert!(!stderr.contains(retired), "{args:?}: {stderr}");
+            }
         }
     }
 }
@@ -1664,7 +1498,7 @@ fn scan_once_max_sources_limits_discovered_sources() {
             "--root",
             "tests/fixtures/session_stores",
             "--client",
-            "gemini",
+            "qwen",
             "--max-sources",
             "1",
             "--log-path",
@@ -1686,8 +1520,8 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .as_object()
         .expect("source counts object");
     assert_eq!(source_counts.len(), 1);
-    assert_eq!(source_counts["gemini.json"], 1);
-    assert_eq!(summary["source_discovery"]["returned_source_count"], 69);
+    assert_eq!(source_counts["qwen.jsonl"], 1);
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 57);
     assert_eq!(summary["source_discovery"]["operational_source_count"], 1);
 
     let lines = fs::read_to_string(log_path).expect("log file");
@@ -1699,7 +1533,7 @@ fn scan_once_max_sources_limits_discovered_sources() {
         .iter()
         .find(|event| event["event_type"] == "health")
         .expect("health event");
-    assert_eq!(health["source_counts"]["gemini.json"], 1);
+    assert_eq!(health["source_counts"]["qwen.jsonl"], 1);
 }
 
 #[test]
@@ -1807,19 +1641,19 @@ fn repeated_scans_suppress_duplicate_detections() {
         serde_json::from_slice::<Value>(&output.stdout).expect("scan summary json")
     };
     let first_summary = run_scan(&[]);
-    assert_eq!(first_summary["detection_count"], 36);
-    assert_eq!(first_summary["emitted_count"], 37);
+    assert_eq!(first_summary["detection_count"], 31);
+    assert_eq!(first_summary["emitted_count"], 32);
     assert_source_processing_accounting(&first_summary);
-    assert_detection_flow_accounting(&first_summary, 36, 0);
+    assert_detection_flow_accounting(&first_summary, 31, 0);
 
     let second_summary = run_scan(&[]);
-    assert_eq!(second_summary["detection_count"], 36);
+    assert_eq!(second_summary["detection_count"], 31);
     assert_eq!(second_summary["emitted_count"], 0);
     assert_source_processing_accounting(&second_summary);
-    assert_detection_flow_accounting(&second_summary, 0, 36);
+    assert_detection_flow_accounting(&second_summary, 0, 31);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        120
+        102
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -1834,14 +1668,14 @@ fn repeated_scans_suppress_duplicate_detections() {
         .lines()
         .count();
     let backfill_summary = run_scan(&["--dry-run", "--backfill"]);
-    assert_eq!(backfill_summary["detection_count"], 36);
+    assert_eq!(backfill_summary["detection_count"], 31);
     assert_eq!(
         backfill_summary["detection_flow"]["effective_detection_candidate_count"],
-        36
+        31
     );
     assert_eq!(
         backfill_summary["detection_flow"]["emitted_detection_count"],
-        36
+        31
     );
     assert_eq!(
         backfill_summary["detection_flow"]["state_deduplicated_detection_count"],
@@ -1856,7 +1690,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     );
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 38);
+    assert_eq!(lines.lines().count(), 33);
 }
 
 #[test]
@@ -2325,7 +2159,7 @@ fn scan_once_can_emit_activity_events() {
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert!(summary["activity_count"].as_u64().unwrap_or_default() > 0);
-    assert_eq!(summary["detection_count"], 36);
+    assert_eq!(summary["detection_count"], 31);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -3575,7 +3409,7 @@ fn scan_once_allows_fixture_root_with_dry_run() {
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
-    assert_eq!(summary["detection_count"], 36);
+    assert_eq!(summary["detection_count"], 31);
 }
 
 #[test]

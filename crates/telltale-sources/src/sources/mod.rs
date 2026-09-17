@@ -11,13 +11,10 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod copilot;
-pub(crate) mod gemini;
-pub(crate) mod kilocode;
 pub(crate) mod openclaw;
 pub(crate) mod opencode;
 pub(crate) mod qwen;
 pub mod registry;
-pub(crate) mod roocode;
 
 #[cfg(test)]
 mod canonical_conformance;

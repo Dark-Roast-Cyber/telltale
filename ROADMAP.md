@@ -37,24 +37,23 @@ The required session/store adapter families for the 0.7 baseline are:
 - **Qwen**: `qwen.projects`
 - **GitHub Copilot**: `copilot.process_log`
 
-Claude and Codex desktop-app-specific acquisition may be deferred when it requires
+Claude and Codex desktop-app-specific acquisition is deferred when it requires
 separate source contracts. The core Claude Code and Codex session sources above
-are the 0.7 convergence requirement. `codex.project_sessions` remains a candidate
-unless a deliberate supported contract is accepted.
+are the 0.7 convergence requirement.
 
-The following currently implemented source identities are **not required for the
-0.7 baseline** and should not receive new Canonical Observation v2 migration work:
+The following former source identities were retired during 0.6.x convergence
+and are not built-in discovery or parser paths:
 
 - `gemini.tmp`
 - `opencode.legacy_json`
 - `roocode.tasks`
 - `kilocode.tasks`
+- `opencode.project_json`
+- `codex.project_sessions`
 
-`opencode.project_json` is also not required for 0.7. These paths may continue to
-exist temporarily while current behavior is removed or reclassified, but they
-must not block Canonical Observation v2 or Detection v2 production activation.
-Current public support documents remain authoritative for what the released code
-actually supports until the corresponding removal work lands.
+Git history preserves their former implementations and fixtures. They must not
+return as compatibility registrations or receive Canonical Observation v2 work
+without a separately accepted source contract.
 
 ### Remaining 0.6.x migration sequence
 

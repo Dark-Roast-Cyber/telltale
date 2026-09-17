@@ -21,7 +21,7 @@ a configurable cadence and never reads transcript/session contents.
 
 These are the host-side locations Telltale currently resolves when
 `telltale scan --root .` uses host-style discovery instead of a checked-in fixture
-tree. Registered `Home`, `ConfigHome`, and `DataHome` sources also resolve on
+tree. Registered `Home` and `DataHome` sources also resolve on
 Windows through the platform-aware root helpers. Windows entries below are not
 live-validated and are not by themselves public live-source support claims.
 
@@ -39,15 +39,9 @@ than by exact private path or transcript content.
 | Codex | `codex.archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `%CODEX_HOME%\archived_sessions` or `%USERPROFILE%\.codex\archived_sessions` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Codex | `codex.headless_sessions` | `$CODEX_HOME/headless` or `~/.codex/headless` | `$CODEX_HOME/headless` or `~/.codex/headless` | `%CODEX_HOME%\headless` or `%USERPROFILE%\.codex\headless` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows unvalidated | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. |
-| Gemini CLI | `gemini.tmp` | `~/.gemini/tmp` | `~/.gemini/tmp` | `%USERPROFILE%\.gemini\tmp` | Candidate; Windows unvalidated | Gemini docs confirm `~/.gemini/` and `tmp/` usage; all Windows claims remain bounded and unvalidated. |
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
-| RooCode | `roocode.tasks` | `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks` | `~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks` | `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\tasks` | Confirmed root; Windows unvalidated | VS Code `globalStorage` path plus confirmed extension identifier `rooveterinaryinc.roo-cline`; not a live Windows support claim. |
-| KiloCode | `kilocode.tasks` | `~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks` | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/tasks` | `%APPDATA%\Code\User\globalStorage\kilocode.kilo-code\tasks` | Confirmed root; Windows unvalidated | VS Code `globalStorage` path plus confirmed extension identifier `kilocode.kilo-code`; not a live Windows support claim. |
 | OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | `%LOCALAPPDATA%\opencode\opencode.db` or `%APPDATA%\opencode\opencode.db` | Confirmed Linux/macOS; Windows unvalidated | Telltale resolves Linux through `XDG_DATA_HOME`, macOS through the platform data root, and Windows through the platform data root. Native Windows live validation is incomplete. |
-| OpenCode | `opencode.legacy_json` | `$XDG_DATA_HOME/opencode/storage/message` or `~/.local/share/opencode/storage/message` | `~/Library/Application Support/opencode/storage/message` | `%LOCALAPPDATA%\opencode\storage\message` or `%APPDATA%\opencode\storage\message` | Confirmed Linux/macOS; Windows unvalidated | Same root model as `opencode.sqlite`; Windows project/global storage paths are not live-validated. |
-| Codex | `codex.project_sessions` | project-local `.codex-worktree` | project-local `.codex-worktree` | project-local `.codex-worktree` | Candidate | Per-project Codex CLI logs; discovered below configured project roots or applicable default project roots. |
-| OpenCode | `opencode.project_json` | project-local `.opencode` | project-local `.opencode` | project-local `.opencode` | Candidate | Per-project OpenCode JSON messages; discovered below configured project roots or applicable default project roots. |
 | Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Telltale-local operational model | **Project-local only** — discovered below configured project roots or applicable default project roots. No home-relative source root. |
 
 ## Project Roots
@@ -66,7 +60,10 @@ Pass the config to scans:
 telltale scan --once --root "$HOME" --project-config projects.yaml
 ```
 
-Project-local discovery is additive: home-relative sources are still discovered from `--root`. The source definition in `crates/telltale-sources/src/sources/<agent>/mod.rs`, collected by `sources/registry.rs`, defines the per-client subpath for each project (for example, `logs/copilot` for Copilot, `.opencode` for OpenCode, and `.codex-worktree` for Codex). If a project has a non-standard subpath, rename the directory to match the registry subpath rather than overriding per-project paths in the YAML.
+Project-local discovery is additive: home-relative sources are still discovered
+from `--root`. The retained project-local source is Copilot `logs/copilot`. If a
+project uses a non-standard subpath, rename the directory to match the registry
+subpath rather than overriding per-project paths in the YAML.
 
 The `TELLTALE_PROJECT_CONFIG` environment variable accepts a platform-native path
 list when no `--project-config` flag is given. When neither is provided,
@@ -85,7 +82,6 @@ escaping rules.
 
 - `Home` sources resolve from `HOME` on Linux/macOS and `HOME` or `USERPROFILE` on Windows.
 - `CodexHome` resolves from `CODEX_HOME` when set, otherwise `~/.codex`.
-- `ConfigHome` resolves to `XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, and `APPDATA` or `%USERPROFILE%\AppData\Roaming` on Windows.
 - `DataHome` resolves to `XDG_DATA_HOME` or `~/.local/share` on Linux, `~/Library/Application Support` on macOS, and `LOCALAPPDATA`, then `APPDATA`, then `%USERPROFILE%\AppData\Local` on Windows.
 
 ## Linux Operational Notes
@@ -109,7 +105,6 @@ OpenCode parser notes:
 - Per-source parse operations are sequential; a single slow or contended source blocks the current scan (known limitation).
 - OpenCode per-message model attribution reflects the model that generated each message, which may differ from the session's primary model when sub-agents are used.
 - Live OpenCode SQLite stores also carry a top-level `message.session_id` column even when the JSON payload does not.
-- Legacy JSON messages include `role`, `sessionID`, `modelID`, `providerID`, `tokens`, `time`, `agent`, and `mode`.
 - Telltale needs all roles and tool records, not only assistant token-usage rows.
 
 Claude Code parser notes:
@@ -118,63 +113,9 @@ Claude Code parser notes:
 - Message payloads can live under `message.role`, `message.model`, and `message.content`.
 - `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; Telltale normalizes `tool_use` blocks as tool calls and `tool_result` blocks as tool results.
 
-Gemini parser notes:
-
-- JSON files under `.gemini/tmp` may contain a top-level `sessionId`, `model`, timestamps, and a `messages` array.
-- Telltale normalizes `type: user` as user messages and `type: gemini` or `type: model` as assistant messages.
-- Current fixture-backed support covers benign text content plus synthetic tool-call and tool-result records.
-- A missing `messages` member remains the established `Empty` result for the
-  valid empty-session fixture; malformed or structurally invalid message data
-  is a terminal parser error.
-
 Qwen parser notes:
 
 - JSONL files under `.qwen/projects/**/chats` may contain `type`, `model`, `timestamp`, `sessionId`, and `usageMetadata` fields.
 - `qwen.projects` uses a source-owned modeled JSONL parser with metadata
   inheritance, tool-call/result classification, and terminal schema/unknown
   boundaries. It is not a generic JSONL fallback.
-
-RooCode parser notes:
-
-- `ui_messages.json` files can appear under task directories below the VS Code extension storage root.
-- `roocode.tasks` is a source-owned modeled `ClineMessage` parser. The root is
-  an ordered array of `ask`/`say` records with subtype-specific fields and
-  numeric epoch-millisecond `ts`; structural drift and unknown subtypes fail
-  closed. Roo completed MCP tool requests persist an inner JSON `use_mcp_tool`
-  object whose arguments field is a string; partial requests preserve the
-  arguments object. Resource requests use `access_mcp_resource` with
-  `serverName` and `uri`. MCP responses persist as plain result text with no
-  source tool name. `say:user_feedback`, assistant text, explicit
-  command/MCP requests, and explicit command/MCP output retain their bounded
-  legacy kinds without inferred correlation.
-- The pinned Roo `TaskHistoryStore` writes a full `history_item.json` per task;
-  its direct non-empty `id` is the source-reported session namespace. The
-  debounced `_index.json` is only a cache/corroboration file and never overrides
-  the direct history file. Missing history leaves only the parent-directory
-  compatibility grouping fallback; malformed, empty, or conflicting metadata
-  fails closed without selecting an index or path value. A renamed task
-  directory does not change a valid direct ID. Roo has no proven native
-  per-message coordinate, so protected assignment remains required for future
-  canonical projection. Agent, provider, and model remain absent.
-
-KiloCode parser notes:
-
-- `ui_messages.json` files can appear under task directories below the VS Code extension storage root.
-- `kilocode.tasks` is a source-owned modeled parser for the legacy migration
-  store only. It keeps `ui_messages.json` as the body anchor. The pinned legacy
-  writer does not write Roo's `history_item.json` or `_index.json`; those files
-  are not read or promoted by this adapter.
-- The registered `kilocode.kilo-code` VS Code identity is written by
-  `Kilo-Org/kilocode-legacy@ae046acafd17993bdf12dce0f81d9ac948e17ee8`,
-  `src/core/task-persistence/taskMessages.ts`; current
-  `Kilo-Org/kilocode@31f1f3118ccba73e9d9fdc6cac78f6644e9c23ef` only reads and
-  diagnoses this legacy anchor.
-- `api_conversation_history.json` is a separate alternate body and is never
-  merged or used to rescue UI-message drift. Current Kilo SQLite/server/CLI
-  storage is outside this identity. The independently pinned legacy writer
-  records the `ClineMessage` ask/say MCP request and plain-text result shapes,
-  so tool-call, tool-result, and UC-001 fixture support is advertised for this
-  exact legacy anchor. The whole-array writer provides no middle-delete proof;
-  Kilo has no source-reported session namespace or per-message coordinate in
-  this adapter: its parent directory is a compatibility grouping fallback only,
-  and protected assignment remains required for future canonical projection.

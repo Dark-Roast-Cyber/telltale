@@ -16,10 +16,8 @@ are ToolCall **Supported**, UserContext **Unsupported**, and ToolExecution
 **Unknown**. The offline shadow covers 15 cases, 17 reviewed sessions, and 306
 detector evaluations; its five reviewed match-set differences and 28 reviewed
 capability-driven indeterminate outcomes have zero unexplained differences.
-`opencode.legacy_json`
-remains supported and its v2 migration has not started; `opencode.project_json`
-remains Candidate and its v2 migration has not started. `NormalizedRecordV1`
-plus its loss-aware compatibility path remain current in production.
+`NormalizedRecordV1` plus its loss-aware compatibility path remain current in
+production.
 
 Detection v2 has only an experimental, non-production foundation: the
 `observation_match` detector, `DetectorResult` -> `Signal` -> atomic `Finding`,

@@ -176,11 +176,8 @@ pub enum RuleExpectationKind {
 pub enum Client {
     Codex,
     Claude,
-    Gemini,
     Openclaw,
     Qwen,
-    Roocode,
-    Kilocode,
     Opencode,
     Copilot,
 }
@@ -190,11 +187,8 @@ impl Client {
         match self {
             Self::Codex => ClientId::Codex,
             Self::Claude => ClientId::Claude,
-            Self::Gemini => ClientId::Gemini,
             Self::Openclaw => ClientId::OpenClaw,
             Self::Qwen => ClientId::Qwen,
-            Self::Roocode => ClientId::RooCode,
-            Self::Kilocode => ClientId::KiloCode,
             Self::Opencode => ClientId::OpenCode,
             Self::Copilot => ClientId::Copilot,
         }
@@ -209,8 +203,6 @@ pub enum SourceKindName {
     ArchivedJsonl,
     HeadlessJsonl,
     Sqlite,
-    LegacyJson,
-    UiMessagesJson,
     CopilotProcessLog,
 }
 
@@ -222,8 +214,6 @@ impl SourceKindName {
             Self::ArchivedJsonl => SourceKind::ArchivedJsonl,
             Self::HeadlessJsonl => SourceKind::HeadlessJsonl,
             Self::Sqlite => SourceKind::Sqlite,
-            Self::LegacyJson => SourceKind::LegacyJson,
-            Self::UiMessagesJson => SourceKind::UiMessagesJson,
             Self::CopilotProcessLog => SourceKind::CopilotProcessLog,
         }
     }
@@ -569,15 +559,7 @@ pub fn supported_source_ids() -> BTreeSet<String> {
 }
 
 pub fn candidate_source_ids() -> BTreeSet<String> {
-    // The public registry does not encode support maturity. Keep the two
-    // documented candidate identities explicit, then derive the supported
-    // denominator as every other registered identity. A newly registered
-    // source therefore fails evaluation coverage until its status and fixture
-    // representation are reviewed.
-    BTreeSet::from([
-        "codex.project_sessions".to_string(),
-        "opencode.project_json".to_string(),
-    ])
+    BTreeSet::new()
 }
 
 fn registered_source_ids() -> BTreeSet<String> {
@@ -597,7 +579,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_derived_source_sets_preserve_current_coverage_contract() {
+    fn registry_derived_source_sets_match_the_eight_source_denominator() {
         let supported = supported_source_ids();
         let candidates = candidate_source_ids();
         assert_eq!(
@@ -608,22 +590,12 @@ mod tests {
                 "codex.headless_sessions".to_string(),
                 "codex.sessions".to_string(),
                 "copilot.process_log".to_string(),
-                "gemini.tmp".to_string(),
-                "kilocode.tasks".to_string(),
                 "openclaw.agents".to_string(),
-                "opencode.legacy_json".to_string(),
                 "opencode.sqlite".to_string(),
                 "qwen.projects".to_string(),
-                "roocode.tasks".to_string(),
             ])
         );
-        assert_eq!(
-            candidates,
-            BTreeSet::from([
-                "codex.project_sessions".to_string(),
-                "opencode.project_json".to_string(),
-            ])
-        );
+        assert!(candidates.is_empty());
         assert_eq!(
             supported_source_ids()
                 .union(&candidate_source_ids())

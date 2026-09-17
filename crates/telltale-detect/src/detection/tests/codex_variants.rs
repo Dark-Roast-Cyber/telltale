@@ -111,22 +111,6 @@ fn ignores_synthetic_codex_session_fixture() {
 }
 
 #[test]
-fn ignores_opencode_legacy_session_fixture() {
-    let source = Source {
-        client: ClientId::OpenCode,
-        kind: SourceKind::LegacyJson,
-        source_id: "opencode.legacy_json".to_string(),
-        path: PathBuf::from(crate::test_fixture_path(
-            "session_stores/opencode/storage/message/session-a/message-a.json",
-        )),
-    };
-
-    let detections = detect_sources(&[source]);
-
-    assert!(detections.is_empty());
-}
-
-#[test]
 fn detects_opencode_sqlite_session_fixture() {
     let source = Source {
         client: ClientId::OpenCode,

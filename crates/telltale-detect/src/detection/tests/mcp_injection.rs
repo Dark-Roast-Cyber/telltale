@@ -5,7 +5,7 @@ fn detects_uc001_mcp_injection_chain_only() {
     let sources = discover_sources_best_effort(&crate::test_fixture_path("session_stores"));
     let detections = detect_sources(&sources);
 
-    assert_eq!(detections.len(), 36);
+    assert_eq!(detections.len(), 31);
     let event = detections
         .iter()
         .find(|(_, event)| event.session_id == "uc001-positive")

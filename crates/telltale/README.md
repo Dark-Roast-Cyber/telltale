@@ -62,7 +62,7 @@ platforms fail closed until equivalent descriptor/ACL profiles are validated. Ne
 state must be created explicitly with `ProtectedAssignmentStore::initialize`;
 `open` never recreates missing authority, database, key, or receipt state.
 Domain registration does not establish replay-association readiness or enable a
-projector; RooCode and KiloCode remain blocked.
+projector.
 
 Operational limits: the store targets a single local filesystem under the owning
 user's private directory; network filesystems are unsupported. Assignment and

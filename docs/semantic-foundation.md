@@ -25,9 +25,7 @@
 > differences.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**.
-> `opencode.legacy_json` remains supported and its v2
-> migration has not started; `opencode.project_json` remains Candidate and its
-> v2 migration has not started. Production adapter cutover has not started.
+> Production adapter cutover has not started.
 > **Existing compatibility:**
 > Event 3.0 remains the current frozen external compatibility and output
 > contract.
@@ -40,9 +38,8 @@ The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 referenc
 projections do not activate this path in production: `NormalizedRecordV1`
 remains the scanner's adapter contract, Rule v1 remains the production
 detection path, and Canonical Observation v2 cutover has not started.
-`opencode.legacy_json` remains supported and `opencode.project_json` remains
-Candidate; neither source's v2 migration has started. Production Detection v2,
-Event4 emission/integration, and Telemetry/Output v2 remain not started, and
+Production Detection v2, Event4 emission/integration, and Telemetry/Output v2
+remain not started, and
 Event 3.0 remains frozen. The `compat.v1.url` view is intentionally
 visibility-limited to truthful absence; focused synthetic harness coverage
 demonstrates the compatibility gap.

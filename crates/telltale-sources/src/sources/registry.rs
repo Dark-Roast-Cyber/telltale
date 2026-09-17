@@ -1,13 +1,11 @@
 //! Built-in client source registry.
 //!
-//! Phase 1 moves the static `CLIENTS` assembly from `crate::clients` into this
-//! module. The per-client source arrays and the final `ClientDef` slice live
-//! here; the types themselves remain in `crate::clients` to preserve the public
-//! API during migration.
+//! Per-client source arrays live in their source modules. This module collects
+//! them into the deterministic built-in client and install registries.
 
 use crate::clients::ClientDef;
 use crate::install_inventory::AgentInstallDef;
-use crate::sources::{claude, codex, copilot, gemini, kilocode, openclaw, opencode, qwen, roocode};
+use crate::sources::{claude, codex, copilot, openclaw, opencode, qwen};
 use telltale_schema::clients::ClientId;
 
 const CLIENTS: &[ClientDef] = &[
@@ -22,11 +20,6 @@ const CLIENTS: &[ClientDef] = &[
         sources: claude::SOURCES,
     },
     ClientDef {
-        id: ClientId::Gemini,
-        display_name: "Gemini CLI",
-        sources: gemini::SOURCES,
-    },
-    ClientDef {
         id: ClientId::OpenClaw,
         display_name: "OpenClaw",
         sources: openclaw::SOURCES,
@@ -35,16 +28,6 @@ const CLIENTS: &[ClientDef] = &[
         id: ClientId::Qwen,
         display_name: "Qwen CLI",
         sources: qwen::SOURCES,
-    },
-    ClientDef {
-        id: ClientId::RooCode,
-        display_name: "RooCode",
-        sources: roocode::SOURCES,
-    },
-    ClientDef {
-        id: ClientId::KiloCode,
-        display_name: "KiloCode",
-        sources: kilocode::SOURCES,
     },
     ClientDef {
         id: ClientId::OpenCode,
@@ -64,15 +47,12 @@ pub(crate) fn builtin_client_defs() -> &'static [ClientDef] {
 
 /// Install inventory evidence definitions, in the same order as `CLIENTS`.
 /// The order must stay aligned with the client registry so install inventory
-/// snapshot hashes remain stable across the adapter migration.
+/// snapshot hashes are deterministic.
 const INSTALL_DEFS: &[AgentInstallDef] = &[
     codex::INSTALL,
     claude::INSTALL,
-    gemini::INSTALL,
     openclaw::INSTALL,
     qwen::INSTALL,
-    roocode::INSTALL,
-    kilocode::INSTALL,
     opencode::INSTALL,
     copilot::INSTALL,
 ];
@@ -91,11 +71,11 @@ mod tests {
 
     /// Exhaustive regression snapshot of the per-agent install evidence
     /// definitions collected through the registry. This test must fail if any
-    /// agent id, signal list, or ordering changes during the Phase 5 migration:
-    /// ordering feeds the install inventory snapshot hash, so a reorder would
-    /// re-emit inventory events on hosts with unchanged installs.
+    /// agent id, signal list, or ordering changes. Ordering feeds the install
+    /// inventory snapshot hash, so a reorder would re-emit inventory events on
+    /// hosts with unchanged installs.
     #[test]
-    fn install_defs_match_expected_phase5_snapshot() {
+    fn install_defs_match_expected_snapshot() {
         let expected: &[AgentInstallDef] = &[
             AgentInstallDef {
                 agent: "codex",
@@ -112,13 +92,6 @@ mod tests {
                 global_storage_ids: &[],
             },
             AgentInstallDef {
-                agent: "gemini",
-                executables: &["gemini"],
-                node_packages: &["@google/gemini-cli"],
-                extension_ids: &[],
-                global_storage_ids: &[],
-            },
-            AgentInstallDef {
                 agent: "openclaw",
                 executables: &["openclaw"],
                 node_packages: &["openclaw"],
@@ -131,20 +104,6 @@ mod tests {
                 node_packages: &["@qwen-code/qwen-code"],
                 extension_ids: &[],
                 global_storage_ids: &[],
-            },
-            AgentInstallDef {
-                agent: "roocode",
-                executables: &[],
-                node_packages: &[],
-                extension_ids: &["rooveterinaryinc.roo-cline"],
-                global_storage_ids: &["rooveterinaryinc.roo-cline"],
-            },
-            AgentInstallDef {
-                agent: "kilocode",
-                executables: &["kilo", "kilocode"],
-                node_packages: &["@kilocode/cli"],
-                extension_ids: &["kilocode.kilo-code"],
-                global_storage_ids: &["kilocode.kilo-code"],
             },
             AgentInstallDef {
                 agent: "opencode",
@@ -183,13 +142,13 @@ mod tests {
 
     /// Exhaustive regression snapshot of the built-in source registry. This test
     /// must fail if any client id, display name, source count, or source metadata
-    /// changes during the Phase 1 delegation.
+    /// changes.
     #[test]
-    fn registry_matches_expected_phase1_snapshot() {
+    fn registry_matches_expected_snapshot() {
         let clients = builtin_client_defs();
-        assert_eq!(clients.len(), 9, "expected nine built-in clients");
+        assert_eq!(clients.len(), 6, "expected six built-in clients");
 
-        assert_client(clients, 0, ClientId::Codex, "Codex", 4);
+        assert_client(clients, 0, ClientId::Codex, "Codex", 3);
         assert_source(
             clients[0].sources[0],
             "codex.sessions",
@@ -223,18 +182,6 @@ mod tests {
             true,
             None,
         );
-        assert_source(
-            clients[0].sources[3],
-            "codex.project_sessions",
-            SourceKind::Jsonl,
-            PathRoot::ProjectLocal,
-            ".codex-worktree",
-            "codex/project_sessions",
-            SourcePattern::Extension("jsonl"),
-            true,
-            Some(".codex-worktree"),
-        );
-
         assert_client(clients, 1, ClientId::Claude, "Claude Code", 1);
         assert_source(
             clients[1].sources[0],
@@ -248,22 +195,9 @@ mod tests {
             None,
         );
 
-        assert_client(clients, 2, ClientId::Gemini, "Gemini CLI", 1);
+        assert_client(clients, 2, ClientId::OpenClaw, "OpenClaw", 1);
         assert_source(
             clients[2].sources[0],
-            "gemini.tmp",
-            SourceKind::Json,
-            PathRoot::Home,
-            ".gemini/tmp",
-            "gemini/tmp",
-            SourcePattern::Extension("json"),
-            true,
-            None,
-        );
-
-        assert_client(clients, 3, ClientId::OpenClaw, "OpenClaw", 1);
-        assert_source(
-            clients[3].sources[0],
             "openclaw.agents",
             SourceKind::Jsonl,
             PathRoot::Home,
@@ -274,9 +208,9 @@ mod tests {
             None,
         );
 
-        assert_client(clients, 4, ClientId::Qwen, "Qwen CLI", 1);
+        assert_client(clients, 3, ClientId::Qwen, "Qwen CLI", 1);
         assert_source(
-            clients[4].sources[0],
+            clients[3].sources[0],
             "qwen.projects",
             SourceKind::Jsonl,
             PathRoot::Home,
@@ -287,35 +221,9 @@ mod tests {
             None,
         );
 
-        assert_client(clients, 5, ClientId::RooCode, "RooCode", 1);
+        assert_client(clients, 4, ClientId::OpenCode, "OpenCode", 1);
         assert_source(
-            clients[5].sources[0],
-            "roocode.tasks",
-            SourceKind::UiMessagesJson,
-            PathRoot::ConfigHome,
-            "Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks",
-            "roocode/tasks",
-            SourcePattern::ExactFile("ui_messages.json"),
-            true,
-            None,
-        );
-
-        assert_client(clients, 6, ClientId::KiloCode, "KiloCode", 1);
-        assert_source(
-            clients[6].sources[0],
-            "kilocode.tasks",
-            SourceKind::UiMessagesJson,
-            PathRoot::ConfigHome,
-            "Code/User/globalStorage/kilocode.kilo-code/tasks",
-            "kilocode/tasks",
-            SourcePattern::ExactFile("ui_messages.json"),
-            true,
-            None,
-        );
-
-        assert_client(clients, 7, ClientId::OpenCode, "OpenCode", 3);
-        assert_source(
-            clients[7].sources[0],
+            clients[4].sources[0],
             "opencode.sqlite",
             SourceKind::Sqlite,
             PathRoot::DataHome,
@@ -325,32 +233,9 @@ mod tests {
             false,
             None,
         );
+        assert_client(clients, 5, ClientId::Copilot, "GitHub Copilot", 1);
         assert_source(
-            clients[7].sources[1],
-            "opencode.legacy_json",
-            SourceKind::LegacyJson,
-            PathRoot::DataHome,
-            "opencode/storage/message",
-            "opencode/storage/message",
-            SourcePattern::Extension("json"),
-            true,
-            None,
-        );
-        assert_source(
-            clients[7].sources[2],
-            "opencode.project_json",
-            SourceKind::LegacyJson,
-            PathRoot::ProjectLocal,
-            ".opencode",
-            "opencode/project",
-            SourcePattern::Extension("json"),
-            true,
-            Some(".opencode"),
-        );
-
-        assert_client(clients, 8, ClientId::Copilot, "GitHub Copilot", 1);
-        assert_source(
-            clients[8].sources[0],
+            clients[5].sources[0],
             "copilot.process_log",
             SourceKind::CopilotProcessLog,
             PathRoot::ProjectLocal,

@@ -1,18 +1,15 @@
 # Source Validation Matrix
 
 This matrix is the canonical public record for source-support claims. It tracks
-the 12 currently matrixed source identities across discovery, parsing, tool-call handling,
+the eight supported source identities across discovery, parsing, tool-call handling,
 tool-result handling, use-case coverage, live validation status, and known lossy
 fields. README and installation guidance link here rather than assigning
 subjective confidence labels. A source is only considered supported when the
 required coverage gates below have fixture-backed proof; live validation is an
 additional, bounded signal rather than broad source-store coverage.
 
-The static registry contains 14 exact identities, including two project-local
-candidates,
-`codex.project_sessions` and `opencode.project_json`. They are excluded from the
-supported matrix until they pass every coverage gate. Their registered paths and
-candidate status are documented in [Session Sources](session-sources.md).
+The static registry and parser table contain exactly these eight identities.
+There are no hidden candidate or compatibility registrations.
 
 ## Legend
 
@@ -24,34 +21,23 @@ candidate status are documented in [Session Sources](session-sources.md).
 ## Parser maturity assessment
 
 Parser maturity is an implementation/parity statement, not a public support or
-live-validation claim. All 14 registered identities have synthetic
-parser/parity fixture coverage, including the project-local candidates. All 14
-identities use source-owned modeled parsers. RooCode has a pinned native
-UI-message interpretation with direct `history_item.json` identity and cache-only
-index corroboration; KiloCode has an independently pinned legacy-writer
-interpretation with no generic JSON-document fallback or Roo companion identity
-logic. Current Kilo SQLite/server/CLI storage remains outside the identity.
+live-validation claim. All eight registered identities use source-owned modeled
+parsers and have synthetic parser/parity fixture coverage.
 
 | Client | Exact source identity | Parser maturity | Parser/parity fixtures | Matrix support status |
 | --- | --- | --- | --- | --- |
 | Codex | `codex.sessions` | Modeled | ✅ | Supported |
 | Codex | `codex.archived_sessions` | Modeled | ✅ | Supported |
 | Codex | `codex.headless_sessions` | Modeled | ✅ | Supported |
-| Codex | `codex.project_sessions` | Modeled | ✅ | Candidate; project-local gates remain separate |
 | Claude Code | `claude.projects` | Modeled | ✅ | Supported |
-| Gemini CLI | `gemini.tmp` | Modeled | ✅ | Supported |
 | OpenClaw | `openclaw.agents` | Modeled | ✅ | Supported |
 | Qwen CLI | `qwen.projects` | Modeled | ✅ | Supported |
-| RooCode | `roocode.tasks` | Modeled `ClineMessage` UI-message parser | ✅ | Supported |
-| KiloCode | `kilocode.tasks` | Modeled legacy-writer `ClineMessage` UI-message parser | ✅ | Supported |
 | OpenCode | `opencode.sqlite` | Modeled | ✅ | Supported |
-| OpenCode | `opencode.legacy_json` | Modeled | ✅ | Supported |
-| OpenCode | `opencode.project_json` | Modeled | ✅ | Candidate; project-local gates remain separate |
 | Copilot | `copilot.process_log` | Modeled | ✅ | Supported |
 
 The matrix status above remains governed by the coverage gates below. A parser
 being modeled does not by itself establish live host validation, and a complete
-project-local parser fixture does not promote a candidate to Supported.
+modeled parser does not by itself establish a live-host claim.
 
 Non-production Canonical Observation v2 reference adapters are implemented for
 `openclaw.agents`, `qwen.projects`, and Copilot `copilot.process_log`. Offline
@@ -73,13 +59,9 @@ support statuses in this matrix remain unchanged.
 | Codex | `codex.archived_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Same as `codex.sessions` |
 | Codex | `codex.headless_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Same as `codex.sessions` |
 | Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| Gemini CLI | `gemini.tmp` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
 | Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | `call_id`, `is_error`, `content_parts` unavailable via legacy flat record |
-| RooCode | `roocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Agent/provider/model are absent in the verified UI record; `call_id`, `is_error`, `content_parts`, and canonical per-message identity are unavailable. Direct non-empty `history_item.json.id` is the source session namespace; `_index.json` is cache-only corroboration and the parent directory is compatibility-only. Protected assignment remains required for messages. |
-| KiloCode | `kilocode.tasks` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Legacy writer reports `ClineMessage` subtype, numeric `ts`, and MCP request/result encodings; it writes no history/index companion and agent/provider/model, call IDs, session namespace, content parts, and canonical per-message identity are unavailable. The parent directory is compatibility-only. Protected assignment remains required. |
 | OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | `call_id`, `is_error`, workspace, `content_parts` unavailable via legacy flat record |
-| OpenCode | `opencode.legacy_json` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ Fixture-backed + bounded live validation | Same as `opencode.sqlite` |
 | Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ Fixture-backed + bounded live validation | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, `content_parts` unavailable |
 
 ## Coverage Gates
@@ -98,9 +80,9 @@ Live host validation is an additional operational confidence signal, not a
 support gate. Record it when safe and available, but do not scan large or
 sensitive real session stores just to satisfy fixture coverage.
 
-Windows discovery coverage includes deterministic Codex `CodexHome` and VS Code
-`globalStorage` tests for RooCode and KiloCode. These paths are not live-validated
-and are not by themselves public live-source support; see [Session Sources](session-sources.md).
+Windows discovery coverage includes deterministic Codex `CodexHome` tests. These
+paths are not live-validated and are not by themselves public live-source
+support; see [Session Sources](session-sources.md).
 
 The v0.2.0 release archives and CI smoke checks establish binary packaging and
 execution support on macOS and Windows. They do not prove broad live validation
@@ -166,8 +148,8 @@ registration, or external parser configuration.
 
 | Use Case | Description | Clients Covered | Status |
 | --- | --- | --- | --- |
-| UC-001 | Fake MCP prompt injection to controlled domain | All 9 supported clients (12 matrixed source identities) | ✅ Complete |
-| UC-002 | Credential harvesting before package publish | Codex, OpenCode (legacy_json), Copilot | ✅ 3 clients |
+| UC-001 | Fake MCP prompt injection to controlled domain | All 6 supported clients (8 source identities) | ✅ Complete |
+| UC-002 | Credential harvesting before package publish | Codex, Copilot | ✅ 2 clients |
 | UC-003 | DNS exfiltration with encoded payload | Codex | ✅ 1 client |
 
 ## Live Validation Status
@@ -175,7 +157,7 @@ registration, or external parser configuration.
 Codex, OpenCode, Claude Code, and Copilot have received bounded live validation:
 
 - **Codex**: `~/.codex/sessions/`, `archived_sessions/`, and `headless/` (complete)
-- **OpenCode**: Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db`, plus `storage/message/` below the same root (complete)
+- **OpenCode**: Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` (complete)
 - **Copilot**: `logs/copilot/process-*.log` (complete)
 - **Claude Code**: `~/.claude/projects/` (complete) — bounded `--client claude --max-sources 5 --dry-run` parsed 5 sources with 5 activities and 1 benign detection, zero scanner errors; repeated at cap 10 with consistent results.
 
@@ -186,7 +168,6 @@ local source paths or transcript identifiers.
 ## Related Documents
 
 - [Adding an Agent Source](adding-agent-source.md) — implementation checklist and exact parser-registration architecture
-- [Source Adapter Architecture](source-adapter-refactor-plan.md) — implemented architecture and migration record
 - [Agent Capability Profiles](agent-capability-profiles.md) — per-source field availability and known gaps
 - [Client Capability Matrix](client-capability-matrix.md) — field-level availability per client
 - [Normalization Schema](normalization-schema.md) — `NormalizedRecordV1` contract

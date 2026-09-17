@@ -717,8 +717,6 @@ fn health_constructor_normalizes_blank_policy_names_for_schema() {
 mod export;
 #[path = "cli/migration.rs"]
 mod migration;
-#[path = "cli/parser_maturity.rs"]
-mod parser_maturity;
 
 #[path = "cli/provenance.rs"]
 mod provenance;

@@ -65,12 +65,6 @@ const MCP_CONFIGS: &[McpConfigDef] = &[
         format: ConfigFormat::Json,
     },
     McpConfigDef {
-        client: ClientId::Gemini,
-        id: "gemini.mcp_config",
-        relative_path: ".gemini/settings.json",
-        format: ConfigFormat::Json,
-    },
-    McpConfigDef {
         client: ClientId::OpenCode,
         id: "opencode.mcp_config",
         relative_path: ".config/opencode/opencode.json",

@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/Dark_Roast_Cyber-Visit_Site-8b4513?style=flat-square" alt="Dark Roast Cyber" />
   </a>
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/Supported_Agents-9-green?style=flat-square" alt="Supported Agents" />
+  <img src="https://img.shields.io/badge/Supported_Agents-6-green?style=flat-square" alt="Supported Agents" />
   <img src="https://img.shields.io/badge/Detection_Categories-13-orange?style=flat-square" alt="Detection Categories" />
 </p>
 
@@ -69,11 +69,13 @@ scanner and is excluded from headless default builds and installs.
 ## Source support status
 
 The [Source Validation Matrix](docs/source-validation-matrix.md) is canonical
-for public source-support claims. Current client-level status is:
+for public source-support claims. The built-in denominator is eight exact source
+identities across six agent families: Claude Code, Codex, OpenCode, OpenClaw,
+Qwen, and GitHub Copilot. Current client-level status is:
 
 - **Fixture-backed plus bounded live validation**: Codex, OpenCode, Claude Code,
   and GitHub Copilot.
-- **Fixture-backed only**: Gemini CLI, OpenClaw, Qwen CLI, RooCode, and KiloCode.
+- **Fixture-backed only**: OpenClaw and Qwen CLI.
 
 These labels describe parser and source-store validation, not broad live coverage.
 Release archives and CI smoke checks cover binary packaging and execution on
@@ -190,11 +192,11 @@ precedence, trust-boundary guidance, override YAML format, and flag behavior.
 
 ### Project-local session stores
 
-Some clients (Copilot, OpenCode-in-project, Codex per-project) store data inside
-project directories. By default, Telltale scans `~/github` and `~/projects` if
-they exist. To customize, declare project roots in a YAML file and pass it with
-`--project-config` (or set `TELLTALE_PROJECT_CONFIG`). Project-local discovery is
-additive — home-relative sources are still discovered from `--root`.
+Copilot process logs are discovered inside project directories. By default,
+Telltale scans `~/github` and `~/projects` if they exist. To customize, declare
+project roots in a YAML file and pass it with `--project-config` (or set
+`TELLTALE_PROJECT_CONFIG`). Project-local discovery is additive — home-relative
+sources are still discovered from `--root`.
 
 See [Install](docs/install.md) for the YAML format and `--project-config` usage.
 
@@ -402,7 +404,6 @@ These files are the source-of-truth for Telltale's current implementation, rules
 - [Policy modes](docs/policy-modes.md) — observe, alert, simulate-block modes
 - [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content
 - [Adding an agent source](docs/adding-agent-source.md) — contributor checklist for new agent/session-source support
-- [Source adapter refactor plan](docs/source-adapter-refactor-plan.md) — planned move toward per-agent source modules
 - [Use cases](docs/use-cases.md) — concrete detection use cases with fixture guidance
 - [Normalization schema](docs/normalization-schema.md) — canonical `NormalizedRecordV1` schema
 - [Source validation matrix](docs/source-validation-matrix.md) — coverage and validation gates

@@ -629,10 +629,10 @@ mod tests {
 
         let summaries = build_baseline_summaries(&records);
 
-        assert!(
-            summaries.len() >= 8,
-            "expected supported benign clients, got {}",
-            summaries.len()
+        assert_eq!(
+            summaries.len(),
+            7,
+            "expected retained benign fixture summaries"
         );
         assert!(
             summaries

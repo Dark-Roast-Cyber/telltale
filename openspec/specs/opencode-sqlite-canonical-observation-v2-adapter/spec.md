@@ -5,9 +5,7 @@ This specification covers only the OpenCode `opencode.sqlite` reference adapter
 path. One SQLite-native interpretation feeds the unchanged legacy
 `ParsedRecord`/`NormalizedRecordV1` production compatibility projection and a
 crate-private, non-production Canonical Observation v2 projection.
-`opencode.legacy_json` and `opencode.project_json` remain on their existing
-legacy paths; no production cutover, Event 3.0 change, or other adapter
-migration is included.
+No production cutover, Event 3.0 change, or other adapter migration is included.
 ## Requirements
 ### Requirement: One OpenCode SQLite-native interpretation
 
@@ -137,9 +135,7 @@ multiple observations share the complete identity coordinate.
 Canonical mapping errors MUST be safe, code-based, and free of raw source
 payloads. They MUST NOT become production parse failures. The change MUST NOT
 modify JSON source identities, Event 3.0, detection, parser registration,
-production scanning, or the legacy projection. `opencode.legacy_json` and
-`opencode.project_json` MUST remain unchanged legacy-only source paths, with
-their existing status preserved. The Canonical Observation v2 projection MUST
+production scanning, or the legacy projection. The Canonical Observation v2 projection MUST
 remain a crate-private, non-production reference seam; `NormalizedRecordV1`
 MUST remain the production path and no production cutover occurs.
 

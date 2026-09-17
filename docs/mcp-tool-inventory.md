@@ -18,12 +18,9 @@ Telltale does not connect to MCP servers during scan. That keeps the batch scann
 | --- | --- | --- | --- |
 | Codex | `.codex/config.toml` | supported | Reads `[mcp_servers.<name>]` and `[mcp.servers.<name>]` sections with `command`, `url`, `type`/`transport`, and `args` metadata. |
 | Claude Code | `.claude.json`, `.mcp.json`, workspace `.mcp.json` within depth 4 | supported | Reads `mcpServers`, `mcp_servers`, and `mcp.servers` JSON objects. |
-| Gemini CLI | `.gemini/settings.json` | supported | Reads common JSON MCP server objects when present. |
 | OpenCode | `.config/opencode/opencode.json` | supported | Reads common JSON MCP server objects when present. |
 | OpenClaw | `.openclaw/config.json` | supported | Reads common JSON MCP server objects when present. |
 | Qwen CLI | `.qwen/settings.json` | supported | Reads common JSON MCP server objects when present. |
-| RooCode | VS Code extension settings | not yet supported | Configuration storage varies by VS Code profile and extension version; session parsing remains supported. |
-| KiloCode | VS Code extension settings | not yet supported | Configuration storage varies by VS Code profile and extension version; legacy UI-message session parsing is fixture-backed, but static config inventory is separate and not yet supported. |
 | GitHub Copilot | Copilot MCP configuration | not yet supported | Telltale currently supports Copilot process-log activity, but not static MCP config inventory. |
 
 ## Open Source Enumeration Reference

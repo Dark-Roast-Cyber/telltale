@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn watch_snapshot_count_matches_canonical_path_index_for_duplicate_projects() {
-        let path = PathBuf::from("duplicate-project/.codex-worktree/session.jsonl");
+        let path = PathBuf::from("duplicate-project/session.jsonl");
         let first = Source {
             client: ClientId::Codex,
             kind: SourceKind::Jsonl,

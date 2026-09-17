@@ -46,9 +46,6 @@ pub enum ParseError {
         source_id: String,
         detail: &'static str,
     },
-    SourceContract {
-        category: &'static str,
-    },
 }
 
 impl fmt::Display for ParseError {
@@ -90,9 +87,6 @@ impl fmt::Display for ParseError {
                 "schema drift for ({}, {source_id}): {detail}",
                 client.as_str()
             ),
-            ParseError::SourceContract { category } => {
-                write!(f, "source contract failure: {category}")
-            }
         }
     }
 }
@@ -217,22 +211,10 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ParserImplementation::Modeled(crate::sources::codex::parser::extract_codex_jsonl_source),
     ),
     registration(
-        ClientId::Codex,
-        "codex.project_sessions",
-        SourceKind::Jsonl,
-        ParserImplementation::Modeled(crate::sources::codex::parser::extract_codex_jsonl_source),
-    ),
-    registration(
         ClientId::Claude,
         "claude.projects",
         SourceKind::Jsonl,
         ParserImplementation::Modeled(crate::sources::claude::parser::extract_claude_jsonl_source),
-    ),
-    registration(
-        ClientId::Gemini,
-        "gemini.tmp",
-        SourceKind::Json,
-        ParserImplementation::Modeled(crate::sources::gemini::parser::extract_gemini_json_source),
     ),
     registration(
         ClientId::OpenClaw,
@@ -249,38 +231,10 @@ const PARSER_REGISTRATIONS: &[ParserRegistration] = &[
         ParserImplementation::Modeled(crate::sources::qwen::parser::extract_qwen_jsonl_source),
     ),
     registration(
-        ClientId::RooCode,
-        "roocode.tasks",
-        SourceKind::UiMessagesJson,
-        ParserImplementation::Modeled(crate::sources::roocode::parser::extract_roocode_source),
-    ),
-    registration(
-        ClientId::KiloCode,
-        "kilocode.tasks",
-        SourceKind::UiMessagesJson,
-        ParserImplementation::Modeled(crate::sources::kilocode::parser::extract_kilocode_source),
-    ),
-    registration(
         ClientId::OpenCode,
         "opencode.sqlite",
         SourceKind::Sqlite,
         ParserImplementation::Modeled(crate::sources::opencode::parser::extract_sqlite_source),
-    ),
-    registration(
-        ClientId::OpenCode,
-        "opencode.legacy_json",
-        SourceKind::LegacyJson,
-        ParserImplementation::Modeled(
-            crate::sources::opencode::parser::extract_opencode_json_source,
-        ),
-    ),
-    registration(
-        ClientId::OpenCode,
-        "opencode.project_json",
-        SourceKind::LegacyJson,
-        ParserImplementation::Modeled(
-            crate::sources::opencode::parser::extract_opencode_json_source,
-        ),
     ),
     registration(
         ClientId::Copilot,
@@ -344,19 +298,6 @@ pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, ParseErro
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str::<Value>(line).map_err(ParseError::from))
         .collect()
-}
-
-pub(crate) fn read_json_document(source: &Source) -> Result<Value, ParseError> {
-    let raw = fs::read_to_string(&source.path)?;
-    Ok(serde_json::from_str::<Value>(&raw)?)
-}
-
-pub(crate) fn read_bounded_json_document(source: &Source) -> Result<Value, ParseError> {
-    read_json_document(source).map_err(|error| match error {
-        ParseError::Io(_) => source_contract_error("source_unavailable"),
-        ParseError::Json(_) => source_contract_error("malformed_json"),
-        error => error,
-    })
 }
 
 pub(crate) fn record_kind(value: &Value) -> RecordKind {
@@ -472,35 +413,6 @@ pub(crate) fn default_source_file_stem(source: &Source) -> String {
         .to_string()
 }
 
-pub(crate) fn default_source_parent_name(source: &Source) -> String {
-    source
-        .path
-        .parent()
-        .and_then(|path| path.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
-pub(crate) fn epoch_millis_timestamp(value: &Value) -> Result<String, ParseError> {
-    let millis = value
-        .as_i64()
-        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-        .ok_or(source_contract_error("invalid_timestamp"))?;
-    let nanos = i128::from(millis)
-        .checked_mul(1_000_000)
-        .ok_or(source_contract_error("timestamp_out_of_range"))?;
-    let timestamp = time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
-        .map_err(|_| source_contract_error("timestamp_out_of_range"))?;
-    timestamp
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|_| source_contract_error("timestamp_format"))
-}
-
-pub(crate) const fn source_contract_error(category: &'static str) -> ParseError {
-    ParseError::SourceContract { category }
-}
-
 pub(crate) fn session_id_field(value: &Value) -> Option<String> {
     string_field(value, "session_id")
         .or_else(|| string_field(value, "sessionID"))
@@ -597,7 +509,6 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::clients::supported_clients;
-    use crate::discovery::discover_sources_best_effort;
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::source::Source;
 
@@ -644,66 +555,6 @@ mod tests {
             Some("{\"format\":\"json\"}")
         );
         assert_eq!(normalized.content, "function_call: repo_status");
-    }
-
-    #[test]
-    fn parses_gemini_json_message_array_records() {
-        let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
-            .into_iter()
-            .find(|source| {
-                source.client == ClientId::Gemini
-                    && source.kind == SourceKind::Json
-                    && source.path.file_name().and_then(|name| name.to_str())
-                        == Some("session-a.json")
-            })
-            .expect("fixture source");
-
-        let records = parse_source_records(&source).expect("records");
-
-        assert_eq!(records.len(), 2);
-        assert!(records.iter().all(|record| {
-            record.session_id == "gemini-session-a" && record.client == "gemini"
-        }));
-        assert_eq!(records[0].kind, RecordKind::UserMessage);
-        assert_eq!(records[0].agent.as_deref(), Some("gemini"));
-        assert_eq!(records[0].provider.as_deref(), Some("google"));
-        assert_eq!(records[1].kind, RecordKind::AssistantMessage);
-        assert_eq!(records[1].model.as_deref(), Some("gemini-fixture-model"));
-        assert!(
-            records[1]
-                .content
-                .contains("benign Gemini fixture response")
-        );
-    }
-
-    #[test]
-    fn parses_gemini_json_tool_call_and_result_records() {
-        let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
-            .into_iter()
-            .find(|source| {
-                source.client == ClientId::Gemini
-                    && source.kind == SourceKind::Json
-                    && source.path.file_name().and_then(|name| name.to_str())
-                        == Some("uc001-gemini-tool-result.json")
-            })
-            .expect("fixture source");
-
-        let records = parse_source_records(&source).expect("records");
-
-        assert_eq!(records.len(), 3);
-        assert!(records.iter().all(|record| {
-            record.session_id == "gemini-uc001-tool-result" && record.client == "gemini"
-        }));
-        assert_eq!(records[0].kind, RecordKind::UserMessage);
-        assert_eq!(records[1].kind, RecordKind::ToolCall);
-        assert_eq!(records[1].tool_name.as_deref(), Some("repo_status"));
-        assert_eq!(
-            records[1].arguments.as_deref(),
-            Some("{\"format\":\"json\"}")
-        );
-        assert_eq!(records[2].kind, RecordKind::ToolResult);
-        assert_eq!(records[2].tool_name.as_deref(), Some("repo_status"));
-        assert!(records[2].content.contains("darkroastcyber.io/mcp-lab"));
     }
 
     #[test]
@@ -762,7 +613,7 @@ mod tests {
             .map(|registration| (registration.client, registration.source_id))
             .collect::<BTreeSet<_>>();
 
-        assert_eq!(definitions.len(), 14);
+        assert_eq!(definitions.len(), 8);
         assert_eq!(definition_keys.len(), definitions.len());
         assert_eq!(registration_keys.len(), PARSER_REGISTRATIONS.len());
         assert_eq!(definition_keys, registration_keys);
@@ -778,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_registration_maturity_snapshot_has_fourteen_modeled_and_no_fallbacks() {
+    fn parser_registration_matches_the_eight_supported_source_identities() {
         let modeled = PARSER_REGISTRATIONS
             .iter()
             .map(|registration| registration.source_id)
@@ -790,21 +641,39 @@ mod tests {
                 "codex.sessions",
                 "codex.archived_sessions",
                 "codex.headless_sessions",
-                "codex.project_sessions",
                 "claude.projects",
-                "gemini.tmp",
                 "opencode.sqlite",
-                "opencode.legacy_json",
-                "opencode.project_json",
                 "openclaw.agents",
                 "qwen.projects",
-                "roocode.tasks",
-                "kilocode.tasks",
                 "copilot.process_log",
             ])
         );
-        assert_eq!(PARSER_REGISTRATIONS.len(), 14);
-        assert_eq!(modeled.len(), 14);
+        assert_eq!(PARSER_REGISTRATIONS.len(), 8);
+        assert_eq!(modeled.len(), 8);
+    }
+
+    #[test]
+    fn retired_source_identities_are_not_registered() {
+        for (client, source_id, kind) in [
+            (ClientId::OpenCode, "opencode.legacy_json", SourceKind::Json),
+            (
+                ClientId::OpenCode,
+                "opencode.project_json",
+                SourceKind::Json,
+            ),
+            (ClientId::Codex, "codex.project_sessions", SourceKind::Jsonl),
+        ] {
+            let source = Source {
+                client,
+                kind,
+                source_id: source_id.to_owned(),
+                path: PathBuf::from("not-read"),
+            };
+            assert!(matches!(
+                parse_source_records(&source),
+                Err(super::ParseError::UnsupportedSourceIdentity { .. })
+            ));
+        }
     }
 
     #[test]
@@ -847,33 +716,6 @@ mod tests {
         assert!(matches!(
             parse_source_records(&wrong_kind),
             Err(super::ParseError::SourceKindMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn registered_modeled_parser_parses_but_unknown_identity_does_not() {
-        let path = crate::test_fixture_path(
-            "parser_maturity/non_discovered/explicit-generic-fallback.json",
-        );
-        let registered = Source {
-            client: ClientId::OpenCode,
-            kind: SourceKind::LegacyJson,
-            source_id: "opencode.legacy_json".to_string(),
-            path: path.clone(),
-        };
-        let records = parse_source_records(&registered).expect("registered modeled records");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].kind, RecordKind::AssistantMessage);
-
-        let unknown = Source {
-            source_id: "opencode.invented".to_string(),
-            path,
-            ..registered
-        };
-        let error = parse_source_records(&unknown).expect_err("unknown identity must fail");
-        assert!(matches!(
-            error,
-            super::ParseError::UnsupportedSourceIdentity { .. }
         ));
     }
 }

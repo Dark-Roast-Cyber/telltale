@@ -308,11 +308,9 @@ Do not edit bundled defaults in place.
 
 ## Project-Local Session Stores
 
-Some clients store session data inside project directories rather than under
-`$HOME`. By default, Telltale scans `~/github` and `~/projects` if they exist.
-Copilot, OpenCode-in-project, and Codex per-project CLI logs are discovered
-from these default paths. To customize, declare project roots in a YAML config
-file:
+Copilot process logs are discovered inside project directories rather than
+under `$HOME`. By default, Telltale scans `~/github` and `~/projects` if they
+exist. To customize, declare project roots in a YAML config file:
 
 ```yaml
 projects:

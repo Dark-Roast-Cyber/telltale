@@ -61,15 +61,12 @@ matter for the long-lived baseline:
 | Qwen | `qwen.projects` |
 | GitHub Copilot | `copilot.process_log` |
 
-Claude and Codex desktop-app-specific acquisition may be deferred when it needs a
-separate source contract. `codex.project_sessions` remains a candidate unless a
-deliberate supported contract is accepted.
+Claude and Codex desktop-app-specific acquisition is deferred when it needs a
+separate source contract.
 
-`gemini.tmp`, `opencode.legacy_json`, `roocode.tasks`, `kilocode.tasks`, and the
-`opencode.project_json` candidate are outside the required 0.7 convergence set.
-They should not receive new Canonical Observation v2 migration work merely to
-preserve the historical support denominator. Current support documentation still
-describes shipped behavior until explicit removal or reclassification lands.
+`gemini.tmp`, `opencode.legacy_json`, `opencode.project_json`, `roocode.tasks`,
+`kilocode.tasks`, and `codex.project_sessions` are retired. They are not hidden
+production paths, parser registrations, or migration candidates.
 
 The production migration order is:
 

@@ -1,28 +1,5 @@
 version: 1
 cases:
-  - id: OC-UN-001
-    description: OpenCode uneventful assistant-only message
-    input:
-      kind: source_fixture
-      fixture: tests/fixtures/session_stores/opencode/storage/message/session-a/message-a.json
-      client: opencode
-      source_id: opencode.legacy_json
-      source_kind: legacy_json
-    eventfulness: uneventful
-    disposition: not_applicable
-    expected_security_review: not_scored
-    label_rationale: Uneventful assistant-only activity has no independent analyst security-review contract; it is a parser and visibility seed.
-    expected_visibility:
-      required_record_kinds: [assistant_message]
-      optional_fields: [timestamp, agent, model, provider]
-      unavailable_fields: [pid, parent_pid]
-    expected_detection:
-      rule_expectations: []
-      exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
-    tags: [seed, opencode, source_conformance, characterization]
-
   - id: OC-RT-001
     description: OpenCode routine source read synthesized without a shell invocation
     input:
@@ -53,10 +30,10 @@ cases:
     description: OpenCode UC-001 tool result with MCP injection and controlled egress
     input:
       kind: source_fixture
-      fixture: tests/fixtures/session_stores/opencode/storage/message/session-b/message-b.json
+      fixture: tests/fixtures/session_stores/opencode/opencode.db
       client: opencode
-      source_id: opencode.legacy_json
-      source_kind: legacy_json
+      source_id: opencode.sqlite
+      source_kind: sqlite
     eventfulness: noteworthy
     disposition: malicious
     expected_security_review: required
@@ -182,52 +159,6 @@ cases:
       expected_contributions: []
     tags: [source_conformance, characterization]
 
-  - id: SC-GEMINI-001
-    description: Gemini temporary-session benign source conformance
-    input:
-      kind: source_fixture
-      fixture: tests/fixtures/benign_baselines/gemini/tmp/benign-baseline.json
-      client: gemini
-      source_id: gemini.tmp
-      source_kind: json
-    eventfulness: routine
-    disposition: benign
-    expected_security_review: not_scored
-    label_rationale: Parser identity and visibility verification for Gemini sessions is not an independent security-review scenario.
-    expected_visibility:
-      required_record_kinds: [assistant_message]
-      optional_fields: [timestamp, tool_name, arguments, content]
-      unavailable_fields: [pid, parent_pid]
-    expected_detection:
-      rule_expectations: []
-      exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
-    tags: [source_conformance, characterization]
-
-  - id: SC-KILOCODE-001
-    description: KiloCode task benign source conformance
-    input:
-      kind: source_fixture
-      fixture: tests/fixtures/benign_baselines/kilocode/tasks/baseline-task/ui_messages.json
-      client: kilocode
-      source_id: kilocode.tasks
-      source_kind: ui_messages_json
-    eventfulness: routine
-    disposition: benign
-    expected_security_review: not_scored
-    label_rationale: Parser identity and visibility verification for KiloCode tasks is not an independent security-review scenario.
-    expected_visibility:
-      required_record_kinds: [assistant_message]
-      optional_fields: [timestamp, tool_name, arguments, content]
-      unavailable_fields: [pid, parent_pid]
-    expected_detection:
-      rule_expectations: []
-      exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
-    tags: [source_conformance, characterization]
-
   - id: SC-OPENCLAW-001
     description: OpenClaw agent benign source conformance
     input:
@@ -251,43 +182,6 @@ cases:
       expected_contributions: []
     tags: [source_conformance, characterization]
 
-  - id: SC-OPENCODE-SQLITE-001
-    description: OpenCode SQLite UC-001 source conformance
-    input:
-      kind: source_fixture
-      fixture: tests/fixtures/session_stores/opencode/opencode.db
-      client: opencode
-      source_id: opencode.sqlite
-      source_kind: sqlite
-    eventfulness: noteworthy
-    disposition: malicious
-    expected_security_review: not_scored
-    label_rationale: This duplicate OpenCode representation of UC-001 characterizes SQLite parser behavior; the independently labeled legacy-source scenario supplies the efficacy outcome.
-    expected_visibility:
-      required_record_kinds: [tool_result]
-      optional_fields: [timestamp, tool_name, arguments, agent, model, provider]
-      unavailable_fields: [pid, parent_pid]
-    expected_detection:
-      rule_expectations:
-        - rule_id: mcp.tool_metadata.prompt_injection
-          expectation: expected_match
-      exact_rule_set: false
-      expected_score: 185
-      expected_contributions:
-        - id: approval.bypass.context
-          type: deterministic_rule
-          points: 45
-        - id: mcp.tool_metadata.prompt_injection
-          type: deterministic_rule
-          points: 60
-        - id: network.controlled_test_domain.darkroast
-          type: deterministic_rule
-          points: 45
-        - id: chain.mcp_injection_then_egress
-          type: chain_modifier
-          points: 35
-    tags: [source_conformance, characterization, opencode]
-
   - id: SC-QWEN-001
     description: Qwen project benign source conformance
     input:
@@ -310,75 +204,6 @@ cases:
       expected_score: 0
       expected_contributions: []
     tags: [source_conformance, characterization]
-
-  - id: SC-ROOCODE-001
-    description: RooCode task benign source conformance
-    input:
-      kind: source_fixture
-      fixture: tests/fixtures/benign_baselines/roocode/tasks/baseline-task/ui_messages.json
-      client: roocode
-      source_id: roocode.tasks
-      source_kind: ui_messages_json
-    eventfulness: routine
-    disposition: benign
-    expected_security_review: not_scored
-    label_rationale: Parser identity and visibility verification for RooCode tasks is not an independent security-review scenario.
-    expected_visibility:
-      required_record_kinds: [assistant_message]
-      optional_fields: [timestamp, tool_name, arguments, content]
-      unavailable_fields: [pid, parent_pid]
-    expected_detection:
-      rule_expectations: []
-      exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
-    tags: [source_conformance, characterization]
-
-  - id: CAND-CODEX-PROJECT-001
-    description: Codex project-session candidate source remains separate from supported coverage
-    input:
-      kind: source_fixture
-      fixture: tests/fixtures/parser_maturity/codex/project_sessions/project-session.jsonl
-      client: codex
-      source_id: codex.project_sessions
-      source_kind: jsonl
-    eventfulness: uneventful
-    disposition: not_applicable
-    expected_security_review: not_scored
-    label_rationale: Candidate source identity verification is not an efficacy scenario and must not count toward supported-source or security-review metrics.
-    expected_visibility:
-      required_record_kinds: [assistant_message]
-      optional_fields: [timestamp, agent, model, provider]
-      unavailable_fields: [pid, parent_pid]
-    expected_detection:
-      rule_expectations: []
-      exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
-    tags: [candidate_source, characterization]
-
-  - id: CAND-OPENCODE-PROJECT-001
-    description: OpenCode project-json candidate source remains separate from supported coverage
-    input:
-      kind: source_fixture
-      fixture: tests/fixtures/parser_maturity/opencode/project/project-message.json
-      client: opencode
-      source_id: opencode.project_json
-      source_kind: legacy_json
-    eventfulness: uneventful
-    disposition: not_applicable
-    expected_security_review: not_scored
-    label_rationale: Candidate source identity verification is not an efficacy scenario and must not count toward supported-source or security-review metrics.
-    expected_visibility:
-      required_record_kinds: [assistant_message]
-      optional_fields: [timestamp, agent, model, provider]
-      unavailable_fields: [pid, parent_pid]
-    expected_detection:
-      rule_expectations: []
-      exact_rule_set: true
-      expected_score: 0
-      expected_contributions: []
-    tags: [candidate_source, characterization]
 
   - id: RX-SECRET-NET-001
     description: Secret environment access followed by network download

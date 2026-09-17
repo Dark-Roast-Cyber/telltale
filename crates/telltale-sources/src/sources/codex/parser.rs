@@ -38,7 +38,6 @@ mod tests {
         ("codex.sessions", SourceKind::Jsonl),
         ("codex.archived_sessions", SourceKind::ArchivedJsonl),
         ("codex.headless_sessions", SourceKind::HeadlessJsonl),
-        ("codex.project_sessions", SourceKind::Jsonl),
     ];
 
     fn source(source_id: &str, kind: SourceKind, fixture: &str) -> Source {
