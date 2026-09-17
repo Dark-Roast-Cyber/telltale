@@ -8,16 +8,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use telltale_rules::{CompiledRuleSet, MatchResult, RuleV1CompatibilityExport};
+use telltale_rules::{CompiledRuleSet, MatchResult};
 use telltale_schema::observation::{CanonicalObservationV2, CapabilityId, CorrelationOrigin};
 use telltale_schema::record::NormalizedRecord;
-use telltale_schema::scoring::RiskContributionType;
+use telltale_schema::scoring::{RiskAccountingError, RiskContributionType};
 
 use crate::detection::{evaluate_session_matches, legacy_evaluation_fields};
 use crate::v2::{
-    DetectorResult, EvaluationStatus, NonEvaluationReason, RuleV1CompatibilityPlan,
-    RuleV1CompileError, compile_rule_v1,
+    NonEvaluationReason, RuleV1CompatibilityPlan, RuleV1CompileError, compile_rule_v1,
+    evaluate_rule_v1_session,
 };
+
+pub use crate::v2::rule_v1::RuleV1DetectorOutcome as SessionDetectorOutcome;
 
 const SESSION_HASH_DOMAIN: &str = "telltale:detection-v2-shadow-session-v1:";
 
@@ -26,6 +28,7 @@ const SESSION_HASH_DOMAIN: &str = "telltale:detection-v2-shadow-session-v1:";
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShadowComparisonError {
     CompatibilityCompilation,
+    CompatibilityEvaluation,
     LegacyEvaluation,
 }
 
@@ -33,6 +36,7 @@ impl ShadowComparisonError {
     pub fn code(self) -> &'static str {
         match self {
             Self::CompatibilityCompilation => "compatibility_compilation",
+            Self::CompatibilityEvaluation => "compatibility_evaluation",
             Self::LegacyEvaluation => "legacy_evaluation",
         }
     }
@@ -52,27 +56,9 @@ impl From<RuleV1CompileError> for ShadowComparisonError {
     }
 }
 
-/// Session-level result after applying the deterministic status precedence.
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionDetectorOutcome {
-    Match,
-    Error,
-    Indeterminate,
-    NoMatch,
-    #[default]
-    NotApplicable,
-}
-
-impl SessionDetectorOutcome {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Match => "match",
-            Self::Error => "error",
-            Self::Indeterminate => "indeterminate",
-            Self::NoMatch => "no_match",
-            Self::NotApplicable => "not_applicable",
-        }
+impl From<RiskAccountingError> for ShadowComparisonError {
+    fn from(_: RiskAccountingError) -> Self {
+        Self::CompatibilityEvaluation
     }
 }
 
@@ -133,92 +119,6 @@ impl MismatchClassification {
             Self::UnexpectedSemanticDifference => "unexpected_semantic_difference",
             Self::DetectorError => "detector_error",
         }
-    }
-}
-
-/// Counts of each per-observation status for one detector/session.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize)]
-pub struct DetectorSessionAggregate {
-    pub outcome: SessionDetectorOutcome,
-    pub matched_observations: u64,
-    pub evaluated_no_match_observations: u64,
-    pub not_evaluated_observations: u64,
-    pub not_applicable_observations: u64,
-    pub detector_error_observations: u64,
-    pub non_evaluation_reason_counts: BTreeMap<String, u64>,
-    pub matched_selector_paths: Vec<String>,
-}
-
-impl DetectorSessionAggregate {
-    pub fn outcome(&self) -> SessionDetectorOutcome {
-        self.outcome
-    }
-
-    pub fn reason_counts(&self) -> &BTreeMap<String, u64> {
-        &self.non_evaluation_reason_counts
-    }
-}
-
-/// Aggregate independent detector results with match > error > indeterminate
-/// > no-match > not-applicable precedence.
-pub fn aggregate_detector_results(results: &[DetectorResult]) -> DetectorSessionAggregate {
-    let mut aggregate = DetectorSessionAggregate::default();
-    for result in results {
-        match result.evaluation_status() {
-            EvaluationStatus::EvaluatedMatch => {
-                aggregate.matched_observations += 1;
-                aggregate.outcome = max_outcome(aggregate.outcome, SessionDetectorOutcome::Match);
-                aggregate
-                    .matched_selector_paths
-                    .extend(result.matched_selector_paths().iter().cloned());
-            }
-            EvaluationStatus::EvaluatedNoMatch => {
-                aggregate.evaluated_no_match_observations += 1;
-                aggregate.outcome = max_outcome(aggregate.outcome, SessionDetectorOutcome::NoMatch);
-            }
-            EvaluationStatus::NotEvaluated => {
-                aggregate.not_evaluated_observations += 1;
-                aggregate.outcome =
-                    max_outcome(aggregate.outcome, SessionDetectorOutcome::Indeterminate);
-                if let Some(reason) = result.non_evaluation_reason() {
-                    *aggregate
-                        .non_evaluation_reason_counts
-                        .entry(reason.as_str().to_owned())
-                        .or_default() += 1;
-                }
-            }
-            EvaluationStatus::NotApplicable => {
-                aggregate.not_applicable_observations += 1;
-            }
-            EvaluationStatus::DetectorError => {
-                aggregate.detector_error_observations += 1;
-                aggregate.outcome = max_outcome(aggregate.outcome, SessionDetectorOutcome::Error);
-            }
-        }
-    }
-    aggregate.matched_selector_paths.sort();
-    aggregate.matched_selector_paths.dedup();
-    aggregate
-}
-
-fn max_outcome(
-    left: SessionDetectorOutcome,
-    right: SessionDetectorOutcome,
-) -> SessionDetectorOutcome {
-    if outcome_rank(right) > outcome_rank(left) {
-        right
-    } else {
-        left
-    }
-}
-
-fn outcome_rank(outcome: SessionDetectorOutcome) -> u8 {
-    match outcome {
-        SessionDetectorOutcome::NotApplicable => 0,
-        SessionDetectorOutcome::NoMatch => 1,
-        SessionDetectorOutcome::Indeterminate => 2,
-        SessionDetectorOutcome::Error => 3,
-        SessionDetectorOutcome::Match => 4,
     }
 }
 
@@ -469,7 +369,6 @@ pub fn compare_sessions(
             records,
             canonical,
             &plan,
-            &export,
             rule_set,
         )?);
     }
@@ -481,14 +380,9 @@ pub fn compare_sessions(
         comparison
             .unaligned_legacy_session_references
             .push(session_reference(session_id));
-        comparison.sessions.push(compare_one_session(
-            None,
-            records,
-            &[],
-            &plan,
-            &export,
-            rule_set,
-        )?);
+        comparison
+            .sessions
+            .push(compare_one_session(None, records, &[], &plan, rule_set)?);
     }
 
     for (session_id, canonical) in &canonical_sessions {
@@ -503,7 +397,6 @@ pub fn compare_sessions(
             &[],
             canonical,
             &plan,
-            &export,
             rule_set,
         )?);
     }
@@ -511,14 +404,9 @@ pub fn compare_sessions(
     if !unscoped.is_empty() {
         comparison.unscoped_observation_count = unscoped.len() as u64;
         comparison.health.session_alignment_gaps += unscoped.len() as u64;
-        comparison.sessions.push(compare_one_session(
-            None,
-            &[],
-            &unscoped,
-            &plan,
-            &export,
-            rule_set,
-        )?);
+        comparison
+            .sessions
+            .push(compare_one_session(None, &[], &unscoped, &plan, rule_set)?);
     }
 
     comparison.unaligned_legacy_session_references.sort();
@@ -575,7 +463,6 @@ fn compare_one_session(
     legacy_records: &[&NormalizedRecord],
     canonical: &[&CanonicalObservationV2],
     plan: &RuleV1CompatibilityPlan,
-    export: &RuleV1CompatibilityExport,
     rule_set: &CompiledRuleSet,
 ) -> Result<SessionComparison, ShadowComparisonError> {
     let session_reference = session_id.map(session_reference);
@@ -592,7 +479,7 @@ fn compare_one_session(
         .map_err(|_| ShadowComparisonError::LegacyEvaluation)?;
     let legacy_atomic_ids = legacy_match
         .as_ref()
-        .map(|result| atomic_ids(result, export))
+        .map(|result| atomic_ids(result, plan))
         .unwrap_or_default();
     let legacy_modifier_ids = legacy_match
         .as_ref()
@@ -607,53 +494,44 @@ fn compare_one_session(
     let legacy_metadata = legacy_metadata(legacy_match.as_ref());
 
     let (family_counts, stage_counts, capability_availability) = canonical_shape(canonical);
-    let mut detectors = Vec::with_capacity(plan.detectors().len());
-    let mut v2_atomic_ids = BTreeSet::new();
-    for detector in plan.detectors() {
-        let results = canonical
-            .iter()
-            .map(|observation| detector.evaluate(observation))
-            .collect::<Vec<_>>();
-        let aggregate = aggregate_detector_results(&results);
-        if aggregate.outcome == SessionDetectorOutcome::Match {
-            v2_atomic_ids.insert(detector.detector().id().to_owned());
-        }
+    let canonical_evaluation = evaluate_rule_v1_session(plan, canonical)?;
+    let mut detectors = Vec::with_capacity(canonical_evaluation.detectors().len());
+    for aggregate in canonical_evaluation.detectors() {
         detectors.push(AtomicComparison {
             session_reference: session_reference.clone(),
-            detector_id: detector.detector().id().to_owned(),
-            legacy_matched: legacy_atomic_ids.contains(detector.detector().id()),
+            detector_id: aggregate.detector_id().to_owned(),
+            legacy_matched: legacy_atomic_ids.contains(aggregate.detector_id()),
             relation: relation(
-                legacy_atomic_ids.contains(detector.detector().id()),
-                aggregate.outcome,
+                legacy_atomic_ids.contains(aggregate.detector_id()),
+                aggregate.outcome(),
             ),
             classification: None,
             reason_code: None,
             legacy_matched_target: legacy_evidence_target(
                 legacy_match.as_ref(),
-                detector.detector().id(),
+                aggregate.detector_id(),
             ),
-            v2_outcome: aggregate.outcome,
-            v2_non_evaluation_reasons: aggregate.non_evaluation_reason_counts,
-            v2_matched_selector_paths: aggregate.matched_selector_paths,
+            v2_outcome: aggregate.outcome(),
+            v2_non_evaluation_reasons: aggregate.non_evaluation_reason_counts().clone(),
+            v2_matched_selector_paths: aggregate.matched_selector_paths().to_vec(),
             canonical_family_counts: family_counts.clone(),
             canonical_stage_counts: stage_counts.clone(),
             capability_availability: capability_availability.clone(),
         });
     }
 
-    let v2_modifier_id_set = triggered_modifier_ids(&v2_atomic_ids, export, plan);
-    let v2_effective_ids = v2_atomic_ids
-        .iter()
-        .cloned()
-        .chain(v2_modifier_id_set.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    let v2_ledger = normalize_contributions(compatibility_ledger(
-        &v2_atomic_ids,
-        &v2_modifier_id_set,
-        export,
-    ));
-    let v2_score = checked_shadow_score(&v2_ledger)?;
-    let v2_metadata = v2_metadata(&v2_atomic_ids, &v2_modifier_id_set, export);
+    let v2_ledger = normalize_contributions(
+        canonical_evaluation
+            .compatibility_contributions()
+            .iter()
+            .map(|contribution| ShadowContribution {
+                id: contribution.id().to_owned(),
+                contribution_type: contribution.contribution_type(),
+                points: contribution.points(),
+            })
+            .collect(),
+    );
+    let v2_metadata = metadata_snapshot(canonical_evaluation.compatibility_metadata());
 
     for detector in &mut detectors {
         if !detector.is_mismatch() {
@@ -666,9 +544,10 @@ fn compare_one_session(
     }
 
     let modifier_ids_legacy = sorted_unique(legacy_modifier_ids.into_iter().collect());
-    let v2_modifier_ids = sorted_unique(v2_modifier_id_set.into_iter().collect());
+    let v2_modifier_ids = canonical_evaluation.triggered_modifier_ids().to_vec();
     let modifier_equivalent = modifier_ids_legacy == v2_modifier_ids;
-    let risk_equivalent = legacy_ledger == v2_ledger && legacy_score == v2_score;
+    let risk_equivalent =
+        legacy_ledger == v2_ledger && legacy_score == canonical_evaluation.compatibility_score();
     let metadata_equivalent = legacy_metadata == v2_metadata;
     Ok(SessionComparison {
         session_reference,
@@ -679,9 +558,9 @@ fn compare_one_session(
         capability_availability,
         detectors,
         v2_compat_modifier_ids: v2_modifier_ids,
-        v2_compat_effective_rule_ids: v2_effective_ids.into_iter().collect(),
+        v2_compat_effective_rule_ids: canonical_evaluation.effective_rule_ids().to_vec(),
         v2_compat_contribution_ledger: v2_ledger,
-        v2_compat_score: v2_score,
+        v2_compat_score: canonical_evaluation.compatibility_score(),
         modifier_ids_legacy,
         legacy_contribution_ledger: legacy_ledger,
         legacy_score,
@@ -691,11 +570,11 @@ fn compare_one_session(
     })
 }
 
-fn atomic_ids(result: &MatchResult, export: &RuleV1CompatibilityExport) -> BTreeSet<String> {
-    let atomic = export
-        .rules()
+fn atomic_ids(result: &MatchResult, plan: &RuleV1CompatibilityPlan) -> BTreeSet<String> {
+    let atomic = plan
+        .detectors()
         .iter()
-        .map(|rule| rule.id.as_str())
+        .map(|detector| detector.detector().id())
         .collect::<BTreeSet<_>>();
     result
         .rule_ids
@@ -706,15 +585,15 @@ fn atomic_ids(result: &MatchResult, export: &RuleV1CompatibilityExport) -> BTree
 }
 
 fn modifier_ids(result: &MatchResult, plan: &RuleV1CompatibilityPlan) -> BTreeSet<String> {
-    let modifiers = plan
-        .modifiers()
+    let atomic = plan
+        .detectors()
         .iter()
-        .map(|modifier| modifier.id())
+        .map(|detector| detector.detector().id())
         .collect::<BTreeSet<_>>();
     result
         .rule_ids
         .iter()
-        .filter(|id| modifiers.contains(id.as_str()))
+        .filter(|id| !atomic.contains(id.as_str()))
         .cloned()
         .collect()
 }
@@ -738,16 +617,6 @@ fn normalize_contributions(mut contributions: Vec<ShadowContribution>) -> Vec<Sh
     contributions
 }
 
-fn checked_shadow_score(
-    contributions: &[ShadowContribution],
-) -> Result<u64, ShadowComparisonError> {
-    contributions.iter().try_fold(0_u64, |total, contribution| {
-        total
-            .checked_add(contribution.points)
-            .ok_or(ShadowComparisonError::LegacyEvaluation)
-    })
-}
-
 fn legacy_metadata(result: Option<&MatchResult>) -> MetadataSnapshot {
     let Some(result) = result else {
         return MetadataSnapshot::default();
@@ -762,115 +631,21 @@ fn legacy_metadata(result: Option<&MatchResult>) -> MetadataSnapshot {
     }
 }
 
-fn v2_metadata(
-    atomic_ids: &BTreeSet<String>,
-    modifier_ids: &BTreeSet<String>,
-    export: &RuleV1CompatibilityExport,
-) -> MetadataSnapshot {
-    let mut snapshot = MetadataSnapshot::default();
-    for rule in export
-        .rules()
-        .iter()
-        .filter(|rule| atomic_ids.contains(&rule.id))
-    {
-        snapshot.categories.push(rule.category.clone());
-        snapshot
-            .detection_classes
-            .push(rule.detection_class.clone());
-        snapshot.signal_types.push(rule.signal_type.clone());
-        snapshot.analytic_intents.push(rule.analytic_intent.clone());
-        snapshot.atlas_tags.extend(rule.atlas_tags.iter().cloned());
-        snapshot.tags.extend(rule.tags.iter().cloned());
+fn metadata_snapshot(metadata: &crate::v2::RuleV1CompatibilityMetadata) -> MetadataSnapshot {
+    MetadataSnapshot {
+        categories: metadata.categories().to_vec(),
+        detection_classes: metadata.detection_classes().to_vec(),
+        signal_types: metadata.signal_types().to_vec(),
+        analytic_intents: metadata.analytic_intents().to_vec(),
+        atlas_tags: metadata.atlas_tags().to_vec(),
+        tags: metadata.tags().to_vec(),
     }
-    for modifier in export
-        .modifiers()
-        .iter()
-        .filter(|modifier| modifier_ids.contains(&modifier.id))
-    {
-        snapshot
-            .detection_classes
-            .push(modifier.detection_class.clone());
-        snapshot.signal_types.push(modifier.signal_type.clone());
-        snapshot
-            .analytic_intents
-            .push(modifier.analytic_intent.clone());
-        snapshot
-            .atlas_tags
-            .extend(modifier.atlas_tags.iter().cloned());
-    }
-    snapshot.categories = sorted_unique(snapshot.categories);
-    snapshot.detection_classes = sorted_unique(snapshot.detection_classes);
-    snapshot.signal_types = sorted_unique(snapshot.signal_types);
-    snapshot.analytic_intents = sorted_unique(snapshot.analytic_intents);
-    snapshot.atlas_tags = sorted_unique(snapshot.atlas_tags);
-    snapshot.tags = sorted_unique(snapshot.tags);
-    snapshot
 }
 
 fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
     values.sort();
     values.dedup();
     values
-}
-
-fn triggered_modifier_ids(
-    atomic_ids: &BTreeSet<String>,
-    export: &RuleV1CompatibilityExport,
-    plan: &RuleV1CompatibilityPlan,
-) -> BTreeSet<String> {
-    let categories = export
-        .rules()
-        .iter()
-        .filter(|rule| atomic_ids.contains(&rule.id))
-        .map(|rule| rule.category.as_str())
-        .collect::<BTreeSet<_>>();
-    plan.modifiers()
-        .iter()
-        .filter(|modifier| {
-            let category_match = modifier
-                .when_all_categories()
-                .iter()
-                .all(|category| categories.contains(category.as_str()));
-            let rule_match = modifier
-                .when_all_rule_ids()
-                .iter()
-                .all(|rule_id| atomic_ids.contains(rule_id));
-            !(modifier.when_all_categories().is_empty() && modifier.when_all_rule_ids().is_empty())
-                && category_match
-                && rule_match
-        })
-        .map(|modifier| modifier.id().to_owned())
-        .collect()
-}
-
-fn compatibility_ledger(
-    atomic_ids: &BTreeSet<String>,
-    modifier_ids: &BTreeSet<String>,
-    export: &RuleV1CompatibilityExport,
-) -> Vec<ShadowContribution> {
-    let mut contributions = export
-        .rules()
-        .iter()
-        .filter(|rule| atomic_ids.contains(&rule.id) && rule.score > 0)
-        .map(|rule| ShadowContribution {
-            id: rule.id.clone(),
-            contribution_type: RiskContributionType::DeterministicRule,
-            points: rule.score,
-        })
-        .chain(
-            export
-                .modifiers()
-                .iter()
-                .filter(|modifier| modifier_ids.contains(&modifier.id) && modifier.score > 0)
-                .map(|modifier| ShadowContribution {
-                    id: modifier.id.clone(),
-                    contribution_type: RiskContributionType::ChainModifier,
-                    points: modifier.score,
-                }),
-        )
-        .collect::<Vec<_>>();
-    contributions.sort();
-    contributions
 }
 
 fn relation(legacy_matched: bool, v2_outcome: SessionDetectorOutcome) -> AtomicRelation {
@@ -1567,70 +1342,6 @@ mod tests {
     }
 
     #[test]
-    fn precedence_and_indeterminate_are_preserved() {
-        let rule = rules(&target_rule(
-            "synthetic.message",
-            "assistant_context",
-            "needle",
-        ));
-        let matching = message("session", MessageRole::Assistant, "needle");
-        let no_match = message("session", MessageRole::Assistant, "other");
-        let result = compare_sessions(&rule, &[], &[no_match, matching]).unwrap();
-        assert_eq!(
-            result.sessions[0].detectors[0].v2_outcome,
-            SessionDetectorOutcome::Match
-        );
-        assert_eq!(
-            result.sessions[0].detectors[0].v2_non_evaluation_reasons,
-            BTreeMap::new()
-        );
-        let aggregate = aggregate_detector_results(&[
-            result_for(EvaluationStatus::EvaluatedNoMatch),
-            result_for(EvaluationStatus::NotEvaluated),
-        ]);
-        assert_eq!(aggregate.outcome, SessionDetectorOutcome::Indeterminate);
-        assert_eq!(aggregate.evaluated_no_match_observations, 1);
-        assert_eq!(aggregate.not_evaluated_observations, 1);
-
-        let aggregate = aggregate_detector_results(&[
-            result_for(EvaluationStatus::NotEvaluated),
-            result_for(EvaluationStatus::DetectorError),
-        ]);
-        assert_eq!(aggregate.outcome, SessionDetectorOutcome::Error);
-    }
-
-    fn result_for(status: EvaluationStatus) -> DetectorResult {
-        let identity = crate::v2::DetectorIdentity::new(
-            crate::v2::DetectorKind::ObservationMatch,
-            "synthetic.result",
-        )
-        .unwrap();
-        let metadata = crate::v2::FindingMetadata::new(
-            crate::v2::FindingKind::SecurityDetection,
-            "synthetic",
-            crate::v2::Severity::Low,
-        )
-        .unwrap();
-        match status {
-            EvaluationStatus::NotEvaluated => {
-                DetectorResult::not_evaluated(identity, NonEvaluationReason::TypeMismatch, metadata)
-                    .unwrap()
-            }
-            EvaluationStatus::DetectorError => DetectorResult::detector_error(
-                identity,
-                metadata,
-                crate::v2::Diagnostic::new(
-                    crate::v2::DiagnosticKind::RuntimeDetectorError,
-                    "synthetic_error",
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-            _ => DetectorResult::new(identity, status, metadata).unwrap(),
-        }
-    }
-
-    #[test]
     fn truthful_alignment_hashes_ids_and_keeps_unscoped_separate_from_unknown() {
         let rule = rules(&target_rule("synthetic.user", "user_context", "needle"));
         let legacy = record("unknown", RecordKind::UserMessage, "needle");
@@ -1699,54 +1410,6 @@ mod tests {
     }
 
     #[test]
-    fn modifiers_are_aggregated_once_and_never_become_detectors() {
-        let yaml = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 7\n    targets: [assistant_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n  - id: synthetic.modifier\n    score: 9\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: alert\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.atomic]\n    explanation: synthetic\n";
-        let rule = rules(yaml);
-        let canonical = vec![
-            message("session", MessageRole::Assistant, "needle"),
-            message("session", MessageRole::Assistant, "needle"),
-        ];
-        let legacy = vec![
-            record("session", RecordKind::AssistantMessage, "needle"),
-            record("session", RecordKind::AssistantMessage, "needle"),
-        ];
-        let result = compare_sessions(&rule, &legacy, &canonical).unwrap();
-        let session = &result.sessions[0];
-        assert_eq!(session.v2_compat_modifier_ids, ["synthetic.modifier"]);
-        assert_eq!(session.modifier_ids_legacy, ["synthetic.modifier"]);
-        assert_eq!(session.v2_compat_score, 16);
-        assert_eq!(session.legacy_score, 16);
-        assert_eq!(session.v2_compat_contribution_ledger.len(), 2);
-        assert_eq!(session.legacy_contribution_ledger.len(), 2);
-        for ledger in [
-            &session.v2_compat_contribution_ledger,
-            &session.legacy_contribution_ledger,
-        ] {
-            assert_eq!(
-                ledger
-                    .iter()
-                    .filter(|entry| entry.id == "synthetic.atomic")
-                    .count(),
-                1
-            );
-            assert_eq!(
-                ledger
-                    .iter()
-                    .filter(|entry| entry.id == "synthetic.modifier")
-                    .count(),
-                1
-            );
-        }
-        assert!(session.risk_equivalent);
-        assert!(
-            session
-                .detectors
-                .iter()
-                .all(|detector| detector.detector_id != "synthetic.modifier")
-        );
-    }
-
-    #[test]
     fn contribution_and_risk_equality_ignore_legacy_evaluation_order() {
         let yaml = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 7\n    targets: [user_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n  - id: chain.synthetic\n    score: 9\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: alert\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.atomic]\n    explanation: synthetic\n";
         let rule = rules(yaml);
@@ -1757,27 +1420,6 @@ mod tests {
         )
         .unwrap();
         let session = &result.sessions[0];
-        assert_eq!(session.legacy_score, 16);
-        assert_eq!(session.v2_compat_score, 16);
-        assert_eq!(
-            session.legacy_contribution_ledger,
-            session.v2_compat_contribution_ledger
-        );
-        assert_eq!(
-            session.legacy_contribution_ledger,
-            [
-                ShadowContribution {
-                    id: "chain.synthetic".to_owned(),
-                    contribution_type: RiskContributionType::ChainModifier,
-                    points: 9,
-                },
-                ShadowContribution {
-                    id: "synthetic.atomic".to_owned(),
-                    contribution_type: RiskContributionType::DeterministicRule,
-                    points: 7,
-                },
-            ]
-        );
         assert!(session.risk_equivalent);
         assert_eq!(result.risk_equivalence.equal, 1);
     }
@@ -1797,54 +1439,6 @@ mod tests {
         assert_eq!(session.v2_compat_modifier_ids, ["chain.a", "chain.z"]);
         assert!(session.modifier_equivalent);
         assert_eq!(result.modifier_equivalence.equal, 1);
-    }
-
-    #[test]
-    fn compatibility_score_overflow_uses_existing_shadow_error() {
-        let contributions = [
-            ShadowContribution {
-                id: "synthetic.first".to_owned(),
-                contribution_type: RiskContributionType::DeterministicRule,
-                points: u64::MAX,
-            },
-            ShadowContribution {
-                id: "synthetic.second".to_owned(),
-                contribution_type: RiskContributionType::DeterministicRule,
-                points: 1,
-            },
-        ];
-        assert_eq!(
-            checked_shadow_score(&contributions),
-            Err(ShadowComparisonError::LegacyEvaluation)
-        );
-    }
-
-    #[test]
-    fn modifier_requires_every_category_condition() {
-        let yaml = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 7\n    targets: [assistant_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n  - id: synthetic.category_modifier\n    score: 9\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: alert\n    atlas_tags: []\n    when_all_categories: [other]\n    explanation: synthetic\n";
-        let rule = rules(yaml);
-        let result = compare_sessions(
-            &rule,
-            &[record("session", RecordKind::AssistantMessage, "needle")],
-            &[message("session", MessageRole::Assistant, "needle")],
-        )
-        .unwrap();
-        assert!(result.sessions[0].v2_compat_modifier_ids.is_empty());
-        assert!(result.sessions[0].modifier_equivalent);
-    }
-
-    #[test]
-    fn modifier_requires_every_rule_id_condition() {
-        let yaml = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 7\n    targets: [assistant_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n  - id: synthetic.rule_modifier\n    score: 9\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: alert\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.missing]\n    explanation: synthetic\n";
-        let rule = rules(yaml);
-        let result = compare_sessions(
-            &rule,
-            &[record("session", RecordKind::AssistantMessage, "needle")],
-            &[message("session", MessageRole::Assistant, "needle")],
-        )
-        .unwrap();
-        assert!(result.sessions[0].v2_compat_modifier_ids.is_empty());
-        assert!(result.sessions[0].modifier_equivalent);
     }
 
     #[test]

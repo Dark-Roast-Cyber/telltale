@@ -6,11 +6,12 @@ foundation. It implements only the `observation_match` detector, the
 `DetectorResult` -> `Signal`
 -> atomic `Finding` boundary, the final 56-selector registry (48 native plus
 exactly eight Rule v1 compatibility views), their capability/provenance/matcher/
-identity contracts, and the read-only Rule v1 export/compatibility compiler.
+identity contracts, and the read-only Rule v1 export/compatibility compiler and
+source-free session evaluator.
 `compat.v1.url` remains compiler-supported but truthfully absent pending P13
-visibility-gap measurement. There is no shadow or activation path, source or
-scanner wiring, advanced detector runtime, Event4, gateway, or Detection Content
-v2 runtime loader; Event 3.0 remains unchanged.
+visibility-gap measurement. There is no live shadow or activation path, source
+or scanner wiring, advanced detector runtime, Event4, gateway, or Detection
+Content v2 runtime loader; Event 3.0 remains unchanged.
 ## Requirements
 ### Requirement: Detector result materialization
 
@@ -179,7 +180,24 @@ integer round-trips exactly to a finite `f64`; otherwise it is
 view containing compiled target/regex pairs, exact IDs, effective metadata,
 policy identity, and modifier plans. The v2 compiler MUST consume that view,
 map supported classes/severity/scores/ATLAS losslessly, reject operational
-health without a truthful mapping, and not create modifier detectors.
+health without a truthful mapping, and not create modifier detectors. The
+compiled plan MUST retain the effective compatibility view needed to evaluate
+one caller-defined canonical session without a separately synchronized export.
+The shared evaluator MUST aggregate each detector over the supplied observations
+using match, error, indeterminate, evaluated no-match, then not-applicable
+precedence while retaining status/reason counts and sorted matched selector
+paths. It MUST determine matched atomic IDs, trigger modifiers from all declared
+category and rule-ID conditions, and reconstruct deterministic compatibility
+metadata. Empty-condition modifiers MUST NOT fire.
+
+Rule v1 compatibility contributions and their checked score MUST use
+`RiskContribution`, `DeterministicRule`, `ChainModifier`,
+`canonicalize_contributions`, and `checked_risk_sum`. A matched rule or triggered
+modifier MUST contribute at most once per session and zero-score entries MUST
+remain matched/triggered without creating a contribution. This compatibility
+sum MUST NOT be treated as native Detection v2 aggregate risk. Modifiers MUST
+remain Rule v1 compatibility session constructs and MUST NOT become
+DetectorResults, Signals, Findings, or native v2 detector kinds.
 
 #### Scenario: Effective rules compile as atomic detectors
 
@@ -202,6 +220,14 @@ health without a truthful mapping, and not create modifier detectors.
   visibility and resolves truthfully absent without manufacturing URL, path, or
   network facts; P13 measures the resulting visibility gap
 
+#### Scenario: Caller-defined session uses one compatibility plan
+
+- **WHEN** a caller supplies a compiled Rule v1 compatibility plan and an empty
+  or non-empty slice of already grouped Canonical Observation v2 values
+- **THEN** the shared evaluator performs no source access or session inference
+  and returns the bounded detector aggregates, effective Rule v1 IDs,
+  compatibility contributions and checked score, and compatibility metadata
+
 ### Requirement: Production and privacy boundary
 
 The foundation MUST be free of source I/O and source-crate dependencies, MUST
@@ -218,7 +244,8 @@ Event 3 behavior unchanged. Diagnostics and identities MUST contain no raw
 
 - **WHEN** the Detection v2 module is built without source-I/O features
 - **THEN** it compiles and evaluates only caller-provided typed observations,
-  with no scanner, adapter, Event, policy, or action path
+  with no scanner, adapter, Event, policy, or action path; normal production
+  paths do not invoke the Rule v1 compatibility session evaluator
 
 #### Scenario: Identity is value-independent
 

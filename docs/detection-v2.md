@@ -3,7 +3,8 @@
 > **Status:** **Experimental foundation and fixture-only shadow harness
 > implemented (non-production).** The `telltale_detect::v2` module implements
 > only the `observation_match` detector, `DetectorResult` -> `Signal` -> atomic
-> `Finding`, and the Rule v1 compiler. It is not the current engine. An offline,
+> `Finding`, and the Rule v1 compatibility compiler and session evaluator. It is
+> not the current engine. An offline,
 > deterministic, immutable-fixture harness measures the current native
 > Canonical Observation v2 reference identities (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
@@ -28,8 +29,13 @@ offline measurement harness.
 
 ## Offline shadow/equivalence boundary
 
-The offline harness reports three separate compatibility questions: atomic rule-set
-equivalence, modifier compatibility, and contribution/score compatibility. It
+The Rule v1 compatibility compiler retains one effective export with its compiled
+observation-match detectors. Its shared, source-free session evaluator aggregates
+caller-grouped canonical observations, applies Rule v1 modifiers once, and
+reconstructs Rule v1 compatibility contributions, score, and metadata. The
+offline shadow harness consumes that evaluator and reports three separate
+compatibility questions: atomic rule-set equivalence, modifier compatibility,
+and contribution/score compatibility. It
 does not combine those questions into a parity claim. The current reviewed
 reference corpus has exactly five reviewed match-set differences: one
 `execution.shell` legacy-only command-content broadening and four
@@ -325,9 +331,15 @@ The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
 The compiler copies effective Rule v1 IDs, metadata, scores, and compiled
 target/regex matchers into non-production observation-match detector
 definitions with `rule_version: 1`; IDs are not renamed. Modifiers remain
-non-executing compatibility plans. This compiler does not implement Rule v1
-allowlist or suppression behavior, existing scoring/evaluation equivalence, or
-Event3 projection/equivalence. Native v2 selectors are observation-scoped,
+Rule v1 compatibility session constructs: the shared non-production evaluator
+triggers them from matched atomic Rule v1 IDs and categories, but they never
+become DetectorResults, Signals, Findings, or native v2 correlation detectors.
+The evaluator uses the existing validated contribution primitives to construct
+Rule v1 compatibility contributions and a checked compatibility score. That sum
+is not native Detection v2 aggregate risk; Detection v2 still has no accepted
+general session aggregate-risk model. The compiler and evaluator do not
+implement Rule v1 allowlist or suppression behavior or Event3
+projection/equivalence. Native v2 selectors are observation-scoped,
 preserve absence, and do not treat parsed paths or URLs as observed side
 effects. `url` remains compiler-supported as `compat.v1.url`, but it resolves
 truthfully absent; focused synthetic compatibility coverage demonstrates the
@@ -347,8 +359,9 @@ See the [Detection Content v2 draft schema](../schemas/detection-content-v2-draf
 
 > **Event 3.0: FROZEN / CURRENT COMPATIBILITY CONTRACT**
 
-The foundation is not currently wired into production or running in the
-scanner. Event3 remains supported and unchanged:
+The foundation, including the Rule v1 compatibility session evaluator, is not
+currently wired into production or running in scan/watch. Event3 remains
+supported and unchanged:
 its Rule v1 IDs, deterministic scoring, thresholds, parser ownership, privacy,
 and persisted/replayed bytes remain current. Event4 is independently versioned
 and does not replace Event3 until explicit migration gates pass. Future semantics

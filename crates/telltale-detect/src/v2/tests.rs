@@ -1211,11 +1211,226 @@ fn rule_v1_export_is_effective_and_modifiers_are_not_detectors() {
     }));
     let plan = compile_rule_v1(&export).expect("v1 compatibility plan");
     assert_eq!(plan.detectors().len(), export.rules().len());
-    assert_eq!(plan.modifiers().len(), export.modifiers().len());
     assert!(plan.detectors().iter().all(|detector| {
         detector.detector().kind() == DetectorKind::ObservationMatch
             && detector.detector().rule_version() == Some(1)
     }));
+}
+
+fn rule_v1_session_plan() -> RuleV1CompatibilityPlan {
+    let document = r#"
+version: 1
+description: synthetic session compatibility
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: synthetic.alpha
+    category: alpha
+    detection_class: security_detection
+    signal_type: atomic
+    analytic_intent: alert
+    severity: low
+    score: 7
+    targets: [assistant_context]
+    regex: alpha
+    tags: [tag:alpha]
+    atlas_tags: [atlas:AML.T0001]
+    explanation: alpha rationale
+  - id: synthetic.beta
+    category: beta
+    detection_class: threat_hunting
+    signal_type: atomic
+    analytic_intent: hunt
+    severity: medium
+    score: 0
+    targets: [assistant_context]
+    regex: beta
+    tags: [tag:beta]
+    atlas_tags: [atlas:AML.T0002]
+    explanation: beta rationale
+modifiers:
+  - id: chain.categories
+    score: 9
+    detection_class: policy_violation
+    signal_type: chain
+    analytic_intent: audit
+    atlas_tags: [atlas:AML.T0003]
+    when_all_categories: [alpha, beta]
+    explanation: category rationale
+  - id: chain.rules
+    score: 0
+    detection_class: compliance_observation
+    signal_type: chain
+    analytic_intent: audit
+    atlas_tags: [atlas:AML.T0004]
+    when_all_rule_ids: [synthetic.alpha, synthetic.beta]
+    explanation: rule rationale
+  - id: chain.combined
+    score: 11
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: audit
+    atlas_tags: [atlas:AML.T0005]
+    when_all_categories: [alpha, beta]
+    when_all_rule_ids: [synthetic.alpha, synthetic.beta]
+    explanation: combined rationale
+  - id: chain.empty
+    score: 13
+    detection_class: security_detection
+    signal_type: chain
+    analytic_intent: audit
+    atlas_tags: []
+    explanation: empty rationale
+"#;
+    let export = telltale_rules::load_rule_set_from_documents(&[document], None)
+        .expect("session rules")
+        .compatibility_export();
+    compile_rule_v1(&export).expect("session plan")
+}
+
+#[test]
+fn rule_v1_session_evaluator_owns_modifier_risk_and_metadata_semantics() {
+    let plan = rule_v1_session_plan();
+    let observations = [
+        message(
+            MessageRole::Assistant,
+            "alpha raw-canonical-evidence",
+            "alpha-one",
+        ),
+        message(MessageRole::Assistant, "alpha beta", "alpha-two"),
+    ];
+    let observation_refs = observations.iter().collect::<Vec<_>>();
+    let evaluation = evaluate_rule_v1_session(&plan, &observation_refs).expect("evaluation");
+
+    assert_eq!(
+        evaluation.matched_atomic_rule_ids(),
+        ["synthetic.alpha", "synthetic.beta"]
+    );
+    assert_eq!(
+        evaluation.triggered_modifier_ids(),
+        ["chain.categories", "chain.combined", "chain.rules"]
+    );
+    assert_eq!(
+        evaluation.effective_rule_ids(),
+        [
+            "chain.categories",
+            "chain.combined",
+            "chain.rules",
+            "synthetic.alpha",
+            "synthetic.beta",
+        ]
+    );
+    let alpha = evaluation
+        .detectors()
+        .iter()
+        .find(|detector| detector.detector_id() == "synthetic.alpha")
+        .expect("alpha detector");
+    assert_eq!(alpha.outcome(), RuleV1DetectorOutcome::Match);
+    assert_eq!(alpha.evaluated_match_count(), 2);
+    assert_eq!(
+        alpha.matched_selector_paths(),
+        ["compat.v1.assistant_context"]
+    );
+    assert_eq!(
+        evaluation
+            .compatibility_contributions()
+            .iter()
+            .map(|contribution| (
+                contribution.id(),
+                contribution.contribution_type(),
+                contribution.points(),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "synthetic.alpha",
+                telltale_schema::scoring::RiskContributionType::DeterministicRule,
+                7,
+            ),
+            (
+                "chain.categories",
+                telltale_schema::scoring::RiskContributionType::ChainModifier,
+                9,
+            ),
+            (
+                "chain.combined",
+                telltale_schema::scoring::RiskContributionType::ChainModifier,
+                11,
+            ),
+        ]
+    );
+    assert_eq!(evaluation.compatibility_score(), 27);
+
+    let metadata = evaluation.compatibility_metadata();
+    assert_eq!(metadata.categories(), ["alpha", "beta"]);
+    assert_eq!(
+        metadata.detection_classes(),
+        [
+            "compliance_observation",
+            "policy_violation",
+            "security_detection",
+            "threat_hunting",
+        ]
+    );
+    assert_eq!(metadata.signal_types(), ["atomic", "chain"]);
+    assert_eq!(metadata.analytic_intents(), ["alert", "audit", "hunt"]);
+    assert_eq!(
+        metadata.atlas_tags(),
+        [
+            "atlas:AML.T0001",
+            "atlas:AML.T0002",
+            "atlas:AML.T0003",
+            "atlas:AML.T0004",
+            "atlas:AML.T0005",
+        ]
+    );
+    assert_eq!(metadata.tags(), ["tag:alpha", "tag:beta"]);
+    assert!(!format!("{evaluation:?}").contains("raw-canonical-evidence"));
+}
+
+#[test]
+fn rule_v1_session_modifier_conditions_and_empty_session_are_bounded() {
+    let plan = rule_v1_session_plan();
+    let alpha = message(MessageRole::Assistant, "alpha", "alpha-only");
+    let alpha_only = evaluate_rule_v1_session(&plan, &[&alpha]).expect("alpha evaluation");
+    assert_eq!(alpha_only.matched_atomic_rule_ids(), ["synthetic.alpha"]);
+    assert!(alpha_only.triggered_modifier_ids().is_empty());
+    assert_eq!(alpha_only.compatibility_score(), 7);
+
+    let empty = evaluate_rule_v1_session(&plan, &[]).expect("empty evaluation");
+    assert!(empty.matched_atomic_rule_ids().is_empty());
+    assert!(empty.triggered_modifier_ids().is_empty());
+    assert!(empty.effective_rule_ids().is_empty());
+    assert!(empty.compatibility_contributions().is_empty());
+    assert_eq!(empty.compatibility_score(), 0);
+    assert_eq!(
+        empty.compatibility_metadata(),
+        &RuleV1CompatibilityMetadata::default()
+    );
+    assert!(
+        empty
+            .detectors()
+            .iter()
+            .all(|detector| detector.outcome() == RuleV1DetectorOutcome::NotApplicable)
+    );
+}
+
+#[test]
+fn rule_v1_session_compatibility_score_overflow_fails_closed() {
+    let document = format!(
+        "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [assistant_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n  - id: chain.overflow\n    score: {}\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: audit\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.atomic]\n    explanation: synthetic\n",
+        u64::MAX
+    );
+    let export = telltale_rules::load_rule_set_from_documents(&[&document], None)
+        .expect("overflow rules")
+        .compatibility_export();
+    let plan = compile_rule_v1(&export).expect("overflow plan");
+    let observation = message(MessageRole::Assistant, "needle", "overflow");
+    assert!(matches!(
+        evaluate_rule_v1_session(&plan, &[&observation]),
+        Err(telltale_schema::scoring::RiskAccountingError::Overflow)
+    ));
 }
 
 #[test]

@@ -7,7 +7,7 @@
 
 mod matcher;
 mod observation_match;
-mod rule_v1;
+pub(crate) mod rule_v1;
 mod selector;
 mod types;
 
@@ -20,9 +20,10 @@ pub use observation_match::{
     CompiledObservationMatchDetector, MAX_REQUIRED_CAPABILITIES, MatchSurface,
     ObservationMatchContent, ObservationMatchSpec,
 };
-pub use rule_v1::{
-    RuleV1CompatibilityPlan, RuleV1CompileError, RuleV1ModifierPlan, compile_rule_v1,
-};
+#[cfg(test)]
+pub(crate) use rule_v1::RuleV1DetectorOutcome;
+pub(crate) use rule_v1::{RuleV1CompatibilityMetadata, evaluate_rule_v1_session};
+pub use rule_v1::{RuleV1CompatibilityPlan, RuleV1CompileError, compile_rule_v1};
 pub use selector::{
     SelectorBacking, SelectorId, SelectorPresence, SelectorRegistry, SelectorResolution,
 };

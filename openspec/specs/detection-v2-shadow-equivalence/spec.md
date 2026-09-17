@@ -72,9 +72,11 @@ SHA-256 fingerprints rather than raw IDs.
 ### Requirement: Observation and session outcome semantics
 
 Every applicable detector MUST evaluate each canonical observation independently.
-Session aggregation MUST use the precedence match, detector error, indeterminate,
-evaluated no-match, then not-applicable. Aggregates MUST retain counts for each
-status and bounded sorted non-evaluation reason counts. An indeterminate result
+The shared Rule v1 compatibility session evaluator, not the shadow comparator,
+MUST own session aggregation using the precedence match, detector error,
+indeterminate, evaluated no-match, then not-applicable. Aggregates MUST retain
+counts for each status and bounded sorted non-evaluation reason counts. The
+shadow comparator MUST consume those aggregates, and an indeterminate result
 MUST NOT be counted as both-no-match.
 
 #### Scenario: Non-evaluation dominates evaluated no-match
@@ -94,15 +96,16 @@ MUST NOT be counted as both-no-match.
 ### Requirement: Atomic equivalence and compatibility aggregation
 
 The primary comparison unit MUST be the effective atomic Rule v1 ID. Contribution
-and risk comparison MUST remain shadow-only legacy compatibility accounting: each
-matched Rule v1 rule contributes exactly once per session, and each triggered
-modifier contributes exactly once per modifier/session. Contribution ledgers MUST
-be compared as exact multisets of contribution ID, type, and points, with scores
-computed using checked addition. Equal scores alone MUST NOT establish rule
-equivalence. This accounting MUST NOT invent or change native Detection v2
-aggregate risk, Signal, or Finding semantics. Modifiers MUST remain
-measurement-only plans and MUST NOT become Detection v2 detector results, Signals,
-or Findings. The comparator MUST distinguish
+and risk comparison MUST remain Rule v1 compatibility accounting. The shared
+canonical evaluator MUST construct the canonical contribution ledger and checked
+compatibility score; each matched Rule v1 rule contributes exactly once per
+session, and each triggered modifier contributes exactly once per
+modifier/session. The shadow comparator MUST compare that result with the legacy
+ledger as exact multisets of contribution ID, type, and points. Equal scores
+alone MUST NOT establish rule equivalence. This accounting MUST NOT invent or
+change native Detection v2 aggregate risk, Signal, or Finding semantics.
+Modifiers MUST remain Rule v1 compatibility session constructs and MUST NOT
+become Detection v2 detector results, Signals, or Findings. The comparator MUST distinguish
 `both_match`, evaluated `both_no_match`, `legacy_only`, `v2_only`,
 `v2_indeterminate`, and `v2_error`, with not-applicable retained separately.
 
@@ -124,16 +127,19 @@ or Findings. The comparator MUST distinguish
 
 - **WHEN** a matched Rule v1 rule and a triggered modifier are present in one
   aligned session
-- **THEN** the shadow ledger contains one contribution for each applicable rule
-  or modifier, compares their ID/type/points entries with multiplicity, and does
-  not alter native Detection v2 aggregate risk or Finding semantics.
+- **THEN** the shared evaluator's compatibility ledger contains one contribution
+  for each applicable rule or modifier, the shadow comparator compares their
+  ID/type/points entries with multiplicity, and neither alters native Detection
+  v2 aggregate risk or Finding semantics.
 
 ### Requirement: Reconstructable compatibility metadata
 
-Where reconstructable from the effective Rule v1 export, the comparator MUST
-compare categories, detection classes, signal types, analytic intents, ATLAS
-tags, and tags as compatibility metadata. It MUST NOT add legacy-only native-v2
-fields, and MUST NOT require evidence order or evidence values for equivalence.
+Where reconstructable from the effective Rule v1 export, the shared canonical
+evaluator MUST construct categories, detection classes, signal types, analytic
+intents, ATLAS tags, and tags as compatibility metadata, and the comparator MUST
+compare that metadata with the legacy result. Neither boundary MUST add
+legacy-only native-v2 fields or require evidence order or evidence values for
+equivalence.
 
 #### Scenario: Metadata comparison does not widen native v2
 
