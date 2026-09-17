@@ -14,95 +14,80 @@ The authoritative architecture philosophy lives in
 and an accepted architecture document differ in technical detail, the architecture
 document governs.
 
-## Current Focus: 0.6.x Stabilization and Architecture Convergence
+## Current Focus: 0.6.x Architecture Convergence
 
-Telltale 0.6.0 established the trust, privacy, durable-delivery, release, and
-controlled-adoption foundations needed for the next phase of development.
+The earlier dependency-maintenance and repository-cleanup phases are no longer
+active roadmap sections. Completed implementation history belongs in Git history
+and `CHANGELOG.md`; the remaining 0.6.x objective is to converge the accepted
+semantic architecture into one production path before 0.7.0.
 
-The 0.6.x development series is the period for maintenance, cleanup, and
-foundational convergence before the project begins treating 0.7.0 as a long-lived
-near-production baseline.
+The migration should reduce parallel machinery as it progresses. New compatibility
+layers are acceptable only when they have a specific migration purpose and a
+clear deletion gate.
 
-### 0.6.1: dependency and maintenance stabilization
+### 0.7 target agent set
 
-The immediate priority is a deliberate dependency-maintenance sprint centered on
-the pending Rust dependency updates represented by PR #35.
+The required session/store adapter families for the 0.7 baseline are:
 
-This is not treated as a blind generated dependency bump. The update crosses
-major dependency boundaries and must leave the supported workspace, package
-verification, security checks, and platform CI green as one coherent dependency
-graph.
+- **Claude Code**: `claude.projects`
+- **Codex**: `codex.sessions`, `codex.archived_sessions`, and
+  `codex.headless_sessions`
+- **OpenCode**: `opencode.sqlite`
+- **OpenClaw**: `openclaw.agents`
+- **Qwen**: `qwen.projects`
+- **GitHub Copilot**: `copilot.process_log`
 
-Priorities include:
+Claude and Codex desktop-app-specific acquisition may be deferred when it requires
+separate source contracts. The core Claude Code and Codex session sources above
+are the 0.7 convergence requirement. `codex.project_sessions` remains a candidate
+unless a deliberate supported contract is accepted.
 
-1. **Align dependency versions across the workspace** - avoid split native-library
-   dependency lines and other graph inconsistencies between the CLI and internal
-   crates.
-2. **Handle breaking dependency API changes deliberately** - update Telltale code
-   only where required by the accepted dependency versions rather than carrying
-   compatibility shims without a defined purpose.
-3. **Regenerate and review the lockfile as one release input** - dependency
-   movement should be explainable and reproducible.
-4. **Re-run the full release-quality validation surface** - Clippy, tests,
-   security/supply-chain checks, package verification, console checks, and
-   supported platform CI must validate the resulting graph.
-5. **Keep scope narrow** - do not mix the dependency migration with the broader
-   code-volume and architecture cleanup planned for 0.6.2.
+The following currently implemented source identities are **not required for the
+0.7 baseline** and should not receive new Canonical Observation v2 migration work:
 
-### 0.6.2: consolidation and cleanup
+- `gemini.tmp`
+- `opencode.legacy_json`
+- `roocode.tasks`
+- `kilocode.tasks`
 
-After dependency stabilization, make the repository smaller, clearer, and easier
-for humans and coding agents to work in before more architecture is migrated.
+`opencode.project_json` is also not required for 0.7. These paths may continue to
+exist temporarily while current behavior is removed or reclassified, but they
+must not block Canonical Observation v2 or Detection v2 production activation.
+Current public support documents remain authoritative for what the released code
+actually supports until the corresponding removal work lands.
 
-Priorities include:
+### Remaining 0.6.x migration sequence
 
-1. **Clean planning and documentation ownership** - keep roadmap, architecture,
-   durable requirements, accepted work, active plans, raw ideas, and shipped
-   history in distinct authoritative locations rather than duplicating the same
-   state across several files.
-2. **Reduce implementation and test volume** - remove obsolete code, stale
-   migration scaffolding, redundant tests, outdated comments, and unnecessary
-   abstractions where behavior can be preserved.
-3. **Split oversized modules along existing responsibilities** - improve review
-   and agent-editing boundaries without introducing architecture solely for file
-   organization.
-4. **Reconcile documentation with reality** - clearly distinguish current
-   behavior, accepted future architecture, compatibility surfaces, and work that
-   has not yet been implemented.
-5. **Prepare clean migration boundaries** - make the subsequent Canonical
-   Observation v2, Detection v2, and event/telemetry cutovers easier to perform
-   without maintaining unnecessary parallel paths.
+The intended convergence order is:
 
-The cleanup phase should avoid product expansion for its own sake. Its value is a
-smaller and more legible base for the remaining 0.6.x work.
-
-### Remaining 0.6.x: move the accepted architecture into production
-
-After stabilization and cleanup, the main objective is to stop treating the newer
-architecture as a parallel or experimental path and make it the normal
-implementation.
-
-The major themes are:
-
-- **Canonical Observation v2 becomes the native internal evidence model.**
-  Supported source adapters should emit canonical observations directly rather
-  than relying on a legacy flattened record as the architectural center.
-- **Detection v2 becomes the production detection path.** Shadow/equivalence
-  machinery is useful during migration, but it is transition tooling, not the
-  intended steady state.
-- **The newer event and telemetry/output model replaces transitional output
-  paths.** Event and transport boundaries should converge on the accepted
-  semantic architecture rather than accumulating another compatibility layer.
-- **Supported source adapters converge on the current model.** Legacy and
-  candidate source paths should either be migrated, explicitly retained for a
-  defined compatibility reason, or removed.
-- **Detection content and evaluation move with the architecture.** Rules,
-  fixtures, evaluation, and analyst-facing evidence should validate the native
-  data and detection paths rather than preserving old paths merely because they
-  existed first.
-- **Migration scaffolding is deleted as replacements become authoritative.** The
-  goal is not to finish the new architecture while keeping every predecessor in
-  production indefinitely.
+1. **Contract the production support denominator.** Make the target agent set
+   explicit in code, tests, support documentation, and migration gates. Retire or
+   reclassify non-target sources instead of porting them to the new semantic
+   architecture.
+2. **Make Detection v2 capable of replacing Rule v1 execution.** Keep Rule v1 as
+   a supported content format, but move its compiled evaluation, modifier,
+   contribution, and scoring behavior onto the Detection v2 runtime rather than
+   maintaining two authoritative detector engines.
+3. **Move shipped process-chain behavior onto the Detection v2 result path.**
+   Preserve its matching, suppression, correlation, and risk behavior without
+   manufacturing directly observed Process facts from parsed command text.
+4. **Promote Canonical Observation v2 to the production acquisition contract for
+   the target source set.** Source-native adapters should emit canonical
+   observations directly, along with only the checkpoint metadata required by
+   scan/watch operation. Do not route production through a permanent
+   CanonicalObservationV2-to-NormalizedRecord or NormalizedRecord-to-v2 bridge.
+5. **Cut scan, watch, and the supported embedding facade over together.** The
+   normal production path should become Canonical Observation v2 -> Detection v2,
+   while Event 3.0 remains a deliberate compatibility projection during the
+   migration.
+6. **Delete transitional machinery after activation.** Remove the legacy
+   NormalizedRecord-centered detector path, duplicate scoring/grouping logic,
+   shadow/equivalence infrastructure, migration-only fixtures and reports, and
+   stale documentation once their replacements are authoritative.
+7. **Decide the final 0.7 event/telemetry cutover after semantic convergence.**
+   Event4 remains an independent projection from accepted semantic truth. Do not
+   expand Event4 persistence, dual emission, or transport merely to compensate
+   for an unfinished internal migration.
 
 The accepted semantic direction is documented in:
 
@@ -119,18 +104,22 @@ Those documents define architecture. They are not task trackers.
 0.7.0 is the first milestone intended to be close to a production-ready,
 long-lived architectural baseline.
 
-The release should represent convergence rather than another transition point.
 Before final 0.7.0, the normal production tree should satisfy these principles:
 
-- one authoritative canonical observation path;
-- one authoritative production detection path;
-- one current event/telemetry architecture;
-- no normal production feature described as beta, shadow, fixture-only,
-  experimental, or a planned replacement for another normal production path;
-- no legacy implementation retained without an explicit compatibility purpose;
+- one authoritative Canonical Observation v2 production path for the target
+  source set;
+- one authoritative Detection v2 production path;
+- Rule v1 retained as content compatibility rather than a second detector engine;
+- shipped process-chain behavior converged on the same detector result model;
+- Event 3.0 retained only as a deliberate external compatibility contract while
+  the current telemetry contract is finalized;
+- no normal production feature described as shadow, fixture-only, experimental,
+  or a planned replacement for another normal production path;
+- no legacy implementation retained without an explicit continuing compatibility
+  purpose;
 - supported sources have truthful capability and validation status;
-- major oversized modules and generated/repetitive test surfaces have been
-  reduced or decomposed where that materially improves maintainability;
+- migration-only shadow/equivalence machinery removed after its activation gate
+  has been satisfied;
 - public documentation and OpenSpec requirements describe the product that
   actually ships;
 - privacy, durability, release, installation, and platform guarantees continue to
@@ -155,6 +144,9 @@ Likely later areas include:
 
 - direct harness integrations and lower-latency observation;
 - inference-gateway observation and policy boundaries;
+- Claude and Codex desktop-app-specific acquisition when separate source work is
+  justified;
+- runtime observation such as OpenShell integration;
 - policy, decisions, approvals, and capability-driven enforcement;
 - additional rule-package and managed-content mechanisms;
 - richer correlation and investigation workflows;

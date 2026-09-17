@@ -24,34 +24,80 @@ foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
 v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
 [telemetry/output architecture](telemetry-output-architecture.md) pages. They
 are accepted architecture, with experimental Detection v2 and Event4 contract
-foundations now implemented non-production. Event4 production projection,
-privacy, persistence, and output are not implemented; neither is
-Telemetry/Output v2.
+foundations now implemented non-production. Event4 production persistence and
+output are not implemented; neither is Telemetry/Output v2.
+
 Only `observation_match`, `DetectorResult` -> `Signal` -> atomic `Finding`, and
 the Rule v1 compiler are implemented for Detection v2. The fixture-only offline
 shadow harness is an offline measurement seam, not a scanner or activation path;
-advanced detector runtime and Detection Content v2 loader are not implemented.
-Canonical Observation v2 core types/scaffolding are implemented in `telltale-schema`; the Claude Code
-(`claude.projects`) and Codex v2 reference projections are implemented, and the
-OpenCode (`opencode.sqlite`) v2 reference projection is implemented as
-non-production. OpenClaw (`openclaw.agents`) and Qwen (`qwen.projects`) v2
-reference adapters are also implemented as non-production projections. Copilot
-(`copilot.process_log`) is implemented as a non-production reference adapter.
-Offline deterministic shadow coverage includes Copilot across 15 cases, 17
-reviewed sessions, and 306 detector evaluations, with five reviewed match-set
-differences plus 28 reviewed capability-driven indeterminate outcomes and zero
-unexplained differences. Copilot native-v2 capabilities are ToolCall
-**Supported**, UserContext **Unsupported**, and ToolExecution **Unknown**.
-`opencode.legacy_json`
-remains supported and its v2 migration
-has not started; `opencode.project_json` remains Candidate and its v2 migration
-has not started. Production adapter migration/cutover has not started.
-Event 3.0 remains the frozen current compatibility contract. The pipeline below
-continues to describe the shipped implementation.
+advanced detector runtime and a Detection Content v2 loader are not implemented.
+
+Canonical Observation v2 core types/scaffolding are implemented in
+`telltale-schema`. Non-production reference projections exist for Claude Code
+(`claude.projects`), the principal Codex session identities, OpenCode
+(`opencode.sqlite`), OpenClaw (`openclaw.agents`), Qwen (`qwen.projects`), and
+Copilot (`copilot.process_log`). Offline deterministic shadow coverage includes
+Copilot across 15 cases, 17 reviewed sessions, and 306 detector evaluations,
+with five reviewed match-set differences plus 28 reviewed capability-driven
+indeterminate outcomes and zero unexplained differences. Copilot native-v2
+capabilities are ToolCall **Supported**, UserContext **Unsupported**, and
+ToolExecution **Unknown**.
+
+Production adapter migration/cutover has not started. Event 3.0 remains the
+frozen current compatibility contract. The pipeline below continues to describe
+the shipped implementation until the coordinated production cutover occurs.
+
+## 0.7 convergence boundary
+
+The 0.7 production migration is intentionally scoped to the source families that
+matter for the long-lived baseline:
+
+| Agent family | Required 0.7 source identity |
+| --- | --- |
+| Claude Code | `claude.projects` |
+| Codex | `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions` |
+| OpenCode | `opencode.sqlite` |
+| OpenClaw | `openclaw.agents` |
+| Qwen | `qwen.projects` |
+| GitHub Copilot | `copilot.process_log` |
+
+Claude and Codex desktop-app-specific acquisition may be deferred when it needs a
+separate source contract. `codex.project_sessions` remains a candidate unless a
+deliberate supported contract is accepted.
+
+`gemini.tmp`, `opencode.legacy_json`, `roocode.tasks`, `kilocode.tasks`, and the
+`opencode.project_json` candidate are outside the required 0.7 convergence set.
+They should not receive new Canonical Observation v2 migration work merely to
+preserve the historical support denominator. Current support documentation still
+describes shipped behavior until explicit removal or reclassification lands.
+
+The production migration order is:
+
+1. contract the supported production denominator to the target set;
+2. move Rule v1 compiled evaluation, modifiers, contributions, and scoring onto
+   the Detection v2 runtime while retaining Rule v1 as a content format;
+3. move shipped process-chain matching and correlation onto the Detection v2
+   result path without converting parsed command text into directly observed
+   Process evidence;
+4. make target source adapters produce Canonical Observation v2 directly, plus
+   only the acquisition/checkpoint metadata required by scan/watch operation;
+5. cut scan, watch, and the supported embedding facade over to Canonical
+   Observation v2 -> Detection v2 as one coordinated production boundary;
+6. delete the legacy NormalizedRecord-centered detector path, duplicate
+   scoring/grouping code, shadow/equivalence migration machinery, and stale
+   migration-only tests and documentation;
+7. decide the remaining Event4 and telemetry activation gates after the internal
+   semantic/detection path is singular.
+
+Production must not converge by creating a permanent
+`CanonicalObservationV2 -> NormalizedRecord` bridge or a permanent
+`NormalizedRecord -> CanonicalObservationV2` bridge. Event3 and Event4 are
+projections from accepted internal semantics, not conversion stages between the
+old and new internal models.
 
 ## Pipeline
 
-Telltale runs a repeatable batch pipeline:
+Telltale currently runs a repeatable batch pipeline:
 
 1. **Discover**: enumerate known session stores for enabled clients.
 2. **Ingest**: read new or changed files/databases using offsets, mtimes, or content fingerprints.
@@ -66,10 +112,10 @@ Telltale runs a repeatable batch pipeline:
    payload for Splunk HEC or Elastic-compatible export.
 
 The current scanner still uses `NormalizedRecordV1`; production remains on this
-path and Canonical Observation v2 cutover has not started. The Claude Code,
-Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference projections are
-implemented but are not wired into production normalization, detection, CLI, or
-scan execution. The experimental Detection v2 foundation and fixture-only
+path and Canonical Observation v2 cutover has not started. The target Claude
+Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference projections
+are implemented but are not wired into production normalization, detection, CLI,
+or scan execution. The experimental Detection v2 foundation and fixture-only
 offline harness are likewise not wired into the scanner; production detection
 remains the existing Rule v1 path. Its `compat.v1.url` view remains truthfully
 absent without URL/path/network manufacturing; focused synthetic harness
@@ -80,21 +126,29 @@ coverage demonstrates the compatibility gap.
 - `discovery`: knows where each agent stores sessions.
 - `parser`: client-specific transcript/database parsing. See
   [Adding an Agent Source](adding-agent-source.md) for the current checklist and
-  [Source Adapter Refactor Plan](source-adapter-refactor-plan.md) for the
-  recommended adapter-module refactor path.
-- `normalizer`: creates common records with stable field names.
-- `rules`: loads and evaluates regex rules.
-- `scoring`: combines matches, context, and thresholds.
+  exact parser-registration architecture.
+- `normalizer`: creates common records with stable field names in the current
+  production path; Canonical Observation v2 replaces this architectural center
+  at the production cutover.
+- `rules`: loads and validates detection content; Rule v1 remains a content
+  compatibility format during Detection v2 convergence.
+- `scoring`: combines matches, context, and thresholds in the current production
+  path; duplicate legacy scoring ownership is removed after Detection v2 cutover.
 - `event`: redaction, schema-shaped event builders, evidence hashes, and local JSONL serialization.
 - `sink`: vendor-neutral event delivery boundary. Sink-specific envelopes belong here, while the canonical event payload stays unchanged.
 - `state`: scan checkpoints and duplicate suppression.
 
 ## Normalized Record Types
 
+The current production compatibility model includes:
+
 - `conversation.message`: user, assistant, system, developer, or tool-result content.
 - `tool.call`: tool name plus normalized arguments and raw evidence hash.
 - `tool.result`: exit status, stdout/stderr summary, file metadata, or error.
 - `detection.event`: rule matches, deterministic score, timeline anchors, and response metadata.
+
+These are current-path concepts, not the intended 0.7 semantic center. Canonical
+Observation v2 is the accepted internal evidence model for the converged path.
 
 ## Analyst Review Context
 
