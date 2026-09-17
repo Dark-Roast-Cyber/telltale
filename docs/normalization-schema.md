@@ -14,7 +14,7 @@ implemented as non-production. Copilot (`copilot.process_log`) v2 reference
 projection is also implemented as non-production. Its native-v2 capabilities
 are ToolCall **Supported**, UserContext **Unsupported**, and ToolExecution
 **Unknown**. The offline shadow covers 15 cases, 17 reviewed sessions, and 306
-detector evaluations; its five reviewed match-set differences and 28 reviewed
+detector evaluations; its one reviewed match-set difference and 28 reviewed
 capability-driven indeterminate outcomes have zero unexplained differences.
 `NormalizedRecordV1` plus its loss-aware compatibility path remain current in
 production.

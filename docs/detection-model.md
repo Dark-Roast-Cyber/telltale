@@ -149,6 +149,24 @@ rules:
     explanation: User-defined rule for suspicious agent behavior.
 ```
 
+The `detection` form may declare one optional exclusion regex per selected
+target:
+
+```yaml
+detection:
+  selection:
+    assistant_context: 'bypass\s+approval'
+  exclude:
+    assistant_context: '^quoted example:\s+bypass\s+approval$'
+  condition: selection
+```
+
+The target matches when its selection regex matches and its exclusion regex does
+not. Exclusions are target-local, must name a target in `selection`, and are not
+available on the simple `targets` + `regex` form. Rule defaults apply
+case-insensitive compilation to both expressions. Rule v1 remains the supported
+production content format; there is no separate filter engine.
+
 Policy YAML can select active rule categories and rule ids without editing the rule files:
 
 ```yaml

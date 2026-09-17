@@ -329,11 +329,8 @@ pub fn evaluate_session_matches(
     rule_set.evaluate(&fields)
 }
 
-/// Builds the exact legacy field view used by session evaluation. This shared
-/// crate-private view is used by both production evaluation and the
-/// experimental shadow comparator, which can identify legacy post-match
-/// filtering without reimplementing legacy flattening.
-pub(crate) fn legacy_evaluation_fields(parsed: &[NormalizedRecord]) -> Vec<(&str, &str)> {
+/// Builds the exact legacy field view used by session evaluation.
+fn legacy_evaluation_fields(parsed: &[NormalizedRecord]) -> Vec<(&str, &str)> {
     parsed
         .iter()
         .flat_map(|record| {

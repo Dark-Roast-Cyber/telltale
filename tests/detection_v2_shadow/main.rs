@@ -237,7 +237,6 @@ fn load_expectations(root: &Path) -> ExpectationDocument {
             "compat_v1_url_unavailable"
                 | "legacy_tool_content_file_path_broadening"
                 | "legacy_tool_content_command_broadening"
-                | "legacy_post_match_filter"
                 | "canonical_capability_unknown"
                 | "canonical_capability_unsupported"
                 | "canonical_provenance_ineligible"
@@ -263,7 +262,6 @@ fn load_expectations(root: &Path) -> ExpectationDocument {
             "visibility_gap"
                 | "legacy_flattening_difference"
                 | "v2_semantic_expansion"
-                | "legacy_post_filter_difference"
                 | "modifier_difference"
                 | "risk_difference"
                 | "metadata_difference"
@@ -617,9 +615,9 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
         report.atomic_equivalence,
         AtomicEquivalenceCounts {
             both_match: 15,
-            both_no_match: 247,
+            both_no_match: 251,
             legacy_only: 1,
-            v2_only: 4,
+            v2_only: 0,
             v2_indeterminate: 28,
             v2_error: 0,
             v2_not_applicable: 11,
@@ -628,19 +626,19 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
     assert_eq!(
         report.risk_equivalence,
         EquivalenceCounts {
-            equal: 11,
+            equal: 15,
             legacy_only: 2,
             v2_only: 0,
-            different: 4,
+            different: 0,
         }
     );
     assert_eq!(
         report.metadata_equivalence,
         EquivalenceCounts {
-            equal: 11,
+            equal: 15,
             legacy_only: 2,
             v2_only: 0,
-            different: 4,
+            different: 0,
         }
     );
     assert_eq!(report.health.total_detector_session_evaluations, 306);
@@ -650,8 +648,8 @@ fn detection_v2_shadow_matches_reviewed_fixture_ledger() {
     assert_eq!(report.health.canonical_projection_errors, 0);
     assert!(!report.target_breakdown.is_empty());
     assert!(!report.rule_breakdown.is_empty());
-    assert_eq!(report.reviewed_exceptions.len(), 33);
-    assert_eq!(report.mismatches.len(), 33);
+    assert_eq!(report.reviewed_exceptions.len(), 29);
+    assert_eq!(report.mismatches.len(), 29);
     assert!(report.source_breakdown.contains_key("claude.projects"));
     assert!(report.source_breakdown.contains_key("openclaw.agents"));
     assert!(report.source_breakdown.contains_key("qwen.projects"));

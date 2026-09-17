@@ -486,11 +486,22 @@ fn compile_rule(
                 families.push(family);
             }
         }
-        clauses.push(MatcherSpec::predicate(
+        let positive = MatcherSpec::predicate(
             selector,
             MatcherOperator::Regex,
             Some(JsonValue::string(&matcher.regex)),
-        ));
+        );
+        clauses.push(match &matcher.exclusion_regex {
+            Some(exclusion_regex) => MatcherSpec::all(vec![
+                positive,
+                MatcherSpec::not(MatcherSpec::predicate(
+                    compat_selector(&matcher.target)?,
+                    MatcherOperator::Regex,
+                    Some(JsonValue::string(exclusion_regex)),
+                )),
+            ]),
+            None => positive,
+        });
     }
     let matcher = MatcherSpec::any(clauses);
     let identity = DetectorIdentity::new(DetectorKind::ObservationMatch, &rule.id)

@@ -20,7 +20,7 @@
 > (`qwen.projects`), and Copilot (`copilot.process_log`) reference adapters are
 > also implemented as non-production projections. Offline deterministic shadow
 > coverage includes Copilot across 15 cases, 17 reviewed sessions, and 306
-> detector evaluations; the corpus has five reviewed match-set differences plus
+> detector evaluations; the corpus has one reviewed match-set difference plus
 > 28 reviewed capability-driven indeterminate outcomes, with zero unexplained
 > differences.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext

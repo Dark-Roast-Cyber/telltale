@@ -38,7 +38,7 @@ Canonical Observation v2 core types/scaffolding are implemented in
 (`opencode.sqlite`), OpenClaw (`openclaw.agents`), Qwen (`qwen.projects`), and
 Copilot (`copilot.process_log`). Offline deterministic shadow coverage includes
 Copilot across 15 cases, 17 reviewed sessions, and 306 detector evaluations,
-with five reviewed match-set differences plus 28 reviewed capability-driven
+with one reviewed match-set difference plus 28 reviewed capability-driven
 indeterminate outcomes and zero unexplained differences. Copilot native-v2
 capabilities are ToolCall **Supported**, UserContext **Unsupported**, and
 ToolExecution **Unknown**.

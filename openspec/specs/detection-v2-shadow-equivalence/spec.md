@@ -4,7 +4,7 @@
 This specification defines a deterministic, fixture-only comparison of current
 Rule v1 session evaluation with the non-production Canonical Observation v2
 compatibility path. The reviewed 17-session corpus covers 15 cases and 306
-detector evaluations. It records five reviewed match-set differences plus 28
+detector evaluations. It records one reviewed match-set difference plus 28
 reviewed capability-driven indeterminate outcomes, with zero unexplained
 differences. It does not activate Detection v2 or change Event 3.0.
 ## Requirements

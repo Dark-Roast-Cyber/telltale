@@ -17,7 +17,7 @@ Every rule in `config/rules/tool-call-regex.yaml` must include:
 | `severity` | One of `informational`, `low`, `medium`, `high`, `critical`. | `high` |
 | `score` | Numeric risk contribution (0–100 per rule). Matching contributions accumulate into the emitted, uncapped `risk_score`. | `60` |
 | `targets` | Fields the regex evaluates. Must be valid Telltale targets. | `[assistant_context, arguments, tool_result]` |
-| `regex` or `detection` | The matching pattern. `targets` + `regex` for simple signatures; `detection.selection` with `condition: selection` for Sigma-inspired rules. | See examples in detection-model.md |
+| `regex` or `detection` | The matching pattern. `targets` + `regex` for simple signatures; `detection.selection` with `condition: selection` for target-specific patterns. | See examples in detection-model.md |
 | `tags` | One or more descriptive tags for filtering, searching, and documentation. | `[mcp, prompt-injection, tool-poisoning]` |
 | `explanation` | One sentence describing what the rule detects and why it matters. | "MCP tool metadata appears to contain prompt-injection instructions." |
 | `falsepositives` | Known benign scenarios that can produce the same signal. | `["Authorized release workflows may publish packages."]` |
@@ -28,7 +28,7 @@ Optional fields:
 | --- | --- |
 | `title` | Human-readable name. Defaults to `id` if absent. |
 | `enabled` | Defaults to `true`. Set `false` to disable without removing. |
-| `case_insensitive` | Defaults to the top-level `defaults.case_insensitive` value. |
+| `detection.exclude` | At most one exclusion regex per selected target. The key must also exist in `detection.selection`; exclusions are not valid with `targets` + `regex`. |
 
 ### Rule Purpose Metadata
 

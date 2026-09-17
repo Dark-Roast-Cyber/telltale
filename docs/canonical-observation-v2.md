@@ -8,8 +8,8 @@
 > (`qwen.projects`), and Copilot (`copilot.process_log`) v2 reference
 > projections are implemented as non-production projections. The offline
 > shadow/equivalence harness includes Copilot across 15 cases, 17 reviewed
-> sessions, and 306 detector evaluations. It reports five reviewed match-set
-> differences plus 28 reviewed capability-driven indeterminate outcomes, with
+> sessions, and 306 detector evaluations. It reports one reviewed match-set
+> difference plus 28 reviewed capability-driven indeterminate outcomes, with
 > zero unexplained differences. These
 > projections are not production detector input: production remains on
 > `NormalizedRecordV1` and Rule v1, with no live shadow or production parity.

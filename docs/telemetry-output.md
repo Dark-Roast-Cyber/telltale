@@ -131,18 +131,31 @@ from provenance assembly.
 The manifest has three distinct SHA-256 identities. Rule and suppression
 fingerprints identify their own effective content; the full
 `producer_manifest_id` hashes the canonical manifest payload without that ID.
-All are rendered as `sha256:` plus 64 lowercase hexadecimal characters. Rule
-identity is derived from compiled output semantics, so policy names, source YAML
-formatting, line endings, paths, and descriptive rule title/description or
-rule/modifier false-positive guidance do not affect it. Rule and modifier order
-remain identity-bearing because evaluation emits ordered rule IDs and evidence.
+All are rendered as `sha256:` plus 64 lowercase hexadecimal characters.
+
+Three independent version labels apply to Rule v1 provenance:
+
+- the producer manifest schema remains `ProducerProvenanceManifestV1`, version 1;
+- `rules.canonicalization` is currently
+  `rule-v1-compiled-compatibility-v2`;
+- the rule fingerprint preimage uses domain
+  `telltale:producer-rule-v1-fingerprint:v2`.
+
+The current Rule v1 identity is derived from compiled output semantics,
+including target exclusions. Policy names, source YAML formatting, line
+endings, paths, and descriptive rule title/description or rule/modifier
+false-positive guidance do not affect it. Rule and modifier order remain
+identity-bearing because evaluation emits ordered rule IDs and evidence.
 Suppression provenance declares
 canonicalization `suppression-v1-effective-v1`; suppression criteria are
 included only in the domain-separated digest preimage. The manifest exposes
 state, count, and fingerprint, never suppression names or criteria.
 
-The fixed digest domains are `telltale:producer-rule-v1-fingerprint:v1`,
-`telltale:producer-suppression-v1-fingerprint:v1`, and
+Historical well-formed manifest-schema-v1 documents using rule canonicalization
+`rule-v1-compiled-compatibility-v1` remain accepted; newly produced manifests
+use the current canonicalization and fingerprint domain above. The other fixed
+digest domains are
+`telltale:producer-suppression-v1-fingerprint:v1` and
 `telltale:producer-provenance-manifest-v1-id:v1`, each followed by a NUL
 separator before its canonical JSON payload.
 

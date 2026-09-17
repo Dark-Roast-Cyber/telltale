@@ -14,7 +14,8 @@ use crate::event::{
 
 pub const PRODUCER_PROVENANCE_SCHEMA: &str = "producer_provenance_manifest";
 pub const PRODUCER_PROVENANCE_VERSION: u32 = 1;
-pub const RULE_V1_CANONICALIZATION: &str = "rule-v1-compiled-compatibility-v1";
+pub const RULE_V1_CANONICALIZATION_V1: &str = "rule-v1-compiled-compatibility-v1";
+pub const RULE_V1_CANONICALIZATION: &str = "rule-v1-compiled-compatibility-v2";
 pub const SUPPRESSION_V1_CANONICALIZATION: &str = "suppression-v1-effective-v1";
 
 const MANIFEST_ID_DOMAIN: &[u8] = b"telltale:producer-provenance-manifest-v1-id:v1\0";
@@ -225,8 +226,10 @@ impl ProducerProvenanceManifestV1 {
         {
             return Err(ProducerProvenanceError::InvalidEvent3Identity);
         }
-        if self.rules.canonicalization != RULE_V1_CANONICALIZATION
-            || !valid_hash(&self.rules.fingerprint)
+        if !matches!(
+            self.rules.canonicalization.as_str(),
+            RULE_V1_CANONICALIZATION_V1 | RULE_V1_CANONICALIZATION
+        ) || !valid_hash(&self.rules.fingerprint)
         {
             return Err(ProducerProvenanceError::InvalidHash);
         }
@@ -424,6 +427,28 @@ mod tests {
         assert_eq!(
             ProducerProvenanceManifestV1::from_json_bytes(&first),
             Ok(manifest)
+        );
+    }
+
+    #[test]
+    fn historical_v1_rule_canonicalization_remains_valid() {
+        let current = manifest();
+        let historical = ProducerProvenanceManifestV1::new(
+            current.telltale_version,
+            ProducerRuleProvenance {
+                canonicalization: RULE_V1_CANONICALIZATION_V1.to_string(),
+                ..current.rules
+            },
+            current.risk_thresholds,
+            current.operational_alert_thresholds,
+            current.suppression,
+            current.features,
+        )
+        .expect("historical manifest");
+        let bytes = historical.to_json_bytes().expect("historical JSON");
+        assert_eq!(
+            ProducerProvenanceManifestV1::from_json_bytes(&bytes),
+            Ok(historical)
         );
     }
 

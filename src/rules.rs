@@ -365,6 +365,9 @@ fn apply_rule_defaults(rule: &mut RuleDefinition, defaults: &RuleDefaults) {
             for regex in detection.selection.values_mut() {
                 *regex = format!("(?i:{regex})");
             }
+            for regex in detection.exclude.values_mut() {
+                *regex = format!("(?i:{regex})");
+            }
         }
     }
 }
@@ -556,6 +559,50 @@ modifiers: []
                 "pack.deployment",
                 "pack.local"
             ]
+        );
+    }
+
+    #[test]
+    fn cli_resolution_applies_case_defaults_to_exclusions() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("rules.yaml");
+        fs::write(
+            &path,
+            r#"version: 1
+description: exclusion defaults
+defaults: {case_insensitive: true, enabled: true}
+rules:
+  - id: test.exclusion
+    category: test
+    severity: low
+    score: 1
+    detection:
+      selection: {command: needle}
+      exclude: {command: quoted}
+      condition: selection
+    tags: [test]
+    explanation: Synthetic test rule.
+modifiers: []
+"#,
+        )
+        .expect("write rules");
+        let resolution =
+            resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                &RulePackPaths::default(),
+                &[path],
+                None,
+                RuleLoadMode::CustomOnly,
+                &[],
+                &[],
+            )
+            .expect("resolve rules");
+
+        assert!(
+            resolution
+                .rule_set
+                .evaluate(&[("command", "NEEDLE in a QUOTED example")])
+                .expect("evaluate")
+                .is_none()
         );
     }
 

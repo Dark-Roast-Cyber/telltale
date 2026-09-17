@@ -37,10 +37,9 @@ offline shadow harness consumes that evaluator and reports three separate
 compatibility questions: atomic rule-set equivalence, modifier compatibility,
 and contribution/score compatibility. It
 does not combine those questions into a parity claim. The current reviewed
-reference corpus has exactly five reviewed match-set differences: one
-`execution.shell` legacy-only command-content broadening and four
-`secret.env.read` v2-only legacy post-match-filter cases; all five are
-explained. Separately, 28 reviewed capability-driven indeterminate outcomes are
+reference corpus has exactly one reviewed match-set difference:
+`execution.shell` legacy-only command-content broadening. Separately, 28
+reviewed capability-driven indeterminate outcomes are
 reported as visibility evidence, not additional mismatches. The complete corpus
 has zero unexplained differences. Focused synthetic compatibility coverage proves
 `compat.v1.url` is compiler-supported but
@@ -329,8 +328,10 @@ Rule v1 -> compatibility compiler/adapter -> Detection v2 IR -> DetectorResult
 The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
 `command`, `file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
 The compiler copies effective Rule v1 IDs, metadata, scores, and compiled
-target/regex matchers into non-production observation-match detector
-definitions with `rule_version: 1`; IDs are not renamed. Modifiers remain
+target/regex matchers with optional target-local exclusion regexes into
+non-production observation-match detector definitions with `rule_version: 1`;
+IDs are not renamed. An excluded matcher lowers to existing `all` and `not`
+matcher composition; Detection v2 has no rule-specific filter runtime. Modifiers remain
 Rule v1 compatibility session constructs: the shared non-production evaluator
 triggers them from matched atomic Rule v1 IDs and categories, but they never
 become DetectorResults, Signals, Findings, or native v2 correlation detectors.

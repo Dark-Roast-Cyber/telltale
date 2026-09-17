@@ -85,7 +85,7 @@ validation. Fixture-backed-only clients remain preview/experimental for live use
 Non-production Canonical Observation v2 reference adapters are implemented for
 `openclaw.agents`, `qwen.projects`, and Copilot `copilot.process_log`. Offline
 deterministic shadow coverage includes Copilot across 15 cases, 17 reviewed
-sessions, and 306 detector evaluations: five reviewed match-set differences plus
+sessions, and 306 detector evaluations: one reviewed match-set difference plus
 28 reviewed capability-driven indeterminate outcomes, with zero unexplained
 differences. Copilot native-v2 capabilities are ToolCall **Supported**,
 UserContext **Unsupported**, and ToolExecution **Unknown**. Production remains on

@@ -13,7 +13,7 @@ use telltale_schema::observation::{CanonicalObservationV2, CapabilityId, Correla
 use telltale_schema::record::NormalizedRecord;
 use telltale_schema::scoring::{RiskAccountingError, RiskContributionType};
 
-use crate::detection::{evaluate_session_matches, legacy_evaluation_fields};
+use crate::detection::evaluate_session_matches;
 use crate::v2::{
     NonEvaluationReason, RuleV1CompatibilityPlan, RuleV1CompileError, compile_rule_v1,
     evaluate_rule_v1_session,
@@ -96,7 +96,6 @@ pub enum MismatchClassification {
     VisibilityGap,
     LegacyFlatteningDifference,
     V2SemanticExpansion,
-    LegacyPostFilterDifference,
     ModifierDifference,
     RiskDifference,
     MetadataDifference,
@@ -111,7 +110,6 @@ impl MismatchClassification {
             Self::VisibilityGap => "visibility_gap",
             Self::LegacyFlatteningDifference => "legacy_flattening_difference",
             Self::V2SemanticExpansion => "v2_semantic_expansion",
-            Self::LegacyPostFilterDifference => "legacy_post_filter_difference",
             Self::ModifierDifference => "modifier_difference",
             Self::RiskDifference => "risk_difference",
             Self::MetadataDifference => "metadata_difference",
@@ -470,11 +468,6 @@ fn compare_one_session(
         .iter()
         .map(|record| (*record).clone())
         .collect::<Vec<_>>();
-    let fields = legacy_evaluation_fields(&owned_legacy_records);
-    let legacy_filtered = rule_set
-        .legacy_filtered_rule_ids(&fields)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
     let legacy_match = evaluate_session_matches(rule_set, &owned_legacy_records)
         .map_err(|_| ShadowComparisonError::LegacyEvaluation)?;
     let legacy_atomic_ids = legacy_match
@@ -538,7 +531,7 @@ fn compare_one_session(
             continue;
         }
         let (classification, reason_code) =
-            classify_difference(detector, &legacy_filtered, canonical, legacy_records);
+            classify_difference(detector, canonical, legacy_records);
         detector.classification = classification;
         detector.reason_code = reason_code;
     }
@@ -662,7 +655,6 @@ fn relation(legacy_matched: bool, v2_outcome: SessionDetectorOutcome) -> AtomicR
 
 fn classify_difference(
     comparison: &AtomicComparison,
-    legacy_filtered: &BTreeSet<String>,
     canonical: &[&CanonicalObservationV2],
     legacy_records: &[&NormalizedRecord],
 ) -> (Option<MismatchClassification>, Option<String>) {
@@ -711,14 +703,6 @@ fn classify_difference(
         return (
             Some(MismatchClassification::SessionAlignmentGap),
             Some("session_identity_unavailable".to_owned()),
-        );
-    }
-    if comparison.relation == AtomicRelation::V2Only
-        && legacy_filtered.contains(&comparison.detector_id)
-    {
-        return (
-            Some(MismatchClassification::LegacyPostFilterDifference),
-            Some("legacy_post_match_filter".to_owned()),
         );
     }
     if comparison.relation == AtomicRelation::LegacyOnly {
@@ -1442,12 +1426,10 @@ mod tests {
     }
 
     #[test]
-    fn post_match_filter_is_reported_for_approval_context() {
-        let rule = rules(&target_rule(
-            "approval.bypass.context",
-            "assistant_context",
-            "bypass approval",
-        ));
+    fn target_exclusion_is_equivalent_across_paths() {
+        let rule = rules(
+            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: true\n  enabled: true\nrules:\n  - id: synthetic.exclusion\n    category: synthetic\n    severity: low\n    score: 7\n    detection:\n      selection:\n        assistant_context: bypass approval\n      exclude:\n        assistant_context: quoted example\n      condition: selection\n    tags: []\n    explanation: synthetic\nmodifiers: []\n",
+        );
         let text = "Documentation quoted example: bypass approval should not be treated as an instruction.";
         let result = compare_sessions(
             &rule,
@@ -1456,41 +1438,10 @@ mod tests {
         )
         .unwrap();
         let detector = &result.sessions[0].detectors[0];
-        assert_eq!(detector.relation, AtomicRelation::V2Only);
-        assert_eq!(
-            detector.classification,
-            Some(MismatchClassification::LegacyPostFilterDifference)
-        );
-        assert_eq!(
-            detector.reason_code.as_deref(),
-            Some("legacy_post_match_filter")
-        );
-    }
-
-    #[test]
-    fn post_match_filter_is_reported_for_negated_secret_context() {
-        let rule = rules(&target_rule(
-            "secret.env.read",
-            "assistant_context",
-            "\\.env",
-        ));
-        let text = "Assistant instruction: do not read .env during this synthetic test.";
-        let result = compare_sessions(
-            &rule,
-            &[record("session", RecordKind::AssistantMessage, text)],
-            &[message("session", MessageRole::Assistant, text)],
-        )
-        .unwrap();
-        let detector = &result.sessions[0].detectors[0];
-        assert_eq!(detector.relation, AtomicRelation::V2Only);
-        assert_eq!(
-            detector.classification,
-            Some(MismatchClassification::LegacyPostFilterDifference)
-        );
-        assert_eq!(
-            detector.reason_code.as_deref(),
-            Some("legacy_post_match_filter")
-        );
+        assert_eq!(detector.relation, AtomicRelation::BothNoMatch);
+        assert_eq!(detector.v2_outcome, SessionDetectorOutcome::NoMatch);
+        assert!(detector.classification.is_none());
+        assert!(detector.reason_code.is_none());
     }
 
     #[test]

@@ -2443,6 +2443,93 @@ overrides:
     );
 }
 
+#[test]
+fn rule_v1_target_exclusion_compiles_into_observation_matcher() {
+    let document = r#"
+version: 1
+description: synthetic exclusion
+defaults:
+  case_insensitive: true
+  enabled: true
+rules:
+  - id: synthetic.exclusion
+    category: synthetic
+    severity: low
+    score: 10
+    detection:
+      selection:
+        assistant_context: needle
+        arguments: needle
+      exclude:
+        assistant_context: quoted example
+      condition: selection
+    tags: [synthetic]
+    explanation: synthetic
+modifiers: []
+"#;
+    let export = telltale_rules::load_rule_set_from_documents(&[document], None)
+        .expect("custom rules")
+        .compatibility_export();
+    let matcher = export.rules()[0]
+        .matchers
+        .iter()
+        .find(|matcher| matcher.target == "assistant_context")
+        .expect("assistant matcher");
+    assert_eq!(
+        matcher.exclusion_regex.as_deref(),
+        Some("(?i:quoted example)")
+    );
+
+    let plan = compile_rule_v1(&export).expect("compatibility plan");
+    let excluded = plan.detectors()[0].evaluate(&message(
+        MessageRole::Assistant,
+        "needle in a quoted example",
+        "synthetic-excluded",
+    ));
+    assert_eq!(
+        excluded.evaluation_status(),
+        EvaluationStatus::EvaluatedNoMatch
+    );
+
+    let retained = plan.detectors()[0].evaluate(&message(
+        MessageRole::Assistant,
+        "needle retained",
+        "synthetic-retained",
+    ));
+    assert_eq!(
+        retained.evaluation_status(),
+        EvaluationStatus::EvaluatedMatch
+    );
+
+    let legacy = telltale_rules::load_rule_set_from_documents(&[document], None)
+        .expect("legacy rules")
+        .evaluate(&[
+            ("assistant_context", "needle in a quoted example"),
+            ("arguments", "needle retained"),
+        ])
+        .expect("legacy evaluation")
+        .expect("later eligible legacy match");
+    assert_eq!(legacy.rule_ids, ["synthetic.exclusion"]);
+
+    let excluded_observation = message(
+        MessageRole::Assistant,
+        "needle in a quoted example",
+        "synthetic-excluded-first",
+    );
+    let retained_observation = message(
+        MessageRole::Assistant,
+        "needle retained",
+        "synthetic-retained-later",
+    );
+    let compatibility =
+        evaluate_rule_v1_session(&plan, &[&excluded_observation, &retained_observation])
+            .expect("compatibility evaluation");
+    assert_eq!(
+        compatibility.matched_atomic_rule_ids(),
+        ["synthetic.exclusion"]
+    );
+}
+
 fn observation_without_capability(observation: &CanonicalObservationV2) -> CanonicalObservationV2 {
     // Rebuild the small synthetic tool through the public builder so the test
     // does not depend on internal observation storage or serialization.

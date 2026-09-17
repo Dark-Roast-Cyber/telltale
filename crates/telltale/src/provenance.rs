@@ -133,8 +133,31 @@ mod tests {
             assemble_producer_provenance_manifest(&rules, &ProducerProvenanceOptions::default())
                 .expect("manifest");
         assert_eq!(manifest.rules.rule_count, rules.rule_count() as u64);
+        assert_eq!(
+            manifest.rules.canonicalization,
+            telltale_schema::provenance::RULE_V1_CANONICALIZATION
+        );
         assert_eq!(manifest.suppression.state, ProducerSuppressionState::None);
         assert!(manifest.to_json_bytes().is_ok());
+    }
+
+    #[test]
+    fn effective_exclusion_changes_rules_and_manifest_identity() {
+        let document = |exclusion: &str| {
+            format!(
+                "version: 1\ndescription: synthetic\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: low\n    score: 20\n    detection:\n      selection:\n        command: synthetic-command\n      exclude:\n        command: {exclusion}\n      condition: selection\n    tags: [synthetic]\n    explanation: synthetic explanation\nmodifiers: []\n"
+            )
+        };
+        let first = load_rule_set_from_documents(&[&document("benign-a")], None).expect("first");
+        let second = load_rule_set_from_documents(&[&document("benign-b")], None).expect("second");
+        let options = ProducerProvenanceOptions::default();
+        let first =
+            assemble_producer_provenance_manifest(&first, &options).expect("first manifest");
+        let second =
+            assemble_producer_provenance_manifest(&second, &options).expect("second manifest");
+
+        assert_ne!(first.rules.fingerprint, second.rules.fingerprint);
+        assert_ne!(first.producer_manifest_id, second.producer_manifest_id);
     }
 
     #[test]

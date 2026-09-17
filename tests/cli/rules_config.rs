@@ -2293,7 +2293,7 @@ modifiers: []
 }
 
 #[test]
-fn scan_post_match_skip_emits_valid_retained_event3() {
+fn scan_target_exclusion_emits_valid_retained_event3() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");
     let sessions = root.join("codex/sessions");
@@ -2318,12 +2318,16 @@ rules:
     regex: 'synthetic marker'
     tags: [synthetic]
     explanation: Synthetic retained match
-  - id: secret.env.read
+  - id: test.excluded
     category: execution
     severity: high
     score: 80
-    targets: [assistant_context]
-    regex: '\.env'
+    detection:
+      selection:
+        assistant_context: '\.env'
+      exclude:
+        assistant_context: policy
+      condition: selection
     tags: [synthetic, skipped-only]
     explanation: Synthetic skipped match
 modifiers: []

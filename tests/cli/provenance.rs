@@ -19,6 +19,10 @@ fn config_provenance_is_deterministic_and_validates_as_public_manifest() {
             .expect("public manifest");
     assert_eq!(manifest.rules.rule_count, 18);
     assert_eq!(
+        manifest.rules.canonicalization,
+        "rule-v1-compiled-compatibility-v2"
+    );
+    assert_eq!(
         manifest.suppression.state,
         telltale_schema::provenance::ProducerSuppressionState::None
     );

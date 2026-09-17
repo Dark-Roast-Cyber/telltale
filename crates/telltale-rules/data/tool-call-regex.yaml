@@ -10,8 +10,17 @@ rules:
       - atlas:AML.T0055
     severity: medium
     score: 35
-    targets: [command, arguments, file_path, assistant_context, tool_result]
-    regex: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+    detection:
+      selection:
+        command: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+        arguments: '(^|[\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|cat\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|grep\s+.*(\.env|\.bash_secrets|\.zsh_secrets)'
+        file_path: '(^|[\/\\])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))'
+        assistant_context: '(?s:((read_file|readfile|view_file).*([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:])).*(read_file|readfile|view_file)))'
+        tool_result: '(?s:((read_file|readfile|view_file).*([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:]))|([\/\\\s])(\.env(\.|$|[\/\\]|\s|[,;:])|\.bash_secrets(\.|$|[\/\\]|\s|[,;:])|\.zsh_secrets(\.|$|[\/\\]|\s|[,;:])).*(read_file|readfile|view_file)))'
+      exclude:
+        assistant_context: '(?s:((do not|don''t|should not|must not|never|refuse to)\s+(use\s+(read_file|readfile|view_file)\s+to\s+)?read\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|(read_file|readfile|view_file).*(\.env|\.bash_secrets|\.zsh_secrets).*(forbidden|disallowed|prohibited)( behavior)?))'
+        tool_result: '(?s:((do not|don''t|should not|must not|never|refuse to)\s+(use\s+(read_file|readfile|view_file)\s+to\s+)?read\s+.*(\.env|\.bash_secrets|\.zsh_secrets)|(read_file|readfile|view_file).*(\.env|\.bash_secrets|\.zsh_secrets).*(forbidden|disallowed|prohibited)( behavior)?))'
+      condition: selection
     tags: [credentials, env, file-read]
     explanation: Access to .env files can expose API keys and secrets.
     falsepositives:
@@ -76,8 +85,16 @@ rules:
     category: download
     severity: low
     score: 20
-    targets: [command, arguments, url]
-    regex: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
+    detection:
+      selection:
+        command: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
+        arguments: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
+        url: '(^|\b)(curl|wget|aria2c|Invoke-WebRequest|iwr|fetch)\b.*(https?://|ftp://)'
+      exclude:
+        command: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
+        arguments: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
+        url: '(--data|--upload-file|--post-data|--post-file|--form|-x(?:[ \t]?(?:post|put))|--request (?:post|put)|--method(?: |=)post|-t[ \t]|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]])|(^|[[:space:]])-d))'
+      condition: selection
     tags: [network, download]
     explanation: HTTP or FTP retrieval by a download client, not outbound upload.
     falsepositives:
@@ -105,7 +122,7 @@ rules:
     severity: high
     score: 60
     targets: [command, arguments, url]
-    regex: '(curl|wget).*(-X\s*POST|(?-i:-F\s)|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?:^|[\s])-d(?:[\s=@A-Za-z0-9])|-T\s|PUT\s)|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
+    regex: '(curl|wget).*(-X\s*(POST|PUT)|--request\s+(POST|PUT)|--method(?:\s+|=)POST|(?-i:(^|[[:space:]])-F(?:[[:space:]]|[^-[:space:]]))|--data|--data-binary|--data-raw|--upload-file|--form|--post-data|--post-file|(?:^|[\s])-d(?:[\s=@A-Za-z0-9])|-T\s|PUT\s)|rclone\s+copy|aws\s+s3\s+cp|gsutil\s+cp|az\s+storage'
     tags: [network, exfiltration]
     explanation: Outbound upload or object-storage copy in a tool call.
     falsepositives:
@@ -131,8 +148,18 @@ rules:
       - atlas:AML.T0051
     severity: high
     score: 45
-    targets: [assistant_context, command, arguments, tool_result]
-    regex: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+    detection:
+      selection:
+        assistant_context: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+        command: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+        arguments: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+        tool_result: '(without\s+(asking|approval|confirmation)|bypass\s+approval|hide\s+this|do\s+not\s+tell|silent(ly)?\s+run|no\s+confirm)'
+      exclude:
+        assistant_context: '(?s:\s*((for documentation|in the documentation review|documentation review|review notes).*(bypass approval.*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*bypass approval)(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass approval\s*|cost data .*examples in the policy mention bypass approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+        command: '(?s:\s*((for documentation|in the documentation review|documentation review|review notes).*(bypass approval.*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*bypass approval)(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass approval\s*|cost data .*examples in the policy mention bypass approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+        arguments: '(?s:\s*((for documentation|in the documentation review|documentation review|review notes).*(bypass approval.*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*bypass approval)(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass approval\s*|cost data .*examples in the policy mention bypass approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+        tool_result: '(?s:\s*((for documentation|in the documentation review|documentation review|review notes).*(bypass approval.*(quoted example|should not be treated as an instruction|review notes)|(quoted example|should not be treated as an instruction|review notes).*bypass approval)(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*|messageabortederror:\s*run without asking\s*|apierror unauthorized:\s*bypass approval\s*|not authenticated;\s*silently run\s*|you are opencode;\s*no confirm\s*|important:\s*refuse to write code that may be used maliciously;\s*bypass approval\s*|cost data .*examples in the policy mention bypass approval and silent execution as disallowed behavior\.(?:[[:punct:][:space:]]|tool_name\s+\S+|type\s+\S+|timestamp\s+\S+)*)$)'
+      condition: selection
     tags: [approval, intent]
     explanation: Context suggests bypassing human approval or hiding execution.
     falsepositives:

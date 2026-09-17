@@ -177,7 +177,8 @@ integer round-trips exactly to a finite `f64`; otherwise it is
 ### Requirement: Rule v1 compatibility
 
 `telltale-rules` MUST expose only an effective read-only Rule v1 compatibility
-view containing compiled target/regex pairs, exact IDs, effective metadata,
+view containing compiled target/regex pairs and optional target exclusions,
+exact IDs, effective metadata,
 policy identity, and modifier plans. The v2 compiler MUST consume that view,
 map supported classes/severity/scores/ATLAS losslessly, reject operational
 health without a truthful mapping, and not create modifier detectors. The
@@ -189,6 +190,18 @@ precedence while retaining status/reason counts and sorted matched selector
 paths. It MUST determine matched atomic IDs, trigger modifiers from all declared
 category and rule-ID conditions, and reconstruct deterministic compatibility
 metadata. Empty-condition modifiers MUST NOT fire.
+
+Each Rule v1 target exclusion MUST compile with its positive matcher into the
+same Detection v2 observation matcher. A matching exclusion regex removes the
+positive match. Exclusions MUST remain target-scoped, MUST name a target in the
+same `detection.selection`, MUST NOT be accepted on the simple `targets` plus
+`regex` form, and MUST NOT depend on rule IDs in either evaluator. Rule
+evaluation MUST continue to other target matchers after an excluded candidate.
+The effective Rule v1 fingerprint MUST include compiled exclusions under current
+canonicalization `rule-v1-compiled-compatibility-v2` and digest domain
+`telltale:producer-rule-v1-fingerprint:v2`. New producer manifests MUST emit
+that canonicalization, while well-formed historical manifests naming
+`rule-v1-compiled-compatibility-v1` remain valid under manifest schema v1.
 
 Rule v1 compatibility contributions and their checked score MUST use
 `RiskContribution`, `DeterministicRule`, `ChainModifier`,

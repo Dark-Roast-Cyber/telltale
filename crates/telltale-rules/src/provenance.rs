@@ -8,7 +8,7 @@ use crate::{
     RuleV1CompatibilityRule,
 };
 
-pub const RULE_V1_FINGERPRINT_DOMAIN: &[u8] = b"telltale:producer-rule-v1-fingerprint:v1\0";
+pub const RULE_V1_FINGERPRINT_DOMAIN: &[u8] = b"telltale:producer-rule-v1-fingerprint:v2\0";
 
 /// Fingerprint the already compiled compatibility export, never source YAML.
 pub fn rule_v1_fingerprint(export: &RuleV1CompatibilityExport) -> String {
@@ -37,8 +37,13 @@ fn canonical_rule(rule: &RuleV1CompatibilityRule) -> CanonicalRule<'_> {
         left.target
             .cmp(right.target)
             .then_with(|| left.regex.cmp(right.regex))
+            .then_with(|| left.exclusion_regex.cmp(&right.exclusion_regex))
     });
-    matchers.dedup_by(|left, right| left.target == right.target && left.regex == right.regex);
+    matchers.dedup_by(|left, right| {
+        left.target == right.target
+            && left.regex == right.regex
+            && left.exclusion_regex == right.exclusion_regex
+    });
     CanonicalRule {
         id: &rule.id,
         category: &rule.category,
@@ -58,6 +63,7 @@ fn canonical_matcher(matcher: &RuleV1CompatibilityMatcher) -> CanonicalMatcher<'
     CanonicalMatcher {
         target: &matcher.target,
         regex: &matcher.regex,
+        exclusion_regex: matcher.exclusion_regex.as_deref(),
     }
 }
 
@@ -107,6 +113,7 @@ struct CanonicalRule<'a> {
 struct CanonicalMatcher<'a> {
     target: &'a str,
     regex: &'a str,
+    exclusion_regex: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -276,6 +283,22 @@ mod tests {
             assert_ne!(base, fingerprint);
         }
 
+        let mut changed = rule();
+        changed.targets.clear();
+        changed.regex = None;
+        changed.detection = Some(DetectionDefinition {
+            selection: BTreeMap::from([
+                ("command".to_string(), "synthetic".to_string()),
+                ("tool_result".to_string(), "synthetic".to_string()),
+            ]),
+            exclude: BTreeMap::from([("command".to_string(), "benign".to_string())]),
+            condition: "selection".to_string(),
+        });
+        assert_ne!(
+            base,
+            rule_v1_fingerprint(&compiled(changed, Vec::new()).compatibility_export())
+        );
+
         let modifier = ModifierDefinition {
             id: "chain.synthetic".to_string(),
             score: 8,
@@ -292,6 +315,62 @@ mod tests {
         let fingerprint =
             rule_v1_fingerprint(&compiled(rule(), vec![modifier]).compatibility_export());
         assert_ne!(base, fingerprint);
+    }
+
+    #[test]
+    fn exclusion_order_and_source_formatting_do_not_affect_v2_identity() {
+        let first = r#"
+version: 1
+description: first source
+defaults: {case_insensitive: false, enabled: true}
+rules:
+  - id: rule.synthetic
+    category: execution
+    severity: high
+    score: 60
+    detection:
+      selection:
+        command: synthetic
+        tool_result: synthetic
+      exclude:
+        command: benign-command
+        tool_result: benign-result
+      condition: selection
+    tags: [a, z]
+    explanation: Synthetic explanation
+modifiers: []
+"#;
+        let second = first
+            .replace("first source", "second source")
+            .replace(
+                "        command: benign-command\n        tool_result: benign-result",
+                "        tool_result: benign-result\n        command: benign-command",
+            )
+            .replace("[a, z]", "[z, a]")
+            .replace('\n', "\r\n");
+        let first = load_rule_set_from_documents(&[first], None)
+            .expect("first")
+            .compatibility_export();
+        let second = load_rule_set_from_documents(&[&second], None)
+            .expect("second")
+            .compatibility_export();
+        assert_eq!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&second));
+    }
+
+    #[test]
+    fn changing_only_exclusion_regex_changes_v2_identity() {
+        let document = |exclusion: &str| {
+            format!(
+                "version: 1\ndescription: source\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: rule.synthetic\n    category: execution\n    severity: high\n    score: 60\n    detection:\n      selection:\n        command: synthetic\n      exclude:\n        command: {exclusion}\n      condition: selection\n    tags: [a]\n    explanation: Synthetic explanation\nmodifiers: []\n"
+            )
+        };
+        let first = load_rule_set_from_documents(&[&document("benign-a")], None)
+            .expect("first")
+            .compatibility_export();
+        let second = load_rule_set_from_documents(&[&document("benign-b")], None)
+            .expect("second")
+            .compatibility_export();
+        assert_ne!(rule_v1_fingerprint(&first), rule_v1_fingerprint(&second));
     }
 
     #[test]
@@ -403,6 +482,7 @@ mod tests {
         selected_rule.regex = None;
         selected_rule.detection = Some(DetectionDefinition {
             selection,
+            exclude: BTreeMap::new(),
             condition: "selection".to_string(),
         });
         let first = RuleSet {
