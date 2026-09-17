@@ -4,7 +4,8 @@
 > external contract. **Current implementation:** the non-production Event4 4.0
 > contract foundation is implemented in `telltale-schema`: typed bodies, the
 > authoritative structural schema, stateless and persistence-neutral contextual
-> validation, and `event4-json-v1` encoding. Production privacy projection,
+> validation, and `event4-json-v1` encoding. An experimental Tool-only privacy
+> and materialization boundary is implemented in `telltale-core`. Production privacy projection,
 > emission, persistence, replay, and transport are not implemented. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
@@ -15,6 +16,40 @@ This page describes the contract foundation and future projection. The schema
 crate can validate and encode caller-supplied post-privacy candidates, but it
 does not activate an Event4 emitter, adapter, collector, sink, policy runtime,
 or production output path.
+
+## Experimental Tool boundary (Phase 2, first tranche)
+
+`telltale_core::event4_output::emit_tool_observation_event4` accepts a
+`CanonicalObservationV2` and mutable `Event4InMemoryContext`, returning an
+`AcceptedEvent4` or a bounded code-owned error. It supports only Tool proposed,
+requested, execution-started, execution-completed, and result-returned stages.
+Other families and unsupported stages return no bytes and change no context.
+
+The fixed projection preserves semantic observation ID, kind, stage/action,
+source occurrence time, observation time, and sequence. Source is limited to
+mode, adapter ID, optional version, and fidelity. Adapter metadata must remain
+unchanged by the existing Metadata sanitizer and satisfy the 128-byte opaque
+identifier grammar; unsafe adapter IDs omit source, unsafe versions are omitted.
+Full-native, partial-structured, and flattened-lossy fidelity map to exact,
+partial, and lossy. Unknown and derived-only fidelity omit source rather than
+inventing a wire meaning. All other optional data is omitted, including tool
+name/arguments/results, commands, native coordinates, paths, correlations,
+local evidence, facets, normalization/key references, and identity preimages.
+
+After privacy projection, each invocation assigns one random Event4 record ID
+from exactly 128 OS-CSPRNG bits (`evt:v4:` plus 32 lowercase hex digits), distinct
+from the semantic observation ID and never content-derived or UUID-generated.
+It then reads the UTC clock once for `materialized_at`, independently of source
+times. RNG, time, and terminal validation failures are closed failures. A
+collision is an integrity failure, even for identical bytes, and is not retried.
+Context receives the Phase 1 effect only after validation and canonical encoding
+succeed. Retry means reusing returned canonical bytes, not rerunning emission;
+Phase 1 still supports idempotent validation of already materialized records.
+
+This is callable experimental code, not normal production Event4 output.
+Persistence, replay integration, transport, sinks, and Finding/Session/Decision/
+Action/State/Health/Summary projection remain deferred. Event3 is neither called
+nor altered by this boundary.
 
 ## Shape
 

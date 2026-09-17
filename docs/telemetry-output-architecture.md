@@ -3,7 +3,9 @@
 > **Status:** **Accepted architecture.** This is the reviewed intended future
 > telemetry/output contract. **Current implementation:** the non-production
 > Event4 contract, validation kernel, and canonical encoder are implemented in
-> `telltale-schema`. CanonicalPayload, production privacy/export projection,
+> `telltale-schema`. The first Phase 2 tranche adds a callable experimental
+> Tool-only privacy/materialization boundary in `telltale-core::event4_output`.
+> CanonicalPayload, production privacy/export projection,
 > telemetry profiles, durability integration, and dual Event3/Event4 output are
 > **not implemented**.
 > **Existing compatibility:** Event 3.0 remains the current frozen external
@@ -15,6 +17,14 @@ Current Event3 JSONL and sink behavior is documented in
 [Telemetry output](telemetry-output.md). Nothing on this page changes current
 defaults or activates a future emitter, profile, serializer, collector, or
 transport.
+
+The experimental [Tool Event4 boundary](event4.md#experimental-tool-boundary-phase-2-first-tranche)
+is not connected to this production pipeline. It assigns a one-time random
+record ID distinct from the semantic observation ID, then selects
+`materialized_at` once after privacy projection, validates/encodes, and applies
+an in-memory acceptance effect. Returned canonical bytes are the retry unit.
+Persistence/replay/transport and all non-Tool projections remain deferred;
+Event3 projection, defaults, bytes, and sinks are unchanged.
 
 ## Pipeline
 

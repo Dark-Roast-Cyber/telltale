@@ -3241,12 +3241,14 @@ dependencies = [
  "hmac",
  "libc",
  "rusqlite",
+ "serde_json",
  "sha2",
  "telltale-detect",
  "telltale-rules",
  "telltale-schema",
  "telltale-sources",
  "tempfile",
+ "time",
 ]
 
 [[package]]

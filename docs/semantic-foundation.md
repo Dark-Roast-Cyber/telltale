@@ -5,8 +5,10 @@
 > non-production Detection v2 foundation implements only `observation_match`,
 > `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
 > The non-production Event4 contract, validator, and canonical encoder are
-> implemented in `telltale-schema`; production projection, privacy, persistence,
-> and output are not. Telemetry/Output v2 is not implemented. The fixture-only
+> implemented in `telltale-schema`. The first Phase 2 tranche adds an experimental
+> Tool-only privacy/materialization boundary in `telltale-core::event4_output`;
+> production projection, privacy, persistence, and output are not implemented.
+> Telemetry/Output v2 is not implemented. The fixture-only
 > offline shadow harness is an offline measurement seam, not a production shadow
 > or activation path. Advanced detector runtime and Detection Content v2 loader
 > are not implemented.

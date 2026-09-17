@@ -20,6 +20,7 @@ use telltale_detect::detection::evaluate_session_matches;
 use telltale_rules::CompiledRuleSet;
 
 pub mod assignment;
+pub mod event4_output;
 pub mod local_event_feed;
 pub mod provenance;
 
