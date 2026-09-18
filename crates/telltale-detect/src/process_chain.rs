@@ -21,9 +21,9 @@
 //!    per-rule throttling and a per-entity risk cap so informational noise
 //!    cannot be summed indefinitely.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
-use time::{Duration, OffsetDateTime};
+use time::Duration;
 
 use telltale_rules::process_chain::{
     CompiledCorrelationRule, CompiledProcessChainRules, ProcessChainContext, ProcessChainDetection,
@@ -36,6 +36,12 @@ use telltale_schema::event::{
 use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::scoring::{RiskAccountingError, RiskContribution, RiskContributionType};
 use telltale_schema::source::Source;
+
+use crate::process_chain_session::{
+    DEFAULT_MAX_CORRELATION_RISK_PER_ENTITY, DEFAULT_MAX_CORRELATIONS_PER_RULE_ENTITY,
+    DEFAULT_SUPPRESSION_WINDOW, ProcessChainOccurrenceId, ProcessChainSessionCandidate,
+    ProcessChainSessionConfig, correlate_retained,
+};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -59,10 +65,18 @@ impl Default for ProcessChainConfig {
     fn default() -> Self {
         Self {
             context: ProcessChainContext::default(),
-            suppression_window: Duration::hours(1),
-            max_correlations_per_rule_entity: 1,
-            max_correlation_risk_per_entity: 150,
+            suppression_window: DEFAULT_SUPPRESSION_WINDOW,
+            max_correlations_per_rule_entity: DEFAULT_MAX_CORRELATIONS_PER_RULE_ENTITY,
+            max_correlation_risk_per_entity: DEFAULT_MAX_CORRELATION_RISK_PER_ENTITY,
         }
+    }
+}
+
+fn session_config(config: &ProcessChainConfig) -> ProcessChainSessionConfig {
+    ProcessChainSessionConfig {
+        suppression_window: config.suppression_window,
+        max_correlations_per_rule_entity: config.max_correlations_per_rule_entity,
+        max_correlation_risk_per_entity: config.max_correlation_risk_per_entity,
     }
 }
 
@@ -573,45 +587,57 @@ fn process_chain_detection_event(
 /// inside the suppression window. The first event survives and records a
 /// `repeat_count`; the rest are dropped and counted.
 pub fn suppress_repeats(events: Vec<Event>, window: Duration) -> (Vec<Event>, usize) {
-    let mut anchors: HashMap<String, (usize, OffsetDateTime, u64)> = HashMap::new();
-    let mut kept: Vec<Option<Event>> = Vec::with_capacity(events.len());
-    let mut suppressed = 0;
-
-    for event in events {
-        let Some(process) = event.process.as_ref() else {
-            kept.push(Some(event));
-            continue;
-        };
-        let key = format!(
-            "{}|{}|{}",
-            event.rule_ids.first().cloned().unwrap_or_default(),
-            event.risk_entity_value.clone().unwrap_or_default(),
-            process.dedup_key
-        );
-        let timestamp = parse_event_timestamp(&event.timestamp);
-        match (anchors.get_mut(&key), timestamp) {
-            (Some((index, anchor_time, count)), Some(timestamp))
-                if timestamp - *anchor_time <= window =>
-            {
-                *count += 1;
-                let repeats = *count;
-                let index = *index;
-                if let Some(Some(anchor)) = kept.get_mut(index) {
-                    record_repeat_count(anchor, repeats);
-                }
-                suppressed += 1;
-                kept.push(None);
-            }
-            _ => {
-                if let Some(timestamp) = timestamp {
-                    anchors.insert(key, (kept.len(), timestamp, 1));
-                }
-                kept.push(Some(event));
-            }
+    let candidates = events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| event_candidate(event, ProcessChainOccurrenceId::new(index)))
+        .collect::<Vec<_>>();
+    let suppression = crate::process_chain_session::suppress_repeats(&candidates, window);
+    let mut repeat_counts = suppression.repeat_counts.into_iter().peekable();
+    let mut kept = Vec::with_capacity(suppression.retained.len());
+    for index in suppression.retained {
+        let mut event = events[index].clone();
+        while repeat_counts
+            .peek()
+            .is_some_and(|(anchor, _)| *anchor < index)
+        {
+            repeat_counts.next();
         }
+        if let Some((_, repeats)) = repeat_counts.next_if(|(anchor, _)| *anchor == index) {
+            record_repeat_count(&mut event, repeats);
+        }
+        kept.push(event);
     }
+    (kept, suppression.suppressed_count)
+}
 
-    (kept.into_iter().flatten().collect(), suppressed)
+fn event_candidate(
+    event: &Event,
+    occurrence_id: ProcessChainOccurrenceId,
+) -> ProcessChainSessionCandidate {
+    let Some(process) = event.process.as_ref() else {
+        return ProcessChainSessionCandidate {
+            occurrence_id,
+            rule_id: String::new(),
+            category: String::new(),
+            child: String::new(),
+            dedupe_key: String::new(),
+            entity: None,
+            occurred_at: None,
+        };
+    };
+    ProcessChainSessionCandidate {
+        occurrence_id,
+        rule_id: event.rule_ids.first().cloned().unwrap_or_default(),
+        category: event.categories.first().cloned().unwrap_or_default(),
+        child: process.target_process_name.clone(),
+        dedupe_key: process.dedup_key.clone(),
+        entity: event
+            .risk_entity_value
+            .clone()
+            .or_else(|| Some(event.session_id.clone())),
+        occurred_at: parse_event_timestamp(&event.timestamp),
+    }
 }
 
 fn record_repeat_count(event: &mut Event, repeats: u64) {
@@ -636,15 +662,6 @@ fn record_repeat_count(event: &mut Event, repeats: u64) {
 // Correlation
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-struct CorrelationCandidate<'a> {
-    event: &'a Event,
-    timestamp: OffsetDateTime,
-    category: String,
-    rule_id: String,
-    child: String,
-}
-
 /// Finds ordered sequences of process-chain detections and emits one event per
 /// satisfied sequence.
 ///
@@ -658,91 +675,62 @@ pub fn correlate_process_chain_events(
     rules: &CompiledProcessChainRules,
     config: &ProcessChainConfig,
 ) -> Result<Vec<Event>, RiskAccountingError> {
-    let mut by_entity: BTreeMap<String, Vec<CorrelationCandidate<'_>>> = BTreeMap::new();
-    for event in events {
-        if event.event_type != "process_chain" {
+    let mut candidates = Vec::new();
+    let mut event_indexes = Vec::new();
+    for (index, event) in events.iter().enumerate() {
+        if event.event_type != "process_chain" || event.process.is_none() {
             continue;
         }
-        let Some(process) = event.process.as_ref() else {
+        let candidate = event_candidate(event, ProcessChainOccurrenceId::new(index));
+        if candidate.occurred_at.is_none() || candidate.entity.is_none() {
             continue;
-        };
-        let Some(timestamp) = parse_event_timestamp(&event.timestamp) else {
-            continue;
-        };
-        let entity = event
-            .risk_entity_value
-            .clone()
-            .unwrap_or_else(|| event.session_id.clone());
-        by_entity
-            .entry(entity)
-            .or_default()
-            .push(CorrelationCandidate {
-                event,
-                timestamp,
-                category: event.categories.first().cloned().unwrap_or_default(),
-                rule_id: event.rule_ids.first().cloned().unwrap_or_default(),
-                child: process.target_process_name.clone(),
-            });
+        }
+        candidates.push(candidate);
+        event_indexes.push(index);
     }
-
+    let retained = (0..candidates.len()).collect::<Vec<_>>();
+    let config = session_config(config);
+    let decisions = correlate_retained(
+        &candidates,
+        &retained,
+        rules,
+        config.max_correlations_per_rule_entity,
+        config.max_correlation_risk_per_entity,
+    );
     let mut correlation_events = Vec::new();
-    for (entity, mut candidates) in by_entity {
-        candidates.sort_by_key(|candidate| candidate.timestamp);
-        let mut entity_risk = 0_u64;
-        for rule in rules.correlations() {
-            let matches =
-                find_sequences(rule, &candidates, config.max_correlations_per_rule_entity);
-            for matched in matches {
-                let over_cap =
-                    entity_risk.saturating_add(rule.score) > config.max_correlation_risk_per_entity;
-                let score = if over_cap { 0 } else { rule.score };
-                entity_risk = entity_risk.saturating_add(score);
-                correlation_events.push(correlation_event(
-                    source, &entity, rule, &matched, score, over_cap,
-                )?);
-            }
+    for decision in decisions {
+        let rule = &rules.correlations()[decision.rule_index];
+        let Some(entity) = decision
+            .candidate_indexes
+            .first()
+            .and_then(|index| candidates.get(*index))
+            .and_then(|candidate| candidate.entity.as_deref())
+        else {
+            continue;
+        };
+        let matched = decision
+            .candidate_indexes
+            .iter()
+            .filter_map(|index| {
+                event_indexes
+                    .get(*index)
+                    .and_then(|event| events.get(*event))
+            })
+            .collect::<Vec<_>>();
+        if matched.len() != decision.candidate_indexes.len() {
+            continue;
         }
+        correlation_events.push(correlation_event(
+            source,
+            entity,
+            rule,
+            &matched,
+            decision.effective_score,
+            decision.risk_capped,
+        )?);
     }
 
     Ok(correlation_events)
-}
-
-fn find_sequences<'a>(
-    rule: &CompiledCorrelationRule,
-    candidates: &[CorrelationCandidate<'a>],
-    limit: usize,
-) -> Vec<Vec<&'a Event>> {
-    let mut sequences = Vec::new();
-    let window = Duration::seconds(rule.window_seconds as i64);
-
-    for start in 0..candidates.len() {
-        if sequences.len() >= limit {
-            break;
-        }
-        let mut step = 0;
-        let mut matched: Vec<&Event> = Vec::new();
-        let anchor = candidates[start].timestamp;
-        for candidate in &candidates[start..] {
-            if candidate.timestamp - anchor > window {
-                break;
-            }
-            let Some(current) = rule.steps.get(step) else {
-                break;
-            };
-            if current.matches(&candidate.category, &candidate.rule_id, &candidate.child) {
-                matched.push(candidate.event);
-                step += 1;
-                if step == rule.steps.len() {
-                    break;
-                }
-            }
-        }
-        if step == rule.steps.len() {
-            sequences.push(matched);
-        }
-    }
-
-    sequences
 }
 
 fn correlation_event(

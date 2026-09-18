@@ -12,6 +12,7 @@ pub mod detection;
 #[cfg(feature = "source-io")]
 pub mod mcp;
 pub mod process_chain;
+pub(crate) mod process_chain_session;
 /// Experimental, non-production I/O-free Detection v2 equivalence harness.
 pub mod shadow_v2;
 pub mod timeline;

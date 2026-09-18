@@ -29,13 +29,13 @@ output are not implemented; neither is Telemetry/Output v2.
 
 `observation_match`, bounded Tool-derived parent/child and standalone
 `process_chain` evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`, and
-the Rule v1 compiler are implemented for Detection v2. The process-chain path
-parses canonical Tool command evidence into private matcher working state; it
-does not manufacture Canonical Process observations. The fixture-only offline
-shadow harness is an offline measurement seam, not a scanner or activation path.
-Process-chain repeat suppression and entity correlation remain on the legacy
-production path; advanced detector runtime and a Detection Content v2 loader
-are not implemented.
+the Rule v1 compiler are implemented for Detection v2. The non-production
+process-chain session evaluator parses canonical Tool command evidence into
+private matcher working state and shares one pure repeat/correlation semantic
+kernel with the legacy Event3 wrapper; it does not manufacture Canonical Process
+observations. The fixture-only offline shadow harness is an offline measurement
+seam, not a scanner or activation path. Advanced detector runtime and a
+Detection Content v2 loader are not implemented.
 
 Canonical Observation v2 core types/scaffolding are implemented in
 `telltale-schema`. Non-production reference projections exist for Claude Code

@@ -1108,15 +1108,43 @@ impl DetectorResult {
         capability_context: Option<CapabilityContext>,
         matched_selector_paths: Vec<String>,
     ) -> Result<Self, DetectionError> {
-        let observation_ids = match observation {
-            Some(value) => vec![validated_observation_id(value.observation_id())?],
-            None => Vec::new(),
-        };
         if metadata.session_id.is_none() {
             metadata.session_id = observation
                 .and_then(|value| value.session_id())
                 .map(|value| value.value().to_owned());
         }
+        let observation_ids = observation
+            .map(|value| vec![value.observation_id()])
+            .unwrap_or_default();
+        Self::evaluated_with_observation_ids(
+            detector,
+            status,
+            reason,
+            observation_ids,
+            metadata,
+            capability_context,
+            matched_selector_paths,
+        )
+    }
+
+    /// Construct an evaluated result from already-created canonical
+    /// observation IDs.  The IDs are still validated and normalized here; the
+    /// helper only avoids forcing multi-observation detectors through a single
+    /// observation-shaped constructor.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn evaluated_with_observation_ids(
+        detector: DetectorIdentity,
+        status: EvaluationStatus,
+        reason: Option<NonEvaluationReason>,
+        observation_ids: Vec<&str>,
+        metadata: FindingMetadata,
+        capability_context: Option<CapabilityContext>,
+        matched_selector_paths: Vec<String>,
+    ) -> Result<Self, DetectionError> {
+        let observation_ids = observation_ids
+            .into_iter()
+            .map(validated_observation_id)
+            .collect::<Result<Vec<_>, _>>()?;
         Self::from_parts(
             detector,
             status,

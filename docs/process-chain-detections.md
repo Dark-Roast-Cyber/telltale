@@ -25,16 +25,19 @@ Set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn the pack off for a scan.
 ## Detection v2 convergence status
 
 A bounded non-production Detection v2 path now evaluates parent/child and
-standalone rules from command-bearing Canonical Observation v2 Tool evidence;
+standalone rules from command-bearing Canonical Observation v2 Tool evidence,
+and a caller-grouped session evaluator applies repeat suppression and the six
+specialized process-chain correlations;
 the exact evidence and lifecycle contract is documented in
 [Detection v2](detection-v2.md#tool-derived-process-chain-boundary). Command
 parsing creates private matcher working state, not Canonical Process evidence.
 `CompiledProcessChainRules` remains the authoritative matcher, and matches use
 ordinary Detection v2 DetectorResults, Signals, and Findings.
 
-This path is not active in scan or watch. Production still uses the existing
-NormalizedRecord extraction, Event3 projection, repeat suppression, and entity
-correlation described below. Event3 is unchanged and Event4 is inactive.
+This path is not active in scan or watch. Production still starts from
+NormalizedRecord and projects Event3 through the existing wrapper. The pure
+repeat/correlation semantic kernel is shared by that wrapper and the v2 session
+evaluator, while Event3 and Event4 contracts remain unchanged/inactive.
 
 ## The core rule: emission and risk are separate decisions
 
@@ -259,6 +262,19 @@ Bounds that stop unbounded summation:
 
 Informational events contribute zero risk directly and still satisfy sequence
 steps, which is the whole point of emitting them.
+
+The non-production v2 session path uses the same six compiled definitions and
+step predicates. Its ordered candidates use source-reported `occurred_at`, not
+`observed_at`; a missing occurrence time retains the atomic result but cannot
+participate in timed suppression or correlation. Equal timestamps retain parser
+and caller order, so statements derived from one Tool observation cannot be
+reordered by detector ID. Tool-derived matcher input has no host or user in this
+tranche, so the v2 path uses only the opaque canonical session ID as scope;
+direct host/user scope is deferred to canonical Process evidence. Different
+sessions never correlate. Correlation results remain ordinary
+`DetectorKind::ProcessChain` results with `FindingKind::Correlation` and
+`CorrelationScope::Sequence`, omit aggregate capability context, and do not use
+the reserved generic `Sequence` or `Correlation` kinds.
 
 ## False-positive controls
 

@@ -3,17 +3,19 @@
 ## Purpose
 This specification covers only the experimental, non-production Detection v2
 foundation. It implements the `observation_match` detector, bounded
-Tool-derived parent/child and standalone `process_chain` evaluation, the
+Tool-derived parent/child, standalone, and caller-grouped session
+`process_chain` evaluation, the
 `DetectorResult` -> `Signal`
 -> atomic `Finding` boundary, the final 56-selector registry (48 native plus
 exactly eight Rule v1 compatibility views), their capability/provenance/matcher/
 identity contracts, and the read-only Rule v1 export/compatibility compiler and
-source-free session evaluator.
+source-free session evaluator. Process-chain repeat/correlation semantics have
+one pure shared owner used by both the legacy Event3 adapter and this v2
+session evaluator; this does not activate v2 in production.
 `compat.v1.url` remains compiler-supported but truthfully absent pending P13
 visibility-gap measurement. There is no live shadow or activation path, source
-or scanner wiring, process-chain repeat suppression or entity correlation,
-advanced detector runtime, Event4, gateway, or Detection Content v2 runtime
-loader; Event 3.0 remains unchanged.
+or scanner wiring, advanced detector runtime, Event4, gateway, or Detection
+Content v2 runtime loader; Event 3.0 remains unchanged.
 ## Requirements
 ### Requirement: Detector result materialization
 
@@ -256,11 +258,14 @@ Command candidates MUST come only from the governed `command.text` facet,
 reported `tool.searchable_arguments`, or string-valued `tool.arguments`. Tool
 names MUST NOT become commands and arbitrary JSON objects MUST NOT be
 stringified. Identical strings within one observation MUST be parsed once;
-distinct strings MUST all be evaluated without making their surface order a
-process ordering contract. Distinct candidates that produce the same final
-Detection v2 Signal identity MUST yield one result for that supporting Tool
-observation; this result normalization MUST NOT replace matcher-owned rule
-deduplication.
+distinct strings MUST all be evaluated. Private matcher candidates MUST retain
+the command parser's traversal order for session semantics, including derived
+statements within one Tool observation. Outward atomic results MUST instead be
+detector-ordered and duplicate-free. Distinct private candidates that produce
+the same final Detection v2 Signal identity MUST yield one outward result for
+that supporting Tool observation without discarding child context needed by a
+correlation predicate; this result normalization MUST NOT replace
+matcher-owned rule deduplication.
 
 The existing command parser MUST produce private matcher working state for the
 existing `CompiledProcessChainRules`. That matcher MUST remain authoritative for
@@ -302,9 +307,140 @@ MUST materialize through the ordinary Signal and atomic Finding path.
 #### Scenario: Process-chain migration remains bounded
 
 - **WHEN** the Tool-derived evaluator is available
-- **THEN** scan/watch, Event3, Event4, repeat suppression, entity correlation,
-  direct Process evidence, and any OpenShell integration remain unchanged and
-  inactive at this boundary
+- **THEN** scan/watch activation, Event3 projection, Event4, direct Process
+  evidence, and any OpenShell integration remain unchanged and inactive at this
+  boundary; only the caller-grouped non-production session evaluator applies
+  repeat suppression and specialized process-chain correlation
+
+### Requirement: Process-chain session semantics
+
+The implementation MUST provide one crate-private, I/O-free process-chain
+session semantic owner for both the legacy Event3 adapter and the Detection v2
+caller-grouped evaluator. The owner MUST operate only on rule ID, category,
+normalized child name, matcher-owned dedupe key, resolved entity, an opaque
+occurrence-group identity, and an optional caller-supplied ordering timestamp.
+The kernel MUST NOT assign or reinterpret timestamp provenance. It MUST remain
+independent of Event3 values, Canonical Observation values, DetectorResult,
+source access, policy, and enforcement. `CompiledProcessChainRules::correlations()` and
+`CorrelationStep::matches` remain authoritative for the six shipped
+correlations and their predicates; no generic temporal engine or v2 content
+loader is introduced.
+
+The caller MUST supply the observation group. The evaluator MUST NOT discover
+sessions or sources, and mixed input MUST NOT correlate or suppress across
+different resolved session/entity values. A valid atomic match MUST survive
+when session semantics lack an entity or ordering time.
+
+Timed session semantics MUST use only canonical source-reported `occurred_at`.
+`observed_at`, materialization time, Event3 construction time, and wall-clock
+time MUST NOT be fallbacks. Candidates MUST be ordered chronologically with
+stable parser/caller order for equal occurrence times. A missing `occurred_at`
+MUST retain its atomic result but MUST NOT be a timed repeat anchor, timed
+repeat, or timed correlation step.
+
+Tool-derived matcher inputs in this tranche have no truthful host or user. The
+v2 Tool session path MUST therefore use only the opaque canonical session ID as
+its session scope, MUST NOT compose it with delimiter-separated matcher values,
+and MUST NOT label it as a host. Direct host/user-scoped evidence remains
+deferred to the future canonical Process path. Without a canonical session ID,
+only the atomic result is retained.
+
+Private matcher variants MUST be grouped into atomic occurrences before repeat
+suppression. For the v2 Tool path, occurrence identity MUST use supporting
+canonical observation identity, detector identity, and matcher-owned dedupe
+identity; raw command text and private child name MUST NOT participate. The
+shared kernel MUST receive only an opaque occurrence-group identity.
+
+Repeat suppression MUST compare atomic occurrences using `rule ID + resolved
+entity + matcher-owned dedupe key`. The first eligible timed occurrence is the
+anchor; equivalent timed occurrences inside the configured window are
+suppressed once per occurrence. Correlation MUST evaluate only private variants
+from retained occurrences, while every ordered child variant associated with a
+retained occurrence remains eligible for `CorrelationStep::matches`. The
+retained private anchor count MUST include the anchor as occurrence 1, and
+suppressed-occurrence count MUST remain available privately. The existing
+defaults MUST remain one hour, one correlation per rule/entity per caller
+evaluation, and 150 correlation-risk points per entity.
+
+Each satisfied shipped correlation MUST normalize to an ordinary evaluated
+`DetectorResult` with `DetectorKind::ProcessChain`, the immutable correlation
+rule ID, `rule_version: 1`, `FindingKind::Correlation`, and
+`CorrelationScope::Sequence`. It MUST contain all actual supporting canonical
+Tool observation IDs, normalized and deduplicated by the common constructor; no
+synthetic observation ID may be created. The ordinary Signal/Finding path MUST
+materialize the result, and exact duplicate semantic identity with the same
+supporting set MUST collapse without collapsing different supporting sets. A
+correlation result MUST omit `capability_context` rather than attribute one
+supporting observation's context to the aggregate.
+
+Correlation matching MUST preserve ordered steps, the compiled per-rule window,
+the per-rule/per-entity throttle, and the authored correlation-rule iteration
+order for risk accounting. Zero-risk atomic matches MUST remain eligible steps.
+When an authored correlation score would exceed the per-entity cap, the
+correlation MUST still emit as `EvaluatedMatch` with effective risk 0,
+informational effective severity, retained detector/confidence/ATT&CK metadata,
+and a bounded `risk_capped` tag; the capped score MUST NOT increase accumulated
+entity risk.
+
+#### Scenario: Canonical process-chain session correlation
+
+- **WHEN** two eligible Tool observations in one canonical session satisfy one
+  of the six compiled process-chain sequences within its `occurred_at` window
+- **THEN** one ordinary `ProcessChain` correlation result is emitted with both
+  actual observation IDs, `FindingKind::Correlation`, and sequence scope
+
+#### Scenario: Missing source occurrence time is not repaired
+
+- **WHEN** an atomic Tool match has no `occurred_at`
+- **THEN** the atomic result remains evaluated, `observed_at` is not substituted,
+  and the match cannot suppress or satisfy timed session semantics
+
+#### Scenario: Session fallback remains truthful
+
+- **WHEN** Tool-derived process matching has no truthful host/user entity but
+  has a canonical session ID
+- **THEN** session-scoped suppression/correlation uses that session ID without
+  asserting host evidence; different session IDs do not join
+
+#### Scenario: Derived command order remains semantic
+
+- **WHEN** one Tool observation contains multiple parsed statements with one
+  source occurrence time
+- **THEN** ordered correlation uses parser traversal order, while outward
+  atomic results remain detector-ordered and duplicate-free
+
+#### Scenario: Private child context survives atomic normalization
+
+- **WHEN** distinct private matcher candidates share one outward atomic Signal
+  identity but carry child names used by `CorrelationStep::matches`
+- **THEN** the retained occurrence exposes its complete ordered private
+  candidate set to correlation and the outward atomic result still appears once
+
+#### Scenario: Suppressed occurrence is not correlation evidence
+
+- **WHEN** an atomic occurrence is suppressed as a repeat inside the configured
+  suppression window
+- **THEN** none of its private matcher variants may satisfy a specialized
+  process-chain correlation step
+
+#### Scenario: Repeat outside suppression window is retained
+
+- **WHEN** an equivalent timed occurrence falls outside the suppression window
+- **THEN** it becomes a retained occurrence and may satisfy a later correlation
+  within that correlation rule's own window
+
+#### Scenario: Aggregate capability context is not inferred
+
+- **WHEN** a process-chain correlation is supported by Tool observations with
+  different capability contexts
+- **THEN** the correlation result omits capability context instead of copying
+  the anchor observation's context
+
+#### Scenario: Generic correlation kinds remain reserved
+
+- **WHEN** a shipped process-chain correlation is satisfied
+- **THEN** its detector kind is `ProcessChain`, not generic `Sequence` or
+  `Correlation`, and those generic kinds remain runtime-unsupported
 
 ### Requirement: Production and privacy boundary
 

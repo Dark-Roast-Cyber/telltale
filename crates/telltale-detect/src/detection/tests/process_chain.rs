@@ -246,6 +246,33 @@ fn informational_events_participate_in_a_correlated_detection() {
 }
 
 #[test]
+fn one_record_correlation_preserves_parser_statement_order() {
+    let reversed = events_for(&[(
+        "cmd.exe /c whoami && cmd.exe /c hostname",
+        "2026-05-10T10:00:00Z",
+    )]);
+    assert!(
+        event_with_rule(
+            &reversed,
+            "procchain.correlation.host_then_account_discovery"
+        )
+        .is_none()
+    );
+
+    let forward = events_for(&[(
+        "cmd.exe /c hostname && cmd.exe /c whoami",
+        "2026-05-10T10:00:00Z",
+    )]);
+    assert!(
+        event_with_rule(
+            &forward,
+            "procchain.correlation.host_then_account_discovery"
+        )
+        .is_some()
+    );
+}
+
+#[test]
 fn correlation_respects_the_time_window() {
     let events = events_for(&[
         ("cmd.exe /c hostname", "2026-05-10T10:00:00Z"),
