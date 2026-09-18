@@ -39,8 +39,8 @@ use telltale_schema::source::Source;
 
 use crate::process_chain_session::{
     DEFAULT_MAX_CORRELATION_RISK_PER_ENTITY, DEFAULT_MAX_CORRELATIONS_PER_RULE_ENTITY,
-    DEFAULT_SUPPRESSION_WINDOW, ProcessChainSessionCandidate, ProcessChainSessionConfig,
-    correlate_retained,
+    DEFAULT_SUPPRESSION_WINDOW, ProcessChainOccurrenceId, ProcessChainSessionCandidate,
+    ProcessChainSessionConfig, correlate_retained,
 };
 
 // ---------------------------------------------------------------------------
@@ -587,7 +587,11 @@ fn process_chain_detection_event(
 /// inside the suppression window. The first event survives and records a
 /// `repeat_count`; the rest are dropped and counted.
 pub fn suppress_repeats(events: Vec<Event>, window: Duration) -> (Vec<Event>, usize) {
-    let candidates = events.iter().map(event_candidate).collect::<Vec<_>>();
+    let candidates = events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| event_candidate(event, ProcessChainOccurrenceId::new(index)))
+        .collect::<Vec<_>>();
     let suppression = crate::process_chain_session::suppress_repeats(&candidates, window);
     let mut repeat_counts = suppression.repeat_counts.into_iter().peekable();
     let mut kept = Vec::with_capacity(suppression.retained.len());
@@ -607,9 +611,13 @@ pub fn suppress_repeats(events: Vec<Event>, window: Duration) -> (Vec<Event>, us
     (kept, suppression.suppressed_count)
 }
 
-fn event_candidate(event: &Event) -> ProcessChainSessionCandidate {
+fn event_candidate(
+    event: &Event,
+    occurrence_id: ProcessChainOccurrenceId,
+) -> ProcessChainSessionCandidate {
     let Some(process) = event.process.as_ref() else {
         return ProcessChainSessionCandidate {
+            occurrence_id,
             rule_id: String::new(),
             category: String::new(),
             child: String::new(),
@@ -619,6 +627,7 @@ fn event_candidate(event: &Event) -> ProcessChainSessionCandidate {
         };
     };
     ProcessChainSessionCandidate {
+        occurrence_id,
         rule_id: event.rule_ids.first().cloned().unwrap_or_default(),
         category: event.categories.first().cloned().unwrap_or_default(),
         child: process.target_process_name.clone(),
@@ -672,7 +681,7 @@ pub fn correlate_process_chain_events(
         if event.event_type != "process_chain" || event.process.is_none() {
             continue;
         }
-        let candidate = event_candidate(event);
+        let candidate = event_candidate(event, ProcessChainOccurrenceId::new(index));
         if candidate.occurred_at.is_none() || candidate.entity.is_none() {
             continue;
         }

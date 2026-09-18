@@ -344,13 +344,22 @@ and MUST NOT label it as a host. Direct host/user-scoped evidence remains
 deferred to the future canonical Process path. Without a canonical session ID,
 only the atomic result is retained.
 
-Repeat suppression MUST use `rule ID + resolved entity + matcher-owned dedupe
-key`. The first eligible timed match is the anchor; equivalent timed matches
-inside the configured window are suppressed. The retained private anchor count
-MUST include the anchor as occurrence 1, and suppressed-match count MUST remain
-available privately. The existing defaults MUST remain one hour, one
-correlation per rule/entity per caller evaluation, and 150 correlation-risk
-points per entity.
+Private matcher variants MUST be grouped into atomic occurrences before repeat
+suppression. For the v2 Tool path, occurrence identity MUST use supporting
+canonical observation identity, detector identity, and matcher-owned dedupe
+identity; raw command text and private child name MUST NOT participate. The
+shared kernel MUST receive only an opaque occurrence-group identity.
+
+Repeat suppression MUST compare atomic occurrences using `rule ID + resolved
+entity + matcher-owned dedupe key`. The first eligible timed occurrence is the
+anchor; equivalent timed occurrences inside the configured window are
+suppressed once per occurrence. Correlation MUST evaluate only private variants
+from retained occurrences, while every ordered child variant associated with a
+retained occurrence remains eligible for `CorrelationStep::matches`. The
+retained private anchor count MUST include the anchor as occurrence 1, and
+suppressed-occurrence count MUST remain available privately. The existing
+defaults MUST remain one hour, one correlation per rule/entity per caller
+evaluation, and 150 correlation-risk points per entity.
 
 Each satisfied shipped correlation MUST normalize to an ordinary evaluated
 `DetectorResult` with `DetectorKind::ProcessChain`, the immutable correlation
@@ -403,8 +412,21 @@ entity risk.
 
 - **WHEN** distinct private matcher candidates share one outward atomic Signal
   identity but carry child names used by `CorrelationStep::matches`
-- **THEN** correlation sees the complete ordered private candidate set and the
-  outward atomic result still appears once
+- **THEN** the retained occurrence exposes its complete ordered private
+  candidate set to correlation and the outward atomic result still appears once
+
+#### Scenario: Suppressed occurrence is not correlation evidence
+
+- **WHEN** an atomic occurrence is suppressed as a repeat inside the configured
+  suppression window
+- **THEN** none of its private matcher variants may satisfy a specialized
+  process-chain correlation step
+
+#### Scenario: Repeat outside suppression window is retained
+
+- **WHEN** an equivalent timed occurrence falls outside the suppression window
+- **THEN** it becomes a retained occurrence and may satisfy a later correlation
+  within that correlation rule's own window
 
 #### Scenario: Aggregate capability context is not inferred
 

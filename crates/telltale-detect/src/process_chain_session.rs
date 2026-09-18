@@ -31,6 +31,18 @@ impl Default for ProcessChainSessionConfig {
     }
 }
 
+/// Caller-assigned identity for one outward atomic occurrence. Multiple private
+/// matcher variants may share it without making child context part of repeat
+/// suppression identity.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ProcessChainOccurrenceId(usize);
+
+impl ProcessChainOccurrenceId {
+    pub(crate) fn new(value: usize) -> Self {
+        Self(value)
+    }
+}
+
 /// The detector-neutral facts needed by repeat/correlation semantics.
 ///
 /// `entity` is already resolved by the caller.  An absent entity or timestamp
@@ -38,6 +50,7 @@ impl Default for ProcessChainSessionConfig {
 /// caller still retains the atomic detection.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ProcessChainSessionCandidate {
+    pub(crate) occurrence_id: ProcessChainOccurrenceId,
     pub(crate) rule_id: String,
     pub(crate) category: String,
     pub(crate) child: String,
@@ -74,20 +87,18 @@ struct SuppressionKey {
     dedupe_key: String,
 }
 
-/// Apply repeat suppression for outward atomic selection, then evaluate the
-/// complete private candidate stream against the compiled correlations. A
-/// duplicate atomic Signal can still carry distinct child context needed by a
-/// correlation predicate.
+/// Apply repeat suppression between atomic occurrences, retain every private
+/// matcher variant associated with each retained occurrence, then evaluate
+/// correlations over only those retained variants.
 pub(crate) fn evaluate_process_chain_session(
     candidates: &[ProcessChainSessionCandidate],
     rules: &CompiledProcessChainRules,
     config: &ProcessChainSessionConfig,
 ) -> ProcessChainSessionSemantics {
     let suppression = suppress_repeats(candidates, config.suppression_window);
-    let complete = (0..candidates.len()).collect::<Vec<_>>();
     let correlations = correlate_retained(
         candidates,
-        &complete,
+        &suppression.retained,
         rules,
         config.max_correlations_per_rule_entity,
         config.max_correlation_risk_per_entity,
@@ -105,16 +116,26 @@ pub(crate) fn suppress_repeats(
     window: Duration,
 ) -> RepeatSuppression {
     let mut anchors: BTreeMap<SuppressionKey, (usize, OffsetDateTime, u64)> = BTreeMap::new();
+    let mut retained_occurrences = BTreeMap::new();
     let mut retained = Vec::with_capacity(candidates.len());
     let mut repeat_counts = BTreeMap::new();
     let mut suppressed_count = 0;
 
     for (index, candidate) in candidates.iter().enumerate() {
+        if let Some(&is_retained) = retained_occurrences.get(&candidate.occurrence_id) {
+            if is_retained {
+                retained.push(index);
+            }
+            continue;
+        }
+
         let Some(entity) = candidate.entity.as_ref() else {
+            retained_occurrences.insert(candidate.occurrence_id, true);
             retained.push(index);
             continue;
         };
         let Some(timestamp) = candidate.occurred_at else {
+            retained_occurrences.insert(candidate.occurrence_id, true);
             retained.push(index);
             continue;
         };
@@ -129,9 +150,11 @@ pub(crate) fn suppress_repeats(
                 *count += 1;
                 repeat_counts.insert(*anchor_index, *count);
                 suppressed_count += 1;
+                retained_occurrences.insert(candidate.occurrence_id, false);
             }
             _ => {
                 anchors.insert(key, (index, timestamp, 1));
+                retained_occurrences.insert(candidate.occurrence_id, true);
                 retained.push(index);
             }
         }
@@ -253,6 +276,7 @@ mod tests {
     use telltale_rules::process_chain::load_process_chain_rules;
 
     fn candidate(
+        occurrence_id: usize,
         rule_id: &str,
         category: &str,
         child: &str,
@@ -261,6 +285,7 @@ mod tests {
         occurred_at: Option<&str>,
     ) -> ProcessChainSessionCandidate {
         ProcessChainSessionCandidate {
+            occurrence_id: ProcessChainOccurrenceId::new(occurrence_id),
             rule_id: rule_id.to_owned(),
             category: category.to_owned(),
             child: child.to_owned(),
@@ -277,6 +302,7 @@ mod tests {
     fn suppression_groups_by_rule_entity_and_matcher_key() {
         let candidates = vec![
             candidate(
+                0,
                 "rule.a",
                 "discovery",
                 "hostname",
@@ -285,6 +311,7 @@ mod tests {
                 Some("2026-01-01T00:00:00Z"),
             ),
             candidate(
+                1,
                 "rule.a",
                 "discovery",
                 "hostname",
@@ -293,6 +320,7 @@ mod tests {
                 Some("2026-01-01T00:30:00Z"),
             ),
             candidate(
+                2,
                 "rule.a",
                 "discovery",
                 "hostname",
@@ -301,6 +329,7 @@ mod tests {
                 Some("2026-01-01T00:30:00Z"),
             ),
             candidate(
+                3,
                 "rule.b",
                 "discovery",
                 "hostname",
@@ -319,6 +348,7 @@ mod tests {
     fn missing_time_or_entity_remains_atomic_only() {
         let candidates = vec![
             candidate(
+                0,
                 "rule.a",
                 "discovery",
                 "hostname",
@@ -327,6 +357,7 @@ mod tests {
                 None,
             ),
             candidate(
+                1,
                 "rule.a",
                 "discovery",
                 "hostname",
@@ -360,6 +391,7 @@ correlations:
         .unwrap();
         let candidates = vec![
             candidate(
+                0,
                 "rule.discovery",
                 "discovery",
                 "hostname",
@@ -368,6 +400,7 @@ correlations:
                 Some("2026-01-01T00:00:00Z"),
             ),
             candidate(
+                1,
                 "rule.remote",
                 "lateral_movement",
                 "psexec",
@@ -411,6 +444,7 @@ correlations:
         .unwrap();
         let candidates = vec![
             candidate(
+                0,
                 "rule.discovery",
                 "discovery",
                 "hostname",
@@ -419,6 +453,7 @@ correlations:
                 Some("2026-01-01T00:00:00Z"),
             ),
             candidate(
+                1,
                 "rule.remote",
                 "lateral_movement",
                 "psexec",
@@ -427,6 +462,7 @@ correlations:
                 Some("2026-01-01T00:01:00Z"),
             ),
             candidate(
+                2,
                 "rule.discovery",
                 "discovery",
                 "hostname",
@@ -435,6 +471,7 @@ correlations:
                 Some("2026-01-01T00:00:00Z"),
             ),
             candidate(
+                3,
                 "rule.remote",
                 "lateral_movement",
                 "psexec",

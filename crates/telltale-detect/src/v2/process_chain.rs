@@ -21,7 +21,8 @@ use super::{
     EvaluationStatus, FindingKind, FindingMetadata, Severity,
 };
 use crate::process_chain_session::{
-    ProcessChainSessionCandidate, ProcessChainSessionConfig, evaluate_process_chain_session,
+    ProcessChainOccurrenceId, ProcessChainSessionCandidate, ProcessChainSessionConfig,
+    evaluate_process_chain_session,
 };
 
 const ELIGIBLE_TOOL_STAGES: [ObservationStage; 4] = [
@@ -147,18 +148,31 @@ pub(crate) fn evaluate_tool_process_chain_session(
         (None, None) => std::cmp::Ordering::Equal,
     });
 
+    let mut occurrence_ids = BTreeMap::new();
+    let mut next_occurrence_id = 0;
     let candidates = matches
         .iter()
         .map(|matched| {
+            let dedupe_key = matched
+                .result
+                .dedupe_key()
+                .ok_or(DetectionError::RuntimeEvaluation)?;
+            let occurrence_key = (
+                matched.result.observation_ids().to_vec(),
+                matched.result.detector().id().to_owned(),
+                dedupe_key.to_owned(),
+            );
+            let occurrence_id = *occurrence_ids.entry(occurrence_key).or_insert_with(|| {
+                let occurrence_id = ProcessChainOccurrenceId::new(next_occurrence_id);
+                next_occurrence_id += 1;
+                occurrence_id
+            });
             Ok(ProcessChainSessionCandidate {
+                occurrence_id,
                 rule_id: matched.result.detector().id().to_owned(),
                 category: matched.result.category().to_owned(),
                 child: matched.child.clone(),
-                dedupe_key: matched
-                    .result
-                    .dedupe_key()
-                    .ok_or(DetectionError::RuntimeEvaluation)?
-                    .to_owned(),
+                dedupe_key: dedupe_key.to_owned(),
                 entity: matched.result.session_id().map(str::to_owned),
                 occurred_at: matched.occurred_at,
             })
@@ -1194,6 +1208,46 @@ correlations: []
     }
 
     #[test]
+    fn suppressed_atomic_occurrence_cannot_satisfy_correlation() {
+        let rules = load_default_process_chain_rules().unwrap();
+        let anchor = timed_command(
+            "cmd.exe /c hostname",
+            "suppression-anchor",
+            Some("session:suppression-lifecycle"),
+            Some("2026-09-17T10:00:00Z"),
+        );
+        let repeated = timed_command(
+            "cmd.exe /c hostname",
+            "suppressed-repeat",
+            Some("session:suppression-lifecycle"),
+            Some("2026-09-17T10:50:00Z"),
+        );
+        let account = timed_command(
+            "cmd.exe /c whoami",
+            "correlation-step",
+            Some("session:suppression-lifecycle"),
+            Some("2026-09-17T10:55:00Z"),
+        );
+
+        let evaluation = evaluate_tool_process_chain_session(
+            &rules,
+            &[&anchor, &repeated, &account],
+            &ProcessChainContext::default(),
+            &ProcessChainSessionConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(evaluation.suppressed_count(), 1);
+        assert_eq!(
+            evaluation.repeat_count("procchain.discovery.cmd_hostname", anchor.observation_id()),
+            Some(2)
+        );
+        assert!(!evaluation.results().iter().any(|result| {
+            result.detector().id() == "procchain.correlation.host_then_account_discovery"
+        }));
+    }
+
+    #[test]
     fn repeats_outside_window_and_different_sessions_survive() {
         let rules = load_default_process_chain_rules().unwrap();
         let first = timed_command(
@@ -1223,6 +1277,53 @@ correlations: []
         .unwrap();
         assert_eq!(evaluation.results().len(), 3);
         assert_eq!(evaluation.suppressed_count(), 0);
+    }
+
+    #[test]
+    fn repeat_outside_suppression_window_can_start_correlation() {
+        let rules = load_default_process_chain_rules().unwrap();
+        let original = timed_command(
+            "cmd.exe /c hostname",
+            "outside-correlation-original",
+            Some("session:outside-correlation"),
+            Some("2026-09-17T10:00:00Z"),
+        );
+        let later = timed_command(
+            "cmd.exe /c hostname",
+            "outside-correlation-later",
+            Some("session:outside-correlation"),
+            Some("2026-09-17T11:01:00Z"),
+        );
+        let account = timed_command(
+            "cmd.exe /c whoami",
+            "outside-correlation-account",
+            Some("session:outside-correlation"),
+            Some("2026-09-17T11:05:00Z"),
+        );
+
+        let evaluation = evaluate_tool_process_chain_session(
+            &rules,
+            &[&original, &later, &account],
+            &ProcessChainContext::default(),
+            &ProcessChainSessionConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(evaluation.suppressed_count(), 0);
+        let correlation = result(
+            evaluation.results(),
+            "procchain.correlation.host_then_account_discovery",
+        );
+        assert_eq!(
+            correlation
+                .observation_ids()
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            [later.observation_id(), account.observation_id()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
     }
 
     #[test]
@@ -1455,9 +1556,15 @@ correlations:
             1,
             "outward atomic Signal identity remains unique"
         );
-        assert!(evaluation.results().iter().any(|result| {
-            result.detector().id() == "procchain.correlation.synthetic_children"
-        }));
+        assert_eq!(evaluation.suppressed_count(), 0);
+        let correlation = result(
+            evaluation.results(),
+            "procchain.correlation.synthetic_children",
+        );
+        assert_eq!(
+            correlation.observation_ids(),
+            [observation.observation_id()]
+        );
     }
 
     #[test]

@@ -154,6 +154,13 @@ remains the owner of the six correlation definitions and
 `CorrelationStep::matches`; generic `sequence` and `correlation` detector kinds
 remain runtime-unsupported.
 
+Private matcher variants are grouped into atomic occurrences by supporting
+observation, detector, and matcher dedupe identity. Repeat suppression selects
+the retained occurrences before specialized process-chain correlation. Every
+private child variant belonging to a retained occurrence remains available to
+`CorrelationStep::matches`; no variant from a suppressed occurrence can become
+correlation evidence.
+
 Timed v2 semantics use only truthful source-reported `occurred_at`. They never
 substitute `observed_at`, materialization time, Event3 construction time, or the
 wall clock. Missing `occurred_at` retains the atomic match but makes it
@@ -379,8 +386,10 @@ consumes distinct input items in any order. Overlapping windows choose the
 earliest satisfying start, and later completions with the same dedupe key are
 duplicates. Process chains use their specialized `parent_child`, `standalone`,
 or ordered `entity_correlation` shape and converge through DetectorResult. The
-implemented bounded path covers Tool-derived `parent_child` and `standalone`;
-`entity_correlation` remains on the legacy production path.
+production entity-correlation path remains the legacy Event3 implementation.
+The non-production Detection v2 ProcessChain session evaluator implements the
+same six specialized entity correlations for Tool-derived matches. Generic
+Detection v2 `Sequence` and `Correlation` detector kinds remain unsupported.
 
 ## Suppression, deduplication, and risk
 
