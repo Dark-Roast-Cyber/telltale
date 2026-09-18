@@ -71,10 +71,13 @@ The intended convergence order is:
    Preserve its matching, suppression, correlation, and risk behavior without
    manufacturing directly observed Process facts from parsed command text.
 4. **Promote Canonical Observation v2 to the production acquisition contract for
-   the target source set.** Source-native adapters should emit canonical
-   observations directly, along with only the checkpoint metadata required by
-   scan/watch operation. Do not route production through a permanent
-   CanonicalObservationV2-to-NormalizedRecord or NormalizedRecord-to-v2 bridge.
+   the target source set — complete.** The public `telltale-sources` acquisition
+   API is the single cross-source COv2 acquisition owner for all eight identities.
+   Source-native extraction feeds source-owned canonical mapping directly, with
+   caller-owned observed time and separate operational progress. The parallel
+   experimental projection router is removed; no legacy conversion bridge is
+   introduced. Production scan/watch/detection/embedding remain on the legacy
+   path until step 5.
 5. **Cut scan, watch, and the supported embedding facade over together.** The
    normal production path should become Canonical Observation v2 -> Detection v2,
    while Event 3.0 remains a deliberate compatibility projection during the
@@ -87,6 +90,9 @@ The intended convergence order is:
    Event4 remains an independent projection from accepted semantic truth. Do not
    expand Event4 persistence, dual emission, or transport merely to compensate
    for an unfinished internal migration.
+
+Step 5 is next and has not started. Acquisition convergence does not activate
+Detection v2 in production, change Event 3.0, or activate Event4.
 
 The accepted semantic direction is documented in:
 

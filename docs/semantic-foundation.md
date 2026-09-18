@@ -26,9 +26,16 @@
 > detector evaluations; the corpus has one reviewed match-set difference plus
 > 28 reviewed capability-driven indeterminate outcomes, with zero unexplained
 > differences.
-> Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
-> **Unsupported**, and ToolExecution **Unknown**.
-> Production adapter cutover has not started.
+> The public `telltale_sources::acquisition` module owns the authoritative
+> cross-source acquisition contract for all eight identities. It is the single
+> router from source-native extraction through source-owned canonical mapping to
+> an acquisition batch; source mappers remain crate-private. Production runtime
+> cutover has not started; see [Canonical Observation v2](canonical-observation-v2.md)
+> for the explicit `observed_at`, progress semantics, and runtime boundary.
+> ROADMAP step 4 convergence is complete; the later coordinated scan/watch/
+> embedding runtime cutover is step 5 and has not started.
+> Copilot native-v2 capabilities are ToolCall
+> **Supported**, UserContext **Unsupported**, and ToolExecution **Unknown**.
 > **Existing compatibility:**
 > Event 3.0 remains the current frozen external compatibility and output
 > contract.
@@ -38,14 +45,29 @@ architecture and distinguishes the implemented non-production foundation from
 shipped runtime behavior.
 
 The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference
-projections do not activate this path in production: `NormalizedRecordV1`
-remains the scanner's adapter contract, Rule v1 remains the production
-detection path, and Canonical Observation v2 cutover has not started.
+projections do not activate this path in production:
+`telltale_schema::record::NormalizedRecord` remains the scanner-to-detector
+handoff and Rule v1 remains the production detection path. `NormalizedRecordV1`
+is used separately for timeline/export-oriented behavior; it is not the
+scanner's primary detection record contract. The acquisition module does not
+change that runtime boundary.
+Every acquisition call receives explicit caller-owned `observed_at`. OpenCode's
+bounded read controls and high-water progress are source-specific operational
+metadata, not evidence; the other seven identities return
+`AcquisitionProgress::None`. Copilot reuses source-local stateful native
+interpretation without durable progress; active session and ordinal state is
+rebuilt on each acquisition. The legacy production scanner, detection path, and
+embedding path remain unchanged, Event 3.0 is frozen, and Event4 is inactive.
 Production Detection v2, Event4 emission/integration, and Telemetry/Output v2
 remain not started, and
 Event 3.0 remains frozen. The `compat.v1.url` view is intentionally
 visibility-limited to truthful absence; focused synthetic harness coverage
 demonstrates the compatibility gap.
+
+Acquisition is not a conversion bridge from `CanonicalObservationV2` to either
+the production `NormalizedRecord` handoff or the separate timeline/export-oriented
+`NormalizedRecordV1` representation. Those paths remain separate until the
+coordinated production cutover.
 
 ## The semantic path
 

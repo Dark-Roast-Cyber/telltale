@@ -7,20 +7,24 @@
 > and the six specialized correlations, `DetectorResult` -> `Signal` -> atomic
 > `Finding`,
 > and the Rule v1 compatibility compiler and session evaluator. It is not the
-> current engine. An offline,
-> deterministic, immutable-fixture harness measures the current native
-> Canonical Observation v2 reference identities (`claude.projects`;
+> current engine. All eight contracted identities have authoritative Canonical
+> Observation v2 acquisition coverage (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
 > `opencode.sqlite`; `openclaw.agents`; `qwen.projects`; `copilot.process_log`) and
-> has zero unexplained differences in the current reviewed 17-session corpus
-> (15 cases, 306 detector evaluations). The reviewed differences are five
-> match-set differences plus 28 capability-driven indeterminate outcomes. The
-> OpenClaw, Qwen, and Copilot reference adapters are implemented as non-production
-> projections. Copilot native-v2 capabilities are ToolCall **Supported**,
+> feed an offline, deterministic, immutable-fixture harness. The current reviewed
+> corpus covers 15 cases, 17 sessions, and 306 detector/session evaluations: 15
+> both-match, 251 both-no-match, one legacy-only match, zero v2-only matches, 28
+> v2-indeterminate outcomes, zero v2 errors, and 11 v2-not-applicable outcomes.
+> Fifteen sessions have equivalent risk and two are legacy-only; the current
+> accounting contains 29 reviewed exceptions and zero unexplained differences.
+> This is bounded fixture evidence, not complete behavioral equivalence or proof
+> for every custom Rule v1 rule; in particular, `compat.v1.url` remains
+> intentionally absent. Copilot native-v2 capabilities are ToolCall **Supported**,
 > UserContext **Unsupported**, and ToolExecution **Unknown**.
-> Live scanner shadow: **NO**. Production activation: **NO**. Production remains
-> on `NormalizedRecordV1` and Rule v1; remaining adapter coverage is incomplete,
-> and Event3 remains frozen. The v2 process-chain session path is still
+> Live scanner shadow: **NO**. Detection v2 production runtime activation:
+> **NOT STARTED**. Complete acquisition coverage does not mean complete production
+> runtime coverage: production remains on `NormalizedRecord` and Rule v1, and
+> Event3 remains frozen. The v2 process-chain session path is still
 > non-production; legacy Event3 remains the active projection and now delegates
 > repeat/correlation decisions to the shared pure semantic kernel. Advanced detector
 > runtime and a Detection Content v2 loader are not implemented. **Existing

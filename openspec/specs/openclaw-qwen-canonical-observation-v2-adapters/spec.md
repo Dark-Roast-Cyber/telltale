@@ -4,10 +4,12 @@
 
 Define the completed P15 adapter contract for OpenClaw and Qwen JSONL sources.
 The contract covers source-owned native interpretation, exact legacy
-compatibility, non-production Canonical Observation v2 projections, exact
-facade routing, cross-adapter conformance, and offline shadow evidence. The
+compatibility, non-production Canonical Observation v2 projections, authoritative
+acquisition routing, cross-adapter conformance, and offline shadow evidence. The
 reviewed 13-session corpus has zero unexplained mismatches; production remains
-on `NormalizedRecordV1` and Rule v1.
+on `NormalizedRecordV1` and Rule v1. The authoritative public acquisition API
+reuses the same native interpretation and canonical mapping without activating
+production.
 ## Requirements
 ### Requirement: One source-owned native interpretation
 
@@ -193,20 +195,6 @@ evidence.
 - **THEN** the Qwen canonical slice fails closed or retains Unknown rather than
   inventing identity or lifecycle meaning
 
-### Requirement: Facade routing is exact and non-production
-
-The canonical facade MUST route only the exact supported identities
-`(ClientId::OpenClaw, "openclaw.agents", SourceKind::Jsonl)` and
-`(ClientId::Qwen, "qwen.projects", SourceKind::Jsonl)`, MUST expose no
-source-native types, and MUST remain outside production parsing, scanning, and
-detection.
-
-#### Scenario: Wrong-case facade identity is rejected
-
-- **WHEN** a caller supplies a wrong-case or wrong-client OpenClaw/Qwen source
-- **THEN** the facade returns unsupported identity without reading the path or
-  routing to another adapter
-
 ### Requirement: Conformance and shadow evidence remain offline
 
 Cross-adapter vectors MUST compare canonical semantic family, compatible stage,
@@ -242,3 +230,49 @@ activation.
 - **WHEN** P15 adapter tests run beside existing Event3 and source regressions
 - **THEN** Event3 bytes/behavior and unrelated adapter output remain unchanged,
   and no production v2 observations are required
+
+### Requirement: Acquisition reuses source-owned canonical mapping
+
+The authoritative public acquisition API MUST accept exactly
+`(OpenClaw, openclaw.agents)` and `(Qwen, qwen.projects)` with `Jsonl` source
+kind. It MUST validate identity and kind before source I/O. Each invocation
+reaching extraction MUST invoke its existing native extractor exactly once and
+map those records through the same source-owned canonical semantics as the
+reference projector, without a
+`ParsedRecord` or `NormalizedRecord` conversion.
+
+Shared acquisition input MUST remain caller-owned `observed_at`, without SQLite
+read controls. Both sources MUST return `AcquisitionProgress::None`. Acquisition
+MUST preserve the identity, time, capability, and evidence-strength requirements
+above, MUST NOT persist scanner state, and MUST NOT return a partial successful
+batch or successful progress on mapping/validation failure. Source-read, mapping,
+and validation errors MUST remain bounded and privacy-safe in Display and Debug.
+
+#### Scenario: Acquisition matches the reference projection
+
+- **WHEN** either source is acquired with a fixed observed time
+- **THEN** observations preserve reference projection semantics and capabilities,
+  source timestamps, structured tool evidence and source call linkage, with no
+  invented execution or direct activity facts, and progress is `None`
+
+#### Scenario: Acquisition preserves replay coordinates
+
+- **WHEN** the same native coordinates are acquired repeatedly or from a renamed
+  artifact
+- **THEN** observation IDs and session correlation remain stable, native record
+  IDs retain precedence over session-scoped sequence, and missing both identity
+  forms fails closed rather than using a path or legacy filename fallback
+
+#### Scenario: Invalid acquisition inputs fail before reading
+
+- **WHEN** either identity is supplied with the wrong client or source kind
+- **THEN** acquisition rejects it before invoking native extraction or reading
+  its path
+
+#### Scenario: All-eight authoritative acquisition remains pre-cutover
+
+- **WHEN** authoritative public acquisition covers all eight source identities
+  before the coordinated production runtime cutover
+- **THEN** acquisition convergence step 4 is complete, runtime cutover step 5
+  has not begun, and production parsing, scanner state, scan/watch/embedding,
+  detection, durable state, Event3, and Event4 behavior remain unchanged

@@ -121,6 +121,13 @@ pub(crate) fn project_copilot_canonical_observations(
     }
 
     let events = extract_copilot_native_events(source)?;
+    project_copilot_native_events(events, &options)
+}
+
+pub(crate) fn project_copilot_native_events(
+    events: Vec<CopilotNativeEvent>,
+    options: &CopilotCanonicalOptions,
+) -> Result<Vec<CanonicalObservationV2>, CopilotCanonicalError> {
     let mut observations = Vec::new();
     for event in events {
         match event {
@@ -164,7 +171,7 @@ pub(crate) fn project_copilot_canonical_observations(
                     ordinal,
                     timestamp.as_deref(),
                     item,
-                    &options,
+                    options,
                     &mut observations,
                 )?;
             }

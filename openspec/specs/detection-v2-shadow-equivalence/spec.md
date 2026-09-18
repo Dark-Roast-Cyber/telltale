@@ -8,38 +8,20 @@ detector evaluations. It records one reviewed match-set difference plus 28
 reviewed capability-driven indeterminate outcomes, with zero unexplained
 differences. It does not activate Detection v2 or change Event 3.0.
 ## Requirements
-### Requirement: Canonical projection facade
+### Requirement: Shadow fixtures use authoritative acquisition
 
-The source layer MUST expose a provider-neutral projection entry point that
-routes by the exact registered client and source identity, accepts caller-owned
-observation time, and returns only Canonical Observation v2 values or one of the
-bounded error codes `unsupported_source_identity`, `source_parse`,
-`canonical_mapping`, and `canonical_validation`. It MUST route Claude projects,
-the three supported Codex session identities, OpenCode SQLite, OpenClaw
-`openclaw.agents`, Qwen `qwen.projects`, and Copilot `copilot.process_log`.
-It MUST NOT route `codex.project_sessions`, legacy JSON, project JSON, or
-unrelated source identities.
+The fixture harness MUST acquire canonical observations through the authoritative
+`telltale-sources::acquisition` API defined by source-support-denominator, with
+fixed caller-owned observed time. It MUST pass only the batch's observations to
+the source-free comparator and MUST NOT persist acquisition progress or own a
+second source router. Legacy fixture parsing MUST remain independent, without
+converting either representation into the other.
 
-#### Scenario: Exact identity selects the native projector
+#### Scenario: Acquisition convergence preserves reviewed shadow results
 
-- **WHEN** a registered supported `(client, source_id)` pair is projected with a
-  fixed observation time
-- **THEN** the existing native projector is invoked without NormalizedRecord
-  conversion and each returned observation retains that observation time.
-
-#### Scenario: Exact Copilot process-log identity selects its native projector
-
-- **WHEN** `(ClientId::Copilot, "copilot.process_log")` with
-  `SourceKind::CopilotProcessLog` is projected with a fixed observation time
-- **THEN** the Copilot native projector is invoked without NormalizedRecord
-  conversion and each returned observation retains that observation time.
-
-#### Scenario: Unsupported identity fails closed
-
-- **WHEN** an unregistered or explicitly non-v2 `(client, source_id)` pair is
-  supplied
-- **THEN** the call returns `unsupported_source_identity` without reading the
-  source path or exposing it in Display or Debug output.
+- **WHEN** fixture sources are acquired through the authoritative API
+- **THEN** observation semantics and the reviewed mismatch multiset remain
+  unchanged, with no golden updates justified solely by the routing change
 
 ### Requirement: Source-free shadow comparison
 

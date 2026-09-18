@@ -28,6 +28,10 @@ compiled-in registry and parser change.
   case-sensitive `(ClientId, source_id)` parser registration table. `SourceKind`
   is checked as expected container/reporting metadata after identity lookup; it
   never selects semantic parsing.
+- `crates/telltale-sources/src/acquisition.rs` owns the public,
+  cross-source Canonical Observation v2 acquisition router, batch types, and
+  acquisition controls. Its route is source-native extraction -> source-owned
+  canonical mapping -> batch; source mappers remain crate-private.
 - Each modeled source parser uses the internal uniform shape
   `fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, ParseError>`.
   Public `parse_source_records()` and
@@ -110,6 +114,10 @@ entirely new coding agent or harness.
   another parser.
 - Define the source contract for missing or unknown discriminators. Do not infer
   a known kind from an explicit unknown variant.
+- When the source participates in Canonical Observation v2 acquisition, keep
+  native extraction and canonical mapping in the source module, then add its
+  exact identity to the single public acquisition router. Do not add a parallel
+  cross-source facade or make the source mapper public.
 
 ### 5. Add exact private registration
 

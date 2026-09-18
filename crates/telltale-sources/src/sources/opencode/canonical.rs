@@ -132,8 +132,14 @@ pub(crate) fn project_opencode_canonical_observations(
     }
 
     let extraction = extract_sqlite_native_source(source, options.parse_options)?;
-    let part_message_ids = extraction
-        .records
+    project_opencode_native_records(&extraction.records, &options.observed_at)
+}
+
+pub(crate) fn project_opencode_native_records(
+    records: &[OpenCodeSqliteNativeRecord],
+    observed_at: &ObservedAt,
+) -> Result<Vec<CanonicalObservationV2>, OpenCodeCanonicalError> {
+    let part_message_ids = records
         .iter()
         .filter_map(|record| match record {
             OpenCodeSqliteNativeRecord::Text(record) => record.message_id.as_deref(),
@@ -144,7 +150,7 @@ pub(crate) fn project_opencode_canonical_observations(
         .collect::<BTreeSet<_>>();
 
     let mut observations = Vec::new();
-    for record in &extraction.records {
+    for record in records {
         match record {
             OpenCodeSqliteNativeRecord::Message(record)
                 if record
@@ -153,15 +159,15 @@ pub(crate) fn project_opencode_canonical_observations(
                     .is_some_and(|id| part_message_ids.contains(id)) => {}
             OpenCodeSqliteNativeRecord::Message(record) => {
                 require_source_id(record.source_id.as_deref())?;
-                project_message(record, &options, &mut observations)?;
+                project_message(record, observed_at, &mut observations)?;
             }
             OpenCodeSqliteNativeRecord::Text(record) => {
                 require_source_id(record.source_id.as_deref())?;
-                project_text_part(record, &options, &mut observations)?;
+                project_text_part(record, observed_at, &mut observations)?;
             }
             OpenCodeSqliteNativeRecord::Tool(record) => {
                 require_source_id(record.source_id.as_deref())?;
-                project_tool_part(record, &options, &mut observations)?;
+                project_tool_part(record, observed_at, &mut observations)?;
             }
         }
     }
@@ -170,7 +176,7 @@ pub(crate) fn project_opencode_canonical_observations(
 
 fn project_message(
     record: &OpenCodeMessageNativeRecord,
-    options: &OpenCodeCanonicalOptions,
+    observed_at: &ObservedAt,
     observations: &mut Vec<CanonicalObservationV2>,
 ) -> Result<(), OpenCodeCanonicalError> {
     let message_type = record.message_type.as_deref();
@@ -207,7 +213,7 @@ fn project_message(
             record.error.as_ref(),
             record.error_present,
             stage,
-            options,
+            observed_at,
             observations,
         );
     }
@@ -232,7 +238,7 @@ fn project_message(
         record.context.occurrence_time.as_deref(),
         ObservationBody::Message(body),
         ObservationStage::MessageObserved,
-        options,
+        observed_at,
     )?;
     builder = builder.fact_metadata("message.role", normal_reported()?);
     builder = builder.fact_metadata("message.content", normal_reported()?);
@@ -242,7 +248,7 @@ fn project_message(
 
 fn project_text_part(
     record: &OpenCodeTextPartNativeRecord,
-    options: &OpenCodeCanonicalOptions,
+    observed_at: &ObservedAt,
     observations: &mut Vec<CanonicalObservationV2>,
 ) -> Result<(), OpenCodeCanonicalError> {
     let text = record
@@ -258,7 +264,7 @@ fn project_text_part(
         record.occurrence_time.as_deref(),
         ObservationBody::Message(body),
         ObservationStage::MessageObserved,
-        options,
+        observed_at,
     )?;
     builder = builder.fact_metadata("message.role", normal_reported()?);
     builder = builder.fact_metadata("message.content", normal_reported()?);
@@ -268,7 +274,7 @@ fn project_text_part(
 
 fn project_tool_part(
     record: &OpenCodeToolPartNativeRecord,
-    options: &OpenCodeCanonicalOptions,
+    observed_at: &ObservedAt,
     observations: &mut Vec<CanonicalObservationV2>,
 ) -> Result<(), OpenCodeCanonicalError> {
     if record.tool_state_invalid {
@@ -291,7 +297,7 @@ fn project_tool_part(
         None,
         false,
         None,
-        options,
+        observed_at,
         observations,
     )
 }
@@ -311,7 +317,7 @@ fn project_tool(
     fallback_error: Option<&Value>,
     fallback_error_present: bool,
     message_stage: Option<ObservationStage>,
-    options: &OpenCodeCanonicalOptions,
+    observed_at: &ObservedAt,
     observations: &mut Vec<CanonicalObservationV2>,
 ) -> Result<(), OpenCodeCanonicalError> {
     let empty_state;
@@ -394,7 +400,7 @@ fn project_tool(
             has_result,
             explicit_failure,
             stage,
-            options,
+            observed_at,
             observations,
         )?;
         terminal_stage_emitted |= stage == ObservationStage::ToolExecutionCompleted;
@@ -421,7 +427,7 @@ fn project_tool(
             has_result,
             explicit_failure,
             ObservationStage::ToolResultReturned,
-            options,
+            observed_at,
             observations,
         )?;
     }
@@ -442,7 +448,7 @@ fn emit_tool_observation(
     has_result: bool,
     explicit_failure: bool,
     stage: ObservationStage,
-    options: &OpenCodeCanonicalOptions,
+    observed_at: &ObservedAt,
     observations: &mut Vec<CanonicalObservationV2>,
 ) -> Result<(), OpenCodeCanonicalError> {
     let mut body = ToolObservation::new();
@@ -522,7 +528,7 @@ fn emit_tool_observation(
         occurrence_time,
         ObservationBody::Tool(body),
         stage,
-        options,
+        observed_at,
     )?;
     for (path, provenance) in metadata {
         builder = builder.fact_metadata(path, normal(provenance)?);
@@ -565,7 +571,7 @@ fn common_builder(
     occurrence_time: Option<&str>,
     body: ObservationBody,
     stage: ObservationStage,
-    options: &OpenCodeCanonicalOptions,
+    observed_at: &ObservedAt,
 ) -> Result<ObservationBuilder, OpenCodeCanonicalError> {
     let mut source = SourceProvenance::new(
         IngestionMode::SessionStore,
@@ -577,10 +583,9 @@ fn common_builder(
     if let Some(source_id) = source_id {
         source = source.with_native_id(source_id)?;
     }
-    let mut builder =
-        CanonicalObservationV2::builder(body, stage, options.observed_at.clone(), source)
-            .sequence(source_sequence)
-            .capability_context(capabilities());
+    let mut builder = CanonicalObservationV2::builder(body, stage, observed_at.clone(), source)
+        .sequence(source_sequence)
+        .capability_context(capabilities());
     if let Some(session_id) = &context.session_id {
         builder = builder
             .session_id(telltale_schema::observation::CorrelationId::source_reported(session_id)?);

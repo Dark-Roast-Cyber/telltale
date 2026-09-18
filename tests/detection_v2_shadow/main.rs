@@ -11,9 +11,7 @@ use telltale_rules::load_default_rule_set;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::ObservedAt;
 use telltale_schema::source::Source;
-use telltale_sources::canonical::{
-    CanonicalProjectionOptions, project_source_canonical_observations,
-};
+use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
 use telltale_sources::parser::parse_source_records;
 
 const OBSERVED_AT: &str = "2026-09-04T00:00:00Z";
@@ -284,11 +282,12 @@ fn evaluate_case(
 ) -> ShadowComparison {
     let source = source(root, case);
     let legacy = parse_source_records(&source).expect("legacy fixture parse");
-    let canonical = project_source_canonical_observations(
+    let canonical = acquire_source(
         &source,
-        CanonicalProjectionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
-    .unwrap_or_else(|error| panic!("{} projection failed: {error}", case.id));
+    .unwrap_or_else(|error| panic!("{} acquisition failed: {error}", case.id))
+    .observations;
     assert!(
         !canonical.is_empty(),
         "{} must project observations",

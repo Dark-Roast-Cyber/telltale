@@ -5,7 +5,9 @@ This specification covers only the Claude Code `claude.projects` reference
 adapter path from the published implementation. It records a local,
 non-production Canonical Observation v2 projection; the legacy
 `NormalizedRecordV1`/`ParsedRecord` path remains production, with no detector
-cutover, Event 3.0 change, or other adapter migration.
+cutover or Event 3.0 change. The authoritative public acquisition API also
+reuses this native interpretation and canonical mapping without activating
+production.
 ## Requirements
 ### Requirement: One Claude-native interpretation
 
@@ -37,7 +39,8 @@ unknown explicit discriminator to `RecordKind::Other`, and object-envelope
 
 ### Requirement: Canonical projection is not production-active
 
-The v2 projection MUST be a `pub(crate)` future/test seam only. It MUST NOT be
+The v2 projection MUST remain a `pub(crate)` production-inactive reference
+seam. It MUST NOT be
 wired into `parse_source_records`, detection, CLI, or the scan pipeline, and
 `NormalizedRecordV1` MUST remain the production path.
 
@@ -254,3 +257,33 @@ record abstraction, registry, or runtime migration.
   both reference adapters with truthful source sessions
 - **THEN** their family, stage, role, content structure, metadata, and lifecycle
   meaning compare equal while source-specific coordinates and IDs may differ
+
+### Requirement: Claude acquisition reuses canonical semantics without progress
+
+The authoritative public acquisition API MUST validate the exact
+`(Claude, claude.projects)` identity and `Jsonl` kind before I/O. It MUST invoke
+the existing native extractor exactly once and map those records through the
+same canonical semantics as the reference projector, without a legacy record
+conversion. It MUST accept only
+caller-owned `observed_at` as shared acquisition configuration, not SQLite read
+controls, and return `AcquisitionProgress::None`. It MUST preserve source time,
+session-scoped replay identity, structured evidence, and bounded source-read,
+mapping, and validation errors. Failure MUST NOT return successful progress.
+
+#### Scenario: Acquisition preserves reference evidence
+
+- **WHEN** a valid Claude source is acquired with a fixed observed time
+- **THEN** its observations match the reference projection, repeated acquisition
+  retains observation identity, and progress is `None`
+
+#### Scenario: Canonical identity cannot use the legacy fallback
+
+- **WHEN** a Claude source has no truthful canonical session coordinate
+- **THEN** acquisition fails with a privacy-safe replay-unverifiable error while
+  legacy parsing retains its existing filename fallback independently
+
+#### Scenario: Invalid acquisition identity or kind is rejected before I/O
+
+- **WHEN** the client/source pair or source kind does not match this contract
+- **THEN** acquisition rejects it before opening the path, without exposing the
+  path or source contents through Display or Debug

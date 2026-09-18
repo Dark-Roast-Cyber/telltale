@@ -8,10 +8,6 @@ mod install;
 pub(crate) mod native;
 pub(crate) mod parser;
 
-#[allow(unused_imports)]
-pub(crate) use canonical::{
-    ClaudeCanonicalError, ClaudeCanonicalOptions, project_claude_canonical_observations,
-};
 pub(crate) use install::INSTALL;
 
 pub(crate) const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {

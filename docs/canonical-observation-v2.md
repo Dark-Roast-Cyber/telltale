@@ -15,11 +15,15 @@
 > `NormalizedRecordV1` and Rule v1, with no live shadow or production parity.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**.
-> OpenCode legacy JSON remains compatibility-only, and production adapter
-> cutover has not started. The P10B identity/conformance amendment is
-> implemented: stable identity is coordinate-only and semantic comparison is
-> separate. **Existing compatibility:** Event 3.0 remains the current frozen
-> external compatibility and output contract.
+> `opencode.legacy_json` is retired, and production adapter runtime cutover has
+> not started. The public `telltale_sources::acquisition` contract now covers
+> `claude.projects`, `codex.sessions`, `codex.archived_sessions`,
+> `codex.headless_sessions`, `opencode.sqlite`, `openclaw.agents`,
+> `qwen.projects`, and `copilot.process_log`—all eight target identities. The P10B
+> identity/conformance amendment is implemented: stable identity is
+> coordinate-only and semantic comparison is separate. **Existing
+> compatibility:** Event 3.0 remains the current frozen external compatibility
+> and output contract.
 
 The accepted data path is:
 
@@ -36,10 +40,45 @@ The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 referenc
 projections are deliberately not active normalization paths. They preserve
 source call IDs, structured content parts, structured tool values, and truthful
 lifecycle stages while the production scanner continues to use
-`NormalizedRecordV1`. Detection v2 runtime and telemetry/output v2 are not
-started. The
-Event4 contract foundation is implemented without a Canonical Observation v2
+`NormalizedRecordV1`. The experimental Detection v2 foundation exists, but
+production activation and telemetry/output v2 have not started. The Event4
+contract foundation is implemented without a Canonical Observation v2
 projection or production output path, and Event 3.0 remains frozen.
+
+## Acquisition convergence status
+
+The public `telltale_sources::acquisition` module, including its public batch,
+options, progress, error, and router functions, owns authoritative cross-source
+acquisition for all eight identities:
+`claude.projects`, `codex.sessions`, `codex.archived_sessions`,
+`codex.headless_sessions`, `opencode.sqlite`, `openclaw.agents`,
+`qwen.projects`, and `copilot.process_log`. The single router performs
+source-native extraction, calls the source-owned crate-private canonical mapper,
+and returns an acquisition batch. All eight use explicit caller-owned
+`observed_at`.
+
+The OpenCode-specific `acquire_opencode_sqlite` entry point accepts a part
+minimum-update coordinate and part limit, and returns separate progress as the
+selected part-row `time_updated` high-water value. These read controls and
+progress are source-specific operational metadata, not canonical evidence,
+provenance, occurrence time, or durable state; the acquisition call does not
+persist a cursor. The other seven identities return
+`AcquisitionProgress::None`, and do not share the OpenCode controls.
+
+Copilot reuses source-local stateful native interpretation, but has no durable
+progress coordinate or durable local acquisition state. Its active session and
+ordinal state is rebuilt on each acquisition.
+
+The all-eight adapter coverage gate and ROADMAP step 4 convergence are complete.
+The experimental parallel top-level canonical facade has been deleted; the
+acquisition module is the single public cross-source router. This does not
+activate production: the legacy scanner, detection, and embedding paths remain
+unchanged. Step 5, the coordinated scan/watch/embedding runtime cutover, has not
+started. Event 3.0 remains frozen and Event4 remains inactive.
+
+Acquisition directly maps source-native facts to Canonical Observation v2. It is
+not a conversion bridge to or from `NormalizedRecordV1`; the later coordinated
+runtime cutover remains a separate step.
 
 ## Conceptual contract
 

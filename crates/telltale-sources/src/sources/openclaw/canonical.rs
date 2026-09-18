@@ -121,9 +121,16 @@ pub(crate) fn project_openclaw_canonical_observations(
     }
 
     let records = extract_openclaw_native_records(source)?;
+    project_openclaw_native_records(&records, &options)
+}
+
+pub(crate) fn project_openclaw_native_records(
+    records: &[OpenClawNativeRecord],
+    options: &OpenClawCanonicalOptions,
+) -> Result<Vec<CanonicalObservationV2>, OpenClawCanonicalError> {
     let mut observations = Vec::new();
     for record in records {
-        project_record(&record, &options, &mut observations)?;
+        project_record(record, options, &mut observations)?;
     }
     Ok(observations)
 }

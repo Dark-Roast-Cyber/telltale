@@ -121,9 +121,16 @@ pub(crate) fn project_qwen_canonical_observations(
     }
 
     let records = extract_qwen_native_records(source)?;
+    project_qwen_native_records(&records, &options)
+}
+
+pub(crate) fn project_qwen_native_records(
+    records: &[QwenNativeRecord],
+    options: &QwenCanonicalOptions,
+) -> Result<Vec<CanonicalObservationV2>, QwenCanonicalError> {
     let mut observations = Vec::new();
     for record in records {
-        project_record(&record, &options, &mut observations)?;
+        project_record(record, options, &mut observations)?;
     }
     Ok(observations)
 }

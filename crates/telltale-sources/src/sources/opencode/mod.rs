@@ -14,11 +14,6 @@ mod tests;
 
 pub(crate) use install::INSTALL;
 
-#[allow(unused_imports)]
-pub(crate) use canonical::{
-    OpenCodeCanonicalError, OpenCodeCanonicalOptions, project_opencode_canonical_observations,
-};
-
 pub(crate) const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "opencode.sqlite",
     kind: SourceKind::Sqlite,

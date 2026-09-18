@@ -121,9 +121,16 @@ pub(crate) fn project_claude_canonical_observations(
     }
 
     let records = extract_claude_native_records(source)?;
+    project_claude_native_records(&records, &options)
+}
+
+pub(crate) fn project_claude_native_records(
+    records: &[ClaudeNativeRecord],
+    options: &ClaudeCanonicalOptions,
+) -> Result<Vec<CanonicalObservationV2>, ClaudeCanonicalError> {
     let mut observations = Vec::new();
     for record in records {
-        project_record(&record, &options, &mut observations)?;
+        project_record(record, options, &mut observations)?;
     }
     Ok(observations)
 }

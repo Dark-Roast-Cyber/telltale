@@ -25,7 +25,12 @@ v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
 [telemetry/output architecture](telemetry-output-architecture.md) pages. They
 are accepted architecture, with experimental Detection v2 and Event4 contract
 foundations now implemented non-production. Event4 production persistence and
-output are not implemented; neither is Telemetry/Output v2.
+output are not implemented; neither is Telemetry/Output v2. The public
+`telltale_sources::acquisition` module now owns authoritative cross-source
+Canonical Observation v2 acquisition for all eight target identities. It is the
+single router: source-native extraction flows into source-owned canonical
+mapping and then an acquisition batch. It is not connected to scan, watch,
+detection, or embedding.
 
 `observation_match`, bounded Tool-derived parent/child and standalone
 `process_chain` evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`, and
@@ -48,9 +53,13 @@ indeterminate outcomes and zero unexplained differences. Copilot native-v2
 capabilities are ToolCall **Supported**, UserContext **Unsupported**, and
 ToolExecution **Unknown**.
 
-Production adapter migration/cutover has not started. Event 3.0 remains the
-frozen current compatibility contract. The pipeline below continues to describe
-the shipped implementation until the coordinated production cutover occurs.
+Production adapter acquisition convergence now covers all eight identities at the
+public `telltale_sources::acquisition` boundary, satisfying and completing
+ROADMAP step 4. Source mappers remain crate-private; acquisition is the single
+cross-source router and there is no parallel canonical facade. Event 3.0 remains
+the frozen current compatibility contract. The pipeline below continues to
+describe the shipped implementation until the later coordinated production
+cutover occurs.
 Event4 remains inactive. Direct runtime telemetry, including any future
 OpenShell source that reports Process, Network, Runtime, policy, enforcement, or
 action-result evidence, remains separate from command-derived Tool
@@ -95,8 +104,14 @@ The production migration order is:
 7. decide the remaining Event4 and telemetry activation gates after the internal
    semantic/detection path is singular.
 
-Production must not converge by creating a permanent
-`CanonicalObservationV2 -> NormalizedRecord` bridge or a permanent
+Step 4 convergence is complete. The later coordinated scan, watch, and supported
+embedding runtime cutover is step 5 and has not started. The legacy production
+scanner, detection path, and embedding path remain unchanged; Event 3.0 is frozen
+and Event4 is inactive.
+
+Acquisition is direct source-native extraction followed by source-owned canonical
+mapping; it is not a conversion bridge. Production must not converge by creating
+a permanent `CanonicalObservationV2 -> NormalizedRecord` bridge or a permanent
 `NormalizedRecord -> CanonicalObservationV2` bridge. Event3 and Event4 are
 projections from accepted internal semantics, not conversion stages between the
 old and new internal models.
@@ -117,11 +132,18 @@ Telltale currently runs a repeatable batch pipeline:
    local JSONL for SIEM shippers; optional delivery paths wrap the same event
    payload for Splunk HEC or Elastic-compatible export.
 
-The current scanner still uses `NormalizedRecordV1`; production remains on this
-path and Canonical Observation v2 cutover has not started. The target Claude
-Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference projections
-are implemented but are not wired into production normalization, detection, CLI,
-or scan execution. The experimental Detection v2 foundation and fixture-only
+The current scanner and production detector still hand off
+`telltale_schema::record::NormalizedRecord` values. `NormalizedRecordV1` is a
+separate timeline/export-oriented representation used where that richer shape is
+needed; it is not the scanner's primary detection record contract. Canonical
+Observation v2 runtime cutover has not started. The public
+`telltale_sources::acquisition` batch covers all eight identities but is not wired
+into production normalization, detection, CLI, or scan execution. Its
+`observed_at` is explicit caller input. OpenCode-only bounded read controls and
+high-water progress are operational metadata, not evidence; the other seven
+identities return no progress. Copilot's local state is rebuilt per acquisition
+and is not durable. The target source mappings are implemented but are not wired
+into production normalization, detection, CLI, or scan execution. The experimental Detection v2 foundation and fixture-only
 offline harness are likewise not wired into the scanner; production detection
 remains the existing Rule v1 path. Its `compat.v1.url` view remains truthfully
 absent without URL/path/network manufacturing; focused synthetic harness
@@ -132,7 +154,10 @@ coverage demonstrates the compatibility gap.
 - `discovery`: knows where each agent stores sessions.
 - `parser`: client-specific transcript/database parsing. See
   [Adding an Agent Source](adding-agent-source.md) for the current checklist and
-  exact parser-registration architecture.
+   exact parser-registration architecture.
+- `acquisition`: the public `telltale_sources::acquisition` single router for
+  source-native extraction, source-owned canonical mapping, and acquisition
+  batches across the supported identities. Its source mappers are crate-private.
 - `normalizer`: creates common records with stable field names in the current
   production path; Canonical Observation v2 replaces this architectural center
   at the production cutover.

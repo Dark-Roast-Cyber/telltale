@@ -122,9 +122,16 @@ pub(crate) fn project_codex_canonical_observations(
     }
 
     let records = extract_codex_native_records(source)?;
+    project_codex_native_records(&records, &options)
+}
+
+pub(crate) fn project_codex_native_records(
+    records: &[CodexNativeRecord],
+    options: &CodexCanonicalOptions,
+) -> Result<Vec<CanonicalObservationV2>, CodexCanonicalError> {
     let mut observations = Vec::new();
     for record in records {
-        project_record(&record, &options, &mut observations)?;
+        project_record(record, options, &mut observations)?;
     }
     Ok(observations)
 }

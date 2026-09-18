@@ -4,6 +4,8 @@
 Define the bounded, non-production Canonical Observation v2 interpretation of
 the GitHub Copilot process log while preserving the existing legacy parser and
 keeping Event 3.0 and production NormalizedRecordV1 unchanged.
+The authoritative public acquisition API reuses this same native state machine
+and canonical mapping without activating production consumers.
 ## Requirements
 ### Requirement: Stateful source-owned interpretation
 
@@ -180,28 +182,6 @@ independent of fact provenance and fidelity.
 - **THEN** its capability context resolves UserContext to Unsupported and
   ToolExecution to Unknown rather than treating either gap as a clean absence
 
-### Requirement: Exact non-production facade route
-
-The source facade MUST route exactly `(ClientId::Copilot,
-"copilot.process_log")` to the Copilot projector and MUST preserve the caller's
-observed time. Wrong client, source ID case, or source ID MUST be rejected
-before source I/O. The Copilot projector itself MUST reject a wrong source kind
-before source I/O. No other new identity MAY be routed.
-
-#### Scenario: Exact Copilot route preserves observed time
-
-- **WHEN** the exact Copilot identity and source kind are projected with a fixed
-  observed time
-- **THEN** the native Copilot projector is used and every observation retains
-  that observed time
-
-#### Scenario: Wrong identity is rejected without reading the path
-
-- **WHEN** a wrong-case or wrong-client Copilot-looking source points at a
-  missing path
-- **THEN** the facade returns unsupported_source_identity without exposing or
-  reading the path
-
 ### Requirement: Offline shadow expansion remains private and deterministic
 
 The fixture-only shadow harness MUST add only the mixed-format, multi-session,
@@ -225,3 +205,48 @@ unchanged.
 - **WHEN** the same Copilot fixture set is shadowed twice
 - **THEN** the report bytes and reviewed mismatch multiset are identical
 
+### Requirement: Acquisition reuses stateful native interpretation without progress
+
+The authoritative public acquisition API MUST validate exact
+`(Copilot, copilot.process_log)` identity and `CopilotProcessLog` kind before
+source I/O. Each invocation reaching extraction MUST invoke the existing native
+extractor exactly once and feed its
+events directly into the same canonical mapping used by the reference projector,
+without a legacy record conversion. Each invocation MUST rebuild source-local
+session state and per-session ordinals from the supplied source. These values
+MUST NOT become durable scanner state or acquisition progress.
+
+Acquisition MUST preserve the lifecycle, replay identity, evidence strength,
+capability, and error semantics above, accept caller-owned `observed_at`, and
+return `AcquisitionProgress::None`. Failures MUST retain bounded source-read,
+mapping, and validation categories without raw native errors or source content
+in Display/Debug. Failure MUST NOT return a partial successful batch.
+
+#### Scenario: Complete-source replay preserves session ordinals
+
+- **WHEN** the same complete log is acquired twice with fixed observed time,
+  including multiple sessions and reactivation of an earlier session
+- **THEN** observations match the reference projector, ignored items consume
+  ordinals, reactivation continues that session's ordinal within the log, and
+  replay IDs remain stable without cross-invocation state
+
+#### Scenario: Missing session and malformed streams remain strict
+
+- **WHEN** accumulated output lacks an active source session, occurs after
+  completion, or contains recognized malformed/truncated structured output
+- **THEN** acquisition preserves the reference canonical failure rather than
+  using legacy session fallback, skipping the failure, or returning earlier
+  observations as a successful partial batch
+
+#### Scenario: Invalid identity and kind fail before extraction
+
+- **WHEN** the source client/ID or source kind differs from the exact contract
+- **THEN** acquisition rejects the input before native extraction or path access
+
+#### Scenario: All-eight authoritative acquisition remains pre-cutover
+
+- **WHEN** authoritative public acquisition covers all eight source identities
+  before the coordinated production runtime cutover
+- **THEN** acquisition convergence step 4 is complete, runtime cutover step 5
+  has not begun, and production parsing, scanner state, scan/watch/embedding,
+  detection, Event3, and Event4 behavior remain unchanged

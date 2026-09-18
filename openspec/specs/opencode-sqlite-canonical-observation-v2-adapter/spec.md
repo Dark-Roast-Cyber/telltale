@@ -4,8 +4,10 @@
 This specification covers only the OpenCode `opencode.sqlite` reference adapter
 path. One SQLite-native interpretation feeds the unchanged legacy
 `ParsedRecord`/`NormalizedRecordV1` production compatibility projection and a
-crate-private, non-production Canonical Observation v2 projection.
-No production cutover, Event 3.0 change, or other adapter migration is included.
+crate-private Canonical Observation v2 projection. It also feeds the
+authoritative public acquisition API, which is not wired into production runtime
+consumers. No production runtime cutover, Event 3.0 change, or other adapter
+migration is included.
 ## Requirements
 ### Requirement: One OpenCode SQLite-native interpretation
 
@@ -160,3 +162,40 @@ native model, adapter trait, registry, or production cutover.
   and the other reference adapters where the source facts overlap
 - **THEN** shared semantics compare consistently while OpenCode-only direct
   execution stages remain limited to the lifecycle state it reports
+
+### Requirement: Acquisition evidence and operational progress remain separate
+
+The authoritative public acquisition API MUST accept caller-owned
+`observed_at` plus the existing bounded part minimum-update and limit read
+options. It MUST validate the exact `ClientId`, source ID, and SQLite source kind
+before source I/O, perform exactly one existing OpenCode native extraction, and
+map that extraction through the existing canonical semantics. It MUST return the
+canonical observations separately from operational progress containing exactly
+the selected extraction's optional part `time_updated` high-water coordinate.
+The progress coordinate MUST NOT enter canonical evidence, provenance,
+observation identity, or occurrence time, and the acquisition boundary MUST NOT
+persist cursor or scanner state.
+
+#### Scenario: Bounded acquisition returns matching progress
+
+- **WHEN** a caller supplies a fixed observed time, part minimum-update
+  coordinate, and part limit
+- **THEN** the existing native selection receives those values, every returned
+  observation preserves the caller's observed time and existing canonical
+  semantics, and progress reports the exact high-water coordinate from that same
+  extraction
+
+#### Scenario: Invalid identity fails before source access
+
+- **WHEN** the client, source ID, or SQLite source kind is not the exact
+  `opencode.sqlite` contract
+- **THEN** acquisition fails before reading the supplied path with a bounded
+  error that does not expose the path, source payload, session ID, call ID,
+  arguments, or result
+
+#### Scenario: Authoritative acquisition remains pre-cutover
+
+- **WHEN** the authoritative public acquisition API is available before the
+  coordinated production runtime cutover
+- **THEN** scan, watch, detection, embedding, Event 3.0, Event4, and durable scan
+  state behavior remain unchanged

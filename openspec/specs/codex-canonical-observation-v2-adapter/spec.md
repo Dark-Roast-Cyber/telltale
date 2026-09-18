@@ -4,8 +4,9 @@
 This specification covers only the Codex reference adapter path from the
 published implementation. It records a local, non-production Canonical
 Observation v2 projection; the legacy `NormalizedRecordV1`/`ParsedRecord` path
-remains production, with no detector cutover or Event 3.0 change, and no other
-adapter migration.
+remains production, with no detector cutover or Event 3.0 change. The
+authoritative public acquisition API also reuses this native interpretation and
+canonical mapping without activating production.
 ## Requirements
 ### Requirement: One Codex-native interpretation
 
@@ -210,7 +211,7 @@ prompts, tool arguments/results, paths, secrets, or arbitrary source payloads.
 This change MUST NOT alter parser registration symbols, production scanning,
 detection, `NormalizedRecordV1`, Rule v1, process-chain behavior, Event 3.0
 schemas/IDs/serialization/privacy/durable bytes, or any other adapter. The v2
-projection MUST remain a crate-private test/future seam only.
+ projection MUST remain a crate-private, production-inactive reference seam.
 
 #### Scenario: Production stays on legacy
 
@@ -231,3 +232,37 @@ neutral native model, adapter trait, registry, or production cutover.
 - **WHEN** equivalent synthetic tool request/result records are projected
 - **THEN** requested/result-returned stages, structured values, source call IDs
   when present, and absence of execution stages compare consistently
+
+### Requirement: Codex acquisition preserves all three source identities
+
+The authoritative public acquisition API MUST accept exactly the three Codex
+identity/kind pairs specified above, validating them before I/O. Each call
+reaching extraction MUST invoke the existing native extractor exactly once and
+map those records through the existing canonical semantics without a legacy
+record conversion. Shared
+acquisition input MUST be caller-owned `observed_at`, without SQLite read
+controls. Each identity MUST return `AcquisitionProgress::None`; acquisition
+MUST NOT persist scanner state or return successful progress on failure.
+Source-read, mapping, and validation failures MUST remain bounded and privacy-safe.
+
+#### Scenario: Three identities acquire native evidence independently
+
+- **WHEN** the same valid native input is acquired as live, archived, and headless
+  Codex sources with their respective kinds and a fixed observed time
+- **THEN** each returns reference-equivalent observations with its own adapter ID
+  and stable replay identity, source-derived occurrence time, and no progress
+  coordinate
+
+#### Scenario: Invalid identity and kind fail before I/O
+
+- **WHEN** a Codex source has a wrong client/source pair or another identity's kind
+- **THEN** acquisition rejects it before opening the path and does not leak the
+  path or native error
+
+#### Scenario: Source session and tool semantics remain unchanged
+
+- **WHEN** acquired native records inherit an explicit session from session metadata
+  and contain structured tool calls or results
+- **THEN** acquisition preserves source session and call linkage, structured values,
+  and request/result stages without manufacturing execution evidence or restoring
+  a filename-derived canonical session
