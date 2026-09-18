@@ -16,11 +16,11 @@ use telltale_schema::scoring::{
     checked_risk_sum,
 };
 
+use super::classification::finding_kind_for_detection_class;
 use super::matcher::{MatcherOperator, MatcherSpec};
 use super::observation_match::{CompiledObservationMatchDetector, ObservationMatchSpec};
 use super::types::{
-    DetectionError, DetectorIdentity, DetectorKind, EvaluationStatus, FindingKind, FindingMetadata,
-    Severity,
+    DetectionError, DetectorIdentity, DetectorKind, EvaluationStatus, FindingMetadata, Severity,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -454,7 +454,8 @@ fn compile_rule(
     if rule.signal_type != "atomic" {
         return Err(RuleV1CompileError::InvalidMetadata);
     }
-    let finding_kind = finding_kind(&rule.detection_class)?;
+    let finding_kind = finding_kind_for_detection_class(&rule.detection_class)
+        .map_err(|_| RuleV1CompileError::UnmappableDetectionClass)?;
     let severity = severity(&rule.severity)?;
     if rule.score > 100 {
         return Err(RuleV1CompileError::ScoreOutOfRange);
@@ -570,20 +571,6 @@ fn required_capabilities(rule: &RuleV1CompatibilityRule) -> Vec<CapabilityId> {
     capabilities.into_iter().collect()
 }
 
-fn finding_kind(class: &str) -> Result<FindingKind, RuleV1CompileError> {
-    match class {
-        "security_detection" => Ok(FindingKind::SecurityDetection),
-        "policy_violation" => Ok(FindingKind::PolicyViolation),
-        "threat_hunting" => Ok(FindingKind::ThreatHunt),
-        "compliance_observation" => Ok(FindingKind::ComplianceObservation),
-        "baseline_deviation" => Ok(FindingKind::BehavioralDeviation),
-        // Operational health is not a truthful security meaning for an atomic
-        // Rule v1 observation match.  Do not silently map it to informational.
-        "operational_health" => Err(RuleV1CompileError::UnmappableDetectionClass),
-        _ => Err(RuleV1CompileError::UnmappableDetectionClass),
-    }
-}
-
 fn severity(value: &str) -> Result<Severity, RuleV1CompileError> {
     match value {
         "informational" => Ok(Severity::Informational),
@@ -600,7 +587,7 @@ mod tests {
     use telltale_schema::observation::ObservationId;
 
     use super::*;
-    use crate::v2::{DetectorResult, Diagnostic, DiagnosticKind, NonEvaluationReason};
+    use crate::v2::{DetectorResult, Diagnostic, DiagnosticKind, FindingKind, NonEvaluationReason};
 
     fn identity() -> DetectorIdentity {
         DetectorIdentity::new(DetectorKind::ObservationMatch, "synthetic.aggregate").unwrap()

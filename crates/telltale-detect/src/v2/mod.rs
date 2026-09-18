@@ -5,8 +5,11 @@
 //! and emits local semantic results; source discovery, policy, actions,
 //! telemetry, and Event projection remain outside this boundary.
 
+mod classification;
 mod matcher;
 mod observation_match;
+#[allow(dead_code)]
+pub(crate) mod process_chain;
 pub(crate) mod rule_v1;
 mod selector;
 mod types;

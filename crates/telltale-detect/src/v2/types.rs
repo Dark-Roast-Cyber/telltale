@@ -110,7 +110,7 @@ impl DetectorKind {
     }
 
     pub fn runtime_supported(self) -> bool {
-        matches!(self, Self::ObservationMatch)
+        matches!(self, Self::ObservationMatch | Self::ProcessChain)
     }
 }
 

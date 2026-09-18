@@ -2,7 +2,8 @@
 
 > **Status:** **Accepted architecture with an experimental foundation.** These
 > contracts are reviewed future architecture. **Current implementation:** the
-> non-production Detection v2 foundation implements only `observation_match`,
+> non-production Detection v2 foundation implements `observation_match`,
+> bounded Tool-derived parent/child and standalone `process_chain` evaluation,
 > `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
 > The non-production Event4 contract, validator, and canonical encoder are
 > implemented in `telltale-schema`. The first Phase 2 tranche adds an experimental
@@ -10,8 +11,9 @@
 > production projection, privacy, persistence, and output are not implemented.
 > Telemetry/Output v2 is not implemented. The fixture-only
 > offline shadow harness is an offline measurement seam, not a production shadow
-> or activation path. Advanced detector runtime and Detection Content v2 loader
-> are not implemented.
+> or activation path. Process-chain repeat suppression and entity correlation
+> remain on the legacy production path. Remaining advanced detector runtime and
+> the Detection Content v2 loader are not implemented.
 > Canonical Observation v2 core types/scaffolding are implemented in
 > `telltale-schema`. Claude Code (`claude.projects`) and Codex v2 Canonical
 > Observation v2 reference adapter families are implemented. The OpenCode

@@ -27,10 +27,15 @@ are accepted architecture, with experimental Detection v2 and Event4 contract
 foundations now implemented non-production. Event4 production persistence and
 output are not implemented; neither is Telemetry/Output v2.
 
-Only `observation_match`, `DetectorResult` -> `Signal` -> atomic `Finding`, and
-the Rule v1 compiler are implemented for Detection v2. The fixture-only offline
-shadow harness is an offline measurement seam, not a scanner or activation path;
-advanced detector runtime and a Detection Content v2 loader are not implemented.
+`observation_match`, bounded Tool-derived parent/child and standalone
+`process_chain` evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`, and
+the Rule v1 compiler are implemented for Detection v2. The process-chain path
+parses canonical Tool command evidence into private matcher working state; it
+does not manufacture Canonical Process observations. The fixture-only offline
+shadow harness is an offline measurement seam, not a scanner or activation path.
+Process-chain repeat suppression and entity correlation remain on the legacy
+production path; advanced detector runtime and a Detection Content v2 loader
+are not implemented.
 
 Canonical Observation v2 core types/scaffolding are implemented in
 `telltale-schema`. Non-production reference projections exist for Claude Code
@@ -46,6 +51,10 @@ ToolExecution **Unknown**.
 Production adapter migration/cutover has not started. Event 3.0 remains the
 frozen current compatibility contract. The pipeline below continues to describe
 the shipped implementation until the coordinated production cutover occurs.
+Event4 remains inactive. Direct runtime telemetry, including any future
+OpenShell source that reports Process, Network, Runtime, policy, enforcement, or
+action-result evidence, remains separate from command-derived Tool
+interpretation; no OpenShell integration exists today.
 
 ## 0.7 convergence boundary
 

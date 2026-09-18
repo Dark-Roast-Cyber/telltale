@@ -10,6 +10,8 @@ scoring, and the session `detection` event are unchanged.
 - Generator: `scripts/dev/generate-process-chain-rules.py`
 - Matching engine: `crates/telltale-rules/src/process_chain.rs`
 - Extraction, emission, correlation: `crates/telltale-detect/src/process_chain.rs`
+- Non-production Detection v2 Tool boundary:
+  `crates/telltale-detect/src/v2/process_chain.rs`
 - Event type: `process_chain`
 
 Behavioural reference: the irflow-timeline process-tree rule library
@@ -19,6 +21,20 @@ library. Scores, categories, command-line conditions, deduplication, and
 correlation are Telltale's own.
 
 Set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn the pack off for a scan.
+
+## Detection v2 convergence status
+
+A bounded non-production Detection v2 path now evaluates parent/child and
+standalone rules from command-bearing Canonical Observation v2 Tool evidence;
+the exact evidence and lifecycle contract is documented in
+[Detection v2](detection-v2.md#tool-derived-process-chain-boundary). Command
+parsing creates private matcher working state, not Canonical Process evidence.
+`CompiledProcessChainRules` remains the authoritative matcher, and matches use
+ordinary Detection v2 DetectorResults, Signals, and Findings.
+
+This path is not active in scan or watch. Production still uses the existing
+NormalizedRecord extraction, Event3 projection, repeat suppression, and entity
+correlation described below. Event3 is unchanged and Event4 is inactive.
 
 ## The core rule: emission and risk are separate decisions
 
@@ -287,10 +303,10 @@ An interpreter that carries a recoverable payload is not itself reported as a
 child: its payload already describes the real children and repeats the same
 text. `powershell -enc <blob>`, which has no recoverable payload, is reported.
 
-Structured process telemetry — a source that reports a real parent, child, PID,
-host, and user — bypasses extraction entirely by constructing
-`ProcessObservation` directly. That is the intended path once a source provides
-it.
+The existing matcher can accept structured `ProcessObservation` working input
+directly, but no current source supplies it. Detection v2 does not consume
+direct Canonical Process observations yet; that stronger evidence path is
+deferred until a real source contract requires it.
 
 ## Event fields
 

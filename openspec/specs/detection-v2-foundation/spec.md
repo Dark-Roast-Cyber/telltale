@@ -2,7 +2,8 @@
 
 ## Purpose
 This specification covers only the experimental, non-production Detection v2
-foundation. It implements only the `observation_match` detector, the
+foundation. It implements the `observation_match` detector, bounded
+Tool-derived parent/child and standalone `process_chain` evaluation, the
 `DetectorResult` -> `Signal`
 -> atomic `Finding` boundary, the final 56-selector registry (48 native plus
 exactly eight Rule v1 compatibility views), their capability/provenance/matcher/
@@ -10,8 +11,9 @@ identity contracts, and the read-only Rule v1 export/compatibility compiler and
 source-free session evaluator.
 `compat.v1.url` remains compiler-supported but truthfully absent pending P13
 visibility-gap measurement. There is no live shadow or activation path, source
-or scanner wiring, advanced detector runtime, Event4, gateway, or Detection
-Content v2 runtime loader; Event 3.0 remains unchanged.
+or scanner wiring, process-chain repeat suppression or entity correlation,
+advanced detector runtime, Event4, gateway, or Detection Content v2 runtime
+loader; Event 3.0 remains unchanged.
 ## Requirements
 ### Requirement: Detector result materialization
 
@@ -241,24 +243,89 @@ DetectorResults, Signals, Findings, or native v2 detector kinds.
   and returns the bounded detector aggregates, effective Rule v1 IDs,
   compatibility contributions and checked score, and compatibility metadata
 
+### Requirement: Tool-derived process-chain evaluation
+
+`process_chain` MUST be runtime-supported without activating `sequence`,
+`correlation`, `imported`, `baseline`, or `guard_model`. The non-production
+evaluator MUST accept already-created Canonical Observation v2 values and MUST
+evaluate only Tool observations at `ToolProposed`, `ToolRequested`,
+`ToolExecutionStarted`, or `ToolExecutionCompleted`. `ToolResultReturned` and
+all non-Tool families MUST produce no process-chain candidates.
+
+Command candidates MUST come only from the governed `command.text` facet,
+reported `tool.searchable_arguments`, or string-valued `tool.arguments`. Tool
+names MUST NOT become commands and arbitrary JSON objects MUST NOT be
+stringified. Identical strings within one observation MUST be parsed once;
+distinct strings MUST all be evaluated without making their surface order a
+process ordering contract. Distinct candidates that produce the same final
+Detection v2 Signal identity MUST yield one result for that supporting Tool
+observation; this result normalization MUST NOT replace matcher-owned rule
+deduplication.
+
+The existing command parser MUST produce private matcher working state for the
+existing `CompiledProcessChainRules`. That matcher MUST remain authoritative for
+parent/child and standalone matching, rule-level deduplication, context
+adjustment, inferred-parent confidence weakening, winning rule identity, and
+merged techniques. The adapter MUST NOT construct or return Canonical Process
+observations, `ProcessObserved` stages, PIDs, or process-instance identities.
+Direct Canonical Process evidence is a separate stronger evidence class and is
+not consumed by this evaluator.
+
+Each surviving match MUST become one ordinary `DetectorResult` with kind
+`process_chain`, the immutable process-chain rule ID, `rule_version: 1`, the
+supporting Tool observation ID, effective severity/risk/confidence, category,
+dedupe key, `CorrelationScope::Process`, and canonically available session ID.
+Detection-class mapping MUST share one fail-closed helper with Rule v1. Valid
+bare ATT&CK IDs MUST normalize to typed `attack:` IDs and malformed values MUST
+fail closed. A zero-risk informational match MUST remain `evaluated_match` and
+MUST materialize through the ordinary Signal and atomic Finding path.
+
+#### Scenario: Tool command evidence produces a process-chain result
+
+- **WHEN** an eligible Tool observation contains `cmd.exe /c whoami`
+- **THEN** the existing immutable parent/child rule matches with the Tool
+  observation ID, and no Canonical Process observation is created
+
+#### Scenario: Command evidence is absent
+
+- **WHEN** a Tool observation has only a shell-like tool name, arbitrary JSON
+  arguments, or result content
+- **THEN** no process-chain candidate or negative result matrix is produced
+
+#### Scenario: Existing effective matcher semantics survive normalization
+
+- **WHEN** matcher-owned context adjustment, inferred-parent weakening, or
+  rule-level deduplication changes the surviving process-chain detection
+- **THEN** Detection v2 uses the effective winner, score, severity, confidence,
+  and merged techniques without implementing those semantics again
+
+#### Scenario: Process-chain migration remains bounded
+
+- **WHEN** the Tool-derived evaluator is available
+- **THEN** scan/watch, Event3, Event4, repeat suppression, entity correlation,
+  direct Process evidence, and any OpenShell integration remain unchanged and
+  inactive at this boundary
+
 ### Requirement: Production and privacy boundary
 
 The foundation MUST be free of source I/O and source-crate dependencies, MUST
-not provide policy/action/export/Event fields, and MUST leave current detection,
-allowlist, process-chain, timeline, Rule v1 evaluation/scoring, adapters, and
-Event 3 behavior unchanged. Diagnostics and identities MUST contain no raw
- matched values. Evidence references MUST be representation-specific validated
- handles (selector paths, valid typed IDs, safe fingerprints, bounded
- classifications, or accepted local structured references), not arbitrary
- content. Debug output for results, signals, findings, and their evidence-bearing
- supporting values MUST redact semantic strings and evidence payloads.
+not provide policy/action/export/Event fields, and MUST leave current production
+detection, allowlist, process-chain extraction/suppression/correlation, timeline,
+Rule v1 evaluation/scoring, adapters, and Event 3 behavior unchanged.
+Diagnostics and identities MUST contain no raw matched values. Evidence
+references MUST be representation-specific validated handles (selector paths,
+valid typed IDs, safe fingerprints, bounded classifications, or accepted local
+structured references), not arbitrary content. Debug output for results,
+signals, findings, and their evidence-bearing supporting values MUST redact
+semantic strings and evidence payloads.
 
 #### Scenario: Local module remains non-production
 
 - **WHEN** the Detection v2 module is built without source-I/O features
 - **THEN** it compiles and evaluates only caller-provided typed observations,
   with no scanner, adapter, Event, policy, or action path; normal production
-  paths do not invoke the Rule v1 compatibility session evaluator
+  paths do not invoke the Rule v1 compatibility session evaluator or the
+  Tool-derived process-chain evaluator
 
 #### Scenario: Identity is value-independent
 

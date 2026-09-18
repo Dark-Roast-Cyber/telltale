@@ -2,9 +2,10 @@
 
 > **Status:** **Experimental foundation and fixture-only shadow harness
 > implemented (non-production).** The `telltale_detect::v2` module implements
-> only the `observation_match` detector, `DetectorResult` -> `Signal` -> atomic
-> `Finding`, and the Rule v1 compatibility compiler and session evaluator. It is
-> not the current engine. An offline,
+> `observation_match`, bounded Tool-derived parent/child and standalone
+> `process_chain` evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`,
+> and the Rule v1 compatibility compiler and session evaluator. It is not the
+> current engine. An offline,
 > deterministic, immutable-fixture harness measures the current native
 > Canonical Observation v2 reference identities (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
@@ -17,8 +18,9 @@
 > UserContext **Unsupported**, and ToolExecution **Unknown**.
 > Live scanner shadow: **NO**. Production activation: **NO**. Production remains
 > on `NormalizedRecordV1` and Rule v1; remaining adapter coverage is incomplete,
-> and Event3 remains frozen. Advanced detector runtime
-> and a Detection Content v2 loader are not implemented. **Existing
+> and Event3 remains frozen. Process-chain lifecycle repeat suppression and
+> entity correlation remain on the legacy production path. Advanced detector
+> runtime and a Detection Content v2 loader are not implemented. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
@@ -90,9 +92,52 @@ Decision or Action authority. `classifier` is not a kind; future model content
 uses `guard_model`. `external` is not a kind; imported results use `imported`.
 Unknown kinds are rejected.
 
-The implementation activates only `observation_match`. Process-chain,
-sequence, correlation, imported, baseline, and guard-model behavior remains
-reserved architecture and is not runtime-supported by this foundation.
+The implementation runtime-supports `observation_match` and the bounded
+non-production `process_chain` path described below. Sequence, correlation,
+imported, baseline, and guard-model behavior remains reserved architecture and
+is not runtime-supported by this foundation.
+
+## Tool-derived process-chain boundary
+
+The bounded process-chain path consumes one already-created Canonical
+Observation v2 value at a time. Only Tool observations at `ToolProposed`,
+`ToolRequested`, `ToolExecutionStarted`, or `ToolExecutionCompleted` are
+eligible. `ToolResultReturned` is excluded. The policy is source-neutral.
+
+Command candidates come from, in order, the governed `command.text` facet,
+reported `tool.searchable_arguments`, and string-valued `tool.arguments`.
+Arbitrary JSON arguments are not stringified, and a tool name is not treated as
+a command. Identical command strings within one observation are parsed once;
+different strings are all evaluated, and detector identity rather than command
+surface order determines result ordering. If distinct strings match the same
+rule with the same final Signal identity, one result survives for that Tool
+observation. There is no cross-observation lifecycle deduplication in this
+tranche.
+
+The existing command parser converts each command candidate into private
+`telltale-rules` matcher working input. `CompiledProcessChainRules` remains the
+only owner of parent/child and standalone matching, rule-level deduplication,
+context adjustment, and inferred-parent confidence weakening. A surviving
+match becomes an ordinary `DetectorResult(kind = process_chain)` supported by
+the actual Tool observation ID, then an ordinary Signal and Finding. The
+immutable process-chain rule ID is the detector ID and `rule_version` remains
+1. Effective score, severity, confidence, dedupe key, and merged techniques are
+copied after matcher semantics run. ATT&CK IDs are validated and normalized at
+this boundary (`T1219` -> `attack:T1219`, `T1003.001` ->
+`attack:T1003.001`); malformed values fail closed.
+
+This parsing is detector interpretation, not direct operating-system
+observation. It does not create a Canonical Process observation, a
+`ProcessObserved` stage, a PID, or a process-instance identity. Direct
+Canonical Process evidence remains a separate, stronger future input class.
+Runtime sources such as OpenShell may eventually report Process, Network,
+Runtime, policy, enforcement, or action-result evidence directly, but no
+OpenShell integration or provider abstraction exists in this tranche.
+
+The new path is not scanner- or watch-wired. Production continues to use the
+existing process-chain extraction, Event3 construction, repeat suppression,
+and six entity-correlation definitions. Event3 remains frozen and Event4
+remains inactive. Process-chain Detection v2 is therefore not fully migrated.
 
 ## DetectorResult
 
@@ -282,7 +327,9 @@ A sequence consumes distinct input items in declared order. A correlation
 consumes distinct input items in any order. Overlapping windows choose the
 earliest satisfying start, and later completions with the same dedupe key are
 duplicates. Process chains use their specialized `parent_child`, `standalone`,
-or ordered `entity_correlation` shape and converge through DetectorResult.
+or ordered `entity_correlation` shape and converge through DetectorResult. The
+implemented bounded path covers Tool-derived `parent_child` and `standalone`;
+`entity_correlation` remains on the legacy production path.
 
 ## Suppression, deduplication, and risk
 
@@ -360,8 +407,9 @@ See the [Detection Content v2 draft schema](../schemas/detection-content-v2-draf
 
 > **Event 3.0: FROZEN / CURRENT COMPATIBILITY CONTRACT**
 
-The foundation, including the Rule v1 compatibility session evaluator, is not
-currently wired into production or running in scan/watch. Event3 remains
+The foundation, including the Rule v1 compatibility session evaluator and
+Tool-derived process-chain evaluator, is not currently wired into production or
+running in scan/watch. Event3 remains
 supported and unchanged:
 its Rule v1 IDs, deterministic scoring, thresholds, parser ownership, privacy,
 and persisted/replayed bytes remain current. Event4 is independently versioned
