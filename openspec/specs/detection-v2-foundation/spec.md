@@ -317,10 +317,11 @@ MUST materialize through the ordinary Signal and atomic Finding path.
 The implementation MUST provide one crate-private, I/O-free process-chain
 session semantic owner for both the legacy Event3 adapter and the Detection v2
 caller-grouped evaluator. The owner MUST operate only on rule ID, category,
-normalized child name, matcher-owned dedupe key, resolved entity, and optional
-source occurrence time. It MUST remain independent of Event3 values,
-Canonical Observation values, DetectorResult, source access, policy, and
-enforcement. `CompiledProcessChainRules::correlations()` and
+normalized child name, matcher-owned dedupe key, resolved entity, an opaque
+occurrence-group identity, and an optional caller-supplied ordering timestamp.
+The kernel MUST NOT assign or reinterpret timestamp provenance. It MUST remain
+independent of Event3 values, Canonical Observation values, DetectorResult,
+source access, policy, and enforcement. `CompiledProcessChainRules::correlations()` and
 `CorrelationStep::matches` remain authoritative for the six shipped
 correlations and their predicates; no generic temporal engine or v2 content
 loader is introduced.
