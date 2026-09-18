@@ -3,7 +3,9 @@
 > **Status:** **Experimental foundation and fixture-only shadow harness
 > implemented (non-production).** The `telltale_detect::v2` module implements
 > `observation_match`, bounded Tool-derived parent/child and standalone
-> `process_chain` evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`,
+> `process_chain` evaluation, caller-grouped process-chain session suppression
+> and the six specialized correlations, `DetectorResult` -> `Signal` -> atomic
+> `Finding`,
 > and the Rule v1 compatibility compiler and session evaluator. It is not the
 > current engine. An offline,
 > deterministic, immutable-fixture harness measures the current native
@@ -18,8 +20,9 @@
 > UserContext **Unsupported**, and ToolExecution **Unknown**.
 > Live scanner shadow: **NO**. Production activation: **NO**. Production remains
 > on `NormalizedRecordV1` and Rule v1; remaining adapter coverage is incomplete,
-> and Event3 remains frozen. Process-chain lifecycle repeat suppression and
-> entity correlation remain on the legacy production path. Advanced detector
+> and Event3 remains frozen. The v2 process-chain session path is still
+> non-production; legacy Event3 remains the active projection and now delegates
+> repeat/correlation decisions to the shared pure semantic kernel. Advanced detector
 > runtime and a Detection Content v2 loader are not implemented. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
@@ -111,8 +114,8 @@ a command. Identical command strings within one observation are parsed once;
 different strings are all evaluated, and detector identity rather than command
 surface order determines result ordering. If distinct strings match the same
 rule with the same final Signal identity, one result survives for that Tool
-observation. There is no cross-observation lifecycle deduplication in this
-tranche.
+observation. Session grouping is caller-defined; there is no source discovery
+or cross-session state in this tranche.
 
 The existing command parser converts each command candidate into private
 `telltale-rules` matcher working input. `CompiledProcessChainRules` remains the
@@ -134,10 +137,56 @@ Runtime sources such as OpenShell may eventually report Process, Network,
 Runtime, policy, enforcement, or action-result evidence directly, but no
 OpenShell integration or provider abstraction exists in this tranche.
 
-The new path is not scanner- or watch-wired. Production continues to use the
-existing process-chain extraction, Event3 construction, repeat suppression,
-and six entity-correlation definitions. Event3 remains frozen and Event4
-remains inactive. Process-chain Detection v2 is therefore not fully migrated.
+### Process-chain session convergence (non-production)
+
+The caller may pass a grouped slice of already-created Canonical Tool
+observations to the crate-private session evaluator. It performs one matcher
+pass per observation, retains atomic matches, applies the shared process-chain
+session kernel, and returns ordinary `DetectorResult` values for both atomic
+and satisfied correlation rules. It does not discover sessions, sources, or
+scanner state.
+
+The pure kernel is shared with the Event3 adapter and owns repeat grouping,
+repeat-window anchor selection, ordered sequence walking, per-rule/per-entity
+throttling, and per-entity risk-cap accounting. `CompiledProcessChainRules`
+remains the owner of the six correlation definitions and
+`CorrelationStep::matches`; generic `sequence` and `correlation` detector kinds
+remain runtime-unsupported.
+
+Timed v2 semantics use only truthful source-reported `occurred_at`. They never
+substitute `observed_at`, materialization time, Event3 construction time, or the
+wall clock. Missing `occurred_at` retains the atomic match but makes it
+ineligible for timed repeat suppression and correlation. Candidates are ordered
+chronologically, with stable caller order for equal timestamps.
+
+Tool-derived matcher input normally has no truthful host or user. When the
+matcher does provide one, the v2 evaluator retains it but scopes it to the
+canonical session so the same host value in two sessions cannot join. Otherwise
+it falls back to the canonical session ID as a session-scoped entity; it never
+labels that ID as a host. Without either a truthful matcher entity or a
+canonical session ID, the atomic match survives but cannot join a
+cross-observation operation. Different canonical sessions never correlate.
+
+Repeat identity remains `rule ID + resolved entity + matcher-owned dedupe key`.
+The first timed match is the anchor; repeats inside the configured window are
+omitted while the private session result retains total occurrence count and
+suppressed count. The defaults remain one hour, one correlation per rule/entity,
+and 150 correlation-risk points per entity per caller evaluation.
+
+Each satisfied shipped correlation is an ordinary `DetectorResult` with
+`DetectorKind::ProcessChain`, the immutable correlation rule ID, rule version 1,
+`FindingKind::Correlation`, and `CorrelationScope::Sequence`. It includes every
+actual supporting canonical Tool observation ID, so ordinary Signal/Finding
+identity changes when that supporting set changes. Risk-capped results still
+emit as evaluated matches with risk 0, informational severity, preserved
+confidence/ATT&CK metadata, and a bounded `risk_capped` tag. Zero-risk atomic
+matches remain eligible sequence steps.
+
+The new path is not scanner- or watch-wired. Production continues to acquire
+`NormalizedRecord` values and project Event3 through its existing wrapper;
+Event3 remains frozen and Event4 remains inactive. Direct Process evidence,
+OpenShell, generic temporal engines, Detection Content v2 loading, and v2
+Event3 projection remain deferred.
 
 ## DetectorResult
 

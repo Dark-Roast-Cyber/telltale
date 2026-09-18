@@ -11,8 +11,9 @@
 > production projection, privacy, persistence, and output are not implemented.
 > Telemetry/Output v2 is not implemented. The fixture-only
 > offline shadow harness is an offline measurement seam, not a production shadow
-> or activation path. Process-chain repeat suppression and entity correlation
-> remain on the legacy production path. Remaining advanced detector runtime and
+> or activation path. The non-production caller-grouped process-chain session
+> evaluator now shares one pure repeat/correlation semantic kernel with the
+> legacy Event3 wrapper. Remaining advanced detector runtime and
 > the Detection Content v2 loader are not implemented.
 > Canonical Observation v2 core types/scaffolding are implemented in
 > `telltale-schema`. Claude Code (`claude.projects`) and Codex v2 Canonical
