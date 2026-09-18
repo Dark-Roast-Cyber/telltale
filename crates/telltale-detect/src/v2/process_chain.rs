@@ -16,7 +16,6 @@ use telltale_schema::observation::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::classification::finding_kind_for_detection_class;
-use super::types::{MAX_ID_BYTES, bounded_opaque};
 use super::{
     Confidence, CorrelationScope, DetectionError, DetectorIdentity, DetectorKind, DetectorResult,
     EvaluationStatus, FindingKind, FindingMetadata, Severity,
@@ -39,21 +38,14 @@ pub(crate) fn evaluate_tool_process_chains(
     observation: &CanonicalObservationV2,
     context: &ProcessChainContext,
 ) -> Result<Vec<DetectorResult>, DetectionError> {
-    Ok(
-        evaluate_tool_process_chain_matches(rules, observation, context, 0)?
-            .into_iter()
-            .map(|matched| matched.result)
-            .collect(),
-    )
+    let matches = evaluate_tool_process_chain_matches(rules, observation, context, 0)?;
+    Ok(normalize_atomic_results(&matches))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct ProcessChainWorkingMatch {
     result: DetectorResult,
-    category: String,
     child: String,
-    dedupe_key: String,
-    entity: Option<String>,
     occurred_at: Option<OffsetDateTime>,
     observation_index: usize,
 }
@@ -67,44 +59,45 @@ fn evaluate_tool_process_chain_matches(
     let mut matches = Vec::new();
     for process_input in command_derived_process_matcher_inputs(observation) {
         for detection in rules.evaluate_with_context(&process_input, context) {
-            let category = detection.rule_category.clone();
-            let dedupe_key = detection.dedup_key.clone();
-            let entity = resolved_entity(&detection, observation);
             matches.push(ProcessChainWorkingMatch {
                 result: normalize_match(&detection, observation)?,
-                category,
                 child: process_input.child.normalized_name(),
-                dedupe_key,
-                entity,
                 occurred_at: occurred_at(observation),
                 observation_index,
             });
         }
     }
-    // Detector identity, not command-surface order, owns output ordering.
-    matches.sort_by(|left, right| {
-        left.result
-            .detector()
-            .id()
-            .cmp(right.result.detector().id())
-            .then_with(|| left.result.dedupe_key().cmp(&right.result.dedupe_key()))
-    });
-    // Every result here has the same supporting observation, kind, version,
-    // match surface, and selector context. The detector ID plus matcher-owned
-    // dedupe key therefore distinguishes their Signal identities. Collapse
-    // only duplicate identities created when distinct command candidates match
-    // the same rule; semantic rule deduplication remains matcher-owned.
-    matches.dedup_by(|left, right| {
-        left.result.detector().id() == right.result.detector().id()
-            && left.result.dedupe_key() == right.result.dedupe_key()
-    });
     Ok(matches)
+}
+
+fn normalize_atomic_results<'a>(
+    matches: impl IntoIterator<Item = &'a ProcessChainWorkingMatch>,
+) -> Vec<DetectorResult> {
+    let mut results = matches
+        .into_iter()
+        .map(|matched| matched.result.clone())
+        .collect::<Vec<_>>();
+    // Outward atomic presentation is detector-ordered and duplicate-free.
+    // Private session semantics use the untouched parser-ordered matches.
+    results.sort_by(|left, right| {
+        left.detector()
+            .id()
+            .cmp(right.detector().id())
+            .then_with(|| left.observation_ids().cmp(right.observation_ids()))
+            .then_with(|| left.dedupe_key().cmp(&right.dedupe_key()))
+    });
+    results.dedup_by(|left, right| {
+        left.detector().id() == right.detector().id()
+            && left.observation_ids() == right.observation_ids()
+            && left.dedupe_key() == right.dedupe_key()
+    });
+    results
 }
 
 /// Private session result retained by the non-production caller-defined
 /// evaluator. Repeat accounting stays here rather than broadening the common
 /// DetectorResult/Signal/Finding types.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct ProcessChainSessionEvaluation {
     results: Vec<DetectorResult>,
     repeat_counts: BTreeMap<(String, String), u64>,
@@ -156,23 +149,29 @@ pub(crate) fn evaluate_tool_process_chain_session(
 
     let candidates = matches
         .iter()
-        .map(|matched| ProcessChainSessionCandidate {
-            rule_id: matched.result.detector().id().to_owned(),
-            category: matched.category.clone(),
-            child: matched.child.clone(),
-            dedupe_key: matched.dedupe_key.clone(),
-            entity: matched.entity.clone(),
-            occurred_at: matched.occurred_at,
+        .map(|matched| {
+            Ok(ProcessChainSessionCandidate {
+                rule_id: matched.result.detector().id().to_owned(),
+                category: matched.result.category().to_owned(),
+                child: matched.child.clone(),
+                dedupe_key: matched
+                    .result
+                    .dedupe_key()
+                    .ok_or(DetectionError::RuntimeEvaluation)?
+                    .to_owned(),
+                entity: matched.result.session_id().map(str::to_owned),
+                occurred_at: matched.occurred_at,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, DetectionError>>()?;
     let semantics = evaluate_process_chain_session(&candidates, rules, config);
 
-    let mut results = semantics
+    let retained_matches = semantics
         .suppression
         .retained
         .iter()
-        .filter_map(|index| matches.get(*index).map(|matched| matched.result.clone()))
-        .collect::<Vec<_>>();
+        .filter_map(|index| matches.get(*index));
+    let mut results = normalize_atomic_results(retained_matches);
     let mut repeat_counts = BTreeMap::new();
     for (index, count) in semantics.suppression.repeat_counts {
         let Some(matched) = matches.get(index) else {
@@ -327,29 +326,6 @@ fn normalize_match(
     .with_match_surface("text")
 }
 
-fn resolved_entity(
-    detection: &ProcessChainDetection,
-    observation: &CanonicalObservationV2,
-) -> Option<String> {
-    let entity = detection
-        .risk_entity_value
-        .as_deref()
-        .map(|value| format!("{}:{value}", detection.risk_entity_type));
-    let session = observation
-        .session_id()
-        .map(|session| session.value().to_owned());
-
-    match (entity, session) {
-        // A truthful matcher entity is still scoped to the caller's canonical
-        // session. Otherwise two independent Tool sessions on the same host
-        // could suppress or correlate together.
-        (Some(entity), Some(session)) => Some(format!("session:{session}|{entity}")),
-        (Some(entity), None) => Some(entity),
-        (None, Some(session)) => Some(format!("session:{session}")),
-        (None, None) => None,
-    }
-}
-
 fn occurred_at(observation: &CanonicalObservationV2) -> Option<OffsetDateTime> {
     observation
         .occurred_at()
@@ -376,11 +352,11 @@ fn correlation_result(
         .iter()
         .map(|value| normalize_attack_technique(value))
         .collect::<Result<Vec<_>, _>>()?;
-    let entity = matched
+    let session_scope = matched
         .first()
-        .and_then(|candidate| candidate.entity.as_deref())
+        .and_then(|candidate| candidate.result.session_id())
         .ok_or(DetectionError::RuntimeEvaluation)?;
-    let dedupe_key = correlation_dedupe_key(&rule.id, entity);
+    let dedupe_key = correlation_dedupe_key(session_scope);
     let mut tags = vec!["process_chain", "correlation", rule.category.as_str()];
     if risk_capped {
         tags.push("risk_capped");
@@ -421,22 +397,14 @@ fn correlation_result(
         None,
         observation_ids,
         metadata,
-        anchor.capability_context().cloned(),
+        None,
         Vec::new(),
     )
 }
 
-fn correlation_dedupe_key(rule_id: &str, entity: &str) -> String {
-    let candidate = format!("correlation:{rule_id}:{entity}");
-    if bounded_opaque(&candidate, MAX_ID_BYTES).is_ok() {
-        candidate
-    } else {
-        // Canonical correlation IDs are normally safe opaque tokens. If a
-        // caller supplies a valid but stricter-than-v2 identity, retain a
-        // deterministic structured identity without copying it into metadata.
-        let digest = sha2::Sha256::digest(entity.as_bytes());
-        format!("correlation:{rule_id}:entity_sha256:{digest:x}")
-    }
+fn correlation_dedupe_key(session_scope: &str) -> String {
+    let digest = sha2::Sha256::digest(session_scope.as_bytes());
+    format!("correlation:session_sha256:{digest:x}")
 }
 
 fn severity(value: &str) -> Result<Severity, DetectionError> {
@@ -562,6 +530,31 @@ mod tests {
         session_id: Option<&str>,
         occurred_at: Option<&str>,
     ) -> CanonicalObservationV2 {
+        tool_with_session_time_and_capability(
+            stage,
+            command_text,
+            searchable_arguments,
+            arguments,
+            tool_name,
+            native_id,
+            session_id,
+            occurred_at,
+            CapabilityAvailability::Supported,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn tool_with_session_time_and_capability(
+        stage: ObservationStage,
+        command_text: Option<&str>,
+        searchable_arguments: Option<&str>,
+        arguments: Option<JsonValue>,
+        tool_name: &str,
+        native_id: &str,
+        session_id: Option<&str>,
+        occurred_at: Option<&str>,
+        tool_call_capability: CapabilityAvailability,
+    ) -> CanonicalObservationV2 {
         let has_arguments = arguments.is_some();
         let mut body = ToolObservation::new().with_name(tool_name).unwrap();
         if let Some(arguments) = arguments {
@@ -594,7 +587,7 @@ mod tests {
         let mut builder = builder
             .capability_context(
                 CapabilityContext::new()
-                    .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+                    .with_override(CapabilityId::ToolCall, tool_call_capability),
             )
             .fact_metadata("tool.name", metadata(FactProvenance::Reported));
         if has_arguments {
@@ -682,36 +675,34 @@ mod tests {
     }
 
     #[test]
-    fn truthful_matcher_entities_remain_scoped_to_the_canonical_session() {
+    fn tool_derived_matcher_inputs_use_only_canonical_session_scope() {
         let rules = load_default_process_chain_rules().unwrap();
-        let mut input = ProcessObservation::default();
-        input.parent.name = "cmd".to_owned();
-        input.child.name = "hostname".to_owned();
-        input.host = Some("workstation-a".to_owned());
-        let detection = rules
-            .evaluate_with_context(&input, &ProcessChainContext::default())
-            .into_iter()
-            .find(|detection| detection.rule_id == "procchain.discovery.cmd_hostname")
-            .expect("host-bearing matcher detection");
-
-        let first = timed_command(
+        let observation = timed_command(
             "cmd.exe /c hostname",
-            "host-entity-first",
-            Some("entity-session-a"),
+            "session-scope",
+            Some("opaque|session:value"),
             Some("2026-09-17T10:00:00Z"),
         );
-        let second = timed_command(
-            "cmd.exe /c hostname",
-            "host-entity-second",
-            Some("entity-session-b"),
-            Some("2026-09-17T10:01:00Z"),
+        let inputs = command_derived_process_matcher_inputs(&observation);
+        assert!(!inputs.is_empty());
+        assert!(
+            inputs
+                .iter()
+                .all(|input| input.host.is_none() && input.user.is_none())
         );
 
-        let first_entity = resolved_entity(&detection, &first).expect("resolved entity");
-        let second_entity = resolved_entity(&detection, &second).expect("resolved entity");
-        assert_eq!(first_entity, "session:entity-session-a|host:workstation-a");
-        assert_eq!(second_entity, "session:entity-session-b|host:workstation-a");
-        assert_ne!(first_entity, second_entity);
+        let matches = evaluate_tool_process_chain_matches(
+            &rules,
+            &observation,
+            &ProcessChainContext::default(),
+            0,
+        )
+        .unwrap();
+        assert!(
+            matches
+                .iter()
+                .all(|matched| matched.result.session_id() == Some("opaque|session:value"))
+        );
     }
 
     #[test]
@@ -1372,6 +1363,141 @@ correlations: []
         let finding = signal.finding().unwrap();
         assert_eq!(signal.observation_ids(), correlation.observation_ids());
         assert_eq!(finding.observation_ids(), correlation.observation_ids());
+    }
+
+    #[test]
+    fn one_tool_observation_preserves_command_order_for_correlation() {
+        let rules = load_default_process_chain_rules().unwrap();
+        let reversed = timed_command(
+            "cmd.exe /c whoami && cmd.exe /c hostname",
+            "same-observation-reversed",
+            Some("s:reversed"),
+            Some("2026-09-17T10:00:00Z"),
+        );
+        let reversed = evaluate_tool_process_chain_session(
+            &rules,
+            &[&reversed],
+            &ProcessChainContext::default(),
+            &ProcessChainSessionConfig::default(),
+        )
+        .unwrap();
+        assert!(!reversed.results().iter().any(|result| {
+            result.detector().id() == "procchain.correlation.host_then_account_discovery"
+        }));
+
+        let forward = timed_command(
+            "cmd.exe /c hostname && cmd.exe /c whoami",
+            "same-observation-forward",
+            Some("s:forward"),
+            Some("2026-09-17T10:00:00Z"),
+        );
+        let forward = evaluate_tool_process_chain_session(
+            &rules,
+            &[&forward],
+            &ProcessChainContext::default(),
+            &ProcessChainSessionConfig::default(),
+        )
+        .unwrap();
+        assert!(forward.results().iter().any(|result| {
+            result.detector().id() == "procchain.correlation.host_then_account_discovery"
+        }));
+    }
+
+    #[test]
+    fn correlation_keeps_child_context_when_atomic_signal_identity_collapses() {
+        let rules = load_process_chain_rules(
+            r#"
+version: 1
+description: private child context
+defaults: { enabled: true, risk_entity: host, suppression_window_seconds: 3600 }
+categories:
+  discovery: { detection_class: security_detection, analytic_intent: alert, investigation_fields: [], falsepositives: [] }
+rules: []
+standalone:
+  - { id: procchain.synthetic.command, title: command, category: discovery, severity: informational, score: 0, confidence: low, match: command_line, patterns: ["\\b(hostname|whoami)\\b"], mitre: [T1082], reason: command }
+correlations:
+  - id: procchain.correlation.synthetic_children
+    title: child sequence
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: medium
+    mitre: [T1082]
+    reason: child sequence
+    window_seconds: 60
+    entity: host
+    sequence:
+      - { any_rule_id: [procchain.synthetic.command], any_child: [hostname] }
+      - { any_rule_id: [procchain.synthetic.command], any_child: [whoami] }
+"#,
+        )
+        .unwrap();
+        let observation = timed_command(
+            "cmd.exe /c hostname && cmd.exe /c whoami",
+            "same-identity-children",
+            Some("session:private-children"),
+            Some("2026-09-17T10:00:00Z"),
+        );
+        let evaluation = evaluate_tool_process_chain_session(
+            &rules,
+            &[&observation],
+            &ProcessChainContext::default(),
+            &ProcessChainSessionConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            evaluation
+                .results()
+                .iter()
+                .filter(|result| result.detector().id() == "procchain.synthetic.command")
+                .count(),
+            1,
+            "outward atomic Signal identity remains unique"
+        );
+        assert!(evaluation.results().iter().any(|result| {
+            result.detector().id() == "procchain.correlation.synthetic_children"
+        }));
+    }
+
+    #[test]
+    fn correlation_omits_non_aggregate_capability_context() {
+        let rules = load_default_process_chain_rules().unwrap();
+        let hostname = tool_with_session_time_and_capability(
+            ObservationStage::ToolRequested,
+            Some("cmd.exe /c hostname"),
+            None,
+            None,
+            "shell",
+            "capability-hostname",
+            Some("session:capability-context"),
+            Some("2026-09-17T10:00:00Z"),
+            CapabilityAvailability::Supported,
+        );
+        let account = tool_with_session_time_and_capability(
+            ObservationStage::ToolRequested,
+            Some("cmd.exe /c whoami"),
+            None,
+            None,
+            "shell",
+            "capability-account",
+            Some("session:capability-context"),
+            Some("2026-09-17T10:01:00Z"),
+            CapabilityAvailability::Unknown,
+        );
+        let evaluation = evaluate_tool_process_chain_session(
+            &rules,
+            &[&hostname, &account],
+            &ProcessChainContext::default(),
+            &ProcessChainSessionConfig::default(),
+        )
+        .unwrap();
+        let correlation = result(
+            evaluation.results(),
+            "procchain.correlation.host_then_account_discovery",
+        );
+
+        assert!(correlation.capability_context().is_none());
     }
 
     #[test]

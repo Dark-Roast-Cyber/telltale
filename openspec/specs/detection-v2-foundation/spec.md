@@ -258,11 +258,14 @@ Command candidates MUST come only from the governed `command.text` facet,
 reported `tool.searchable_arguments`, or string-valued `tool.arguments`. Tool
 names MUST NOT become commands and arbitrary JSON objects MUST NOT be
 stringified. Identical strings within one observation MUST be parsed once;
-distinct strings MUST all be evaluated without making their surface order a
-process ordering contract. Distinct candidates that produce the same final
-Detection v2 Signal identity MUST yield one result for that supporting Tool
-observation; this result normalization MUST NOT replace matcher-owned rule
-deduplication.
+distinct strings MUST all be evaluated. Private matcher candidates MUST retain
+the command parser's traversal order for session semantics, including derived
+statements within one Tool observation. Outward atomic results MUST instead be
+detector-ordered and duplicate-free. Distinct private candidates that produce
+the same final Detection v2 Signal identity MUST yield one outward result for
+that supporting Tool observation without discarding child context needed by a
+correlation predicate; this result normalization MUST NOT replace
+matcher-owned rule deduplication.
 
 The existing command parser MUST produce private matcher working state for the
 existing `CompiledProcessChainRules`. That matcher MUST remain authoritative for
@@ -330,16 +333,16 @@ when session semantics lack an entity or ordering time.
 Timed session semantics MUST use only canonical source-reported `occurred_at`.
 `observed_at`, materialization time, Event3 construction time, and wall-clock
 time MUST NOT be fallbacks. Candidates MUST be ordered chronologically with
-stable caller order for equal occurrence times. A missing `occurred_at` MUST
-retain its atomic result but MUST NOT be a timed repeat anchor, timed repeat, or
-timed correlation step.
+stable parser/caller order for equal occurrence times. A missing `occurred_at`
+MUST retain its atomic result but MUST NOT be a timed repeat anchor, timed
+repeat, or timed correlation step.
 
-Tool-derived evidence MUST use a truthful matcher entity when one exists;
-that entity MUST still be scoped to the canonical session when one is present
-so equal host/user values from different sessions cannot join. Otherwise a
-canonical session ID MAY be used as a session-scoped entity. A session ID MUST
-NOT be labelled as a host, and no host/user value may be manufactured. If
-neither value exists, only the atomic result is retained.
+Tool-derived matcher inputs in this tranche have no truthful host or user. The
+v2 Tool session path MUST therefore use only the opaque canonical session ID as
+its session scope, MUST NOT compose it with delimiter-separated matcher values,
+and MUST NOT label it as a host. Direct host/user-scoped evidence remains
+deferred to the future canonical Process path. Without a canonical session ID,
+only the atomic result is retained.
 
 Repeat suppression MUST use `rule ID + resolved entity + matcher-owned dedupe
 key`. The first eligible timed match is the anchor; equivalent timed matches
@@ -356,7 +359,9 @@ rule ID, `rule_version: 1`, `FindingKind::Correlation`, and
 Tool observation IDs, normalized and deduplicated by the common constructor; no
 synthetic observation ID may be created. The ordinary Signal/Finding path MUST
 materialize the result, and exact duplicate semantic identity with the same
-supporting set MUST collapse without collapsing different supporting sets.
+supporting set MUST collapse without collapsing different supporting sets. A
+correlation result MUST omit `capability_context` rather than attribute one
+supporting observation's context to the aggregate.
 
 Correlation matching MUST preserve ordered steps, the compiled per-rule window,
 the per-rule/per-entity throttle, and the authored correlation-rule iteration
@@ -386,6 +391,27 @@ entity risk.
   has a canonical session ID
 - **THEN** session-scoped suppression/correlation uses that session ID without
   asserting host evidence; different session IDs do not join
+
+#### Scenario: Derived command order remains semantic
+
+- **WHEN** one Tool observation contains multiple parsed statements with one
+  source occurrence time
+- **THEN** ordered correlation uses parser traversal order, while outward
+  atomic results remain detector-ordered and duplicate-free
+
+#### Scenario: Private child context survives atomic normalization
+
+- **WHEN** distinct private matcher candidates share one outward atomic Signal
+  identity but carry child names used by `CorrelationStep::matches`
+- **THEN** correlation sees the complete ordered private candidate set and the
+  outward atomic result still appears once
+
+#### Scenario: Aggregate capability context is not inferred
+
+- **WHEN** a process-chain correlation is supported by Tool observations with
+  different capability contexts
+- **THEN** the correlation result omits capability context instead of copying
+  the anchor observation's context
 
 #### Scenario: Generic correlation kinds remain reserved
 

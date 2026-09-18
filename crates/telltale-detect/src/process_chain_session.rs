@@ -34,9 +34,9 @@ impl Default for ProcessChainSessionConfig {
 /// The detector-neutral facts needed by repeat/correlation semantics.
 ///
 /// `entity` is already resolved by the caller.  An absent entity or timestamp
-/// intentionally makes only the cross-observation operation ineligible; the
+/// intentionally makes only the timed session operation ineligible; the
 /// caller still retains the atomic detection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ProcessChainSessionCandidate {
     pub(crate) rule_id: String,
     pub(crate) category: String,
@@ -67,24 +67,27 @@ pub(crate) struct ProcessChainSessionSemantics {
     pub(crate) correlations: Vec<CorrelationDecision>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct SuppressionKey {
     rule_id: String,
     entity: String,
     dedupe_key: String,
 }
 
-/// Apply repeat suppression and then evaluate the retained candidates against
-/// the compiled process-chain correlation vocabulary.
+/// Apply repeat suppression for outward atomic selection, then evaluate the
+/// complete private candidate stream against the compiled correlations. A
+/// duplicate atomic Signal can still carry distinct child context needed by a
+/// correlation predicate.
 pub(crate) fn evaluate_process_chain_session(
     candidates: &[ProcessChainSessionCandidate],
     rules: &CompiledProcessChainRules,
     config: &ProcessChainSessionConfig,
 ) -> ProcessChainSessionSemantics {
     let suppression = suppress_repeats(candidates, config.suppression_window);
+    let complete = (0..candidates.len()).collect::<Vec<_>>();
     let correlations = correlate_retained(
         candidates,
-        &suppression.retained,
+        &complete,
         rules,
         config.max_correlations_per_rule_entity,
         config.max_correlation_risk_per_entity,

@@ -266,12 +266,14 @@ steps, which is the whole point of emitting them.
 The non-production v2 session path uses the same six compiled definitions and
 step predicates. Its ordered candidates use source-reported `occurred_at`, not
 `observed_at`; a missing occurrence time retains the atomic result but cannot
-participate in timed suppression or correlation. Tool-derived evidence normally
-has no host or user. If the matcher supplies one, the v2 caller keeps it but
-scopes it to the canonical session; otherwise it resolves a session-scoped
-entity from that ID without relabeling it as a host. Different sessions never
-correlate. Correlation results remain ordinary `DetectorKind::ProcessChain`
-results with `FindingKind::Correlation` and `CorrelationScope::Sequence`, not
+participate in timed suppression or correlation. Equal timestamps retain parser
+and caller order, so statements derived from one Tool observation cannot be
+reordered by detector ID. Tool-derived matcher input has no host or user in this
+tranche, so the v2 path uses only the opaque canonical session ID as scope;
+direct host/user scope is deferred to canonical Process evidence. Different
+sessions never correlate. Correlation results remain ordinary
+`DetectorKind::ProcessChain` results with `FindingKind::Correlation` and
+`CorrelationScope::Sequence`, omit aggregate capability context, and do not use
 the reserved generic `Sequence` or `Correlation` kinds.
 
 ## False-positive controls

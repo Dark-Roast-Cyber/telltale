@@ -111,11 +111,12 @@ Command candidates come from, in order, the governed `command.text` facet,
 reported `tool.searchable_arguments`, and string-valued `tool.arguments`.
 Arbitrary JSON arguments are not stringified, and a tool name is not treated as
 a command. Identical command strings within one observation are parsed once;
-different strings are all evaluated, and detector identity rather than command
-surface order determines result ordering. If distinct strings match the same
-rule with the same final Signal identity, one result survives for that Tool
-observation. Session grouping is caller-defined; there is no source discovery
-or cross-session state in this tranche.
+different strings are all evaluated. Private matcher candidates retain parser
+traversal order for session correlation, including multiple statements derived
+from one Tool observation. Outward atomic results are separately detector-ordered
+and deduplicated by final Signal identity. Atomic normalization does not discard
+private child context used by correlation. Session grouping is caller-defined;
+there is no source discovery or cross-session state in this tranche.
 
 The existing command parser converts each command candidate into private
 `telltale-rules` matcher working input. `CompiledProcessChainRules` remains the
@@ -157,17 +158,16 @@ Timed v2 semantics use only truthful source-reported `occurred_at`. They never
 substitute `observed_at`, materialization time, Event3 construction time, or the
 wall clock. Missing `occurred_at` retains the atomic match but makes it
 ineligible for timed repeat suppression and correlation. Candidates are ordered
-chronologically, with stable caller order for equal timestamps.
+chronologically, with stable parser and caller order for equal timestamps.
 
-Tool-derived matcher input normally has no truthful host or user. When the
-matcher does provide one, the v2 evaluator retains it but scopes it to the
-canonical session so the same host value in two sessions cannot join. Otherwise
-it falls back to the canonical session ID as a session-scoped entity; it never
-labels that ID as a host. Without either a truthful matcher entity or a
-canonical session ID, the atomic match survives but cannot join a
+Tool-derived matcher input in this tranche has no truthful host or user. The v2
+Tool session path therefore uses only the opaque canonical session ID as its
+scope and does not compose it with matcher values or label it as a host. Direct
+host/user-scoped runtime evidence remains future canonical Process work. Without
+a canonical session ID, the atomic match survives but cannot join a
 cross-observation operation. Different canonical sessions never correlate.
 
-Repeat identity remains `rule ID + resolved entity + matcher-owned dedupe key`.
+Repeat identity remains `rule ID + canonical session scope + matcher-owned dedupe key`.
 The first timed match is the anchor; repeats inside the configured window are
 omitted while the private session result retains total occurrence count and
 suppressed count. The defaults remain one hour, one correlation per rule/entity,
@@ -180,7 +180,9 @@ actual supporting canonical Tool observation ID, so ordinary Signal/Finding
 identity changes when that supporting set changes. Risk-capped results still
 emit as evaluated matches with risk 0, informational severity, preserved
 confidence/ATT&CK metadata, and a bounded `risk_capped` tag. Zero-risk atomic
-matches remain eligible sequence steps.
+matches remain eligible sequence steps. Correlation results omit
+`capability_context`; one supporting observation's context is not presented as
+an aggregate fact.
 
 The new path is not scanner- or watch-wired. Production continues to acquire
 `NormalizedRecord` values and project Event3 through its existing wrapper;
