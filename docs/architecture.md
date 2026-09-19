@@ -105,9 +105,11 @@ The production migration order is:
    semantic/detection path is singular.
 
 Step 4 convergence is complete. Step 5 has an inactive canonical evaluation and
-Event3 compatibility boundary; coordinated scan, watch, and supported embedding
-activation remains later work under Issue #51. The legacy production
-scanner, detection path, and embedding path remain unchanged; Event 3.0 is frozen
+Event3 compatibility boundary. Scanner-owned processing success now gates OpenCode
+cursor eligibility on the current production path; parse success alone cannot
+advance that cursor. Coordinated scan, watch, and supported embedding activation
+onto Canonical Observation v2 -> Detection v2 remains later work under Issue #51.
+Production detection and embedding remain on the legacy path; Event 3.0 is frozen
 and Event4 is inactive.
 
 Acquisition is direct source-native extraction followed by source-owned canonical

@@ -84,7 +84,7 @@ pub fn detect_parsed_source_records(
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Vec<Event> {
-    detect_parsed_source_records_internal(source, rule_set, parsed, false).0
+    detect_parsed_source_attempt(source, rule_set, parsed, false).events
 }
 
 #[derive(Clone)]
@@ -125,24 +125,39 @@ pub fn detect_parsed_source_records_with_snapshot(
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> (Vec<Event>, EffectiveMatchSnapshot) {
-    let (events, snapshot) = detect_parsed_source_records_internal(source, rule_set, parsed, true);
+    let attempt = detect_parsed_source_attempt(source, rule_set, parsed, true);
     (
-        events,
-        snapshot.expect("snapshot requested from detection pass"),
+        attempt.events,
+        attempt
+            .snapshot
+            .expect("snapshot requested from detection pass"),
     )
 }
 
-fn detect_parsed_source_records_internal(
+/// Legacy detection-pass result with operational completion independent of Event3.
+///
+/// `completed_operationally` is false when any session failed analysis, even if
+/// a `scanner_error` event was also produced. This is not scanner progress
+/// eligibility; the scanner maps it. Delete when production scan no longer uses
+/// the legacy detector (Issue #51 later tranche / ROADMAP step 6).
+pub struct ParsedSourceDetectionAttempt {
+    pub events: Vec<Event>,
+    pub snapshot: Option<EffectiveMatchSnapshot>,
+    pub completed_operationally: bool,
+}
+
+pub fn detect_parsed_source_attempt(
     source: &Source,
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
     capture_snapshot: bool,
-) -> (Vec<Event>, Option<EffectiveMatchSnapshot>) {
+) -> ParsedSourceDetectionAttempt {
     let sessions = group_records_by_session(parsed.to_vec());
     let mut snapshot = capture_snapshot.then(|| EffectiveMatchSnapshot {
         sessions: Vec::with_capacity(sessions.len()),
     });
     let mut events = Vec::new();
+    let mut completed_operationally = true;
 
     for (session_id, records) in sessions {
         match detect_records(source, rule_set, &records) {
@@ -166,6 +181,7 @@ fn detect_parsed_source_records_internal(
                 }
             }
             Err(error) => {
+                completed_operationally = false;
                 if let Some(snapshot) = snapshot.as_mut() {
                     snapshot.sessions.push(EffectiveSessionMatchSnapshot {
                         session_id,
@@ -178,7 +194,11 @@ fn detect_parsed_source_records_internal(
         }
     }
 
-    (events, snapshot)
+    ParsedSourceDetectionAttempt {
+        events,
+        snapshot,
+        completed_operationally,
+    }
 }
 
 /// Evaluates each source-local session once with the pre-policy rule set and
@@ -276,21 +296,55 @@ pub fn summarize_parsed_source_activity(
     baseline_snapshots: &BaselineSnapshotStore,
     baseline_deviation_config: BaselineDeviationConfig,
 ) -> Vec<Event> {
-    group_records_by_session(parsed.to_vec())
-        .iter()
-        .flat_map(|(_, records)| {
-            match activity_records(
-                source,
-                records,
-                baseline_snapshots,
-                baseline_deviation_config,
-            ) {
-                Ok(Some(event)) => vec![event],
-                Ok(None) => Vec::new(),
-                Err(error) => vec![telltale_schema::event::scanner_error_event(source, &error)],
+    summarize_parsed_source_activity_attempt(
+        source,
+        parsed,
+        baseline_snapshots,
+        baseline_deviation_config,
+    )
+    .events
+}
+
+/// Legacy activity-pass result with operational completion independent of Event3.
+///
+/// `completed_operationally` is false when any session failed activity analysis,
+/// even if a `scanner_error` event was also produced. This is not scanner
+/// progress eligibility. Delete this attempt carrier when production activity
+/// analysis consumes the canonical runtime result in a later Issue #51 tranche.
+pub struct ParsedSourceActivityAttempt {
+    pub events: Vec<Event>,
+    pub completed_operationally: bool,
+}
+
+pub fn summarize_parsed_source_activity_attempt(
+    source: &Source,
+    parsed: &[NormalizedRecord],
+    baseline_snapshots: &BaselineSnapshotStore,
+    baseline_deviation_config: BaselineDeviationConfig,
+) -> ParsedSourceActivityAttempt {
+    let mut events = Vec::new();
+    let mut completed_operationally = true;
+
+    for (_, records) in group_records_by_session(parsed.to_vec()) {
+        match activity_records(
+            source,
+            &records,
+            baseline_snapshots,
+            baseline_deviation_config,
+        ) {
+            Ok(Some(event)) => events.push(event),
+            Ok(None) => {}
+            Err(error) => {
+                completed_operationally = false;
+                events.push(telltale_schema::event::scanner_error_event(source, &error));
             }
-        })
-        .collect()
+        }
+    }
+
+    ParsedSourceActivityAttempt {
+        events,
+        completed_operationally,
+    }
 }
 
 fn group_records_by_session(parsed: Vec<NormalizedRecord>) -> Vec<(String, Vec<NormalizedRecord>)> {
@@ -679,6 +733,8 @@ mod tests {
     mod download_execute;
     #[path = "mcp_injection.rs"]
     mod mcp_injection;
+    #[path = "operational_status.rs"]
+    mod operational_status;
     #[path = "policy_accounting.rs"]
     mod policy_accounting;
     #[path = "process_chain.rs"]

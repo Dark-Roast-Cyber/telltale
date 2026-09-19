@@ -33,8 +33,10 @@
 > cutover has not started; see [Canonical Observation v2](canonical-observation-v2.md)
 > for the explicit `observed_at`, progress semantics, and runtime boundary.
 > ROADMAP step 4 convergence is complete. Step 5 Tranche A adds inactive canonical
-> session evaluation and Event3 compatibility; coordinated scan/watch/embedding
-> activation remains later work under Issue #51. See [Detection v2](detection-v2.md#inactive-canonical-processing-issue-51-tranche-a).
+> session evaluation and Event3 compatibility. Tranche B1 gates OpenCode cursor
+> eligibility on scanner-owned processing success without activating the canonical
+> production path; coordinated scan/watch/embedding activation remains later work
+> under Issue #51. See [Detection v2](detection-v2.md#inactive-canonical-processing-issue-51-tranche-a).
 > Copilot native-v2 capabilities are ToolCall
 > **Supported**, UserContext **Unsupported**, and ToolExecution **Unknown**.
 > **Existing compatibility:**

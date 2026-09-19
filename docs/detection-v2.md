@@ -330,9 +330,11 @@ by either new API.
   count semantics, and pre-policy accounting require Tranche B integration work;
   this tranche neither emits fake baseline findings nor migrates baseline state.
 - Source-instance verification, safe acquisition chunk/session boundaries,
-  configured bounds handling, output durability, post-projection allowlisting,
-  and the inherited OpenCode downstream-success cursor issue remain activation
-  responsibilities. Step 5 and production activation are not complete.
+  configured bounds handling, output durability, and post-projection allowlisting
+  remain activation responsibilities. The current production path now refuses to
+  advance an OpenCode cursor after downstream operational failure; canonical
+  production activation is still required to consume this contract. Step 5 and
+  production activation are not complete.
 
 ## DetectorResult
 

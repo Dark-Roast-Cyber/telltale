@@ -93,9 +93,11 @@ The intended convergence order is:
 
 Step 5 is in progress under Issue #51. Tranche A adds inactive canonical session
 evaluation and Event3 compatibility; it does not switch production callers.
-Scanner/watch/embedding preparation, progress-eligibility fixes, and coordinated
-activation remain later tranches. Step 5 is not complete. Event 3.0 remains
-unchanged in production: Tranche A does not change its schema, public contract,
+Tranche B1 establishes scanner-owned processing-success / progress-eligibility
+and stops OpenCode cursor advancement after downstream operational failure.
+Production scan, watch, and embedding remain on the legacy path. Coordinated
+canonical activation remains later work. Step 5 is not complete. Event 3.0 remains
+unchanged in production: this work does not change its schema, public contract,
 routing, or persisted production bytes. The inactive canonical compatibility
 projector can have reviewed truthful semantic differences from the legacy
 runtime; it is not a byte-parity claim. Event4 remains inactive.

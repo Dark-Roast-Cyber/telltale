@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 
 use crate::allowlist::{load_allowlist, suppress_detection};
-use crate::baseline::{BaselineDeviationConfig, BaselineSnapshotStore, build_baseline_summaries};
+use crate::baseline::{BaselineDeviationConfig, build_baseline_summaries};
 use crate::cli::historical::{EventRecordKind, JsonlEventRecord, read_jsonl_records};
 use crate::detection::{
-    EffectiveMatchSnapshot, PolicyMatchAccounting, account_policy_matches,
-    detect_parsed_source_records, detect_parsed_source_records_with_snapshot,
-    summarize_parsed_source_activity,
+    EffectiveMatchSnapshot, ParsedSourceActivityAttempt, ParsedSourceDetectionAttempt,
+    PolicyMatchAccounting, account_policy_matches, detect_parsed_source_attempt,
+    summarize_parsed_source_activity_attempt,
 };
 use crate::discovery::is_fixture_root;
 use crate::event::{
@@ -44,7 +44,12 @@ const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
 
 mod discovery;
+mod processing;
 pub(super) mod watch;
+
+use processing::{
+    SourceProcessingStatus, should_stage_sqlite_ingestion_cursors, sqlite_progress_candidate,
+};
 
 use discovery::{
     SourceDiscoveryAccounting, discover_operational_sources, load_project_configuration,
@@ -257,42 +262,57 @@ fn run_scan_for_platform(
         let snapshot = collect_install_inventory(observed_at_unix_ms);
         install_inventory_event = Some((snapshot_to_event(&snapshot)?, snapshot));
     }
-    let activities = if config.execution.emit_activity {
-        let baseline_deviation_config = BaselineDeviationConfig {
+    let activity_config = config
+        .execution
+        .emit_activity
+        .then(|| BaselineDeviationConfig {
             enabled: config.execution.baseline_deviation_scoring,
             ..BaselineDeviationConfig::default()
-        };
-        let mut activities = summarize_scan_source_activity(
-            &parsed_sources,
-            &baseline_snapshots,
-            baseline_deviation_config,
-        );
-        // MCP discovery walks host-wide config directories; targeted scans only
-        // re-examine changed session sources, so leave it to full scans.
-        if !targeted {
-            activities.extend(discover_mcp_inventory(config.execution.root));
-            activities.extend(discover_mcp_usage(config.execution.root, &sources));
-        }
-        activities
-    } else {
-        Vec::new()
-    };
+        });
+    let mut activities = Vec::new();
     let mut effective_match_snapshots = Vec::new();
     let mut detections = Vec::new();
+    let mut processing_statuses = Vec::with_capacity(parsed_sources.len());
     let process_chain_rules = load_process_chain_rules_if_enabled();
     for parsed_source in &parsed_sources {
-        let (events, snapshot) = analyze_parsed_source(
+        let activity_attempt = activity_config.and_then(|baseline_deviation_config| {
+            let records = parsed_source.records.as_ref().ok()?;
+            Some(summarize_parsed_source_activity_attempt(
+                &parsed_source.source,
+                records,
+                &baseline_snapshots,
+                baseline_deviation_config,
+            ))
+        });
+        let analyzed = analyze_parsed_source(
             parsed_source,
             &rule_set,
             policy_active,
             process_chain_rules.as_ref(),
+            activity_attempt.as_ref(),
         );
+        processing_statuses.push(analyzed.status);
+        if let Some(activity_attempt) = activity_attempt {
+            activities.extend(
+                activity_attempt
+                    .events
+                    .into_iter()
+                    .map(|event| (parsed_source.source.clone(), event)),
+            );
+        }
         detections.extend(
-            events
+            analyzed
+                .events
                 .into_iter()
                 .map(|event| (parsed_source.source.clone(), event)),
         );
-        effective_match_snapshots.extend(snapshot);
+        effective_match_snapshots.extend(analyzed.snapshot);
+    }
+    // MCP discovery walks host-wide config directories; targeted scans only
+    // re-examine changed session sources, so leave it to full scans.
+    if config.execution.emit_activity && !targeted {
+        activities.extend(discover_mcp_inventory(config.execution.root));
+        activities.extend(discover_mcp_usage(config.execution.root, &sources));
     }
     let mut detection_flow = detection_flow_accounting(&detections);
     let mut suppressed_count = 0_usize;
@@ -403,8 +423,13 @@ fn run_scan_for_platform(
     } else {
         state.replace_source_observations(&sources, observed_at_unix_ms);
     }
-    if !config.execution.dry_run && !config.backfill {
-        observe_sqlite_ingestion_cursors(&mut state, &parsed_sources, observed_at_unix_ms);
+    if should_stage_sqlite_ingestion_cursors(config.execution.dry_run, config.backfill) {
+        observe_sqlite_ingestion_cursors(
+            &mut state,
+            &parsed_sources,
+            &processing_statuses,
+            observed_at_unix_ms,
+        );
     }
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
@@ -512,28 +537,10 @@ fn run_scan_for_platform(
     })
 }
 
-fn summarize_scan_source_activity(
-    parsed_sources: &[ParsedScanSource],
-    baseline_snapshots: &BaselineSnapshotStore,
-    baseline_deviation_config: BaselineDeviationConfig,
-) -> Vec<(Source, Event)> {
-    let mut activities = Vec::new();
-    for parsed_source in parsed_sources {
-        let Ok(records) = &parsed_source.records else {
-            continue;
-        };
-        activities.extend(
-            summarize_parsed_source_activity(
-                &parsed_source.source,
-                records,
-                baseline_snapshots,
-                baseline_deviation_config,
-            )
-            .into_iter()
-            .map(|event| (parsed_source.source.clone(), event)),
-        );
-    }
-    activities
+struct AnalyzedScanSource {
+    events: Vec<Event>,
+    snapshot: Option<EffectiveMatchSnapshot>,
+    status: SourceProcessingStatus,
 }
 
 fn analyze_parsed_source(
@@ -541,33 +548,65 @@ fn analyze_parsed_source(
     rule_set: &telltale_rules::CompiledRuleSet,
     policy_active: bool,
     process_chain_rules: Option<&telltale_rules::process_chain::CompiledProcessChainRules>,
-) -> (Vec<Event>, Option<EffectiveMatchSnapshot>) {
+    activity_attempt: Option<&ParsedSourceActivityAttempt>,
+) -> AnalyzedScanSource {
     let source = &parsed_source.source;
     let records = match &parsed_source.records {
         Ok(records) => records,
-        Err(ParseError::Empty) => return (Vec::new(), None),
-        Err(error) => return (vec![scanner_error_event(source, error)], None),
+        Err(ParseError::Empty) => {
+            return AnalyzedScanSource {
+                events: Vec::new(),
+                snapshot: None,
+                status: SourceProcessingStatus::Failed,
+            };
+        }
+        Err(error) => {
+            return AnalyzedScanSource {
+                events: vec![scanner_error_event(source, error)],
+                snapshot: None,
+                status: SourceProcessingStatus::Failed,
+            };
+        }
     };
+    let process_chain = process_chain_rules
+        .map(|rules| detect_process_chains(source, rules, records, &ProcessChainConfig::default()));
+    let attempt = detect_parsed_source_attempt(source, rule_set, records, policy_active);
+    finish_analyzed_source(source, process_chain, attempt, activity_attempt)
+}
+
+/// Combines parse-success downstream results into one processing status.
+/// Activity, process-chain, and detection Event3 values may describe a failure;
+/// status remains the operational owner.
+fn finish_analyzed_source(
+    source: &Source,
+    process_chain: Option<Result<Vec<Event>, RiskAccountingError>>,
+    attempt: ParsedSourceDetectionAttempt,
+    activity_attempt: Option<&ParsedSourceActivityAttempt>,
+) -> AnalyzedScanSource {
     let mut events = Vec::new();
-    if let Some(rules) = process_chain_rules {
-        match detect_process_chains(source, rules, records, &ProcessChainConfig::default()) {
+    let mut status = SourceProcessingStatus::Succeeded;
+    if let Some(result) = process_chain {
+        match result {
             Ok(chain_events) => events.extend(chain_events),
-            Err(error) => events.push(scanner_error_event(source, &error)),
+            Err(error) => {
+                status = SourceProcessingStatus::Failed;
+                events.push(scanner_error_event(source, &error));
+            }
         }
     }
     // Chain output (or its scanner error) precedes the ordinary detection pass.
-    let (detections, snapshot) = if policy_active {
-        let (detections, snapshot) =
-            detect_parsed_source_records_with_snapshot(source, rule_set, records);
-        (detections, Some(snapshot))
-    } else {
-        (
-            detect_parsed_source_records(source, rule_set, records),
-            None,
-        )
-    };
-    events.extend(detections);
-    (events, snapshot)
+    if !attempt.completed_operationally {
+        status = SourceProcessingStatus::Failed;
+    }
+    if activity_attempt.is_some_and(|attempt| !attempt.completed_operationally) {
+        status = SourceProcessingStatus::Failed;
+    }
+    events.extend(attempt.events);
+    AnalyzedScanSource {
+        events,
+        snapshot: attempt.snapshot,
+        status,
+    }
 }
 
 fn scanner_health_alerts(
@@ -821,20 +860,24 @@ fn parse_options_for_scan_source(
 fn observe_sqlite_ingestion_cursors(
     state: &mut ScanState,
     parsed_sources: &[ParsedScanSource],
+    processing_statuses: &[SourceProcessingStatus],
     observed_at_unix_ms: u64,
 ) {
-    for parsed_source in parsed_sources {
-        if !is_opencode_sqlite_source(&parsed_source.source) || parsed_source.records.is_err() {
+    debug_assert_eq!(parsed_sources.len(), processing_statuses.len());
+    for (parsed_source, status) in parsed_sources.iter().zip(processing_statuses) {
+        let Some(last_time_updated) = sqlite_progress_candidate(
+            is_opencode_sqlite_source(&parsed_source.source),
+            parsed_source.sqlite_part_max_time_updated,
+            *status,
+        ) else {
             continue;
-        }
-        if let Some(last_time_updated) = parsed_source.sqlite_part_max_time_updated {
-            state.observe_sqlite_ingestion_cursor(
-                &parsed_source.source,
-                OPENCODE_SQLITE_PART_TABLE,
-                last_time_updated,
-                observed_at_unix_ms,
-            );
-        }
+        };
+        state.observe_sqlite_ingestion_cursor(
+            &parsed_source.source,
+            OPENCODE_SQLITE_PART_TABLE,
+            last_time_updated,
+            observed_at_unix_ms,
+        );
     }
 }
 
@@ -1490,6 +1533,7 @@ mod tests {
 
     use super::discovery::ProjectConfigurationAccounting;
     use super::*;
+    use crate::baseline::BaselineSnapshotStore;
     use crate::install_inventory::InstallInventorySnapshot;
     use crate::sink::{
         DeliveryError, DeliveryErrorClass, EventSink, LocalJsonlSink, RotationConfig,
@@ -1642,12 +1686,293 @@ mod tests {
 
         let parsed = parse_scan_sources(std::slice::from_ref(&source), &state, false, false);
         assert!(parsed[0].records.is_err());
-        observe_sqlite_ingestion_cursors(&mut state, &parsed, 2_000);
+        let analyzed = analyze_parsed_source(&parsed[0], &test_rule_set(), false, None, None);
+        assert_eq!(analyzed.status, SourceProcessingStatus::Failed);
+        assert_eq!(analyzed.events[0].event_type, "scanner_error");
+        observe_sqlite_ingestion_cursors(&mut state, &parsed, &[analyzed.status], 2_000);
 
         assert_eq!(
             state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
             Some(5_000)
         );
+    }
+
+    #[test]
+    fn opencode_successful_no_match_keeps_cursor_eligible() {
+        let parsed = opencode_parsed(Ok(Vec::new()), Some(9_000));
+        let analyzed = analyze_parsed_source(&parsed, &test_rule_set(), false, None, None);
+        assert_eq!(analyzed.status, SourceProcessingStatus::Succeeded);
+        assert!(analyzed.events.is_empty());
+        let mut state = ScanState::default();
+        observe_sqlite_ingestion_cursors(&mut state, &[parsed], &[analyzed.status], 2_000);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(
+                &opencode_test_source(),
+                OPENCODE_SQLITE_PART_TABLE
+            ),
+            Some(9_000)
+        );
+    }
+
+    #[test]
+    fn opencode_activity_failure_emits_error_and_does_not_advance_cursor() {
+        let parsed = opencode_parsed(Ok(vec![activity_record(Some(String::new()))]), Some(9_000));
+        let source = parsed.source.clone();
+        let activity_attempt = summarize_parsed_source_activity_attempt(
+            &source,
+            parsed.records.as_ref().expect("parsed records"),
+            &BaselineSnapshotStore::default(),
+            BaselineDeviationConfig::default(),
+        );
+        assert!(!activity_attempt.completed_operationally);
+        assert_eq!(activity_attempt.events.len(), 1);
+        assert_eq!(activity_attempt.events[0].event_type, "scanner_error");
+
+        let detection_attempt = detect_parsed_source_attempt(
+            &source,
+            &test_rule_set(),
+            parsed.records.as_ref().expect("parsed records"),
+            false,
+        );
+        assert!(detection_attempt.completed_operationally);
+        assert!(detection_attempt.events.is_empty());
+        let analyzed = finish_analyzed_source(
+            &source,
+            Some(Ok(Vec::new())),
+            detection_attempt,
+            Some(&activity_attempt),
+        );
+        assert_eq!(analyzed.status, SourceProcessingStatus::Failed);
+        assert!(
+            analyzed.events.is_empty(),
+            "ordinary detection is a no-match"
+        );
+        assert_eq!(
+            sqlite_progress_candidate(true, Some(9_000), analyzed.status),
+            None
+        );
+
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 5_000, 1_000);
+        observe_sqlite_ingestion_cursors(&mut state, &[parsed], &[analyzed.status], 2_000);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
+            Some(5_000)
+        );
+    }
+
+    #[test]
+    fn opencode_successful_enabled_activity_no_match_keeps_cursor_eligible() {
+        let parsed = opencode_parsed(
+            Ok(vec![activity_record(Some("synthetic-model".to_string()))]),
+            Some(9_000),
+        );
+        let source = parsed.source.clone();
+        let activity_attempt = summarize_parsed_source_activity_attempt(
+            &source,
+            parsed.records.as_ref().expect("parsed records"),
+            &BaselineSnapshotStore::default(),
+            BaselineDeviationConfig::default(),
+        );
+        assert!(activity_attempt.completed_operationally);
+        assert_eq!(activity_attempt.events.len(), 1);
+        assert_eq!(activity_attempt.events[0].event_type, "activity");
+
+        let detection_attempt = detect_parsed_source_attempt(
+            &source,
+            &test_rule_set(),
+            parsed.records.as_ref().expect("parsed records"),
+            false,
+        );
+        assert!(detection_attempt.completed_operationally);
+        assert!(detection_attempt.events.is_empty());
+        let analyzed = finish_analyzed_source(
+            &source,
+            Some(Ok(Vec::new())),
+            detection_attempt,
+            Some(&activity_attempt),
+        );
+        assert_eq!(analyzed.status, SourceProcessingStatus::Succeeded);
+        assert!(
+            analyzed.events.is_empty(),
+            "ordinary detection is a no-match"
+        );
+        assert_eq!(
+            sqlite_progress_candidate(true, Some(9_000), analyzed.status),
+            Some(9_000)
+        );
+
+        let mut state = ScanState::default();
+        observe_sqlite_ingestion_cursors(&mut state, &[parsed], &[analyzed.status], 2_000);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
+            Some(9_000)
+        );
+    }
+
+    #[test]
+    fn opencode_successful_findings_keep_cursor_eligible() {
+        let parsed = opencode_parsed(Ok(Vec::new()), Some(9_000));
+        let source = parsed.source.clone();
+        let mut finding = scanner_error_event(&source, &ParseError::Empty);
+        finding.event_type = "detection".to_string();
+        let analyzed = finish_analyzed_source(
+            &source,
+            Some(Ok(Vec::new())),
+            ParsedSourceDetectionAttempt {
+                events: vec![finding],
+                snapshot: None,
+                completed_operationally: true,
+            },
+            None,
+        );
+        assert_eq!(analyzed.status, SourceProcessingStatus::Succeeded);
+        assert_eq!(analyzed.events[0].event_type, "detection");
+        let mut state = ScanState::default();
+        observe_sqlite_ingestion_cursors(&mut state, &[parsed], &[analyzed.status], 2_000);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
+            Some(9_000)
+        );
+    }
+
+    #[test]
+    fn opencode_scanner_error_event_does_not_make_progress_eligible() {
+        let parsed = opencode_parsed(Ok(Vec::new()), Some(9_000));
+        let source = parsed.source.clone();
+        let analyzed = finish_analyzed_source(
+            &source,
+            None,
+            ParsedSourceDetectionAttempt {
+                events: vec![scanner_error_event(&source, &RiskAccountingError::Overflow)],
+                snapshot: None,
+                completed_operationally: false,
+            },
+            None,
+        );
+        assert_eq!(analyzed.status, SourceProcessingStatus::Failed);
+        assert_eq!(analyzed.events[0].event_type, "scanner_error");
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 5_000, 1_000);
+        observe_sqlite_ingestion_cursors(&mut state, &[parsed], &[analyzed.status], 2_000);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
+            Some(5_000)
+        );
+    }
+
+    #[test]
+    fn opencode_detection_operational_failure_does_not_advance_cursor() {
+        let parsed = opencode_parsed(Ok(Vec::new()), Some(9_000));
+        let source = parsed.source.clone();
+        let analyzed = finish_analyzed_source(
+            &source,
+            Some(Ok(Vec::new())),
+            ParsedSourceDetectionAttempt {
+                events: vec![scanner_error_event(&source, &RiskAccountingError::Overflow)],
+                snapshot: None,
+                completed_operationally: false,
+            },
+            None,
+        );
+        assert_eq!(analyzed.status, SourceProcessingStatus::Failed);
+        assert!(
+            analyzed
+                .events
+                .iter()
+                .any(|event| event.event_type == "scanner_error")
+        );
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 5_000, 1_000);
+        observe_sqlite_ingestion_cursors(&mut state, &[parsed], &[analyzed.status], 2_000);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
+            Some(5_000)
+        );
+    }
+
+    #[test]
+    fn opencode_process_chain_operational_failure_does_not_advance_cursor() {
+        let parsed = opencode_parsed(Ok(Vec::new()), Some(9_000));
+        let source = parsed.source.clone();
+        let analyzed = finish_analyzed_source(
+            &source,
+            Some(Err(RiskAccountingError::Overflow)),
+            ParsedSourceDetectionAttempt {
+                events: Vec::new(),
+                snapshot: None,
+                completed_operationally: true,
+            },
+            None,
+        );
+        assert_eq!(analyzed.status, SourceProcessingStatus::Failed);
+        assert_eq!(analyzed.events[0].event_type, "scanner_error");
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 5_000, 1_000);
+        observe_sqlite_ingestion_cursors(&mut state, &[parsed], &[analyzed.status], 2_000);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, OPENCODE_SQLITE_PART_TABLE),
+            Some(5_000)
+        );
+    }
+
+    #[test]
+    fn watch_shared_path_failed_processing_is_not_a_durable_cursor_change() {
+        let parsed = opencode_parsed(Ok(Vec::new()), Some(9_000));
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(
+            &parsed.source,
+            OPENCODE_SQLITE_PART_TABLE,
+            5_000,
+            1_000,
+        );
+        let probe = StateChangeProbe::capture(&state);
+        observe_sqlite_ingestion_cursors(
+            &mut state,
+            &[parsed],
+            &[SourceProcessingStatus::Failed],
+            2_000,
+        );
+        assert!(!probe.changed(&state));
+    }
+
+    fn opencode_test_source() -> Source {
+        Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".to_string(),
+            path: PathBuf::from("/synthetic/opencode.db"),
+        }
+    }
+
+    fn opencode_parsed(
+        records: Result<Vec<NormalizedRecord>, ParseError>,
+        high_water: Option<i64>,
+    ) -> ParsedScanSource {
+        ParsedScanSource {
+            source: opencode_test_source(),
+            records,
+            sqlite_part_max_time_updated: high_water,
+        }
+    }
+
+    fn activity_record(model: Option<String>) -> NormalizedRecord {
+        NormalizedRecord {
+            session_id: "session-a".to_string(),
+            client: "opencode".to_string(),
+            agent: None,
+            model,
+            provider: None,
+            timestamp: None,
+            kind: telltale_schema::record::RecordKind::Other,
+            tool_name: None,
+            arguments: None,
+            content: "synthetic benign activity".to_string(),
+        }
+    }
+
+    fn test_rule_set() -> telltale_rules::CompiledRuleSet {
+        telltale_rules::load_default_rule_set().expect("default rule set")
     }
 
     #[test]
