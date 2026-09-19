@@ -91,8 +91,14 @@ The intended convergence order is:
    expand Event4 persistence, dual emission, or transport merely to compensate
    for an unfinished internal migration.
 
-Step 5 is next and has not started. Acquisition convergence does not activate
-Detection v2 in production, change Event 3.0, or activate Event4.
+Step 5 is in progress under Issue #51. Tranche A adds inactive canonical session
+evaluation and Event3 compatibility; it does not switch production callers.
+Scanner/watch/embedding preparation, progress-eligibility fixes, and coordinated
+activation remain later tranches. Step 5 is not complete. Event 3.0 remains
+unchanged in production: Tranche A does not change its schema, public contract,
+routing, or persisted production bytes. The inactive canonical compatibility
+projector can have reviewed truthful semantic differences from the legacy
+runtime; it is not a byte-parity claim. Event4 remains inactive.
 
 The accepted semantic direction is documented in:
 

@@ -665,6 +665,16 @@ fn classify_difference(
         );
     }
     if comparison.relation == AtomicRelation::V2Indeterminate {
+        if comparison.legacy_matched_target.as_deref() == Some("url")
+            && comparison
+                .v2_non_evaluation_reasons
+                .contains_key(NonEvaluationReason::InsufficientVisibility.as_str())
+        {
+            return (
+                Some(MismatchClassification::LegacyFlatteningDifference),
+                Some("compat_v1_url_unavailable".to_owned()),
+            );
+        }
         if comparison
             .v2_non_evaluation_reasons
             .contains_key(NonEvaluationReason::RequiredCapabilityUnsupported.as_str())
@@ -1163,7 +1173,7 @@ mod tests {
             let canonical = canonical();
             let result = compare_sessions(&rule, &[legacy], &[canonical]).unwrap();
             if target == "url" {
-                assert_eq!(result.atomic_equivalence.legacy_only, 1, "{target}");
+                assert_eq!(result.atomic_equivalence.v2_indeterminate, 1, "{target}");
             } else {
                 assert_eq!(result.atomic_equivalence.both_match, 1, "{target}");
             }
@@ -1177,7 +1187,7 @@ mod tests {
         let canonical = tool("session", "run", JsonValue::string("other"));
         let result = compare_sessions(&rule, &[legacy], &[canonical]).unwrap();
         let detector = &result.sessions[0].detectors[0];
-        assert_eq!(detector.relation, AtomicRelation::LegacyOnly);
+        assert_eq!(detector.relation, AtomicRelation::V2Indeterminate);
         assert_eq!(
             detector.reason_code.as_deref(),
             Some("compat_v1_url_unavailable")
@@ -1295,12 +1305,17 @@ mod tests {
             };
             let result = compare_sessions(&rule, &[legacy], &[canonical()]).unwrap();
             let detector = &result.sessions[0].detectors[0];
-            assert_eq!(detector.relation, AtomicRelation::BothNoMatch, "{target}");
-            assert_eq!(
-                detector.v2_outcome,
-                SessionDetectorOutcome::NoMatch,
-                "{target}"
-            );
+            if target == "url" {
+                assert_eq!(detector.relation, AtomicRelation::V2Indeterminate);
+                assert_eq!(detector.v2_outcome, SessionDetectorOutcome::Indeterminate);
+            } else {
+                assert_eq!(detector.relation, AtomicRelation::BothNoMatch, "{target}");
+                assert_eq!(
+                    detector.v2_outcome,
+                    SessionDetectorOutcome::NoMatch,
+                    "{target}"
+                );
+            }
         }
     }
 

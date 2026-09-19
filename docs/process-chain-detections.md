@@ -1,10 +1,13 @@
 # Process-Chain Detections
 
 Telltale's regex rules ask "does this text look risky". Process-chain rules ask
-a narrower question: **did this process spawn that one, and what did the child's
-command line say**. They are a second rule vocabulary that runs alongside the
-regex engine and emits its own event type. The regex engine, its rule pack, its
-scoring, and the session `detection` event are unchanged.
+whether available evidence supports a parent/child matcher relationship and
+what command context accompanies it. Directly observed Process evidence can
+support an execution relationship. Command/tool-derived matcher context is an
+interpretation and does **not** prove that one process spawned another. The
+rules are a second vocabulary that runs alongside the regex engine and emits
+its own event type. The regex engine, its rule pack, its scoring, and the session
+`detection` event are unchanged.
 
 - Rule pack: `crates/telltale-rules/data/process-chain.yaml` (generated)
 - Generator: `scripts/dev/generate-process-chain-rules.py`
@@ -24,8 +27,9 @@ Set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn the pack off for a scan.
 
 ## Detection v2 convergence status
 
-A bounded non-production Detection v2 path now evaluates parent/child and
-standalone rules from command-bearing Canonical Observation v2 Tool evidence,
+A bounded non-production Detection v2 path now evaluates command-derived
+parent/child matcher context and standalone rules from command-bearing Canonical
+Observation v2 Tool evidence,
 and a caller-grouped session evaluator applies repeat suppression and the six
 specialized process-chain correlations;
 the exact evidence and lifecycle contract is documented in

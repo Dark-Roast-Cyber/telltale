@@ -12,7 +12,9 @@
 > difference plus 28 reviewed capability-driven indeterminate outcomes, with
 > zero unexplained differences. These
 > projections are not production detector input: production remains on
-> `NormalizedRecordV1` and Rule v1, with no live shadow or production parity.
+> `telltale_schema::record::NormalizedRecord` and Rule v1, with no live shadow
+> or production parity. `NormalizedRecordV1` is separate timeline/export-oriented
+> compatibility material.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**.
 > `opencode.legacy_json` is retired, and production adapter runtime cutover has
@@ -40,7 +42,7 @@ The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 referenc
 projections are deliberately not active normalization paths. They preserve
 source call IDs, structured content parts, structured tool values, and truthful
 lifecycle stages while the production scanner continues to use
-`NormalizedRecordV1`. The experimental Detection v2 foundation exists, but
+`telltale_schema::record::NormalizedRecord`. The experimental Detection v2 foundation exists, but
 production activation and telemetry/output v2 have not started. The Event4
 contract foundation is implemented without a Canonical Observation v2
 projection or production output path, and Event 3.0 remains frozen.
@@ -73,8 +75,9 @@ The all-eight adapter coverage gate and ROADMAP step 4 convergence are complete.
 The experimental parallel top-level canonical facade has been deleted; the
 acquisition module is the single public cross-source router. This does not
 activate production: the legacy scanner, detection, and embedding paths remain
-unchanged. Step 5, the coordinated scan/watch/embedding runtime cutover, has not
-started. Event 3.0 remains frozen and Event4 remains inactive.
+unchanged. Step 5 Tranche A adds inactive canonical session evaluation and
+Event3 compatibility; coordinated scan/watch/embedding activation remains later
+work under Issue #51. Event 3.0 remains frozen and Event4 remains inactive.
 
 Acquisition directly maps source-native facts to Canonical Observation v2. It is
 not a conversion bridge to or from `NormalizedRecordV1`; the later coordinated

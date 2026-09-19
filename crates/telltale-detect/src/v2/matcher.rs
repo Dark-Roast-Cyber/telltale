@@ -502,6 +502,12 @@ fn evaluate_predicate(
         return (MatchState::NotEvaluated(reason), Vec::new());
     }
     let resolved = registry.resolve(predicate.selector, observation);
+    if resolved.presence() == SelectorPresence::UnavailableVisibility {
+        return (
+            MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility),
+            Vec::new(),
+        );
+    }
     if resolved.presence() == SelectorPresence::MetadataMissing {
         return (
             MatchState::NotEvaluated(NonEvaluationReason::IneligibleInput),

@@ -158,3 +158,27 @@ For historical Event 3.0 export and derived timeline/correlation output, the sys
 
 - **WHEN** an untrusted historical Event 3.0 record contains an exact recognized marker
 - **THEN** the label may be preserved for idempotence and correlation linkage but is not authenticated or trusted provenance
+
+### Requirement: Bounded canonical processing errors and evidence
+
+Canonical orchestration and compatibility projection errors SHALL expose only
+bounded codes through Display and Debug, never source content or raw internal
+errors. Projection context SHALL be bounded and limited to evaluation lifetime.
+Caller-controlled retained strings SHALL be size-validated before cloning, and
+incremental aggregate bounds SHALL apply to process variants and correlation steps.
+
+#### Scenario: Malformed or unprojectable source content
+- **WHEN** canonical processing fails
+- **THEN** formatted errors MUST NOT expose messages, commands, arguments, paths,
+  database contents, or raw observations
+
+#### Scenario: Evidence projection
+- **WHEN** evidence is projected into Event3
+- **THEN** existing privacy-safe evidence and terminal serialization rules SHALL
+  apply before export
+
+#### Scenario: Retained process compatibility context
+- **WHEN** controlled synthetic sensitive markers appear in command/path, title,
+  reason, investigation, or false-positive compatibility fields
+- **THEN** terminal Event3 bytes and bounded error Display/Debug SHALL NOT expose
+  those markers outside existing privacy-safe representations

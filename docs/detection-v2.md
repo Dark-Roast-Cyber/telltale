@@ -6,7 +6,9 @@
 > `process_chain` evaluation, caller-grouped process-chain session suppression
 > and the six specialized correlations, `DetectorResult` -> `Signal` -> atomic
 > `Finding`,
-> and the Rule v1 compatibility compiler and session evaluator. It is not the
+> and the Rule v1 compatibility compiler and session evaluator. An inactive
+> source/session orchestration and Event3 compatibility API now joins these
+> evaluators without switching production callers. It is not the
 > current engine. All eight contracted identities have authoritative Canonical
 > Observation v2 acquisition coverage (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
@@ -193,13 +195,144 @@ emit as evaluated matches with risk 0, informational severity, preserved
 confidence/ATT&CK metadata, and a bounded `risk_capped` tag. Zero-risk atomic
 matches remain eligible sequence steps. Correlation results omit
 `capability_context`; one supporting observation's context is not presented as
-an aggregate fact.
+an aggregate fact. Their replay-stable dedupe key is a domain-separated SHA-256
+identity over the immutable correlation rule ID and opaque canonical session
+scope; it contains neither preimage, path, timestamp, nor random material.
 
 The new path is not scanner- or watch-wired. Production continues to acquire
 `NormalizedRecord` values and project Event3 through its existing wrapper;
 Event3 remains frozen and Event4 remains inactive. Direct Process evidence,
 OpenShell, generic temporal engines, Detection Content v2 loading, and v2
-Event3 projection remain deferred.
+Event4 projection remain deferred. The inactive Event3 adapter below does not
+change production routing.
+
+## Inactive canonical processing (Issue #51, Tranche A)
+
+`telltale_detect::v2::session::evaluate_source` accepts a `CanonicalSourceInput`,
+a compiled `RuleV1CompatibilityPlan`, and optional compiled process-chain rules
+with the existing `ProcessChainConfig`. One invocation owns one caller-verified
+source instance. It checks the exact client/adapter identity and rejects duplicate
+observation IDs; it does not discover sources or read paths.
+
+The boundary groups by canonical session value **and identity origin** within
+that source instance. An absent instance or session identity makes each
+observation a singleton, without inventing a session. Ordering uses source
+`occurred_at`, places untimed observations last, and uses canonical/source sequence
+and child ordinal to break time ties. Remaining ties preserve acquisition/caller
+order. An observation hash is not a substitute for occurrence ordering. Both
+evaluators receive the same ordered slice; the process kernel retains its existing
+within-observation parser ordering and temporal eligibility rules.
+
+`evaluate_rule_v1_session` remains the sole Rule v1 compatibility evaluator. Its
+detector counters preserve match, no-match, not-applicable, visibility reasons,
+and errors separately, even when aggregate match precedence hides a lower-ranked
+status. Session modifiers, effective policy/exclusion behavior, checked
+contributions, and overflow behavior are unchanged. `compile_rule_v1` still
+rejects unsupported custom rule metadata. `compat.v1.url` is unavailable rather
+than negatively observed: URL-only rules are indeterminate, mixed-target rules
+evaluate only their available alternatives, and source completion remains
+visibility-limited whenever the plan contains URL compatibility.
+
+The v2 process-chain evaluator remains the sole canonical matcher pass and uses
+the existing shared suppression/correlation kernel. It retains Event3-specific
+context before atomic normalization discards private matcher variants. No
+canonical Process facts, host/user identities, PIDs, or execution outcomes are
+manufactured from Tool evidence.
+
+### Projection and retained context
+
+`telltale_detect::v2::event3::project_event3(&evaluation, &context)` returns
+`ProjectedSource { events, completion }` or a bounded `ProcessingError`. The
+context contains an artifact hash and optional caller-attested, source-reported
+agent/model/provider metadata keyed by the exact canonical session identity.
+The artifact hash must already be canonical lowercase SHA-256. Absent metadata
+stays absent; duplicate, Event3-ambiguous, or unrelated session metadata is
+rejected through one indexed validation pass.
+It never propagates one session's first model to another session.
+
+Retained compatibility material has one owner and lifetime: the canonical
+evaluation result, dropped after projection. It contains no copied observation,
+transcript cache, legacy record, or reevaluation snapshot:
+
+| Material | Why it is retained |
+| --- | --- |
+| Canonical session identity and origin | Grouping and truthful Event3 session attribution |
+| Latest reported occurrence time and first ordered tool name | Existing session-event time/tool fields, without content guessing |
+| Rule IDs, dimensions/tags, modifier IDs, checked contributions and score | Existing Event3 detection/risk contract |
+| Matching observation ID, ordered occurrence index, selector-derived field, redacted snippet and evidence hash | Evidence linkage and precise detection timeline anchors without rerunning a matcher |
+| Process matcher context, secondary rule IDs, inferred-parent flag, rule title/reason, investigation fields, false positives, suppression window, severity and adjustment | Existing process-chain Event3 detail, which generic DetectorResult does not carry |
+| Retained private process variants and ordered correlation step references | Preserve child variants sharing one outward atomic identity; scalar process context is the first variant, additional variants are bounded evidence |
+| Repeat counts, suppressed count, correlation supporting result keys and effective capped score | Preserve kernel decisions and link to the actually projected supporting Event3 IDs |
+| Family/stage counts and unique tool names | Explicit canonical activity/accounting inputs, not fake findings or legacy baseline records |
+
+There are at most 65,536 observations per invocation, 4,096 retained/projection
+items, 4,096 UTF-8 bytes per retained compatibility string, and 4 MiB of aggregate
+retained compatibility text per source or projection pass. Capacity is consumed
+before retaining process variants, correlation steps, evidence, or Event3 material.
+Limits fail explicitly; they do not silently truncate required context. Text snippets use existing bounded redaction. New context containers do
+not implement Debug; processing errors carry only fixed codes. Process command
+and path text is redacted before retention. All output still uses the existing
+Event3 constructors and terminal serializer. Projection validates terminal bytes
+with the bounded Event3 consumer before returning any events, including its 1 MiB
+per-event limit. No partial successful batch is returned on projection failure.
+
+Event3 allows `timeline_anchors` on detection events, **not** process-chain events.
+Detection projection first aggregates one anchor per actual matching occurrence,
+with sorted unique atomic rule IDs, applicable modifier IDs, and evidence fields;
+Event3 canonicalization therefore cannot discard competing per-evidence anchors.
+Process events retain occurrence/observation references in
+existing evidence fields instead of expanding the schema. Terminal privacy can
+sanitize observation-ID snippets; their evidence hashes retain linkage. Event IDs
+and materialization timestamps remain constructor-generated, not replay-stable
+identities; evaluation results and event ordering are deterministic.
+
+### Completion and later activation gates
+
+Successful evaluation returns `Complete` or `VisibilityLimited`. Missing scope,
+capability/provenance limitations, and unavailable process timing do not become
+operational failures. Detector errors (even alongside matches), accounting
+failures, invalid inputs, and bounds violations return explicit errors. Projection
+failure is distinct from evaluation failure. These statuses say nothing about
+whether output has been persisted.
+
+A later scanner must require **acquisition success AND operational evaluation
+success AND projection success AND required durable output persistence** before
+committing acquisition progress. Visibility-limited success may advance after
+durability; permanently unsupported capabilities must not freeze progress.
+ScanState, OpenCode cursors, scan, watch, and embedding are unchanged here.
+Allowlisting remains an event-handling concern after projection and is not applied
+by either new API.
+
+### Compatibility differences and Tranche B dependencies
+
+- The reviewed Rule v1 corpus/ledger is unchanged: one legacy command-content
+  broadening difference, 28 capability-driven indeterminate outcomes, 29 reviewed
+  exceptions, zero unexplained differences. The additional corpus test compares
+  orchestration and Event3 IDs/scores to those existing v2 outcomes.
+- `compat.v1.url` remains unavailable. URL-only rules are indeterminate, mixed
+  rules use their available alternatives, and completion records the visibility
+  limitation; no URL evidence is fabricated.
+- Current acquisition does not retain generic agent/model/provider metadata.
+  Optional omission is truthful; canonical metadata retention or an attested
+  source/session compatibility input is a **baseline activation dependency**.
+  No client-name-as-agent or message-content-as-tool fallback is reproduced.
+- A required Event3 session identity cannot be invented for an unscoped match:
+  evaluation completes with limited visibility, but required projection fails.
+  Later callers need an explicit handling decision; they must not turn that error
+  into successful cursor eligibility.
+- Evidence now references actual observations and selectors; cardinality and
+  anchors intentionally differ from legacy's first-match/field-kind heuristics.
+  Correlation inferred-parent status reflects its supporting matcher context
+  rather than an unconditional false value. These are explicit compatibility
+  differences outside the old Rule v1-only shadow denominator.
+- Canonical family/stage counts are not legacy `record_counts`: extraction may
+  split one source item into multiple facts. Baseline partitioning, activity-event
+  count semantics, and pre-policy accounting require Tranche B integration work;
+  this tranche neither emits fake baseline findings nor migrates baseline state.
+- Source-instance verification, safe acquisition chunk/session boundaries,
+  configured bounds handling, output durability, post-projection allowlisting,
+  and the inherited OpenCode downstream-success cursor issue remain activation
+  responsibilities. Step 5 and production activation are not complete.
 
 ## DetectorResult
 

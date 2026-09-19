@@ -12,6 +12,7 @@ use telltale_rules::process_chain::{
 };
 use telltale_schema::observation::{
     CanonicalObservationV2, FactProvenance, JsonValue, ObservationBody, ObservationStage,
+    canonical_identity_json,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -39,7 +40,8 @@ pub(crate) fn evaluate_tool_process_chains(
     observation: &CanonicalObservationV2,
     context: &ProcessChainContext,
 ) -> Result<Vec<DetectorResult>, DetectionError> {
-    let matches = evaluate_tool_process_chain_matches(rules, observation, context, 0)?;
+    let mut budget = super::session::RetentionBudget::new();
+    let matches = evaluate_tool_process_chain_matches(rules, observation, context, 0, &mut budget)?;
     Ok(normalize_atomic_results(&matches))
 }
 
@@ -49,6 +51,7 @@ struct ProcessChainWorkingMatch {
     child: String,
     occurred_at: Option<OffsetDateTime>,
     observation_index: usize,
+    projection: super::event3::ProcessProjection,
 }
 
 fn evaluate_tool_process_chain_matches(
@@ -56,6 +59,7 @@ fn evaluate_tool_process_chain_matches(
     observation: &CanonicalObservationV2,
     context: &ProcessChainContext,
     observation_index: usize,
+    budget: &mut super::session::RetentionBudget,
 ) -> Result<Vec<ProcessChainWorkingMatch>, DetectionError> {
     let mut matches = Vec::new();
     for process_input in command_derived_process_matcher_inputs(observation) {
@@ -65,7 +69,17 @@ fn evaluate_tool_process_chain_matches(
                 child: process_input.child.normalized_name(),
                 occurred_at: occurred_at(observation),
                 observation_index,
+                projection: super::event3::ProcessProjection::atomic(
+                    &process_input,
+                    &detection,
+                    observation,
+                    observation_index,
+                    budget,
+                )?,
             });
+            if matches.len() > super::session::MAX_PROJECTION_ITEMS {
+                return Err(DetectionError::InvalidBounds);
+            }
         }
     }
     Ok(matches)
@@ -103,9 +117,14 @@ pub(crate) struct ProcessChainSessionEvaluation {
     results: Vec<DetectorResult>,
     repeat_counts: BTreeMap<(String, String), u64>,
     suppressed_count: usize,
+    pub(crate) projection:
+        BTreeMap<super::event3::ProcessResultKey, super::event3::ProcessProjection>,
 }
 
 impl ProcessChainSessionEvaluation {
+    pub(crate) fn projection_item_count(&self) -> usize {
+        self.projection.values().map(|p| p.item_count()).sum()
+    }
     pub(crate) fn results(&self) -> &[DetectorResult] {
         &self.results
     }
@@ -129,6 +148,23 @@ pub(crate) fn evaluate_tool_process_chain_session(
     context: &ProcessChainContext,
     config: &ProcessChainSessionConfig,
 ) -> Result<ProcessChainSessionEvaluation, DetectionError> {
+    let mut budget = super::session::RetentionBudget::new();
+    evaluate_tool_process_chain_session_with_budget(
+        rules,
+        observations,
+        context,
+        config,
+        &mut budget,
+    )
+}
+
+pub(crate) fn evaluate_tool_process_chain_session_with_budget(
+    rules: &CompiledProcessChainRules,
+    observations: &[&CanonicalObservationV2],
+    context: &ProcessChainContext,
+    config: &ProcessChainSessionConfig,
+    budget: &mut super::session::RetentionBudget,
+) -> Result<ProcessChainSessionEvaluation, DetectionError> {
     let mut matches = Vec::new();
     for (observation_index, observation) in observations.iter().enumerate() {
         matches.extend(evaluate_tool_process_chain_matches(
@@ -136,7 +172,11 @@ pub(crate) fn evaluate_tool_process_chain_session(
             observation,
             context,
             observation_index,
+            budget,
         )?);
+        if matches.len() > super::session::MAX_PROJECTION_ITEMS {
+            return Err(DetectionError::InvalidBounds);
+        }
     }
     // Timed session semantics are chronological. `sort_by` is stable, so equal
     // occurred_at values retain caller order. Untimed matches remain atomic but
@@ -186,6 +226,25 @@ pub(crate) fn evaluate_tool_process_chain_session(
         .iter()
         .filter_map(|index| matches.get(*index));
     let mut results = normalize_atomic_results(retained_matches);
+    let mut projection: BTreeMap<
+        super::event3::ProcessResultKey,
+        super::event3::ProcessProjection,
+    > = BTreeMap::new();
+    for index in &semantics.suppression.retained {
+        let matched = &matches[*index];
+        let entry = projection.entry(super::event3::process_result_key(&matched.result));
+        match entry {
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry
+                    .get_mut()
+                    .retain_variant(&matched.projection, budget)?;
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                matched.projection.consume_clone_budget(budget)?;
+                entry.insert(matched.projection.clone());
+            }
+        }
+    }
     let mut repeat_counts = BTreeMap::new();
     for (index, count) in semantics.suppression.repeat_counts {
         let Some(matched) = matches.get(index) else {
@@ -201,6 +260,11 @@ pub(crate) fn evaluate_tool_process_chain_session(
             ),
             count,
         );
+        if let Some(context) =
+            projection.get_mut(&super::event3::process_result_key(&matched.result))
+        {
+            context.repeat_count = Some(count);
+        }
     }
 
     for decision in semantics.correlations {
@@ -213,13 +277,30 @@ pub(crate) fn evaluate_tool_process_chain_session(
         if matched.len() != decision.candidate_indexes.len() {
             continue;
         }
-        results.push(correlation_result(
+        let result = correlation_result(
             rule,
             &matched,
             observations,
             decision.effective_score,
             decision.risk_capped,
-        )?);
+        )?;
+        let supporting = matched
+            .iter()
+            .map(|m| (super::event3::process_result_key(&m.result), &m.projection))
+            .collect::<Vec<_>>();
+        projection.insert(
+            super::event3::process_result_key(&result),
+            super::event3::ProcessProjection::correlation(
+                rule,
+                &supporting,
+                decision.risk_capped,
+                budget,
+            )?,
+        );
+        results.push(result);
+        if results.len() > super::session::MAX_PROJECTION_ITEMS {
+            return Err(DetectionError::InvalidBounds);
+        }
     }
 
     let mut seen = BTreeSet::new();
@@ -235,6 +316,7 @@ pub(crate) fn evaluate_tool_process_chain_session(
         results,
         repeat_counts,
         suppressed_count: semantics.suppression.suppressed_count,
+        projection,
     })
 }
 
@@ -370,7 +452,7 @@ fn correlation_result(
         .first()
         .and_then(|candidate| candidate.result.session_id())
         .ok_or(DetectionError::RuntimeEvaluation)?;
-    let dedupe_key = correlation_dedupe_key(session_scope);
+    let dedupe_key = correlation_dedupe_key(&rule.id, session_scope)?;
     let mut tags = vec!["process_chain", "correlation", rule.category.as_str()];
     if risk_capped {
         tags.push("risk_capped");
@@ -416,9 +498,17 @@ fn correlation_result(
     )
 }
 
-fn correlation_dedupe_key(session_scope: &str) -> String {
-    let digest = sha2::Sha256::digest(session_scope.as_bytes());
-    format!("correlation:session_sha256:{digest:x}")
+fn correlation_dedupe_key(rule_id: &str, session_scope: &str) -> Result<String, DetectionError> {
+    let identity = JsonValue::Array(vec![
+        JsonValue::string("telltale:process-correlation-dedupe"),
+        JsonValue::Unsigned(1),
+        JsonValue::string(rule_id),
+        JsonValue::string(session_scope),
+    ]);
+    let bytes =
+        canonical_identity_json(&identity).map_err(|_| DetectionError::RuntimeEvaluation)?;
+    let digest = sha2::Sha256::digest(bytes);
+    Ok(format!("correlation:sha256:{digest:x}"))
 }
 
 fn severity(value: &str) -> Result<Severity, DetectionError> {
@@ -705,11 +795,13 @@ mod tests {
                 .all(|input| input.host.is_none() && input.user.is_none())
         );
 
+        let mut budget = super::super::session::RetentionBudget::new();
         let matches = evaluate_tool_process_chain_matches(
             &rules,
             &observation,
             &ProcessChainContext::default(),
             0,
+            &mut budget,
         )
         .unwrap();
         assert!(
@@ -1387,6 +1479,93 @@ correlations: []
                 .all(|result| !result.detector().id().starts_with("procchain.correlation."))
         );
         assert_eq!(evaluation.suppressed_count(), 0);
+    }
+
+    #[test]
+    fn correlation_dedupe_identity_includes_rule_and_session_scope() {
+        let rules = load_process_chain_rules(
+            r#"
+version: 1
+description: synthetic correlation identity
+defaults: { enabled: true, risk_entity: host, suppression_window_seconds: 3600 }
+categories:
+  discovery: { detection_class: security_detection, analytic_intent: alert, investigation_fields: [], falsepositives: [] }
+rules: []
+standalone:
+  - { id: procchain.synthetic.hostname, title: hostname, category: discovery, severity: informational, score: 0, confidence: low, match: command_line, patterns: ["\\bhostname\\b"], mitre: [T1082], reason: hostname }
+  - { id: procchain.synthetic.whoami, title: whoami, category: discovery, severity: informational, score: 0, confidence: low, match: command_line, patterns: ["\\bwhoami\\b"], mitre: [T1087], reason: whoami }
+correlations:
+  - id: procchain.correlation.synthetic_one
+    title: first
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: medium
+    mitre: [T1082]
+    reason: first
+    window_seconds: 60
+    entity: host
+    sequence:
+      - { any_rule_id: [procchain.synthetic.hostname], any_child: [hostname] }
+      - { any_rule_id: [procchain.synthetic.whoami], any_child: [whoami] }
+  - id: procchain.correlation.synthetic_two
+    title: second
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: medium
+    mitre: [T1082]
+    reason: second
+    window_seconds: 60
+    entity: host
+    sequence:
+      - { any_rule_id: [procchain.synthetic.hostname], any_child: [hostname] }
+      - { any_rule_id: [procchain.synthetic.whoami], any_child: [whoami] }
+"#,
+        )
+        .unwrap();
+        let observations = [
+            timed_command(
+                "cmd.exe /c hostname",
+                "identity-host",
+                Some("opaque-session"),
+                Some("2026-09-17T10:00:00Z"),
+            ),
+            timed_command(
+                "cmd.exe /c whoami",
+                "identity-account",
+                Some("opaque-session"),
+                Some("2026-09-17T10:01:00Z"),
+            ),
+        ];
+        let evaluate = || {
+            evaluate_tool_process_chain_session(
+                &rules,
+                &[&observations[0], &observations[1]],
+                &ProcessChainContext::default(),
+                &ProcessChainSessionConfig::default(),
+            )
+            .unwrap()
+            .results()
+            .iter()
+            .filter(|result| result.detector().id().starts_with("procchain.correlation."))
+            .map(|result| {
+                (
+                    result.detector().id().to_owned(),
+                    result.dedupe_key().unwrap().to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+        };
+        let first = evaluate();
+        let second = evaluate();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        let keys = first.values().collect::<BTreeSet<_>>();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.iter().all(|key| {
+            key.starts_with("correlation:sha256:") && !key.contains("opaque-session")
+        }));
     }
 
     #[test]

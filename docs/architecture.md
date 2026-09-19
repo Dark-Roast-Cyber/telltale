@@ -104,8 +104,9 @@ The production migration order is:
 7. decide the remaining Event4 and telemetry activation gates after the internal
    semantic/detection path is singular.
 
-Step 4 convergence is complete. The later coordinated scan, watch, and supported
-embedding runtime cutover is step 5 and has not started. The legacy production
+Step 4 convergence is complete. Step 5 has an inactive canonical evaluation and
+Event3 compatibility boundary; coordinated scan, watch, and supported embedding
+activation remains later work under Issue #51. The legacy production
 scanner, detection path, and embedding path remain unchanged; Event 3.0 is frozen
 and Event4 is inactive.
 
@@ -136,7 +137,7 @@ The current scanner and production detector still hand off
 `telltale_schema::record::NormalizedRecord` values. `NormalizedRecordV1` is a
 separate timeline/export-oriented representation used where that richer shape is
 needed; it is not the scanner's primary detection record contract. Canonical
-Observation v2 runtime cutover has not started. The public
+Observation v2 production activation has not started. The public
 `telltale_sources::acquisition` batch covers all eight identities but is not wired
 into production normalization, detection, CLI, or scan execution. Its
 `observed_at` is explicit caller input. OpenCode-only bounded read controls and

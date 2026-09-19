@@ -9,7 +9,7 @@ use std::fmt;
 
 use serde::Serialize;
 use telltale_rules::{RuleV1CompatibilityExport, RuleV1CompatibilityRule};
-use telltale_schema::event::redact_sensitive_text;
+use telltale_schema::event::{Evidence, evidence_hash, redact_sensitive_text};
 use telltale_schema::observation::{CapabilityId, JsonValue, ObservationFamily, ObservationStage};
 use telltale_schema::scoring::{
     RiskAccountingError, RiskContribution, RiskContributionType, canonicalize_contributions,
@@ -60,12 +60,38 @@ pub struct RuleV1CompatibilityPlan {
     detectors: Vec<CompiledObservationMatchDetector>,
 }
 
+pub(crate) enum RuleV1SessionError {
+    Bounds,
+    Accounting(RiskAccountingError),
+}
+
+impl RuleV1SessionError {
+    pub(crate) fn processing_error(&self) -> super::session::ProcessingError {
+        match self {
+            Self::Bounds => super::session::ProcessingError::Bounds,
+            Self::Accounting(_) => super::session::ProcessingError::Evaluation,
+        }
+    }
+}
+
+impl From<RiskAccountingError> for RuleV1SessionError {
+    fn from(value: RiskAccountingError) -> Self {
+        Self::Accounting(value)
+    }
+}
+
 impl RuleV1CompatibilityPlan {
     pub fn policy_name(&self) -> Option<&str> {
         self.export.policy_name()
     }
     pub fn detectors(&self) -> &[CompiledObservationMatchDetector] {
         &self.detectors
+    }
+    pub(crate) fn has_unavailable_url_visibility(&self) -> bool {
+        self.export
+            .rules()
+            .iter()
+            .any(|rule| rule.matchers.iter().any(|matcher| matcher.target == "url"))
     }
 }
 
@@ -96,7 +122,7 @@ impl RuleV1DetectorOutcome {
 
 /// Bounded aggregate for one Rule v1 compatibility detector in one session.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub(crate) struct RuleV1DetectorSessionEvaluation {
+pub struct RuleV1DetectorSessionEvaluation {
     detector_id: String,
     outcome: RuleV1DetectorOutcome,
     evaluated_match_count: u64,
@@ -106,36 +132,61 @@ pub(crate) struct RuleV1DetectorSessionEvaluation {
     detector_error_count: u64,
     non_evaluation_reason_counts: BTreeMap<String, u64>,
     matched_selector_paths: Vec<String>,
+    projection: Vec<RuleV1MatchEvidence>,
+}
+
+/// Bounded, already-redacted compatibility evidence; no source observation is
+/// copied. Dropped with the session result after projection.
+#[derive(Clone)]
+pub(crate) struct RuleV1MatchEvidence {
+    pub(crate) observation_id: String,
+    pub(crate) occurrence: usize,
+    pub(crate) evidence: Evidence,
+}
+
+impl PartialEq for RuleV1MatchEvidence {
+    fn eq(&self, other: &Self) -> bool {
+        self.observation_id == other.observation_id
+            && self.occurrence == other.occurrence
+            && self.evidence.field == other.evidence.field
+            && self.evidence.redacted_value == other.evidence.redacted_value
+            && self.evidence.hash == other.evidence.hash
+            && self.evidence.rule_id == other.evidence.rule_id
+    }
+}
+impl Eq for RuleV1MatchEvidence {}
+
+impl fmt::Debug for RuleV1MatchEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuleV1MatchEvidence")
+            .field("occurrence", &self.occurrence)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RuleV1DetectorSessionEvaluation {
-    pub(crate) fn detector_id(&self) -> &str {
+    pub fn detector_id(&self) -> &str {
         &self.detector_id
     }
-    pub(crate) fn outcome(&self) -> RuleV1DetectorOutcome {
+    pub fn outcome(&self) -> RuleV1DetectorOutcome {
         self.outcome
     }
-    #[cfg(test)]
-    pub(crate) fn evaluated_match_count(&self) -> u64 {
+    pub fn evaluated_match_count(&self) -> u64 {
         self.evaluated_match_count
     }
-    #[cfg(test)]
-    pub(crate) fn evaluated_no_match_count(&self) -> u64 {
+    pub fn evaluated_no_match_count(&self) -> u64 {
         self.evaluated_no_match_count
     }
-    #[cfg(test)]
-    pub(crate) fn not_evaluated_count(&self) -> u64 {
+    pub fn not_evaluated_count(&self) -> u64 {
         self.not_evaluated_count
     }
-    #[cfg(test)]
-    pub(crate) fn not_applicable_count(&self) -> u64 {
+    pub fn not_applicable_count(&self) -> u64 {
         self.not_applicable_count
     }
-    #[cfg(test)]
-    pub(crate) fn detector_error_count(&self) -> u64 {
+    pub fn detector_error_count(&self) -> u64 {
         self.detector_error_count
     }
-    pub(crate) fn non_evaluation_reason_counts(&self) -> &BTreeMap<String, u64> {
+    pub fn non_evaluation_reason_counts(&self) -> &BTreeMap<String, u64> {
         &self.non_evaluation_reason_counts
     }
     pub(crate) fn matched_selector_paths(&self) -> &[String] {
@@ -177,7 +228,7 @@ impl RuleV1CompatibilityMetadata {
 }
 
 /// Complete Rule v1 compatibility semantics for one caller-defined canonical
-/// session. No individual observation results or raw evidence are retained.
+/// session. Only bounded redacted evidence and occurrence references are retained.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct RuleV1SessionEvaluation {
     detectors: Vec<RuleV1DetectorSessionEvaluation>,
@@ -190,6 +241,11 @@ pub(crate) struct RuleV1SessionEvaluation {
 }
 
 impl RuleV1SessionEvaluation {
+    pub(crate) fn projection(&self) -> impl Iterator<Item = &RuleV1MatchEvidence> {
+        self.detectors
+            .iter()
+            .flat_map(|detector| detector.projection.iter())
+    }
     pub(crate) fn detectors(&self) -> &[RuleV1DetectorSessionEvaluation] {
         &self.detectors
     }
@@ -240,11 +296,26 @@ pub(crate) fn evaluate_rule_v1_session(
     plan: &RuleV1CompatibilityPlan,
     observations: &[&telltale_schema::observation::CanonicalObservationV2],
 ) -> Result<RuleV1SessionEvaluation, RiskAccountingError> {
+    let mut budget = super::session::RetentionBudget::new();
+    evaluate_rule_v1_session_with_budget(plan, observations, &mut budget).map_err(|error| {
+        match error {
+            RuleV1SessionError::Accounting(error) => error,
+            RuleV1SessionError::Bounds => RiskAccountingError::Overflow,
+        }
+    })
+}
+
+pub(crate) fn evaluate_rule_v1_session_with_budget(
+    plan: &RuleV1CompatibilityPlan,
+    observations: &[&telltale_schema::observation::CanonicalObservationV2],
+    budget: &mut super::session::RetentionBudget,
+) -> Result<RuleV1SessionEvaluation, RuleV1SessionError> {
     let mut detectors = Vec::with_capacity(plan.detectors.len());
     let mut matched_atomic_rule_ids = BTreeSet::new();
     for detector in &plan.detectors {
-        let aggregate = aggregate_detector_session(detector, observations);
+        let aggregate = aggregate_detector_session(detector, observations, budget)?;
         if aggregate.outcome == RuleV1DetectorOutcome::Match {
+            retain_text(budget, &aggregate.detector_id)?;
             matched_atomic_rule_ids.insert(aggregate.detector_id.clone());
         }
         detectors.push(aggregate);
@@ -257,65 +328,76 @@ pub(crate) fn evaluate_rule_v1_session(
         .filter(|rule| matched_atomic_rule_ids.contains(&rule.id))
         .map(|rule| rule.category.as_str())
         .collect::<BTreeSet<_>>();
-    let triggered_modifier_ids = export
-        .modifiers()
-        .iter()
-        .filter(|modifier| {
-            let has_conditions =
-                !modifier.when_all_categories.is_empty() || !modifier.when_all_rule_ids.is_empty();
-            has_conditions
-                && modifier
-                    .when_all_categories
-                    .iter()
-                    .all(|category| matched_categories.contains(category.as_str()))
-                && modifier
-                    .when_all_rule_ids
-                    .iter()
-                    .all(|rule_id| matched_atomic_rule_ids.contains(rule_id))
-        })
-        .map(|modifier| modifier.id.clone())
-        .collect::<BTreeSet<_>>();
+    let mut triggered_modifier_ids = BTreeSet::new();
+    for modifier in export.modifiers().iter().filter(|modifier| {
+        let has_conditions =
+            !modifier.when_all_categories.is_empty() || !modifier.when_all_rule_ids.is_empty();
+        has_conditions
+            && modifier
+                .when_all_categories
+                .iter()
+                .all(|category| matched_categories.contains(category.as_str()))
+            && modifier
+                .when_all_rule_ids
+                .iter()
+                .all(|rule_id| matched_atomic_rule_ids.contains(rule_id))
+    }) {
+        retain_text(budget, &modifier.id)?;
+        triggered_modifier_ids.insert(modifier.id.clone());
+    }
 
-    let contributions = export
+    let mut contributions = Vec::new();
+    for rule in export
         .rules()
         .iter()
         .filter(|rule| matched_atomic_rule_ids.contains(&rule.id) && rule.score > 0)
-        .map(|rule| {
-            RiskContribution::new(
-                &rule.id,
-                RiskContributionType::DeterministicRule,
-                rule.score,
-                redact_sensitive_text(&rule.explanation),
-            )
-        })
-        .chain(
-            export
-                .modifiers()
-                .iter()
-                .filter(|modifier| {
-                    triggered_modifier_ids.contains(&modifier.id) && modifier.score > 0
-                })
-                .map(|modifier| {
-                    RiskContribution::new(
-                        &modifier.id,
-                        RiskContributionType::ChainModifier,
-                        modifier.score,
-                        redact_sensitive_text(&modifier.explanation),
-                    )
-                }),
-        )
-        .collect::<Result<Vec<_>, _>>()?;
+    {
+        retain_text(budget, &rule.id)?;
+        super::session::RetentionBudget::validate_text(&rule.explanation)
+            .map_err(|_| RuleV1SessionError::Bounds)?;
+        let rationale = redact_sensitive_text(&rule.explanation);
+        retain_text(budget, &rationale)?;
+        contributions.push(RiskContribution::new(
+            &rule.id,
+            RiskContributionType::DeterministicRule,
+            rule.score,
+            rationale,
+        )?);
+    }
+    for modifier in export
+        .modifiers()
+        .iter()
+        .filter(|modifier| triggered_modifier_ids.contains(&modifier.id) && modifier.score > 0)
+    {
+        retain_text(budget, &modifier.id)?;
+        super::session::RetentionBudget::validate_text(&modifier.explanation)
+            .map_err(|_| RuleV1SessionError::Bounds)?;
+        let rationale = redact_sensitive_text(&modifier.explanation);
+        retain_text(budget, &rationale)?;
+        contributions.push(RiskContribution::new(
+            &modifier.id,
+            RiskContributionType::ChainModifier,
+            modifier.score,
+            rationale,
+        )?);
+    }
     let compatibility_contributions = canonicalize_contributions(contributions)?;
     let compatibility_score = checked_risk_sum(&compatibility_contributions)?;
-    let compatibility_metadata =
-        compatibility_metadata(&matched_atomic_rule_ids, &triggered_modifier_ids, export);
-    let effective_rule_ids = matched_atomic_rule_ids
+    let compatibility_metadata = compatibility_metadata(
+        &matched_atomic_rule_ids,
+        &triggered_modifier_ids,
+        export,
+        budget,
+    )?;
+    let mut effective_rule_ids = BTreeSet::new();
+    for rule_id in matched_atomic_rule_ids
         .iter()
         .chain(triggered_modifier_ids.iter())
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+    {
+        retain_text(budget, rule_id)?;
+        effective_rule_ids.insert(rule_id.clone());
+    }
+    let effective_rule_ids = effective_rule_ids.into_iter().collect::<Vec<_>>();
 
     Ok(RuleV1SessionEvaluation {
         detectors,
@@ -331,17 +413,58 @@ pub(crate) fn evaluate_rule_v1_session(
 fn aggregate_detector_session(
     detector: &CompiledObservationMatchDetector,
     observations: &[&telltale_schema::observation::CanonicalObservationV2],
-) -> RuleV1DetectorSessionEvaluation {
+    budget: &mut super::session::RetentionBudget,
+) -> Result<RuleV1DetectorSessionEvaluation, RuleV1SessionError> {
+    retain_text(budget, detector.detector().id())?;
     let mut aggregate = RuleV1DetectorSessionEvaluation {
         detector_id: detector.detector().id().to_owned(),
         ..RuleV1DetectorSessionEvaluation::default()
     };
-    for observation in observations {
-        add_detector_result(&mut aggregate, detector.evaluate(observation));
+    for (occurrence, observation) in observations.iter().enumerate() {
+        let result = detector.evaluate(observation);
+        if result.evaluation_status() == EvaluationStatus::EvaluatedMatch {
+            for path in result.matched_selector_paths() {
+                if aggregate.projection.len() >= super::session::MAX_PROJECTION_ITEMS {
+                    return Err(RuleV1SessionError::Bounds);
+                }
+                let selector =
+                    super::SelectorId::parse(path).map_err(|_| RuleV1SessionError::Bounds)?;
+                let resolution = super::SelectorRegistry::new().resolve(selector, observation);
+                let Some(JsonValue::String(value)) = resolution.value() else {
+                    continue;
+                };
+                super::session::RetentionBudget::validate_text(value)
+                    .map_err(|_| RuleV1SessionError::Bounds)?;
+                let field = path.strip_prefix("compat.v1.").unwrap_or(path);
+                let redacted_value = redact_sensitive_text(value);
+                let retained_bytes = observation
+                    .observation_id()
+                    .len()
+                    .checked_add(field.len())
+                    .and_then(|bytes| bytes.checked_add(redacted_value.len()))
+                    .and_then(|bytes| bytes.checked_add(64))
+                    .and_then(|bytes| bytes.checked_add(detector.detector().id().len()))
+                    .ok_or(RuleV1SessionError::Bounds)?;
+                budget
+                    .consume(1, retained_bytes)
+                    .map_err(|_| RuleV1SessionError::Bounds)?;
+                aggregate.projection.push(RuleV1MatchEvidence {
+                    observation_id: observation.observation_id().to_owned(),
+                    occurrence,
+                    evidence: Evidence {
+                        field: field.to_owned(),
+                        redacted_value,
+                        hash: Some(evidence_hash(value)),
+                        rule_id: Some(detector.detector().id().to_owned()),
+                    },
+                });
+            }
+        }
+        add_detector_result(&mut aggregate, result);
     }
     aggregate.matched_selector_paths.sort();
     aggregate.matched_selector_paths.dedup();
-    aggregate
+    Ok(aggregate)
 }
 
 fn add_detector_result(
@@ -401,37 +524,52 @@ fn compatibility_metadata(
     atomic_ids: &BTreeSet<String>,
     modifier_ids: &BTreeSet<String>,
     export: &RuleV1CompatibilityExport,
-) -> RuleV1CompatibilityMetadata {
+    budget: &mut super::session::RetentionBudget,
+) -> Result<RuleV1CompatibilityMetadata, RuleV1SessionError> {
     let mut metadata = RuleV1CompatibilityMetadata::default();
     for rule in export
         .rules()
         .iter()
         .filter(|rule| atomic_ids.contains(&rule.id))
     {
-        metadata.categories.push(rule.category.clone());
-        metadata
-            .detection_classes
-            .push(rule.detection_class.clone());
-        metadata.signal_types.push(rule.signal_type.clone());
-        metadata.analytic_intents.push(rule.analytic_intent.clone());
-        metadata.atlas_tags.extend(rule.atlas_tags.iter().cloned());
-        metadata.tags.extend(rule.tags.iter().cloned());
+        push_text(budget, &mut metadata.categories, &rule.category)?;
+        push_text(
+            budget,
+            &mut metadata.detection_classes,
+            &rule.detection_class,
+        )?;
+        push_text(budget, &mut metadata.signal_types, &rule.signal_type)?;
+        push_text(
+            budget,
+            &mut metadata.analytic_intents,
+            &rule.analytic_intent,
+        )?;
+        for value in &rule.atlas_tags {
+            push_text(budget, &mut metadata.atlas_tags, value)?;
+        }
+        for value in &rule.tags {
+            push_text(budget, &mut metadata.tags, value)?;
+        }
     }
     for modifier in export
         .modifiers()
         .iter()
         .filter(|modifier| modifier_ids.contains(&modifier.id))
     {
-        metadata
-            .detection_classes
-            .push(modifier.detection_class.clone());
-        metadata.signal_types.push(modifier.signal_type.clone());
-        metadata
-            .analytic_intents
-            .push(modifier.analytic_intent.clone());
-        metadata
-            .atlas_tags
-            .extend(modifier.atlas_tags.iter().cloned());
+        push_text(
+            budget,
+            &mut metadata.detection_classes,
+            &modifier.detection_class,
+        )?;
+        push_text(budget, &mut metadata.signal_types, &modifier.signal_type)?;
+        push_text(
+            budget,
+            &mut metadata.analytic_intents,
+            &modifier.analytic_intent,
+        )?;
+        for value in &modifier.atlas_tags {
+            push_text(budget, &mut metadata.atlas_tags, value)?;
+        }
     }
     metadata.categories = sorted_unique(metadata.categories);
     metadata.detection_classes = sorted_unique(metadata.detection_classes);
@@ -439,7 +577,26 @@ fn compatibility_metadata(
     metadata.analytic_intents = sorted_unique(metadata.analytic_intents);
     metadata.atlas_tags = sorted_unique(metadata.atlas_tags);
     metadata.tags = sorted_unique(metadata.tags);
-    metadata
+    Ok(metadata)
+}
+
+fn retain_text(
+    budget: &mut super::session::RetentionBudget,
+    value: &str,
+) -> Result<(), RuleV1SessionError> {
+    budget
+        .retain_text(value)
+        .map_err(|_| RuleV1SessionError::Bounds)
+}
+
+fn push_text(
+    budget: &mut super::session::RetentionBudget,
+    target: &mut Vec<String>,
+    value: &str,
+) -> Result<(), RuleV1SessionError> {
+    retain_text(budget, value)?;
+    target.push(value.to_owned());
+    Ok(())
 }
 
 fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
@@ -480,7 +637,16 @@ fn compile_rule(
     }
     let mut clauses = Vec::new();
     let mut families = Vec::new();
-    for matcher in &rule.matchers {
+    // URL has no truthful COv2 compatibility value. In a mixed-target Rule v1
+    // detector, evaluate only the available alternatives and report the source
+    // visibility limitation separately. A URL-only detector retains its URL
+    // predicate so it becomes explicitly indeterminate rather than NoMatch.
+    let has_available_target = rule.matchers.iter().any(|matcher| matcher.target != "url");
+    for matcher in rule
+        .matchers
+        .iter()
+        .filter(|matcher| matcher.target != "url" || !has_available_target)
+    {
         let selector = compat_selector(&matcher.target)?;
         for family in selector_families(&matcher.target) {
             if !families.contains(&family) {

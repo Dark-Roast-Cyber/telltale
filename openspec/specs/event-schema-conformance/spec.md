@@ -290,3 +290,35 @@ future architecture and MUST NOT be added implicitly to Event 3.0.
   action, approval, runtime, browser, or OS-context telemetry
 - **THEN** it is deferred to a separately reviewed Event 4.0/future-architecture
   contract and does not extend the frozen Event 3.0 wire
+
+### Requirement: Inactive canonical Event3 compatibility projection
+
+A source-free adapter SHALL construct Event3 from canonical evaluation output and
+explicit compatibility context using existing constructors and terminal privacy
+serialization. It MUST NOT rerun legacy detection or convert canonical
+observations into legacy records. It SHALL retain truthful evidence linkage,
+checked contributions, timeline occurrence anchors, and process-chain context.
+It SHALL require a canonical lowercase SHA-256 artifact hash and validate session
+metadata through one deterministic index before projection.
+
+#### Scenario: Missing compatibility information
+- **WHEN** a legacy field lacks truthful canonical evidence or compatibility context
+- **THEN** the adapter SHALL omit optional values or report explicit projection
+  failure for required values rather than fabricate them
+
+#### Scenario: One complete anchor per occurrence
+- **WHEN** multiple rules, modifier linkage, or evidence fields apply to one
+  canonical occurrence
+- **THEN** the adapter SHALL aggregate one deterministically sorted anchor before
+  Event3 canonicalization so no linkage is discarded
+
+#### Scenario: Invalid projection identity or metadata
+- **WHEN** the artifact hash is noncanonical or metadata is duplicate,
+  Event3-ambiguous, unrelated, or oversized
+- **THEN** projection SHALL fail atomically without normalizing identity or
+  constructing a partial event vector
+
+#### Scenario: Inactive tranche
+- **WHEN** the canonical compatibility API is added
+- **THEN** scanner, watch, embedding, Event3 schema, and Event4 activation SHALL
+  remain unchanged

@@ -1503,7 +1503,7 @@ fn compatibility_views_preserve_roles_and_truthful_absence() {
         url_matcher
             .evaluate(&tool("synthetic arguments", "url-capability"))
             .state(),
-        &MatchState::NoMatch
+        &MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility)
     );
 }
 

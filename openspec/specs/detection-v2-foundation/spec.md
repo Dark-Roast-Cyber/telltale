@@ -9,13 +9,14 @@ Tool-derived parent/child, standalone, and caller-grouped session
 -> atomic `Finding` boundary, the final 56-selector registry (48 native plus
 exactly eight Rule v1 compatibility views), their capability/provenance/matcher/
 identity contracts, and the read-only Rule v1 export/compatibility compiler and
-source-free session evaluator. Process-chain repeat/correlation semantics have
-one pure shared owner used by both the legacy Event3 adapter and this v2
-session evaluator; this does not activate v2 in production.
-`compat.v1.url` remains compiler-supported but truthfully absent pending P13
-visibility-gap measurement. There is no live shadow or activation path, source
-or scanner wiring, advanced detector runtime, Event4, gateway, or Detection
-Content v2 runtime loader; Event 3.0 remains unchanged.
+source-free session evaluator, inactive source-instance-scoped session
+orchestration, and a source-free Event3 compatibility projection. Process-chain
+repeat/correlation semantics have one pure shared owner used by both the
+legacy Event3 adapter and this v2 session evaluator; this does not activate v2
+in production. `compat.v1.url` remains compiler-supported but truthfully
+absent. There is no live shadow or activation path, source or scanner wiring,
+advanced detector runtime, Event4, gateway, or Detection Content v2 runtime
+loader; the Event 3.0 schema remains unchanged.
 ## Requirements
 ### Requirement: Detector result materialization
 
@@ -230,12 +231,14 @@ DetectorResults, Signals, Findings, or native v2 detector kinds.
 - **THEN** compatibility compilation rejects it rather than mapping it to a
   security or informational Finding kind
 
-#### Scenario: Rule v1 URL compatibility remains visible but absent
+#### Scenario: Rule v1 URL compatibility remains explicitly unavailable
 
 - **WHEN** an effective Rule v1 rule uses the `url` target
 - **THEN** compilation succeeds to `compat.v1.url`, which requires `ToolCall`
-  visibility and resolves truthfully absent without manufacturing URL, path, or
-  network facts; P13 measures the resulting visibility gap
+  visibility but cannot resolve a URL value without manufacturing URL, path, or
+  network facts
+- **AND** a URL-only rule is indeterminate, mixed rules evaluate their available
+  alternatives, and source completion records the visibility limitation
 
 #### Scenario: Caller-defined session uses one compatibility plan
 
@@ -476,3 +479,50 @@ semantic strings and evidence payloads.
   formats a result containing a valid evidence reference
 - **THEN** construction rejects the arbitrary text, and Debug output contains no
   evidence payload
+
+### Requirement: Inactive canonical source/session evaluation
+
+The canonical evaluation boundary SHALL own source-instance-scoped session
+grouping and deterministic occurrence ordering for both Rule v1 compatibility
+and process-chain v2 evaluation. It MUST reuse their existing evaluators and
+shared scoring/kernel semantics, without a legacy record conversion bridge.
+
+#### Scenario: Identical session strings from unrelated sources
+- **WHEN** unrelated source instances report identical session strings
+- **THEN** their observations MUST NOT share a session evaluation
+
+#### Scenario: Missing identity or time
+- **WHEN** source/session identity or occurrence time is unavailable
+- **THEN** the missing information SHALL remain explicit and MUST NOT be invented
+- **AND** unavailable identity/time SHALL NOT authorize temporal correlation
+
+#### Scenario: Correlation replay identity
+- **WHEN** two immutable process-correlation rules match one canonical session
+- **THEN** each SHALL receive a distinct replay-stable, domain-separated digest
+  over rule identity and opaque session scope without exposing either preimage
+
+### Requirement: Operational processing completeness
+
+Canonical processing SHALL distinguish ordinary completion, visibility-limited
+completion, operational evaluation failure, and compatibility projection failure.
+It MUST retain bounded evidence/projection context during the authoritative pass.
+The boundary SHALL allow at most 65,536 observations, 4,096 retained/projection
+items, 4,096 UTF-8 bytes per retained compatibility string, and 4 MiB aggregate
+retained compatibility text. Capacity MUST be consumed before retention.
+
+#### Scenario: Unsupported capability
+- **WHEN** a required capability is unsupported or unknown
+- **THEN** evaluation SHALL preserve that distinction from no-match and error
+- **AND** successfully completed visibility-limited processing MAY later be eligible
+  for progress persistence once required output is durable
+
+#### Scenario: Downstream failure
+- **WHEN** evaluation or required Event3 projection fails
+- **THEN** processing SHALL report an explicit bounded failure without a partial
+  successful projection result
+- **AND** emitted events SHALL NOT be used as proof of processing completion
+
+#### Scenario: Reordered authoritative coordinates
+- **WHEN** input order changes but source occurrence coordinates fully determine
+  canonical order
+- **THEN** replay-stable evaluation and projection semantics SHALL remain equal

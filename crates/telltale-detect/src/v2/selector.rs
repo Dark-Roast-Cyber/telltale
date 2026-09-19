@@ -271,6 +271,7 @@ impl SelectorId {
 pub enum SelectorPresence {
     Present,
     Absent,
+    UnavailableVisibility,
     MetadataMissing,
 }
 
@@ -610,9 +611,17 @@ impl SelectorRegistry {
                 resolved.selector = selector;
                 resolved
             }
-            // The v1 URL view remains absent even when a native network.url
-            // facet exists; compatibility must not invent a tool-side URL fact.
-            SelectorId::CompatUrl => absent(selector, required_capability),
+            // The v1 URL view is unavailable, not negatively observed, even
+            // when Tool visibility is otherwise supported. Compatibility must
+            // neither invent a tool-side URL fact nor turn the visibility gap
+            // into a genuine no-match.
+            SelectorId::CompatUrl => SelectorResolution {
+                selector,
+                presence: SelectorPresence::UnavailableVisibility,
+                value: None,
+                metadata: None,
+                required_capability,
+            },
             _ => absent(selector, required_capability),
         }
     }

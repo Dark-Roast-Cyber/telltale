@@ -19,6 +19,160 @@ const EXPECTATIONS_PATH: &str = "tests/evaluation/detection-v2-shadow-expectatio
 const REPORT_ENV: &str = "TELLTALE_DETECTION_V2_SHADOW_REPORT";
 const UNSCOPED_SESSION_REFERENCE: &str = "unscoped";
 
+#[test]
+fn inactive_canonical_orchestration_and_event3_preserve_reviewed_rule_results() {
+    use telltale_detect::v2::{
+        compile_rule_v1,
+        event3::{Event3CompatibilityContext, project_event3},
+        session::{CanonicalSourceInput, evaluate_source},
+    };
+    use telltale_schema::observation::CorrelationId;
+    let root = repo_root();
+    let rules = load_default_rule_set().unwrap();
+    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let mut session_count = 0;
+    for case in CASES {
+        let source = source(&root, *case);
+        let observations = acquire_source(
+            &source,
+            AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap()
+        .observations;
+        let legacy = parse_source_records(&source).unwrap();
+        let oracle = compare_sessions(&rules, &legacy, &observations).unwrap();
+        let instance = CorrelationId::source_reported(case.id).unwrap();
+        let evaluation = evaluate_source(
+            CanonicalSourceInput {
+                client: case.client,
+                source_id: case.source_id,
+                source_instance: Some(&instance),
+                observations: &observations,
+            },
+            &plan,
+            None,
+        )
+        .unwrap();
+        session_count += evaluation.sessions().len();
+        let mut expected = oracle
+            .sessions
+            .iter()
+            .map(|s| (s.v2_compat_effective_rule_ids.clone(), s.v2_compat_score))
+            .collect::<Vec<_>>();
+        let mut actual = evaluation
+            .sessions()
+            .iter()
+            .map(|s| (s.rule_ids().to_vec(), s.rule_score()))
+            .collect::<Vec<_>>();
+        expected.sort();
+        actual.sort();
+        assert_eq!(actual, expected, "{}", case.id);
+        let hash = telltale_schema::event::path_hash(&source.path);
+        let projected = project_event3(
+            &evaluation,
+            &Event3CompatibilityContext {
+                source_path_hash: &hash,
+                sessions: &[],
+            },
+        )
+        .unwrap();
+        if case.id == "p13-codex-uc003-positive" {
+            let session = &evaluation.sessions()[0];
+            assert_eq!(
+                session.session_id().map(|id| id.value()),
+                Some("uc003-positive-dns-exfil")
+            );
+            assert_eq!(
+                session.rule_ids(),
+                [
+                    "chain.shell_encoded_payload",
+                    "execution.encoded_payload",
+                    "execution.shell",
+                    "exfil.dns_encoding",
+                ]
+            );
+            assert_eq!(session.rule_score(), 130);
+
+            assert_eq!(projected.events.len(), 1);
+            let event = &projected.events[0];
+            assert_eq!(event.session_id, "uc003-positive-dns-exfil");
+            assert_eq!(event.risk_score, 130);
+            assert_eq!(
+                event
+                    .risk_contributions
+                    .iter()
+                    .map(|item| (item.id(), item.points()))
+                    .collect::<Vec<_>>(),
+                [
+                    ("execution.encoded_payload", 50),
+                    ("execution.shell", 15),
+                    ("exfil.dns_encoding", 55),
+                    ("chain.shell_encoded_payload", 10),
+                ]
+            );
+            assert_eq!(
+                event
+                    .evidence
+                    .iter()
+                    .map(|item| (
+                        item.field.as_str(),
+                        item.hash.as_deref(),
+                        item.rule_id.as_deref()
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    (
+                        "command",
+                        Some("e359841309a2ad6b6b698dbcd7f054a2d0470841a788ffb060b1763586b3ed7f"),
+                        Some("execution.shell")
+                    ),
+                    (
+                        "canonical_observation_id",
+                        Some("b167d3da5f674468318c67cff289259acc0904c3a711e655bd1509d1499803e8"),
+                        Some("execution.shell")
+                    ),
+                    (
+                        "command",
+                        Some("e359841309a2ad6b6b698dbcd7f054a2d0470841a788ffb060b1763586b3ed7f"),
+                        Some("execution.encoded_payload")
+                    ),
+                    (
+                        "canonical_observation_id",
+                        Some("b167d3da5f674468318c67cff289259acc0904c3a711e655bd1509d1499803e8"),
+                        Some("execution.encoded_payload")
+                    ),
+                    (
+                        "command",
+                        Some("e359841309a2ad6b6b698dbcd7f054a2d0470841a788ffb060b1763586b3ed7f"),
+                        Some("exfil.dns_encoding")
+                    ),
+                    (
+                        "canonical_observation_id",
+                        Some("b167d3da5f674468318c67cff289259acc0904c3a711e655bd1509d1499803e8"),
+                        Some("exfil.dns_encoding")
+                    ),
+                ]
+            );
+            assert_eq!(event.timeline_anchors.len(), 1);
+            assert_eq!(event.timeline_anchors[0].entry_index, 0);
+            assert_eq!(event.timeline_anchors[0].rule_ids, event.rule_ids);
+            assert_eq!(event.timeline_anchors[0].evidence_fields, ["command"]);
+        }
+        let mut projected_scores = projected
+            .events
+            .iter()
+            .map(|e| (e.rule_ids.clone(), e.risk_score))
+            .collect::<Vec<_>>();
+        projected_scores.sort();
+        expected.retain(|(ids, _)| !ids.is_empty());
+        assert_eq!(projected_scores, expected, "{}", case.id);
+        for event in projected.events {
+            serde_json::to_string(&event).unwrap();
+        }
+    }
+    assert_eq!(session_count, 17);
+}
+
 #[derive(Clone, Copy)]
 struct CaseDefinition {
     id: &'static str,

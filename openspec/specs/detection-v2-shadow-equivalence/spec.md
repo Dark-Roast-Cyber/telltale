@@ -167,3 +167,23 @@ the frozen baseline report, and scanner/watch behavior unchanged.
 
 - **WHEN** normal scan or watch is run
 - **THEN** no Detection v2 shadow evaluation or shadow report is invoked.
+
+### Requirement: Canonical compatibility activation evidence
+
+The fixture-only shadow comparator SHALL remain an activation oracle, not a
+production dependency. Inactive orchestration and Event3 compatibility tests
+SHALL preserve the reviewed difference ledger and explicitly explain new
+compatibility differences without fabricating URL or stronger process facts.
+
+#### Scenario: Structural evaluator changes
+- **WHEN** canonical orchestration retains additional compatibility context
+- **THEN** existing match, contribution, and visibility counts SHALL remain
+  unchanged unless a behavioral difference is explicitly reviewed
+
+#### Scenario: Independent compatibility assertions
+- **WHEN** inactive canonical Event3 compatibility is tested on reviewed fixtures
+- **THEN** fixed expectations SHALL assert exact session attribution, rule IDs,
+  contributions, score, evidence fields/hashes, anchor linkage, and semantic
+  ordering without deriving expected values from the new evaluator
+- **AND** process-chain identity and ordering SHALL use independent synthetic
+  process fixtures when the reviewed Rule v1 corpus has no process matches
