@@ -329,12 +329,32 @@ by either new API.
   split one source item into multiple facts. Baseline partitioning, activity-event
   count semantics, and pre-policy accounting require Tranche B integration work;
   this tranche neither emits fake baseline findings nor migrates baseline state.
-- Source-instance verification, safe acquisition chunk/session boundaries,
+- The inactive B2 composition now verifies one resolved regular-file coordinate
+  before native acquisition; safe acquisition chunk/session boundaries,
   configured bounds handling, output durability, and post-projection allowlisting
   remain activation responsibilities. The current production path now refuses to
   advance an OpenCode cursor after downstream operational failure; canonical
   production activation is still required to consume this contract. Step 5 and
   production activation are not complete.
+
+### Inactive canonical runtime composition (Issue #51, Tranche B2)
+
+The private B2 seam proves one production-shaped path: verify one resolved
+regular file, acquire directly through the existing native source owner, call
+canonical evaluation once, then project Event3 once. It returns events,
+scanner-owned status, acquisition progress, and optional completion. It covers
+the exact eight source identities and preserves the original scanner path hash
+for Event3 while using the resolved path for acquisition. Evaluation/projection
+failure remains failed and ineligible even when an acquired progress candidate is
+retained; visibility-limited completion remains successful. The focused test
+also demonstrates one existing allowlist application after projection.
+
+This seam is inactive: scan and watch still share the legacy `run_scan` path,
+the embedding facade still accepts `NormalizedRecord`, Event3 remains frozen,
+and Event4 remains inactive. Safe SQLite read boundaries, activity/accounting,
+baseline migration, attested metadata, durability, and coordinated
+scan/watch/embedding activation remain future work. The accepted public work
+owner is [Issue #51](https://github.com/Dark-Roast-Cyber/telltale/issues/51).
 
 ## DetectorResult
 

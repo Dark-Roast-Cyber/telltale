@@ -43,6 +43,7 @@ use telltale_schema::source::Source;
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
 
+mod canonical;
 mod discovery;
 mod processing;
 pub(super) mod watch;
