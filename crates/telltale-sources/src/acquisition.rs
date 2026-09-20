@@ -41,8 +41,8 @@ mod contributions;
 use accounting::AccountingBuilder;
 pub(crate) use accounting::session_identity;
 pub use accounting::{
-    AttestedValue, MAX_ATTESTED_SESSIONS, NativeCounts, RecordCounts, SessionAccounting,
-    SessionMetadata, SourceAccounting,
+    AccountingCoverage, AttestedValue, MAX_ATTESTED_SESSIONS, NativeCounts, RecordCounts,
+    SessionAccounting, SessionMetadata, SourceAccounting,
 };
 pub use contributions::{ActivityContributions, MAX_CONTRIBUTION_KEYS};
 
@@ -295,7 +295,7 @@ pub fn acquire_source(
     Ok(AcquisitionBatch {
         observations,
         progress: AcquisitionProgress::None,
-        accounting: accounting.finish(),
+        accounting: accounting.finish(AccountingCoverage::CompleteSource),
     })
 }
 
@@ -343,7 +343,9 @@ pub fn acquire_opencode_sqlite(
     Ok(AcquisitionBatch {
         observations,
         progress,
-        accounting: accounting.finish(),
+        // Selected parts and separate SQL statement snapshots cannot establish
+        // whole-database replacement coverage, even without a lower bound.
+        accounting: accounting.finish(AccountingCoverage::PartialSource),
     })
 }
 

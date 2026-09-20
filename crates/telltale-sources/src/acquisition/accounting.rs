@@ -199,10 +199,24 @@ impl fmt::Debug for SessionAccounting {
     }
 }
 
+/// Coverage of the caller-owned source instance, not a session or source family.
+/// This attests accounting coverage only, not observation visibility or progress.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum AccountingCoverage {
+    /// All B3A-countable native units from an exhaustive source read are included.
+    /// File reads cover the acquired byte stream, not an atomic filesystem revision.
+    CompleteSource,
+    /// Whole-source coverage is not established; never eligible for replacement.
+    /// A small or empty batch does not upgrade a partial read contract.
+    #[default]
+    PartialSource,
+}
+
 /// Facts about this acquired batch only, never a cumulative session snapshot.
 /// Counts outside canonical session scope remain explicitly unscoped.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct SourceAccounting {
+    pub coverage: AccountingCoverage,
     pub sessions: Vec<SessionAccounting>,
     pub unscoped: NativeCounts,
 }
@@ -278,8 +292,9 @@ impl AccountingBuilder {
             .observe(name, arguments, content, &mut self.contribution_keys)
     }
 
-    pub(super) fn finish(self) -> SourceAccounting {
+    pub(super) fn finish(self, coverage: AccountingCoverage) -> SourceAccounting {
         SourceAccounting {
+            coverage,
             sessions: self.sessions.into_values().collect(),
             unscoped: self.unscoped,
         }

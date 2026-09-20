@@ -38,6 +38,10 @@ fn jsonl_attestation_is_native_bounded_and_order_independent() {
             r#"{"type":"user","session_id":"session-a","model":"model-b","content":"synthetic"}"#;
         std::fs::write(&path, first).unwrap();
         let batch = acquire_source(&source, options()).unwrap();
+        assert_eq!(
+            batch.accounting.coverage,
+            AccountingCoverage::CompleteSource
+        );
         let session = &batch.accounting.sessions[0];
         assert_eq!(session.metadata.agent.known(), Some("native-agent"));
         assert_eq!(session.metadata.model.known(), Some("model-a"));
@@ -116,6 +120,7 @@ fn sqlite_accounts_suppressed_parents_selected_parts_and_unscoped_rows() {
     };
     let batch = acquire_source(&source, options()).unwrap();
     let session = &batch.accounting.sessions[0];
+    assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
     assert_eq!(session.session_id.value(), "s");
     assert_eq!(
         session.session_id.origin(),
@@ -178,6 +183,10 @@ fn copilot_counts_items_not_lines_or_observations_and_never_defaults_metadata() 
     )).unwrap();
     let batch = acquire_source(&source, options()).unwrap();
     let session = &batch.accounting.sessions[0];
+    assert_eq!(
+        batch.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
     assert_eq!(session.counts.native_units, 4); // workspace + three items, not completion control
     assert_eq!(
         session.counts.record_counts,
@@ -199,10 +208,147 @@ fn copilot_counts_items_not_lines_or_observations_and_never_defaults_metadata() 
     std::fs::write(&source.path, "2026-04-27T16:16:57.841Z [INFO] Workspace initialized: synthetic-session (checkpoints: 0)\n").unwrap();
     let missing = acquire_source(&source, options()).unwrap();
     assert!(missing.observations.is_empty());
+    assert_eq!(
+        missing.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
     assert_eq!(missing.accounting.sessions[0].counts.native_units, 1);
     assert_eq!(
         missing.accounting.sessions[0].metadata,
         SessionMetadata::default()
+    );
+}
+
+#[test]
+fn exhaustive_file_coverage_is_not_returned_after_a_malformed_tail() {
+    let directory = tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        source_id: "claude.projects".into(),
+        kind: SourceKind::Jsonl,
+        path: directory.path().join("synthetic.jsonl"),
+    };
+    let valid = r#"{"type":"user","session_id":"s","content":"synthetic"}"#;
+    std::fs::write(&source.path, format!("{valid}\n\n{valid}\n")).unwrap();
+    let complete = acquire_source(&source, options()).unwrap();
+    assert_eq!(
+        complete.accounting.coverage,
+        AccountingCoverage::CompleteSource
+    );
+    assert_eq!(complete.accounting.sessions[0].counts.native_units, 2);
+    std::fs::write(&source.path, format!("{valid}\n{{malformed-tail")).unwrap();
+    assert!(matches!(
+        acquire_source(&source, options()),
+        Err(AcquisitionError::SourceRead)
+    ));
+}
+
+#[test]
+fn sqlite_overlap_and_mutable_rereads_never_attest_source_replacement() {
+    let directory = tempdir().unwrap();
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path: directory.path().join("synthetic.db"),
+    };
+    let conn = rusqlite::Connection::open(&source.path).unwrap();
+    conn.execute_batch(r#"
+        CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+        CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+        INSERT INTO message VALUES ('m','s','{"role":"assistant"}');
+        INSERT INTO part VALUES ('a','m','s',100,'{"type":"text","text":"synthetic A"}');
+        INSERT INTO part VALUES ('b','m','s',200,'{"type":"text","text":"synthetic B"}');
+    "#).unwrap();
+    let read = |min, limit| {
+        acquire_opencode_sqlite(
+            &source,
+            options(),
+            OpenCodeSqliteReadOptions {
+                part_min_time_updated: min,
+                part_limit: limit,
+            },
+        )
+        .unwrap()
+    };
+    let ab = read(Some(0), 2);
+    conn.execute(
+        "INSERT INTO part VALUES ('c','m','s',300,'{\"type\":\"text\",\"text\":\"synthetic C\"}')",
+        [],
+    )
+    .unwrap();
+    let bc = read(Some(200), 2);
+    for (batch, ids, high_water) in [(&ab, ["a", "b"], 200), (&bc, ["b", "c"], 300)] {
+        assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+        assert_eq!(batch.accounting.sessions[0].counts.native_units, 3); // parent + two parts
+        assert_eq!(
+            batch
+                .observations
+                .iter()
+                .map(|o| o.source().native_id().unwrap())
+                .collect::<Vec<_>>(),
+            ids
+        );
+        assert_eq!(
+            batch.progress,
+            AcquisitionProgress::OpenCodeSqlite {
+                part_max_time_updated: Some(high_water)
+            }
+        );
+    }
+    assert_eq!(
+        ab.observations[1].observation_id(),
+        bc.observations[0].observation_id()
+    );
+    // Uncursored reads select the latest limit, not the complete source.
+    let latest = read(None, 2);
+    assert_eq!(latest.accounting, bc.accounting);
+    assert_eq!(read(Some(200), 2).accounting, bc.accounting);
+    conn.execute("UPDATE part SET data = '{\"type\":\"text\",\"text\":\"synthetic revised B\"}', time_updated = 400 WHERE id = 'b'", []).unwrap();
+    let revised = read(Some(200), 2);
+    assert_eq!(
+        revised.accounting.coverage,
+        AccountingCoverage::PartialSource
+    );
+    assert_eq!(
+        bc.observations[0].observation_id(),
+        revised.observations[1].observation_id()
+    );
+    assert_ne!(bc.observations[0].body(), revised.observations[1].body());
+    // No lower bound, oversized limits, default reads, and absent high-water
+    // do not establish a shared snapshot or a complete-replacement contract.
+    for batch in [
+        read(None, i64::MAX),
+        read(Some(500), 2),
+        acquire_source(&source, options()).unwrap(),
+    ] {
+        assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+    }
+    conn.execute_batch("DELETE FROM part; DELETE FROM message;")
+        .unwrap();
+    let empty = read(None, 2);
+    assert_eq!(empty.accounting.coverage, AccountingCoverage::PartialSource);
+    assert_eq!(
+        empty.progress,
+        AcquisitionProgress::OpenCodeSqlite {
+            part_max_time_updated: None
+        }
+    );
+}
+
+#[test]
+fn coverage_defaults_fail_closed_and_has_no_source_controlled_metadata() {
+    assert_eq!(
+        SourceAccounting::default().coverage,
+        AccountingCoverage::PartialSource
+    );
+    assert_eq!(
+        format!("{:?}", AccountingCoverage::CompleteSource),
+        "CompleteSource"
+    );
+    assert_eq!(
+        format!("{:?}", AccountingCoverage::PartialSource),
+        "PartialSource"
     );
 }
 

@@ -178,6 +178,10 @@ fn ordinary_zero_findings_and_missing_source_are_explicit() {
     assert_eq!(result.progress, AcquisitionProgress::None);
     assert_eq!(result.sqlite_progress_candidate(false, false), None);
     let accounting = result.accounting.as_ref().unwrap();
+    assert_eq!(
+        accounting.coverage,
+        telltale_sources::acquisition::AccountingCoverage::CompleteSource
+    );
     assert_eq!(accounting.sessions[0].counts.native_units, 1);
     assert_eq!(
         accounting.sessions[0].metadata,
@@ -463,6 +467,7 @@ fn metadata_origin_must_match_not_just_visible_session_id() {
                     counts: Default::default(),
                 }],
                 unscoped: Default::default(),
+                coverage: Default::default(),
             },
         },
         &plan("user_context"),
@@ -507,6 +512,10 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
     );
     assert_eq!(result.sqlite_progress_candidate(false, false), Some(1000));
     let accounting = result.accounting.as_ref().unwrap();
+    assert_eq!(
+        accounting.coverage,
+        telltale_sources::acquisition::AccountingCoverage::PartialSource
+    );
     assert_eq!(accounting.sessions[0].counts.native_units, 2);
     assert_eq!(
         accounting.sessions[0].metadata,
@@ -522,6 +531,10 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
     state.observe_sqlite_ingestion_cursor(&source, "part", 700_001, 1);
     let live = process_canonical_source(&source, &state, false, false, clock(), &plan, None);
     assert_eq!(
+        live.accounting.as_ref().unwrap().coverage,
+        telltale_sources::acquisition::AccountingCoverage::PartialSource
+    );
+    assert_eq!(
         live.progress,
         AcquisitionProgress::OpenCodeSqlite {
             part_max_time_updated: None
@@ -531,6 +544,10 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
         let full =
             process_canonical_source(&source, &state, backfill, dry_run, clock(), &plan, None);
         assert_eq!(full.progress, result.progress);
+        assert_eq!(
+            full.accounting.as_ref().unwrap().coverage,
+            telltale_sources::acquisition::AccountingCoverage::PartialSource
+        );
         assert_eq!(full.sqlite_progress_candidate(dry_run, backfill), None);
     }
     assert_eq!(
