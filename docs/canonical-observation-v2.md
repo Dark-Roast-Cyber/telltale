@@ -85,6 +85,43 @@ Acquisition directly maps source-native facts to Canonical Observation v2. It is
 not a conversion bridge to or from `NormalizedRecordV1`; the later coordinated
 runtime cutover remains a separate step.
 
+### Shared inactive source runtime
+
+`telltale-core::canonical_runtime` owns the single source-semantic composition:
+acquisition → COv2 → Detection v2 → Event3 compatibility → canonical activity.
+It is a hidden, deliberately unstable cross-crate seam, not a supported public
+embedding API. The inactive CLI adapter and private `Pipeline` canonical adapter
+both call it. The existing core crate already depends on sources, rules, and
+detection; it does not depend on CLI code.
+
+The operation takes caller-owned observation time, optional acquisition read
+bounds, effective Rule v1 compatibility content, optional canonical process-chain
+configuration, and explicit prior baseline context. It returns source-atomic
+semantic output or typed failure; no partial successful event set escapes a late
+activity failure. Completion and acquisition accounting coverage remain separate.
+The resolved-file canonical correlation identity is unchanged and is not a durable
+baseline replacement key.
+
+The inactive embedding adapter uses one observation time for a whole root scan,
+shared discovery, no process-chain configuration, an empty prior snapshot store,
+and disabled baseline deviation. It creates activity from accounting without
+inventing history or persisting replacement candidates. OpenCode remains partial
+and cannot produce whole-source replacement. Scanner cursor policy, mode policy,
+error-event adaptation, state installation, and output transactions stay in the
+CLI; event allowlisting stays outside the semantic operation.
+
+The supported `Pipeline::scan_root` remains legacy-selected, with unchanged
+outputs/errors. Canonical activation would add activity output and requires an
+explicit decision on typed failures versus the current scanner-error stream.
+Canonical metadata/visibility corrections also require compatibility review.
+Event3 constructors retain fresh envelope IDs/times; semantic ordering, not
+byte-identical envelopes, is deterministic. Record-level `detect_records` and
+`evaluate_session` remain intentional legacy compatibility APIs rather than a
+second source-runtime design. Coordinated activation still requires scanner
+transaction integration and reset prerequisites, followed by deletion of the
+temporary legacy source branch. Step 5 remains incomplete; Event3 is frozen and
+Event4 inactive.
+
 ### Inactive session attestation and accounting
 
 Issue [#51](https://github.com/Dark-Roast-Cyber/telltale/issues/51) Tranche B3A adds

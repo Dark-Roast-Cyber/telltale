@@ -13,6 +13,19 @@ persistence and delivery while using the same analytic and event semantics.
 
 ## Delivery boundary
 
+`Pipeline::scan_root` still uses the legacy source runtime and returns detection
+or scanner-error events, not activity events. An inactive canonical source
+runtime is prepared below the facade for coordinated scan/watch/embedding
+activation; it is not a new supported embedding API. See the
+[canonical runtime boundary](canonical-observation-v2.md#shared-inactive-source-runtime).
+
+`detect_records` and `evaluate_session` remain deliberate Rule v1 record-level
+compatibility APIs accepting `NormalizedRecord`. They cannot supply native
+acquisition/accounting facts and are not converted into canonical observations.
+Their future API redesign is separate from source-runtime activation.
+The facade has no baseline-state, cursor, process-chain configuration, or event
+allowlist contract. Rule policy controls rule enablement, not event allowlisting.
+
 `telltale-core::Pipeline` yields `Event` values; the embedding host owns
 serialization, persistence, and I/O. The public out-of-process path is exactly
 `terminal/emittable Event 3.0 -> durable JSONL -> future generic vendor-neutral

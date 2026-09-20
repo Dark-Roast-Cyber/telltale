@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn runtime_failures_become_private_scanner_errors_without_staging_eligibility() {
+    use telltale_core::canonical_runtime::SourceFailure;
+    let source = source("PRIVATE-path".into());
+    let progress = AcquisitionProgress::OpenCodeSqlite {
+        part_max_time_updated: Some(42),
+    };
+    for (stage, code) in [
+        (FailureStage::SourceScope, "canonical_source_scope_failed"),
+        (FailureStage::Acquisition, "canonical_acquisition_failed"),
+        (FailureStage::Evaluation, "canonical_evaluation_failed"),
+        (FailureStage::Projection, "canonical_projection_failed"),
+        (FailureStage::Activity, "canonical_activity_failed"),
+    ] {
+        let result = adapt_result(
+            &source,
+            Err(SourceFailure {
+                stage,
+                progress,
+                acquisition: None,
+            }),
+        );
+        assert_eq!(result.status, SourceProcessingStatus::Failed);
+        assert_eq!(result.progress, progress);
+        assert_eq!(result.sqlite_progress_candidate(false, false), None);
+        assert_eq!(result.completion, None);
+        assert!(result.accounting.is_none());
+        assert_eq!(
+            result.baseline_replacement,
+            BaselineReplacement::NoReplacement
+        );
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].event_type, "scanner_error");
+        assert_eq!(result.events[0].agent, None);
+        let serialized = serde_json::to_string(&result.events).unwrap();
+        assert!(serialized.contains(code));
+        assert!(!serialized.contains("PRIVATE"));
+    }
+}
+
+#[test]
 fn ownership_failure_returns_neither_accounting_nor_eligible_progress() {
     let directory = tempdir().unwrap();
     let source = database(&directory.path().join("synthetic.db"));
@@ -294,48 +334,6 @@ fn partial_and_scanner_modes_cannot_stage_baseline_mutation() {
 }
 
 #[test]
-fn activity_failure_discards_detection_output_replacement_and_progress_eligibility() {
-    use telltale_sources::acquisition::{AccountingCoverage, SessionAccounting};
-    let source = source("synthetic".into());
-    let mut accounting = SourceAccounting {
-        coverage: AccountingCoverage::CompleteSource,
-        ..Default::default()
-    };
-    for id in ["s", "bad"] {
-        accounting.sessions.push(SessionAccounting {
-            session_id: CorrelationId::source_reported(id).unwrap(),
-            metadata: Default::default(),
-            counts: Default::default(),
-        });
-    }
-    accounting.sessions[1].counts.record_counts.user_message = u64::from(u32::MAX) + 1;
-    let result = finish_batch(
-        &source,
-        &CorrelationId::source_reported("instance").unwrap(),
-        AcquisitionBatch {
-            observations: vec![message("one", Some("s"))],
-            progress: AcquisitionProgress::OpenCodeSqlite {
-                part_max_time_updated: Some(42),
-            },
-            accounting,
-        },
-        &plan("user_context"),
-        None,
-        &BaselineSnapshotStore::default(),
-        BaselineDeviationConfig::default(),
-    );
-    assert_eq!(result.status, SourceProcessingStatus::Failed);
-    assert_eq!(result.events.len(), 1);
-    assert_eq!(result.events[0].event_type, "scanner_error");
-    assert_eq!(
-        result.baseline_replacement,
-        BaselineReplacement::NoReplacement
-    );
-    assert_eq!(result.sqlite_progress_candidate(false, false), None);
-    assert!(result.accounting.is_none());
-}
-
-#[test]
 fn canonical_candidate_round_trips_existing_state_without_plaintext_hosts() {
     let directory = tempdir().unwrap();
     let source = source(directory.path().join("synthetic.jsonl"));
@@ -552,26 +550,6 @@ fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progr
     );
 }
 
-#[test]
-fn instance_scope_is_file_bound_not_content_or_session_bound() {
-    let dir = tempdir().unwrap();
-    let a = source(dir.path().join("a"));
-    let b = source(dir.path().join("b"));
-    std::fs::write(&a.path, "same").unwrap();
-    std::fs::write(&b.path, "same").unwrap();
-    let (_, first) = verified_source(&a).unwrap();
-    assert_ne!(first, verified_source(&b).unwrap().1);
-    std::fs::write(&a.path, "changed").unwrap();
-    assert_eq!(first, verified_source(&a).unwrap().1);
-    let alias = source(dir.path().join(".").join("a"));
-    assert_eq!(first, verified_source(&alias).unwrap().1);
-    let mut other_identity = a.clone();
-    other_identity.client = ClientId::Qwen;
-    other_identity.source_id = "qwen.projects".into();
-    assert_ne!(first, verified_source(&other_identity).unwrap().1);
-    assert!(verified_source(&source(dir.path().to_owned())).is_err());
-}
-
 fn plan(target: &str) -> RuleV1CompatibilityPlan {
     let yaml = format!(
         "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.target\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [{target}]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n"
@@ -584,123 +562,28 @@ fn plan(target: &str) -> RuleV1CompatibilityPlan {
     .unwrap()
 }
 
-fn message(
-    id: &str,
-    session: Option<&str>,
-) -> telltale_schema::observation::CanonicalObservationV2 {
-    use telltale_schema::observation::*;
-    let provenance = SourceProvenance::new(
-        IngestionMode::SessionStore,
-        "claude_code",
-        "claude.projects",
-        Fidelity::FullNative,
-    )
-    .unwrap()
-    .with_native_id(id)
-    .unwrap();
-    let mut builder = CanonicalObservationV2::builder(
-        ObservationBody::Message(
-            MessageObservation::new(MessageRole::User).with_content(JsonValue::string("needle")),
-        ),
-        ObservationStage::MessageObserved,
-        clock(),
-        provenance,
-    )
-    .fact_metadata("message.role", FactMetadata::reported().unwrap())
-    .fact_metadata("message.content", FactMetadata::reported().unwrap())
-    .capability_context(
-        CapabilityContext::new()
-            .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported),
-    );
-    if let Some(session) = session {
-        builder = builder.session_id(CorrelationId::source_reported(session).unwrap());
-    }
-    builder.build().unwrap()
-}
-
-#[test]
-fn evaluation_and_projection_failures_discard_all_findings_but_retain_ineligible_candidate() {
-    let source = source("PRIVATE-path".into());
-    let instance = CorrelationId::source_reported("test-instance").unwrap();
-    let progress = AcquisitionProgress::OpenCodeSqlite {
-        part_max_time_updated: Some(42),
-    };
-    let plan = plan("user_context");
-    for (observations, expected) in [
-        (
-            vec![
-                message("duplicate", Some("s")),
-                message("duplicate", Some("s")),
-            ],
-            "canonical_evaluation_failed",
-        ),
-        (
-            vec![message("scoped", Some("s")), message("unscoped", None)],
-            "canonical_projection_failed",
-        ),
-    ] {
-        let result = finish_batch(
-            &source,
-            &instance,
-            AcquisitionBatch {
-                accounting: SourceAccounting::default(),
-                observations,
-                progress,
-            },
-            &plan,
-            None,
-            &BaselineSnapshotStore::default(),
-            BaselineDeviationConfig::default(),
-        );
-        assert_eq!(result.status, SourceProcessingStatus::Failed);
-        assert_eq!(result.progress, progress);
-        assert_eq!(result.sqlite_progress_candidate(false, false), None);
-        assert_eq!(result.events.len(), 1);
-        assert_eq!(result.events[0].event_type, "scanner_error");
-        let serialized = serde_json::to_string(&result.events).unwrap();
-        assert!(serialized.contains(expected));
-        assert!(!serialized.contains("PRIVATE"));
-        assert!(!serialized.contains("needle"));
-    }
-    let mut wrong_source = source;
-    wrong_source.source_id = "codex.sessions".into();
-    let result = finish_batch(
-        &wrong_source,
-        &instance,
-        AcquisitionBatch {
-            accounting: SourceAccounting::default(),
-            observations: vec![message("one", Some("same-session"))],
-            progress,
-        },
-        &plan,
-        None,
-        &BaselineSnapshotStore::default(),
-        BaselineDeviationConfig::default(),
-    );
-    assert_eq!(result.status, SourceProcessingStatus::Failed);
-}
-
 #[test]
 fn complete_projection_precedes_one_existing_allowlist_application() {
     use crate::allowlist::{Allowlist, suppress_detection};
-    let source = source("synthetic".into());
-    let instance = CorrelationId::source_reported("test-instance").unwrap();
-    let mut result = finish_batch(
+    let directory = tempdir().unwrap();
+    let source = source(directory.path().join("synthetic.jsonl"));
+    std::fs::write(
+        &source.path,
+        r#"{"type":"user","session_id":"s","content":"needle"}"#,
+    )
+    .unwrap();
+    let mut result = process_canonical_source(
         &source,
-        &instance,
-        AcquisitionBatch {
-            accounting: SourceAccounting::default(),
-            observations: vec![message("one", Some("s"))],
-            progress: AcquisitionProgress::None,
-        },
+        &ScanState::default(),
+        CanonicalProcessingOptions::default(),
+        clock(),
         &plan("user_context"),
         None,
-        &BaselineSnapshotStore::default(),
-        BaselineDeviationConfig::default(),
     );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
     assert_eq!(result.completion, Some(EvaluationCompletion::Complete));
-    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events.len(), 2);
+    assert_eq!(result.events[1].event_type, "activity");
     let event = &mut result.events[0];
     assert_eq!(event.risk_score, 1);
     assert!(event.agent.is_none() && event.model.is_none() && event.provider.is_none());
@@ -716,42 +599,6 @@ fn complete_projection_precedes_one_existing_allowlist_application() {
     suppress_detection(event, &suppression);
     assert_eq!(event.risk_score, 0);
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
-}
-
-#[test]
-fn metadata_origin_must_match_not_just_visible_session_id() {
-    use telltale_sources::acquisition::{AttestedValue, SessionAccounting, SessionMetadata};
-    let source = source("synthetic".into());
-    let instance = CorrelationId::source_reported("test-instance").unwrap();
-    let result = finish_batch(
-        &source,
-        &instance,
-        AcquisitionBatch {
-            observations: vec![message("one", Some("s"))],
-            progress: AcquisitionProgress::None,
-            accounting: SourceAccounting {
-                sessions: vec![SessionAccounting {
-                    session_id: CorrelationId::new("s", CorrelationOrigin::TelltaleOriginated)
-                        .unwrap(),
-                    metadata: SessionMetadata {
-                        agent: AttestedValue::Known("wrong-origin-agent".into()),
-                        ..Default::default()
-                    },
-                    counts: Default::default(),
-                }],
-                unscoped: Default::default(),
-                coverage: Default::default(),
-            },
-        },
-        &plan("user_context"),
-        None,
-        &BaselineSnapshotStore::default(),
-        BaselineDeviationConfig::default(),
-    );
-    assert_eq!(result.status, SourceProcessingStatus::Failed);
-    assert_eq!(result.events.len(), 1);
-    assert_eq!(result.events[0].event_type, "scanner_error");
-    assert_eq!(result.events[0].agent, None);
 }
 
 fn database(path: &std::path::Path) -> Source {
