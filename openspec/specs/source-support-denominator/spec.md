@@ -54,6 +54,11 @@ enter canonical identity, correlation, timestamps, provenance, metadata, or
 capabilities. Copilot parser state MUST remain source-local and non-durable.
 Acquisition MUST NOT own scanner checkpoint persistence, overlap, or retry policy.
 
+Each of the eight adapters MUST satisfy the authoritative canonical session
+accounting contract from the same native extraction, separately from observations
+and progress. Detailed attestation, ownership, contribution, bounds, and privacy
+semantics belong to that capability rather than this denominator.
+
 Failures MUST distinguish unsupported identity, kind mismatch, source read,
 canonical mapping, and canonical validation with bounded privacy-safe Display
 and Debug. Errors MUST NOT retain raw source errors or return partial successful

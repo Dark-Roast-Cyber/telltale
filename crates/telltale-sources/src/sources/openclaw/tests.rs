@@ -119,7 +119,7 @@ fn native_openclaw_projection_preserves_legacy_direct_tool_call_shape() {
     assert_eq!(native.len(), 2);
     assert_eq!(native[0].source_sequence, 0);
     assert_eq!(native[1].source_sequence, 1);
-    assert_eq!(native[1].reported_agent, None);
+    assert_eq!(native[1].attestation.as_ref().unwrap().agent.known(), None);
     assert_eq!(
         native[1].legacy_effective_agent.as_deref(),
         Some("fixture-agent")

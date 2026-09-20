@@ -4,6 +4,7 @@
 //! This crate performs no I/O beyond serde serialization; filesystem
 //! discovery, parsing, and delivery live in the downstream crates.
 
+pub mod activity_facts;
 pub mod canonical;
 pub mod clients;
 pub mod event;

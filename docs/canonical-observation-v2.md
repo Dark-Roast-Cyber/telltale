@@ -85,6 +85,68 @@ Acquisition directly maps source-native facts to Canonical Observation v2. It is
 not a conversion bridge to or from `NormalizedRecordV1`; the later coordinated
 runtime cutover remains a separate step.
 
+### Inactive session attestation and accounting
+
+Issue [#51](https://github.com/Dark-Roast-Cyber/telltale/issues/51) Tranche B3A adds
+`AcquisitionBatch.accounting`, owned by acquisition from the same native read.
+`SourceAccounting` contains source-reported canonical session IDs **with origin**,
+per-field agent/model/provider attestation, and native accounting. `Missing`,
+`Known`, and `Ambiguous` are distinct: absent values do not erase known evidence;
+distinct values discard the retained candidate and become ambiguous. No client,
+filename, tool, or content-derived metadata defaults are used. Existing COv2
+capabilities remain separate from per-session value absence.
+Each adapter selects metadata only from source-defined semantic envelopes. If
+recognized native session coordinates for one unit disagree, acquisition fails
+closed rather than selecting an alias or importing joined metadata across sessions.
+
+Each session and the explicitly unscoped bucket retain native-unit counts and
+native-derived legacy record-kind counts. JSONL units are extracted JSON objects;
+SQLite units are message rows and selected text/tool part rows, including parents
+suppressed by canonical mapping; Copilot units are workspace-initialization events
+and accumulated output items, not arbitrary log lines or completion controls.
+These are batch counts, not whole-store, deduplicated, or lifetime totals.
+Legacy activity `record_counts` is a kind histogram, not a COv2 observation count:
+one Claude tool-use record can emit both message and tool observations, while one
+Copilot call can count as two legacy kinds. Unscoped counts have no invented session.
+For native tool-call units, the same sidecar also retains normalized tool-name,
+path-class, and network-host contribution counts, including semantic indicators
+from source fields that COv2 intentionally omits. It does not retain flattened
+legacy content, raw envelopes, commands, arguments, or source paths. This is the
+single contribution input for later baseline convergence; B3B must not recount
+overlapping COv2 arguments.
+
+Retained strings use the COv2 local string limit (4,096 bytes); acquisition caps
+session cardinality at 4,096 because metadata-only sessions need not emit any
+observations. Potential contribution tokens and retained labels use the same local string limit,
+and each batch permits 4,096 distinct contribution keys across scoped and
+unscoped buckets. One acquisition-owned budget is checked before each new map
+entry, including during derivation, not only after aggregation. Native records
+retain no per-unit contribution maps. Legacy parsers do not compute these inactive
+contributions; canonical acquisition borrows existing native projection fields
+without another source read, reconstructed records, or a new raw-input sidecar.
+Internal SQL transport aliases are not source JSON ownership evidence, and ignored
+Copilot items cannot attest metadata. Counts use checked `u64` arithmetic. Invalid/oversized metadata
+or contribution input, capacity exhaustion, and overflow fail with code-only errors. Missing and
+ambiguous metadata remain successful acquisition. Debug rendering hides labels
+and session IDs. The inactive composition borrows only known fields for exact
+evaluated session keys into Event3 projection and retains the single accounting
+sidecar on successful Complete or VisibilityLimited processing. Cursor policy
+and projection's fail-closed origin/collision validation are unchanged.
+
+B3B still owns activity/baseline integration and an intentional pre-1.0 state
+compatibility decision. Client is available from the source; agent/model/provider
+can each be missing or ambiguous. Current baseline keys cannot express ambiguity,
+and legacy sticky/default metadata and fallback session grouping differ. Old
+snapshots therefore cannot be assumed reusable. Event3's existing kind histogram
+must not be repurposed; B3B must decide grouping, omission of zero-count keys,
+and checked `u64` to `u32` conversion, plus canonical tool/path/network
+contribution consumption and prior-state timing.
+No baseline state or activity event is produced here. Validation covers all eight
+native identities, conflicts, bounds/privacy, counts, and projection. Activation
+requires B3B, embedding convergence, and coordinated runtime cutover; then remove
+legacy metadata/count derivation and temporary legacy activity carriers. Scan,
+watch, and embedding remain legacy; Event3 is frozen, Event4 inactive, Step 5 incomplete.
+
 ## Conceptual contract
 
 ```text

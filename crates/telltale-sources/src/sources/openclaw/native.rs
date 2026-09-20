@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
 use crate::parser::{
@@ -47,13 +48,11 @@ pub(crate) struct OpenClawToolFields {
 
 #[derive(Clone)]
 pub(crate) struct OpenClawNativeRecord {
+    pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) source_sequence: u64,
     pub(crate) native_id: Option<String>,
     pub(crate) session_id: Option<String>,
     pub(crate) legacy_session_id: String,
-    pub(crate) reported_agent: Option<String>,
-    pub(crate) reported_provider: Option<String>,
-    pub(crate) reported_model: Option<String>,
     pub(crate) legacy_effective_agent: Option<String>,
     pub(crate) legacy_effective_provider: Option<String>,
     pub(crate) legacy_effective_model: Option<String>,
@@ -92,32 +91,6 @@ pub(crate) fn extract_openclaw_native_records(
         }
 
         let selected_envelope = openclaw_selected_envelope(&value);
-        let reported_agent = selected_envelope
-            .and_then(|envelope| selected_string_field(envelope.value, "agent_nickname"))
-            .or_else(|| {
-                selected_envelope
-                    .and_then(|envelope| selected_string_field(envelope.value, "agent"))
-            });
-        let reported_provider = selected_envelope
-            .and_then(|envelope| selected_string_field(envelope.value, "model_provider"))
-            .or_else(|| {
-                selected_envelope
-                    .and_then(|envelope| selected_string_field(envelope.value, "providerID"))
-            })
-            .or_else(|| {
-                selected_envelope
-                    .and_then(|envelope| selected_string_field(envelope.value, "provider"))
-            });
-        let reported_model = selected_envelope
-            .and_then(|envelope| selected_string_field(envelope.value, "model"))
-            .or_else(|| {
-                selected_envelope
-                    .and_then(|envelope| selected_string_field(envelope.value, "model_name"))
-            })
-            .or_else(|| {
-                selected_envelope
-                    .and_then(|envelope| selected_string_field(envelope.value, "modelID"))
-            });
 
         // The effective values deliberately retain the pre-v2 legacy lookup,
         // including its session_meta compatibility behavior.
@@ -135,14 +108,30 @@ pub(crate) fn extract_openclaw_native_records(
 
         let discriminator = openclaw_discriminator(&value).map(ToOwned::to_owned);
         let legacy_kind = openclaw_record_kind(&value);
+        let legacy_tool_name = openclaw_tool_name(&value);
+        let legacy_arguments =
+            arguments_field(&value).or_else(|| openclaw_tool_input_as_string(&value));
+        let ownership = canonical_session_id(&value);
+        let session_id = ownership.as_ref().ok().cloned().flatten();
         let native = OpenClawNativeRecord {
+            attestation: ownership.and_then(|_| {
+                selected_envelope.map_or_else(
+                    || Ok(SessionMetadata::default()),
+                    |envelope| {
+                        let mut metadata = openclaw_metadata(envelope.value)?;
+                        if let Some(message) =
+                            envelope.value.get("message").filter(|v| v.is_object())
+                        {
+                            metadata.merge(&openclaw_metadata(message)?);
+                        }
+                        Ok(metadata)
+                    },
+                )
+            }),
             source_sequence: source_sequence as u64,
             native_id: openclaw_native_id(&value, discriminator.as_deref()),
-            session_id: canonical_session_id(&value),
+            session_id,
             legacy_session_id: session_id_with_fallback(&value, &default_session_id),
-            reported_agent,
-            reported_provider,
-            reported_model,
             legacy_effective_agent: effective_agent.clone(),
             legacy_effective_provider: effective_provider.clone(),
             legacy_effective_model: effective_model.clone(),
@@ -158,9 +147,8 @@ pub(crate) fn extract_openclaw_native_records(
             tool_calls: openclaw_tool_calls(&value),
             tool: openclaw_tool_fields(&value),
             legacy_kind,
-            legacy_tool_name: openclaw_tool_name(&value),
-            legacy_arguments: arguments_field(&value)
-                .or_else(|| openclaw_tool_input_as_string(&value)),
+            legacy_tool_name,
+            legacy_arguments,
             legacy_content: record_content(&value),
         };
         records.push(native);
@@ -367,15 +355,28 @@ fn openclaw_role(value: &Value) -> Option<String> {
     })
 }
 
-fn canonical_session_id(value: &Value) -> Option<String> {
-    let selected = openclaw_selected_envelope(value)?;
-    ["session_id", "sessionID", "sessionId"]
-        .into_iter()
-        .find_map(|key| {
-            selected_field(selected.value, key)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+fn canonical_session_id(value: &Value) -> Result<Option<String>, AcquisitionError> {
+    let Some(selected) = openclaw_selected_envelope(value) else {
+        return Ok(None);
+    };
+    let mut envelopes = vec![selected.value];
+    if let Some(message) = selected.value.get("message").filter(|v| v.is_object()) {
+        envelopes.push(message);
+    }
+    session_identity(envelopes.into_iter().flat_map(|envelope| {
+        ["session_id", "sessionID", "sessionId"]
+            .into_iter()
+            .filter_map(move |key| envelope.get(key))
+    }))
+}
+
+fn openclaw_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> {
+    SessionMetadata::from_fields(
+        value,
+        &["agent", "agent_nickname"],
+        &["model", "model_name", "modelID"],
+        &["provider", "providerID", "model_provider"],
+    )
 }
 
 fn openclaw_message_content(value: &Value) -> Option<Value> {

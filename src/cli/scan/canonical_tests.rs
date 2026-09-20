@@ -1,4 +1,142 @@
 use super::*;
+
+#[test]
+fn ownership_failure_returns_neither_accounting_nor_eligible_progress() {
+    let directory = tempdir().unwrap();
+    let source = database(&directory.path().join("synthetic.db"));
+    let connection = rusqlite::Connection::open(&source.path).unwrap();
+    connection
+        .execute("UPDATE part SET session_id = 'PRIVATE-other'", [])
+        .unwrap();
+    let result = process_canonical_source(
+        &source,
+        &ScanState::default(),
+        false,
+        false,
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Failed);
+    assert!(result.accounting.is_none());
+    assert_eq!(result.progress, AcquisitionProgress::None);
+    assert_eq!(result.sqlite_progress_candidate(false, false), None);
+    assert!(
+        !serde_json::to_string(&result.events)
+            .unwrap()
+            .contains("PRIVATE")
+    );
+}
+
+#[test]
+fn contribution_budget_failure_returns_no_accounting_or_eligible_progress() {
+    let directory = tempdir().unwrap();
+    let source = source(directory.path().join("synthetic.jsonl"));
+    let mut lines = Vec::new();
+    for session in 0..2 {
+        let hosts = (0..2100)
+            .map(|i| format!("https://s{session}-h{i}.example/x"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(
+            serde_json::json!({"type":"assistant","session_id":format!("s{session}"),
+            "content":[{"type":"tool_use","id":"call-a","name":"shell","input":{}}],
+            "legacy_context":hosts})
+            .to_string(),
+        );
+    }
+    std::fs::write(&source.path, lines.join("\n")).unwrap();
+    let result = process_canonical_source(
+        &source,
+        &ScanState::default(),
+        false,
+        false,
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Failed);
+    assert!(result.accounting.is_none());
+    assert_eq!(result.progress, AcquisitionProgress::None);
+    assert_eq!(result.sqlite_progress_candidate(false, false), None);
+    assert!(
+        !serde_json::to_string(&result.events)
+            .unwrap()
+            .contains(".example")
+    );
+}
+
+#[test]
+fn all_eight_native_contributions_match_legacy_semantic_counts() {
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_sources::acquisition::ActivityContributions;
+    let directory = tempdir().unwrap();
+    for (client, source_id, kind) in [
+        (ClientId::Claude, "claude.projects", SourceKind::Jsonl),
+        (ClientId::Codex, "codex.sessions", SourceKind::Jsonl),
+        (
+            ClientId::Codex,
+            "codex.archived_sessions",
+            SourceKind::ArchivedJsonl,
+        ),
+        (
+            ClientId::Codex,
+            "codex.headless_sessions",
+            SourceKind::HeadlessJsonl,
+        ),
+        (ClientId::OpenClaw, "openclaw.agents", SourceKind::Jsonl),
+        (ClientId::Qwen, "qwen.projects", SourceKind::Jsonl),
+        (
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+        ),
+        (ClientId::OpenCode, "opencode.sqlite", SourceKind::Sqlite),
+    ] {
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind,
+            path: directory.path().join(source_id),
+        };
+        if client == ClientId::OpenCode {
+            let conn = rusqlite::Connection::open(&source.path).unwrap();
+            conn.execute_batch(r#"CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+                CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+                INSERT INTO message VALUES ('m','s','{"role":"assistant"}');
+                INSERT INTO part VALUES ('p','m','s',10,'{"type":"tool","tool":"shell","callID":"call-a","state":{"status":"running","input":{"command":"https://example.test/x /home/u/.env"}}}');
+                INSERT INTO part VALUES ('done','m','s',11,'{"type":"tool","tool":"not-a-call","callID":"call-b","state":{"status":"completed","input":{"path":"/tmp/ignored"},"output":"done"}}');"#).unwrap();
+        } else if client == ClientId::Copilot {
+            std::fs::write(&source.path, concat!(
+                "2026-04-27T16:16:57.841Z [INFO] Workspace initialized: s (checkpoints: 0)\n",
+                "2026-04-27T16:17:17.990Z [INFO] Accumulated output items (1): ",
+                r#"[{"type":"function_call","name":"shell","call_id":"call-a","arguments":"{\"command\":\"https://example.test/x /home/u/.env\"}","message":"https://ignored-result.test/"}]"#
+            )).unwrap();
+        } else {
+            std::fs::write(&source.path, r#"{"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{"command":"https://example.test/x /home/u/.env"}}],"legacy_context":"https://sibling.example.test/x /tmp/synthetic"}"#).unwrap();
+        }
+        let batch = acquire_source(&source, AcquisitionOptions::new(clock())).unwrap();
+        let legacy = telltale_sources::parser::parse_source_records(&source).unwrap();
+        let summaries = telltale_detect::baseline::build_baseline_summaries(&legacy);
+        assert_eq!(summaries.len(), 1);
+        let expected = &summaries[0];
+        let actual = &batch.accounting.sessions[0].counts.contributions;
+        assert_eq!(actual.tool_calls, expected.tool_call_counts, "{source_id}");
+        assert_eq!(
+            actual.path_classes, expected.path_class_counts,
+            "{source_id}"
+        );
+        assert_eq!(
+            actual.network_hosts, expected.network_host_counts,
+            "{source_id}"
+        );
+        assert_eq!(
+            batch.accounting.unscoped.contributions,
+            ActivityContributions::default()
+        );
+        assert!(!actual.tool_calls.is_empty(), "{source_id}");
+    }
+}
 use telltale_detect::v2::compile_rule_v1;
 use telltale_rules::load_default_rule_set;
 use telltale_schema::clients::{ClientId, SourceKind};
@@ -39,6 +177,108 @@ fn ordinary_zero_findings_and_missing_source_are_explicit() {
     assert!(result.completion.is_some());
     assert_eq!(result.progress, AcquisitionProgress::None);
     assert_eq!(result.sqlite_progress_candidate(false, false), None);
+    let accounting = result.accounting.as_ref().unwrap();
+    assert_eq!(accounting.sessions[0].counts.native_units, 1);
+    assert_eq!(
+        accounting.sessions[0].metadata,
+        telltale_sources::acquisition::SessionMetadata::default()
+    );
+}
+
+#[test]
+fn projection_borrows_only_known_metadata_and_retains_ambiguity_for_b3b() {
+    use telltale_sources::acquisition::AttestedValue;
+    let dir = tempdir().unwrap();
+    let source = source(dir.path().join("synthetic.jsonl"));
+    std::fs::write(&source.path, concat!(
+        "{\"type\":\"user\",\"session_id\":\"s\",\"content\":\"needle\",\"agent\":\"native-agent\",\"model\":\"model-a\",\"provider\":\"native-provider\"}\n",
+        "{\"type\":\"user\",\"session_id\":\"s\",\"content\":\"synthetic\",\"model\":\"model-b\"}\n"
+    )).unwrap();
+    let state = ScanState::default();
+    let result = process_canonical_source(
+        &source,
+        &state,
+        false,
+        false,
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(result.completion, Some(EvaluationCompletion::Complete));
+    assert_eq!(result.events.len(), 1);
+    let event = &result.events[0];
+    assert_eq!(event.agent.as_deref(), Some("native-agent"));
+    assert_eq!(event.provider.as_deref(), Some("native-provider"));
+    assert_eq!(event.model, None);
+    let accounting = result.accounting.unwrap();
+    assert_eq!(
+        accounting.sessions[0].metadata.model,
+        AttestedValue::Ambiguous
+    );
+    assert_eq!(accounting.sessions[0].counts.record_counts.user_message, 2);
+    assert_eq!(result.progress, AcquisitionProgress::None);
+}
+
+#[test]
+fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progress() {
+    use telltale_sources::acquisition::AttestedValue;
+    let dir = tempdir().unwrap();
+    let mut source = source(dir.path().join("synthetic.jsonl"));
+    source.client = ClientId::Codex;
+    source.source_id = "codex.sessions".into();
+    std::fs::write(&source.path, "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"metadata-only\",\"model\":\"source-model\"}}\n").unwrap();
+    let result = process_canonical_source(
+        &source,
+        &ScanState::default(),
+        false,
+        false,
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    assert!(result.events.is_empty());
+    assert_eq!(
+        result.accounting.unwrap().sessions[0]
+            .metadata
+            .model
+            .known(),
+        Some("source-model")
+    );
+
+    let source = database(&dir.path().join("synthetic.db"));
+    let conn = rusqlite::Connection::open(&source.path).unwrap();
+    conn.execute(
+        "UPDATE message SET data = ?1",
+        [r#"{"role":"user","model":"model-a","provider":"source-provider"}"#],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE part SET data = ?1",
+        [r#"{"type":"text","text":"needle","model":"model-b"}"#],
+    )
+    .unwrap();
+    let state = ScanState::default();
+    let result =
+        process_canonical_source(&source, &state, false, false, clock(), &plan("url"), None);
+    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(
+        result.completion,
+        Some(EvaluationCompletion::VisibilityLimited)
+    );
+    assert_eq!(
+        result.accounting.as_ref().unwrap().sessions[0]
+            .metadata
+            .model,
+        AttestedValue::Ambiguous
+    );
+    assert_eq!(result.sqlite_progress_candidate(false, false), Some(1000));
+    assert_eq!(result.sqlite_progress_candidate(true, false), None);
+    assert_eq!(
+        state.sqlite_ingestion_cursor_time_updated(&source, "part"),
+        None
+    );
 }
 
 #[test]
@@ -132,6 +372,7 @@ fn evaluation_and_projection_failures_discard_all_findings_but_retain_ineligible
             &source,
             &instance,
             AcquisitionBatch {
+                accounting: SourceAccounting::default(),
                 observations,
                 progress,
             },
@@ -154,6 +395,7 @@ fn evaluation_and_projection_failures_discard_all_findings_but_retain_ineligible
         &wrong_source,
         &instance,
         AcquisitionBatch {
+            accounting: SourceAccounting::default(),
             observations: vec![message("one", Some("same-session"))],
             progress,
         },
@@ -172,6 +414,7 @@ fn complete_projection_precedes_one_existing_allowlist_application() {
         &source,
         &instance,
         AcquisitionBatch {
+            accounting: SourceAccounting::default(),
             observations: vec![message("one", Some("s"))],
             progress: AcquisitionProgress::None,
         },
@@ -196,6 +439,38 @@ fn complete_projection_precedes_one_existing_allowlist_application() {
     suppress_detection(event, &suppression);
     assert_eq!(event.risk_score, 0);
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+}
+
+#[test]
+fn metadata_origin_must_match_not_just_visible_session_id() {
+    use telltale_sources::acquisition::{AttestedValue, SessionAccounting, SessionMetadata};
+    let source = source("synthetic".into());
+    let instance = CorrelationId::source_reported("test-instance").unwrap();
+    let result = finish_batch(
+        &source,
+        &instance,
+        AcquisitionBatch {
+            observations: vec![message("one", Some("s"))],
+            progress: AcquisitionProgress::None,
+            accounting: SourceAccounting {
+                sessions: vec![SessionAccounting {
+                    session_id: CorrelationId::new("s", CorrelationOrigin::TelltaleOriginated)
+                        .unwrap(),
+                    metadata: SessionMetadata {
+                        agent: AttestedValue::Known("wrong-origin-agent".into()),
+                        ..Default::default()
+                    },
+                    counts: Default::default(),
+                }],
+                unscoped: Default::default(),
+            },
+        },
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events[0].agent, None);
 }
 
 fn database(path: &std::path::Path) -> Source {
@@ -231,6 +506,12 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
         }
     );
     assert_eq!(result.sqlite_progress_candidate(false, false), Some(1000));
+    let accounting = result.accounting.as_ref().unwrap();
+    assert_eq!(accounting.sessions[0].counts.native_units, 2);
+    assert_eq!(
+        accounting.sessions[0].metadata,
+        telltale_sources::acquisition::SessionMetadata::default()
+    );
     assert_eq!(
         state.sqlite_ingestion_cursor_time_updated(&source, "part"),
         None
@@ -342,6 +623,7 @@ fn all_eight_identities_acquire_evaluate_project_without_legacy_records() {
             "{}",
             source.source_id
         );
+        assert_eq!(result.accounting.as_ref(), Some(&batch.accounting));
         assert!(
             result
                 .events

@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
+use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
 use crate::parser::{
     ParseError, arguments_field, default_source_file_stem, read_jsonl_values, record_content,
-    session_id_field, session_id_with_fallback, string_field,
+    session_id_with_fallback, string_field,
 };
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -55,6 +56,7 @@ pub(crate) struct CodexToolFields {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CodexNativeRecord {
+    pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) source_sequence: u64,
     pub(crate) adapter_id: String,
     pub(crate) session_id: Option<String>,
@@ -113,11 +115,24 @@ pub(crate) fn extract_codex_native_records(
         let record_value = codex_record_value(&value);
         let envelope = codex_envelope(&value);
         let semantic_value = codex_semantic_value(&value, envelope);
-        let session_id = session_id_field(&value);
+        let ownership = session_identity(
+            codex_envelopes(&value, semantic_value)
+                .into_iter()
+                .flat_map(|envelope| {
+                    ["session_id", "sessionID", "sessionId"]
+                        .into_iter()
+                        .filter_map(move |key| envelope.get(key))
+                }),
+        );
+        let session_id = ownership.as_ref().ok().cloned().flatten();
         let legacy_kind = codex_record_kind(record_value);
+        let legacy_tool_name = codex_tool_name(record_value);
+        let legacy_arguments =
+            arguments_field(record_value).or_else(|| codex_tool_input_as_string(record_value));
         let inherited_for_record = inherited_session_id.clone();
         let effective_session_id = session_id.clone().or(inherited_for_record.clone());
         let native = CodexNativeRecord {
+            attestation: ownership.and_then(|_| codex_attestation(&value, semantic_value)),
             source_sequence: source_sequence as u64,
             adapter_id: source.source_id.clone(),
             session_id: session_id.clone(),
@@ -137,9 +152,8 @@ pub(crate) fn extract_codex_native_records(
                 .map(|blocks| blocks.iter().map(codex_content_block).collect()),
             tool: codex_tool_fields(semantic_value),
             legacy_kind,
-            legacy_tool_name: codex_tool_name(record_value),
-            legacy_arguments: arguments_field(record_value)
-                .or_else(|| codex_tool_input_as_string(record_value)),
+            legacy_tool_name,
+            legacy_arguments,
             legacy_content: record_content(record_value),
         };
 
@@ -152,6 +166,34 @@ pub(crate) fn extract_codex_native_records(
     }
 
     Ok(records)
+}
+
+fn codex_attestation(value: &Value, semantic: &Value) -> Result<SessionMetadata, AcquisitionError> {
+    let mut metadata = SessionMetadata::default();
+    for envelope in codex_envelopes(value, semantic) {
+        metadata.merge(&SessionMetadata::from_fields(
+            envelope,
+            &["agent", "agent_nickname"],
+            &["model"],
+            &["provider", "model_provider"],
+        )?);
+    }
+    Ok(metadata)
+}
+
+fn codex_envelopes<'a>(value: &'a Value, semantic: &'a Value) -> Vec<&'a Value> {
+    let mut envelopes = vec![value, semantic];
+    if let Some(message) = semantic.get("message").filter(|v| v.is_object()) {
+        envelopes.push(message);
+    }
+    if matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("session_meta" | "response_item" | "event_msg")
+    ) && let Some(payload) = value.get("payload").filter(|v| v.is_object())
+    {
+        envelopes.push(payload);
+    }
+    envelopes
 }
 
 pub(crate) fn codex_record_value(value: &Value) -> &Value {

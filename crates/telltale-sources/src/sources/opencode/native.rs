@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use rusqlite::Connection;
 use serde_json::Value;
 
@@ -11,6 +12,7 @@ use telltale_schema::source::Source;
 
 #[derive(Clone)]
 pub(crate) struct OpenCodeMessageContext {
+    pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) session_id: Option<String>,
     pub(crate) role: Option<String>,
     pub(crate) agent: Option<String>,
@@ -88,6 +90,14 @@ pub(crate) enum OpenCodeSqliteNativeRecord {
 }
 
 impl OpenCodeSqliteNativeRecord {
+    pub(crate) fn accounting(&self) -> (&OpenCodeMessageContext, &ParsedRecord) {
+        match self {
+            Self::Message(record) => (&record.context, &record.legacy),
+            Self::Text(record) => (&record.context, &record.legacy),
+            Self::Tool(record) => (&record.context, &record.legacy),
+        }
+    }
+
     pub(crate) fn legacy_record(self) -> ParsedRecord {
         match self {
             Self::Message(record) => record.legacy,
@@ -154,8 +164,9 @@ fn extract_sqlite_message_records(
         .into_iter()
         .enumerate()
         .map(|(source_sequence, value)| {
-            let normalized = normalize_sqlite_message_value(value.clone());
-            let context = message_context(&normalized);
+            let (normalized, attestation) = normalize_sqlite_message_value(value.clone());
+            let mut context = message_context(&normalized);
+            context.attestation = attestation;
             let content = normalized
                 .get("content")
                 .cloned()
@@ -223,14 +234,19 @@ fn extract_sqlite_part_records(
 }
 
 fn sqlite_part_native_record(raw_value: &Value) -> OpenCodeSqliteNativeRecord {
-    let value = normalize_sqlite_part_value(raw_value.clone());
+    let (value, attestation) = normalize_sqlite_part_value(raw_value.clone());
     let source_rowid = raw_value
         .get("__telltale_rowid")
         .and_then(Value::as_i64)
         .unwrap_or_default();
     let source_id = source_string_field(raw_value, "id");
     let message_id = source_string_field(raw_value, "message_id");
-    let context = merge_message_context(message_context(&value), joined_message_context(raw_value));
+    let mut context =
+        merge_message_context(message_context(&value), joined_message_context(raw_value));
+    context.session_id = context
+        .session_id
+        .or_else(|| source_string_field(raw_value, "__telltale_message_session_id"));
+    context.attestation = attestation;
     let legacy = sqlite_value_record(&value, "unknown");
     let part_type = string_field(&value, "type");
 
@@ -264,7 +280,7 @@ fn sqlite_part_native_record(raw_value: &Value) -> OpenCodeSqliteNativeRecord {
 
 fn sqlite_part_query(has_min_time_updated: bool, include_message_context: bool) -> String {
     let select = if include_message_context {
-        "select part.*, part.rowid as __telltale_rowid, message.data as __telltale_message_data \
+        "select part.*, part.rowid as __telltale_rowid, message.data as __telltale_message_data, message.session_id as __telltale_message_session_id \
          from part left join message on message.id = part.message_id"
     } else {
         "select part.*, part.rowid as __telltale_rowid from part"
@@ -350,37 +366,41 @@ pub(crate) fn opencode_tool_part_is_result(value: &Value) -> bool {
             .is_some()
 }
 
-fn normalize_sqlite_message_value(value: Value) -> Value {
+fn normalize_sqlite_message_value(
+    value: Value,
+) -> (Value, Result<SessionMetadata, AcquisitionError>) {
+    let row_metadata = opencode_attestation(&value);
     let Value::Object(object) = value else {
-        return value;
+        return (value, row_metadata);
     };
 
     let Some(data) = object.get("data").and_then(Value::as_str) else {
-        return Value::Object(object);
+        return (Value::Object(object), row_metadata);
     };
 
     let Ok(Value::Object(mut data_object)) = serde_json::from_str::<Value>(data) else {
-        return Value::Object(object);
+        return (Value::Object(object), row_metadata);
     };
 
     for (key, value) in object {
         data_object.entry(key).or_insert(value);
     }
 
-    Value::Object(data_object)
+    (Value::Object(data_object), row_metadata)
 }
 
-fn normalize_sqlite_part_value(value: Value) -> Value {
+fn normalize_sqlite_part_value(value: Value) -> (Value, Result<SessionMetadata, AcquisitionError>) {
+    let row_metadata = opencode_attestation(&value);
     let Value::Object(object) = value else {
-        return value;
+        return (value, row_metadata);
     };
 
     let Some(data) = object.get("data").and_then(Value::as_str) else {
-        return Value::Object(object);
+        return (Value::Object(object), row_metadata);
     };
 
     let Ok(Value::Object(mut data_object)) = serde_json::from_str::<Value>(data) else {
-        return Value::Object(object);
+        return (Value::Object(object), row_metadata);
     };
 
     if let Some(Value::Object(message_object)) = object
@@ -420,7 +440,45 @@ fn normalize_sqlite_part_value(value: Value) -> Value {
         data_object.entry(key).or_insert(value);
     }
 
-    Value::Object(data_object)
+    (Value::Object(data_object), row_metadata)
+}
+
+fn opencode_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> {
+    SessionMetadata::from_fields(
+        value,
+        &["agent"],
+        &["model", "modelID"],
+        &["provider", "providerID"],
+    )
+}
+
+fn opencode_attestation(row: &Value) -> Result<SessionMetadata, AcquisitionError> {
+    let data = row
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+    let message = row
+        .get("__telltale_message_data")
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+    let mut envelopes = vec![row];
+    envelopes.extend(data.as_ref());
+    envelopes.extend(message.as_ref());
+    session_identity(
+        envelopes
+            .iter()
+            .flat_map(|envelope| {
+                ["session_id", "sessionID", "sessionId"]
+                    .into_iter()
+                    .filter_map(move |key| envelope.get(key))
+            })
+            .chain(row.get("__telltale_message_session_id")),
+    )?;
+    let mut metadata = SessionMetadata::default();
+    for envelope in envelopes {
+        metadata.merge(&opencode_metadata(envelope)?);
+    }
+    Ok(metadata)
 }
 
 fn sqlite_value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
@@ -458,6 +516,7 @@ fn source_call_id(value: &Value) -> Option<String> {
 
 fn message_context(value: &Value) -> OpenCodeMessageContext {
     OpenCodeMessageContext {
+        attestation: opencode_metadata(value),
         session_id: source_session_id(value),
         role: source_role(value),
         agent: string_field(value, "agent"),
@@ -485,7 +544,7 @@ fn source_role(value: &Value) -> Option<String> {
 fn source_session_id(value: &Value) -> Option<String> {
     ["session_id", "sessionID", "sessionId"]
         .into_iter()
-        .find_map(|key| string_field(value, key).filter(|value| !value.is_empty()))
+        .find_map(|key| source_string_field(value, key))
 }
 
 fn joined_message_context(value: &Value) -> Option<OpenCodeMessageContext> {

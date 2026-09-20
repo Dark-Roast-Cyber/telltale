@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
+use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
 use crate::parser::{
     ParseError, arguments_field, default_source_file_stem, read_jsonl_values, record_content,
-    session_id_field, session_id_with_fallback, string_field,
+    session_id_with_fallback, string_field,
 };
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -31,6 +32,7 @@ pub(crate) enum ClaudeContentBlock {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClaudeNativeRecord {
+    pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) source_sequence: u64,
     pub(crate) session_id: Option<String>,
     pub(crate) legacy_session_id: String,
@@ -79,10 +81,19 @@ pub(crate) fn extract_claude_native_records(
             .or_else(|| string_field(&value, "model_name"))
             .or_else(|| string_field(&value, "modelID"));
 
-        let session_id = session_id_field(&value);
+        let ownership =
+            session_identity(claude_envelopes(&value).into_iter().flat_map(|envelope| {
+                ["session_id", "sessionID", "sessionId"]
+                    .into_iter()
+                    .filter_map(move |key| envelope.get(key))
+            }));
+        let session_id = ownership.as_ref().ok().cloned().flatten();
         let legacy_arguments =
             arguments_field(&value).or_else(|| claude_tool_input_as_string(&value));
+        let legacy_kind = claude_record_kind(&value);
+        let legacy_tool_name = claude_tool_name(&value);
         let native = ClaudeNativeRecord {
+            attestation: ownership.and_then(|_| claude_attestation(&value)),
             source_sequence: source_sequence as u64,
             legacy_session_id: session_id_with_fallback(&value, &default_session_id),
             session_id,
@@ -95,8 +106,8 @@ pub(crate) fn extract_claude_native_records(
             message_content: claude_message_content(&value),
             blocks: content_blocks(&value)
                 .map(|blocks| blocks.iter().map(claude_content_block).collect::<Vec<_>>()),
-            legacy_kind: claude_record_kind(&value),
-            legacy_tool_name: claude_tool_name(&value),
+            legacy_kind,
+            legacy_tool_name,
             legacy_arguments,
             legacy_content: record_content(&value),
         };
@@ -104,6 +115,34 @@ pub(crate) fn extract_claude_native_records(
     }
 
     Ok(records)
+}
+
+fn claude_attestation(value: &Value) -> Result<SessionMetadata, AcquisitionError> {
+    let mut metadata = SessionMetadata::default();
+    for envelope in claude_envelopes(value) {
+        metadata.merge(&SessionMetadata::from_fields(
+            envelope,
+            &["agent", "agent_nickname"],
+            &["model"],
+            &["provider", "model_provider"],
+        )?);
+    }
+    Ok(metadata)
+}
+
+fn claude_envelopes(value: &Value) -> Vec<&Value> {
+    // Claude conversational records and their message object are native envelopes.
+    // A sibling payload/session_meta object on a conversation is not metadata.
+    let mut envelopes = vec![value];
+    if let Some(message) = value.get("message").filter(|v| v.is_object()) {
+        envelopes.push(message);
+    }
+    if value.get("type").and_then(Value::as_str) == Some("session_meta")
+        && let Some(payload) = value.get("payload").filter(|v| v.is_object())
+    {
+        envelopes.push(payload);
+    }
+    envelopes
 }
 
 pub(crate) fn claude_record_kind(value: &Value) -> RecordKind {

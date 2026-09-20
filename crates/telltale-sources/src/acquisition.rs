@@ -36,10 +36,25 @@ use crate::sources::qwen::canonical::{
 };
 use crate::sources::qwen::native::extract_qwen_native_records;
 
+mod accounting;
+mod contributions;
+use accounting::AccountingBuilder;
+pub(crate) use accounting::session_identity;
+pub use accounting::{
+    AttestedValue, MAX_ATTESTED_SESSIONS, NativeCounts, RecordCounts, SessionAccounting,
+    SessionMetadata, SourceAccounting,
+};
+pub use contributions::{ActivityContributions, MAX_CONTRIBUTION_KEYS};
+
 pub struct AcquisitionBatch {
     pub observations: Vec<CanonicalObservationV2>,
     pub progress: AcquisitionProgress,
+    pub accounting: SourceAccounting,
 }
+
+#[cfg(test)]
+#[path = "acquisition_accounting_tests.rs"]
+mod accounting_tests;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum AcquisitionProgress {
@@ -79,6 +94,12 @@ pub enum AcquisitionError {
     UnsupportedSourceIdentity,
     SourceKindMismatch,
     SourceRead,
+    InvalidAttestation,
+    ConflictingSessionOwnership,
+    InvalidContribution,
+    ContributionCapacity,
+    AttestationCapacity,
+    AccountingOverflow,
     CanonicalMapping { code: &'static str },
     CanonicalValidation { code: &'static str },
 }
@@ -89,6 +110,12 @@ impl AcquisitionError {
             Self::UnsupportedSourceIdentity => "unsupported_source_identity",
             Self::SourceKindMismatch => "source_kind_mismatch",
             Self::SourceRead => "source_read",
+            Self::InvalidAttestation => "invalid_session_attestation",
+            Self::ConflictingSessionOwnership => "conflicting_session_ownership",
+            Self::InvalidContribution => "invalid_native_contribution",
+            Self::ContributionCapacity => "native_contribution_capacity",
+            Self::AttestationCapacity => "session_attestation_capacity",
+            Self::AccountingOverflow => "native_accounting_overflow",
             Self::CanonicalMapping { code } | Self::CanonicalValidation { code } => code,
         }
     }
@@ -124,10 +151,25 @@ pub fn acquire_source(
         return Err(AcquisitionError::SourceKindMismatch);
     }
 
+    let mut accounting = AccountingBuilder::default();
     let observations = match source.client {
         ClientId::Claude => {
             let records =
                 extract_claude_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
+            for record in &records {
+                accounting.record(
+                    record.session_id.as_deref(),
+                    &record.attestation,
+                    &[record.legacy_kind],
+                )?;
+                accounting.contribute(
+                    record.session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.legacy_arguments.as_deref(),
+                    [record.legacy_content.as_str()],
+                )?;
+            }
             project_claude_native_records(
                 &records,
                 &ClaudeCanonicalOptions::new(options.observed_at),
@@ -137,12 +179,40 @@ pub fn acquire_source(
         ClientId::Codex => {
             let records =
                 extract_codex_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
+            for record in &records {
+                accounting.record(
+                    record.effective_session_id.as_deref(),
+                    &record.attestation,
+                    &[record.legacy_kind],
+                )?;
+                accounting.contribute(
+                    record.effective_session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.legacy_arguments.as_deref(),
+                    [record.legacy_content.as_str()],
+                )?;
+            }
             project_codex_native_records(&records, &CodexCanonicalOptions::new(options.observed_at))
                 .map_err(map_codex_error)?
         }
         ClientId::OpenClaw => {
             let records = extract_openclaw_native_records(source)
                 .map_err(|_| AcquisitionError::SourceRead)?;
+            for record in &records {
+                accounting.record(
+                    record.session_id.as_deref(),
+                    &record.attestation,
+                    &[record.legacy_kind],
+                )?;
+                accounting.contribute(
+                    record.session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.legacy_arguments.as_deref(),
+                    [record.legacy_content.as_str()],
+                )?;
+            }
             project_openclaw_native_records(
                 &records,
                 &OpenClawCanonicalOptions::new(options.observed_at),
@@ -152,12 +222,68 @@ pub fn acquire_source(
         ClientId::Qwen => {
             let records =
                 extract_qwen_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
+            for record in &records {
+                accounting.record(
+                    record.session_id.as_deref(),
+                    &record.attestation,
+                    &[record.legacy_kind],
+                )?;
+                accounting.contribute(
+                    record.session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.legacy_arguments.as_deref(),
+                    [record.legacy_content.as_str()],
+                )?;
+            }
             project_qwen_native_records(&records, &QwenCanonicalOptions::new(options.observed_at))
                 .map_err(map_qwen_error)?
         }
         ClientId::Copilot => {
             let events =
                 extract_copilot_native_events(source).map_err(|_| AcquisitionError::SourceRead)?;
+            use crate::sources::copilot::native::CopilotNativeEvent;
+            use telltale_schema::record::RecordKind;
+            for event in &events {
+                match event {
+                    CopilotNativeEvent::WorkspaceInitialized {
+                        source_session_id, ..
+                    } => {
+                        accounting.record(
+                            source_session_id.as_deref(),
+                            &Ok(SessionMetadata::default()),
+                            &[RecordKind::SessionMeta],
+                        )?;
+                    }
+                    CopilotNativeEvent::AccumulatedOutputItem {
+                        canonical_session_id,
+                        item,
+                        ..
+                    } => {
+                        accounting.record(
+                            canonical_session_id.as_deref(),
+                            &item.attestation,
+                            item.record_kinds(),
+                        )?;
+                        if item.item_type.as_deref() == Some("function_call") {
+                            accounting.contribute(
+                                canonical_session_id.as_deref(),
+                                RecordKind::ToolCall,
+                                item.name.as_deref(),
+                                item.arguments.as_deref(),
+                                // Native strings in the legacy call summary; fixed
+                                // punctuation carries no path or host facts.
+                                [
+                                    item.name.as_deref().unwrap_or("unknown"),
+                                    item.call_id.as_deref().unwrap_or_default(),
+                                ],
+                            )?;
+                        }
+                    }
+                    CopilotNativeEvent::SessionCompleted
+                    | CopilotNativeEvent::MalformedStructuredOutput { .. } => {}
+                }
+            }
             project_copilot_native_events(
                 events,
                 &CopilotCanonicalOptions::new(options.observed_at),
@@ -169,6 +295,7 @@ pub fn acquire_source(
     Ok(AcquisitionBatch {
         observations,
         progress: AcquisitionProgress::None,
+        accounting: accounting.finish(),
     })
 }
 
@@ -194,12 +321,29 @@ pub fn acquire_opencode_sqlite(
     let progress = AcquisitionProgress::OpenCodeSqlite {
         part_max_time_updated: extraction.sqlite_part_max_time_updated,
     };
+    let mut accounting = AccountingBuilder::default();
+    for record in &extraction.records {
+        let (context, native) = record.accounting();
+        accounting.record(
+            context.session_id.as_deref(),
+            &context.attestation,
+            &[native.kind],
+        )?;
+        accounting.contribute(
+            context.session_id.as_deref(),
+            native.kind,
+            native.tool_name.as_deref(),
+            native.arguments.as_deref(),
+            [native.content.as_str()],
+        )?;
+    }
     let observations = project_opencode_native_records(&extraction.records, &options.observed_at)
         .map_err(map_canonical_error)?;
 
     Ok(AcquisitionBatch {
         observations,
         progress,
+        accounting: accounting.finish(),
     })
 }
 

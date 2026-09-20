@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 
+use crate::acquisition::{AcquisitionError, SessionMetadata};
 use serde_json::Value;
+use telltale_schema::record::RecordKind;
 
 use crate::parser::{
     ParseError, default_source_file_stem, model_field, provider_field, string_field,
@@ -32,6 +34,7 @@ pub(crate) enum CopilotNativeEvent {
 }
 
 pub(crate) struct CopilotOutputItem {
+    pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) item_type: Option<String>,
     pub(crate) id: Option<String>,
     pub(crate) call_id: Option<String>,
@@ -48,6 +51,16 @@ pub(crate) struct CopilotOutputItem {
 pub(crate) enum CopilotContentBlock {
     OutputText { text: Option<String> },
     Unknown,
+}
+
+fn copilot_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> {
+    // Explicit accumulated-item labels only, never the workspace/client defaults.
+    SessionMetadata::from_fields(
+        value,
+        &["agent"],
+        &["model", "modelID"],
+        &["provider", "providerID"],
+    )
 }
 
 pub(crate) fn extract_copilot_native_events(
@@ -169,6 +182,17 @@ pub(crate) fn extract_copilot_native_events(
 }
 
 impl CopilotOutputItem {
+    pub(crate) fn record_kinds(&self) -> &'static [RecordKind] {
+        match self.item_type.as_deref() {
+            Some("function_call") if self.message.is_some() => {
+                &[RecordKind::ToolCall, RecordKind::ToolResult]
+            }
+            Some("function_call") => &[RecordKind::ToolCall],
+            None | Some("" | "reasoning" | "message") => &[],
+            Some(_) => &[RecordKind::Other],
+        }
+    }
+
     fn from_value(value: &Value) -> Self {
         let object = value
             .as_object()
@@ -182,6 +206,7 @@ impl CopilotOutputItem {
             Some("function_call") | Some("message")
         ) {
             return Self {
+                attestation: Ok(SessionMetadata::default()),
                 item_type,
                 id: None,
                 call_id: None,
@@ -197,6 +222,7 @@ impl CopilotOutputItem {
         }
         let content = object.get("content");
         Self {
+            attestation: copilot_metadata(value),
             item_type,
             id: string_field(value, "id"),
             call_id: string_field(value, "call_id"),

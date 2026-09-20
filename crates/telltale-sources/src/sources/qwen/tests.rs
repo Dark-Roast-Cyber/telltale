@@ -167,7 +167,7 @@ fn qwen_native_records_feed_exact_legacy_projection() {
     assert_eq!(native.len(), 2);
     assert_eq!(native[0].source_sequence, 0);
     assert_eq!(native[1].source_sequence, 1);
-    assert_eq!(native[1].reported_agent, None);
+    assert_eq!(native[1].attestation.as_ref().unwrap().agent.known(), None);
     assert_eq!(
         native[1].legacy_effective_agent.as_deref(),
         Some("fixture-agent")
@@ -760,15 +760,18 @@ fn qwen_metadata_inheritance_is_legacy_only() {
     let source = qwen_source(path.clone());
     let native = super::native::extract_qwen_native_records(&source).expect("native records");
     assert_eq!(
-        native[0].reported_provider.as_deref(),
+        native[0].attestation.as_ref().unwrap().provider.known(),
         Some("fixture-provider")
     );
-    assert_eq!(native[1].reported_provider, None);
+    assert_eq!(
+        native[1].attestation.as_ref().unwrap().provider.known(),
+        None
+    );
     assert_eq!(
         native[1].legacy_effective_provider.as_deref(),
         Some("fixture-provider")
     );
-    assert_eq!(native[1].reported_agent, None);
+    assert_eq!(native[1].attestation.as_ref().unwrap().agent.known(), None);
     assert_eq!(
         native[1].legacy_effective_agent.as_deref(),
         Some("fixture-agent")

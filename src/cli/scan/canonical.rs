@@ -1,20 +1,20 @@
-//! Inactive Issue #51 B2 composition: prove native acquisition -> evaluation ->
+//! Inactive Issue #51 composition: prove native acquisition -> evaluation ->
 //! Event3 before coordinated scan/watch/embedding activation. Validation and
-//! activation dependencies live in canonical-runtime-tranche-b2. After validated
+//! activity/baseline integration remains B3B work. After validated
 //! activation, converge here and delete legacy composition/temporary carriers.
 #![allow(dead_code)] // Private migration seam; never selected by run_scan.
 
 use sha2::{Digest, Sha256};
 use telltale_detect::v2::{
-    CanonicalSourceInput, EvaluationCompletion, Event3CompatibilityContext, ProcessingError,
-    RuleV1CompatibilityPlan, evaluate_source, project_event3,
+    CanonicalSourceInput, EvaluationCompletion, Event3CompatibilityContext, Event3SessionMetadata,
+    ProcessingError, RuleV1CompatibilityPlan, evaluate_source, project_event3,
 };
 use telltale_rules::process_chain::CompiledProcessChainRules;
 use telltale_schema::event::path_hash;
 use telltale_schema::observation::{CorrelationId, CorrelationOrigin, ObservedAt};
 use telltale_sources::acquisition::{
     AcquisitionBatch, AcquisitionOptions, AcquisitionProgress, OpenCodeSqliteReadOptions,
-    acquire_opencode_sqlite, acquire_source,
+    SourceAccounting, acquire_opencode_sqlite, acquire_source,
 };
 
 use super::{
@@ -28,6 +28,7 @@ pub(super) struct CanonicalProcessingResult {
     pub status: SourceProcessingStatus,
     pub progress: AcquisitionProgress,
     pub completion: Option<EvaluationCompletion>,
+    pub accounting: Option<SourceAccounting>,
 }
 
 impl CanonicalProcessingResult {
@@ -142,13 +143,30 @@ fn finish_batch(
         Ok(evaluation) => evaluation,
         Err(_) => return failed(source, batch.progress, "canonical_evaluation_failed"),
     };
-    // Acquisition currently provides no attested agent/model/provider metadata.
-    // In particular, source-instance origin is NOT session identity origin.
+    // Metadata-only native sessions may emit no observations. Projection accepts
+    // evaluated keys only; origin/visible-ID collision validation stays there.
+    let sessions = batch
+        .accounting
+        .sessions
+        .iter()
+        .filter(|attestation| {
+            evaluation
+                .sessions()
+                .iter()
+                .any(|session| session.session_id() == Some(&attestation.session_id))
+        })
+        .map(|session| Event3SessionMetadata {
+            session_id: &session.session_id,
+            agent: session.metadata.agent.known(),
+            model: session.metadata.model.known(),
+            provider: session.metadata.provider.known(),
+        })
+        .collect::<Vec<_>>();
     match project_event3(
         &evaluation,
         &Event3CompatibilityContext {
             source_path_hash: &path_hash(&source.path),
-            sessions: &[],
+            sessions: &sessions,
         },
     ) {
         Ok(projected) => CanonicalProcessingResult {
@@ -156,6 +174,7 @@ fn finish_batch(
             status: SourceProcessingStatus::from_canonical(Ok(projected.completion)),
             progress: batch.progress,
             completion: Some(projected.completion),
+            accounting: Some(batch.accounting),
         },
         Err(_) => failed(source, batch.progress, "canonical_projection_failed"),
     }
@@ -179,6 +198,7 @@ fn failed(
         status: SourceProcessingStatus::Failed,
         progress,
         completion: None,
+        accounting: None,
     }
 }
 
