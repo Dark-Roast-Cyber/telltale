@@ -518,41 +518,76 @@ fn activity_records(
         }
     }
 
+    let deviation =
+        if let Some(current_baseline) = build_baseline_summaries(parsed).into_iter().next() {
+            let previous_baseline = baseline_snapshots
+                .snapshots
+                .get(&baseline_snapshot_id(&current_baseline.key))
+                .filter(|snapshot| snapshot.key == current_baseline.key);
+            assess_baseline_deviation(
+                previous_baseline,
+                &current_baseline,
+                baseline_deviation_config,
+            )?
+        } else {
+            None
+        };
+    activity_from_counts(
+        ActivityEventInput {
+            client: source.client,
+            agent: first_field(parsed, |record| record.agent.clone())
+                .or_else(|| Some(source.client.as_str().to_string())),
+            model: first_field(parsed, |record| record.model.clone()),
+            provider: first_field(parsed, |record| record.provider.clone()),
+            session_id: parsed
+                .first()
+                .map(|record| record.session_id.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            source_path_hash: path_hash(&source.path),
+            tool_name: tool_name(parsed),
+            tags: Vec::new(),
+            evidence: Vec::new(),
+            risk_contributions: Vec::new(),
+            event_time: canonical_session_event_time(parsed),
+        },
+        record_counts,
+        tool_names,
+        deviation,
+    )
+    .map(Some)
+}
+
+/// Shared frozen activity projection; input adapters own counts and identity.
+pub(crate) fn activity_from_counts(
+    mut input: ActivityEventInput,
+    record_counts: BTreeMap<String, u32>,
+    tool_names: BTreeSet<String>,
+    deviation: Option<crate::baseline::BaselineDeviation>,
+) -> Result<Event, telltale_schema::scoring::RiskAccountingError> {
     let mut risk_contributions = Vec::new();
     let mut evidence = Vec::new();
     let mut tags = vec!["activity".to_string(), "session".to_string()];
-
-    if let Some(current_baseline) = build_baseline_summaries(parsed).into_iter().next() {
-        let previous_baseline = baseline_snapshots
-            .snapshots
-            .get(&baseline_snapshot_id(&current_baseline.key))
-            .filter(|snapshot| snapshot.key == current_baseline.key);
-        if let Some(deviation) = assess_baseline_deviation(
-            previous_baseline,
-            &current_baseline,
-            baseline_deviation_config,
-        )? {
-            risk_contributions.push(RiskContribution::new(
-                "baseline.deviation",
-                RiskContributionType::BaselineDeviation,
-                deviation.risk_modifier,
-                "baseline deviation observed",
-            )?);
-            tags.push("baseline_deviation".to_string());
-            let deviation_text = serde_json::json!({
-                "risk_modifier": deviation.risk_modifier,
-                "new_tool_names": deviation.new_tool_names,
-                "new_path_classes": deviation.new_path_classes,
-                "new_network_hosts": deviation.new_network_hosts,
-            })
-            .to_string();
-            evidence.push(Evidence {
-                field: "baseline_deviation".to_string(),
-                redacted_value: deviation_text.clone(),
-                hash: Some(evidence_hash(&deviation_text)),
-                rule_id: None,
-            });
-        }
+    if let Some(deviation) = deviation {
+        risk_contributions.push(RiskContribution::new(
+            "baseline.deviation",
+            RiskContributionType::BaselineDeviation,
+            deviation.risk_modifier,
+            "baseline deviation observed",
+        )?);
+        tags.push("baseline_deviation".to_string());
+        let deviation_text = serde_json::json!({
+            "risk_modifier": deviation.risk_modifier,
+            "new_tool_names": deviation.new_tool_names,
+            "new_path_classes": deviation.new_path_classes,
+            "new_network_hosts": deviation.new_network_hosts,
+        })
+        .to_string();
+        evidence.push(Evidence {
+            field: "baseline_deviation".to_string(),
+            redacted_value: deviation_text.clone(),
+            hash: Some(evidence_hash(&deviation_text)),
+            rule_id: None,
+        });
     }
 
     let counts_text = serde_json::to_string(&record_counts)
@@ -587,23 +622,10 @@ fn activity_records(
     tags.sort();
     tags.dedup();
 
-    Ok(Some(activity_event(ActivityEventInput {
-        client: source.client,
-        agent: first_field(parsed, |record| record.agent.clone())
-            .or_else(|| Some(source.client.as_str().to_string())),
-        model: first_field(parsed, |record| record.model.clone()),
-        provider: first_field(parsed, |record| record.provider.clone()),
-        session_id: parsed
-            .first()
-            .map(|record| record.session_id.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
-        source_path_hash: path_hash(&source.path),
-        tool_name: tool_name(parsed),
-        tags,
-        evidence,
-        risk_contributions,
-        event_time: canonical_session_event_time(parsed),
-    })?))
+    input.tags = tags;
+    input.evidence = evidence;
+    input.risk_contributions = risk_contributions;
+    activity_event(input)
 }
 
 fn canonical_session_event_time(parsed: &[NormalizedRecord]) -> Option<String> {

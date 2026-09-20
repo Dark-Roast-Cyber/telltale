@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -8,6 +8,9 @@ pub use telltale_schema::activity_facts::PathClass;
 use telltale_schema::activity_facts::{network_hosts, path_classes};
 use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::scoring::RiskAccountingError;
+
+#[cfg(feature = "source-io")]
+pub(crate) mod accounting;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct BaselineDeviationConfig {
@@ -106,7 +109,11 @@ pub fn assess_baseline_deviation(
         return Ok(None);
     }
 
-    let previous_network_hosts = baseline_host_identity_counts(previous);
+    let previous_network_hosts = previous
+        .network_host_counts
+        .keys()
+        .map(|host| baseline_host_identity(host))
+        .collect::<BTreeSet<_>>();
     let new_tool_names = current
         .tool_call_counts
         .keys()
@@ -121,7 +128,7 @@ pub fn assess_baseline_deviation(
         .network_host_counts
         .keys()
         .map(|host| baseline_host_identity(host))
-        .filter(|host| !previous_network_hosts.contains_key(host))
+        .filter(|host| !previous_network_hosts.contains(host))
         .count();
 
     let risk_modifier = u64::try_from(new_tool_names)
@@ -156,10 +163,34 @@ pub fn assess_baseline_deviation(
 
 impl BaselineSummary {
     pub fn merge_from(&mut self, other: BaselineSummary) {
-        self.observations.merge_from(other.observations);
-        merge_counts(&mut self.tool_call_counts, other.tool_call_counts);
-        merge_counts(&mut self.path_class_counts, other.path_class_counts);
-        merge_counts(&mut self.network_host_counts, other.network_host_counts);
+        self.merge_with(other, |left, right| Ok(left + right))
+            .expect("legacy addition does not return an error");
+    }
+
+    /// Use on a disposable staged value: errors can leave a partial merge, which
+    /// must never be installed. The legacy input bridge retains its arithmetic.
+    pub fn checked_merge_from(
+        &mut self,
+        other: BaselineSummary,
+    ) -> Result<(), RiskAccountingError> {
+        self.merge_with(other, |left, right| {
+            left.checked_add(right).ok_or(RiskAccountingError::Overflow)
+        })
+    }
+
+    fn merge_with(
+        &mut self,
+        other: BaselineSummary,
+        add: impl Fn(u64, u64) -> Result<u64, RiskAccountingError> + Copy,
+    ) -> Result<(), RiskAccountingError> {
+        self.observations.merge_from(other.observations, add)?;
+        merge_counts(&mut self.tool_call_counts, other.tool_call_counts, add)?;
+        merge_counts(&mut self.path_class_counts, other.path_class_counts, add)?;
+        merge_counts(
+            &mut self.network_host_counts,
+            other.network_host_counts,
+            add,
+        )
     }
 
     fn observe(&mut self, record: &NormalizedRecord) {
@@ -201,14 +232,23 @@ impl BaselineSummary {
 }
 
 impl BaselineObservationTotals {
-    fn merge_from(&mut self, other: BaselineObservationTotals) {
-        self.records += other.records;
-        self.user_messages += other.user_messages;
-        self.assistant_messages += other.assistant_messages;
-        self.tool_calls += other.tool_calls;
-        self.tool_results += other.tool_results;
-        self.session_meta += other.session_meta;
-        self.other += other.other;
+    fn merge_from(
+        &mut self,
+        other: BaselineObservationTotals,
+        add: impl Fn(u64, u64) -> Result<u64, RiskAccountingError>,
+    ) -> Result<(), RiskAccountingError> {
+        for (target, count) in [
+            (&mut self.records, other.records),
+            (&mut self.user_messages, other.user_messages),
+            (&mut self.assistant_messages, other.assistant_messages),
+            (&mut self.tool_calls, other.tool_calls),
+            (&mut self.tool_results, other.tool_results),
+            (&mut self.session_meta, other.session_meta),
+            (&mut self.other, other.other),
+        ] {
+            *target = add(*target, count)?;
+        }
+        Ok(())
     }
 
     fn observe(&mut self, kind: RecordKind) {
@@ -225,10 +265,16 @@ impl BaselineObservationTotals {
     }
 }
 
-fn merge_counts<K: Ord>(target: &mut BTreeMap<K, u64>, source: BTreeMap<K, u64>) {
+fn merge_counts<K: Ord>(
+    target: &mut BTreeMap<K, u64>,
+    source: BTreeMap<K, u64>,
+    add: impl Fn(u64, u64) -> Result<u64, RiskAccountingError>,
+) -> Result<(), RiskAccountingError> {
     for (key, count) in source {
-        *target.entry(key).or_insert(0) += count;
+        let value = target.entry(key).or_insert(0);
+        *value = add(*value, count)?;
     }
+    Ok(())
 }
 
 pub fn baseline_host_identity(host: &str) -> String {
@@ -248,17 +294,6 @@ fn is_canonical_host_hash(host: &str) -> bool {
         && hex
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn baseline_host_identity_counts(summary: &BaselineSummary) -> BTreeMap<String, u64> {
-    summary
-        .network_host_counts
-        .iter()
-        .map(|(host, count)| (baseline_host_identity(host), *count))
-        .fold(BTreeMap::new(), |mut counts, (host, count)| {
-            *counts.entry(host).or_insert(0) += count;
-            counts
-        })
 }
 
 impl From<&NormalizedRecord> for BaselineKey {

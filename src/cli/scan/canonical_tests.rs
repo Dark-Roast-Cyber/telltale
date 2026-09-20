@@ -11,8 +11,7 @@ fn ownership_failure_returns_neither_accounting_nor_eligible_progress() {
     let result = process_canonical_source(
         &source,
         &ScanState::default(),
-        false,
-        false,
+        CanonicalProcessingOptions::default(),
         clock(),
         &plan("user_context"),
         None,
@@ -49,8 +48,7 @@ fn contribution_budget_failure_returns_no_accounting_or_eligible_progress() {
     let result = process_canonical_source(
         &source,
         &ScanState::default(),
-        false,
-        false,
+        CanonicalProcessingOptions::default(),
         clock(),
         &plan("user_context"),
         None,
@@ -142,6 +140,255 @@ use telltale_rules::load_default_rule_set;
 use telltale_schema::clients::{ClientId, SourceKind};
 use tempfile::tempdir;
 
+#[test]
+fn complete_replacement_is_staged_and_empty_clears_only_its_source() {
+    let directory = tempdir().unwrap();
+    let mut source = source(directory.path().join("synthetic.jsonl"));
+    source.client = ClientId::Codex;
+    source.source_id = "codex.sessions".into();
+    let other = Source {
+        path: directory.path().join("other.jsonl"),
+        ..source.clone()
+    };
+    std::fs::write(&source.path, r#"{"type":"user","session_id":"eligible","model":"model","provider":"provider","content":"hello"}"#).unwrap();
+    let mut state = ScanState::default();
+    let initial = process_canonical_source(
+        &source,
+        &state,
+        Default::default(),
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    let BaselineReplacement::Replace(summaries) = initial.baseline_replacement else {
+        panic!("complete file replacement")
+    };
+    assert_eq!(summaries.len(), 1);
+    state.record_baseline_source_contribution(&source, "old".into(), summaries.clone());
+    state.record_baseline_source_contribution(&other, "other".into(), summaries);
+    state.rebuild_baseline_snapshots_from_source_contributions();
+    let before = serde_json::to_string(&state).unwrap();
+    let ineligible = concat!(
+        "{\"type\":\"session_meta\",\"payload\":{}}\n",
+        "{\"type\":\"user\",\"session_id\":\"s\",\"model\":\"a\",\"content\":\"hello\"}\n",
+        "{\"type\":\"user\",\"session_id\":\"s\",\"model\":\"b\",\"content\":\"hello\"}\n"
+    );
+    std::fs::write(&source.path, format!("{{\"type\":\"user\",\"session_id\":\"new\",\"model\":\"new-model\",\"content\":\"hello\"}}\n{ineligible}")).unwrap();
+    let mixed = process_canonical_source(
+        &source,
+        &state,
+        Default::default(),
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(mixed.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(serde_json::to_string(&state).unwrap(), before);
+    let BaselineReplacement::Replace(eligible) = mixed.baseline_replacement else {
+        panic!("mixed complete replacement")
+    };
+    assert_eq!(eligible.len(), 1);
+    assert_eq!(eligible[0].key.model.as_deref(), Some("new-model"));
+    state.record_baseline_source_contribution(&source, "mixed".into(), eligible);
+    state.rebuild_baseline_snapshots_from_source_contributions();
+    assert_eq!(state.baseline_snapshots.snapshots.len(), 2);
+    assert!(
+        state
+            .baseline_snapshots
+            .snapshots
+            .values()
+            .all(|s| s.observations.records == 1)
+    );
+    let before = serde_json::to_string(&state).unwrap();
+    // A complete reread now has only unscoped facts and an ambiguous session.
+    std::fs::write(&source.path, ineligible).unwrap();
+    let current = process_canonical_source(
+        &source,
+        &state,
+        Default::default(),
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(current.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(serde_json::to_string(&state).unwrap(), before);
+    let BaselineReplacement::Replace(empty) = current.baseline_replacement else {
+        panic!("explicit empty replacement")
+    };
+    assert!(empty.is_empty());
+    // Test-only simulation at the authoritative state boundary, not evaluation.
+    state.record_baseline_source_contribution(&source, "new".into(), empty);
+    state.rebuild_baseline_snapshots_from_source_contributions();
+    assert_eq!(
+        state
+            .baseline_snapshots
+            .snapshots
+            .values()
+            .next()
+            .unwrap()
+            .observations
+            .records,
+        1
+    );
+    assert_eq!(state.baseline_source_contributions.len(), 2);
+}
+
+#[test]
+fn partial_and_scanner_modes_cannot_stage_baseline_mutation() {
+    let directory = tempdir().unwrap();
+    let file = source(directory.path().join("synthetic.jsonl"));
+    std::fs::write(
+        &file.path,
+        r#"{"type":"user","session_id":"s","content":"hello"}"#,
+    )
+    .unwrap();
+    let sqlite = database(&directory.path().join("synthetic.db"));
+    let mut state = ScanState::default();
+    let initial = process_canonical_source(
+        &file,
+        &state,
+        Default::default(),
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    let BaselineReplacement::Replace(summaries) = initial.baseline_replacement else {
+        panic!("replacement")
+    };
+    state.record_baseline_source_contribution(&sqlite, "prior".into(), summaries);
+    state.rebuild_baseline_snapshots_from_source_contributions();
+    let before = serde_json::to_string(&state).unwrap();
+    for (backfill, dry_run) in [(false, false), (true, false), (false, true), (true, true)] {
+        for source in [&file, &sqlite] {
+            let result = process_canonical_source(
+                source,
+                &state,
+                CanonicalProcessingOptions {
+                    backfill,
+                    dry_run,
+                    ..Default::default()
+                },
+                clock(),
+                &plan("url"),
+                None,
+            );
+            assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+            assert!(
+                result
+                    .events
+                    .iter()
+                    .any(|event| event.event_type == "activity")
+            );
+            if backfill || dry_run || source.client == ClientId::OpenCode {
+                assert_eq!(
+                    result.baseline_replacement,
+                    BaselineReplacement::NoReplacement
+                );
+            }
+            if source.client == ClientId::OpenCode && !backfill && !dry_run {
+                assert_eq!(result.sqlite_progress_candidate(false, false), Some(1000));
+            }
+            assert_eq!(serde_json::to_string(&state).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn activity_failure_discards_detection_output_replacement_and_progress_eligibility() {
+    use telltale_sources::acquisition::{AccountingCoverage, SessionAccounting};
+    let source = source("synthetic".into());
+    let mut accounting = SourceAccounting {
+        coverage: AccountingCoverage::CompleteSource,
+        ..Default::default()
+    };
+    for id in ["s", "bad"] {
+        accounting.sessions.push(SessionAccounting {
+            session_id: CorrelationId::source_reported(id).unwrap(),
+            metadata: Default::default(),
+            counts: Default::default(),
+        });
+    }
+    accounting.sessions[1].counts.record_counts.user_message = u64::from(u32::MAX) + 1;
+    let result = finish_batch(
+        &source,
+        &CorrelationId::source_reported("instance").unwrap(),
+        AcquisitionBatch {
+            observations: vec![message("one", Some("s"))],
+            progress: AcquisitionProgress::OpenCodeSqlite {
+                part_max_time_updated: Some(42),
+            },
+            accounting,
+        },
+        &plan("user_context"),
+        None,
+        &BaselineSnapshotStore::default(),
+        BaselineDeviationConfig::default(),
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Failed);
+    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events[0].event_type, "scanner_error");
+    assert_eq!(
+        result.baseline_replacement,
+        BaselineReplacement::NoReplacement
+    );
+    assert_eq!(result.sqlite_progress_candidate(false, false), None);
+    assert!(result.accounting.is_none());
+}
+
+#[test]
+fn canonical_candidate_round_trips_existing_state_without_plaintext_hosts() {
+    let directory = tempdir().unwrap();
+    let source = source(directory.path().join("synthetic.jsonl"));
+    std::fs::write(&source.path, r#"{"type":"assistant","session_id":"s","model":"m","provider":"p","content":[{"type":"tool_use","id":"call","name":"shell","input":{"command":"curl https://recognizable-host.synthetic.example/path"}}]}"#).unwrap();
+    let native = acquire_source(&source, AcquisitionOptions::new(clock())).unwrap();
+    assert!(
+        native.accounting.sessions[0]
+            .counts
+            .contributions
+            .network_hosts
+            .contains_key("recognizable-host.synthetic.example")
+    );
+    let mut state = ScanState::default();
+    let result = process_canonical_source(
+        &source,
+        &state,
+        Default::default(),
+        clock(),
+        &plan("user_context"),
+        None,
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    let BaselineReplacement::Replace(summaries) = result.baseline_replacement else {
+        panic!("complete replacement")
+    };
+    assert_eq!(
+        summaries[0].network_host_counts.keys().next().unwrap(),
+        &telltale_detect::baseline::baseline_host_identity("recognizable-host.synthetic.example")
+    );
+    assert!(!format!("{summaries:?}").contains("recognizable-host"));
+    state.record_baseline_source_contribution(&source, "synthetic-fingerprint".into(), summaries);
+    state.rebuild_baseline_snapshots_from_source_contributions();
+    assert!(!format!("{state:?}").contains("recognizable-host"));
+    assert!(
+        !serde_json::to_string(&state)
+            .unwrap()
+            .contains("recognizable-host")
+    );
+    let path = directory.path().join("state.json");
+    state.save(&path).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("recognizable-host")
+    );
+    let loaded = ScanState::load(&path).unwrap();
+    assert_eq!(loaded.baseline_snapshots, state.baseline_snapshots);
+    assert_eq!(
+        loaded.baseline_source_contributions,
+        state.baseline_source_contributions
+    );
+}
+
 fn clock() -> ObservedAt {
     ObservedAt::new("2026-09-19T00:00:00Z").unwrap()
 }
@@ -162,7 +409,14 @@ fn ordinary_zero_findings_and_missing_source_are_explicit() {
     let rules = load_default_rule_set().unwrap();
     let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
     let state = ScanState::default();
-    let failed = process_canonical_source(&source, &state, false, false, clock(), &plan, None);
+    let failed = process_canonical_source(
+        &source,
+        &state,
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan,
+        None,
+    );
     assert_eq!(failed.status, SourceProcessingStatus::Failed);
     assert_eq!(failed.sqlite_progress_candidate(false, false), None);
     assert!(
@@ -171,9 +425,17 @@ fn ordinary_zero_findings_and_missing_source_are_explicit() {
             .contains("PRIVATE")
     );
     std::fs::write(&source.path, "{\"type\":\"user\",\"sessionId\":\"synthetic\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n").unwrap();
-    let result = process_canonical_source(&source, &state, false, false, clock(), &plan, None);
+    let result = process_canonical_source(
+        &source,
+        &state,
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan,
+        None,
+    );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
-    assert!(result.events.is_empty());
+    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events[0].event_type, "activity");
     assert!(result.completion.is_some());
     assert_eq!(result.progress, AcquisitionProgress::None);
     assert_eq!(result.sqlite_progress_candidate(false, false), None);
@@ -202,15 +464,14 @@ fn projection_borrows_only_known_metadata_and_retains_ambiguity_for_b3b() {
     let result = process_canonical_source(
         &source,
         &state,
-        false,
-        false,
+        CanonicalProcessingOptions::default(),
         clock(),
         &plan("user_context"),
         None,
     );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
     assert_eq!(result.completion, Some(EvaluationCompletion::Complete));
-    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events.len(), 2);
     let event = &result.events[0];
     assert_eq!(event.agent.as_deref(), Some("native-agent"));
     assert_eq!(event.provider.as_deref(), Some("native-provider"));
@@ -235,14 +496,14 @@ fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progr
     let result = process_canonical_source(
         &source,
         &ScanState::default(),
-        false,
-        false,
+        CanonicalProcessingOptions::default(),
         clock(),
         &plan("user_context"),
         None,
     );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
-    assert!(result.events.is_empty());
+    assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events[0].event_type, "activity");
     assert_eq!(
         result.accounting.unwrap().sessions[0]
             .metadata
@@ -264,8 +525,14 @@ fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progr
     )
     .unwrap();
     let state = ScanState::default();
-    let result =
-        process_canonical_source(&source, &state, false, false, clock(), &plan("url"), None);
+    let result = process_canonical_source(
+        &source,
+        &state,
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan("url"),
+        None,
+    );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
     assert_eq!(
         result.completion,
@@ -382,6 +649,8 @@ fn evaluation_and_projection_failures_discard_all_findings_but_retain_ineligible
             },
             &plan,
             None,
+            &BaselineSnapshotStore::default(),
+            BaselineDeviationConfig::default(),
         );
         assert_eq!(result.status, SourceProcessingStatus::Failed);
         assert_eq!(result.progress, progress);
@@ -405,6 +674,8 @@ fn evaluation_and_projection_failures_discard_all_findings_but_retain_ineligible
         },
         &plan,
         None,
+        &BaselineSnapshotStore::default(),
+        BaselineDeviationConfig::default(),
     );
     assert_eq!(result.status, SourceProcessingStatus::Failed);
 }
@@ -424,6 +695,8 @@ fn complete_projection_precedes_one_existing_allowlist_application() {
         },
         &plan("user_context"),
         None,
+        &BaselineSnapshotStore::default(),
+        BaselineDeviationConfig::default(),
     );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
     assert_eq!(result.completion, Some(EvaluationCompletion::Complete));
@@ -472,9 +745,12 @@ fn metadata_origin_must_match_not_just_visible_session_id() {
         },
         &plan("user_context"),
         None,
+        &BaselineSnapshotStore::default(),
+        BaselineDeviationConfig::default(),
     );
-    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(result.status, SourceProcessingStatus::Failed);
     assert_eq!(result.events.len(), 1);
+    assert_eq!(result.events[0].event_type, "scanner_error");
     assert_eq!(result.events[0].agent, None);
 }
 
@@ -498,7 +774,14 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
     let source = database(&dir.path().join("synthetic.db"));
     let mut state = ScanState::default();
     let plan = plan("url"); // URL visibility is explicitly unavailable.
-    let result = process_canonical_source(&source, &state, false, false, clock(), &plan, None);
+    let result = process_canonical_source(
+        &source,
+        &state,
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan,
+        None,
+    );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
     assert_eq!(
         result.completion,
@@ -529,7 +812,14 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
         assert_eq!(result.sqlite_progress_candidate(dry_run, backfill), None);
     }
     state.observe_sqlite_ingestion_cursor(&source, "part", 700_001, 1);
-    let live = process_canonical_source(&source, &state, false, false, clock(), &plan, None);
+    let live = process_canonical_source(
+        &source,
+        &state,
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan,
+        None,
+    );
     assert_eq!(
         live.accounting.as_ref().unwrap().coverage,
         telltale_sources::acquisition::AccountingCoverage::PartialSource
@@ -541,8 +831,18 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
         }
     );
     for (dry_run, backfill) in [(true, false), (false, true)] {
-        let full =
-            process_canonical_source(&source, &state, backfill, dry_run, clock(), &plan, None);
+        let full = process_canonical_source(
+            &source,
+            &state,
+            CanonicalProcessingOptions {
+                backfill,
+                dry_run,
+                ..Default::default()
+            },
+            clock(),
+            &plan,
+            None,
+        );
         assert_eq!(full.progress, result.progress);
         assert_eq!(
             full.accounting.as_ref().unwrap().coverage,
@@ -628,8 +928,7 @@ fn all_eight_identities_acquire_evaluate_project_without_legacy_records() {
         let result = process_canonical_source(
             source,
             &state,
-            false,
-            false,
+            CanonicalProcessingOptions::default(),
             clock(),
             &plan,
             Some((&process_rules, &process_config)),
@@ -663,7 +962,14 @@ fn all_eight_identities_acquire_evaluate_project_without_legacy_records() {
             kind,
             path: sources[1].path.clone(),
         };
-        let result = process_canonical_source(&invalid, &state, false, false, clock(), &plan, None);
+        let result = process_canonical_source(
+            &invalid,
+            &state,
+            CanonicalProcessingOptions::default(),
+            clock(),
+            &plan,
+            None,
+        );
         assert_eq!(result.status, SourceProcessingStatus::Failed);
         assert_eq!(result.progress, AcquisitionProgress::None);
     }
@@ -677,8 +983,7 @@ fn acquisition_error_text_is_not_exposed() {
     let result = process_canonical_source(
         &source,
         &ScanState::default(),
-        false,
-        false,
+        CanonicalProcessingOptions::default(),
         clock(),
         &plan("user_context"),
         None,

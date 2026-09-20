@@ -1,10 +1,12 @@
 //! Inactive Issue #51 composition: prove native acquisition -> evaluation ->
-//! Event3 before coordinated scan/watch/embedding activation. Validation and
-//! activity/baseline integration remains B3B work. After validated
+//! Event3 before coordinated scan/watch/embedding activation. Activity/baseline
+//! staging is inactive. After validated
 //! activation, converge here and delete legacy composition/temporary carriers.
 #![allow(dead_code)] // Private migration seam; never selected by run_scan.
 
 use sha2::{Digest, Sha256};
+use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
+use telltale_detect::v2::activity::{BaselineReplacement, evaluate_activity};
 use telltale_detect::v2::{
     CanonicalSourceInput, EvaluationCompletion, Event3CompatibilityContext, Event3SessionMetadata,
     ProcessingError, RuleV1CompatibilityPlan, evaluate_source, project_event3,
@@ -29,6 +31,14 @@ pub(super) struct CanonicalProcessingResult {
     pub progress: AcquisitionProgress,
     pub completion: Option<EvaluationCompletion>,
     pub accounting: Option<SourceAccounting>,
+    pub baseline_replacement: BaselineReplacement,
+}
+
+#[derive(Default)]
+pub(super) struct CanonicalProcessingOptions {
+    pub backfill: bool,
+    pub dry_run: bool,
+    pub baseline_deviation: BaselineDeviationConfig,
 }
 
 impl CanonicalProcessingResult {
@@ -82,8 +92,7 @@ fn verified_source(source: &Source) -> Result<(Source, CorrelationId), Processin
 pub(super) fn process_canonical_source(
     source: &Source,
     state: &ScanState,
-    backfill: bool,
-    dry_run: bool,
+    processing: CanonicalProcessingOptions,
     observed_at: ObservedAt,
     rules: &RuleV1CompatibilityPlan,
     process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
@@ -101,7 +110,8 @@ pub(super) fn process_canonical_source(
     let options = AcquisitionOptions::new(observed_at);
     let acquisition = if is_opencode_sqlite_source(source) {
         // Reuse scanner-owned cursor/overlap policy, including dry-run/backfill.
-        let bounds = parse_options_for_scan_source(source, state, backfill, dry_run);
+        let bounds =
+            parse_options_for_scan_source(source, state, processing.backfill, processing.dry_run);
         acquire_opencode_sqlite(
             &resolved,
             options,
@@ -114,7 +124,23 @@ pub(super) fn process_canonical_source(
         acquire_source(&resolved, options)
     };
     match acquisition {
-        Ok(batch) => finish_batch(source, &instance, batch, rules, process),
+        Ok(batch) => {
+            let mut result = finish_batch(
+                source,
+                &instance,
+                batch,
+                rules,
+                process,
+                &state.baseline_snapshots,
+                processing.baseline_deviation,
+            );
+            // Scanner mode owns staging eligibility; the semantic operation is
+            // pure and does not know about dry-run/backfill or installation.
+            if processing.dry_run || processing.backfill {
+                result.baseline_replacement = BaselineReplacement::NoReplacement;
+            }
+            result
+        }
         Err(_) => failed(
             source,
             AcquisitionProgress::None,
@@ -129,6 +155,8 @@ fn finish_batch(
     batch: AcquisitionBatch,
     rules: &RuleV1CompatibilityPlan,
     process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
+    prior: &BaselineSnapshotStore,
+    baseline_deviation: BaselineDeviationConfig,
 ) -> CanonicalProcessingResult {
     let evaluation = match evaluate_source(
         CanonicalSourceInput {
@@ -169,13 +197,27 @@ fn finish_batch(
             sessions: &sessions,
         },
     ) {
-        Ok(projected) => CanonicalProcessingResult {
-            events: projected.events,
-            status: SourceProcessingStatus::from_canonical(Ok(projected.completion)),
-            progress: batch.progress,
-            completion: Some(projected.completion),
-            accounting: Some(batch.accounting),
-        },
+        Ok(mut projected) => {
+            let activity = match evaluate_activity(
+                &evaluation,
+                &batch.accounting,
+                &path_hash(&source.path),
+                prior,
+                baseline_deviation,
+            ) {
+                Ok(activity) => activity,
+                Err(_) => return failed(source, batch.progress, "canonical_activity_failed"),
+            };
+            projected.events.extend(activity.events);
+            CanonicalProcessingResult {
+                events: projected.events,
+                status: SourceProcessingStatus::from_canonical(Ok(projected.completion)),
+                progress: batch.progress,
+                completion: Some(projected.completion),
+                accounting: Some(batch.accounting),
+                baseline_replacement: activity.replacement,
+            }
+        }
         Err(_) => failed(source, batch.progress, "canonical_projection_failed"),
     }
 }
@@ -199,6 +241,7 @@ fn failed(
         progress,
         completion: None,
         accounting: None,
+        baseline_replacement: BaselineReplacement::NoReplacement,
     }
 }
 

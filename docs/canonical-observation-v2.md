@@ -133,19 +133,83 @@ evaluated session keys into Event3 projection and retains the single accounting
 sidecar on successful Complete or VisibilityLimited processing. Cursor policy
 and projection's fail-closed origin/collision validation are unchanged.
 
-B3B still owns activity/baseline integration and an intentional pre-1.0 state
-compatibility decision. Client is available from the source; agent/model/provider
+B3B's inactive activity/baseline integration and pre-1.0 compatibility decision
+are described below. Client is available from the source; agent/model/provider
 can each be missing or ambiguous. Current baseline keys cannot express ambiguity,
 and legacy sticky/default metadata and fallback session grouping differ. Old
 snapshots therefore cannot be assumed reusable. Event3's existing kind histogram
-must not be repurposed; B3B must decide grouping, omission of zero-count keys,
-and checked `u64` to `u32` conversion, plus canonical tool/path/network
-contribution consumption and prior-state timing.
-No baseline state or activity event is produced here. Validation covers all eight
-native identities, conflicts, bounds/privacy, counts, and projection. Activation
-requires B3B, embedding convergence, and coordinated runtime cutover; then remove
+is not repurposed; B3B preserves its vocabulary with sparse checked conversion,
+native contribution consumption, and prior-snapshot timing.
+Acquisition itself produces no activity events or baseline state. Validation covers
+all eight native identities, conflicts, bounds/privacy, counts, and projection.
+Activation requires reviewed B3B, embedding convergence, scanner transaction
+integration, and coordinated runtime cutover; then remove
 legacy metadata/count derivation and temporary legacy activity carriers. Scan,
 watch, and embedding remain legacy; Event3 is frozen, Event4 inactive, Step 5 incomplete.
+
+### Inactive canonical activity and baseline staging
+
+Current production baseline state aggregates the latest retained contribution for
+each source instance; it is not a lifetime counter or a defined rolling window.
+Legacy scanning replaces a source contribution and evaluates activity against a
+snapshot taken before that update. OpenCode reads all messages but only a capped,
+cursor-filtered selection of parts, with ten minutes of overlap. Consequently,
+replacement can discard older parts outside the selection; addition would instead
+count overlap again. An unchanged-source fingerprint does not solve changed,
+partially overlapping batches.
+
+B3A.1, committed at
+`2c7bc2878ff28224b154d0151260a8430814c1f0`, adds explicit source-instance
+coverage. Exhaustive file reads are `CompleteSource`; current bounded OpenCode
+reads are `PartialSource`. This resolves the prerequisite for file support, but
+does not make an OpenCode partial batch a replacement or an additive population.
+The prior overlap analysis remains authoritative: a previous A+B read followed
+by a B+C read would either lose A under replacement or train B twice under
+addition. Partial coverage is therefore disallowed for baseline storage, not a
+blocker to producing truthful file activity or to supporting a successful partial
+operation.
+
+The unchanged frozen Event3 constructor permits truthful batch session activity for
+`PartialSource`: Known metadata is retained and Missing or Ambiguous fields are
+omitted. A successful partial operation can progress, but it produces no baseline
+storage or deviation and returns `NoReplacement`.
+
+`CompleteSource` returns an explicit `BaselineReplacement::Replace(Vec<BaselineSummary>)`,
+including `Replace(empty)` to clear stale sessions excluded by the current
+eligibility policy. An Ambiguous agent, model, or provider excludes that session
+from baseline storage and deviation, but is not a processing failure. Missing
+fields use the existing optional baseline keys; missing model/provider suppresses
+deviation while missing agent does not. Unscoped accounting never creates a
+session, activity, or baseline; a complete unscoped-only source therefore returns
+`Replace(empty)`.
+
+The inactive evaluator consumes authoritative `SourceAccounting` counts and
+contributions once: it does not recount COv2, reread the source, or reconstruct
+legacy records. Sparse six-kind histograms use checked `u64` to `u32` conversion.
+Normalized plaintext hosts are hashed with the existing `sha256:` host identity
+before a candidate is retained, and aggregation is checked. Evaluation uses the
+immutable canonical evaluation, accounting, source path hash, prior snapshots,
+and configuration; the prior snapshot includes the old same-source contribution
+and the current sample never trains its own comparison snapshot.
+
+The inactive scanner result retains the accounting sidecar transiently alongside
+the baseline replacement and emits one terminal Event3 collection. Source errors
+discard events and replacements, and `Failed` gates progress. Scanner-owned
+`CanonicalProcessingOptions` owns `dry_run` and `backfill`: the pure evaluator may
+build a candidate, but composition suppresses staging to `NoReplacement` for
+both modes. No canonical state mutation, install, or apply occurs in production. A
+future state owner applies a replacement using the authoritative `Source` key,
+not the canonical correlation hash.
+
+No persisted schema or reset is active now. Coordinated activation must reset both
+legacy source contributions and derived snapshots once, durably: reserve the
+baseline schema increment from current 2 to 3, clear both and write a new stamp
+transactionally in an explicit migration, and never silently reset on load or at
+process start. The strict current state envelope 1.0 remains unchanged for now.
+Future aggregate application must be checked and source-atomic before install;
+the existing legacy apply is unchecked and is not activated by B3B. Production
+scan/watch/embedding remain legacy; Event3 is frozen, Event4 inactive, and Step 5
+incomplete. Independent review and activation remain separate gates.
 
 ## Conceptual contract
 
