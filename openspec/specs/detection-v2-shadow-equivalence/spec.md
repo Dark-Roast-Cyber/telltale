@@ -159,9 +159,9 @@ reviewed, and reject wildcard, catch-all, or broad waiver entries.
 
 ### Requirement: Production boundary
 
-The harness MUST leave NormalizedRecordV1 production evaluation, Rule v1 regex,
-scoring, parser ownership, selector/capability/provenance semantics, Event 3.0,
-the frozen baseline report, and scanner/watch behavior unchanged.
+The harness MUST remain opt-in and independent of the canonical production
+runtime. It MUST leave parser ownership, selector/capability/provenance
+semantics, Event3, and the frozen baseline report unchanged.
 
 #### Scenario: Shadow remains opt-in and non-production
 
@@ -171,7 +171,7 @@ the frozen baseline report, and scanner/watch behavior unchanged.
 ### Requirement: Canonical compatibility activation evidence
 
 The fixture-only shadow comparator SHALL remain an activation oracle, not a
-production dependency. Inactive orchestration and Event3 compatibility tests
+production dependency. Canonical orchestration and Event3 compatibility tests
 SHALL preserve the reviewed difference ledger and explicitly explain new
 compatibility differences without fabricating URL or stronger process facts.
 
@@ -181,7 +181,7 @@ compatibility differences without fabricating URL or stronger process facts.
   unchanged unless a behavioral difference is explicitly reviewed
 
 #### Scenario: Independent compatibility assertions
-- **WHEN** inactive canonical Event3 compatibility is tested on reviewed fixtures
+- **WHEN** canonical Event3 compatibility is tested on reviewed fixtures
 - **THEN** fixed expectations SHALL assert exact session attribution, rule IDs,
   contributions, score, evidence fields/hashes, anchor linkage, and semantic
   ordering without deriving expected values from the new evaluator

@@ -10,15 +10,19 @@ use telltale_schema::event::{
     ActivityEventInput, Event, Evidence, PrivacySanitizer, SanitizationContext, activity_event,
     evidence_hash, path_hash,
 };
-use telltale_schema::record::RecordKind;
+use telltale_schema::scoring::RiskAccountingError;
 use telltale_schema::source::Source;
-use telltale_sources::parser::parse_source_records;
+use telltale_sources::acquisition::SourceAccounting;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum ConfigFormat {
     Json,
     Toml,
 }
+
+#[cfg(test)]
+#[path = "mcp_canonical_tests.rs"]
+mod mcp_canonical_tests;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct McpConfigDef {
@@ -114,61 +118,79 @@ pub fn discover_mcp_inventory_servers(root: &Path) -> Vec<McpServerInventory> {
         .collect()
 }
 
-pub fn discover_mcp_usage(root: &Path, sources: &[Source]) -> Vec<(Source, Event)> {
-    let servers = discover_mcp_inventory_servers(root);
-    let tool_index = McpToolIndex::from_servers(&servers);
+/// Configuration-derived inference over one acquisition, not observed server provenance.
+/// No source I/O; the caller discards this output if any source stage fails.
+pub fn project_mcp_usage(
+    source: &Source,
+    accounting: &SourceAccounting,
+    servers: &[McpServerInventory],
+) -> Result<Vec<Event>, RiskAccountingError> {
+    let tool_index = McpToolIndex::from_servers(servers);
     if tool_index.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut events = Vec::new();
-    for source in sources {
-        let Ok(records) = parse_source_records(source) else {
-            continue;
-        };
-        let mut sessions: BTreeMap<String, McpSessionUsage> = BTreeMap::new();
-
-        for record in records
-            .into_iter()
-            .filter(|record| record.kind == RecordKind::ToolCall)
-        {
-            let session = sessions
-                .entry(record.session_id.clone())
-                .or_insert_with(|| {
-                    McpSessionUsage::new(
-                        record.session_id.clone(),
-                        record.agent.clone(),
-                        record.model.clone(),
-                        record.provider.clone(),
-                    )
-                });
-            session.fill_metadata(&record.agent, &record.model, &record.provider);
-
-            let Some(tool_name) = record.tool_name.as_deref() else {
-                session.unattributed_tool_calls += 1;
-                continue;
-            };
+    for facts in &accounting.sessions {
+        let mut session = McpSessionUsage::new(
+            facts.session_id.value().into(),
+            facts.metadata.agent.known().map(str::to_owned),
+            facts.metadata.model.known().map(str::to_owned),
+            facts.metadata.provider.known().map(str::to_owned),
+        );
+        let mut attributed = 0u64;
+        let mut times = BTreeMap::<String, (u64, String)>::new();
+        let mut tools = facts.counts.tool_usage.iter().collect::<Vec<_>>();
+        tools.sort_by_key(|(name, fact)| (fact.first_order, *name));
+        for (tool_name, fact) in tools {
             let Some(matching_servers) = tool_index.lookup(source.client, tool_name) else {
-                session.unattributed_tool_calls += 1;
                 continue;
             };
-
+            attributed = attributed
+                .checked_add(fact.count)
+                .ok_or(RiskAccountingError::Overflow)?;
+            let count = u32::try_from(fact.count).map_err(|_| RiskAccountingError::Overflow)?;
             for server in matching_servers {
-                session.add_tool_call(server, tool_name, record.timestamp.as_deref());
+                let usage = session
+                    .servers
+                    .entry(server.server_name.clone())
+                    .or_insert_with(|| McpServerUsage::new(server.clone()));
+                let tool_count = usage.tools_used.entry(tool_name.clone()).or_default();
+                *tool_count = tool_count
+                    .checked_add(count)
+                    .ok_or(RiskAccountingError::Overflow)?;
+                usage.tool_call_count = usage
+                    .tool_call_count
+                    .checked_add(count)
+                    .ok_or(RiskAccountingError::Overflow)?;
+                if let Some(time) = &fact.first_timestamp {
+                    let first = times
+                        .entry(server.server_name.clone())
+                        .or_insert_with(|| time.clone());
+                    if time.0 < first.0 {
+                        *first = time.clone();
+                    }
+                }
             }
         }
-
-        for usage in sessions.into_values() {
-            for server_usage in usage.servers.values() {
-                events.push((
-                    source.clone(),
-                    mcp_usage_event(source, &usage, server_usage),
-                ));
-            }
+        session.unattributed_tool_calls = u32::try_from(
+            facts
+                .counts
+                .record_counts
+                .tool_call
+                .checked_sub(attributed)
+                .ok_or(RiskAccountingError::Overflow)?,
+        )
+        .map_err(|_| RiskAccountingError::Overflow)?;
+        for (name, usage) in &mut session.servers {
+            usage.event_time = times.remove(name).map(|(_, time)| time);
+        }
+        for usage in session.servers.values() {
+            events.push(mcp_usage_event(source, &session, usage));
         }
     }
 
-    events
+    Ok(events)
 }
 
 #[derive(Debug, Default)]
@@ -229,6 +251,7 @@ impl McpSessionUsage {
         }
     }
 
+    #[cfg(test)]
     fn fill_metadata(
         &mut self,
         agent: &Option<String>,
@@ -244,18 +267,6 @@ impl McpSessionUsage {
         if self.provider.is_none() {
             self.provider = provider.clone();
         }
-    }
-
-    fn add_tool_call(
-        &mut self,
-        server: &McpServerInventory,
-        tool_name: &str,
-        timestamp: Option<&str>,
-    ) {
-        self.servers
-            .entry(server.server_name.clone())
-            .or_insert_with(|| McpServerUsage::new(server.clone()))
-            .add_tool_call(tool_name, timestamp);
     }
 }
 
@@ -277,6 +288,7 @@ impl McpServerUsage {
         }
     }
 
+    #[cfg(test)]
     fn add_tool_call(&mut self, tool_name: &str, timestamp: Option<&str>) {
         *self.tools_used.entry(tool_name.to_string()).or_default() += 1;
         self.tool_call_count += 1;
@@ -792,12 +804,31 @@ mod tests {
 
     use super::{
         ConfigFormat, DiscoveredMcpConfig, McpServerInventory, McpToolIndex,
-        discover_mcp_inventory, discover_mcp_inventory_servers, discover_mcp_usage,
-        inventory_evidence, mcp_inventory_error_event, mcp_inventory_event, parse_toml_mcp_config,
+        discover_mcp_inventory, discover_mcp_inventory_servers, inventory_evidence,
+        mcp_inventory_error_event, mcp_inventory_event, parse_toml_mcp_config, project_mcp_usage,
     };
     use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::event::Event;
     use telltale_schema::event::{ControlledMarker, check_serialized_event_markers, evidence_hash};
+    use telltale_schema::observation::ObservedAt;
     use telltale_schema::source::Source;
+    use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
+
+    fn canonical_mcp_events(root: &std::path::Path, sources: &[Source]) -> Vec<(Source, Event)> {
+        let servers = discover_mcp_inventory_servers(root);
+        let observed_at = ObservedAt::new("2026-09-20T00:00:00Z").expect("observed_at");
+        sources
+            .iter()
+            .flat_map(|source| {
+                let batch = acquire_source(source, AcquisitionOptions::new(observed_at.clone()))
+                    .expect("synthetic source acquisition");
+                project_mcp_usage(source, &batch.accounting, &servers)
+                    .expect("synthetic MCP usage projection")
+                    .into_iter()
+                    .map(|event| (source.clone(), event))
+            })
+            .collect()
+    }
 
     #[test]
     fn emits_static_mcp_inventory_for_json_configs() {
@@ -918,11 +949,11 @@ mod tests {
         fs::write(
             &session_path,
             concat!(
-                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:00Z","tool_name":"list_issues","agent":"claude","model":"fixture-model","provider":"anthropic"}"#,
+                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:00Z","tool_name":"list_issues","agent":"claude","model":"fixture-model","provider":"anthropic","role":"assistant"}"#,
                 "\n",
-                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:01Z","tool_name":"create_issue"}"#,
+                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:01Z","tool_name":"create_issue","role":"assistant"}"#,
                 "\n",
-                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:02Z","tool_name":"view"}"#,
+                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:02Z","tool_name":"view","role":"assistant"}"#,
                 "\n",
             ),
         )
@@ -934,7 +965,7 @@ mod tests {
             path: session_path,
         }];
 
-        let events = discover_mcp_usage(temp.path(), &sources);
+        let events = canonical_mcp_events(temp.path(), &sources);
         assert_eq!(events.len(), 1);
         let event = &events[0].1;
         assert_eq!(event.event_type, "activity");
@@ -958,6 +989,36 @@ mod tests {
     }
 
     #[test]
+    fn usage_time_is_first_present_in_traversal_order_not_chronological_minimum() {
+        let temp = tempdir().expect("tempdir");
+        fs::write(
+            temp.path().join(".mcp.json"),
+            r#"{"mcpServers":{"synthetic":{"command":"synthetic","tools":["lookup"]}}}"#,
+        )
+        .unwrap();
+        let server = discover_mcp_inventory_servers(temp.path()).remove(0);
+        let mut usage = super::McpServerUsage::new(server);
+        usage.add_tool_call("lookup", None);
+        usage.add_tool_call("LOOKUP", Some("2026-09-20T02:00:00Z"));
+        usage.add_tool_call("lookup", Some("2026-09-20T01:00:00Z"));
+        assert_eq!(usage.event_time.as_deref(), Some("2026-09-20T02:00:00Z"));
+        assert_eq!(usage.tool_call_count, 3);
+        assert_eq!(usage.tools_used["lookup"], 2);
+        assert_eq!(usage.tools_used["LOOKUP"], 1);
+    }
+
+    #[test]
+    fn usage_metadata_is_independent_first_nonmissing_not_consensus() {
+        let mut session =
+            super::McpSessionUsage::new("synthetic".into(), Some("first".into()), None, None);
+        session.fill_metadata(&Some("conflicting".into()), &Some("model".into()), &None);
+        session.fill_metadata(&None, &Some("conflicting".into()), &Some("provider".into()));
+        assert_eq!(session.agent.as_deref(), Some("first"));
+        assert_eq!(session.model.as_deref(), Some("model"));
+        assert_eq!(session.provider.as_deref(), Some("provider"));
+    }
+
+    #[test]
     fn skips_mcp_usage_when_no_declared_tools_match() {
         let temp = tempdir().expect("tempdir");
         fs::write(
@@ -975,7 +1036,7 @@ mod tests {
         let session_path = temp.path().join("session-a.jsonl");
         fs::write(
             &session_path,
-            r#"{"type":"tool_call","session_id":"session-a","tool_name":"view"}"#,
+            r#"{"type":"tool_call","session_id":"session-a","tool_name":"view","role":"assistant"}"#,
         )
         .expect("write session");
         let sources = vec![Source {
@@ -985,7 +1046,7 @@ mod tests {
             path: session_path,
         }];
 
-        assert!(discover_mcp_usage(temp.path(), &sources).is_empty());
+        assert!(canonical_mcp_events(temp.path(), &sources).is_empty());
     }
 
     #[test]

@@ -9,7 +9,6 @@ use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use fs4::FileExt;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 fn hold_lock_child(target: &std::path::Path) -> std::process::Child {
@@ -398,7 +397,67 @@ fn migrated_state_preserves_detection_deduplication() {
 }
 
 #[test]
-fn native_migration_manifest_counts_malformed_host_normalization() {
+fn native_schema2_cli_migration_resets_baselines_once() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native-schema2.json");
+    let destination = temp.path().join("native-schema3.json");
+    let mut source_value: Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/state/legacy-scan-state.json"
+    )))
+    .expect("fixture state");
+    source_value["state_schema_version"] = Value::String("1.0".to_string());
+    fs::write(
+        &source,
+        serde_json::to_vec_pretty(&source_value).expect("native schema2 bytes"),
+    )
+    .expect("native schema2 source");
+
+    run_migration(&source, &destination);
+    let first_bytes = fs::read(&destination).expect("destination bytes");
+    let first: Value = serde_json::from_slice(&first_bytes).expect("native schema3 state");
+    assert_eq!(first["state_schema_version"], "1.0");
+    assert_eq!(first["baseline_snapshots"]["schema_version"], 3);
+    assert!(
+        first["baseline_snapshots"]["snapshots"]
+            .as_object()
+            .expect("baseline snapshots")
+            .is_empty()
+    );
+    assert!(
+        first["baseline_source_contributions"]
+            .as_object()
+            .expect("baseline contributions")
+            .is_empty()
+    );
+    for field in [
+        "seen_source_fingerprints",
+        "seen_detection_fingerprints",
+        "source_observations",
+        "sqlite_ingestion_cursors",
+        "install_inventory",
+    ] {
+        assert_eq!(first[field], source_value[field], "{field}");
+    }
+
+    let manifest_path = destination.with_file_name("native-schema3.json.migration.json");
+    let first_manifest = fs::read(&manifest_path).expect("migration manifest");
+    let manifest: Value = serde_json::from_slice(&first_manifest).expect("manifest JSON");
+    assert_eq!(manifest["normalization_count"], 2);
+
+    run_migration(&source, &destination);
+    assert_eq!(
+        fs::read(&destination).expect("repeated destination"),
+        first_bytes
+    );
+    assert_eq!(
+        fs::read(&manifest_path).expect("repeated manifest"),
+        first_manifest
+    );
+}
+
+#[test]
+fn native_schema3_plaintext_hosts_are_rejected_during_migration() {
     let temp = tempdir().expect("tempdir");
     let source = temp.path().join("native-canary.json");
     let destination = temp.path().join("migrated-native.json");
@@ -408,11 +467,9 @@ fn native_migration_manifest_counts_malformed_host_normalization() {
     )))
     .expect("fixture state");
     value["state_schema_version"] = Value::String("1.0".to_string());
+    value["baseline_snapshots"]["schema_version"] = 3.into();
     let bytes = serde_json::to_vec(&value).expect("native JSON");
-    let bytes = String::from_utf8(bytes)
-        .expect("native UTF-8")
-        .replace("internal.example.test", "sha256:ABC");
-    fs::write(&source, bytes.as_bytes()).expect("native source");
+    fs::write(&source, bytes).expect("native source");
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "state", "--from"])
@@ -421,18 +478,9 @@ fn native_migration_manifest_counts_malformed_host_normalization() {
         .arg(&destination)
         .output()
         .expect("migration");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let manifest: Value = serde_json::from_slice(&output.stdout).expect("manifest");
-    assert_eq!(manifest["normalization_count"], 1);
-
-    let canonical_host = format!("sha256:{:x}", Sha256::digest(b"sha256:abc"));
-    let migrated = fs::read_to_string(&destination).expect("migrated state");
-    assert!(!migrated.contains("sha256:ABC"));
-    assert!(migrated.contains(&canonical_host));
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("state requires explicit migration"));
+    assert!(!destination.exists());
 }
 
 #[cfg(target_os = "linux")]
@@ -616,7 +664,7 @@ fn insert_sqlite_part_row(
                 session_id,
                 time,
                 time,
-                serde_json::json!({"type": "text", "text": format!("row-{suffix}")}).to_string(),
+                serde_json::json!({"type": "text", "role": "assistant", "text": format!("row-{suffix}")}).to_string(),
             ),
         )
         .expect("part row");

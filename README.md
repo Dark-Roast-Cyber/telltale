@@ -82,15 +82,14 @@ Release archives and CI smoke checks cover binary packaging and execution on
 Linux, macOS, and Windows; they do not establish broad live source-store
 validation. Fixture-backed-only clients remain preview/experimental for live use.
 
-Non-production Canonical Observation v2 reference adapters are implemented for
-`openclaw.agents`, `qwen.projects`, and Copilot `copilot.process_log`. Offline
-deterministic shadow coverage includes Copilot across 15 cases, 17 reviewed
-sessions, and 306 detector evaluations: one reviewed match-set difference plus
-28 reviewed capability-driven indeterminate outcomes, with zero unexplained
-differences. Copilot native-v2 capabilities are ToolCall **Supported**,
-UserContext **Unsupported**, and ToolExecution **Unknown**. Production remains on
-`NormalizedRecordV1` and Rule v1; there is no live shadow, Detection v2
-production activation, or all-client migration. Event 3.0 remains unchanged.
+Canonical Observation v2 acquisition and the Detection v2 runtime are now the
+authoritative path for CLI scan/watch and `Pipeline::scan_root` across the eight
+supported source identities. Rule v1 remains the content-compatibility format,
+and Event 3.0 remains the compatibility projection. The record-level
+`detect_records` and `evaluate_session` APIs intentionally remain
+`NormalizedRecord` compatibility surfaces. Offline deterministic shadow coverage
+is still fixture-only (including Copilot's 15 cases, 17 reviewed sessions, and
+306 detector evaluations); Event4 and Telemetry/Output v2 remain inactive.
 
 ## Quick start
 
@@ -384,7 +383,7 @@ These files are the source-of-truth for Telltale's current implementation, rules
 - [Semantic foundation](docs/semantic-foundation.md) — accepted future semantic boundaries
 - [Event4 architecture](docs/event4.md) — accepted contract with a non-production foundation
 - [Canonical Observation v2](docs/canonical-observation-v2.md) — accepted future evidence contract
-- [Detection v2](docs/detection-v2.md) — experimental non-production foundation
+- [Detection v2](docs/detection-v2.md) — canonical runtime evaluator and compatibility model
 - [Telemetry/output architecture](docs/telemetry-output-architecture.md) — accepted future output boundary
 - [Development principles](docs/development-principles.md) — authoritative architecture and development philosophy
 - [Detection model](docs/detection-model.md) — risk scoring, rule categories, thresholds

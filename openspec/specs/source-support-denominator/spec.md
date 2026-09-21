@@ -64,19 +64,18 @@ canonical mapping, and canonical validation with bounded privacy-safe Display
 and Debug. Errors MUST NOT retain raw source errors or return partial successful
 batches or checkpointable progress.
 
-This boundary MUST NOT change production parser support or activate
-scan, watch, embedding, production Detection v2, or Event4.
+Scan, watch, and embedding MUST consume this boundary through the shared
+canonical runtime and Detection v2. Event4 MUST remain inactive.
 
 No parallel cross-source canonical projection router, compatibility alias, or
-wrapper MAY remain. Roadmap step 4 acquisition convergence is complete; step 5
-scan/watch/embedding runtime cutover remains separate and is not activated.
+wrapper MAY remain. Roadmap steps 4 and 5 are complete.
 
 #### Scenario: All-eight acquisition has one owner
 
 - **WHEN** a caller acquires any contracted source identity
 - **THEN** the authoritative acquisition API invokes native extraction and the
-  source-owned mapper without a second cross-source router, while production
-  runtime consumers remain unchanged
+  source-owned mapper without a second cross-source router, and the shared
+  source runtime consumes that result without legacy parsing
 
 #### Scenario: Acquisition failure cannot advance progress
 

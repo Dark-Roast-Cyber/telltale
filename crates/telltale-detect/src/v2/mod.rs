@@ -1,10 +1,9 @@
-//! Experimental, local, non-production Detection v2 foundation.
+//! Detection v2 semantic evaluation used by the canonical source runtime.
 //!
-//! This module is intentionally not scanner-wired or connected to the
-//! production scanner. It accepts typed Canonical Observation v2 and native accounting
-//! and emits local semantic results plus an explicit inactive Event3 compatibility
-//! projection; source discovery, actions, persistence, and production routing
-//! remain outside this boundary.
+//! This module accepts typed Canonical Observation v2 and native accounting and
+//! emits local semantic results plus an Event3 compatibility projection. Source
+//! discovery, actions, persistence, and runtime routing remain outside this
+//! boundary.
 
 #[cfg(feature = "source-io")]
 pub mod activity;

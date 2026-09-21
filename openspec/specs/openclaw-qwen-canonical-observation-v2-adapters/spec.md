@@ -4,12 +4,10 @@
 
 Define the completed P15 adapter contract for OpenClaw and Qwen JSONL sources.
 The contract covers source-owned native interpretation, exact legacy
-compatibility, non-production Canonical Observation v2 projections, authoritative
-acquisition routing, cross-adapter conformance, and offline shadow evidence. The
-reviewed 13-session corpus has zero unexplained mismatches; production remains
-on `NormalizedRecordV1` and Rule v1. The authoritative public acquisition API
-reuses the same native interpretation and canonical mapping without activating
-production.
+compatibility, Canonical Observation v2 projections, authoritative acquisition
+routing, cross-adapter conformance, and offline shadow evidence. The reviewed
+13-session corpus has zero unexplained mismatches. Production source evaluation
+uses canonical acquisition and Detection v2 with Rule v1 content compatibility.
 ## Requirements
 ### Requirement: One source-owned native interpretation
 
@@ -182,11 +180,10 @@ secrets, raw JSON, or unnecessary host paths. Unknown input MUST fail closed.
 
 ### Requirement: Qwen follows the contract only after source evidence
 
-The Qwen slice MUST inspect current Qwen fixtures and parser behavior before
-selecting native IDs, supported content blocks, metadata paths, call-ID forms,
-capabilities, and lifecycle semantics. It MUST preserve Qwen legacy output and
-MUST add only a non-production canonical projector consistent with direct Qwen
-evidence.
+The Qwen slice MUST select native IDs, supported content blocks, metadata paths,
+call-ID forms, capabilities, and lifecycle semantics from source evidence. It
+MUST preserve record-level compatibility output and provide canonical mapping
+consistent with direct Qwen evidence.
 
 #### Scenario: Qwen unsupported evidence is not copied silently
 
@@ -199,10 +196,8 @@ evidence.
 
 Cross-adapter vectors MUST compare canonical semantic family, compatible stage,
 body facts, facets, linkage, and truthful capability absence without requiring
-equal adapter IDs or native coordinates. Offline shadow/equivalence expansion
-MUST retain deterministic legacy detection as authoritative and MUST NOT enable
-live shadow, production activation, Event3 changes, or new Detection v2
-runtime behavior.
+equal adapter IDs or native coordinates. Offline shadow/equivalence remains
+measurement evidence and MUST NOT become a live dual-execution path.
 
 #### Scenario: Equivalent vectors compare meaning, not adapter identity
 
@@ -216,14 +211,12 @@ runtime behavior.
 - **THEN** the existing deterministic legacy result remains authoritative and no
   live or production shadow path is enabled
 
-### Requirement: Event 3.0 and adjacent sources remain frozen
+### Requirement: Event 3.0 and adjacent source compatibility
 
-This P15 change MUST NOT modify Event 3.0 schemas, IDs, serialization, privacy,
-delivery, parser ownership, scanner behavior, deterministic scoring, Detection
-v2 production activation, live shadow, OpenCode legacy v2 migration, other
-client migration, Event4, gateway behavior, or a generic adapter framework.
-Production MUST remain on `NormalizedRecordV1` until a separately reviewed
-activation.
+Production scanning MUST consume OpenClaw and Qwen Canonical Observation v2
+through the shared runtime. Exact parser ownership, Event3 schema/wire/privacy,
+already-persisted events, Event4 inactivity, and the absence of a generic adapter
+framework MUST remain unchanged.
 
 #### Scenario: Existing compatibility behavior remains intact
 
@@ -269,10 +262,8 @@ and validation errors MUST remain bounded and privacy-safe in Display and Debug.
 - **THEN** acquisition rejects it before invoking native extraction or reading
   its path
 
-#### Scenario: All-eight authoritative acquisition remains pre-cutover
+#### Scenario: All-eight authoritative acquisition feeds production
 
 - **WHEN** authoritative public acquisition covers all eight source identities
-  before the coordinated production runtime cutover
-- **THEN** acquisition convergence step 4 is complete, runtime cutover step 5
-  has not begun, and production parsing, scanner state, scan/watch/embedding,
-  detection, durable state, Event3, and Event4 behavior remain unchanged
+- **THEN** scan, watch, and embedding consume those canonical batches through
+  the shared runtime without legacy record conversion

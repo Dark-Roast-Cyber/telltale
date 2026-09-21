@@ -291,7 +291,7 @@ future architecture and MUST NOT be added implicitly to Event 3.0.
 - **THEN** it is deferred to a separately reviewed Event 4.0/future-architecture
   contract and does not extend the frozen Event 3.0 wire
 
-### Requirement: Inactive canonical Event3 compatibility projection
+### Requirement: Canonical Event3 compatibility projection
 
 A source-free adapter SHALL construct Event3 from canonical evaluation output and
 explicit compatibility context using existing constructors and terminal privacy
@@ -318,7 +318,7 @@ metadata through one deterministic index before projection.
 - **THEN** projection SHALL fail atomically without normalizing identity or
   constructing a partial event vector
 
-#### Scenario: Inactive tranche
-- **WHEN** the canonical compatibility API is added
-- **THEN** scanner, watch, embedding, Event3 schema, and Event4 activation SHALL
-  remain unchanged
+#### Scenario: Activated compatibility projection
+- **WHEN** scan, watch, or embedding evaluates a canonical source
+- **THEN** the canonical adapter SHALL project Event3 without legacy reevaluation
+- **AND** Event3 schema/wire/privacy compatibility and Event4 inactivity remain

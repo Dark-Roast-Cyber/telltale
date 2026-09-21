@@ -21,9 +21,7 @@ pub(super) enum SourceProcessingStatus {
 }
 
 impl SourceProcessingStatus {
-    /// Maps canonical evaluation/projection completion without activating those
-    /// production callers. Projection failure must be passed as `Err`.
-    #[allow(dead_code)] // production canonical activation will call this
+    /// Projection failure must be passed as `Err`.
     pub(super) fn from_canonical(result: Result<EvaluationCompletion, ProcessingError>) -> Self {
         match result {
             Ok(EvaluationCompletion::Complete | EvaluationCompletion::VisibilityLimited) => {

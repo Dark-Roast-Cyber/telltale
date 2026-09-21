@@ -626,7 +626,15 @@ mod tests {
 
     #[test]
     fn basic_conversation_without_source_session_fails_v2_but_keeps_legacy_fallback() {
-        let source = fixture_source("session_stores/claude/projects/project-a/session-a.jsonl");
+        let mut source = fixture_source("session_stores/claude/projects/project-a/session-a.jsonl");
+        let temp = tempfile::tempdir().unwrap();
+        let input = std::fs::read_to_string(&source.path).unwrap();
+        source.path = temp.path().join("session-a.jsonl");
+        std::fs::write(
+            &source.path,
+            input.replace("\"sessionId\":\"session-a\",", ""),
+        )
+        .unwrap();
         let error = project_claude_canonical_observations(
             &source,
             ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),

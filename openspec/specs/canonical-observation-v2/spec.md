@@ -285,8 +285,8 @@ from Debug/Display output.
 `observation_id` MUST identify a canonical source fact, `session_id` MUST remain
 a source/session correlation, and Event3/Event4 `event_id` MUST remain exported
 event identity. None may be filled from a path, filename, collector value, or
-another identity field. Event 3.0 remains frozen and v2 remains a local,
-non-production foundation.
+another identity field. Event 3.0 remains the external compatibility contract;
+v2 is the active internal source evidence model.
 
 #### Scenario: Stable fact identity is not session correlation
 
@@ -297,8 +297,9 @@ non-production foundation.
 #### Scenario: Event 3.0 remains unchanged
 
 - **WHEN** v2 identity and comparison tests run alongside Event 3.0 regressions
-- **THEN** Event 3.0 schema bytes, IDs, serialization, privacy, and delivery
-  behavior remain unchanged
+- **THEN** Event 3.0 schema/wire/privacy compatibility and already-persisted
+  events remain unchanged; newly generated canonical evidence need not be
+  byte-identical to legacy output
 
 ### Requirement: Canonical construction helpers remain source-neutral
 

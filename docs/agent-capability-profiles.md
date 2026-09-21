@@ -5,7 +5,7 @@ Detection and analyst review must not assume every source has the same visibilit
 
 Legend: **Full** is reliably present and extracted, **Partial** is conditional,
 **Absent** is not present, and **Lossy** exists upstream but is not preserved by
-the current production `NormalizedRecordV1` path.
+the record-level compatibility projection.
 
 ## Supported sources
 
@@ -22,9 +22,9 @@ Sources: `codex.sessions`, `codex.archived_sessions`,
 | Workspace | Partial | Present in some session metadata. |
 | Timestamp and session ID | Full | Source values are used; legacy parsing may use the file stem as a session fallback. |
 | Process ID and exit code | Absent | Not reported by this store. |
-| Call ID, error state, content parts | Lossy | Not preserved through the production legacy projection. |
+| Call ID, error state, content parts | Lossy | Not preserved through the record compatibility projection. |
 
-The non-production Canonical Observation v2 reference projector covers all three
+The Canonical Observation v2 adapter covers all three
 registered Codex identities. It does not use filename/path fallback for v2
 identity.
 
@@ -42,7 +42,7 @@ Source: `claude.projects` (JSONL).
 | Timestamp | Partial | Not guaranteed on every entry. |
 | Session ID | Full | Source value or legacy file-stem fallback. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | The v2 reference projector preserves more structure than the production path. |
+| Call ID, error state, content parts | Lossy | Canonical acquisition preserves more structure than record compatibility. |
 
 ### OpenClaw
 
@@ -57,9 +57,9 @@ Source: `openclaw.agents` (JSONL, including archived/reset suffixes).
 | Timestamp | Partial | Present on some records. |
 | Session ID | Full | Source value or legacy file-stem fallback. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | Not preserved by the production legacy projection. |
+| Call ID, error state, content parts | Lossy | Not preserved by the record compatibility projection. |
 
-The non-production v2 projector reports ToolCall and UserContext **Supported**
+The canonical adapter reports ToolCall and UserContext **Supported**
 and ToolExecution **Unknown**.
 
 ### Qwen CLI
@@ -75,9 +75,9 @@ Source: `qwen.projects` (JSONL).
 | Timestamp | Partial | Present on some records. |
 | Session ID | Full | Source value or legacy file-stem fallback. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | Not preserved by the production legacy projection. |
+| Call ID, error state, content parts | Lossy | Not preserved by the record compatibility projection. |
 
-The non-production v2 projector reports ToolCall and UserContext **Supported**
+The canonical adapter reports ToolCall and UserContext **Supported**
 and ToolExecution **Unknown**.
 
 ### OpenCode
@@ -89,13 +89,13 @@ Source: `opencode.sqlite`.
 | User and assistant messages | Full | Parsed from SQLite message and part data. |
 | Tool calls and results | Full | Selected tool parts preserve their direct lifecycle facts. |
 | Model, provider, agent | Full | Preserved from source JSON. |
-| Workspace | Lossy | Not preserved through the production legacy projection. |
+| Workspace | Lossy | Not preserved through the record compatibility projection. |
 | Timestamp and session ID | Full | SQLite rows provide source timing and session context. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | The v2 reference projector preserves more structure than the production path. |
+| Call ID, error state, content parts | Lossy | Canonical acquisition preserves more structure than record compatibility. |
 
-The `opencode.sqlite` v2 projector is non-production. Production remains on
-`NormalizedRecordV1`; no Detection v2 cutover is included in source convergence.
+The `opencode.sqlite` canonical adapter feeds the production Detection v2 source
+runtime; record compatibility remains separately available.
 
 ### GitHub Copilot
 
@@ -116,7 +116,7 @@ Source: `copilot.process_log`.
 | Call ID | Full | Preserved when reported. |
 | Content parts | Absent | Not present in process logs. |
 
-The non-production v2 projector reports ToolCall **Supported**, UserContext
+The canonical adapter reports ToolCall **Supported**, UserContext
 **Unsupported**, and ToolExecution **Unknown**.
 
 ## Cross-source implications
@@ -124,9 +124,8 @@ The non-production v2 projector reports ToolCall **Supported**, UserContext
 - Copilot detections cannot rely on user-context matching.
 - Model/provider attribution is weaker for Copilot and Claude Code.
 - Workspace correlation is available only from some Codex and Copilot records.
-- Error-based detection remains limited by the production legacy projection.
-- Only Copilot preserves call IDs on the current source path; other production
-  pairing relies on ordering and tool name.
+- Error-based detection remains limited by each source's canonical evidence.
+- Call-ID availability remains source-dependent; missing IDs are not fabricated.
 
 ## Related documents
 

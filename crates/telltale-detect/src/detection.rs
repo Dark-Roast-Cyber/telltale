@@ -5,11 +5,11 @@ use crate::baseline::{
 };
 use crate::baseline::{BaselineSnapshotStore, baseline_snapshot_id};
 use crate::timeline::{TimelineRuleAnchor, build_session_timeline};
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 use telltale_rules::load_default_rule_set;
 use telltale_rules::{CompiledRuleSet, MatchResult};
 use telltale_schema::canonical::{NormalizedRecordV1, Provenance};
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 use telltale_schema::event::scanner_error_event;
 use telltale_schema::event::{
     ActivityEventInput, DetectionEventInput, Event, Evidence, activity_event, evidence_hash,
@@ -18,17 +18,17 @@ use telltale_schema::event::{
 use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use telltale_schema::source::Source;
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 use telltale_sources::parser::{ParseError, parse_source_records};
 
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 #[allow(dead_code)]
 pub fn detect_sources(sources: &[Source]) -> Vec<(Source, Event)> {
     let rule_set = load_default_rule_set().expect("rule set");
     detect_sources_with_rules(sources, &rule_set)
 }
 
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 pub fn detect_sources_with_rules(
     sources: &[Source],
     rule_set: &CompiledRuleSet,
@@ -43,7 +43,7 @@ pub fn detect_sources_with_rules(
         .collect()
 }
 
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 pub fn summarize_source_activities(sources: &[Source]) -> Vec<(Source, Event)> {
     summarize_source_activities_with_baselines(
         sources,
@@ -52,7 +52,7 @@ pub fn summarize_source_activities(sources: &[Source]) -> Vec<(Source, Event)> {
     )
 }
 
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 pub fn summarize_source_activities_with_baselines(
     sources: &[Source],
     baseline_snapshots: &BaselineSnapshotStore,
@@ -68,7 +68,7 @@ pub fn summarize_source_activities_with_baselines(
         .collect()
 }
 
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 fn detect_source(source: &Source, rule_set: &telltale_rules::CompiledRuleSet) -> Vec<Event> {
     let parsed = match parse_source_records(source) {
         Ok(records) => records,
@@ -84,7 +84,7 @@ pub fn detect_parsed_source_records(
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> Vec<Event> {
-    detect_parsed_source_attempt(source, rule_set, parsed, false).events
+    detect_parsed_source_with_optional_snapshot(source, rule_set, parsed, false).0
 }
 
 #[derive(Clone)]
@@ -125,39 +125,25 @@ pub fn detect_parsed_source_records_with_snapshot(
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
 ) -> (Vec<Event>, EffectiveMatchSnapshot) {
-    let attempt = detect_parsed_source_attempt(source, rule_set, parsed, true);
+    let (events, snapshot) =
+        detect_parsed_source_with_optional_snapshot(source, rule_set, parsed, true);
     (
-        attempt.events,
-        attempt
-            .snapshot
-            .expect("snapshot requested from detection pass"),
+        events,
+        snapshot.expect("snapshot requested from detection pass"),
     )
 }
 
-/// Legacy detection-pass result with operational completion independent of Event3.
-///
-/// `completed_operationally` is false when any session failed analysis, even if
-/// a `scanner_error` event was also produced. This is not scanner progress
-/// eligibility; the scanner maps it. Delete when production scan no longer uses
-/// the legacy detector (Issue #51 later tranche / ROADMAP step 6).
-pub struct ParsedSourceDetectionAttempt {
-    pub events: Vec<Event>,
-    pub snapshot: Option<EffectiveMatchSnapshot>,
-    pub completed_operationally: bool,
-}
-
-pub fn detect_parsed_source_attempt(
+fn detect_parsed_source_with_optional_snapshot(
     source: &Source,
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
     capture_snapshot: bool,
-) -> ParsedSourceDetectionAttempt {
+) -> (Vec<Event>, Option<EffectiveMatchSnapshot>) {
     let sessions = group_records_by_session(parsed.to_vec());
     let mut snapshot = capture_snapshot.then(|| EffectiveMatchSnapshot {
         sessions: Vec::with_capacity(sessions.len()),
     });
     let mut events = Vec::new();
-    let mut completed_operationally = true;
 
     for (session_id, records) in sessions {
         match detect_records(source, rule_set, &records) {
@@ -181,7 +167,6 @@ pub fn detect_parsed_source_attempt(
                 }
             }
             Err(error) => {
-                completed_operationally = false;
                 if let Some(snapshot) = snapshot.as_mut() {
                     snapshot.sessions.push(EffectiveSessionMatchSnapshot {
                         session_id,
@@ -194,11 +179,7 @@ pub fn detect_parsed_source_attempt(
         }
     }
 
-    ParsedSourceDetectionAttempt {
-        events,
-        snapshot,
-        completed_operationally,
-    }
+    (events, snapshot)
 }
 
 /// Evaluates each source-local session once with the pre-policy rule set and
@@ -270,7 +251,7 @@ pub fn account_policy_matches(
     Ok(accounting)
 }
 
-#[cfg(feature = "source-io")]
+#[cfg(all(test, feature = "source-io"))]
 fn summarize_source_activity(
     source: &Source,
     baseline_snapshots: &BaselineSnapshotStore,
@@ -296,34 +277,7 @@ pub fn summarize_parsed_source_activity(
     baseline_snapshots: &BaselineSnapshotStore,
     baseline_deviation_config: BaselineDeviationConfig,
 ) -> Vec<Event> {
-    summarize_parsed_source_activity_attempt(
-        source,
-        parsed,
-        baseline_snapshots,
-        baseline_deviation_config,
-    )
-    .events
-}
-
-/// Legacy activity-pass result with operational completion independent of Event3.
-///
-/// `completed_operationally` is false when any session failed activity analysis,
-/// even if a `scanner_error` event was also produced. This is not scanner
-/// progress eligibility. Delete this attempt carrier when production activity
-/// analysis consumes the canonical runtime result in a later Issue #51 tranche.
-pub struct ParsedSourceActivityAttempt {
-    pub events: Vec<Event>,
-    pub completed_operationally: bool,
-}
-
-pub fn summarize_parsed_source_activity_attempt(
-    source: &Source,
-    parsed: &[NormalizedRecord],
-    baseline_snapshots: &BaselineSnapshotStore,
-    baseline_deviation_config: BaselineDeviationConfig,
-) -> ParsedSourceActivityAttempt {
     let mut events = Vec::new();
-    let mut completed_operationally = true;
 
     for (_, records) in group_records_by_session(parsed.to_vec()) {
         match activity_records(
@@ -335,16 +289,12 @@ pub fn summarize_parsed_source_activity_attempt(
             Ok(Some(event)) => events.push(event),
             Ok(None) => {}
             Err(error) => {
-                completed_operationally = false;
                 events.push(telltale_schema::event::scanner_error_event(source, &error));
             }
         }
     }
 
-    ParsedSourceActivityAttempt {
-        events,
-        completed_operationally,
-    }
+    events
 }
 
 fn group_records_by_session(parsed: Vec<NormalizedRecord>) -> Vec<(String, Vec<NormalizedRecord>)> {
@@ -755,8 +705,6 @@ mod tests {
     mod download_execute;
     #[path = "mcp_injection.rs"]
     mod mcp_injection;
-    #[path = "operational_status.rs"]
-    mod operational_status;
     #[path = "policy_accounting.rs"]
     mod policy_accounting;
     #[path = "process_chain.rs"]

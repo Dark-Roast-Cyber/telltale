@@ -1,5 +1,6 @@
-//! Inactive Event3 compatibility adapter. No source access, legacy records,
-//! detector reruns, allowlisting, persistence, or custom serialization.
+//! Event3 compatibility adapter for canonical evaluation output. No source
+//! access, legacy records, detector reruns, allowlisting, persistence, or custom
+//! serialization.
 
 use super::session::{CanonicalSourceEvaluation, EvaluationCompletion, ProcessingError};
 use super::{DetectionError, DetectorResult};
@@ -447,6 +448,7 @@ pub fn project_event3(
         let model = metadata_context.and_then(|m| m.model).map(str::to_owned);
         let provider = metadata_context.and_then(|m| m.provider).map(str::to_owned);
         let session_id = session.session_id.as_ref().map(|s| s.value());
+        let mut ordinary_detection = None;
         if !session.rules.effective_rule_ids().is_empty() {
             let session_id = session_id.ok_or(ProcessingError::Projection)?;
             let metadata = session.rules.compatibility_metadata();
@@ -518,9 +520,10 @@ pub fn project_event3(
                     )
                     .collect(),
             );
-            events.push(event);
+            ordinary_detection = Some(event);
         }
         let Some(processes) = &session.processes else {
+            events.extend(ordinary_detection);
             continue;
         };
         let mut projected_ids = BTreeMap::new();
@@ -670,6 +673,7 @@ pub fn project_event3(
             projected_ids.insert(key, event.event_id.clone());
             events.push(event);
         }
+        events.extend(ordinary_detection);
     }
     // Constructor success alone does not establish terminal exportability.
     for event in &events {

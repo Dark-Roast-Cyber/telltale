@@ -1,15 +1,14 @@
 # Detection v2
 
-> **Status:** **Experimental foundation and fixture-only shadow harness
-> implemented (non-production).** The `telltale_detect::v2` module implements
+> **Status:** **Authoritative canonical source evaluator.** The
+> `telltale_detect::v2` module implements
 > `observation_match`, bounded Tool-derived parent/child and standalone
 > `process_chain` evaluation, caller-grouped process-chain session suppression
 > and the six specialized correlations, `DetectorResult` -> `Signal` -> atomic
 > `Finding`,
-> and the Rule v1 compatibility compiler and session evaluator. An inactive
-> source/session orchestration and Event3 compatibility API now joins these
-> evaluators without switching production callers. It is not the
-> current engine. All eight contracted identities have authoritative Canonical
+> and the Rule v1 compatibility compiler and session evaluator. Source/session
+> orchestration and Event3 compatibility projection join these evaluators in the
+> scan/watch/embedding runtime. All eight contracted identities have Canonical
 > Observation v2 acquisition coverage (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
 > `opencode.sqlite`; `openclaw.agents`; `qwen.projects`; `copilot.process_log`) and
@@ -23,20 +22,17 @@
 > for every custom Rule v1 rule; in particular, `compat.v1.url` remains
 > intentionally absent. Copilot native-v2 capabilities are ToolCall **Supported**,
 > UserContext **Unsupported**, and ToolExecution **Unknown**.
-> Live scanner shadow: **NO**. Detection v2 production runtime activation:
-> **NOT STARTED**. Complete acquisition coverage does not mean complete production
-> runtime coverage: production remains on `NormalizedRecord` and Rule v1, and
-> Event3 remains frozen. The v2 process-chain session path is still
-> non-production; legacy Event3 remains the active projection and now delegates
+> Live scanner shadow: **NO**. Detection v2 is authoritative for production
+> source evaluation; Rule v1 remains its content-compatibility input and Event3
+> remains the external projection. The process-chain session path delegates
 > repeat/correlation decisions to the shared pure semantic kernel. Advanced detector
 > runtime and a Detection Content v2 loader are not implemented. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
-The current Rule v1, process-chain, and Event3 scoring behavior remains documented
-in [Detection model](detection-model.md). This page describes the accepted future
-model and identifies the implemented non-production foundation and fixture-only
-offline measurement harness.
+The retained Rule v1 content and Event3 scoring behavior remains documented in
+[Detection model](detection-model.md). This page describes the active canonical
+evaluation model and fixture-only offline measurement harness.
 
 ## Offline shadow/equivalence boundary
 
@@ -199,14 +195,12 @@ an aggregate fact. Their replay-stable dedupe key is a domain-separated SHA-256
 identity over the immutable correlation rule ID and opaque canonical session
 scope; it contains neither preimage, path, timestamp, nor random material.
 
-The new path is not scanner- or watch-wired. Production continues to acquire
-`NormalizedRecord` values and project Event3 through its existing wrapper;
-Event3 remains frozen and Event4 remains inactive. Direct Process evidence,
+This path is scanner-, watch-, and embedding-wired and projects Event3 through
+the compatibility boundary. Event4 remains inactive. Direct Process evidence,
 OpenShell, generic temporal engines, Detection Content v2 loading, and v2
-Event4 projection remain deferred. The inactive Event3 adapter below does not
-change production routing.
+Event4 projection remain deferred.
 
-## Inactive canonical processing (Issue #51, Tranche A)
+## Canonical processing
 
 `telltale_detect::v2::session::evaluate_source` accepts a `CanonicalSourceInput`,
 a compiled `RuleV1CompatibilityPlan`, and optional compiled process-chain rules
@@ -286,7 +280,7 @@ sanitize observation-ID snippets; their evidence hashes retain linkage. Event ID
 and materialization timestamps remain constructor-generated, not replay-stable
 identities; evaluation results and event ordering are deterministic.
 
-### Completion and later activation gates
+### Completion and scanner transaction gates
 
 Successful evaluation returns `Complete` or `VisibilityLimited`. Missing scope,
 capability/provenance limitations, and unavailable process timing do not become
@@ -295,13 +289,12 @@ failures, invalid inputs, and bounds violations return explicit errors. Projecti
 failure is distinct from evaluation failure. These statuses say nothing about
 whether output has been persisted.
 
-A later scanner must require **acquisition success AND operational evaluation
+The scanner requires **acquisition success AND operational evaluation
 success AND projection success AND required durable output persistence** before
 committing acquisition progress. Visibility-limited success may advance after
 durability; permanently unsupported capabilities must not freeze progress.
-ScanState, OpenCode cursors, scan, watch, and embedding are unchanged here.
-Allowlisting remains an event-handling concern after projection and is not applied
-by either new API.
+Allowlisting remains an event-handling concern after projection and is not
+applied by either evaluation API.
 
 ### Compatibility differences and Tranche B dependencies
 
@@ -325,19 +318,15 @@ by either new API.
   Correlation inferred-parent status reflects its supporting matcher context
   rather than an unconditional false value. These are explicit compatibility
   differences outside the old Rule v1-only shadow denominator.
-- Canonical family/stage counts are not legacy `record_counts`: extraction may
-  split one source item into multiple facts. Baseline partitioning, activity-event
-  count semantics, and pre-policy accounting require Tranche B integration work;
-  this tranche neither emits fake baseline findings nor migrates baseline state.
-- The inactive B2 composition now verifies one resolved regular-file coordinate
+- Canonical family/stage counts are not legacy `record_counts`: acquisition-owned
+  accounting supplies the compatibility histogram and baseline contributions.
+- The shared composition verifies one resolved regular-file coordinate
   before native acquisition; safe acquisition chunk/session boundaries,
   configured bounds handling, output durability, and post-projection allowlisting
-  remain activation responsibilities. The current production path now refuses to
-  advance an OpenCode cursor after downstream operational failure; canonical
-  production activation is still required to consume this contract. Step 5 and
-  production activation are not complete.
+  remain caller responsibilities. Production refuses to advance an OpenCode
+  cursor after downstream operational failure.
 
-### Inactive canonical runtime composition (Issue #51, Tranche B2)
+### Canonical runtime composition
 
 The private B2 seam proves one production-shaped path: verify one resolved
 regular file, acquire directly through the existing native source owner, call
@@ -349,12 +338,10 @@ failure remains failed and ineligible even when an acquired progress candidate i
 retained; visibility-limited completion remains successful. The focused test
 also demonstrates one existing allowlist application after projection.
 
-This seam is inactive: scan and watch still share the legacy `run_scan` path,
-the embedding facade still accepts `NormalizedRecord`, Event3 remains frozen,
-and Event4 remains inactive. Safe SQLite read boundaries, activity/accounting,
-baseline migration, attested metadata, durability, and coordinated
-scan/watch/embedding activation remain future work. The accepted public work
-owner is [Issue #51](https://github.com/Dark-Roast-Cyber/telltale/issues/51).
+This seam is the shared source-semantic owner used by scan, watch, and
+`Pipeline::scan_root`. Scanner state, durability, cursor policy, and failure
+adaptation remain caller-owned. Event3 remains the external contract and Event4
+remains inactive.
 
 ## DetectorResult
 
@@ -545,9 +532,9 @@ consumes distinct input items in any order. Overlapping windows choose the
 earliest satisfying start, and later completions with the same dedupe key are
 duplicates. Process chains use their specialized `parent_child`, `standalone`,
 or ordered `entity_correlation` shape and converge through DetectorResult. The
-production entity-correlation path remains the legacy Event3 implementation.
-The non-production Detection v2 ProcessChain session evaluator implements the
-same six specialized entity correlations for Tool-derived matches. Generic
+  production entity-correlation path uses the Detection v2 ProcessChain session
+evaluator and Event3 compatibility projection. It implements the same six
+specialized entity correlations for Tool-derived matches. Generic
 Detection v2 `Sequence` and `Correlation` detector kinds remain unsupported.
 
 ## Suppression, deduplication, and risk
@@ -595,10 +582,10 @@ The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
 `command`, `file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
 The compiler copies effective Rule v1 IDs, metadata, scores, and compiled
 target/regex matchers with optional target-local exclusion regexes into
-non-production observation-match detector definitions with `rule_version: 1`;
+observation-match detector definitions with `rule_version: 1`;
 IDs are not renamed. An excluded matcher lowers to existing `all` and `not`
 matcher composition; Detection v2 has no rule-specific filter runtime. Modifiers remain
-Rule v1 compatibility session constructs: the shared non-production evaluator
+Rule v1 compatibility session constructs: the shared evaluator
 triggers them from matched atomic Rule v1 IDs and categories, but they never
 become DetectorResults, Signals, Findings, or native v2 correlation detectors.
 The evaluator uses the existing validated contribution primitives to construct
@@ -626,10 +613,8 @@ See the [Detection Content v2 draft schema](../schemas/detection-content-v2-draf
 
 > **Event 3.0: FROZEN / CURRENT COMPATIBILITY CONTRACT**
 
-The foundation, including the Rule v1 compatibility session evaluator and
-Tool-derived process-chain evaluator, is not currently wired into production or
-running in scan/watch. Event3 remains
-supported and unchanged:
+The Rule v1 compatibility session evaluator and Tool-derived process-chain
+evaluator run in the canonical source path. Event3 remains supported:
 its Rule v1 IDs, deterministic scoring, thresholds, parser ownership, privacy,
 and persisted/replayed bytes remain current. Event4 is independently versioned
 and does not replace Event3 until explicit migration gates pass. Future semantics

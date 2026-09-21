@@ -23,12 +23,21 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
         .unwrap();
     let sources = telltale_sources::discovery::discover_sources(root.path()).unwrap();
     assert_eq!(sources.len(), 1);
-    let legacy = pipeline.scan_root(root.path()).unwrap();
+    let public = pipeline.scan_root(root.path()).unwrap();
+    assert_eq!(
+        public
+            .iter()
+            .map(|(_, event)| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        ["detection", "activity"]
+    );
+    let legacy_records = telltale_sources::parser::parse_source_records(&sources[0]).unwrap();
+    let legacy = pipeline.detect_records(&sources[0], &legacy_records);
     assert_eq!(legacy.len(), 1);
-    assert_eq!(legacy[0].1.event_type, "detection");
+    assert_eq!(legacy[0].event_type, "detection");
     let first = pipeline.scan_canonical_sources(&sources, clock()).unwrap();
     let second = pipeline.scan_canonical_sources(&sources, clock()).unwrap();
-    let result = &first[0].1;
+    let result = first[0].1.as_ref().unwrap();
     assert_eq!(
         result
             .events
@@ -47,14 +56,14 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
         BaselineReplacement::Replace(_)
     ));
     assert_eq!(result.events[0].rule_ids, ["synthetic.target"]);
-    assert_eq!(result.events[0].rule_ids, legacy[0].1.rule_ids);
-    assert_eq!(result.events[0].severity, legacy[0].1.severity);
-    assert_eq!(result.events[0].risk_score, legacy[0].1.risk_score);
+    assert_eq!(result.events[0].rule_ids, legacy[0].rule_ids);
+    assert_eq!(result.events[0].severity, legacy[0].severity);
+    assert_eq!(result.events[0].risk_score, legacy[0].risk_score);
     assert_eq!(
         result.events[0].source_path_hash,
-        legacy[0].1.source_path_hash
+        legacy[0].source_path_hash
     );
-    assert_eq!(result.events[0].session_id, legacy[0].1.session_id);
+    assert_eq!(result.events[0].session_id, legacy[0].session_id);
     let evidence = |event: &Event| {
         event
             .evidence
@@ -64,18 +73,30 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
             .collect::<Vec<_>>()
     };
     assert_eq!(evidence(&result.events[0]).len(), 1);
-    assert_eq!(evidence(&legacy[0].1).len(), 1);
+    assert_eq!(evidence(&legacy[0]).len(), 1);
     assert_eq!(evidence(&result.events[0])[0]["redacted_value"], "needle");
     assert_eq!(
-        evidence(&legacy[0].1)[0]["redacted_value"],
+        evidence(&legacy[0])[0]["redacted_value"],
         "message content needle role user sessionId synthetic type user"
     );
     assert_eq!(
         evidence(&result.events[0])[0]["rule_id"],
-        evidence(&legacy[0].1)[0]["rule_id"]
+        evidence(&legacy[0])[0]["rule_id"]
+    );
+    assert_ne!(
+        evidence(&result.events[0])[0]["redacted_value"],
+        evidence(&legacy[0])[0]["redacted_value"]
+    );
+    assert_ne!(
+        evidence(&result.events[0])[0]["hash"],
+        evidence(&legacy[0])[0]["hash"]
     );
     assert!(
-        result.events[0]
+        public
+            .iter()
+            .find(|(_, event)| event.event_type == "detection")
+            .unwrap()
+            .1
             .evidence
             .iter()
             .any(|item| item.field == "canonical_observation_id")
@@ -84,7 +105,11 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
     serde_json::to_value(&result.events).unwrap();
     assert_eq!(result.events[1].risk_score, 0);
     // Event3 constructors own fresh envelope IDs/clocks; semantic order is stable.
-    for (a, b) in result.events.iter().zip(&second[0].1.events) {
+    for (a, b) in result
+        .events
+        .iter()
+        .zip(&second[0].1.as_ref().unwrap().events)
+    {
         assert_eq!(a.event_type, b.event_type);
         assert_eq!(a.rule_ids, b.rule_ids);
         assert_eq!(a.session_id, b.session_id);
@@ -102,17 +127,22 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
         .policy_document("version: 1\ndisabled_rules: [synthetic.target]\n")
         .build()
         .unwrap();
-    assert!(disabled.scan_root(root.path()).unwrap().is_empty());
+    let disabled_public = disabled.scan_root(root.path()).unwrap();
+    assert_eq!(disabled_public.len(), 1);
+    assert_eq!(disabled_public[0].1.event_type, "activity");
     let disabled = disabled.scan_canonical_sources(&sources, clock()).unwrap();
-    assert_eq!(disabled[0].1.events.len(), 1);
-    assert_eq!(disabled[0].1.events[0].event_type, "activity");
+    assert_eq!(disabled[0].1.as_ref().unwrap().events.len(), 1);
+    assert_eq!(
+        disabled[0].1.as_ref().unwrap().events[0].event_type,
+        "activity"
+    );
     let additive = Pipeline::builder()
         .rules_document(RULE)
         .build()
         .unwrap()
         .scan_canonical_sources(&sources, clock())
         .unwrap();
-    assert!(additive[0].1.events.iter().any(|event| {
+    assert!(additive[0].1.as_ref().unwrap().events.iter().any(|event| {
         event.event_type == "detection" && event.rule_ids.iter().any(|id| id == "synthetic.target")
     }));
 }
@@ -140,16 +170,18 @@ fn canonical_embedding_opencode_remains_partial_without_persisting_progress() {
         .scan_canonical_sources(&sources, clock())
         .unwrap();
     assert_eq!(
-        result[0].1.accounting.coverage,
+        result[0].1.as_ref().unwrap().accounting.coverage,
         AccountingCoverage::PartialSource
     );
     assert_eq!(
-        result[0].1.baseline_replacement,
+        result[0].1.as_ref().unwrap().baseline_replacement,
         BaselineReplacement::NoReplacement
     );
     assert!(
         result[0]
             .1
+            .as_ref()
+            .unwrap()
             .events
             .iter()
             .any(|event| event.event_type == "activity")
@@ -170,16 +202,28 @@ fn canonical_embedding_rejects_retired_identity_without_successful_output() {
         path,
     };
     let pipeline = Pipeline::builder().build().unwrap();
-    let error = pipeline
-        .scan_canonical_sources(&[source], clock())
-        .err()
-        .unwrap();
-    let error = error
-        .downcast_ref::<canonical_runtime::SourceFailure>()
-        .unwrap();
+    let results = pipeline.scan_canonical_sources(&[source], clock()).unwrap();
+    let error = results[0].1.as_ref().err().unwrap();
     assert_eq!(error.stage, canonical_runtime::FailureStage::Acquisition);
     assert_eq!(
         error.acquisition,
         Some(telltale_sources::acquisition::AcquisitionError::UnsupportedSourceIdentity)
     );
+}
+
+#[test]
+fn scan_root_returns_scanner_error_for_malformed_synthetic_source() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join(".claude/projects/synthetic");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("malformed.jsonl"), "not-json\n").unwrap();
+
+    let events = Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_root(root.path())
+        .unwrap();
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1.event_type, "scanner_error");
 }

@@ -1,9 +1,10 @@
-//! Unstable Issue #51 source-semantic runtime. Not selected by production callers.
+//! Shared source-semantic runtime for scan, watch, and embedding.
 //! Scanner policy, state installation, event policy and delivery belong outside.
 
 use crate::{Event, Source};
 use sha2::{Digest, Sha256};
 use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
+use telltale_detect::detection::{PolicyMatchAccounting, PolicyMatchAccountingError};
 use telltale_detect::process_chain::ProcessChainConfig;
 use telltale_detect::v2::activity::{BaselineReplacement, evaluate_activity};
 use telltale_detect::v2::{
@@ -24,6 +25,7 @@ pub struct SourceResult {
     pub completion: EvaluationCompletion,
     pub accounting: SourceAccounting,
     pub baseline_replacement: BaselineReplacement,
+    pub policy_accounting: Option<Result<PolicyMatchAccounting, PolicyMatchAccountingError>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +50,26 @@ impl std::fmt::Display for SourceFailure {
     }
 }
 impl std::error::Error for SourceFailure {}
+
+impl SourceFailure {
+    /// Adapt typed operational failure to the frozen source-scanning Event3 contract.
+    pub fn event(&self, source: &Source) -> Event {
+        let code = match self.stage {
+            FailureStage::SourceScope => "canonical_source_scope_failed",
+            FailureStage::Acquisition => "canonical_acquisition_failed",
+            FailureStage::Evaluation => "canonical_evaluation_failed",
+            FailureStage::Projection => "canonical_projection_failed",
+            FailureStage::Activity => "canonical_activity_failed",
+        };
+        let mut event = telltale_schema::event::scanner_error_event(source, &code);
+        for evidence in &mut event.evidence {
+            if evidence.field == "source_path" {
+                evidence.redacted_value = "canonical source".into();
+            }
+        }
+        event
+    }
+}
 
 /// One resolved regular-file coordinate; unchanged canonical correlation domain.
 fn verified_source(source: &Source) -> Result<(Source, CorrelationId), ProcessingError> {
@@ -80,7 +102,9 @@ fn verified_source(source: &Source) -> Result<(Source, CorrelationId), Processin
 }
 
 pub struct SourceContext<'a> {
+    pub mcp_servers: &'a [telltale_detect::mcp::McpServerInventory],
     pub rules: &'a RuleV1CompatibilityPlan,
+    pub pre_policy_rules: Option<&'a RuleV1CompatibilityPlan>,
     pub process: Option<(&'a CompiledProcessChainRules, &'a ProcessChainConfig)>,
     pub prior: &'a BaselineSnapshotStore,
     pub baseline_deviation: BaselineDeviationConfig,
@@ -169,13 +193,70 @@ fn finish_batch(
         context.baseline_deviation,
     )
     .map_err(|_| fail(FailureStage::Activity))?;
+    // Diagnostic-only comparison over the same acquisition. No second source read,
+    // no legacy record conversion, and no effect on authoritative output/progress.
+    let policy_accounting = context.pre_policy_rules.map(|rules| {
+        let before = evaluate_source(
+            CanonicalSourceInput {
+                client: source.client,
+                source_id: &source.source_id,
+                source_instance: Some(instance),
+                observations: &batch.observations,
+            },
+            rules,
+            None,
+        )
+        .map_err(|_| PolicyMatchAccountingError)?;
+        let mut total = PolicyMatchAccounting {
+            pre_policy_detection_candidate_count: 0,
+            fully_filtered_detection_candidate_count: 0,
+            filtered_rule_id_count: 0,
+        };
+        if before.sessions().len() != evaluation.sessions().len() {
+            return Err(PolicyMatchAccountingError);
+        }
+        for (before, after) in before.sessions().iter().zip(evaluation.sessions()) {
+            if before.session_id() != after.session_id()
+                || after
+                    .rule_ids()
+                    .iter()
+                    .any(|id| !before.rule_ids().contains(id))
+            {
+                return Err(PolicyMatchAccountingError);
+            }
+            if !before.rule_ids().is_empty() {
+                total.pre_policy_detection_candidate_count = total
+                    .pre_policy_detection_candidate_count
+                    .checked_add(1)
+                    .ok_or(PolicyMatchAccountingError)?;
+                if after.rule_ids().is_empty() {
+                    total.fully_filtered_detection_candidate_count = total
+                        .fully_filtered_detection_candidate_count
+                        .checked_add(1)
+                        .ok_or(PolicyMatchAccountingError)?;
+                }
+                let filtered = u64::try_from(before.rule_ids().len() - after.rule_ids().len())
+                    .map_err(|_| PolicyMatchAccountingError)?;
+                total.filtered_rule_id_count = total
+                    .filtered_rule_id_count
+                    .checked_add(filtered)
+                    .ok_or(PolicyMatchAccountingError)?;
+            }
+        }
+        Ok(total)
+    });
+    let mcp =
+        telltale_detect::mcp::project_mcp_usage(source, &batch.accounting, context.mcp_servers)
+            .map_err(|_| fail(FailureStage::Activity))?;
     projected.events.extend(activity.events);
+    projected.events.extend(mcp);
     Ok(SourceResult {
         events: projected.events,
         completion: projected.completion,
         progress: batch.progress,
         accounting: batch.accounting,
         baseline_replacement: activity.replacement,
+        policy_accounting,
     })
 }
 

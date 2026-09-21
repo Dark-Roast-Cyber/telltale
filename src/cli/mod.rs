@@ -2,7 +2,6 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use crate::detection::detect_sources_with_rules;
 use crate::paths::{self, PathProfile};
 use crate::rules::{
     RuleLoadMode, RulePackPaths, RuleResolutionDiagnostics,
@@ -138,10 +137,6 @@ enum Command {
         /// Outputs a structured timeline with detection anchors and historical triage context.
         #[arg(long)]
         timeline: bool,
-
-        /// Read session stores from this root for --timeline instead of building from JSONL events.
-        #[arg(long)]
-        source_root: Option<PathBuf>,
     },
 }
 
@@ -1515,28 +1510,31 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     source_id: "codex.sessions".to_string(),
                     path: fixture,
                 };
-                let detections = detect_sources_with_rules(&[source], &resolution.rule_set);
-                if let Some((_, error_event)) = detections
+                let rules = telltale_detect::v2::compile_rule_v1(
+                    &resolution.rule_set.compatibility_export(),
+                )?;
+                let observed_at = telltale_schema::observation::ObservedAt::new(
+                    time::OffsetDateTime::now_utc()
+                        .format(&time::format_description::well_known::Rfc3339)?,
+                )?;
+                let result = telltale_core::canonical_runtime::process_source(
+                    &source,
+                    observed_at,
+                    None,
+                    telltale_core::canonical_runtime::SourceContext {
+                        mcp_servers: &[],
+                        rules: &rules,
+                        pre_policy_rules: None,
+                        process: None,
+                        prior: &crate::baseline::BaselineSnapshotStore::default(),
+                        baseline_deviation: Default::default(),
+                    },
+                )
+                .map_err(|error| format!("rules test failed: {error}"))?;
+                let matches = result.events
                     .iter()
-                    .find(|(_, event)| event.event_type == "scanner_error")
-                {
-                    let detail = error_event
-                        .evidence
-                        .iter()
-                        .find(|evidence| evidence.field == "error")
-                        .map(|evidence| {
-                            PrivacySanitizer::sanitize(
-                                SanitizationContext::Diagnostic,
-                                &evidence.redacted_value,
-                            )
-                        })
-                        .unwrap_or_else(|| "rule evaluation failed".to_string());
-                    return Err(format!("rules test failed: {detail}").into());
-                }
-                let matches = detections
-                    .iter()
-                    .filter(|(_, event)| event.event_type == "detection")
-                    .map(|(_, event)| {
+                    .filter(|event| event.event_type == "detection")
+                    .map(|event| {
                         serde_json::json!({
                             "session_id": terminal_session_id(&event.session_id),
                             "severity": event.severity,
@@ -1651,7 +1649,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             format,
             correlate,
             timeline,
-            source_root,
         } => {
             let log_path = paths::resolve_log_path(path_profile.into(), log_path);
             export::run_export(export::ExportConfig {
@@ -1665,7 +1662,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 format,
                 correlate,
                 timeline,
-                source_root: source_root.as_deref(),
             })?;
         }
     }

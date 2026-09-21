@@ -1,4 +1,4 @@
-//! Inactive, source-atomic activity/baseline projection from acquired accounting.
+//! Source-atomic activity/baseline projection from acquired accounting.
 //! Coverage is necessary evidence, never permission to install scanner state.
 
 use super::session::RetentionBudget;

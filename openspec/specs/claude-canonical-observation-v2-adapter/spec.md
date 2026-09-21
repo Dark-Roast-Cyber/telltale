@@ -1,21 +1,18 @@
 # claude-canonical-observation-v2-adapter Specification
 
 ## Purpose
-This specification covers only the Claude Code `claude.projects` reference
-adapter path from the published implementation. It records a local,
-non-production Canonical Observation v2 projection; the legacy
-`NormalizedRecordV1`/`ParsedRecord` path remains production, with no detector
-cutover or Event 3.0 change. The authoritative public acquisition API also
-reuses this native interpretation and canonical mapping without activating
-production.
+This specification covers the Claude Code `claude.projects` adapter. The
+authoritative public acquisition API reuses its native interpretation and
+Canonical Observation v2 mapping for production source evaluation. Record-level
+compatibility parsing remains available and Event3 remains the external projection.
 ## Requirements
 ### Requirement: One Claude-native interpretation
 
 The Claude adapter MUST read `claude.projects` JSONL once into one bounded
 Claude-specific native interpretation. The native record MUST retain enough
-ordered structure for both the legacy `ParsedRecord` projection and the
-Canonical Observation v2 projection. The production extractor MUST continue to
-produce the existing legacy projection and MUST NOT call the v2 projection.
+ordered structure for both the retained `ParsedRecord` compatibility projection
+and Canonical Observation v2. Production source evaluation MUST use canonical
+acquisition without routing through compatibility records.
 
 #### Scenario: One read supports both projections
 
@@ -37,18 +34,16 @@ unknown explicit discriminator to `RecordKind::Other`, and object-envelope
 - **WHEN** the existing Claude, parity, and detection fixtures are parsed
 - **THEN** records remain behaviorally equivalent to the pre-v2 adapter path
 
-### Requirement: Canonical projection is not production-active
+### Requirement: Canonical projection is production-active
 
-The v2 projection MUST remain a `pub(crate)` production-inactive reference
-seam. It MUST NOT be
-wired into `parse_source_records`, detection, CLI, or the scan pipeline, and
-`NormalizedRecordV1` MUST remain the production path.
+The v2 projection MUST remain source-owned and reached through authoritative
+acquisition. Scan, watch, and embedding MUST consume it through the shared
+canonical runtime. `parse_source_records` remains only a compatibility surface.
 
-#### Scenario: Production uses the compatibility path
+#### Scenario: Production uses canonical acquisition
 
-- **WHEN** the normal scanner parses a `claude.projects` source
-- **THEN** it returns the existing normalized records and does not emit or
-  require Canonical Observation v2 values
+- **WHEN** the normal scanner processes a `claude.projects` source
+- **THEN** it acquires Canonical Observation v2 without normalized-record detection
 
 ### Requirement: Session identity is split between legacy and v2
 

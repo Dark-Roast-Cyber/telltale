@@ -1,11 +1,11 @@
 # copilot-process-log-canonical-observation-v2-adapter Specification
 
 ## Purpose
-Define the bounded, non-production Canonical Observation v2 interpretation of
-the GitHub Copilot process log while preserving the existing legacy parser and
-keeping Event 3.0 and production NormalizedRecordV1 unchanged.
-The authoritative public acquisition API reuses this same native state machine
-and canonical mapping without activating production consumers.
+Define the bounded Canonical Observation v2 interpretation of the GitHub
+Copilot process log. The authoritative public acquisition API reuses this same
+native state machine and canonical mapping for production source evaluation;
+record-level compatibility parsing remains separately available and Event3
+remains the external projection.
 ## Requirements
 ### Requirement: Stateful source-owned interpretation
 
@@ -243,10 +243,8 @@ in Display/Debug. Failure MUST NOT return a partial successful batch.
 - **WHEN** the source client/ID or source kind differs from the exact contract
 - **THEN** acquisition rejects the input before native extraction or path access
 
-#### Scenario: All-eight authoritative acquisition remains pre-cutover
+#### Scenario: All-eight authoritative acquisition feeds production
 
 - **WHEN** authoritative public acquisition covers all eight source identities
-  before the coordinated production runtime cutover
-- **THEN** acquisition convergence step 4 is complete, runtime cutover step 5
-  has not begun, and production parsing, scanner state, scan/watch/embedding,
-  detection, Event3, and Event4 behavior remain unchanged
+- **THEN** scan, watch, and embedding consume those canonical batches through
+  the shared runtime without legacy record conversion

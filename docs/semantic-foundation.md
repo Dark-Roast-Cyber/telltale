@@ -1,76 +1,35 @@
 # Semantic Foundation
 
-> **Status:** **Accepted architecture with an experimental foundation.** These
-> contracts are reviewed future architecture. **Current implementation:** the
-> non-production Detection v2 foundation implements `observation_match`,
-> bounded Tool-derived parent/child and standalone `process_chain` evaluation,
-> `DetectorResult` -> `Signal` -> atomic `Finding`, and the Rule v1 compiler.
-> The non-production Event4 contract, validator, and canonical encoder are
-> implemented in `telltale-schema`. The first Phase 2 tranche adds an experimental
-> Tool-only privacy/materialization boundary in `telltale-core::event4_output`;
-> production projection, privacy, persistence, and output are not implemented.
-> Telemetry/Output v2 is not implemented. The fixture-only
-> offline shadow harness is an offline measurement seam, not a production shadow
-> or activation path. The non-production caller-grouped process-chain session
-> evaluator now shares one pure repeat/correlation semantic kernel with the
-> legacy Event3 wrapper. Remaining advanced detector runtime and
-> the Detection Content v2 loader are not implemented.
-> Canonical Observation v2 core types/scaffolding are implemented in
-> `telltale-schema`. Claude Code (`claude.projects`) and Codex v2 Canonical
-> Observation v2 reference adapter families are implemented. The OpenCode
-> (`opencode.sqlite`) v2 reference projection is also implemented as a
-> non-production projection. OpenClaw (`openclaw.agents`), Qwen
-> (`qwen.projects`), and Copilot (`copilot.process_log`) reference adapters are
-> also implemented as non-production projections. Offline deterministic shadow
-> coverage includes Copilot across 15 cases, 17 reviewed sessions, and 306
-> detector evaluations; the corpus has one reviewed match-set difference plus
-> 28 reviewed capability-driven indeterminate outcomes, with zero unexplained
-> differences.
-> The public `telltale_sources::acquisition` module owns the authoritative
-> cross-source acquisition contract for all eight identities. It is the single
-> router from source-native extraction through source-owned canonical mapping to
-> an acquisition batch; source mappers remain crate-private. Production runtime
-> cutover has not started; see [Canonical Observation v2](canonical-observation-v2.md)
-> for the explicit `observed_at`, progress semantics, and runtime boundary.
-> ROADMAP step 4 convergence is complete. Step 5 Tranche A adds inactive canonical
-> session evaluation and Event3 compatibility. Tranche B1 gates OpenCode cursor
-> eligibility on scanner-owned processing success without activating the canonical
-> production path; coordinated scan/watch/embedding activation remains later work
-> under Issue #51. See [Detection v2](detection-v2.md#inactive-canonical-processing-issue-51-tranche-a).
-> Copilot native-v2 capabilities are ToolCall
-> **Supported**, UserContext **Unsupported**, and ToolExecution **Unknown**.
-> **Existing compatibility:**
-> Event 3.0 remains the current frozen external compatibility and output
-> contract.
+> **Status:** **Accepted architecture with an activated canonical source
+> runtime.** Detection v2 implements `observation_match`, bounded Tool-derived
+> process-chain evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`, and
+> the Rule v1 compatibility compiler. CLI scan/watch and `Pipeline::scan_root`
+> use source-native acquisition -> Canonical Observation v2 -> Detection v2 ->
+> Event3 compatibility projection. The fixture-only shadow harness remains an
+> offline measurement seam. Event4 and Telemetry/Output v2 remain inactive.
+> Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
+> **Unsupported**, and ToolExecution **Unknown**. Event 3.0 remains the current
+> external compatibility and output contract.
 
-This page is the map for the future semantic boundaries. It describes accepted
-architecture and distinguishes the implemented non-production foundation from
-shipped runtime behavior.
+This page maps the active semantic source path and the still-distinct future
+Event4 and telemetry boundaries.
 
-The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference
-projections do not activate this path in production:
-`telltale_schema::record::NormalizedRecord` remains the scanner-to-detector
-handoff and Rule v1 remains the production detection path. `NormalizedRecordV1`
-is used separately for timeline/export-oriented behavior; it is not the
-scanner's primary detection record contract. The acquisition module does not
-change that runtime boundary.
+The eight source adapters feed Canonical Observation v2 directly to Detection
+v2. `NormalizedRecord` and `NormalizedRecordV1` remain only explicit
+record-level compatibility surfaces; neither is the scanner-to-detector handoff.
 Every acquisition call receives explicit caller-owned `observed_at`. OpenCode's
 bounded read controls and high-water progress are source-specific operational
 metadata, not evidence; the other seven identities return
 `AcquisitionProgress::None`. Copilot reuses source-local stateful native
 interpretation without durable progress; active session and ordinal state is
-rebuilt on each acquisition. The legacy production scanner, detection path, and
-embedding path remain unchanged, Event 3.0 is frozen, and Event4 is inactive.
-Production Detection v2, Event4 emission/integration, and Telemetry/Output v2
-remain not started, and
-Event 3.0 remains frozen. The `compat.v1.url` view is intentionally
+rebuilt on each acquisition. Scan, watch, and embedding share the canonical
+source runtime. Event 3.0 remains the external event contract; Event4 and
+Telemetry/Output v2 remain inactive. The `compat.v1.url` view is intentionally
 visibility-limited to truthful absence; focused synthetic harness coverage
 demonstrates the compatibility gap.
 
 Acquisition is not a conversion bridge from `CanonicalObservationV2` to either
-the production `NormalizedRecord` handoff or the separate timeline/export-oriented
-`NormalizedRecordV1` representation. Those paths remain separate until the
-coordinated production cutover.
+record compatibility representation.
 
 ## The semantic path
 

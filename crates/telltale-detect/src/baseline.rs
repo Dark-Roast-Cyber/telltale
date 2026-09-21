@@ -162,13 +162,8 @@ pub fn assess_baseline_deviation(
 }
 
 impl BaselineSummary {
-    pub fn merge_from(&mut self, other: BaselineSummary) {
-        self.merge_with(other, |left, right| Ok(left + right))
-            .expect("legacy addition does not return an error");
-    }
-
     /// Use on a disposable staged value: errors can leave a partial merge, which
-    /// must never be installed. The legacy input bridge retains its arithmetic.
+    /// must never be installed.
     pub fn checked_merge_from(
         &mut self,
         other: BaselineSummary,
@@ -219,15 +214,16 @@ impl BaselineSummary {
         }
     }
 
-    pub fn hash_network_hosts_for_state(&mut self) {
-        self.network_host_counts = self
-            .network_host_counts
-            .iter()
-            .map(|(host, count)| (baseline_host_identity(host), *count))
-            .fold(BTreeMap::new(), |mut counts, (host, count)| {
-                *counts.entry(host).or_insert(0) += count;
-                counts
-            });
+    pub fn hash_network_hosts_for_state(&mut self) -> Result<(), RiskAccountingError> {
+        let mut counts = BTreeMap::<String, u64>::new();
+        for (host, count) in &self.network_host_counts {
+            let total = counts.entry(baseline_host_identity(host)).or_default();
+            *total = total
+                .checked_add(*count)
+                .ok_or(RiskAccountingError::Overflow)?;
+        }
+        self.network_host_counts = counts;
+        Ok(())
     }
 }
 
@@ -352,7 +348,7 @@ fn collect_json_strings(value: &Value, output: &mut Vec<String>) {
 }
 
 /// Version stamp for persisted baseline snapshot stores.
-pub const BASELINE_STATE_VERSION: u16 = 2;
+pub const BASELINE_STATE_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BaselineSnapshotStore {
@@ -603,7 +599,7 @@ mod tests {
             "",
         )];
         let mut previous = build_baseline_summaries(&previous_records).remove(0);
-        previous.hash_network_hosts_for_state();
+        previous.hash_network_hosts_for_state().unwrap();
         let current = build_baseline_summaries(&current_records).remove(0);
 
         assert_eq!(

@@ -95,11 +95,13 @@ state with bounded guidance to the explicit migration command.
 
 The migration command accepts the known legacy unversioned state shape or
 native 1.0 for relocation. It recursively rejects duplicate keys and unknown
-fields. It preserves fingerprints, cursor values and keys, baselines,
-contributions, observations, timestamps, and inventory order. The only
-normalizations are the existing unsalted SHA-256 network-host identity
-normalization and promotion of the nested baseline store to its current
-schema. It never rebuilds, drops, recomputes, or advances state.
+fields. It preserves fingerprints, cursor values and keys, observations,
+timestamps, and inventory order. When the nested baseline store is schema 1 or
+2, explicit migration writes schema 3 and clears its incompatible source
+contributions and derived snapshots. Other state families remain unchanged.
+Migration of schema 3 state preserves its baseline populations. Normal loading
+rejects schema 1 or 2 with migration guidance; it never silently resets them.
+Network-host identity normalization remains the other supported normalization.
 
 The documented legacy compatibility window permits omitted
 `source_instance_id` fields in source observations, SQLite cursors, and source

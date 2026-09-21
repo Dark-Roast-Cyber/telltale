@@ -1,4 +1,4 @@
-//! Native acquisition facts for the inactive canonical runtime (Issue #51).
+//! Native acquisition facts for the canonical runtime (Issue #51).
 //! No cursor policy, baseline state, transcript retention, or exported event schema.
 
 use std::{collections::BTreeMap, fmt};
@@ -162,11 +162,37 @@ impl RecordCounts {
     }
 }
 
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct NativeCounts {
     pub native_units: u64,
     pub record_counts: RecordCounts,
     pub contributions: ActivityContributions,
+    pub tool_usage: BTreeMap<String, ToolUsage>,
+}
+
+/// Transient native call aggregate. Names remain private; no arguments or content.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct ToolUsage {
+    pub count: u64,
+    pub first_order: u64,
+    pub first_timestamp: Option<(u64, String)>,
+}
+
+impl fmt::Debug for ToolUsage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ToolUsage([private])")
+    }
+}
+
+impl fmt::Debug for NativeCounts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeCounts")
+            .field("native_units", &self.native_units)
+            .field("record_counts", &self.record_counts)
+            .field("contributions", &self.contributions)
+            .field("tool_usage_keys", &self.tool_usage.len())
+            .finish()
+    }
 }
 
 impl NativeCounts {
@@ -227,9 +253,63 @@ pub(super) struct AccountingBuilder {
     sessions: BTreeMap<String, SessionAccounting>,
     unscoped: NativeCounts,
     contribution_keys: usize,
+    tool_usage_keys: usize,
+    tool_order: u64,
 }
 
 impl AccountingBuilder {
+    pub(super) fn tool_usage(
+        &mut self,
+        session: Option<&str>,
+        kind: RecordKind,
+        name: Option<&str>,
+        timestamp: Option<&str>,
+    ) -> Result<(), AcquisitionError> {
+        if kind != RecordKind::ToolCall {
+            return Ok(());
+        }
+        self.tool_order = self
+            .tool_order
+            .checked_add(1)
+            .ok_or(AcquisitionError::AccountingOverflow)?;
+        let Some(session) = session else {
+            return Ok(());
+        };
+        let Some(name) = name else {
+            return Ok(());
+        };
+        if name.len() > LOCAL_MAX_STRING_BYTES || name.chars().any(char::is_control) {
+            return Err(AcquisitionError::InvalidContribution);
+        }
+        let counts = &mut self
+            .sessions
+            .get_mut(session)
+            .ok_or(AcquisitionError::InvalidAttestation)?
+            .counts;
+        if !counts.tool_usage.contains_key(name) {
+            if self.tool_usage_keys >= super::MAX_CONTRIBUTION_KEYS {
+                return Err(AcquisitionError::ContributionCapacity);
+            }
+            self.tool_usage_keys += 1;
+        }
+        let usage = counts.tool_usage.entry(name.to_owned()).or_default();
+        if usage.count == 0 {
+            usage.first_order = self.tool_order;
+        }
+        usage.count = usage
+            .count
+            .checked_add(1)
+            .ok_or(AcquisitionError::AccountingOverflow)?;
+        if usage.first_timestamp.is_none()
+            && let Some(timestamp) = timestamp
+        {
+            if timestamp.len() > LOCAL_MAX_STRING_BYTES || timestamp.chars().any(char::is_control) {
+                return Err(AcquisitionError::InvalidContribution);
+            }
+            usage.first_timestamp = Some((self.tool_order, timestamp.to_owned()));
+        }
+        Ok(())
+    }
     pub(super) fn record(
         &mut self,
         session: Option<&str>,
@@ -305,6 +385,60 @@ impl AccountingBuilder {
 mod tests {
     use super::*;
     use crate::acquisition::MAX_CONTRIBUTION_KEYS;
+
+    #[test]
+    fn tool_usage_is_bounded_checked_and_private() {
+        let mut builder = AccountingBuilder::default();
+        builder
+            .record(Some("s"), &Ok(SessionMetadata::default()), &[])
+            .unwrap();
+        builder
+            .tool_usage(Some("s"), RecordKind::ToolCall, Some("private-tool"), None)
+            .unwrap();
+        builder
+            .tool_usage(
+                Some("s"),
+                RecordKind::ToolCall,
+                Some("private-tool"),
+                Some("2026-09-20T02:00:00Z"),
+            )
+            .unwrap();
+        builder
+            .tool_usage(
+                Some("s"),
+                RecordKind::ToolCall,
+                Some("private-tool"),
+                Some("2026-09-20T01:00:00Z"),
+            )
+            .unwrap();
+        let counts = &mut builder.sessions.get_mut("s").unwrap().counts;
+        assert_eq!(counts.tool_usage["private-tool"].count, 3);
+        assert_eq!(counts.tool_usage["private-tool"].first_order, 1);
+        assert_eq!(
+            counts.tool_usage["private-tool"]
+                .first_timestamp
+                .as_ref()
+                .unwrap()
+                .0,
+            2
+        );
+        assert!(!format!("{counts:?}").contains("private-tool"));
+        counts.tool_usage.get_mut("private-tool").unwrap().count = u64::MAX;
+        assert_eq!(
+            builder.tool_usage(Some("s"), RecordKind::ToolCall, Some("private-tool"), None),
+            Err(AcquisitionError::AccountingOverflow)
+        );
+        builder.tool_usage_keys = MAX_CONTRIBUTION_KEYS;
+        assert_eq!(
+            builder.tool_usage(
+                Some("s"),
+                RecordKind::ToolCall,
+                Some("new-private-tool"),
+                None
+            ),
+            Err(AcquisitionError::ContributionCapacity)
+        );
+    }
 
     #[test]
     fn contribution_capacity_is_source_wide_including_unscoped() {

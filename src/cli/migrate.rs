@@ -1365,16 +1365,18 @@ fn contains_schema_version(bytes: &[u8]) -> bool {
 }
 
 fn needs_baseline_promotion(bytes: &[u8]) -> bool {
-    serde_json::from_slice::<serde_json::Value>(bytes)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("baseline_snapshots")?
-                .get("schema_version")
-                .cloned()
-        })
-        .and_then(|value| value.as_u64())
-        == Some(1)
+    matches!(
+        serde_json::from_slice::<serde_json::Value>(bytes)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("baseline_snapshots")?
+                    .get("schema_version")
+                    .cloned()
+            })
+            .and_then(|value| value.as_u64()),
+        Some(1 | 2)
+    )
 }
 
 fn stable_read(
@@ -1447,6 +1449,8 @@ mod tests {
         run_event_migration, run_event_migration_with_failpoint, run_state_migration,
     };
     #[cfg(unix)]
+    use crate::baseline::BASELINE_STATE_VERSION;
+    #[cfg(unix)]
     use crate::state::ScanState;
 
     #[cfg(unix)]
@@ -1467,9 +1471,24 @@ mod tests {
         let mut expected = ScanState::validate_legacy_bytes(source_bytes).expect("legacy parse");
         expected.normalize_legacy_for_migration();
         assert_eq!(first, expected.canonical_bytes().expect("canonical bytes"));
+        let migrated = ScanState::validate_native_bytes(&first).expect("native destination");
+        assert_eq!(
+            migrated.baseline_snapshots.schema_version,
+            BASELINE_STATE_VERSION
+        );
+        assert!(migrated.baseline_snapshots.snapshots.is_empty());
+        assert!(migrated.baseline_source_contributions.is_empty());
+        assert_eq!(
+            migrated.seen_source_fingerprints,
+            expected.seen_source_fingerprints
+        );
+        assert_eq!(
+            migrated.seen_detection_fingerprints,
+            expected.seen_detection_fingerprints
+        );
         let manifest = fs::read(manifest_path(&destination)).expect("manifest");
         let manifest_value: Value = serde_json::from_slice(&manifest).expect("manifest JSON");
-        assert_eq!(manifest_value["normalization_count"], 1);
+        assert_eq!(manifest_value["normalization_count"], 2);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

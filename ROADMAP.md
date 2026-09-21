@@ -76,12 +76,12 @@ The intended convergence order is:
    Source-native extraction feeds source-owned canonical mapping directly, with
    caller-owned observed time and separate operational progress. The parallel
    experimental projection router is removed; no legacy conversion bridge is
-   introduced. Production scan/watch/detection/embedding remain on the legacy
-   path until step 5.
-5. **Cut scan, watch, and the supported embedding facade over together.** The
-   normal production path should become Canonical Observation v2 -> Detection v2,
-   while Event 3.0 remains a deliberate compatibility projection during the
-   migration.
+   introduced. This acquisition step did not activate runtime callers by itself;
+   that coordinated cutover is step 5.
+5. **Cut scan, watch, and the supported embedding facade over together —
+   complete.** The normal production path is Canonical Observation v2 -> Detection
+   v2, with Event 3.0 retained as the compatibility projection during the
+   migration. Record-level compatibility APIs remain intentionally separate.
 6. **Delete transitional machinery after activation.** Remove the legacy
    NormalizedRecord-centered detector path, duplicate scoring/grouping logic,
    shadow/equivalence infrastructure, migration-only fixtures and reports, and
@@ -91,16 +91,14 @@ The intended convergence order is:
    expand Event4 persistence, dual emission, or transport merely to compensate
    for an unfinished internal migration.
 
-Step 5 is in progress under Issue #51. Tranche A adds inactive canonical session
-evaluation and Event3 compatibility; it does not switch production callers.
-Tranche B1 establishes scanner-owned processing-success / progress-eligibility
-and stops OpenCode cursor advancement after downstream operational failure.
-Production scan, watch, and embedding remain on the legacy path. Coordinated
-canonical activation remains later work. Step 5 is not complete. Event 3.0 remains
-unchanged in production: this work does not change its schema, public contract,
-routing, or persisted production bytes. The inactive canonical compatibility
-projector can have reviewed truthful semantic differences from the legacy
-runtime; it is not a byte-parity claim. Event4 remains inactive.
+Step 5 activation is implemented under Issue #51. The shared source-atomic
+runtime owns CLI scan/watch and the supported embedding facade, including
+acquisition, Detection v2 evaluation, canonical activity, baseline replacement,
+and cursor eligibility. Tranche B1's processing-success rule remains in force:
+OpenCode cursors do not advance after downstream operational failure. Event 3.0
+remains unchanged in schema, wire contract, constructors, privacy behavior, and
+already persisted bytes; newly emitted canonical evidence, hashes, or severity
+are not required to be identical to legacy output. Event4 remains inactive.
 
 The accepted semantic direction is documented in:
 

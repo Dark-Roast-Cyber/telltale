@@ -139,8 +139,15 @@ impl ScanState {
 
     pub(crate) fn normalize_legacy_for_migration(&mut self) -> usize {
         let count = raw_network_host_count(self);
-        self.hash_baseline_network_hosts_for_state();
+        self.reset_legacy_baseline();
         count
+    }
+
+    fn reset_legacy_baseline(&mut self) {
+        if self.baseline_snapshots.schema_version != BASELINE_STATE_VERSION {
+            self.baseline_source_contributions.clear();
+            self.baseline_snapshots = BaselineSnapshotStore::default();
+        }
     }
 
     pub(crate) fn family_counts(&self) -> BTreeMap<&'static str, usize> {
@@ -224,28 +231,13 @@ impl ScanState {
             snapshots: snapshots
                 .into_iter()
                 .map(|mut snapshot| {
-                    snapshot.hash_network_hosts_for_state();
+                    snapshot
+                        .hash_network_hosts_for_state()
+                        .expect("test baseline");
                     (baseline_snapshot_id(&snapshot.key), snapshot)
                 })
                 .collect(),
         };
-    }
-
-    pub fn merge_baseline_snapshots(&mut self, snapshots: Vec<BaselineSummary>) {
-        self.baseline_snapshots.schema_version = BASELINE_STATE_VERSION;
-        for mut snapshot in snapshots {
-            snapshot.hash_network_hosts_for_state();
-            let id = baseline_snapshot_id(&snapshot.key);
-            if let Some(existing) = self.baseline_snapshots.snapshots.get_mut(&id) {
-                if existing.key == snapshot.key {
-                    existing.merge_from(snapshot);
-                } else {
-                    self.baseline_snapshots.snapshots.insert(id, snapshot);
-                }
-            } else {
-                self.baseline_snapshots.snapshots.insert(id, snapshot);
-            }
-        }
     }
 
     pub fn record_baseline_source_contribution(
@@ -253,7 +245,14 @@ impl ScanState {
         source: &Source,
         source_fingerprint: String,
         snapshots: Vec<BaselineSummary>,
-    ) {
+    ) -> Result<(), crate::scoring::RiskAccountingError> {
+        let snapshots = snapshots
+            .into_iter()
+            .map(|mut snapshot| {
+                snapshot.hash_network_hosts_for_state()?;
+                Ok((baseline_snapshot_id(&snapshot.key), snapshot))
+            })
+            .collect::<Result<BTreeMap<_, _>, crate::scoring::RiskAccountingError>>()?;
         self.baseline_source_contributions.insert(
             source_observation_key(source),
             BaselineSourceContribution {
@@ -261,25 +260,30 @@ impl ScanState {
                 source_id: source.source_id.clone(),
                 source_instance_id: source_instance_id(source),
                 source_fingerprint,
-                snapshots: snapshots
-                    .into_iter()
-                    .map(|mut snapshot| {
-                        snapshot.hash_network_hosts_for_state();
-                        (baseline_snapshot_id(&snapshot.key), snapshot)
-                    })
-                    .collect(),
+                snapshots,
             },
         );
+        Ok(())
     }
 
-    pub fn rebuild_baseline_snapshots_from_source_contributions(&mut self) {
-        self.baseline_snapshots = BaselineSnapshotStore::default();
+    pub fn rebuild_baseline_snapshots_from_source_contributions(
+        &mut self,
+    ) -> Result<(), crate::scoring::RiskAccountingError> {
+        let mut staged = BaselineSnapshotStore::default();
         let snapshots = self
             .baseline_source_contributions
             .values()
-            .flat_map(|contribution| contribution.snapshots.values().cloned())
-            .collect::<Vec<_>>();
-        self.merge_baseline_snapshots(snapshots);
+            .flat_map(|contribution| contribution.snapshots.values().cloned());
+        for snapshot in snapshots {
+            let id = baseline_snapshot_id(&snapshot.key);
+            if let Some(existing) = staged.snapshots.get_mut(&id) {
+                existing.checked_merge_from(snapshot)?;
+            } else {
+                staged.snapshots.insert(id, snapshot);
+            }
+        }
+        self.baseline_snapshots = staged;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -380,35 +384,6 @@ impl ScanState {
                 observed_at_unix_ms,
             },
         );
-    }
-
-    pub fn has_legacy_source_identity_state(&self) -> bool {
-        self.baseline_source_contributions
-            .values()
-            .any(|contribution| contribution.source_instance_id.is_empty())
-            || self
-                .source_observations
-                .values()
-                .any(|observation| observation.source_instance_id.is_empty())
-    }
-
-    pub fn drop_legacy_source_identity_state(&mut self) {
-        self.baseline_source_contributions
-            .retain(|_, contribution| !contribution.source_instance_id.is_empty());
-        self.source_observations
-            .retain(|_, observation| !observation.source_instance_id.is_empty());
-    }
-
-    fn hash_baseline_network_hosts_for_state(&mut self) {
-        self.baseline_snapshots.schema_version = BASELINE_STATE_VERSION;
-        for snapshot in self.baseline_snapshots.snapshots.values_mut() {
-            snapshot.hash_network_hosts_for_state();
-        }
-        for contribution in self.baseline_source_contributions.values_mut() {
-            for snapshot in contribution.snapshots.values_mut() {
-                snapshot.hash_network_hosts_for_state();
-            }
-        }
     }
 }
 
@@ -524,7 +499,9 @@ fn parse_native_state_mode_with_count(
             return Err(MIGRATION_GUIDANCE.into());
         }
     }
-    let strict_hosts = !allow_legacy_baseline_version;
+    let strict_hosts = !allow_legacy_baseline_version
+        || value["baseline_snapshots"]["schema_version"].as_u64()
+            == Some(u64::from(BASELINE_STATE_VERSION));
     validate_state_families(&value, true, allow_legacy_baseline_version, strict_hosts)?;
     let mut state_object = object.clone();
     state_object.remove("state_schema_version");
@@ -536,7 +513,7 @@ fn parse_native_state_mode_with_count(
         || (allow_legacy_baseline_version
             && !matches!(
                 state.baseline_snapshots.schema_version,
-                1 | BASELINE_STATE_VERSION
+                1 | 2 | BASELINE_STATE_VERSION
             ))
     {
         return Err(MIGRATION_GUIDANCE.into());
@@ -546,7 +523,9 @@ fn parse_native_state_mode_with_count(
     } else {
         0
     };
-    state.hash_baseline_network_hosts_for_state();
+    if allow_legacy_baseline_version {
+        state.reset_legacy_baseline();
+    }
     Ok((state, normalization_count))
 }
 
@@ -558,7 +537,15 @@ fn parse_legacy_state(bytes: &[u8]) -> Result<ScanState, Box<dyn std::error::Err
     }
     validate_fields(object, state_field_names())?;
     validate_state_families(&value, false, true, false)?;
-    serde_json::from_value(value).map_err(|_| MIGRATION_GUIDANCE.into())
+    let version_missing = value
+        .get("baseline_snapshots")
+        .and_then(|value| value.get("schema_version"))
+        .is_none();
+    let mut state: ScanState = serde_json::from_value(value).map_err(|_| MIGRATION_GUIDANCE)?;
+    if version_missing {
+        state.baseline_snapshots.schema_version = 1;
+    }
+    Ok(state)
 }
 
 fn state_field_names() -> &'static [&'static str] {
@@ -587,7 +574,7 @@ fn validate_state_families(
         }
         let baseline = value.as_object().ok_or(MIGRATION_GUIDANCE)?;
         if let Some(version) = baseline.get("schema_version")
-            && !matches!(version, Value::Number(number) if number.as_u64() == Some(BASELINE_STATE_VERSION as u64) || allow_legacy_baseline_version && number.as_u64() == Some(1))
+            && !matches!(version, Value::Number(number) if number.as_u64() == Some(BASELINE_STATE_VERSION as u64) || allow_legacy_baseline_version && matches!(number.as_u64(), Some(1 | 2)))
         {
             return Err(MIGRATION_GUIDANCE.into());
         }
@@ -1191,6 +1178,102 @@ mod tests {
     }
 
     #[test]
+    fn activation_migration_resets_baseline_once_and_preserves_other_families() {
+        let mut state = ScanState::default();
+        state
+            .seen_source_fingerprints
+            .insert("synthetic-source".into());
+        state
+            .seen_detection_fingerprints
+            .insert("synthetic-detection".into());
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".into(),
+            path: "synthetic.db".into(),
+        };
+        state.observe_sources(std::slice::from_ref(&source), 12);
+        state.observe_sqlite_ingestion_cursor(&source, "part", 42, 12);
+        state
+            .record_baseline_source_contribution(
+                &source,
+                "old".into(),
+                vec![BaselineSummary::default()],
+            )
+            .unwrap();
+        state
+            .rebuild_baseline_snapshots_from_source_contributions()
+            .unwrap();
+        let mut legacy: Value = serde_json::from_slice(&state.canonical_bytes().unwrap()).unwrap();
+        legacy["baseline_snapshots"]["schema_version"] = 2.into();
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        assert!(ScanState::validate_native_bytes(&bytes).is_err());
+        let mut migrated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
+        assert_eq!(migrated.baseline_snapshots.schema_version, 3);
+        assert!(migrated.baseline_source_contributions.is_empty());
+        assert!(migrated.baseline_snapshots.snapshots.is_empty());
+        let value = serde_json::to_value(&migrated).unwrap();
+        for field in [
+            "seen_source_fingerprints",
+            "seen_detection_fingerprints",
+            "source_observations",
+            "sqlite_ingestion_cursors",
+            "install_inventory",
+        ] {
+            assert_eq!(value[field], legacy[field], "{field}");
+        }
+        migrated
+            .record_baseline_source_contribution(
+                &source,
+                "new".into(),
+                vec![BaselineSummary::default()],
+            )
+            .unwrap();
+        migrated
+            .rebuild_baseline_snapshots_from_source_contributions()
+            .unwrap();
+        let bytes = migrated.canonical_bytes().unwrap();
+        let reloaded = ScanState::validate_native_bytes(&bytes).unwrap();
+        assert_eq!(reloaded.baseline_source_contributions.len(), 1);
+        let repeated = ScanState::validate_native_migration_bytes(&bytes).unwrap();
+        assert_eq!(repeated.canonical_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn aggregate_overflow_does_not_replace_snapshot() {
+        let mut state = ScanState::default();
+        let mut summary = BaselineSummary::default();
+        summary.observations.records = u64::MAX;
+        let source = Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".into(),
+            path: "one.jsonl".into(),
+        };
+        state
+            .record_baseline_source_contribution(&source, "one".into(), vec![summary.clone()])
+            .unwrap();
+        state
+            .rebuild_baseline_snapshots_from_source_contributions()
+            .unwrap();
+        let before = state.baseline_snapshots.clone();
+        summary.observations.records = 1;
+        let other = Source {
+            path: "two.jsonl".into(),
+            ..source
+        };
+        state
+            .record_baseline_source_contribution(&other, "two".into(), vec![summary])
+            .unwrap();
+        assert!(
+            state
+                .rebuild_baseline_snapshots_from_source_contributions()
+                .is_err()
+        );
+        assert_eq!(state.baseline_snapshots, before);
+    }
+
+    #[test]
     fn rejects_empty_state_file_with_migration_guidance() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("empty-state.json");
@@ -1218,10 +1301,7 @@ mod tests {
 
         assert!(state.seen_source_fingerprints.contains("source-a"));
         assert!(state.seen_detection_fingerprints.contains("detection-a"));
-        assert_eq!(
-            state.baseline_snapshots.schema_version,
-            BASELINE_STATE_VERSION
-        );
+        assert_eq!(state.baseline_snapshots.schema_version, 1);
         assert!(state.baseline_snapshots.snapshots.is_empty());
         assert!(state.baseline_source_contributions.is_empty());
     }
@@ -1255,32 +1335,30 @@ mod tests {
 
         let mut state = ScanState::validate_legacy_bytes(&std::fs::read(&path).expect("read"))
             .expect("validate legacy");
-        state.normalize_legacy_for_migration();
+        assert_eq!(state.normalize_legacy_for_migration(), 1);
         let normalized = serde_json::to_value(&state).expect("state value");
-        assert_ne!(
-            normalized, fixture,
-            "raw baseline host is normalized on load"
+        assert_eq!(normalized["baseline_snapshots"]["schema_version"], 3);
+        assert!(
+            normalized["baseline_snapshots"]["snapshots"]
+                .as_object()
+                .expect("baseline snapshots")
+                .is_empty()
         );
-        assert_eq!(
+        assert!(
             normalized["baseline_source_contributions"]
                 .as_object()
                 .expect("source contributions")
-                .values()
-                .next()
-                .expect("source contribution")["snapshots"]
-                .as_object()
-                .expect("contribution snapshots")
-                .values()
-                .next()
-                .expect("contribution snapshot")["network_host_counts"]
-                [baseline_host_identity("internal.example.test")],
-            1
+                .is_empty()
         );
-        assert!(
-            !serde_json::to_string(&normalized)
-                .expect("normalized state JSON")
-                .contains("internal.example.test")
-        );
+        for field in [
+            "seen_source_fingerprints",
+            "seen_detection_fingerprints",
+            "source_observations",
+            "sqlite_ingestion_cursors",
+            "install_inventory",
+        ] {
+            assert_eq!(normalized[field], fixture[field], "{field}");
+        }
 
         state.save(&path).expect("save state fixture");
         let saved: Value =
@@ -1387,7 +1465,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_legacy_raw_baseline_hosts_as_hashed_state() {
+    fn resets_legacy_raw_baseline_hosts_during_migration() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("legacy-raw-host-baseline.json");
         std::fs::write(
@@ -1426,30 +1504,15 @@ mod tests {
         )
         .expect("write legacy state");
 
-        let key = BaselineKey {
-            client: "codex".to_string(),
-            agent: None,
-            model: Some("o3".to_string()),
-            provider: Some("openai".to_string()),
-        };
-
         let mut state = ScanState::validate_legacy_bytes(&std::fs::read(&path).expect("read"))
             .expect("validate legacy");
         state.normalize_legacy_for_migration();
-        let snapshot = state.baseline_snapshot(&key).expect("baseline snapshot");
-
         assert_eq!(
-            snapshot
-                .network_host_counts
-                .get(&baseline_host_identity("internal.example.test")),
-            Some(&1)
+            state.baseline_snapshots.schema_version,
+            BASELINE_STATE_VERSION
         );
-        assert!(
-            snapshot
-                .network_host_counts
-                .keys()
-                .all(|host| host.starts_with(BASELINE_HOST_HASH_PREFIX))
-        );
+        assert!(state.baseline_snapshots.snapshots.is_empty());
+        assert!(state.baseline_source_contributions.is_empty());
         assert!(
             !serde_json::to_string(&state)
                 .expect("serialize state")
@@ -1500,16 +1563,20 @@ mod tests {
         };
 
         let mut state = ScanState::default();
-        state.record_baseline_source_contribution(
-            &source,
-            "fingerprint-before".to_string(),
-            vec![first],
-        );
-        state.record_baseline_source_contribution(
-            &source,
-            "fingerprint-after".to_string(),
-            vec![second],
-        );
+        state
+            .record_baseline_source_contribution(
+                &source,
+                "fingerprint-before".to_string(),
+                vec![first],
+            )
+            .unwrap();
+        state
+            .record_baseline_source_contribution(
+                &source,
+                "fingerprint-after".to_string(),
+                vec![second],
+            )
+            .unwrap();
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("state-with-source-contribution.json");
         state.save(&path).expect("save state");
@@ -1572,16 +1639,20 @@ mod tests {
             },
             ..BaselineSummary::default()
         };
-        state.record_baseline_source_contribution(
-            &source_a,
-            "fingerprint-a".to_string(),
-            vec![summary.clone()],
-        );
-        state.record_baseline_source_contribution(
-            &source_b,
-            "fingerprint-b".to_string(),
-            vec![summary],
-        );
+        state
+            .record_baseline_source_contribution(
+                &source_a,
+                "fingerprint-a".to_string(),
+                vec![summary.clone()],
+            )
+            .unwrap();
+        state
+            .record_baseline_source_contribution(
+                &source_b,
+                "fingerprint-b".to_string(),
+                vec![summary],
+            )
+            .unwrap();
         assert_eq!(state.baseline_source_contributions.len(), 2);
     }
 
@@ -1693,21 +1764,15 @@ mod tests {
     }
 
     #[test]
-    fn migration_hashes_malformed_prefixed_hosts_before_strict_reparse() {
+    fn migration_rejects_plaintext_hosts_in_native_schema3() {
         let mut value: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/state/legacy-scan-state.json"
         )))
         .expect("legacy fixture");
         value["state_schema_version"] = Value::String(STATE_SCHEMA_VERSION.to_string());
+        value["baseline_snapshots"]["schema_version"] = 3.into();
         let bytes = serde_json::to_vec(&value).expect("native migration input");
-        let bytes = String::from_utf8(bytes)
-            .expect("fixture utf8")
-            .replace("internal.example.test", "sha256:ABC")
-            .into_bytes();
-        let state = ScanState::validate_native_migration_bytes(&bytes).expect("migration input");
-        let canonical = state.canonical_bytes().expect("canonical bytes");
-        assert!(ScanState::validate_native_bytes(&canonical).is_ok());
-        assert!(!String::from_utf8_lossy(&canonical).contains("sha256:ABC"));
+        assert!(ScanState::validate_native_migration_bytes(&bytes).is_err());
     }
 }

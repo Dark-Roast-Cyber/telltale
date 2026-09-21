@@ -291,7 +291,7 @@ pub fn compile_rule_v1(
 
 /// Evaluate Rule v1 compatibility semantics for one caller-defined canonical
 /// session. Session grouping, identity, source access, and production behavior
-/// remain outside this non-production boundary.
+/// remain outside this evaluation boundary.
 pub(crate) fn evaluate_rule_v1_session(
     plan: &RuleV1CompatibilityPlan,
     observations: &[&telltale_schema::observation::CanonicalObservationV2],

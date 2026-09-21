@@ -2,33 +2,23 @@
 
 > **Website:** For an approachable overview of schemas and normalization, see [AgentArchaeology.ai/resources/schemas](https://agentarchaeology.ai/resources/schemas/).
 
-Telltale's internal normalization contract is `NormalizedRecordV1` in `crates/telltale-schema/src/canonical.rs`. It sits between source-specific parsers and downstream detection, deterministic review metadata, and export code.
+`NormalizedRecordV1` in `crates/telltale-schema/src/canonical.rs` is a retained
+record-level compatibility contract. It is not the production source-runtime
+handoff.
 
-[Canonical Observation v2](canonical-observation-v2.md) core types/scaffolding
-are implemented in `telltale-schema` but are not the active normalization path;
-A Claude Code (`claude.projects`) v2 reference projection and a Codex v2
-reference adapter family are implemented, and the OpenCode (`opencode.sqlite`)
-v2 reference projection is implemented as non-production. OpenClaw
-(`openclaw.agents`) and Qwen (`qwen.projects`) v2 reference adapters are also
-implemented as non-production. Copilot (`copilot.process_log`) v2 reference
-projection is also implemented as non-production. Its native-v2 capabilities
+[Canonical Observation v2](canonical-observation-v2.md) is the active source
+normalization path for all eight supported identities. Source-native acquisition
+maps directly to COv2 and Detection v2; it does not convert through either
+`NormalizedRecord` type. Copilot's native-v2 capabilities
 are ToolCall **Supported**, UserContext **Unsupported**, and ToolExecution
 **Unknown**. The offline shadow covers 15 cases, 17 reviewed sessions, and 306
 detector evaluations; its one reviewed match-set difference and 28 reviewed
 capability-driven indeterminate outcomes have zero unexplained differences.
-`NormalizedRecordV1` plus its loss-aware compatibility path remain current in
-production.
-
-Detection v2 has only an experimental, non-production foundation: the
-`observation_match` detector, `DetectorResult` -> `Signal` -> atomic `Finding`,
-and Rule v1 compiler. It is not wired into this production path; the fixture-only
-offline shadow harness is an offline measurement seam, not a production shadow or
-activation path. Advanced detector runtime and Detection Content v2 loader are
-not implemented. The Event4 contract foundation is implemented but has no
-production projection or output path; telemetry/output v2 is not started, and
-Canonical Observation v2 production cutover has not started. Offline deterministic shadow
-coverage now includes OpenClaw, Qwen, and Copilot. Event 3.0 is frozen; the reference
-projections do not change its behavior or output. The
+Detection v2 is authoritative for scan, watch, and `Pipeline::scan_root`, using
+Rule v1 as its content-compatibility input and projecting Event 3.0. The
+fixture-only offline shadow remains measurement evidence, not a live shadow.
+Advanced detector runtime and a Detection Content v2 loader are not implemented.
+Event4 and telemetry/output v2 remain inactive. The
 `compat.v1.url` view remains truthfully absent; focused synthetic harness
 coverage demonstrates the compatibility gap.
 
@@ -196,7 +186,7 @@ This makes the contract explicit for downstream consumers: typed fields are pref
 
 ## Practical Rules
 
-- Use `NormalizedRecordV1` for all new pipeline stages.
-- Treat `NormalizedRecord` as a legacy ingestion shape only.
+- Use Canonical Observation v2 for source-backed pipeline stages.
+- Use `NormalizedRecord` and `NormalizedRecordV1` only for explicit record-level compatibility.
 - Add new source-specific data through `RecordMeta.extensions` or a typed variant field when the field is stable enough to standardize.
 - If a source cannot expose a field, document the gap instead of inventing a placeholder.

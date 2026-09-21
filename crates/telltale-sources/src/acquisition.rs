@@ -42,7 +42,7 @@ use accounting::AccountingBuilder;
 pub(crate) use accounting::session_identity;
 pub use accounting::{
     AccountingCoverage, AttestedValue, MAX_ATTESTED_SESSIONS, NativeCounts, RecordCounts,
-    SessionAccounting, SessionMetadata, SourceAccounting,
+    SessionAccounting, SessionMetadata, SourceAccounting, ToolUsage,
 };
 pub use contributions::{ActivityContributions, MAX_CONTRIBUTION_KEYS};
 
@@ -162,6 +162,12 @@ pub fn acquire_source(
                     &record.attestation,
                     &[record.legacy_kind],
                 )?;
+                accounting.tool_usage(
+                    record.session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.timestamp.as_deref(),
+                )?;
                 accounting.contribute(
                     record.session_id.as_deref(),
                     record.legacy_kind,
@@ -185,6 +191,12 @@ pub fn acquire_source(
                     &record.attestation,
                     &[record.legacy_kind],
                 )?;
+                accounting.tool_usage(
+                    record.effective_session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.timestamp.as_deref(),
+                )?;
                 accounting.contribute(
                     record.effective_session_id.as_deref(),
                     record.legacy_kind,
@@ -204,6 +216,12 @@ pub fn acquire_source(
                     record.session_id.as_deref(),
                     &record.attestation,
                     &[record.legacy_kind],
+                )?;
+                accounting.tool_usage(
+                    record.session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.source_timestamp.as_deref(),
                 )?;
                 accounting.contribute(
                     record.session_id.as_deref(),
@@ -227,6 +245,12 @@ pub fn acquire_source(
                     record.session_id.as_deref(),
                     &record.attestation,
                     &[record.legacy_kind],
+                )?;
+                accounting.tool_usage(
+                    record.session_id.as_deref(),
+                    record.legacy_kind,
+                    record.legacy_tool_name.as_deref(),
+                    record.source_timestamp.as_deref(),
                 )?;
                 accounting.contribute(
                     record.session_id.as_deref(),
@@ -257,6 +281,7 @@ pub fn acquire_source(
                     }
                     CopilotNativeEvent::AccumulatedOutputItem {
                         canonical_session_id,
+                        timestamp,
                         item,
                         ..
                     } => {
@@ -266,6 +291,12 @@ pub fn acquire_source(
                             item.record_kinds(),
                         )?;
                         if item.item_type.as_deref() == Some("function_call") {
+                            accounting.tool_usage(
+                                canonical_session_id.as_deref(),
+                                RecordKind::ToolCall,
+                                item.name.as_deref(),
+                                timestamp.as_deref(),
+                            )?;
                             accounting.contribute(
                                 canonical_session_id.as_deref(),
                                 RecordKind::ToolCall,
@@ -328,6 +359,12 @@ pub fn acquire_opencode_sqlite(
             context.session_id.as_deref(),
             &context.attestation,
             &[native.kind],
+        )?;
+        accounting.tool_usage(
+            context.session_id.as_deref(),
+            native.kind,
+            native.tool_name.as_deref(),
+            context.occurrence_time.as_deref(),
         )?;
         accounting.contribute(
             context.session_id.as_deref(),

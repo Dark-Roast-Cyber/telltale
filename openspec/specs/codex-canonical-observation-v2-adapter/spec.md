@@ -1,21 +1,19 @@
 # codex-canonical-observation-v2-adapter Specification
 
 ## Purpose
-This specification covers only the Codex reference adapter path from the
-published implementation. It records a local, non-production Canonical
-Observation v2 projection; the legacy `NormalizedRecordV1`/`ParsedRecord` path
-remains production, with no detector cutover or Event 3.0 change. The
-authoritative public acquisition API also reuses this native interpretation and
-canonical mapping without activating production.
+This specification covers the Codex adapter path. The authoritative public
+acquisition API reuses its native interpretation and Canonical Observation v2
+mapping for production source evaluation. Record-level compatibility parsing
+remains available; Event 3.0 remains the external projection.
 ## Requirements
 ### Requirement: One Codex-native interpretation
 
 The Codex adapter MUST read each registered Codex JSONL source once into one
 bounded Codex-specific native interpretation. That interpretation MUST retain
-enough ordered structure for both the unchanged legacy `ParsedRecord` /
-`NormalizedRecordV1` projection and the crate-private Canonical Observation v2
-projection. The production extractor MUST continue to produce only the legacy
-projection and MUST NOT call v2.
+enough ordered structure for both the retained `ParsedRecord` /
+`NormalizedRecordV1` compatibility projection and Canonical Observation v2.
+Production source evaluation MUST use canonical acquisition without routing
+through compatibility records.
 
 #### Scenario: One read preserves legacy output
 
@@ -206,18 +204,19 @@ prompts, tool arguments/results, paths, secrets, or arbitrary source payloads.
   source text
 - **THEN** v2 rejects it with a safe mapping code and legacy returns `Other`
 
-### Requirement: Production and Event 3.0 remain frozen
+### Requirement: Canonical production and Event 3.0 compatibility
 
-This change MUST NOT alter parser registration symbols, production scanning,
-detection, `NormalizedRecordV1`, Rule v1, process-chain behavior, Event 3.0
-schemas/IDs/serialization/privacy/durable bytes, or any other adapter. The v2
- projection MUST remain a crate-private, production-inactive reference seam.
+Production scanning MUST consume Codex Canonical Observation v2 through the
+shared runtime. Parser registration, exact source identity, Event3 schema and
+privacy behavior, and already-persisted Event3 data MUST remain compatible.
+New canonical evidence, hashes, severity, and constructor-generated IDs/times
+need not be byte-identical to legacy output.
 
-#### Scenario: Production stays on legacy
+#### Scenario: Production uses canonical acquisition
 
-- **WHEN** the normal Codex scanner parses a registered source
-- **THEN** it returns the existing normalized records without requiring or
-  emitting Canonical Observation v2 values
+- **WHEN** the normal Codex scanner processes a registered source
+- **THEN** it acquires Canonical Observation v2 directly without constructing
+  normalized compatibility records
 
 ### Requirement: Codex conformance evidence exists
 

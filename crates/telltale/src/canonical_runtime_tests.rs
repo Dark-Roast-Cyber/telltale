@@ -64,6 +64,67 @@ fn message(
 }
 
 #[test]
+fn mcp_projection_is_atomic_with_late_activity_failure() {
+    use telltale_sources::acquisition::{SessionAccounting, ToolUsage};
+    let directory = tempdir().unwrap();
+    std::fs::write(
+        directory.path().join(".mcp.json"),
+        r#"{"mcpServers":{"synthetic":{"command":"synthetic","tools":["lookup"]}}}"#,
+    )
+    .unwrap();
+    let servers = telltale_detect::mcp::discover_mcp_inventory_servers(directory.path());
+    let mut accounting = SourceAccounting::default();
+    let mut counts = telltale_sources::acquisition::NativeCounts::default();
+    counts.record_counts.tool_call = 1;
+    counts.tool_usage.insert(
+        "lookup".into(),
+        ToolUsage {
+            count: 1,
+            first_order: 1,
+            first_timestamp: Some((1, "2026-09-19T00:00:00Z".into())),
+        },
+    );
+    accounting.sessions.push(SessionAccounting {
+        session_id: CorrelationId::source_reported("s").unwrap(),
+        metadata: Default::default(),
+        counts,
+    });
+    let source = source("synthetic".into());
+    let projected =
+        telltale_detect::mcp::project_mcp_usage(&source, &accounting, &servers).unwrap();
+    assert_eq!(projected.len(), 1);
+    assert!(projected[0].evidence.iter().any(|e| {
+        e.redacted_value
+            .contains("\"attribution_method\":\"declared_tools\"")
+    }));
+    accounting.sessions[0].counts.record_counts.user_message = u64::from(u32::MAX) + 1;
+    let result = finish_batch(
+        &source,
+        &CorrelationId::new("instance", CorrelationOrigin::TelltaleOriginated).unwrap(),
+        AcquisitionBatch {
+            observations: vec![message("one", Some("s"))],
+            progress: AcquisitionProgress::None,
+            accounting,
+        },
+        SourceContext {
+            mcp_servers: &servers,
+            rules: &plan("user_context"),
+            pre_policy_rules: None,
+            process: None,
+            prior: &BaselineSnapshotStore::default(),
+            baseline_deviation: Default::default(),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(SourceFailure {
+            stage: FailureStage::Activity,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn activity_failure_discards_successful_source_output() {
     use telltale_sources::acquisition::{AccountingCoverage, SessionAccounting};
     let source = source("synthetic".into());
@@ -90,7 +151,9 @@ fn activity_failure_discards_successful_source_output() {
             accounting,
         },
         SourceContext {
+            mcp_servers: &[],
             rules: &plan("user_context"),
+            pre_policy_rules: None,
             process: None,
             prior: &BaselineSnapshotStore::default(),
             baseline_deviation: BaselineDeviationConfig::default(),
@@ -158,7 +221,9 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
                 progress,
             },
             SourceContext {
+                mcp_servers: &[],
                 rules: &plan,
+                pre_policy_rules: None,
                 process: None,
                 prior: &BaselineSnapshotStore::default(),
                 baseline_deviation: BaselineDeviationConfig::default(),
@@ -183,7 +248,9 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
             progress,
         },
         SourceContext {
+            mcp_servers: &[],
             rules: &plan,
+            pre_policy_rules: None,
             process: None,
             prior: &BaselineSnapshotStore::default(),
             baseline_deviation: BaselineDeviationConfig::default(),
@@ -221,7 +288,9 @@ fn metadata_origin_must_match_not_just_visible_session_id() {
             },
         },
         SourceContext {
+            mcp_servers: &[],
             rules: &plan("user_context"),
+            pre_policy_rules: None,
             process: None,
             prior: &BaselineSnapshotStore::default(),
             baseline_deviation: BaselineDeviationConfig::default(),

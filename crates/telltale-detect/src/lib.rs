@@ -16,8 +16,8 @@ pub(crate) mod process_chain_session;
 /// Experimental, non-production I/O-free Detection v2 equivalence harness.
 pub mod shadow_v2;
 pub mod timeline;
-/// Experimental, non-production Detection v2 APIs. This module is not
-/// scanner-wired and accepts only caller-provided typed observations.
+/// Detection v2 APIs used by the canonical source runtime. Evaluation remains
+/// I/O-free and accepts caller-provided typed observations.
 pub mod v2;
 
 #[cfg(all(test, feature = "source-io"))]

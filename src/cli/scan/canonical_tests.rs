@@ -1,4 +1,5 @@
 use super::*;
+use telltale_core::canonical_runtime::FailureStage;
 
 #[test]
 fn runtime_failures_become_private_scanner_errors_without_staging_eligibility() {
@@ -204,9 +205,15 @@ fn complete_replacement_is_staged_and_empty_clears_only_its_source() {
         panic!("complete file replacement")
     };
     assert_eq!(summaries.len(), 1);
-    state.record_baseline_source_contribution(&source, "old".into(), summaries.clone());
-    state.record_baseline_source_contribution(&other, "other".into(), summaries);
-    state.rebuild_baseline_snapshots_from_source_contributions();
+    state
+        .record_baseline_source_contribution(&source, "old".into(), summaries.clone())
+        .unwrap();
+    state
+        .record_baseline_source_contribution(&other, "other".into(), summaries)
+        .unwrap();
+    state
+        .rebuild_baseline_snapshots_from_source_contributions()
+        .unwrap();
     let before = serde_json::to_string(&state).unwrap();
     let ineligible = concat!(
         "{\"type\":\"session_meta\",\"payload\":{}}\n",
@@ -229,8 +236,12 @@ fn complete_replacement_is_staged_and_empty_clears_only_its_source() {
     };
     assert_eq!(eligible.len(), 1);
     assert_eq!(eligible[0].key.model.as_deref(), Some("new-model"));
-    state.record_baseline_source_contribution(&source, "mixed".into(), eligible);
-    state.rebuild_baseline_snapshots_from_source_contributions();
+    state
+        .record_baseline_source_contribution(&source, "mixed".into(), eligible)
+        .unwrap();
+    state
+        .rebuild_baseline_snapshots_from_source_contributions()
+        .unwrap();
     assert_eq!(state.baseline_snapshots.snapshots.len(), 2);
     assert!(
         state
@@ -257,8 +268,12 @@ fn complete_replacement_is_staged_and_empty_clears_only_its_source() {
     };
     assert!(empty.is_empty());
     // Test-only simulation at the authoritative state boundary, not evaluation.
-    state.record_baseline_source_contribution(&source, "new".into(), empty);
-    state.rebuild_baseline_snapshots_from_source_contributions();
+    state
+        .record_baseline_source_contribution(&source, "new".into(), empty)
+        .unwrap();
+    state
+        .rebuild_baseline_snapshots_from_source_contributions()
+        .unwrap();
     assert_eq!(
         state
             .baseline_snapshots
@@ -295,8 +310,12 @@ fn partial_and_scanner_modes_cannot_stage_baseline_mutation() {
     let BaselineReplacement::Replace(summaries) = initial.baseline_replacement else {
         panic!("replacement")
     };
-    state.record_baseline_source_contribution(&sqlite, "prior".into(), summaries);
-    state.rebuild_baseline_snapshots_from_source_contributions();
+    state
+        .record_baseline_source_contribution(&sqlite, "prior".into(), summaries)
+        .unwrap();
+    state
+        .rebuild_baseline_snapshots_from_source_contributions()
+        .unwrap();
     let before = serde_json::to_string(&state).unwrap();
     for (backfill, dry_run) in [(false, false), (true, false), (false, true), (true, true)] {
         for source in [&file, &sqlite] {
@@ -364,8 +383,12 @@ fn canonical_candidate_round_trips_existing_state_without_plaintext_hosts() {
         &telltale_detect::baseline::baseline_host_identity("recognizable-host.synthetic.example")
     );
     assert!(!format!("{summaries:?}").contains("recognizable-host"));
-    state.record_baseline_source_contribution(&source, "synthetic-fingerprint".into(), summaries);
-    state.rebuild_baseline_snapshots_from_source_contributions();
+    state
+        .record_baseline_source_contribution(&source, "synthetic-fingerprint".into(), summaries)
+        .unwrap();
+    state
+        .rebuild_baseline_snapshots_from_source_contributions()
+        .unwrap();
     assert!(!format!("{state:?}").contains("recognizable-host"));
     assert!(
         !serde_json::to_string(&state)

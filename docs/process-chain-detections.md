@@ -13,7 +13,7 @@ its own event type. The regex engine, its rule pack, its scoring, and the sessio
 - Generator: `scripts/dev/generate-process-chain-rules.py`
 - Matching engine: `crates/telltale-rules/src/process_chain.rs`
 - Extraction, emission, correlation: `crates/telltale-detect/src/process_chain.rs`
-- Non-production Detection v2 Tool boundary:
+- Detection v2 Tool boundary:
   `crates/telltale-detect/src/v2/process_chain.rs`
 - Event type: `process_chain`
 
@@ -27,7 +27,7 @@ Set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` to turn the pack off for a scan.
 
 ## Detection v2 convergence status
 
-A bounded non-production Detection v2 path now evaluates command-derived
+A bounded Detection v2 path now evaluates command-derived
 parent/child matcher context and standalone rules from command-bearing Canonical
 Observation v2 Tool evidence,
 and a caller-grouped session evaluator applies repeat suppression and the six
@@ -38,10 +38,10 @@ parsing creates private matcher working state, not Canonical Process evidence.
 `CompiledProcessChainRules` remains the authoritative matcher, and matches use
 ordinary Detection v2 DetectorResults, Signals, and Findings.
 
-This path is not active in scan or watch. Production still starts from
-NormalizedRecord and projects Event3 through the existing wrapper. The pure
-repeat/correlation semantic kernel is shared by that wrapper and the v2 session
-evaluator, while Event3 and Event4 contracts remain unchanged/inactive.
+This path is active in the canonical scan/watch/embedding runtime. The pure
+repeat/correlation semantic kernel remains shared by the canonical evaluator and
+the retained record-level compatibility wrapper. Event3 remains the compatibility
+projection; Event4 remains inactive.
 
 ## The core rule: emission and risk are separate decisions
 

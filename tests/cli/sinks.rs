@@ -315,7 +315,11 @@ fn scan_once_emits_identical_events_to_jsonl_hec_and_elastic() {
         .iter()
         .filter(|event| event["event_type"] == "detection")
         .collect::<Vec<_>>();
-    assert_eq!(detections.len(), 31, "expected fixture detections");
+    assert_eq!(
+        detections.len(),
+        30,
+        "expected canonical fixture detections"
+    );
     assert!(detections.iter().any(|event| {
         event["session_id"] == "tool-injection-shape-session"
             && event["rule_ids"].as_array().is_some_and(|rule_ids| {

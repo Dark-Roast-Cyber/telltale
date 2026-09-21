@@ -12,12 +12,7 @@ use crate::event::{
     terminal_product_metadata, terminal_rule_identifier, terminal_session_id,
     validate_risk_accounting_scope, validate_rule_ids,
 };
-use crate::rules::{CompiledRuleSet, load_default_rule_set};
-use crate::schema::{NormalizedRecordV1, Provenance};
-use crate::scoring::{
-    RiskAccountingError, assess_risk_with_thresholds, canonicalize_contributions, load_thresholds,
-};
-use crate::timeline::build_exported_session_timeline;
+use crate::scoring::{RiskAccountingError, canonicalize_contributions};
 
 pub(crate) struct ExportConfig<'a> {
     pub(crate) log_path: &'a Path,
@@ -30,7 +25,6 @@ pub(crate) struct ExportConfig<'a> {
     pub(crate) format: super::ExportFormat,
     pub(crate) correlate: bool,
     pub(crate) timeline: bool,
-    pub(crate) source_root: Option<&'a Path>,
 }
 
 struct ParsedExportRange {
@@ -53,30 +47,9 @@ struct EventBackedTimelineSummary {
     risk_summary: serde_json::Value,
 }
 
-#[derive(serde::Serialize)]
-struct SourceBackedRiskSummary {
-    tool_call_count: u64,
-    risky_action_count: u64,
-    top_rule_ids: Option<Vec<String>>,
-    top_categories: Option<Vec<String>>,
-    max_severity: &'static str,
-    triage_ran: bool,
-}
-
-struct SourceBackedSessionRecord {
-    timestamp: String,
-    source_index: usize,
-    canonical: NormalizedRecordV1,
-    parsed: telltale_schema::record::NormalizedRecord,
-}
-
 pub(crate) fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     validate_export_config(&config)?;
     let range = parse_export_range(&config)?;
-
-    if let Some(source_root) = config.source_root.filter(|_| config.timeline) {
-        return run_source_backed_timeline_export(&config, source_root);
-    }
 
     let events = super::read_jsonl_events(config.log_path)?;
     validate_imported_event_accounting(&events)?;
@@ -113,9 +86,6 @@ fn validate_export_config(config: &ExportConfig<'_>) -> Result<(), Box<dyn std::
     if config.timeline && config.correlate {
         return Err("--correlate does not support --timeline".into());
     }
-    if config.source_root.is_some() && !config.timeline {
-        return Err("--source-root requires --timeline".into());
-    }
     if !config.timeline && config.format == super::ExportFormat::TimelineText {
         return Err("--format timeline-text requires --timeline".into());
     }
@@ -125,39 +95,7 @@ fn validate_export_config(config: &ExportConfig<'_>) -> Result<(), Box<dyn std::
     if config.timeline && config.format == super::ExportFormat::ElasticBulk {
         return Err("--format elastic-bulk does not support --timeline".into());
     }
-    if config.source_root.is_some() {
-        if !config.severities.is_empty() {
-            return Err("--source-root does not support --severity filters".into());
-        }
-        if !config.rule_ids.is_empty() {
-            return Err("--source-root does not support --rule-id filters".into());
-        }
-        if config.since.is_some() || config.until.is_some() {
-            return Err("--source-root does not support --since/--until filters".into());
-        }
-        if let Some(unsupported_client) = config
-            .clients
-            .iter()
-            .find(|client| !is_supported_client_filter(client))
-        {
-            let expected = telltale_sources::clients::supported_clients()
-                .iter()
-                .map(|client| client.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "--source-root does not support unknown client '{unsupported_client}'; expected one of: {expected}"
-            )
-            .into());
-        }
-    }
     Ok(())
-}
-
-fn is_supported_client_filter(value: &str) -> bool {
-    telltale_sources::clients::supported_clients()
-        .iter()
-        .any(|client| client.id.as_str() == value)
 }
 
 fn parse_export_range(
@@ -171,21 +109,6 @@ fn parse_export_range(
         return Err("--since must be less than or equal to --until".into());
     }
     Ok(ParsedExportRange { since, until })
-}
-
-fn run_source_backed_timeline_export(
-    config: &ExportConfig<'_>,
-    source_root: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let client_filters = string_set(config.clients);
-    let session_filters = string_set(config.session_ids);
-    let timeline_events =
-        build_source_backed_session_timelines(source_root, &session_filters, &client_filters)?;
-    print_single_session_timeline(
-        &timeline_events,
-        config.session_ids[0].as_str(),
-        config.format,
-    )
 }
 
 fn filtered_export_events<'a>(
@@ -915,126 +838,6 @@ fn sanitize_timeline_anchors(anchors: &mut serde_json::Value, event: &serde_json
             }
         }
     }
-}
-
-fn build_source_backed_session_timelines(
-    source_root: &Path,
-    session_filters: &BTreeSet<String>,
-    client_filters: &BTreeSet<String>,
-) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
-    type SessionKey = (String, String);
-
-    let rule_set = load_default_rule_set()?;
-    let mut by_session: BTreeMap<SessionKey, Vec<SourceBackedSessionRecord>> = BTreeMap::new();
-    let mut sources = crate::discovery::discover_sources_best_effort(source_root);
-    if !client_filters.is_empty() {
-        sources.retain(|source| client_filters.contains(source.client.as_str()));
-    }
-
-    for source in &sources {
-        let records = crate::parser::parse_source_records(source)
-            .map_err(|error| format!("source parse failed for {}: {error}", source.source_id))?;
-        let client = source.client.as_str().to_string();
-        let source_path = source.path.to_string_lossy();
-        let source_path_hash = evidence_hash(&source_path);
-        for (index, record) in records.into_iter().enumerate() {
-            if !session_filters.contains(&record.session_id) {
-                continue;
-            }
-            let session_id = record.session_id.clone();
-            let timestamp = record.timestamp.clone().unwrap_or_default();
-            let canonical = NormalizedRecordV1::from_legacy(
-                record.clone(),
-                Provenance {
-                    source_path_hash: source_path_hash.clone(),
-                    source_event_id: None,
-                    offset: Some(index.to_string()),
-                },
-            );
-            by_session
-                .entry((session_id, client.clone()))
-                .or_default()
-                .push(SourceBackedSessionRecord {
-                    timestamp,
-                    source_index: index,
-                    canonical,
-                    parsed: record,
-                });
-        }
-    }
-
-    let timelines = by_session
-        .into_values()
-        .map(|mut records| {
-            records.sort_by(|left, right| {
-                left.timestamp
-                    .cmp(&right.timestamp)
-                    .then_with(|| left.source_index.cmp(&right.source_index))
-            });
-            let mut canonical_records = Vec::with_capacity(records.len());
-            let mut parsed_records = Vec::with_capacity(records.len());
-            for record in records {
-                canonical_records.push(record.canonical);
-                parsed_records.push(record.parsed);
-            }
-            build_source_backed_timeline_value(&canonical_records, &parsed_records, &rule_set)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(timelines.into_iter().flatten().collect())
-}
-
-fn build_source_backed_timeline_value(
-    canonical_records: &[NormalizedRecordV1],
-    parsed_records: &[telltale_schema::record::NormalizedRecord],
-    rule_set: &CompiledRuleSet,
-) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
-    let Some(session_timeline) = build_exported_session_timeline(canonical_records) else {
-        return Ok(None);
-    };
-    let mut timeline = serde_json::to_value(session_timeline)?;
-    let summary = build_source_backed_risk_summary(parsed_records, rule_set)?;
-
-    timeline["detection_count"] = serde_json::Value::from(summary.risky_action_count);
-    timeline["max_severity"] = serde_json::Value::String(summary.max_severity.to_string());
-    timeline["has_triage"] = serde_json::Value::Bool(summary.triage_ran);
-    timeline["record_status"] = serde_json::Value::String("source_derived".to_string());
-    timeline["risk_summary"] = serde_json::to_value(summary)?;
-    Ok(Some(timeline))
-}
-
-fn build_source_backed_risk_summary(
-    parsed_records: &[telltale_schema::record::NormalizedRecord],
-    rule_set: &CompiledRuleSet,
-) -> Result<SourceBackedRiskSummary, RiskAccountingError> {
-    let tool_call_count = parsed_records
-        .iter()
-        .filter(|record| matches!(record.kind, telltale_schema::record::RecordKind::ToolCall))
-        .count() as u64;
-    let (risk_score, top_rule_ids, top_categories, risky_action_count) =
-        match crate::detection::evaluate_session_matches(rule_set, parsed_records)? {
-            Some(matches) => (
-                matches.score,
-                Some(matches.rule_ids),
-                Some(matches.categories),
-                1,
-            ),
-            None => (0, None, None, 0),
-        };
-    let max_severity = if risk_score == 0 {
-        "informational"
-    } else {
-        assess_risk_with_thresholds(risk_score, load_thresholds())
-            .severity
-            .as_str()
-    };
-    Ok(SourceBackedRiskSummary {
-        tool_call_count,
-        risky_action_count,
-        top_rule_ids,
-        top_categories,
-        max_severity,
-        triage_ran: false,
-    })
 }
 
 fn build_event_backed_timeline_summary(

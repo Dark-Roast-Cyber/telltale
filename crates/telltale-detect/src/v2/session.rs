@@ -1,4 +1,4 @@
-//! Inactive canonical processing. One invocation is one caller-verified source
+//! Canonical processing. One invocation is one caller-verified source
 //! instance, never a collection of files grouped by their session strings.
 
 use std::collections::{BTreeMap, BTreeSet};

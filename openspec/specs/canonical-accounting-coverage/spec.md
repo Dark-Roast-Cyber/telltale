@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Define replacement eligibility of native source accounting for the inactive
-canonical runtime. Coverage extends B3A accounting without changing its facts,
+Define replacement eligibility of native source accounting for the canonical
+runtime. Coverage extends B3A accounting without changing its facts,
 observation semantics, or the existing retained-source baseline model.
 
 ## Requirements
@@ -128,19 +128,16 @@ per-record map, source reread, or durable native-unit ledger.
 - **THEN** it adds only constant-size classification metadata
 - **AND** existing contribution/session capacity failures remain failures, not truncation
 
-### Requirement: Prerequisite does not activate baseline or production runtime
+### Requirement: Runtime activation preserves coverage semantics
 
-This capability MUST NOT mutate baseline state, implement activity Event3,
-implement B3B migration/reset policy, change embedding or Event3, activate Event4,
-or add a production caller of process_canonical_source. Scan/watch MUST remain
-legacy and roadmap step 5 incomplete. B3B state work MUST wait for acceptance of
-this coverage contract. Independent review and the requested Rust, OpenSpec, and
-public-document gates SHALL precede acceptance; coordinated runtime activation
-and deletion of legacy composition/temporary carriers require separate scope
-after validated cutover. Coverage semantics MUST survive that deletion.
+The canonical runtime MUST use `CompleteSource` only for exact source-key
+replacement and MUST treat `PartialSource` as `NoReplacement`. Activity MAY be
+emitted for either successful coverage class. Baseline candidates and cursor
+updates MUST remain staged until required local output is durable. Event3
+compatibility and Event4 inactivity remain unchanged.
 
-#### Scenario: Coverage ships as an inactive prerequisite
+#### Scenario: Coverage controls activated replacement
 
-- **WHEN** this prerequisite is implemented and validated
-- **THEN** only the inactive acquisition coverage contract becomes available
-- **AND** no production activation, state migration, reset, or B3B resumption occurs
+- **WHEN** canonical processing succeeds for complete or partial source coverage
+- **THEN** only complete coverage may replace the exact retained contribution
+- **AND** partial coverage cannot replace or add to a retained population

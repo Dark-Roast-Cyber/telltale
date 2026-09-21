@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::detection::detect_sources_with_rules;
 use crate::discovery::discover_sources_best_effort;
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
@@ -37,7 +36,33 @@ pub(crate) fn run_rules_coverage(
         return Ok(());
     }
 
-    let detections = detect_sources_with_rules(&sources, rule_set);
+    let rules = telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export())?;
+    let observed_at = telltale_schema::observation::ObservedAt::new(
+        time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?,
+    )?;
+    let prior = crate::baseline::BaselineSnapshotStore::default();
+    let mut detections = Vec::new();
+    for source in &sources {
+        let result = telltale_core::canonical_runtime::process_source(
+            source,
+            observed_at.clone(),
+            None,
+            telltale_core::canonical_runtime::SourceContext {
+                mcp_servers: &[],
+                rules: &rules,
+                pre_policy_rules: None,
+                process: None,
+                prior: &prior,
+                baseline_deviation: Default::default(),
+            },
+        )?;
+        detections.extend(
+            result
+                .events
+                .into_iter()
+                .map(|event| (source.clone(), event)),
+        );
+    }
 
     // Build coverage map: rule_id -> (positive session_ids, clients).
     let mut positive_sessions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -50,27 +75,6 @@ pub(crate) fn run_rules_coverage(
     }
 
     for (source, event) in &detections {
-        if event.event_type == "scanner_error" {
-            let detail = event
-                .evidence
-                .iter()
-                .find(|evidence| evidence.field == "error")
-                .map(|evidence| {
-                    PrivacySanitizer::sanitize(
-                        SanitizationContext::Diagnostic,
-                        &evidence.redacted_value,
-                    )
-                })
-                .unwrap_or_else(|| "scanner error".to_string());
-            return Err(format!(
-                "rules coverage failed for {}: {detail}",
-                PrivacySanitizer::sanitize(
-                    SanitizationContext::Path,
-                    &source.path.to_string_lossy()
-                )
-            )
-            .into());
-        }
         if event.event_type != "detection" {
             continue;
         }

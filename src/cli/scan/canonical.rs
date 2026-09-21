@@ -1,13 +1,13 @@
-//! Inactive Issue #51 composition: prove native acquisition -> evaluation ->
-//! Event3 before coordinated scan/watch/embedding activation. Activity/baseline
-//! staging is inactive. Source semantics live in telltale_core::canonical_runtime;
+//! Scanner adapter for native acquisition -> evaluation -> Event3.
+//! Source semantics live in telltale_core::canonical_runtime;
 //! this adapter retains scanner policy and compatibility error events only.
-#![allow(dead_code)] // Private migration seam; never selected by run_scan.
 
-use telltale_core::canonical_runtime::{FailureStage, SourceContext, SourceResult};
+use telltale_core::canonical_runtime::{SourceContext, SourceResult};
 use telltale_detect::baseline::BaselineDeviationConfig;
+#[cfg(test)]
+use telltale_detect::v2::EvaluationCompletion;
+use telltale_detect::v2::RuleV1CompatibilityPlan;
 use telltale_detect::v2::activity::BaselineReplacement;
-use telltale_detect::v2::{EvaluationCompletion, RuleV1CompatibilityPlan};
 use telltale_rules::process_chain::CompiledProcessChainRules;
 #[cfg(test)]
 use telltale_schema::event::path_hash;
@@ -20,7 +20,7 @@ use telltale_sources::acquisition::{
 
 use super::{
     Event, ProcessChainConfig, ScanState, Source, SourceProcessingStatus,
-    is_opencode_sqlite_source, parse_options_for_scan_source, scanner_error_event,
+    is_opencode_sqlite_source, parse_options_for_scan_source,
     should_stage_sqlite_ingestion_cursors, sqlite_progress_candidate,
 };
 
@@ -28,16 +28,25 @@ pub(super) struct CanonicalProcessingResult {
     pub events: Vec<Event>,
     pub status: SourceProcessingStatus,
     pub progress: AcquisitionProgress,
+    #[cfg(test)]
     pub completion: Option<EvaluationCompletion>,
     pub accounting: Option<SourceAccounting>,
     pub baseline_replacement: BaselineReplacement,
+    pub policy_accounting: Option<
+        Result<
+            super::PolicyMatchAccounting,
+            telltale_detect::detection::PolicyMatchAccountingError,
+        >,
+    >,
 }
 
 #[derive(Default)]
-pub(super) struct CanonicalProcessingOptions {
+pub(super) struct CanonicalProcessingOptions<'a> {
+    pub mcp_servers: &'a [telltale_detect::mcp::McpServerInventory],
     pub backfill: bool,
     pub dry_run: bool,
     pub baseline_deviation: BaselineDeviationConfig,
+    pub pre_policy_rules: Option<&'a RuleV1CompatibilityPlan>,
 }
 
 impl CanonicalProcessingResult {
@@ -60,7 +69,7 @@ impl CanonicalProcessingResult {
 pub(super) fn process_canonical_source(
     source: &Source,
     state: &ScanState,
-    processing: CanonicalProcessingOptions,
+    processing: CanonicalProcessingOptions<'_>,
     observed_at: ObservedAt,
     rules: &RuleV1CompatibilityPlan,
     process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
@@ -83,7 +92,9 @@ pub(super) fn process_canonical_source(
             observed_at,
             sqlite,
             SourceContext {
+                mcp_servers: processing.mcp_servers,
                 rules,
+                pre_policy_rules: processing.pre_policy_rules,
                 process,
                 prior: &state.baseline_snapshots,
                 baseline_deviation: processing.baseline_deviation,
@@ -107,43 +118,22 @@ fn adapt_result(
             events: result.events,
             status: SourceProcessingStatus::from_canonical(Ok(result.completion)),
             progress: result.progress,
+            #[cfg(test)]
             completion: Some(result.completion),
             accounting: Some(result.accounting),
             baseline_replacement: result.baseline_replacement,
+            policy_accounting: result.policy_accounting,
         },
-        Err(error) => {
-            let code = match error.stage {
-                FailureStage::SourceScope => "canonical_source_scope_failed",
-                FailureStage::Acquisition => "canonical_acquisition_failed",
-                FailureStage::Evaluation => "canonical_evaluation_failed",
-                FailureStage::Projection => "canonical_projection_failed",
-                FailureStage::Activity => "canonical_activity_failed",
-            };
-            failed(source, error.progress, code)
-        }
-    }
-}
-
-fn failed(
-    source: &Source,
-    progress: AcquisitionProgress,
-    code: &'static str,
-) -> CanonicalProcessingResult {
-    let mut event = scanner_error_event(source, &code);
-    // The shared legacy constructor includes a filename label. B2's public
-    // diagnostic boundary retains its hash but never that source-controlled text.
-    for evidence in &mut event.evidence {
-        if evidence.field == "source_path" {
-            evidence.redacted_value = "canonical source".into();
-        }
-    }
-    CanonicalProcessingResult {
-        events: vec![event],
-        status: SourceProcessingStatus::Failed,
-        progress,
-        completion: None,
-        accounting: None,
-        baseline_replacement: BaselineReplacement::NoReplacement,
+        Err(error) => CanonicalProcessingResult {
+            events: vec![error.event(source)],
+            status: SourceProcessingStatus::Failed,
+            progress: error.progress,
+            #[cfg(test)]
+            completion: None,
+            accounting: None,
+            baseline_replacement: BaselineReplacement::NoReplacement,
+            policy_accounting: None,
+        },
     }
 }
 

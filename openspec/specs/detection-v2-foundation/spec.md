@@ -1,20 +1,20 @@
 # detection-v2-foundation Specification
 
 ## Purpose
-This specification covers only the experimental, non-production Detection v2
-foundation. It implements the `observation_match` detector, bounded
+This specification covers the Detection v2 foundation and its activated
+canonical source evaluation. It implements the `observation_match` detector, bounded
 Tool-derived parent/child, standalone, and caller-grouped session
 `process_chain` evaluation, the
 `DetectorResult` -> `Signal`
 -> atomic `Finding` boundary, the final 56-selector registry (48 native plus
 exactly eight Rule v1 compatibility views), their capability/provenance/matcher/
 identity contracts, and the read-only Rule v1 export/compatibility compiler and
-source-free session evaluator, inactive source-instance-scoped session
+source-free session evaluator, source-instance-scoped session
 orchestration, and a source-free Event3 compatibility projection. Process-chain
 repeat/correlation semantics have one pure shared owner used by both the
-legacy Event3 adapter and this v2 session evaluator; this does not activate v2
-in production. `compat.v1.url` remains compiler-supported but truthfully
-absent. There is no live shadow or activation path, source or scanner wiring,
+Event3 compatibility adapter and this v2 session evaluator. `compat.v1.url`
+remains compiler-supported but truthfully
+absent. There is no live shadow,
 advanced detector runtime, Event4, gateway, or Detection Content v2 runtime
 loader; the Event 3.0 schema remains unchanged.
 ## Requirements
@@ -251,8 +251,8 @@ DetectorResults, Signals, Findings, or native v2 detector kinds.
 ### Requirement: Tool-derived process-chain evaluation
 
 `process_chain` MUST be runtime-supported without activating `sequence`,
-`correlation`, `imported`, `baseline`, or `guard_model`. The non-production
-evaluator MUST accept already-created Canonical Observation v2 values and MUST
+`correlation`, `imported`, `baseline`, or `guard_model`. The evaluator MUST
+accept already-created Canonical Observation v2 values and MUST
 evaluate only Tool observations at `ToolProposed`, `ToolRequested`,
 `ToolExecutionStarted`, or `ToolExecutionCompleted`. `ToolResultReturned` and
 all non-Tool families MUST produce no process-chain candidates.
@@ -309,11 +309,13 @@ MUST materialize through the ordinary Signal and atomic Finding path.
 
 #### Scenario: Process-chain migration remains bounded
 
-- **WHEN** the Tool-derived evaluator is available
-- **THEN** scan/watch activation, Event3 projection, Event4, direct Process
-  evidence, and any OpenShell integration remain unchanged and inactive at this
-  boundary; only the caller-grouped non-production session evaluator applies
-  repeat suppression and specialized process-chain correlation
+- **WHEN** the canonical runtime supplies Tool-derived evidence and compiled
+  process-chain rules
+- **THEN** scan/watch invoke the Detection v2 process-chain session evaluator and
+  project its compatible output through Event3
+- **AND** the caller-grouped session evaluator owns repeat suppression and
+  specialized process-chain correlation, while Event4, direct Process evidence,
+  and any OpenShell integration remain inactive
 
 ### Requirement: Process-chain session semantics
 
@@ -445,12 +447,11 @@ entity risk.
 - **THEN** its detector kind is `ProcessChain`, not generic `Sequence` or
   `Correlation`, and those generic kinds remain runtime-unsupported
 
-### Requirement: Production and privacy boundary
+### Requirement: Runtime and privacy boundary
 
-The foundation MUST be free of source I/O and source-crate dependencies, MUST
-not provide policy/action/export/Event fields, and MUST leave current production
-detection, allowlist, process-chain extraction/suppression/correlation, timeline,
-Rule v1 evaluation/scoring, adapters, and Event 3 behavior unchanged.
+The Detection v2 evaluator MUST remain free of source I/O and source-crate
+dependencies. The shared canonical runtime MUST own source acquisition and
+Event3 projection around that evaluator without adding policy/action authority.
 Diagnostics and identities MUST contain no raw matched values. Evidence
 references MUST be representation-specific validated handles (selector paths,
 valid typed IDs, safe fingerprints, bounded classifications, or accepted local
@@ -458,13 +459,11 @@ structured references), not arbitrary content. Debug output for results,
 signals, findings, and their evidence-bearing supporting values MUST redact
 semantic strings and evidence payloads.
 
-#### Scenario: Local module remains non-production
+#### Scenario: Local evaluator remains source-free
 
 - **WHEN** the Detection v2 module is built without source-I/O features
 - **THEN** it compiles and evaluates only caller-provided typed observations,
-  with no scanner, adapter, Event, policy, or action path; normal production
-  paths do not invoke the Rule v1 compatibility session evaluator or the
-  Tool-derived process-chain evaluator
+  with no direct scanner, adapter, Event, policy, or action ownership
 
 #### Scenario: Identity is value-independent
 
@@ -480,7 +479,7 @@ semantic strings and evidence payloads.
 - **THEN** construction rejects the arbitrary text, and Debug output contains no
   evidence payload
 
-### Requirement: Inactive canonical source/session evaluation
+### Requirement: Canonical source/session evaluation
 
 The canonical evaluation boundary SHALL own source-instance-scoped session
 grouping and deterministic occurrence ordering for both Rule v1 compatibility

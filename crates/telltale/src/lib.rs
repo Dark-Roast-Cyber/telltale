@@ -54,21 +54,13 @@ pub use telltale_sources::paths::PathProfile;
 use std::path::Path;
 
 type BoxError = Box<dyn std::error::Error>;
+type SourceOutcome = Result<canonical_runtime::SourceResult, canonical_runtime::SourceFailure>;
 
 /// A compiled detection pipeline: bundled (and optional custom) rules, ready
 /// to evaluate discovered session stores or caller-supplied records.
 pub struct Pipeline {
     rule_set: CompiledRuleSet,
 }
-
-// Temporary source-runtime selection only. Flip at coordinated activation;
-// delete the selector and legacy source branch after validated cutover.
-#[allow(dead_code)]
-enum SourceEngine {
-    Legacy,
-    Canonical,
-}
-const SOURCE_ENGINE: SourceEngine = SourceEngine::Legacy;
 
 /// Builder for [`Pipeline`]. This in-memory convenience includes bundled default
 /// rules and makes extra rule documents additive; it is not the CLI's path and
@@ -90,62 +82,58 @@ impl Pipeline {
         self.rule_set.rule_count()
     }
 
-    /// Discover session stores under `root` and run detection over every
-    /// parseable source. Parse failures surface as `scanner_error` events in
-    /// the stream, exactly as the `telltale` CLI reports them.
+    /// Discover session stores under `root` and run canonical detection and activity.
+    /// Source processing failures surface as `scanner_error` events; discovery
+    /// and rule compilation failures return `Err`. No baseline or cursor is persisted.
     pub fn scan_root(&self, root: &Path) -> Result<Vec<(Source, Event)>, BoxError> {
         let sources = telltale_sources::discovery::discover_sources(root)?;
-        match SOURCE_ENGINE {
-            SourceEngine::Legacy => Ok(telltale_detect::detection::detect_sources_with_rules(
-                &sources,
-                &self.rule_set,
-            )),
-            SourceEngine::Canonical => {
-                let now = time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)?;
-                let observed_at = telltale_schema::observation::ObservedAt::new(now)?;
-                Ok(self
-                    .scan_canonical_sources(&sources, observed_at)?
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)?;
+        let observed_at = telltale_schema::observation::ObservedAt::new(now)?;
+        Ok(self
+            .scan_canonical_sources(&sources, observed_at)?
+            .into_iter()
+            .flat_map(|(source, result)| {
+                result
+                    .map(|result| result.events)
+                    .unwrap_or_else(|error| vec![error.event(&source)])
                     .into_iter()
-                    .flat_map(|(source, result)| {
-                        result
-                            .events
-                            .into_iter()
-                            .map(move |event| (source.clone(), event))
-                    })
-                    .collect())
-            }
-        }
+                    .map(move |event| (source.clone(), event))
+            })
+            .collect())
     }
 
-    /// Inactive, stateless adapter. One observation time for the entire root scan.
+    /// Stateless adapter. One observation time for the entire root scan.
     /// No prior baseline means no deviation history; replacement remains data.
     fn scan_canonical_sources(
         &self,
         sources: &[Source],
         observed_at: telltale_schema::observation::ObservedAt,
-    ) -> Result<Vec<(Source, canonical_runtime::SourceResult)>, BoxError> {
+    ) -> Result<Vec<(Source, SourceOutcome)>, BoxError> {
         let rules = telltale_detect::v2::compile_rule_v1(&self.rule_set.compatibility_export())?;
         let prior = telltale_detect::baseline::BaselineSnapshotStore::default();
-        sources
+        Ok(sources
             .iter()
             .map(|source| {
-                canonical_runtime::process_source(
-                    source,
-                    observed_at.clone(),
-                    None,
-                    canonical_runtime::SourceContext {
-                        rules: &rules,
-                        process: None,
-                        prior: &prior,
-                        baseline_deviation:
-                            telltale_detect::baseline::BaselineDeviationConfig::default(),
-                    },
+                (
+                    source.clone(),
+                    canonical_runtime::process_source(
+                        source,
+                        observed_at.clone(),
+                        None,
+                        canonical_runtime::SourceContext {
+                            mcp_servers: &[],
+                            rules: &rules,
+                            pre_policy_rules: None,
+                            process: None,
+                            prior: &prior,
+                            baseline_deviation:
+                                telltale_detect::baseline::BaselineDeviationConfig::default(),
+                        },
+                    ),
                 )
-                .map(|result| (source.clone(), result))
-                .map_err(|error| Box::new(error) as BoxError)
             })
-            .collect()
+            .collect())
     }
 
     /// Run detection over records the host already parsed or synthesized.

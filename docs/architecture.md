@@ -23,27 +23,26 @@ The accepted future semantic contracts are documented in the [semantic
 foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
 v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
 [telemetry/output architecture](telemetry-output-architecture.md) pages. They
-are accepted architecture, with experimental Detection v2 and Event4 contract
-foundations now implemented non-production. Event4 production persistence and
+are accepted architecture, with the Detection v2 runtime now authoritative for
+the canonical scan/watch/embedding path. Event4 production persistence and
 output are not implemented; neither is Telemetry/Output v2. The public
-`telltale_sources::acquisition` module now owns authoritative cross-source
+`telltale_sources::acquisition` module owns authoritative cross-source
 Canonical Observation v2 acquisition for all eight target identities. It is the
 single router: source-native extraction flows into source-owned canonical
-mapping and then an acquisition batch. It is not connected to scan, watch,
-detection, or embedding.
+mapping and then an acquisition batch consumed by the shared runtime.
 
 `observation_match`, bounded Tool-derived parent/child and standalone
 `process_chain` evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`, and
-the Rule v1 compiler are implemented for Detection v2. The non-production
-process-chain session evaluator parses canonical Tool command evidence into
+the Rule v1 compiler are implemented for Detection v2. The process-chain
+session evaluator parses canonical Tool command evidence into
 private matcher working state and shares one pure repeat/correlation semantic
-kernel with the legacy Event3 wrapper; it does not manufacture Canonical Process
+kernel with Event3 compatibility projection; it does not manufacture Canonical Process
 observations. The fixture-only offline shadow harness is an offline measurement
 seam, not a scanner or activation path. Advanced detector runtime and a
 Detection Content v2 loader are not implemented.
 
-Canonical Observation v2 core types/scaffolding are implemented in
-`telltale-schema`. Non-production reference projections exist for Claude Code
+Canonical Observation v2 core types are implemented in `telltale-schema`.
+Source-native production projections exist for Claude Code
 (`claude.projects`), the principal Codex session identities, OpenCode
 (`opencode.sqlite`), OpenClaw (`openclaw.agents`), Qwen (`qwen.projects`), and
 Copilot (`copilot.process_log`). Offline deterministic shadow coverage includes
@@ -57,9 +56,8 @@ Production adapter acquisition convergence now covers all eight identities at th
 public `telltale_sources::acquisition` boundary, satisfying and completing
 ROADMAP step 4. Source mappers remain crate-private; acquisition is the single
 cross-source router and there is no parallel canonical facade. Event 3.0 remains
-the frozen current compatibility contract. The pipeline below continues to
-describe the shipped implementation until the later coordinated production
-cutover occurs.
+the frozen current compatibility contract. The pipeline below describes the
+activated canonical runtime.
 Event4 remains inactive. Direct runtime telemetry, including any future
 OpenShell source that reports Process, Network, Runtime, policy, enforcement, or
 action-result evidence, remains separate from command-derived Tool
@@ -104,13 +102,11 @@ The production migration order is:
 7. decide the remaining Event4 and telemetry activation gates after the internal
    semantic/detection path is singular.
 
-Step 4 convergence is complete. Step 5 has an inactive canonical evaluation and
-Event3 compatibility boundary. Scanner-owned processing success now gates OpenCode
-cursor eligibility on the current production path; parse success alone cannot
-advance that cursor. Coordinated scan, watch, and supported embedding activation
-onto Canonical Observation v2 -> Detection v2 remains later work under Issue #51.
-Production detection and embedding remain on the legacy path; Event 3.0 is frozen
-and Event4 is inactive.
+Step 4 and coordinated step 5 convergence are complete. Scanner-owned processing
+success gates OpenCode cursor eligibility; parse success alone cannot advance that
+cursor. CLI scan/watch and supported embedding use Canonical Observation v2 ->
+Detection v2 -> Event3 compatibility/activity. Event 3.0 is frozen and Event4 is
+inactive.
 
 Acquisition is direct source-native extraction followed by source-owned canonical
 mapping; it is not a conversion bridge. Production must not converge by creating
@@ -125,9 +121,9 @@ Telltale currently runs a repeatable batch pipeline:
 
 1. **Discover**: enumerate known session stores for enabled clients.
 2. **Ingest**: read new or changed files/databases using offsets, mtimes, or content fingerprints.
-3. **Parse**: convert client-specific transcript formats into normalized conversation records.
-4. **Context Window**: attach bounded preceding user/assistant messages to each tool call.
-5. **Detect**: run static regex filters over tool names, command strings, arguments, paths, URLs, and adjacent messages.
+3. **Acquire**: map source-native facts directly to Canonical Observation v2 plus separate accounting/progress metadata.
+4. **Evaluate**: apply the Detection v2 Rule v1 compatibility plan and bounded process-chain semantics.
+5. **Project**: build Event 3.0 compatibility detections and canonical activity without converting through legacy records.
 6. **Score**: aggregate rule scores and modifiers into a risk result.
 7. **Review metadata**: preserve deterministic response guidance and top-level
    timeline anchors for downstream analyst review when thresholds are crossed.
@@ -135,20 +131,15 @@ Telltale currently runs a repeatable batch pipeline:
    local JSONL for SIEM shippers; optional delivery paths wrap the same event
    payload for Splunk HEC or Elastic-compatible export.
 
-The current scanner and production detector still hand off
-`telltale_schema::record::NormalizedRecord` values. `NormalizedRecordV1` is a
-separate timeline/export-oriented representation used where that richer shape is
-needed; it is not the scanner's primary detection record contract. Canonical
-Observation v2 production activation has not started. The public
-`telltale_sources::acquisition` batch covers all eight identities but is not wired
-into production normalization, detection, CLI, or scan execution. Its
-`observed_at` is explicit caller input. OpenCode-only bounded read controls and
-high-water progress are operational metadata, not evidence; the other seven
-identities return no progress. Copilot's local state is rebuilt per acquisition
-and is not durable. The target source mappings are implemented but are not wired
-into production normalization, detection, CLI, or scan execution. The experimental Detection v2 foundation and fixture-only
-offline harness are likewise not wired into the scanner; production detection
-remains the existing Rule v1 path. Its `compat.v1.url` view remains truthfully
+The canonical runtime acquires source-native facts, evaluates Canonical
+Observation v2 with Detection v2, and projects Event 3 activity/detections. Rule
+v1 remains a content-compatibility view. `NormalizedRecordV1` and
+`NormalizedRecord` remain supported for record-level compatibility APIs such as
+`detect_records` and `evaluate_session`; they are not the scanner's detection
+handoff. `observed_at` is explicit caller input. OpenCode-only bounded read
+controls and high-water progress are operational metadata, not evidence; the
+other seven identities return no progress. Copilot's local state is rebuilt per
+acquisition and is not durable. The `compat.v1.url` view remains truthfully
 absent without URL/path/network manufacturing; focused synthetic harness
 coverage demonstrates the compatibility gap.
 
@@ -161,28 +152,27 @@ coverage demonstrates the compatibility gap.
 - `acquisition`: the public `telltale_sources::acquisition` single router for
   source-native extraction, source-owned canonical mapping, and acquisition
   batches across the supported identities. Its source mappers are crate-private.
-- `normalizer`: creates common records with stable field names in the current
-  production path; Canonical Observation v2 replaces this architectural center
-  at the production cutover.
+- `normalizer`: retains `NormalizedRecord` compatibility APIs; canonical
+  acquisition is the production semantic center.
 - `rules`: loads and validates detection content; Rule v1 remains a content
   compatibility format during Detection v2 convergence.
-- `scoring`: combines matches, context, and thresholds in the current production
-  path; duplicate legacy scoring ownership is removed after Detection v2 cutover.
+- `scoring`: legacy record-level compatibility scoring remains available while
+  canonical runtime scoring is owned by Detection v2.
 - `event`: redaction, schema-shaped event builders, evidence hashes, and local JSONL serialization.
 - `sink`: vendor-neutral event delivery boundary. Sink-specific envelopes belong here, while the canonical event payload stays unchanged.
 - `state`: scan checkpoints and duplicate suppression.
 
 ## Normalized Record Types
 
-The current production compatibility model includes:
+The record-level compatibility model includes:
 
 - `conversation.message`: user, assistant, system, developer, or tool-result content.
 - `tool.call`: tool name plus normalized arguments and raw evidence hash.
 - `tool.result`: exit status, stdout/stderr summary, file metadata, or error.
 - `detection.event`: rule matches, deterministic score, timeline anchors, and response metadata.
 
-These are current-path concepts, not the intended 0.7 semantic center. Canonical
-Observation v2 is the accepted internal evidence model for the converged path.
+These remain available to explicit record-level callers, not to the production
+source runtime. Canonical Observation v2 is the active source evidence model.
 
 ## Analyst Review Context
 

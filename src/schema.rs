@@ -2,7 +2,8 @@
 //! `telltale-schema`. The fixture-driven conversion test stays here because it
 //! exercises the root crate's discovery and parser pipeline.
 
-pub use telltale_schema::canonical::*;
+#[cfg(test)]
+use telltale_schema::canonical::*;
 
 #[cfg(test)]
 mod tests {

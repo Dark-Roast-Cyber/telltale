@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::detection::detect_sources_with_rules;
 use crate::rules::{
     CompiledRuleSet, RuleLoadMode, RulePackPaths, RuleResolution, load_rule_set_from_documents,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
@@ -337,20 +336,33 @@ fn preview_rules_request(
         source_id: "codex.sessions".to_string(),
         path: fixture_path.clone(),
     };
-    let detections = detect_sources_with_rules(&[source], &rule_set);
-    if let Some((_, event)) = detections
+    let rules = match telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export()) {
+        Ok(rules) => rules,
+        Err(error) => return Ok(ApiResponse::bad_request(error.to_string())),
+    };
+    let observed_at = telltale_schema::observation::ObservedAt::new(
+        time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?,
+    )?;
+    let result = match telltale_core::canonical_runtime::process_source(
+        &source,
+        observed_at,
+        None,
+        telltale_core::canonical_runtime::SourceContext {
+            mcp_servers: &[],
+            rules: &rules,
+            pre_policy_rules: None,
+            process: None,
+            prior: &crate::baseline::BaselineSnapshotStore::default(),
+            baseline_deviation: Default::default(),
+        },
+    ) {
+        Ok(result) => result,
+        Err(error) => return Ok(ApiResponse::bad_request(error.to_string())),
+    };
+    let matches = result.events
         .iter()
-        .find(|(_, event)| event.event_type == "scanner_error")
-    {
-        return Ok(ApiResponse::bad_request(format!(
-            "fixture parse failed for {}",
-            event.session_id
-        )));
-    }
-    let matches = detections
-        .iter()
-        .filter(|(_, event)| event.event_type == "detection")
-        .map(|(_, event)| {
+        .filter(|event| event.event_type == "detection")
+        .map(|event| {
             serde_json::json!({
                 "session_id": terminal_session_id(&event.session_id),
                 "severity": event.severity,
@@ -650,7 +662,7 @@ mod tests {
     use super::{compile_rule_yaml, preview_rules_request, rule_summary_json};
 
     #[test]
-    fn preview_uses_the_terminal_session_policy_for_source_sessions() {
+    fn preview_rejects_unsafe_source_sessions_without_leaking() {
         let sessions = [
             "TOKEN=TT_PRIVACY_RULES_SERVER_SESSION_ASSIGNMENT_25",
             "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz12",
@@ -691,15 +703,11 @@ modifiers: []
                 "rules preview retained a controlled session marker"
             );
         }
-        assert!(
-            response.body["matches"]
-                .as_array()
-                .expect("matches")
-                .iter()
-                .all(|item| item["session_id"]
-                    .as_str()
-                    .is_some_and(|session| session.starts_with("[session:")))
-        );
+        assert_eq!(response.status_code, 400);
+        assert_eq!(response.body["status"], "error");
+        assert!(response.body["error"].as_str().is_some_and(|value| {
+            value.contains("canonical source processing failed: Acquisition")
+        }));
     }
 
     #[test]

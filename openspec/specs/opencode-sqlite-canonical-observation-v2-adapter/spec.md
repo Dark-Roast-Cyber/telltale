@@ -1,22 +1,19 @@
 # opencode-sqlite-canonical-observation-v2-adapter Specification
 
 ## Purpose
-This specification covers only the OpenCode `opencode.sqlite` reference adapter
-path. One SQLite-native interpretation feeds the unchanged legacy
-`ParsedRecord`/`NormalizedRecordV1` production compatibility projection and a
-crate-private Canonical Observation v2 projection. It also feeds the
-authoritative public acquisition API, which is not wired into production runtime
-consumers. No production runtime cutover, Event 3.0 change, or other adapter
-migration is included.
+This specification covers the OpenCode `opencode.sqlite` adapter. One
+SQLite-native interpretation feeds retained record compatibility and the
+authoritative Canonical Observation v2 acquisition API used by the production
+source runtime. Event 3.0 remains the external projection.
 ## Requirements
 ### Requirement: One OpenCode SQLite-native interpretation
 
 The `opencode.sqlite` adapter MUST read the existing SQLite message and
 cursor-bounded selected `text`/`tool` part rows into one OpenCode-specific native
 interpretation that retains structured source facts and exact legacy projection
-fields. The production parser MUST derive `ParsedRecord`/
-`NormalizedRecordV1` from that interpretation and MUST NOT call the Canonical
-Observation v2 projection.
+fields. Record-level compatibility parsing MAY derive `ParsedRecord`/
+`NormalizedRecordV1` from that interpretation. Production source evaluation
+MUST use canonical acquisition and MUST NOT route through those records.
 
 #### Scenario: Existing legacy projection remains equivalent
 
@@ -135,11 +132,9 @@ multiple observations share the complete identity coordinate.
 ### Requirement: Canonical failures and compatibility are isolated
 
 Canonical mapping errors MUST be safe, code-based, and free of raw source
-payloads. They MUST NOT become production parse failures. The change MUST NOT
-modify JSON source identities, Event 3.0, detection, parser registration,
-production scanning, or the legacy projection. The Canonical Observation v2 projection MUST
-remain a crate-private, non-production reference seam; `NormalizedRecordV1`
-MUST remain the production path and no production cutover occurs.
+payloads. Record-level compatibility parse behavior remains separately
+available. Production source evaluation MUST consume the Canonical Observation
+v2 acquisition path and MUST NOT reconstruct normalized records.
 
 #### Scenario: Canonical failure does not alter legacy parsing
 

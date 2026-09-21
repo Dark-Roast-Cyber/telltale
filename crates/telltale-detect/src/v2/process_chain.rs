@@ -1,4 +1,4 @@
-//! Non-production process-chain evaluation over canonical Tool evidence.
+//! Process-chain evaluation over canonical Tool evidence.
 //!
 //! Parsed command relationships stay private matcher working state. This
 //! module never constructs canonical Process observations.
@@ -33,8 +33,8 @@ const ELIGIBLE_TOOL_STAGES: [ObservationStage; 4] = [
     ObservationStage::ToolExecutionCompleted,
 ];
 
-/// Evaluates command-bearing canonical Tool evidence without production wiring,
-/// source access, lifecycle suppression, correlation, or Event projection.
+/// Evaluates command-bearing canonical Tool evidence without source access,
+/// lifecycle suppression, correlation, or Event projection.
 pub(crate) fn evaluate_tool_process_chains(
     rules: &CompiledProcessChainRules,
     observation: &CanonicalObservationV2,
@@ -109,8 +109,8 @@ fn normalize_atomic_results<'a>(
     results
 }
 
-/// Private session result retained by the non-production caller-defined
-/// evaluator. Repeat accounting stays here rather than broadening the common
+/// Private session result retained by the caller-defined evaluator. Repeat
+/// accounting stays here rather than broadening the common
 /// DetectorResult/Signal/Finding types.
 #[derive(Clone)]
 pub(crate) struct ProcessChainSessionEvaluation {

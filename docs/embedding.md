@@ -13,16 +13,17 @@ persistence and delivery while using the same analytic and event semantics.
 
 ## Delivery boundary
 
-`Pipeline::scan_root` still uses the legacy source runtime and returns detection
-or scanner-error events, not activity events. An inactive canonical source
-runtime is prepared below the facade for coordinated scan/watch/embedding
-activation; it is not a new supported embedding API. See the
-[canonical runtime boundary](canonical-observation-v2.md#shared-inactive-source-runtime).
+`Pipeline::scan_root` uses the shared canonical source runtime and returns the
+same Event 3 detection/activity compatibility projection as CLI scan/watch.
+Acquisition is source-native Canonical Observation v2 followed by authoritative
+Detection v2 evaluation. The runtime remains a private implementation seam; it
+does not add a second public embedding abstraction. See the [canonical runtime
+boundary](canonical-observation-v2.md#shared-canonical-source-runtime).
 
 `detect_records` and `evaluate_session` remain deliberate Rule v1 record-level
 compatibility APIs accepting `NormalizedRecord`. They cannot supply native
 acquisition/accounting facts and are not converted into canonical observations.
-Their future API redesign is separate from source-runtime activation.
+They remain separate from the active source runtime by design.
 The facade has no baseline-state, cursor, process-chain configuration, or event
 allowlist contract. Rule policy controls rule enablement, not event allowlisting.
 

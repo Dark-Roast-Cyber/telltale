@@ -164,7 +164,9 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
-    assert_eq!(summary["detection_count"], 31);
+    // Copilot's mixed-context rules require unsupported UserContext and remain
+    // visibility-limited. Commands also no longer include fabricated tool names.
+    assert_eq!(summary["detection_count"], 30);
     assert_runtime_snapshot(&summary);
     assert_eq!(
         summary["effective_configuration"]["local_config"]["mode"],
@@ -190,7 +192,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         1
     );
     assert_source_processing_accounting(&summary);
-    assert_detection_flow_accounting(&summary, 31, 0);
+    assert_detection_flow_accounting(&summary, 30, 0);
     assert_eq!(summary["source_processing"]["selected_source_count"], 57);
     assert_eq!(summary["source_discovery"]["basis"], "current_full_scan");
     assert_eq!(
@@ -237,7 +239,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             "other": 0,
         })
     );
-    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 102);
+    assert_eq!(summary["detection_flow"]["matched_rule_id_count"], 89);
     assert_eq!(summary["source_counts"]["claude.jsonl"], 3);
     assert_eq!(summary["source_counts"]["codex.jsonl"], 40);
     assert_eq!(summary["source_counts"]["codex.archived_jsonl"], 2);
@@ -252,7 +254,13 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
         .collect::<Vec<_>>();
-    assert_eq!(events.len(), 33);
+    assert_eq!(events.len(), 32);
+    assert!(
+        !events.iter().any(|event| {
+            event["event_type"] == "detection" && event["session_id"] == "copilot-uc001-tool-result"
+        }),
+        "mixed-context rules must not bypass Copilot's unsupported UserContext"
+    );
     assert!(events.iter().all(|event| {
         event.get("source_processing").is_none()
             && event.get("detection_flow").is_none()
@@ -374,7 +382,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(event["telltale_version"], env!("CARGO_PKG_VERSION"));
     assert!(event["scan_duration_ms"].as_u64().is_some());
     assert_eq!(event["rule_count"], 18);
-    assert_eq!(event["emitted_count"], 32);
+    assert_eq!(event["emitted_count"], 31);
     assert_eq!(event["suppressed_count"], 0);
     assert_eq!(event["scanner_error_count"], 0);
     assert_eq!(event["threshold_config"]["low"], 20);
@@ -429,7 +437,8 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(detection["event_type"], "detection");
     assert_eq!(detection["severity"], "critical");
     assert_eq!(detection["session_id"], "uc001-positive");
-    assert_eq!(detection["tool_name"], "repo_status");
+    // Mentioning a tool in assistant text does not attest an observed tool name.
+    assert!(detection["tool_name"].is_null());
     assert!(
         detection["rule_ids"]
             .as_array()
@@ -500,7 +509,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     );
     assert_eq!(compliance_tool["event_type"], "detection");
     assert_eq!(compliance_tool["severity"], "critical");
-    assert_eq!(compliance_tool["tool_name"], "get_compliance_status");
+    assert!(compliance_tool["tool_name"].is_null());
     assert!(
         compliance_tool["rule_ids"]
             .as_array()
@@ -536,7 +545,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     );
     assert_eq!(reversed_injection["event_type"], "detection");
     assert_eq!(reversed_injection["severity"], "critical");
-    assert_eq!(reversed_injection["tool_name"], "repo_status");
+    assert!(reversed_injection["tool_name"].is_null());
     assert!(
         reversed_injection["rule_ids"]
             .as_array()
@@ -1091,7 +1100,15 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         "private key event failed schema validation"
     );
     assert_eq!(private_key["event_type"], "detection");
-    assert_eq!(private_key["severity"], "high");
+    assert_eq!(private_key["severity"], "medium");
+    assert!(
+        !private_key["rule_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id == "execution.shell"),
+        "the bash tool name must not be synthesized into command evidence"
+    );
     assert!(
         private_key["rule_ids"]
             .as_array()
@@ -1641,19 +1658,19 @@ fn repeated_scans_suppress_duplicate_detections() {
         serde_json::from_slice::<Value>(&output.stdout).expect("scan summary json")
     };
     let first_summary = run_scan(&[]);
-    assert_eq!(first_summary["detection_count"], 31);
-    assert_eq!(first_summary["emitted_count"], 32);
+    assert_eq!(first_summary["detection_count"], 30);
+    assert_eq!(first_summary["emitted_count"], 31);
     assert_source_processing_accounting(&first_summary);
-    assert_detection_flow_accounting(&first_summary, 31, 0);
+    assert_detection_flow_accounting(&first_summary, 30, 0);
 
     let second_summary = run_scan(&[]);
-    assert_eq!(second_summary["detection_count"], 31);
+    assert_eq!(second_summary["detection_count"], 30);
     assert_eq!(second_summary["emitted_count"], 0);
     assert_source_processing_accounting(&second_summary);
-    assert_detection_flow_accounting(&second_summary, 0, 31);
+    assert_detection_flow_accounting(&second_summary, 0, 30);
     assert_eq!(
         second_summary["detection_flow"]["matched_rule_id_count"],
-        102
+        89
     );
     assert!(
         !second_summary["diagnostic_warnings"]
@@ -1668,14 +1685,14 @@ fn repeated_scans_suppress_duplicate_detections() {
         .lines()
         .count();
     let backfill_summary = run_scan(&["--dry-run", "--backfill"]);
-    assert_eq!(backfill_summary["detection_count"], 31);
+    assert_eq!(backfill_summary["detection_count"], 30);
     assert_eq!(
         backfill_summary["detection_flow"]["effective_detection_candidate_count"],
-        31
+        30
     );
     assert_eq!(
         backfill_summary["detection_flow"]["emitted_detection_count"],
-        31
+        30
     );
     assert_eq!(
         backfill_summary["detection_flow"]["state_deduplicated_detection_count"],
@@ -1690,7 +1707,7 @@ fn repeated_scans_suppress_duplicate_detections() {
     );
 
     let lines = fs::read_to_string(log_path).expect("log file");
-    assert_eq!(lines.lines().count(), 33);
+    assert_eq!(lines.lines().count(), 32);
 }
 
 #[test]
@@ -1889,7 +1906,7 @@ fn scan_once_replaces_changed_source_baseline_contribution() {
 
     let write_source = |tool_calls: &[(&str, &str)]| {
         let mut lines = vec![
-            r#"{"type":"session_meta","timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline-test","model":"o3"}}"#.to_string(),
+            r#"{"type":"session_meta","session_id":"append-only","timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline-test","model":"o3"}}"#.to_string(),
             r#"{"type":"event_msg","timestamp":"2026-05-17T10:00:01Z","payload":{"type":"user_message","message":"Inspect the project files."}}"#.to_string(),
         ];
         for (index, (call_id, command)) in tool_calls.iter().enumerate() {
@@ -1986,7 +2003,7 @@ fn scan_once_persists_distinct_source_contributions_for_same_bucket() {
             source_dir.join(name),
             format!(
                 "{}\n{}\n{}\n",
-                r#"{"type":"session_meta","timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline-test","model":"o3"}}"#,
+                serde_json::json!({"type":"session_meta","session_id":name,"timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline-test","model":"o3"}}),
                 r#"{"type":"event_msg","timestamp":"2026-05-17T10:00:01Z","payload":{"type":"user_message","message":"Inspect the project files."}}"#,
                 event
             ),
@@ -2036,7 +2053,7 @@ fn scan_once_rebuild_baselines_reparses_unchanged_sources_without_reemitting_det
     fs::write(
         &source_path,
         concat!(
-            r#"{"type":"session_meta","timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline-test","model":"o3"}}"#,
+            r#"{"type":"session_meta","session_id":"session-a","timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"codex-baseline-test","model":"o3"}}"#,
             "\n",
             r#"{"type":"event_msg","timestamp":"2026-05-17T10:00:01Z","payload":{"type":"user_message","message":"Inspect the project files."}}"#,
             "\n",
@@ -2159,7 +2176,7 @@ fn scan_once_can_emit_activity_events() {
 
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert!(summary["activity_count"].as_u64().unwrap_or_default() > 0);
-    assert_eq!(summary["detection_count"], 31);
+    assert_eq!(summary["detection_count"], 30);
 
     let lines = fs::read_to_string(log_path).expect("log file");
     let events = lines
@@ -3409,7 +3426,7 @@ fn scan_once_allows_fixture_root_with_dry_run() {
     );
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["event_type"], "health");
-    assert_eq!(summary["detection_count"], 31);
+    assert_eq!(summary["detection_count"], 30);
 }
 
 #[test]

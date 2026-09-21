@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-use telltale_detect::detection::{detect_sources_with_rules, summarize_source_activities};
+use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
+use telltale_detect::detection::{detect_parsed_source_records, summarize_parsed_source_activity};
 use telltale_rules::load_default_rule_set;
 use telltale_schema::canonical::Provenance;
 use telltale_sources::discovery::discover_sources_best_effort;
@@ -187,30 +188,45 @@ fn bench_discovery(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_scan_throughput(c: &mut Criterion) {
+fn bench_legacy_record_compatibility(c: &mut Criterion) {
     let rule_set = load_default_rule_set().expect("rule set");
     let root = fixture_root();
+    let baseline_snapshots = BaselineSnapshotStore::default();
+    let baseline_deviation_config = BaselineDeviationConfig::default();
 
-    let mut group = c.benchmark_group("scan_throughput");
+    let mut group = c.benchmark_group("legacy_record_compatibility");
     group.sample_size(20);
 
-    // Benchmark: discover + parse + detect on all fixture sources
+    // Legacy record compatibility benchmark: discover + parse + detect.
     let sources = discover_sources_best_effort(&root);
-    group.bench_function("all_fixtures_full_pipeline", |b| {
+    group.bench_function("all_fixtures_parse_detect", |b| {
         b.iter(|| {
-            let _ = detect_sources_with_rules(&sources, &rule_set);
+            for source in &sources {
+                if let Ok(records) = parse_source_records(source) {
+                    let _ = detect_parsed_source_records(source, &rule_set, &records);
+                }
+            }
         });
     });
 
-    // Benchmark: activity summary (parse + score, no rule matching)
-    group.bench_function("all_fixtures_activity_summary", |b| {
+    // Legacy record compatibility benchmark: parse + activity summary.
+    group.bench_function("all_fixtures_parse_activity_summary", |b| {
         b.iter(|| {
-            let _ = summarize_source_activities(&sources);
+            for source in &sources {
+                if let Ok(records) = parse_source_records(source) {
+                    let _ = summarize_parsed_source_activity(
+                        source,
+                        &records,
+                        &baseline_snapshots,
+                        baseline_deviation_config,
+                    );
+                }
+            }
         });
     });
 
-    // Benchmark: parse only (no detection)
-    group.bench_function("all_fixtures_parse_only", |b| {
+    // Legacy record compatibility benchmark: parse only (no detection).
+    group.bench_function("all_fixtures_legacy_parse_only", |b| {
         b.iter(|| {
             for source in &sources {
                 let _ = parse_source_records(source);
@@ -221,10 +237,10 @@ fn bench_scan_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_synthetic_throughput(c: &mut Criterion) {
+fn bench_synthetic_legacy_record_compatibility(c: &mut Criterion) {
     let rule_set = load_default_rule_set().expect("rule set");
 
-    let mut group = c.benchmark_group("synthetic_throughput");
+    let mut group = c.benchmark_group("synthetic_legacy_record_compatibility");
     group.sample_size(20);
 
     for size in [10, 50, 200, 1000] {
@@ -233,17 +249,21 @@ fn bench_synthetic_throughput(c: &mut Criterion) {
         let sources = discover_sources_best_effort(tmp.path());
 
         group.bench_with_input(
-            BenchmarkId::new("parse_detect", format!("{}tool_calls", size)),
+            BenchmarkId::new("legacy_parse_detect", format!("{}tool_calls", size)),
             &sources,
             |b, sources| {
                 b.iter(|| {
-                    let _ = detect_sources_with_rules(sources, &rule_set);
+                    for source in sources {
+                        if let Ok(records) = parse_source_records(source) {
+                            let _ = detect_parsed_source_records(source, &rule_set, &records);
+                        }
+                    }
                 });
             },
         );
 
         group.bench_with_input(
-            BenchmarkId::new("parse_only", format!("{}tool_calls", size)),
+            BenchmarkId::new("legacy_parse_only", format!("{}tool_calls", size)),
             &sources,
             |b, sources| {
                 b.iter(|| {
@@ -294,8 +314,8 @@ criterion_group!(
     bench_rule_loading,
     bench_rule_evaluation,
     bench_discovery,
-    bench_scan_throughput,
-    bench_synthetic_throughput,
+    bench_legacy_record_compatibility,
+    bench_synthetic_legacy_record_compatibility,
     bench_conformance,
 );
 criterion_main!(benches);

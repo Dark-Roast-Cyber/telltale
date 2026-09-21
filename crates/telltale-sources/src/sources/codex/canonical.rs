@@ -773,11 +773,19 @@ mod tests {
 
     #[test]
     fn simple_messages_use_source_time_but_not_filename_session() {
-        let source = source(
+        let mut source = source(
             "codex.sessions",
             SourceKind::Jsonl,
             "session_stores/codex/sessions/2026/04/session-a.jsonl",
         );
+        let temp = tempfile::tempdir().unwrap();
+        let input = std::fs::read_to_string(&source.path).unwrap();
+        source.path = temp.path().join("session-a.jsonl");
+        std::fs::write(
+            &source.path,
+            input.replace("\"session_id\":\"session-a\",", ""),
+        )
+        .unwrap();
         let error = super::project_codex_canonical_observations(
             &source,
             CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),

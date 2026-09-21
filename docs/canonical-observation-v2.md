@@ -1,24 +1,16 @@
 # Canonical Observation v2
 
-> **Status:** **Accepted architecture.** Canonical Observation v2 is the
-> reviewed intended future internal evidence contract. **Current
-> implementation:** Canonical Observation v2 core domain types/scaffolding are
-> implemented in `telltale-schema`. Claude Code (`claude.projects`), Codex,
-> OpenCode (`opencode.sqlite`), OpenClaw (`openclaw.agents`), Qwen
-> (`qwen.projects`), and Copilot (`copilot.process_log`) v2 reference
-> projections are implemented as non-production projections. The offline
-> shadow/equivalence harness includes Copilot across 15 cases, 17 reviewed
-> sessions, and 306 detector evaluations. It reports one reviewed match-set
-> difference plus 28 reviewed capability-driven indeterminate outcomes, with
-> zero unexplained differences. These
-> projections are not production detector input: production remains on
-> `telltale_schema::record::NormalizedRecord` and Rule v1, with no live shadow
-> or production parity. `NormalizedRecordV1` is separate timeline/export-oriented
-> compatibility material.
+> **Status:** **Active internal source evidence contract.** Canonical
+> Observation v2 is produced by source-native acquisition for all eight supported
+> identities and consumed by Detection v2 in CLI scan/watch and
+> `Pipeline::scan_root`. Rule v1 remains the content-compatibility format;
+> `NormalizedRecord` types remain explicit record-level compatibility surfaces.
+> The offline shadow/equivalence harness remains fixture measurement, not a live
+> shadow.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**.
-> `opencode.legacy_json` is retired, and production adapter runtime cutover has
-> not started. The public `telltale_sources::acquisition` contract now covers
+> `opencode.legacy_json` is retired. The public
+> `telltale_sources::acquisition` contract covers
 > `claude.projects`, `codex.sessions`, `codex.archived_sessions`,
 > `codex.headless_sessions`, `opencode.sqlite`, `openclaw.agents`,
 > `qwen.projects`, and `copilot.process_log`—all eight target identities. The P10B
@@ -38,14 +30,10 @@ Canonical Observation is the unit of evidence. It is local-first and richer
 than any export. Detection consumes it, not Event4 or a destination-specific
 projection.
 
-The Claude Code, Codex, OpenCode SQLite, OpenClaw, Qwen, and Copilot v2 reference
-projections are deliberately not active normalization paths. They preserve
-source call IDs, structured content parts, structured tool values, and truthful
-lifecycle stages while the production scanner continues to use
-`telltale_schema::record::NormalizedRecord`. The experimental Detection v2 foundation exists, but
-production activation and telemetry/output v2 have not started. The Event4
-contract foundation is implemented without a Canonical Observation v2
-projection or production output path, and Event 3.0 remains frozen.
+The source projections preserve source call IDs, structured content parts,
+structured tool values, and truthful lifecycle stages. Detection v2 is active
+for the source runtime. Event4 and telemetry/output v2 remain inactive, while
+Event 3.0 remains the external compatibility contract.
 
 ## Acquisition convergence status
 
@@ -72,27 +60,21 @@ progress coordinate or durable local acquisition state. Its active session and
 ordinal state is rebuilt on each acquisition.
 
 The all-eight adapter coverage gate and ROADMAP step 4 convergence are complete.
-The experimental parallel top-level canonical facade has been deleted; the
-acquisition module is the single public cross-source router. This does not
-activate production: the legacy detection and embedding paths remain unchanged.
-Scanner-owned processing success now gates OpenCode cursor commit eligibility;
-acquisition progress reporting is unchanged and still does not persist a cursor.
-Step 5 Tranche A adds inactive canonical session evaluation and Event3
-compatibility; coordinated scan/watch/embedding activation remains later work
-under Issue #51. Event 3.0 remains frozen and Event4 remains inactive.
+The acquisition module is the single public cross-source router. Scanner-owned
+processing success gates OpenCode cursor commit eligibility; acquisition
+progress reporting does not itself persist a cursor. Event 3.0 remains the
+external contract and Event4 remains inactive.
 
 Acquisition directly maps source-native facts to Canonical Observation v2. It is
-not a conversion bridge to or from `NormalizedRecordV1`; the later coordinated
-runtime cutover remains a separate step.
+not a conversion bridge to or from either normalized-record compatibility type.
 
-### Shared inactive source runtime
+### Shared canonical source runtime
 
 `telltale-core::canonical_runtime` owns the single source-semantic composition:
 acquisition → COv2 → Detection v2 → Event3 compatibility → canonical activity.
-It is a hidden, deliberately unstable cross-crate seam, not a supported public
-embedding API. The inactive CLI adapter and private `Pipeline` canonical adapter
-both call it. The existing core crate already depends on sources, rules, and
-detection; it does not depend on CLI code.
+It is a hidden cross-crate seam, not a second supported public embedding API.
+CLI scan/watch and `Pipeline::scan_root` call it. The core crate does not depend
+on CLI code.
 
 The operation takes caller-owned observation time, optional acquisition read
 bounds, effective Rule v1 compatibility content, optional canonical process-chain
@@ -102,7 +84,7 @@ activity failure. Completion and acquisition accounting coverage remain separate
 The resolved-file canonical correlation identity is unchanged and is not a durable
 baseline replacement key.
 
-The inactive embedding adapter uses one observation time for a whole root scan,
+The embedding adapter uses one observation time for a whole root scan,
 shared discovery, no process-chain configuration, an empty prior snapshot store,
 and disabled baseline deviation. It creates activity from accounting without
 inventing history or persisting replacement candidates. OpenCode remains partial
@@ -110,19 +92,13 @@ and cannot produce whole-source replacement. Scanner cursor policy, mode policy,
 error-event adaptation, state installation, and output transactions stay in the
 CLI; event allowlisting stays outside the semantic operation.
 
-The supported `Pipeline::scan_root` remains legacy-selected, with unchanged
-outputs/errors. Canonical activation would add activity output and requires an
-explicit decision on typed failures versus the current scanner-error stream.
-Canonical metadata/visibility corrections also require compatibility review.
-Event3 constructors retain fresh envelope IDs/times; semantic ordering, not
-byte-identical envelopes, is deterministic. Record-level `detect_records` and
-`evaluate_session` remain intentional legacy compatibility APIs rather than a
-second source-runtime design. Coordinated activation still requires scanner
-transaction integration and reset prerequisites, followed by deletion of the
-temporary legacy source branch. Step 5 remains incomplete; Event3 is frozen and
-Event4 inactive.
+`Pipeline::scan_root` retains its public event return shape while using canonical
+acquisition and Detection v2. Event3 constructors retain fresh envelope IDs and
+times; semantic ordering, not byte-identical newly generated envelopes, is
+deterministic. Record-level `detect_records` and `evaluate_session` remain
+intentional compatibility APIs rather than a second source-runtime design.
 
-### Inactive session attestation and accounting
+### Session attestation and accounting
 
 Issue [#51](https://github.com/Dark-Roast-Cyber/telltale/issues/51) Tranche B3A adds
 `AcquisitionBatch.accounting`, owned by acquisition from the same native read.
@@ -158,37 +134,35 @@ observations. Potential contribution tokens and retained labels use the same loc
 and each batch permits 4,096 distinct contribution keys across scoped and
 unscoped buckets. One acquisition-owned budget is checked before each new map
 entry, including during derivation, not only after aggregation. Native records
-retain no per-unit contribution maps. Legacy parsers do not compute these inactive
+retain no per-unit contribution maps. Legacy parsers do not compute these
 contributions; canonical acquisition borrows existing native projection fields
 without another source read, reconstructed records, or a new raw-input sidecar.
 Internal SQL transport aliases are not source JSON ownership evidence, and ignored
 Copilot items cannot attest metadata. Counts use checked `u64` arithmetic. Invalid/oversized metadata
 or contribution input, capacity exhaustion, and overflow fail with code-only errors. Missing and
 ambiguous metadata remain successful acquisition. Debug rendering hides labels
-and session IDs. The inactive composition borrows only known fields for exact
+and session IDs. The composition borrows only known fields for exact
 evaluated session keys into Event3 projection and retains the single accounting
 sidecar on successful Complete or VisibilityLimited processing. Cursor policy
 and projection's fail-closed origin/collision validation are unchanged.
 
-B3B's inactive activity/baseline integration and pre-1.0 compatibility decision
+B3B's activity/baseline integration and pre-1.0 compatibility decision
 are described below. Client is available from the source; agent/model/provider
 can each be missing or ambiguous. Current baseline keys cannot express ambiguity,
 and legacy sticky/default metadata and fallback session grouping differ. Old
 snapshots therefore cannot be assumed reusable. Event3's existing kind histogram
 is not repurposed; B3B preserves its vocabulary with sparse checked conversion,
 native contribution consumption, and prior-snapshot timing.
-Acquisition itself produces no activity events or baseline state. Validation covers
-all eight native identities, conflicts, bounds/privacy, counts, and projection.
-Activation requires reviewed B3B, embedding convergence, scanner transaction
-integration, and coordinated runtime cutover; then remove
-legacy metadata/count derivation and temporary legacy activity carriers. Scan,
-watch, and embedding remain legacy; Event3 is frozen, Event4 inactive, Step 5 incomplete.
+Acquisition itself produces no activity events or baseline state. The shared
+runtime evaluates accounting, while the scanner transaction owns installation.
+Validation covers all eight native identities, conflicts, bounds/privacy,
+counts, and projection.
 
-### Inactive canonical activity and baseline staging
+### Canonical activity and baseline staging
 
-Current production baseline state aggregates the latest retained contribution for
+Baseline state aggregates the latest retained contribution for
 each source instance; it is not a lifetime counter or a defined rolling window.
-Legacy scanning replaces a source contribution and evaluates activity against a
+Canonical scanning replaces a complete source contribution and evaluates activity against a
 snapshot taken before that update. OpenCode reads all messages but only a capped,
 cursor-filtered selection of parts, with ten minutes of overlap. Consequently,
 replacement can discard older parts outside the selection; addition would instead
@@ -220,7 +194,7 @@ deviation while missing agent does not. Unscoped accounting never creates a
 session, activity, or baseline; a complete unscoped-only source therefore returns
 `Replace(empty)`.
 
-The inactive evaluator consumes authoritative `SourceAccounting` counts and
+The evaluator consumes authoritative `SourceAccounting` counts and
 contributions once: it does not recount COv2, reread the source, or reconstruct
 legacy records. Sparse six-kind histograms use checked `u64` to `u32` conversion.
 Normalized plaintext hosts are hashed with the existing `sha256:` host identity
@@ -229,24 +203,18 @@ immutable canonical evaluation, accounting, source path hash, prior snapshots,
 and configuration; the prior snapshot includes the old same-source contribution
 and the current sample never trains its own comparison snapshot.
 
-The inactive scanner result retains the accounting sidecar transiently alongside
+The scanner result retains the accounting sidecar transiently alongside
 the baseline replacement and emits one terminal Event3 collection. Source errors
 discard events and replacements, and `Failed` gates progress. Scanner-owned
 `CanonicalProcessingOptions` owns `dry_run` and `backfill`: the pure evaluator may
 build a candidate, but composition suppresses staging to `NoReplacement` for
-both modes. No canonical state mutation, install, or apply occurs in production. A
-future state owner applies a replacement using the authoritative `Source` key,
-not the canonical correlation hash.
+both modes. The scanner applies replacements using the authoritative `Source`
+key, not the canonical correlation hash, only after required output durability.
 
-No persisted schema or reset is active now. Coordinated activation must reset both
-legacy source contributions and derived snapshots once, durably: reserve the
-baseline schema increment from current 2 to 3, clear both and write a new stamp
-transactionally in an explicit migration, and never silently reset on load or at
-process start. The strict current state envelope 1.0 remains unchanged for now.
-Future aggregate application must be checked and source-atomic before install;
-the existing legacy apply is unchecked and is not activated by B3B. Production
-scan/watch/embedding remain legacy; Event3 is frozen, Event4 inactive, and Step 5
-incomplete. Independent review and activation remain separate gates.
+Baseline schema 3 is active. Explicit migration from schema 1 or 2 clears both
+incompatible source contributions and derived snapshots while preserving
+unrelated state. Ordinary load rejects old schemas and never silently resets
+them. Aggregate rebuild is checked and source-atomic before installation.
 
 ## Conceptual contract
 
