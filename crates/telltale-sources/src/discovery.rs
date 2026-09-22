@@ -429,7 +429,8 @@ fn is_hidden_path(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with('.'))
 }
 
-fn source_search_root(root: &Path, source_def: ClientSourceDef) -> PathBuf {
+/// Resolves a registry source definition using the same roots as source discovery.
+pub fn source_search_root(root: &Path, source_def: ClientSourceDef) -> PathBuf {
     if is_fixture_root(root) {
         return source_def.fixture_path(root);
     }

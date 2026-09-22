@@ -160,8 +160,10 @@ telltale-detect = "=$VERSION"
 EOF
 
 cat > "$DETECT_CONSUMER_DIR/src/main.rs" <<'EOF'
+use std::path::Path;
+
 fn main() {
-    let _events = telltale_detect::detection::detect_sources(&[]);
+    let _inventory = telltale_detect::mcp::discover_mcp_inventory_servers(Path::new("."));
 }
 EOF
 

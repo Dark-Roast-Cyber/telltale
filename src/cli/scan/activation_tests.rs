@@ -16,7 +16,16 @@ impl Fixture {
         let path = dir.path().join(".codex/sessions/synthetic.jsonl");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "{\"type\":\"user\",\"session_id\":\"synthetic\",\"model\":\"model\",\"provider\":\"provider\",\"content\":\"hello\"}\n").unwrap();
-        let db = dir.path().join(".local/share/opencode/opencode.db");
+        let opencode = telltale_sources::clients::supported_clients()
+            .iter()
+            .find(|client| client.id == ClientId::OpenCode)
+            .unwrap();
+        let sqlite = opencode
+            .sources
+            .iter()
+            .find(|source| source.id == "opencode.sqlite")
+            .unwrap();
+        let db = telltale_sources::discovery::source_search_root(dir.path(), *sqlite);
         fs::create_dir_all(db.parent().unwrap()).unwrap();
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.execute_batch(r#"CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
