@@ -445,7 +445,21 @@ fn native_schema2_cli_migration_resets_baselines_once() {
     let manifest: Value = serde_json::from_slice(&first_manifest).expect("manifest JSON");
     assert_eq!(manifest["normalization_count"], 2);
 
-    run_migration(&source, &destination);
+    let rerun = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["migrate", "state", "--from"])
+        .arg(&source)
+        .args(["--to"])
+        .arg(&destination)
+        .output()
+        .expect("repeated migration");
+    #[cfg(unix)]
+    assert!(
+        rerun.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+    #[cfg(windows)]
+    assert_windows_existing_target_unsupported(&rerun);
     assert_eq!(
         fs::read(&destination).expect("repeated destination"),
         first_bytes
