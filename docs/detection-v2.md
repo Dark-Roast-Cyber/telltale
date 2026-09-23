@@ -26,9 +26,9 @@ The retained Rule v1 content and Event3 scoring behavior remain documented in
 evaluation model.
 
 The Rule v1 compatibility compiler retains one effective export with its compiled
-observation-match detectors. Its shared, source-free session evaluator aggregates
-caller-grouped canonical observations, applies Rule v1 modifiers once, and
-reconstructs Rule v1 compatibility contributions, score, and metadata.
+observation-match detectors. The source-free canonical session adapter aggregates
+caller-grouped observations and delegates Rule v1 match, modifier, contribution,
+score, and metadata decisions to `telltale-rules`.
 `compat.v1.url` is compiler-supported but truthfully absent; URL evidence is
 not fabricated from unrelated canonical facts.
 
@@ -191,7 +191,8 @@ order. An observation hash is not a substitute for occurrence ordering. Both
 evaluators receive the same ordered slice; the process kernel retains its existing
 within-observation parser ordering and temporal eligibility rules.
 
-`evaluate_rule_v1_session` remains the sole Rule v1 compatibility evaluator. Its
+`evaluate_rule_v1_session` remains the canonical session adapter to the shared
+Rule v1 content evaluator in `telltale-rules`. Its
 detector counters preserve match, no-match, not-applicable, visibility reasons,
 and errors separately, even when aggregate match precedence hides a lower-ranked
 status. Session modifiers, effective policy/exclusion behavior, checked
@@ -547,12 +548,12 @@ Rule v1 -> compatibility compiler/adapter -> Detection v2 IR -> DetectorResult
 
 The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
 `command`, `file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
-The compiler copies effective Rule v1 IDs, metadata, scores, and compiled
-target/regex matchers with optional target-local exclusion regexes into
-observation-match detector definitions with `rule_version: 1`;
-IDs are not renamed. An excluded matcher lowers to existing `all` and `not`
-matcher composition; Detection v2 has no rule-specific filter runtime. Modifiers remain
-Rule v1 compatibility session constructs: the shared evaluator
+The compiler maps effective Rule v1 IDs and metadata into observation-match
+detector definitions with `rule_version: 1`; IDs are not renamed. Detection v2
+resolves canonical applicability, capabilities, and truthful selector values,
+then applies the same compiled Rule v1 predicates (including target-local
+exclusions) as the I/O-free Rule v1 API and direct-record compatibility.
+Modifiers remain Rule v1 compatibility session constructs: the content evaluator
 triggers them from matched atomic Rule v1 IDs and categories, but they never
 become DetectorResults, Signals, Findings, or native v2 correlation detectors.
 The evaluator uses the existing validated contribution primitives to construct

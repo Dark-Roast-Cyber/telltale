@@ -1,6 +1,7 @@
 //! The only active Detection v2 detector: a bounded observation matcher.
 
 use std::collections::BTreeSet;
+use telltale_rules::RuleV1ContentMatcher;
 
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityId, ObservationFamily, ObservationStage,
@@ -137,6 +138,7 @@ impl ObservationMatchSpec {
             matcher,
             required_capabilities,
             metadata: self.metadata,
+            rule_v1_content: None,
         })
     }
 }
@@ -150,9 +152,18 @@ pub struct CompiledObservationMatchDetector {
     matcher: CompiledMatcher,
     required_capabilities: BTreeSet<CapabilityId>,
     metadata: FindingMetadata,
+    rule_v1_content: Option<(RuleV1ContentMatcher, Vec<String>)>,
 }
 
 impl CompiledObservationMatchDetector {
+    pub(crate) fn with_rule_v1_content(
+        mut self,
+        matcher: RuleV1ContentMatcher,
+        targets: Vec<String>,
+    ) -> Self {
+        self.rule_v1_content = Some((matcher, targets));
+        self
+    }
     pub fn detector(&self) -> &DetectorIdentity {
         &self.detector
     }
@@ -208,13 +219,17 @@ impl CompiledObservationMatchDetector {
                 .expect("validated match surface remains valid");
         }
 
-        let evaluation: MatcherEvaluation = self.matcher.evaluate(observation);
-        let (status, reason, paths) = match evaluation.state() {
-            MatchState::Match => (
-                EvaluationStatus::EvaluatedMatch,
-                None,
+        let (state, paths) = if let Some((matcher, targets)) = &self.rule_v1_content {
+            super::rule_v1::evaluate_content_matcher(matcher, targets, observation)
+        } else {
+            let evaluation: MatcherEvaluation = self.matcher.evaluate(observation);
+            (
+                evaluation.state().clone(),
                 evaluation.matched_selector_paths().to_vec(),
-            ),
+            )
+        };
+        let (status, reason, paths) = match &state {
+            MatchState::Match => (EvaluationStatus::EvaluatedMatch, None, paths),
             MatchState::NoMatch => (EvaluationStatus::EvaluatedNoMatch, None, Vec::new()),
             MatchState::NotEvaluated(reason) => {
                 (EvaluationStatus::NotEvaluated, Some(*reason), Vec::new())

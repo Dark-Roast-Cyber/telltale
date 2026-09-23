@@ -15,7 +15,10 @@ assert!(rules.rule_count() > 0);
 ```
 
 `CompiledRuleSet::compatibility_export()` exposes the effective compiled Rule v1
-semantics used by the public provenance manifest. Its `fingerprint()` is
+semantics used by the public provenance manifest. The export's
+`evaluate_matched()` supplies the same session-level Rule v1 content decisions
+used by `CompiledRuleSet::evaluate()` and Detection v2; canonical applicability
+and evidence selection remain with Detection v2. Its `fingerprint()` is
 domain-separated and does not hash source YAML, formatting, filesystem paths,
 policy names, or descriptive rule metadata (`title`, `description`, and
 `falsepositives`). Rule and modifier order remains identity-bearing because

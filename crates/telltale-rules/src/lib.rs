@@ -130,8 +130,7 @@ pub struct ModifierDefinition {
 #[derive(Debug, Clone)]
 pub struct CompiledRuleSet {
     rules: Vec<CompiledRule>,
-    modifiers: Vec<ModifierDefinition>,
-    policy_name: Option<String>,
+    content: RuleV1CompatibilityExport,
 }
 
 /// Effective, read-only Rule v1 data for semantic compatibility consumers.
@@ -197,6 +196,48 @@ pub struct MatchResult {
     pub evidence: Vec<Evidence>,
 }
 
+/// Compiled Rule v1 predicates independent of any observation or record type.
+#[derive(Debug, Clone)]
+pub struct RuleV1ContentMatcher {
+    matchers: Vec<CompiledMatcher>,
+}
+
+impl RuleV1ContentMatcher {
+    pub fn matching_fields<'a>(&self, fields: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+        fields
+            .iter()
+            .copied()
+            .filter(|(name, value)| {
+                self.matchers
+                    .iter()
+                    .any(|matcher| matcher.matches(name, value))
+            })
+            .collect()
+    }
+}
+
+impl RuleV1CompatibilityRule {
+    pub fn compile_content_matcher(&self) -> Result<RuleV1ContentMatcher, regex::Error> {
+        Ok(RuleV1ContentMatcher {
+            matchers: self
+                .matchers
+                .iter()
+                .map(|matcher| {
+                    Ok(CompiledMatcher {
+                        target: matcher.target.clone(),
+                        regex: Regex::new(&matcher.regex)?,
+                        exclusion_regex: matcher
+                            .exclusion_regex
+                            .as_deref()
+                            .map(Regex::new)
+                            .transpose()?,
+                    })
+                })
+                .collect::<Result<Vec<_>, regex::Error>>()?,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CompiledRule {
     definition: RuleDefinition,
@@ -208,6 +249,17 @@ struct CompiledMatcher {
     target: String,
     regex: Regex,
     exclusion_regex: Option<Regex>,
+}
+
+impl CompiledMatcher {
+    fn matches(&self, name: &str, value: &str) -> bool {
+        self.target == name
+            && self.regex.is_match(value)
+            && !self
+                .exclusion_regex
+                .as_ref()
+                .is_some_and(|regex| regex.is_match(value))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -477,18 +529,16 @@ impl RuleSet {
                 Ok(modifier)
             })
             .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-        Ok(CompiledRuleSet {
-            rules,
-            modifiers,
-            policy_name: policy.and_then(|policy| {
-                policy
-                    .name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_owned)
-            }),
-        })
+        let policy_name = policy.and_then(|policy| {
+            policy
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        });
+        let content = build_export(&rules, &modifiers, policy_name.as_deref());
+        Ok(CompiledRuleSet { rules, content })
     }
 }
 
@@ -518,7 +568,7 @@ impl CompiledRuleSet {
     }
 
     pub fn policy_name(&self) -> Option<&str> {
-        self.policy_name.as_deref()
+        self.content.policy_name()
     }
 
     pub fn summaries(&self) -> Vec<RuleSummary> {
@@ -541,89 +591,19 @@ impl CompiledRuleSet {
     /// Exposes only the effective compiled Rule v1 plan.  In particular, this
     /// cannot be used to recover a disabled or replaced source definition.
     pub fn compatibility_export(&self) -> RuleV1CompatibilityExport {
-        RuleV1CompatibilityExport {
-            policy_name: self.policy_name.clone(),
-            rules: self
-                .rules
-                .iter()
-                .map(|rule| RuleV1CompatibilityRule {
-                    id: rule.definition.id.clone(),
-                    title: rule.definition.title.clone(),
-                    description: rule.definition.description.clone(),
-                    category: rule.definition.category.clone(),
-                    detection_class: rule.definition.detection_class.clone(),
-                    signal_type: rule.definition.signal_type.clone(),
-                    analytic_intent: rule.definition.analytic_intent.clone(),
-                    atlas_tags: rule.definition.atlas_tags.clone(),
-                    severity: rule.definition.severity.clone(),
-                    score: rule.definition.score,
-                    tags: rule.definition.tags.clone(),
-                    explanation: rule.definition.explanation.clone(),
-                    falsepositives: rule.definition.falsepositives.clone(),
-                    matchers: rule
-                        .matchers
-                        .iter()
-                        .map(|matcher| RuleV1CompatibilityMatcher {
-                            target: matcher.target.clone(),
-                            regex: matcher.regex.as_str().to_owned(),
-                            exclusion_regex: matcher
-                                .exclusion_regex
-                                .as_ref()
-                                .map(|regex| regex.as_str().to_owned()),
-                        })
-                        .collect(),
-                })
-                .collect(),
-            modifiers: self
-                .modifiers
-                .iter()
-                .map(|modifier| RuleV1CompatibilityModifier {
-                    id: modifier.id.clone(),
-                    score: modifier.score,
-                    detection_class: modifier.detection_class.clone(),
-                    signal_type: modifier.signal_type.clone(),
-                    analytic_intent: modifier.analytic_intent.clone(),
-                    atlas_tags: modifier.atlas_tags.clone(),
-                    when_all_categories: modifier.when_all_categories.clone(),
-                    when_all_rule_ids: modifier.when_all_rule_ids.clone(),
-                    falsepositives: modifier.falsepositives.clone(),
-                    explanation: modifier.explanation.clone(),
-                })
-                .collect(),
-        }
+        self.content.clone()
     }
 
     pub fn evaluate(
         &self,
         fields: &[(&str, &str)],
     ) -> Result<Option<MatchResult>, RiskAccountingError> {
-        let mut rule_ids = Vec::new();
-        let mut categories = BTreeSet::new();
-        let mut detection_classes = BTreeSet::new();
-        let mut signal_types = BTreeSet::new();
-        let mut analytic_intents = BTreeSet::new();
-        let mut atlas_tags = BTreeSet::new();
-        let mut tags = BTreeSet::new();
-        let mut contributions = Vec::new();
+        let mut matched_ids = BTreeSet::new();
         let mut evidence = Vec::new();
 
         for rule in &self.rules {
             if let Some(matched) = matching_field(rule, fields) {
-                rule_ids.push(rule.definition.id.clone());
-                categories.insert(rule.definition.category.clone());
-                detection_classes.insert(rule.definition.detection_class.clone());
-                signal_types.insert(rule.definition.signal_type.clone());
-                analytic_intents.insert(rule.definition.analytic_intent.clone());
-                atlas_tags.extend(rule.definition.atlas_tags.iter().cloned());
-                tags.extend(rule.definition.tags.iter().cloned());
-                if rule.definition.score > 0 {
-                    contributions.push(RiskContribution::new(
-                        &rule.definition.id,
-                        RiskContributionType::DeterministicRule,
-                        rule.definition.score,
-                        redact_sensitive_text(&rule.definition.explanation),
-                    )?);
-                }
+                matched_ids.insert(rule.definition.id.as_str());
                 evidence.push(Evidence {
                     field: matched.name.to_string(),
                     redacted_value: redact_sensitive_text(matched.value),
@@ -633,37 +613,155 @@ impl CompiledRuleSet {
             }
         }
 
-        let category_set: BTreeSet<_> = categories.iter().cloned().collect();
-        let rule_id_set: BTreeSet<_> = rule_ids.iter().cloned().collect();
-        for modifier in &self.modifiers {
-            let has_category_conditions = !modifier.when_all_categories.is_empty();
-            let has_rule_id_conditions = !modifier.when_all_rule_ids.is_empty();
-            let categories_match = modifier
-                .when_all_categories
-                .iter()
-                .all(|category| category_set.contains(category));
-            let rule_ids_match = modifier
-                .when_all_rule_ids
-                .iter()
-                .all(|rule_id| rule_id_set.contains(rule_id));
+        let mut result = self.content.evaluate_matched(&matched_ids)?;
+        if let Some(result) = &mut result {
+            result.evidence = evidence;
+        }
+        Ok(result)
+    }
+}
 
-            if (has_category_conditions || has_rule_id_conditions)
-                && categories_match
-                && rule_ids_match
-            {
-                rule_ids.push(modifier.id.clone());
-                detection_classes.insert(modifier.detection_class.clone());
-                signal_types.insert(modifier.signal_type.clone());
-                analytic_intents.insert(modifier.analytic_intent.clone());
-                atlas_tags.extend(modifier.atlas_tags.iter().cloned());
-                if modifier.score > 0 {
-                    contributions.push(RiskContribution::new(
-                        &modifier.id,
-                        RiskContributionType::ChainModifier,
-                        modifier.score,
-                        redact_sensitive_text(&modifier.explanation),
-                    )?);
-                }
+fn build_export(
+    rules: &[CompiledRule],
+    modifiers: &[ModifierDefinition],
+    policy_name: Option<&str>,
+) -> RuleV1CompatibilityExport {
+    RuleV1CompatibilityExport {
+        policy_name: policy_name.map(str::to_owned),
+        rules: rules
+            .iter()
+            .map(|rule| RuleV1CompatibilityRule {
+                id: rule.definition.id.clone(),
+                title: rule.definition.title.clone(),
+                description: rule.definition.description.clone(),
+                category: rule.definition.category.clone(),
+                detection_class: rule.definition.detection_class.clone(),
+                signal_type: rule.definition.signal_type.clone(),
+                analytic_intent: rule.definition.analytic_intent.clone(),
+                atlas_tags: rule.definition.atlas_tags.clone(),
+                severity: rule.definition.severity.clone(),
+                score: rule.definition.score,
+                tags: rule.definition.tags.clone(),
+                explanation: rule.definition.explanation.clone(),
+                falsepositives: rule.definition.falsepositives.clone(),
+                matchers: rule
+                    .matchers
+                    .iter()
+                    .map(|matcher| RuleV1CompatibilityMatcher {
+                        target: matcher.target.clone(),
+                        regex: matcher.regex.as_str().to_owned(),
+                        exclusion_regex: matcher
+                            .exclusion_regex
+                            .as_ref()
+                            .map(|regex| regex.as_str().to_owned()),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        modifiers: modifiers
+            .iter()
+            .map(|modifier| RuleV1CompatibilityModifier {
+                id: modifier.id.clone(),
+                score: modifier.score,
+                detection_class: modifier.detection_class.clone(),
+                signal_type: modifier.signal_type.clone(),
+                analytic_intent: modifier.analytic_intent.clone(),
+                atlas_tags: modifier.atlas_tags.clone(),
+                when_all_categories: modifier.when_all_categories.clone(),
+                when_all_rule_ids: modifier.when_all_rule_ids.clone(),
+                falsepositives: modifier.falsepositives.clone(),
+                explanation: modifier.explanation.clone(),
+            })
+            .collect(),
+    }
+}
+
+impl RuleV1CompatibilityExport {
+    /// Eligible modifiers for the supplied atomic matches, in declaration order.
+    pub fn triggered_modifiers(
+        &self,
+        matched: &BTreeSet<&str>,
+    ) -> Vec<&RuleV1CompatibilityModifier> {
+        let atomic = self
+            .rules
+            .iter()
+            .filter(|rule| matched.contains(rule.id.as_str()))
+            .collect::<Vec<_>>();
+        let categories = atomic
+            .iter()
+            .map(|rule| rule.category.as_str())
+            .collect::<BTreeSet<_>>();
+        let rule_ids = atomic
+            .iter()
+            .map(|rule| rule.id.as_str())
+            .collect::<BTreeSet<_>>();
+        self.modifiers
+            .iter()
+            .filter(|modifier| {
+                (!modifier.when_all_categories.is_empty() || !modifier.when_all_rule_ids.is_empty())
+                    && modifier
+                        .when_all_categories
+                        .iter()
+                        .all(|category| categories.contains(category.as_str()))
+                    && modifier
+                        .when_all_rule_ids
+                        .iter()
+                        .all(|id| rule_ids.contains(id.as_str()))
+            })
+            .collect()
+    }
+
+    /// Evaluate Rule v1 session content only. The caller owns input selection,
+    /// capability status and evidence; unknown IDs cannot create matches.
+    pub fn evaluate_matched(
+        &self,
+        matched: &BTreeSet<&str>,
+    ) -> Result<Option<MatchResult>, RiskAccountingError> {
+        let atomic = self
+            .rules
+            .iter()
+            .filter(|rule| matched.contains(rule.id.as_str()))
+            .collect::<Vec<_>>();
+        let mut rule_ids = atomic
+            .iter()
+            .map(|rule| rule.id.clone())
+            .collect::<Vec<_>>();
+        let mut categories = BTreeSet::new();
+        let mut detection_classes = BTreeSet::new();
+        let mut signal_types = BTreeSet::new();
+        let mut analytic_intents = BTreeSet::new();
+        let mut atlas_tags = BTreeSet::new();
+        let mut tags = BTreeSet::new();
+        let mut contributions = Vec::new();
+        for rule in &atomic {
+            categories.insert(rule.category.clone());
+            detection_classes.insert(rule.detection_class.clone());
+            signal_types.insert(rule.signal_type.clone());
+            analytic_intents.insert(rule.analytic_intent.clone());
+            atlas_tags.extend(rule.atlas_tags.iter().cloned());
+            tags.extend(rule.tags.iter().cloned());
+            if rule.score > 0 {
+                contributions.push(RiskContribution::new(
+                    &rule.id,
+                    RiskContributionType::DeterministicRule,
+                    rule.score,
+                    redact_sensitive_text(&rule.explanation),
+                )?);
+            }
+        }
+        for modifier in self.triggered_modifiers(matched) {
+            rule_ids.push(modifier.id.clone());
+            detection_classes.insert(modifier.detection_class.clone());
+            signal_types.insert(modifier.signal_type.clone());
+            analytic_intents.insert(modifier.analytic_intent.clone());
+            atlas_tags.extend(modifier.atlas_tags.iter().cloned());
+            if modifier.score > 0 {
+                contributions.push(RiskContribution::new(
+                    &modifier.id,
+                    RiskContributionType::ChainModifier,
+                    modifier.score,
+                    redact_sensitive_text(&modifier.explanation),
+                )?);
             }
         }
 
@@ -683,7 +781,7 @@ impl CompiledRuleSet {
                 tags: tags.into_iter().collect(),
                 score,
                 contributions,
-                evidence,
+                evidence: Vec::new(),
             }))
         }
     }
@@ -886,14 +984,9 @@ fn matching_field<'a>(
     fields
         .iter()
         .find(|(name, value)| {
-            rule.matchers.iter().any(|matcher| {
-                matcher.target == *name
-                    && matcher.regex.is_match(value)
-                    && !matcher
-                        .exclusion_regex
-                        .as_ref()
-                        .is_some_and(|regex| regex.is_match(value))
-            })
+            rule.matchers
+                .iter()
+                .any(|matcher| matcher.matches(name, value))
         })
         .map(|(name, value)| MatchedField { name, value })
 }
@@ -972,6 +1065,79 @@ mod tests {
         }
         .compile(None)
         .expect("compile rules")
+    }
+
+    #[test]
+    fn content_owner_matches_excludes_and_scores_once_per_session() {
+        let document = r#"
+version: 1
+description: synthetic content contract
+defaults: {case_insensitive: false, enabled: true}
+rules:
+  - id: test.alpha
+    category: execution
+    severity: high
+    score: 7
+    detection:
+      selection: {command: needle}
+      exclude: {command: quoted}
+    tags: [synthetic]
+    explanation: synthetic
+  - id: test.beta
+    category: network
+    severity: low
+    score: 0
+    targets: [arguments]
+    regex: beta
+    tags: []
+    explanation: synthetic
+modifiers:
+  - id: chain.both
+    score: 9
+    when_all_categories: [execution, network]
+    when_all_rule_ids: [test.alpha, test.beta]
+    explanation: synthetic
+  - id: chain.empty
+    score: 5
+    explanation: synthetic
+"#;
+        let export = super::load_rule_set_from_documents(&[document], None)
+            .unwrap()
+            .compatibility_export();
+        let matcher = export.rules()[0].compile_content_matcher().unwrap();
+        assert!(
+            matcher
+                .matching_fields(&[("command", "needle quoted")])
+                .is_empty()
+        );
+        assert_eq!(
+            matcher.matching_fields(&[("command", "needle quoted"), ("command", "needle")]),
+            vec![("command", "needle")]
+        );
+        let result = export
+            .evaluate_matched(&["test.alpha", "test.beta"].into_iter().collect())
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.rule_ids, ["test.alpha", "test.beta", "chain.both"]);
+        assert_eq!(result.categories, ["execution", "network"]);
+        assert_eq!(result.score, 16);
+        assert_eq!(
+            result
+                .contributions
+                .iter()
+                .map(|c| (c.id(), c.points()))
+                .collect::<Vec<_>>(),
+            [("test.alpha", 7), ("chain.both", 9)]
+        );
+        let overflowing = document.replace("score: 9", &format!("score: {}", u64::MAX));
+        let overflow_export = super::load_rule_set_from_documents(&[&overflowing], None)
+            .unwrap()
+            .compatibility_export();
+        assert!(
+            overflow_export
+                .evaluate_matched(&["test.alpha", "test.beta"].into_iter().collect())
+                .is_err()
+        );
     }
 
     fn rule(id: &str, category: &str) -> RuleDefinition {

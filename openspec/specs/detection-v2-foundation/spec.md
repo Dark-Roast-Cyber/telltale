@@ -188,17 +188,19 @@ map supported classes/severity/scores/ATLAS losslessly, reject operational
 health without a truthful mapping, and not create modifier detectors. The
 compiled plan MUST retain the effective compatibility view needed to evaluate
 one caller-defined canonical session without a separately synchronized export.
-The shared evaluator MUST aggregate each detector over the supplied observations
-using match, error, indeterminate, evaluated no-match, then not-applicable
+The Detection v2 session adapter MUST aggregate each detector over the supplied
+observations using match, error, indeterminate, evaluated no-match, then not-applicable
 precedence while retaining status/reason counts and sorted matched selector
-paths. It MUST determine matched atomic IDs, trigger modifiers from all declared
-category and rule-ID conditions, and reconstruct deterministic compatibility
-metadata. Empty-condition modifiers MUST NOT fire.
+paths. It MUST determine matched atomic IDs and pass them to the shared Rule v1
+content evaluator, which MUST trigger modifiers from all declared category and
+rule-ID conditions and reconstruct deterministic compatibility metadata.
+Empty-condition modifiers MUST NOT fire.
 
-Each Rule v1 target exclusion MUST compile with its positive matcher into the
-same Detection v2 observation matcher. A matching exclusion regex removes the
-positive match. Exclusions MUST remain target-scoped, MUST name a target in the
-same `detection.selection`, MUST NOT be accepted on the simple `targets` plus
+Each Rule v1 target exclusion MUST be evaluated with its positive matcher by
+the shared Rule v1 content evaluator after Detection v2 resolves applicability,
+capabilities, and truthful selector values. A matching exclusion regex removes
+the positive match. Exclusions MUST remain target-scoped, MUST name a target in
+the same `detection.selection`, MUST NOT be accepted on the simple `targets` plus
 `regex` form, and MUST NOT depend on rule IDs in either evaluator. Rule
 evaluation MUST continue to other target matchers after an excluded candidate.
 The effective Rule v1 fingerprint MUST include compiled exclusions under current
@@ -207,6 +209,10 @@ canonicalization `rule-v1-compiled-compatibility-v2` and digest domain
 that canonicalization, while well-formed historical manifests naming
 `rule-v1-compiled-compatibility-v1` remain valid under manifest schema v1.
 
+The I/O-free Rule v1 API, direct-record compatibility path, and Detection v2
+MUST share the same Rule v1 content evaluator for matching, exclusions,
+modifier eligibility, contributions, checked score, and compatibility metadata.
+Canonical applicability, capability and provenance remain Detection v2 concerns.
 Rule v1 compatibility contributions and their checked score MUST use
 `RiskContribution`, `DeterministicRule`, `ChainModifier`,
 `canonicalize_contributions`, and `checked_risk_sum`. A matched rule or triggered

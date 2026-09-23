@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use crate::detection::{account_policy_matches, detect_parsed_source_records_with_snapshot};
+use crate::detection::{
+    account_policy_matches, detect_parsed_source_records_with_snapshot, evaluate_session_matches,
+};
 use telltale_rules::{CompiledRuleSet, load_rule_set_from_documents};
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::record::{NormalizedRecord, RecordKind};
@@ -62,6 +64,29 @@ fn record(session_id: &str, content: &str) -> NormalizedRecord {
 
 fn compiled(policy: Option<&str>) -> CompiledRuleSet {
     load_rule_set_from_documents(&[RULES], policy).expect("compile accounting rules")
+}
+
+#[test]
+fn direct_record_session_retains_flat_match_and_event3_contract() {
+    let rules = compiled(None);
+    let records = [
+        record("session-a", "first second"),
+        record("session-a", "first"),
+    ];
+    let result = evaluate_session_matches(&rules, &records).unwrap().unwrap();
+    assert_eq!(result.rule_ids, ["test.first", "test.second", "chain.test"]);
+    assert_eq!(result.score, 3);
+    assert_eq!(result.evidence.len(), 2);
+    assert_eq!(result.evidence[0].field, "command");
+    let (events, _) =
+        detect_parsed_source_records_with_snapshot(&source("source-a"), &rules, &records);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type, "detection");
+    assert_eq!(
+        events[0].rule_ids,
+        ["test.first", "test.second", "chain.test"]
+    );
+    assert_eq!(events[0].risk_score, 3);
 }
 
 #[test]

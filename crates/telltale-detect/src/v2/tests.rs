@@ -1292,7 +1292,7 @@ modifiers:
 }
 
 #[test]
-fn rule_v1_session_evaluator_owns_modifier_risk_and_metadata_semantics() {
+fn rule_v1_session_adapts_shared_modifier_risk_and_metadata_semantics() {
     let plan = rule_v1_session_plan();
     let observations = [
         message(
@@ -2460,7 +2460,7 @@ overrides:
 }
 
 #[test]
-fn rule_v1_target_exclusion_compiles_into_observation_matcher() {
+fn rule_v1_target_exclusion_uses_shared_content_matcher() {
     let document = r#"
 version: 1
 description: synthetic exclusion

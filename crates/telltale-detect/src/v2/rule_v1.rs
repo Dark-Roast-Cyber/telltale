@@ -8,19 +8,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::Serialize;
-use telltale_rules::{RuleV1CompatibilityExport, RuleV1CompatibilityRule};
+use telltale_rules::{RuleV1CompatibilityExport, RuleV1CompatibilityRule, RuleV1ContentMatcher};
 use telltale_schema::event::{Evidence, evidence_hash, redact_sensitive_text};
 use telltale_schema::observation::{CapabilityId, JsonValue, ObservationFamily, ObservationStage};
-use telltale_schema::scoring::{
-    RiskAccountingError, RiskContribution, RiskContributionType, canonicalize_contributions,
-    checked_risk_sum,
-};
+use telltale_schema::scoring::{RiskAccountingError, RiskContribution};
 
 use super::classification::finding_kind_for_detection_class;
-use super::matcher::{MatcherOperator, MatcherSpec};
+use super::matcher::{MAX_PATTERN_BYTES, MatchState, MatcherSpec};
 use super::observation_match::{CompiledObservationMatchDetector, ObservationMatchSpec};
+use super::selector::SelectorPresence;
 use super::types::{
-    DetectionError, DetectorIdentity, DetectorKind, EvaluationStatus, FindingMetadata, Severity,
+    DetectionError, DetectorIdentity, DetectorKind, EvaluationStatus, FindingMetadata,
+    NonEvaluationReason, Severity,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,88 +306,86 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
         detectors.push(aggregate);
     }
 
-    let export = &plan.export;
-    let matched_categories = export
-        .rules()
+    let selected = matched_atomic_rule_ids
         .iter()
-        .filter(|rule| matched_atomic_rule_ids.contains(&rule.id))
-        .map(|rule| rule.category.as_str())
+        .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let mut triggered_modifier_ids = BTreeSet::new();
-    for modifier in export.modifiers().iter().filter(|modifier| {
-        let has_conditions =
-            !modifier.when_all_categories.is_empty() || !modifier.when_all_rule_ids.is_empty();
-        has_conditions
-            && modifier
-                .when_all_categories
-                .iter()
-                .all(|category| matched_categories.contains(category.as_str()))
-            && modifier
-                .when_all_rule_ids
-                .iter()
-                .all(|rule_id| matched_atomic_rule_ids.contains(rule_id))
-    }) {
-        retain_text(budget, &modifier.id)?;
-        triggered_modifier_ids.insert(modifier.id.clone());
-    }
-
-    let mut contributions = Vec::new();
-    for rule in export
+    for rule in plan
+        .export
         .rules()
         .iter()
-        .filter(|rule| matched_atomic_rule_ids.contains(&rule.id) && rule.score > 0)
+        .filter(|rule| selected.contains(rule.id.as_str()) && rule.score > 0)
     {
-        retain_text(budget, &rule.id)?;
         super::session::RetentionBudget::validate_text(&rule.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
-        let rationale = redact_sensitive_text(&rule.explanation);
-        retain_text(budget, &rationale)?;
-        contributions.push(RiskContribution::new(
-            &rule.id,
-            RiskContributionType::DeterministicRule,
-            rule.score,
-            rationale,
-        )?);
     }
-    for modifier in export
-        .modifiers()
-        .iter()
-        .filter(|modifier| triggered_modifier_ids.contains(&modifier.id) && modifier.score > 0)
+    for modifier in plan
+        .export
+        .triggered_modifiers(&selected)
+        .into_iter()
+        .filter(|modifier| modifier.score > 0)
     {
-        retain_text(budget, &modifier.id)?;
         super::session::RetentionBudget::validate_text(&modifier.explanation)
             .map_err(|_| RuleV1SessionError::Bounds)?;
-        let rationale = redact_sensitive_text(&modifier.explanation);
-        retain_text(budget, &rationale)?;
-        contributions.push(RiskContribution::new(
-            &modifier.id,
-            RiskContributionType::ChainModifier,
-            modifier.score,
-            rationale,
-        )?);
     }
-    let compatibility_contributions = canonicalize_contributions(contributions)?;
-    let compatibility_score = checked_risk_sum(&compatibility_contributions)?;
-    let compatibility_metadata = compatibility_metadata(
-        &matched_atomic_rule_ids,
-        &triggered_modifier_ids,
-        export,
-        budget,
-    )?;
-    let mut effective_rule_ids = BTreeSet::new();
-    for rule_id in matched_atomic_rule_ids
-        .iter()
-        .chain(triggered_modifier_ids.iter())
-    {
-        retain_text(budget, rule_id)?;
-        effective_rule_ids.insert(rule_id.clone());
-    }
-    let effective_rule_ids = effective_rule_ids.into_iter().collect::<Vec<_>>();
+    let content = plan.export.evaluate_matched(&selected)?;
+    let (
+        triggered_modifier_ids,
+        effective_rule_ids,
+        compatibility_contributions,
+        compatibility_score,
+        compatibility_metadata,
+    ) = if let Some(matches) = content {
+        let triggered_modifier_ids = plan
+            .export
+            .modifiers()
+            .iter()
+            .filter(|modifier| matches.rule_ids.contains(&modifier.id))
+            .map(|modifier| modifier.id.clone())
+            .collect::<Vec<_>>();
+        for rule_id in &triggered_modifier_ids {
+            retain_text(budget, rule_id)?;
+        }
+        for contribution in &matches.contributions {
+            retain_text(budget, contribution.id())?;
+            retain_text(budget, contribution.rationale())?;
+        }
+        let metadata = RuleV1CompatibilityMetadata {
+            categories: retain_values(budget, matches.categories)?,
+            detection_classes: retain_values(budget, matches.detection_classes)?,
+            signal_types: retain_values(budget, matches.signal_types)?,
+            analytic_intents: retain_values(budget, matches.analytic_intents)?,
+            atlas_tags: retain_values(budget, matches.atlas_tags)?,
+            tags: retain_values(budget, matches.tags)?,
+        };
+        let ids = retain_values(budget, matches.rule_ids)?;
+        (
+            triggered_modifier_ids,
+            ids,
+            matches.contributions,
+            matches.score,
+            metadata,
+        )
+    } else {
+        (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            0,
+            RuleV1CompatibilityMetadata::default(),
+        )
+    };
+    let mut effective_rule_ids = effective_rule_ids;
+    effective_rule_ids.sort();
+    effective_rule_ids.dedup();
+    let mut triggered_modifier_ids = triggered_modifier_ids;
+    triggered_modifier_ids.sort();
+    triggered_modifier_ids.dedup();
 
     Ok(RuleV1SessionEvaluation {
         detectors,
         matched_atomic_rule_ids: matched_atomic_rule_ids.into_iter().collect(),
-        triggered_modifier_ids: triggered_modifier_ids.into_iter().collect(),
+        triggered_modifier_ids,
         effective_rule_ids,
         compatibility_contributions,
         compatibility_score,
@@ -506,64 +503,14 @@ fn outcome_rank(outcome: RuleV1DetectorOutcome) -> u8 {
     }
 }
 
-fn compatibility_metadata(
-    atomic_ids: &BTreeSet<String>,
-    modifier_ids: &BTreeSet<String>,
-    export: &RuleV1CompatibilityExport,
+fn retain_values(
     budget: &mut super::session::RetentionBudget,
-) -> Result<RuleV1CompatibilityMetadata, RuleV1SessionError> {
-    let mut metadata = RuleV1CompatibilityMetadata::default();
-    for rule in export
-        .rules()
-        .iter()
-        .filter(|rule| atomic_ids.contains(&rule.id))
-    {
-        push_text(budget, &mut metadata.categories, &rule.category)?;
-        push_text(
-            budget,
-            &mut metadata.detection_classes,
-            &rule.detection_class,
-        )?;
-        push_text(budget, &mut metadata.signal_types, &rule.signal_type)?;
-        push_text(
-            budget,
-            &mut metadata.analytic_intents,
-            &rule.analytic_intent,
-        )?;
-        for value in &rule.atlas_tags {
-            push_text(budget, &mut metadata.atlas_tags, value)?;
-        }
-        for value in &rule.tags {
-            push_text(budget, &mut metadata.tags, value)?;
-        }
+    values: Vec<String>,
+) -> Result<Vec<String>, RuleV1SessionError> {
+    for value in &values {
+        retain_text(budget, value)?;
     }
-    for modifier in export
-        .modifiers()
-        .iter()
-        .filter(|modifier| modifier_ids.contains(&modifier.id))
-    {
-        push_text(
-            budget,
-            &mut metadata.detection_classes,
-            &modifier.detection_class,
-        )?;
-        push_text(budget, &mut metadata.signal_types, &modifier.signal_type)?;
-        push_text(
-            budget,
-            &mut metadata.analytic_intents,
-            &modifier.analytic_intent,
-        )?;
-        for value in &modifier.atlas_tags {
-            push_text(budget, &mut metadata.atlas_tags, value)?;
-        }
-    }
-    metadata.categories = sorted_unique(metadata.categories);
-    metadata.detection_classes = sorted_unique(metadata.detection_classes);
-    metadata.signal_types = sorted_unique(metadata.signal_types);
-    metadata.analytic_intents = sorted_unique(metadata.analytic_intents);
-    metadata.atlas_tags = sorted_unique(metadata.atlas_tags);
-    metadata.tags = sorted_unique(metadata.tags);
-    Ok(metadata)
+    Ok(values)
 }
 
 fn retain_text(
@@ -573,22 +520,6 @@ fn retain_text(
     budget
         .retain_text(value)
         .map_err(|_| RuleV1SessionError::Bounds)
-}
-
-fn push_text(
-    budget: &mut super::session::RetentionBudget,
-    target: &mut Vec<String>,
-    value: &str,
-) -> Result<(), RuleV1SessionError> {
-    retain_text(budget, value)?;
-    target.push(value.to_owned());
-    Ok(())
-}
-
-fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
-    values.sort();
-    values.dedup();
-    values
 }
 
 fn compile_rule(
@@ -621,7 +552,21 @@ fn compile_rule(
     if rule.matchers.is_empty() {
         return Err(RuleV1CompileError::InvalidRule);
     }
+    for matcher in &rule.matchers {
+        if matcher.regex.len() > MAX_PATTERN_BYTES
+            || matcher
+                .exclusion_regex
+                .as_ref()
+                .is_some_and(|regex| regex.len() > MAX_PATTERN_BYTES)
+        {
+            return Err(RuleV1CompileError::InvalidMetadata);
+        }
+    }
+    let content = rule
+        .compile_content_matcher()
+        .map_err(|_| RuleV1CompileError::InvalidMetadata)?;
     let mut clauses = Vec::new();
+    let mut targets = Vec::new();
     let mut families = Vec::new();
     // URL has no truthful COv2 compatibility value. In a mixed-target Rule v1
     // detector, evaluate only the available alternatives and report the source
@@ -634,27 +579,13 @@ fn compile_rule(
         .filter(|matcher| matcher.target != "url" || !has_available_target)
     {
         let selector = compat_selector(&matcher.target)?;
+        targets.push(matcher.target.clone());
         for family in selector_families(&matcher.target) {
             if !families.contains(&family) {
                 families.push(family);
             }
         }
-        let positive = MatcherSpec::predicate(
-            selector,
-            MatcherOperator::Regex,
-            Some(JsonValue::string(&matcher.regex)),
-        );
-        clauses.push(match &matcher.exclusion_regex {
-            Some(exclusion_regex) => MatcherSpec::all(vec![
-                positive,
-                MatcherSpec::not(MatcherSpec::predicate(
-                    compat_selector(&matcher.target)?,
-                    MatcherOperator::Regex,
-                    Some(JsonValue::string(exclusion_regex)),
-                )),
-            ]),
-            None => positive,
-        });
+        clauses.push(MatcherSpec::exists(selector));
     }
     let matcher = MatcherSpec::any(clauses);
     let identity = DetectorIdentity::new(DetectorKind::ObservationMatch, &rule.id)
@@ -675,6 +606,52 @@ fn compile_rule(
             DetectionError::ScoreOutOfRange => RuleV1CompileError::ScoreOutOfRange,
             _ => RuleV1CompileError::InvalidMetadata,
         })
+        .map(|detector| detector.with_rule_v1_content(content, targets))
+}
+
+/// The canonical adapter resolves only truthful compatibility selectors. Rule
+/// predicates (including exclusions) run in the I/O-free Rule v1 content owner.
+pub(super) fn evaluate_content_matcher(
+    matcher: &RuleV1ContentMatcher,
+    targets: &[String],
+    observation: &telltale_schema::observation::CanonicalObservationV2,
+) -> (MatchState, Vec<String>) {
+    let registry = super::SelectorRegistry::new();
+    let mut resolutions = Vec::new();
+    let mut unknown = Vec::new();
+    for target in targets {
+        let selector = super::SelectorId::parse(&format!("compat.v1.{target}"))
+            .expect("validated Rule v1 target");
+        resolutions.push(registry.resolve(selector, observation));
+    }
+    let mut fields = Vec::new();
+    for (target, resolution) in targets.iter().zip(&resolutions) {
+        match resolution.presence() {
+            SelectorPresence::UnavailableVisibility => {
+                unknown.push(NonEvaluationReason::InsufficientVisibility)
+            }
+            SelectorPresence::MetadataMissing => unknown.push(NonEvaluationReason::IneligibleInput),
+            SelectorPresence::Present => match resolution.value() {
+                Some(JsonValue::String(value)) => fields.push((target.as_str(), value.as_str())),
+                _ => unknown.push(NonEvaluationReason::TypeMismatch),
+            },
+            SelectorPresence::Absent => {}
+        }
+    }
+    let mut paths = matcher
+        .matching_fields(&fields)
+        .iter()
+        .map(|(name, _)| format!("compat.v1.{name}"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    if !paths.is_empty() {
+        (MatchState::Match, paths)
+    } else if let Some(reason) = unknown.into_iter().min() {
+        (MatchState::NotEvaluated(reason), Vec::new())
+    } else {
+        (MatchState::NoMatch, Vec::new())
+    }
 }
 
 fn compat_selector(target: &str) -> Result<String, RuleV1CompileError> {
