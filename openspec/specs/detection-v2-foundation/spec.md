@@ -13,9 +13,8 @@ source-free session evaluator, source-instance-scoped session
 orchestration, and a source-free Event3 compatibility projection. Process-chain
 repeat/correlation semantics have one pure shared owner used by both the
 Event3 compatibility adapter and this v2 session evaluator. `compat.v1.url`
-remains compiler-supported but truthfully
-absent. There is no live shadow,
-advanced detector runtime, Event4, gateway, or Detection Content v2 runtime
+remains compiler-supported but truthfully absent. There is no advanced detector
+runtime, Event4, gateway, or Detection Content v2 runtime
 loader; the Event 3.0 schema remains unchanged.
 ## Requirements
 ### Requirement: Detector result materialization

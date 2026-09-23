@@ -13,8 +13,6 @@ pub mod detection;
 pub mod mcp;
 pub mod process_chain;
 pub(crate) mod process_chain_session;
-/// Experimental, non-production I/O-free Detection v2 equivalence harness.
-pub mod shadow_v2;
 pub mod timeline;
 /// Detection v2 APIs used by the canonical source runtime. Evaluation remains
 /// I/O-free and accepts caller-provided typed observations.

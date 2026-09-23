@@ -182,29 +182,6 @@ independent of fact provenance and fidelity.
 - **THEN** its capability context resolves UserContext to Unsupported and
   ToolExecution to Unknown rather than treating either gap as a clean absence
 
-### Requirement: Offline shadow expansion remains private and deterministic
-
-The fixture-only shadow harness MUST add only the mixed-format, multi-session,
-and uc001 existing Copilot fixtures. It MUST group canonical observations only
-by source-reported session, review every non-equivalent relation with the exact
-existing mismatch vocabulary, retain multiplicity, and add no broad waiver.
-Reports MUST remain deterministic and MUST contain no raw Copilot session IDs,
-call IDs, assistant text, encrypted content, paths, URLs, process filenames,
-arguments, results, or source paths. The v1 baseline report MUST remain
-unchanged.
-
-#### Scenario: Copilot capability differences are evidence
-
-- **WHEN** Copilot observations are evaluated by the existing shadow detector
-- **THEN** required UserContext unsupported and ToolExecution unknown outcomes
-  remain visible as bounded non-evaluation evidence rather than being hidden by
-  changing adapter capabilities
-
-#### Scenario: Repeated shadow generation is byte-identical
-
-- **WHEN** the same Copilot fixture set is shadowed twice
-- **THEN** the report bytes and reviewed mismatch multiset are identical
-
 ### Requirement: Acquisition reuses stateful native interpretation without progress
 
 The authoritative public acquisition API MUST validate exact

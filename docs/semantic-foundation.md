@@ -5,8 +5,7 @@
 > process-chain evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`, and
 > the Rule v1 compatibility compiler. CLI scan/watch and `Pipeline::scan_root`
 > use source-native acquisition -> Canonical Observation v2 -> Detection v2 ->
-> Event3 compatibility projection. The fixture-only shadow harness remains an
-> offline measurement seam. Event4 and Telemetry/Output v2 remain inactive.
+> Event3 compatibility projection. Event4 and Telemetry/Output v2 remain inactive.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**. Event 3.0 remains the current
 > external compatibility and output contract.

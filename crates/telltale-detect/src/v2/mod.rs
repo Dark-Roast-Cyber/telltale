@@ -36,7 +36,8 @@ pub use observation_match::{
     CompiledObservationMatchDetector, MAX_REQUIRED_CAPABILITIES, MatchSurface,
     ObservationMatchContent, ObservationMatchSpec,
 };
-pub(crate) use rule_v1::{RuleV1CompatibilityMetadata, evaluate_rule_v1_session};
+#[cfg(test)]
+pub(crate) use rule_v1::RuleV1CompatibilityMetadata;
 pub use rule_v1::{RuleV1CompatibilityPlan, RuleV1CompileError, compile_rule_v1};
 pub use rule_v1::{RuleV1DetectorOutcome, RuleV1DetectorSessionEvaluation};
 pub use selector::{

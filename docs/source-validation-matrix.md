@@ -40,16 +40,12 @@ being modeled does not by itself establish live host validation, and a complete
 modeled parser does not by itself establish a live-host claim.
 
 Production Canonical Observation v2 adapters are implemented for all eight exact
-source identities and feed the shared canonical scan/watch runtime. Offline
-deterministic shadow coverage includes Copilot across 15 cases, 17 reviewed
-sessions, and 306 detector evaluations. The reviewed differences are one
-match-set difference plus 28 capability-driven indeterminate outcomes, with zero
-unexplained differences. In the active OpenClaw and Qwen projections, `ToolCall`
+source identities and feed the shared canonical scan/watch runtime. In the
+active OpenClaw and Qwen projections, `ToolCall`
 and `UserContext` are **Supported** while `ToolExecution` is **Unknown**. Copilot
 native-v2 capabilities are ToolCall **Supported**, UserContext **Unsupported**,
-and ToolExecution **Unknown**. These fixture measurements are not live validation
-or a claim of cross-representation parity; the support statuses in this matrix
-remain unchanged.
+and ToolExecution **Unknown**. Fixture-backed support is not live validation;
+the support statuses in this matrix remain unchanged.
 
 ## Validation Matrix
 

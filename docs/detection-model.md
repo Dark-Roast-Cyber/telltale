@@ -2,12 +2,9 @@
 
 > **Website:** For an approachable overview of the detection model and threat taxonomy, see [AgentArchaeology.ai/telltale/detection-model](https://agentarchaeology.ai/telltale/detection-model/).
 
-The current Rule v1 and process-chain engine is documented here. [Detection v2](detection-v2.md)
-also documents an experimental, non-production foundation implementing only
-`observation_match`, `DetectorResult` -> `Signal` -> atomic `Finding`, and the
-Rule v1 compiler. It is not the current engine; the fixture-only P13 shadow
-harness is an offline measurement seam, not a scanner or activation path.
-Advanced detector runtime and Detection Content v2 loader are not implemented.
+Rule v1 content and Event3 scoring semantics are documented here. [Detection v2](detection-v2.md)
+documents the authoritative canonical source evaluator for scan/watch and embedding.
+Advanced detector runtime and a Detection Content v2 loader are not implemented.
 
 ## Risk Flow
 

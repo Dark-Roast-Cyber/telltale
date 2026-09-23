@@ -87,9 +87,8 @@ authoritative path for CLI scan/watch and `Pipeline::scan_root` across the eight
 supported source identities. Rule v1 remains the content-compatibility format,
 and Event 3.0 remains the compatibility projection. The record-level
 `detect_records` and `evaluate_session` APIs intentionally remain
-`NormalizedRecord` compatibility surfaces. Offline deterministic shadow coverage
-is still fixture-only (including Copilot's 15 cases, 17 reviewed sessions, and
-306 detector evaluations); Event4 and Telemetry/Output v2 remain inactive.
+`NormalizedRecord` compatibility surfaces. Event4 and Telemetry/Output v2
+remain inactive.
 
 ## Quick start
 

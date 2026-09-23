@@ -11,52 +11,26 @@
 > scan/watch/embedding runtime. All eight contracted identities have Canonical
 > Observation v2 acquisition coverage (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
-> `opencode.sqlite`; `openclaw.agents`; `qwen.projects`; `copilot.process_log`) and
-> feed an offline, deterministic, immutable-fixture harness. The current reviewed
-> corpus covers 15 cases, 17 sessions, and 306 detector/session evaluations: 15
-> both-match, 251 both-no-match, one legacy-only match, zero v2-only matches, 28
-> v2-indeterminate outcomes, zero v2 errors, and 11 v2-not-applicable outcomes.
-> Fifteen sessions have equivalent risk and two are legacy-only; the current
-> accounting contains 29 reviewed exceptions and zero unexplained differences.
-> This is bounded fixture evidence, not complete behavioral equivalence or proof
-> for every custom Rule v1 rule; in particular, `compat.v1.url` remains
-> intentionally absent. Copilot native-v2 capabilities are ToolCall **Supported**,
-> UserContext **Unsupported**, and ToolExecution **Unknown**.
-> Live scanner shadow: **NO**. Detection v2 is authoritative for production
-> source evaluation; Rule v1 remains its content-compatibility input and Event3
+> `opencode.sqlite`; `openclaw.agents`; `qwen.projects`; `copilot.process_log`).
+> `compat.v1.url` remains intentionally absent. Copilot native-v2 capabilities
+> are ToolCall **Supported**, UserContext **Unsupported**, and ToolExecution
+> **Unknown**. Rule v1 remains its content-compatibility input and Event3
 > remains the external projection. The process-chain session path delegates
 > repeat/correlation decisions to the shared pure semantic kernel. Advanced detector
 > runtime and a Detection Content v2 loader are not implemented. **Existing
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
-The retained Rule v1 content and Event3 scoring behavior remains documented in
+The retained Rule v1 content and Event3 scoring behavior remain documented in
 [Detection model](detection-model.md). This page describes the active canonical
-evaluation model and fixture-only offline measurement harness.
-
-## Offline shadow/equivalence boundary
+evaluation model.
 
 The Rule v1 compatibility compiler retains one effective export with its compiled
 observation-match detectors. Its shared, source-free session evaluator aggregates
 caller-grouped canonical observations, applies Rule v1 modifiers once, and
-reconstructs Rule v1 compatibility contributions, score, and metadata. The
-offline shadow harness consumes that evaluator and reports three separate
-compatibility questions: atomic rule-set equivalence, modifier compatibility,
-and contribution/score compatibility. It
-does not combine those questions into a parity claim. The current reviewed
-reference corpus has exactly one reviewed match-set difference:
-`execution.shell` legacy-only command-content broadening. Separately, 28
-reviewed capability-driven indeterminate outcomes are
-reported as visibility evidence, not additional mismatches. The complete corpus
-has zero unexplained differences. Focused synthetic compatibility coverage proves
-`compat.v1.url` is compiler-supported but
-truthfully absent and demonstrates the compatibility gap; there is no
-end-to-end reference-corpus URL mismatch in the current corpus.
-
-The harness explicitly excludes Event3/event construction, allowlist/suppression,
-timeline, baseline, process-chain, mutable live-store reads, and all-client
-parity. It is an opt-in measurement seam only; it does not change production
-behavior or the frozen Event3 contract.
+reconstructs Rule v1 compatibility contributions, score, and metadata.
+`compat.v1.url` is compiler-supported but truthfully absent; URL evidence is
+not fabricated from unrelated canonical facts.
 
 ## Detection path and units
 
@@ -98,7 +72,7 @@ uses `guard_model`. `external` is not a kind; imported results use `imported`.
 Unknown kinds are rejected.
 
 The implementation runtime-supports `observation_match` and the bounded
-non-production `process_chain` path described below. Sequence, correlation,
+`process_chain` path described below. Sequence, correlation,
 imported, baseline, and guard-model behavior remains reserved architecture and
 is not runtime-supported by this foundation.
 
@@ -118,7 +92,7 @@ traversal order for session correlation, including multiple statements derived
 from one Tool observation. Outward atomic results are separately detector-ordered
 and deduplicated by final Signal identity. Atomic normalization does not discard
 private child context used by correlation. Session grouping is caller-defined;
-there is no source discovery or cross-session state in this tranche.
+the evaluator does not discover sources or hold cross-session state.
 
 The existing command parser converts each command candidate into private
 `telltale-rules` matcher working input. `CompiledProcessChainRules` remains the
@@ -138,9 +112,9 @@ observation. It does not create a Canonical Process observation, a
 Canonical Process evidence remains a separate, stronger future input class.
 Runtime sources such as OpenShell may eventually report Process, Network,
 Runtime, policy, enforcement, or action-result evidence directly, but no
-OpenShell integration or provider abstraction exists in this tranche.
+OpenShell integration or provider abstraction exists in the current runtime.
 
-### Process-chain session convergence (non-production)
+### Process-chain session evaluation
 
 The caller may pass a grouped slice of already-created Canonical Tool
 observations to the crate-private session evaluator. It performs one matcher
@@ -169,7 +143,7 @@ wall clock. Missing `occurred_at` retains the atomic match but makes it
 ineligible for timed repeat suppression and correlation. Candidates are ordered
 chronologically, with stable parser and caller order for equal timestamps.
 
-Tool-derived matcher input in this tranche has no truthful host or user. The v2
+Tool-derived matcher input has no truthful host or user. The v2
 Tool session path therefore uses only the opaque canonical session ID as its
 scope and does not compose it with matcher values or label it as a host. Direct
 host/user-scoped runtime evidence remains future canonical Process work. Without
@@ -296,28 +270,21 @@ durability; permanently unsupported capabilities must not freeze progress.
 Allowlisting remains an event-handling concern after projection and is not
 applied by either evaluation API.
 
-### Compatibility differences and Tranche B dependencies
+### Compatibility behavior
 
-- The reviewed Rule v1 corpus/ledger is unchanged: one legacy command-content
-  broadening difference, 28 capability-driven indeterminate outcomes, 29 reviewed
-  exceptions, zero unexplained differences. The additional corpus test compares
-  orchestration and Event3 IDs/scores to those existing v2 outcomes.
 - `compat.v1.url` remains unavailable. URL-only rules are indeterminate, mixed
   rules use their available alternatives, and completion records the visibility
   limitation; no URL evidence is fabricated.
-- Current acquisition does not retain generic agent/model/provider metadata.
-  Optional omission is truthful; canonical metadata retention or an attested
-  source/session compatibility input is a **baseline activation dependency**.
-  No client-name-as-agent or message-content-as-tool fallback is reproduced.
+- Acquisition retains source-attested agent/model/provider metadata where
+  available. Missing or ambiguous values remain absent; no client-name-as-agent
+  or message-content-as-tool fallback is reproduced.
 - A required Event3 session identity cannot be invented for an unscoped match:
   evaluation completes with limited visibility, but required projection fails.
-  Later callers need an explicit handling decision; they must not turn that error
-  into successful cursor eligibility.
+  Callers must not turn that error into successful cursor eligibility.
 - Evidence now references actual observations and selectors; cardinality and
   anchors intentionally differ from legacy's first-match/field-kind heuristics.
   Correlation inferred-parent status reflects its supporting matcher context
-  rather than an unconditional false value. These are explicit compatibility
-  differences outside the old Rule v1-only shadow denominator.
+  rather than an unconditional false value.
 - Canonical family/stage counts are not legacy `record_counts`: acquisition-owned
   accounting supplies the compatibility histogram and baseline contributions.
 - The shared composition verifies one resolved regular-file coordinate
@@ -328,17 +295,17 @@ applied by either evaluation API.
 
 ### Canonical runtime composition
 
-The private B2 seam proves one production-shaped path: verify one resolved
+The shared runtime follows one production path: verify one resolved
 regular file, acquire directly through the existing native source owner, call
 canonical evaluation once, then project Event3 once. It returns events,
 scanner-owned status, acquisition progress, and optional completion. It covers
 the exact eight source identities and preserves the original scanner path hash
 for Event3 while using the resolved path for acquisition. Evaluation/projection
 failure remains failed and ineligible even when an acquired progress candidate is
-retained; visibility-limited completion remains successful. The focused test
-also demonstrates one existing allowlist application after projection.
+retained; visibility-limited completion remains successful. Allowlisting is
+applied after projection.
 
-This seam is the shared source-semantic owner used by scan, watch, and
+The runtime is the shared source-semantic owner used by scan, watch, and
 `Pipeline::scan_root`. Scanner state, durability, cursor policy, and failure
 adaptation remain caller-owned. Event3 remains the external contract and Event4
 remains inactive.

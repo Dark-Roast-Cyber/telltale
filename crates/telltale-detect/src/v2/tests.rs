@@ -10,6 +10,8 @@ use telltale_schema::observation::{
     ToolObservation,
 };
 
+use super::rule_v1::{RuleV1SessionError, evaluate_rule_v1_session_with_budget};
+use super::session::RetentionBudget;
 use super::types::signal_identity_tuple;
 use super::*;
 
@@ -1301,7 +1303,9 @@ fn rule_v1_session_evaluator_owns_modifier_risk_and_metadata_semantics() {
         message(MessageRole::Assistant, "alpha beta", "alpha-two"),
     ];
     let observation_refs = observations.iter().collect::<Vec<_>>();
-    let evaluation = evaluate_rule_v1_session(&plan, &observation_refs).expect("evaluation");
+    let evaluation =
+        evaluate_rule_v1_session_with_budget(&plan, &observation_refs, &mut RetentionBudget::new())
+            .expect("evaluation");
 
     assert_eq!(
         evaluation.matched_atomic_rule_ids(),
@@ -1393,12 +1397,15 @@ fn rule_v1_session_evaluator_owns_modifier_risk_and_metadata_semantics() {
 fn rule_v1_session_modifier_conditions_and_empty_session_are_bounded() {
     let plan = rule_v1_session_plan();
     let alpha = message(MessageRole::Assistant, "alpha", "alpha-only");
-    let alpha_only = evaluate_rule_v1_session(&plan, &[&alpha]).expect("alpha evaluation");
+    let alpha_only =
+        evaluate_rule_v1_session_with_budget(&plan, &[&alpha], &mut RetentionBudget::new())
+            .expect("alpha evaluation");
     assert_eq!(alpha_only.matched_atomic_rule_ids(), ["synthetic.alpha"]);
     assert!(alpha_only.triggered_modifier_ids().is_empty());
     assert_eq!(alpha_only.compatibility_score(), 7);
 
-    let empty = evaluate_rule_v1_session(&plan, &[]).expect("empty evaluation");
+    let empty = evaluate_rule_v1_session_with_budget(&plan, &[], &mut RetentionBudget::new())
+        .expect("empty evaluation");
     assert!(empty.matched_atomic_rule_ids().is_empty());
     assert!(empty.triggered_modifier_ids().is_empty());
     assert!(empty.effective_rule_ids().is_empty());
@@ -1428,8 +1435,8 @@ fn rule_v1_session_compatibility_score_overflow_fails_closed() {
     let plan = compile_rule_v1(&export).expect("overflow plan");
     let observation = message(MessageRole::Assistant, "needle", "overflow");
     assert!(matches!(
-        evaluate_rule_v1_session(&plan, &[&observation]),
-        Err(telltale_schema::scoring::RiskAccountingError::Overflow)
+        evaluate_rule_v1_session_with_budget(&plan, &[&observation], &mut RetentionBudget::new()),
+        Err(RuleV1SessionError::Accounting)
     ));
 }
 
@@ -1492,6 +1499,15 @@ fn compatibility_views_preserve_roles_and_truthful_absence() {
         assert_eq!(resolution.is_present(), expected, "{}", selector.as_str());
         assert_eq!(resolution.selector(), selector);
     }
+    assert!(
+        !registry
+            .resolve(
+                SelectorId::CompatCommand,
+                &tool_with_object_arguments("name-only")
+            )
+            .is_present(),
+        "tool name and unrelated arguments must not become command evidence"
+    );
 
     let url_matcher = MatcherSpec::equals("compat.v1.url", JsonValue::string("https://example"));
     let url_matcher = url_matcher.compile().expect("URL compatibility matcher");
@@ -2501,16 +2517,6 @@ modifiers: []
         EvaluationStatus::EvaluatedMatch
     );
 
-    let legacy = telltale_rules::load_rule_set_from_documents(&[document], None)
-        .expect("legacy rules")
-        .evaluate(&[
-            ("assistant_context", "needle in a quoted example"),
-            ("arguments", "needle retained"),
-        ])
-        .expect("legacy evaluation")
-        .expect("later eligible legacy match");
-    assert_eq!(legacy.rule_ids, ["synthetic.exclusion"]);
-
     let excluded_observation = message(
         MessageRole::Assistant,
         "needle in a quoted example",
@@ -2521,9 +2527,12 @@ modifiers: []
         "needle retained",
         "synthetic-retained-later",
     );
-    let compatibility =
-        evaluate_rule_v1_session(&plan, &[&excluded_observation, &retained_observation])
-            .expect("compatibility evaluation");
+    let compatibility = evaluate_rule_v1_session_with_budget(
+        &plan,
+        &[&excluded_observation, &retained_observation],
+        &mut RetentionBudget::new(),
+    )
+    .expect("compatibility evaluation");
     assert_eq!(
         compatibility.matched_atomic_rule_ids(),
         ["synthetic.exclusion"]

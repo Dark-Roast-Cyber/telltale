@@ -11,16 +11,13 @@ normalization path for all eight supported identities. Source-native acquisition
 maps directly to COv2 and Detection v2; it does not convert through either
 `NormalizedRecord` type. Copilot's native-v2 capabilities
 are ToolCall **Supported**, UserContext **Unsupported**, and ToolExecution
-**Unknown**. The offline shadow covers 15 cases, 17 reviewed sessions, and 306
-detector evaluations; its one reviewed match-set difference and 28 reviewed
-capability-driven indeterminate outcomes have zero unexplained differences.
-Detection v2 is authoritative for scan, watch, and `Pipeline::scan_root`, using
-Rule v1 as its content-compatibility input and projecting Event 3.0. The
-fixture-only offline shadow remains measurement evidence, not a live shadow.
-Advanced detector runtime and a Detection Content v2 loader are not implemented.
+**Unknown**. Detection v2 is authoritative for scan, watch, and
+`Pipeline::scan_root`, using
+Rule v1 as its content-compatibility input and projecting Event 3.0. Advanced
+detector runtime and a Detection Content v2 loader are not implemented.
 Event4 and telemetry/output v2 remain inactive. The
-`compat.v1.url` view remains truthfully absent; focused synthetic harness
-coverage demonstrates the compatibility gap.
+`compat.v1.url` view remains truthfully absent; direct canonical tests cover
+the resulting visibility gap.
 
 This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
 

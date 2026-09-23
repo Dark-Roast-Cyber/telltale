@@ -37,18 +37,14 @@ the Rule v1 compiler are implemented for Detection v2. The process-chain
 session evaluator parses canonical Tool command evidence into
 private matcher working state and shares one pure repeat/correlation semantic
 kernel with Event3 compatibility projection; it does not manufacture Canonical Process
-observations. The fixture-only offline shadow harness is an offline measurement
-seam, not a scanner or activation path. Advanced detector runtime and a
+observations. Advanced detector runtime and a
 Detection Content v2 loader are not implemented.
 
 Canonical Observation v2 core types are implemented in `telltale-schema`.
 Source-native production projections exist for Claude Code
 (`claude.projects`), the principal Codex session identities, OpenCode
 (`opencode.sqlite`), OpenClaw (`openclaw.agents`), Qwen (`qwen.projects`), and
-Copilot (`copilot.process_log`). Offline deterministic shadow coverage includes
-Copilot across 15 cases, 17 reviewed sessions, and 306 detector evaluations,
-with one reviewed match-set difference plus 28 reviewed capability-driven
-indeterminate outcomes and zero unexplained differences. Copilot native-v2
+Copilot (`copilot.process_log`). Copilot native-v2
 capabilities are ToolCall **Supported**, UserContext **Unsupported**, and
 ToolExecution **Unknown**.
 
@@ -96,9 +92,9 @@ The production migration order is:
    only the acquisition/checkpoint metadata required by scan/watch operation;
 5. cut scan, watch, and the supported embedding facade over to Canonical
    Observation v2 -> Detection v2 as one coordinated production boundary;
-6. delete the legacy NormalizedRecord-centered detector path, duplicate
-   scoring/grouping code, shadow/equivalence migration machinery, and stale
-   migration-only tests and documentation;
+6. retire the remaining legacy NormalizedRecord-centered detector path and
+   duplicate scoring/grouping code while retaining deliberate record-level
+   compatibility APIs;
 7. decide the remaining Event4 and telemetry activation gates after the internal
    semantic/detection path is singular.
 

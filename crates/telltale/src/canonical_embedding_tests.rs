@@ -10,7 +10,7 @@ fn clock() -> ObservedAt {
 }
 
 #[test]
-fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
+fn canonical_embedding_is_stateless_and_deterministic() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join(".claude/projects/synthetic");
     std::fs::create_dir_all(&directory).unwrap();
@@ -31,10 +31,6 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
             .collect::<Vec<_>>(),
         ["detection", "activity"]
     );
-    let legacy_records = telltale_sources::parser::parse_source_records(&sources[0]).unwrap();
-    let legacy = pipeline.detect_records(&sources[0], &legacy_records);
-    assert_eq!(legacy.len(), 1);
-    assert_eq!(legacy[0].event_type, "detection");
     let first = pipeline.scan_canonical_sources(&sources, clock()).unwrap();
     let second = pipeline.scan_canonical_sources(&sources, clock()).unwrap();
     let result = first[0].1.as_ref().unwrap();
@@ -56,14 +52,13 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
         BaselineReplacement::Replace(_)
     ));
     assert_eq!(result.events[0].rule_ids, ["synthetic.target"]);
-    assert_eq!(result.events[0].rule_ids, legacy[0].rule_ids);
-    assert_eq!(result.events[0].severity, legacy[0].severity);
-    assert_eq!(result.events[0].risk_score, legacy[0].risk_score);
+    assert_eq!(result.events[0].severity, "informational");
+    assert_eq!(result.events[0].risk_score, 1);
+    assert_eq!(result.events[0].session_id, "synthetic");
     assert_eq!(
-        result.events[0].source_path_hash,
-        legacy[0].source_path_hash
+        result.events[0].source_path_hash.as_deref(),
+        Some(telltale_schema::event::path_hash(&path).as_str())
     );
-    assert_eq!(result.events[0].session_id, legacy[0].session_id);
     let evidence = |event: &Event| {
         event
             .evidence
@@ -73,23 +68,14 @@ fn canonical_embedding_is_stateless_deterministic_and_default_stays_legacy() {
             .collect::<Vec<_>>()
     };
     assert_eq!(evidence(&result.events[0]).len(), 1);
-    assert_eq!(evidence(&legacy[0]).len(), 1);
     assert_eq!(evidence(&result.events[0])[0]["redacted_value"], "needle");
     assert_eq!(
-        evidence(&legacy[0])[0]["redacted_value"],
-        "message content needle role user sessionId synthetic type user"
+        evidence(&result.events[0])[0]["rule_id"],
+        "synthetic.target"
     );
     assert_eq!(
-        evidence(&result.events[0])[0]["rule_id"],
-        evidence(&legacy[0])[0]["rule_id"]
-    );
-    assert_ne!(
-        evidence(&result.events[0])[0]["redacted_value"],
-        evidence(&legacy[0])[0]["redacted_value"]
-    );
-    assert_ne!(
         evidence(&result.events[0])[0]["hash"],
-        evidence(&legacy[0])[0]["hash"]
+        telltale_schema::event::evidence_hash("needle")
     );
     assert!(
         public

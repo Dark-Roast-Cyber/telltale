@@ -5,8 +5,6 @@
 > identities and consumed by Detection v2 in CLI scan/watch and
 > `Pipeline::scan_root`. Rule v1 remains the content-compatibility format;
 > `NormalizedRecord` types remain explicit record-level compatibility surfaces.
-> The offline shadow/equivalence harness remains fixture measurement, not a live
-> shadow.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**.
 > `opencode.legacy_json` is retired. The public

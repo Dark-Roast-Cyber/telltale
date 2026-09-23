@@ -5,8 +5,7 @@
 Define the completed P15 adapter contract for OpenClaw and Qwen JSONL sources.
 The contract covers source-owned native interpretation, exact legacy
 compatibility, Canonical Observation v2 projections, authoritative acquisition
-routing, cross-adapter conformance, and offline shadow evidence. The reviewed
-13-session corpus has zero unexplained mismatches. Production source evaluation
+routing and cross-adapter conformance. Production source evaluation
 uses canonical acquisition and Detection v2 with Rule v1 content compatibility.
 ## Requirements
 ### Requirement: One source-owned native interpretation
@@ -192,24 +191,17 @@ consistent with direct Qwen evidence.
 - **THEN** the Qwen canonical slice fails closed or retains Unknown rather than
   inventing identity or lifecycle meaning
 
-### Requirement: Conformance and shadow evidence remain offline
+### Requirement: Cross-adapter conformance preserves semantic meaning
 
 Cross-adapter vectors MUST compare canonical semantic family, compatible stage,
 body facts, facets, linkage, and truthful capability absence without requiring
-equal adapter IDs or native coordinates. Offline shadow/equivalence remains
-measurement evidence and MUST NOT become a live dual-execution path.
+equal adapter IDs or native coordinates.
 
 #### Scenario: Equivalent vectors compare meaning, not adapter identity
 
 - **WHEN** OpenClaw and Qwen produce equivalent synthetic message/tool vectors
 - **THEN** conformance compares their semantic meaning while allowing source
   provenance and native coordinates to differ
-
-#### Scenario: Offline shadow does not alter authority
-
-- **WHEN** an OpenClaw or Qwen canonical vector is included in offline shadow
-- **THEN** the existing deterministic legacy result remains authoritative and no
-  live or production shadow path is enabled
 
 ### Requirement: Event 3.0 and adjacent source compatibility
 

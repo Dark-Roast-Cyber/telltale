@@ -4440,6 +4440,99 @@ fn scan_once_emits_native_high_risk_detection_without_network() {
 }
 
 #[test]
+fn canonical_codex_dns_exfil_projects_fixed_event3_evidence() {
+    const COMMAND_HASH: &str = "e359841309a2ad6b6b698dbcd7f054a2d0470841a788ffb060b1763586b3ed7f";
+    const OBSERVATION_HASH: &str =
+        "b167d3da5f674468318c67cff289259acc0904c3a711e655bd1509d1499803e8";
+    let root = tempdir().unwrap();
+    let sessions = root.path().join("codex/sessions/2026/04");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "tests/fixtures/session_stores/codex/sessions/2026/04/uc003-positive-dns-exfil.jsonl",
+        ),
+        sessions.join("uc003-positive-dns-exfil.jsonl"),
+    )
+    .unwrap();
+    let scanned = telltale_core::Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_root(root.path())
+        .unwrap();
+    let detections = scanned
+        .iter()
+        .map(|(_, event)| event)
+        .filter(|event| event.event_type == "detection")
+        .collect::<Vec<_>>();
+    assert_eq!(detections.len(), 1);
+    let event = detections[0];
+    assert_eq!(event.session_id, "uc003-positive-dns-exfil");
+    assert_eq!(
+        event.rule_ids,
+        [
+            "chain.shell_encoded_payload",
+            "execution.encoded_payload",
+            "execution.shell",
+            "exfil.dns_encoding",
+        ]
+    );
+    assert_eq!(event.risk_score, 130);
+
+    let mut contributions = event
+        .risk_contributions
+        .iter()
+        .map(|item| (item.id(), item.points()))
+        .collect::<Vec<_>>();
+    contributions.sort_unstable();
+    assert_eq!(
+        contributions,
+        [
+            ("chain.shell_encoded_payload", 10),
+            ("execution.encoded_payload", 50),
+            ("execution.shell", 15),
+            ("exfil.dns_encoding", 55),
+        ]
+    );
+
+    let mut evidence = event
+        .evidence
+        .iter()
+        .map(|item| {
+            (
+                item.field.as_str(),
+                item.hash.as_deref(),
+                item.rule_id.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    evidence.sort_unstable();
+    let mut expected_evidence = [
+        "execution.shell",
+        "execution.encoded_payload",
+        "exfil.dns_encoding",
+    ]
+    .into_iter()
+    .flat_map(|rule| {
+        [
+            ("command", Some(COMMAND_HASH), Some(rule)),
+            (
+                "canonical_observation_id",
+                Some(OBSERVATION_HASH),
+                Some(rule),
+            ),
+        ]
+    })
+    .collect::<Vec<_>>();
+    expected_evidence.sort_unstable();
+    assert_eq!(evidence, expected_evidence);
+
+    assert_eq!(event.timeline_anchors.len(), 1);
+    assert_eq!(event.timeline_anchors[0].entry_index, 0);
+    assert_eq!(event.timeline_anchors[0].rule_ids, event.rule_ids);
+    assert_eq!(event.timeline_anchors[0].evidence_fields, ["command"]);
+}
+
+#[test]
 fn scan_once_uses_canonical_threshold_without_network() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("session_stores");

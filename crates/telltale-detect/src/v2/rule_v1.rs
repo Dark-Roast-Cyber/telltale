@@ -60,23 +60,24 @@ pub struct RuleV1CompatibilityPlan {
     detectors: Vec<CompiledObservationMatchDetector>,
 }
 
+#[derive(Debug)]
 pub(crate) enum RuleV1SessionError {
     Bounds,
-    Accounting(RiskAccountingError),
+    Accounting,
 }
 
 impl RuleV1SessionError {
     pub(crate) fn processing_error(&self) -> super::session::ProcessingError {
         match self {
             Self::Bounds => super::session::ProcessingError::Bounds,
-            Self::Accounting(_) => super::session::ProcessingError::Evaluation,
+            Self::Accounting => super::session::ProcessingError::Evaluation,
         }
     }
 }
 
 impl From<RiskAccountingError> for RuleV1SessionError {
-    fn from(value: RiskAccountingError) -> Self {
-        Self::Accounting(value)
+    fn from(_: RiskAccountingError) -> Self {
+        Self::Accounting
     }
 }
 
@@ -189,6 +190,7 @@ impl RuleV1DetectorSessionEvaluation {
     pub fn non_evaluation_reason_counts(&self) -> &BTreeMap<String, u64> {
         &self.non_evaluation_reason_counts
     }
+    #[cfg(test)]
     pub(crate) fn matched_selector_paths(&self) -> &[String] {
         &self.matched_selector_paths
     }
@@ -273,8 +275,8 @@ impl RuleV1SessionEvaluation {
 /// Compile every effective Rule v1 rule to an observation matcher.  A single
 /// compatibility detector may apply to Message and Tool observations because
 /// legacy targets span those two canonical families. Each compiled detector
-/// still evaluates one observation at a time; `evaluate_rule_v1_session`
-/// provides the bounded compatibility aggregation.
+/// still evaluates one observation at a time; session evaluation provides
+/// bounded compatibility aggregation.
 pub fn compile_rule_v1(
     rules: &RuleV1CompatibilityExport,
 ) -> Result<RuleV1CompatibilityPlan, RuleV1CompileError> {
@@ -286,22 +288,6 @@ pub fn compile_rule_v1(
     Ok(RuleV1CompatibilityPlan {
         export: rules.clone(),
         detectors,
-    })
-}
-
-/// Evaluate Rule v1 compatibility semantics for one caller-defined canonical
-/// session. Session grouping, identity, source access, and production behavior
-/// remain outside this evaluation boundary.
-pub(crate) fn evaluate_rule_v1_session(
-    plan: &RuleV1CompatibilityPlan,
-    observations: &[&telltale_schema::observation::CanonicalObservationV2],
-) -> Result<RuleV1SessionEvaluation, RiskAccountingError> {
-    let mut budget = super::session::RetentionBudget::new();
-    evaluate_rule_v1_session_with_budget(plan, observations, &mut budget).map_err(|error| {
-        match error {
-            RuleV1SessionError::Accounting(error) => error,
-            RuleV1SessionError::Bounds => RiskAccountingError::Overflow,
-        }
     })
 }
 
