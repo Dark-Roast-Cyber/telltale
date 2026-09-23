@@ -34,8 +34,8 @@ pub(super) struct CanonicalProcessingResult {
     pub baseline_replacement: BaselineReplacement,
     pub policy_accounting: Option<
         Result<
-            super::PolicyMatchAccounting,
-            telltale_detect::detection::PolicyMatchAccountingError,
+            telltale_detect::v2::PolicyMatchAccounting,
+            telltale_detect::v2::PolicyMatchAccountingError,
         >,
     >,
 }

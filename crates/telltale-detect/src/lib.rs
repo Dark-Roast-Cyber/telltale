@@ -1,9 +1,9 @@
-//! Telltale's detection layer: deterministic rule evaluation over parsed
-//! session records, session timelines, baseline deviation, cross-session
-//! correlation, allowlist suppression, and MCP usage analysis.
+//! Telltale's detection layer: deterministic evaluation over caller-supplied
+//! records or canonical observations, session timelines, baseline state and
+//! deviation, correlation, allowlist suppression, and optional MCP analysis.
 //!
-//! Records in, events out. Runtime concerns — state persistence, sinks, and
-//! the CLI — live in the downstream binary crate.
+//! Source discovery and parsing live in `telltale-sources`; source orchestration
+//! lives in `telltale-core`. State persistence and sinks live downstream.
 
 pub mod allowlist;
 pub mod baseline;

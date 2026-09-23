@@ -106,7 +106,9 @@ fn contribution_budget_failure_returns_no_accounting_or_eligible_progress() {
 }
 
 #[test]
-fn all_eight_native_contributions_match_legacy_semantic_counts() {
+fn all_eight_native_contributions_match_fixed_accounting_expectations() {
+    use std::collections::BTreeMap;
+    use telltale_schema::activity_facts::PathClass;
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_sources::acquisition::ActivityContributions;
     let directory = tempdir().unwrap();
@@ -155,25 +157,35 @@ fn all_eight_native_contributions_match_legacy_semantic_counts() {
             std::fs::write(&source.path, r#"{"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{"command":"https://example.test/x /home/u/.env"}}],"legacy_context":"https://sibling.example.test/x /tmp/synthetic"}"#).unwrap();
         }
         let batch = acquire_source(&source, AcquisitionOptions::new(clock())).unwrap();
-        let legacy = telltale_sources::parser::parse_source_records(&source).unwrap();
-        let summaries = telltale_detect::baseline::build_baseline_summaries(&legacy);
-        assert_eq!(summaries.len(), 1);
-        let expected = &summaries[0];
         let actual = &batch.accounting.sessions[0].counts.contributions;
-        assert_eq!(actual.tool_calls, expected.tool_call_counts, "{source_id}");
+        let (paths, hosts) = match source_id {
+            "copilot.process_log" => (
+                BTreeMap::from([(PathClass::SecretStore, 1)]),
+                BTreeMap::from([("example.test".to_string(), 1)]),
+            ),
+            "opencode.sqlite" => (
+                BTreeMap::from([(PathClass::SecretStore, 4), (PathClass::Other, 1)]),
+                BTreeMap::from([("example.test".to_string(), 3)]),
+            ),
+            _ => (
+                BTreeMap::from([(PathClass::SecretStore, 2), (PathClass::Temp, 1)]),
+                BTreeMap::from([
+                    ("example.test".to_string(), 2),
+                    ("sibling.example.test".to_string(), 1),
+                ]),
+            ),
+        };
         assert_eq!(
-            actual.path_classes, expected.path_class_counts,
+            actual.tool_calls,
+            BTreeMap::from([("shell".into(), 1)]),
             "{source_id}"
         );
-        assert_eq!(
-            actual.network_hosts, expected.network_host_counts,
-            "{source_id}"
-        );
+        assert_eq!(actual.path_classes, paths, "{source_id}");
+        assert_eq!(actual.network_hosts, hosts, "{source_id}");
         assert_eq!(
             batch.accounting.unscoped.contributions,
             ActivityContributions::default()
         );
-        assert!(!actual.tool_calls.is_empty(), "{source_id}");
     }
 }
 use telltale_detect::v2::compile_rule_v1;
@@ -636,6 +648,56 @@ fn database(path: &std::path::Path) -> Source {
         source_id: "opencode.sqlite".into(),
         path: path.into(),
     }
+}
+
+#[test]
+fn benign_opencode_sqlite_partial_source_has_no_canonical_detection() {
+    use telltale_sources::acquisition::AccountingCoverage;
+
+    let dir = tempdir().unwrap();
+    let source = database(&dir.path().join("benign.db"));
+    let connection = rusqlite::Connection::open(&source.path).unwrap();
+    connection
+        .execute(
+            "UPDATE part SET data = ?1",
+            [r#"{"type":"text","text":"This is a minimal Rust project."}"#],
+        )
+        .unwrap();
+    let batch = acquire_source(&source, AcquisitionOptions::new(clock())).unwrap();
+    assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+    assert!(!batch.observations.is_empty());
+
+    let rules = load_default_rule_set().unwrap();
+    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let result = process_canonical_source(
+        &source,
+        &ScanState::default(),
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan,
+        None,
+    );
+    assert_eq!(result.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(
+        result.accounting.as_ref().unwrap().coverage,
+        AccountingCoverage::PartialSource
+    );
+    assert_eq!(
+        result.baseline_replacement,
+        BaselineReplacement::NoReplacement
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| event.event_type == "activity")
+    );
+    assert!(
+        !result
+            .events
+            .iter()
+            .any(|event| event.event_type == "detection")
+    );
 }
 
 #[test]

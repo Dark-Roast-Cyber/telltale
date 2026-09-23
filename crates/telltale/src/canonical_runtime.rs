@@ -4,12 +4,12 @@
 use crate::{Event, Source};
 use sha2::{Digest, Sha256};
 use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
-use telltale_detect::detection::{PolicyMatchAccounting, PolicyMatchAccountingError};
 use telltale_detect::process_chain::ProcessChainConfig;
 use telltale_detect::v2::activity::{BaselineReplacement, evaluate_activity};
 use telltale_detect::v2::{
     CanonicalSourceInput, EvaluationCompletion, Event3CompatibilityContext, Event3SessionMetadata,
-    ProcessingError, RuleV1CompatibilityPlan, evaluate_source, project_event3,
+    PolicyMatchAccounting, PolicyMatchAccountingError, ProcessingError, RuleV1CompatibilityPlan,
+    evaluate_source, project_event3,
 };
 use telltale_rules::process_chain::CompiledProcessChainRules;
 use telltale_schema::event::path_hash;

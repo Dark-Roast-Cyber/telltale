@@ -7,9 +7,12 @@ use crate::baseline::{
     self, BaselineDeviationConfig, BaselineKey, BaselineSnapshotStore, BaselineSummary,
     assess_baseline_deviation, baseline_snapshot_id,
 };
-use crate::detection::activity_from_counts;
 use std::collections::{BTreeMap, BTreeSet};
-use telltale_schema::event::{ActivityEventInput, Event, is_canonical_sha256_hex};
+use telltale_schema::event::Evidence;
+use telltale_schema::event::{
+    ActivityEventInput, Event, activity_event, evidence_hash, is_canonical_sha256_hex,
+};
+use telltale_schema::scoring::{RiskAccountingError, RiskContribution, RiskContributionType};
 use telltale_sources::acquisition::{AccountingCoverage, RecordCounts, SourceAccounting};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -154,4 +157,72 @@ fn histogram(counts: &RecordCounts) -> Result<BTreeMap<String, u32>, ProcessingE
         ))
     })
     .collect()
+}
+
+fn activity_from_counts(
+    mut input: ActivityEventInput,
+    record_counts: BTreeMap<String, u32>,
+    tool_names: BTreeSet<String>,
+    deviation: Option<crate::baseline::BaselineDeviation>,
+) -> Result<Event, RiskAccountingError> {
+    let mut risk_contributions = Vec::new();
+    let mut evidence = Vec::new();
+    let mut tags = vec!["activity".to_string(), "session".to_string()];
+    if let Some(deviation) = deviation {
+        risk_contributions.push(RiskContribution::new(
+            "baseline.deviation",
+            RiskContributionType::BaselineDeviation,
+            deviation.risk_modifier,
+            "baseline deviation observed",
+        )?);
+        tags.push("baseline_deviation".to_string());
+        let deviation_text = serde_json::json!({
+            "risk_modifier": deviation.risk_modifier,
+            "new_tool_names": deviation.new_tool_names,
+            "new_path_classes": deviation.new_path_classes,
+            "new_network_hosts": deviation.new_network_hosts,
+        })
+        .to_string();
+        evidence.push(Evidence {
+            field: "baseline_deviation".to_string(),
+            redacted_value: deviation_text.clone(),
+            hash: Some(evidence_hash(&deviation_text)),
+            rule_id: None,
+        });
+    }
+
+    let counts_text =
+        serde_json::to_string(&record_counts).map_err(|_| RiskAccountingError::Overflow)?;
+    evidence.push(Evidence {
+        field: "record_counts".to_string(),
+        redacted_value: counts_text.clone(),
+        hash: Some(evidence_hash(&counts_text)),
+        rule_id: None,
+    });
+    if !tool_names.is_empty() {
+        let tool_name_list = tool_names
+            .iter()
+            .take(10)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        evidence.push(Evidence {
+            field: "tool_names".to_string(),
+            redacted_value: tool_name_list.clone(),
+            hash: Some(evidence_hash(&tool_name_list)),
+            rule_id: None,
+        });
+    }
+    if record_counts
+        .get("tool_call")
+        .is_some_and(|count| *count > 0)
+    {
+        tags.push("tooling".to_string());
+    }
+    tags.sort();
+    tags.dedup();
+    input.tags = tags;
+    input.evidence = evidence;
+    input.risk_contributions = risk_contributions;
+    activity_event(input)
 }

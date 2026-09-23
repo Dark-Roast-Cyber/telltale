@@ -3,8 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
-use telltale_detect::detection::{detect_parsed_source_records, summarize_parsed_source_activity};
+use telltale_detect::detection::detect_parsed_source_records;
 use telltale_rules::load_default_rule_set;
 use telltale_schema::canonical::Provenance;
 use telltale_sources::discovery::discover_sources_best_effort;
@@ -191,8 +190,6 @@ fn bench_discovery(c: &mut Criterion) {
 fn bench_legacy_record_compatibility(c: &mut Criterion) {
     let rule_set = load_default_rule_set().expect("rule set");
     let root = fixture_root();
-    let baseline_snapshots = BaselineSnapshotStore::default();
-    let baseline_deviation_config = BaselineDeviationConfig::default();
 
     let mut group = c.benchmark_group("legacy_record_compatibility");
     group.sample_size(20);
@@ -204,22 +201,6 @@ fn bench_legacy_record_compatibility(c: &mut Criterion) {
             for source in &sources {
                 if let Ok(records) = parse_source_records(source) {
                     let _ = detect_parsed_source_records(source, &rule_set, &records);
-                }
-            }
-        });
-    });
-
-    // Legacy record compatibility benchmark: parse + activity summary.
-    group.bench_function("all_fixtures_parse_activity_summary", |b| {
-        b.iter(|| {
-            for source in &sources {
-                if let Ok(records) = parse_source_records(source) {
-                    let _ = summarize_parsed_source_activity(
-                        source,
-                        &records,
-                        &baseline_snapshots,
-                        baseline_deviation_config,
-                    );
                 }
             }
         });

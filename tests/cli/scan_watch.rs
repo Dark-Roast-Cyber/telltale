@@ -1863,6 +1863,16 @@ fn scan_once_persists_incremental_baseline_snapshots() {
             "stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        let summary: Value = serde_json::from_slice(&output.stdout).expect("scan summary");
+        assert_eq!(
+            summary["detection_flow"]["effective_detection_candidate_count"],
+            0
+        );
+        let events = fs::read_to_string(&log_path).expect("benign events");
+        assert!(events.lines().all(|line| {
+            let event: Value = serde_json::from_str(line).expect("Event3 JSON");
+            event["event_type"] != "detection"
+        }));
     };
 
     run_scan();

@@ -13,6 +13,7 @@ mod classification;
 pub mod event3;
 mod matcher;
 mod observation_match;
+pub mod policy_accounting;
 #[allow(dead_code)]
 pub(crate) mod process_chain;
 pub(crate) mod rule_v1;
@@ -36,6 +37,7 @@ pub use observation_match::{
     CompiledObservationMatchDetector, MAX_REQUIRED_CAPABILITIES, MatchSurface,
     ObservationMatchContent, ObservationMatchSpec,
 };
+pub use policy_accounting::{PolicyMatchAccounting, PolicyMatchAccountingError};
 #[cfg(test)]
 pub(crate) use rule_v1::RuleV1CompatibilityMetadata;
 pub use rule_v1::{RuleV1CompatibilityPlan, RuleV1CompileError, compile_rule_v1};

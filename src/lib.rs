@@ -7,7 +7,7 @@ mod schema;
 mod sink;
 mod state;
 
-use telltale_detect::{allowlist, baseline, correlation, detection, mcp, process_chain};
+use telltale_detect::{allowlist, baseline, correlation, mcp, process_chain};
 use telltale_schema::scoring;
 use telltale_sources::{discovery, install_inventory, parser, paths, projects};
 

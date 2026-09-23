@@ -52,6 +52,21 @@ fn run(
     accounting: &SourceAccounting,
     prior: &BaselineSnapshotStore,
 ) -> Result<activity::ActivityBaselineResult, ProcessingError> {
+    run_with_config(
+        accounting,
+        prior,
+        BaselineDeviationConfig {
+            enabled: true,
+            min_previous_tool_calls: 5,
+        },
+    )
+}
+
+fn run_with_config(
+    accounting: &SourceAccounting,
+    prior: &BaselineSnapshotStore,
+    config: BaselineDeviationConfig,
+) -> Result<activity::ActivityBaselineResult, ProcessingError> {
     let rules = telltale_rules::load_default_rule_set().unwrap();
     let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
     let evaluation = evaluate_source(
@@ -65,16 +80,7 @@ fn run(
         None,
     )
     .unwrap();
-    evaluate_activity(
-        &evaluation,
-        accounting,
-        &"a".repeat(64),
-        prior,
-        BaselineDeviationConfig {
-            enabled: true,
-            min_previous_tool_calls: 5,
-        },
-    )
+    evaluate_activity(&evaluation, accounting, &"a".repeat(64), prior, config)
 }
 
 fn replacement(result: &activity::ActivityBaselineResult) -> &[crate::baseline::BaselineSummary] {
@@ -236,6 +242,8 @@ fn mixed_and_unscoped_accounting_have_explicit_replacement_semantics() {
 
 #[test]
 fn prior_snapshot_is_immutable_and_current_sample_does_not_self_train() {
+    use telltale_schema::event::evidence_hash;
+    use telltale_schema::scoring::RiskContributionType;
     let mut input = accounting();
     let empty = BaselineSnapshotStore::default();
     let first = run(&input, &empty).unwrap();
@@ -252,7 +260,77 @@ fn prior_snapshot_is_immutable_and_current_sample_does_not_self_train() {
         .tool_calls
         .insert("novel".into(), 1);
     let next = run(&input, &prior).unwrap();
-    assert_eq!(next.events[0].risk_score, 5);
+    let event = &next.events[0];
+    assert_eq!(event.risk_score, 5);
+    assert_eq!(event.risk_contributions.len(), 1);
+    let contribution = &event.risk_contributions[0];
+    assert_eq!(contribution.id(), "baseline.deviation");
+    assert_eq!(
+        contribution.contribution_type(),
+        RiskContributionType::BaselineDeviation
+    );
+    assert_eq!(contribution.points(), 5);
+    assert_eq!(contribution.rationale(), "baseline deviation observed");
+    assert!(event.tags.iter().any(|tag| tag == "baseline_deviation"));
+    let deviation =
+        r#"{"new_network_hosts":0,"new_path_classes":0,"new_tool_names":1,"risk_modifier":5}"#;
+    assert_eq!(
+        event
+            .evidence
+            .iter()
+            .filter(|item| item.field == "baseline_deviation")
+            .collect::<Vec<_>>()
+            .len(),
+        1
+    );
+    let evidence = event
+        .evidence
+        .iter()
+        .find(|item| item.field == "baseline_deviation")
+        .unwrap();
+    assert_eq!(evidence.redacted_value, deviation);
+    assert_eq!(
+        evidence.hash.as_deref(),
+        Some(evidence_hash(deviation).as_str())
+    );
+    assert_eq!(evidence.rule_id, None);
+    assert_eq!(
+        event
+            .evidence
+            .iter()
+            .find(|item| item.field == "record_counts")
+            .unwrap()
+            .redacted_value,
+        r#"{"tool_call":6}"#
+    );
+    assert_eq!(event.evidence.len(), 3);
+
+    let disabled = run_with_config(&input, &prior, BaselineDeviationConfig::default()).unwrap();
+    assert_eq!(disabled.events.len(), 1);
+    let disabled_event = &disabled.events[0];
+    assert_eq!(disabled_event.risk_score, 0);
+    assert!(disabled_event.risk_contributions.is_empty());
+    assert!(
+        !disabled_event
+            .tags
+            .iter()
+            .any(|tag| tag == "baseline_deviation")
+    );
+    assert!(
+        !disabled_event
+            .evidence
+            .iter()
+            .any(|item| item.field == "baseline_deviation")
+    );
+    assert_eq!(
+        disabled_event
+            .evidence
+            .iter()
+            .find(|item| item.field == "record_counts")
+            .unwrap()
+            .redacted_value,
+        r#"{"tool_call":6}"#
+    );
     assert_eq!(prior, before);
     let current = replacement(&next)[0].clone();
     let mut self_trained = prior.clone();

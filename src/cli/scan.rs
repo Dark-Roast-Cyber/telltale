@@ -8,7 +8,6 @@ use time::OffsetDateTime;
 use crate::allowlist::{load_allowlist, suppress_detection};
 use crate::baseline::BaselineDeviationConfig;
 use crate::cli::historical::{EventRecordKind, JsonlEventRecord, read_jsonl_records};
-use crate::detection::PolicyMatchAccounting;
 use crate::discovery::is_fixture_root;
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertConfig, OperationalAlertInput,
@@ -32,6 +31,7 @@ use crate::scoring::load_thresholds;
 use crate::scoring::{RiskAccountingError, RiskContribution, canonicalize_contributions};
 use crate::sink::{SinkFailure, SinkSet};
 use crate::state::{ScanState, SqliteIngestionCursor, StateLock, source_fingerprint};
+use telltale_detect::v2::PolicyMatchAccounting;
 use telltale_detect::v2::activity::BaselineReplacement;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::ObservedAt;

@@ -182,12 +182,7 @@ EOF
 cat > "$DETECT_LIGHT_CONSUMER_DIR/src/main.rs" <<'EOF'
 use std::path::PathBuf;
 
-use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
-use telltale_detect::detection::{
-    account_policy_matches, detect_parsed_source_records,
-    detect_parsed_source_records_with_snapshot, evaluate_session_matches,
-    summarize_parsed_source_activity,
-};
+use telltale_detect::detection::{detect_parsed_source_records, evaluate_session_matches};
 use telltale_rules::load_default_rule_set;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::record::NormalizedRecord;
@@ -215,14 +210,6 @@ fn main() {
     let rules = load_default_rule_set().expect("rules");
     let _ = evaluate_session_matches(&rules, &records);
     let _ = detect_parsed_source_records(&source, &rules, &records);
-    let (_, snapshot) = detect_parsed_source_records_with_snapshot(&source, &rules, &records);
-    let _ = account_policy_matches(&snapshot, &rules);
-    let _ = summarize_parsed_source_activity(
-        &source,
-        &records,
-        &BaselineSnapshotStore::default(),
-        BaselineDeviationConfig::default(),
-    );
 }
 EOF
 
