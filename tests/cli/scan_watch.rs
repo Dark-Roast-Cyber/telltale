@@ -3684,10 +3684,13 @@ fn watch_skips_no_op_state_save() {
     let _watch_guard = watch_process_guard();
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("stores");
-    copy_dir_recursive(
-        Path::new("tests/fixtures/session_stores/codex"),
-        &root.join("codex"),
-    );
+    let session_dir = root.join("codex/sessions/2026/04");
+    fs::create_dir_all(&session_dir).expect("create Codex session directory");
+    fs::copy(
+        "tests/fixtures/session_stores/codex/sessions/2026/04/session-a.jsonl",
+        session_dir.join("session-a.jsonl"),
+    )
+    .expect("copy Codex session fixture");
     let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("telltale-state.json");
 

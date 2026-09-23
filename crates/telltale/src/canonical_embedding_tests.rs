@@ -57,7 +57,7 @@ fn canonical_embedding_is_stateless_and_deterministic() {
     assert_eq!(result.events[0].session_id, "synthetic");
     assert_eq!(
         result.events[0].source_path_hash.as_deref(),
-        Some(telltale_schema::event::path_hash(&path).as_str())
+        Some(telltale_schema::event::path_hash(&sources[0].path).as_str())
     );
     let evidence = |event: &Event| {
         event
