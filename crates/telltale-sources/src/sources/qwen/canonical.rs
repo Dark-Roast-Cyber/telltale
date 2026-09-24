@@ -16,7 +16,7 @@ use super::native::{
     QwenContentBlock, QwenNativeRecord, QwenToolFields, extract_qwen_native_records,
     is_known_qwen_discriminator,
 };
-use crate::parser::ParseError;
+use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct QwenCanonicalOptions {
@@ -30,7 +30,7 @@ impl QwenCanonicalOptions {
 }
 
 pub(crate) enum QwenCanonicalError {
-    Source(ParseError),
+    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -91,8 +91,8 @@ impl fmt::Display for QwenCanonicalError {
 
 impl std::error::Error for QwenCanonicalError {}
 
-impl From<ParseError> for QwenCanonicalError {
-    fn from(error: ParseError) -> Self {
+impl From<SourceReadError> for QwenCanonicalError {
+    fn from(error: SourceReadError) -> Self {
         Self::Source(error)
     }
 }
@@ -151,7 +151,7 @@ fn project_record(
         ));
     }
 
-    if record.legacy_kind == telltale_schema::record::RecordKind::SessionMeta {
+    if record.discriminator.as_deref() == Some("session_meta") {
         return Ok(());
     }
 

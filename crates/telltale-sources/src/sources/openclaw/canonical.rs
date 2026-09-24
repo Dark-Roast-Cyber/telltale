@@ -16,7 +16,7 @@ use super::native::{
     OpenClawContentBlock, OpenClawNativeRecord, OpenClawToolFields,
     extract_openclaw_native_records, is_known_openclaw_discriminator,
 };
-use crate::parser::ParseError;
+use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct OpenClawCanonicalOptions {
@@ -30,7 +30,7 @@ impl OpenClawCanonicalOptions {
 }
 
 pub(crate) enum OpenClawCanonicalError {
-    Source(ParseError),
+    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -91,8 +91,8 @@ impl fmt::Display for OpenClawCanonicalError {
 
 impl std::error::Error for OpenClawCanonicalError {}
 
-impl From<ParseError> for OpenClawCanonicalError {
-    fn from(error: ParseError) -> Self {
+impl From<SourceReadError> for OpenClawCanonicalError {
+    fn from(error: SourceReadError) -> Self {
         Self::Source(error)
     }
 }
@@ -151,7 +151,7 @@ fn project_record(
         ));
     }
 
-    if record.legacy_kind == telltale_schema::record::RecordKind::SessionMeta {
+    if record.discriminator.as_deref() == Some("session_meta") {
         return Ok(());
     }
 
@@ -722,12 +722,10 @@ mod tests {
         IdentityCoordinateValue, IngestionMode, JsonValue, MessageRole, ObservationBody,
         ObservationFamily, ObservationStage, ObservedAt, SemanticReplayVerdict,
     };
-    use telltale_schema::record::RecordKind;
     use telltale_schema::source::Source;
     use tempfile::tempdir;
 
     use super::{OpenClawCanonicalOptions, project_openclaw_canonical_observations};
-    use crate::parser::parse_source_records;
 
     const OBSERVED_AT: &str = "2026-09-04T12:00:00Z";
 
@@ -751,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn benign_baseline_preserves_direct_tool_calls_and_legacy_flattening() {
+    fn benign_baseline_preserves_direct_tool_calls() {
         let path = crate::test_fixture_path(
             "benign_baselines/openclaw/agents/baseline-project/benign-baseline.jsonl",
         );
@@ -844,12 +842,6 @@ mod tests {
                     .resolve(CapabilityId::UserContext)
                     == CapabilityAvailability::Supported
         }));
-
-        let legacy = parse_source_records(&source(path)).expect("legacy records");
-        assert_eq!(legacy.len(), 4);
-        assert_eq!(legacy[1].kind, RecordKind::AssistantMessage);
-        assert_eq!(legacy[1].arguments, None);
-        assert_eq!(legacy[2].kind, RecordKind::ToolResult);
     }
 
     #[test]
@@ -1260,9 +1252,6 @@ mod tests {
         )
         .expect_err("payload message without evidence must fail closed");
         assert_eq!(error.code(), "missing_payload_evidence");
-        let legacy = parse_source_records(&source(payload_path)).expect("legacy records");
-        assert_eq!(legacy[0].kind, RecordKind::UserMessage);
-        assert!(legacy[0].content.contains("Synthetic outer content."));
 
         let top_level_path = directory.path().join("top-level-empty.jsonl");
         fs::write(
@@ -1287,7 +1276,7 @@ mod tests {
             r#"{"payload":{"type":"tool","sessionId":"s","tool":"shell","state":{"status":"completed","input":{"command":"printf synthetic"},"output":"ok"}}}"#,
         )
         .unwrap();
-        let source_path = path.clone();
+        let _source_path = path.clone();
         let observations = project(path);
 
         assert_eq!(observations.len(), 2);
@@ -1327,12 +1316,6 @@ mod tests {
                         | ObservationStage::ToolExecutionCompleted
                 )
         }));
-
-        let legacy = parse_source_records(&source(source_path)).expect("legacy records");
-        assert_eq!(legacy.len(), 1);
-        assert_eq!(legacy[0].kind, RecordKind::ToolCall);
-        assert_eq!(legacy[0].tool_name.as_deref(), Some("shell"));
-        assert_eq!(legacy[0].arguments, None);
     }
 
     #[test]
@@ -1377,7 +1360,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_inheritance_is_legacy_only() {
+    fn session_metadata_does_not_copy_onto_later_records() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("metadata.jsonl");
         fs::write(
@@ -1396,19 +1379,7 @@ mod tests {
             native[1].attestation.as_ref().unwrap().provider.known(),
             None
         );
-        assert_eq!(
-            native[1].legacy_effective_provider.as_deref(),
-            Some("fixture-provider")
-        );
         assert_eq!(native[1].attestation.as_ref().unwrap().agent.known(), None);
-        assert_eq!(
-            native[1].legacy_effective_agent.as_deref(),
-            Some("fixture-agent")
-        );
-
-        let legacy = parse_source_records(&source(path)).expect("legacy records");
-        assert_eq!(legacy[1].provider.as_deref(), Some("fixture-provider"));
-        assert_eq!(legacy[1].agent.as_deref(), Some("fixture-agent"));
     }
 
     #[test]
@@ -1429,10 +1400,6 @@ mod tests {
         let native = super::super::native::extract_openclaw_native_records(&source(path.clone()))
             .expect("native records");
         assert_eq!(native[1].session_id, None);
-        assert_eq!(
-            parse_source_records(&source(path)).unwrap()[1].session_id,
-            "session-meta-only"
-        );
     }
 
     #[test]
@@ -1493,7 +1460,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_canonical_inputs_fail_without_changing_legacy_output() {
+    fn unknown_canonical_inputs_fail_closed() {
         let unknown =
             crate::test_fixture_path("parser_maturity/non_discovered/unknown-variant.jsonl");
         let error = project_openclaw_canonical_observations(
@@ -1504,10 +1471,6 @@ mod tests {
         assert_eq!(error.code(), "unknown_discriminator");
         assert!(!error.to_string().contains("Synthetic unknown"));
         assert!(!format!("{error:?}").contains("Synthetic unknown"));
-        assert_eq!(
-            parse_source_records(&source(unknown)).unwrap()[0].kind,
-            RecordKind::Other
-        );
 
         let directory = tempdir().unwrap();
         let path = directory.path().join("payload-unknown.jsonl");
@@ -1524,10 +1487,6 @@ mod tests {
         assert_eq!(error.code(), "unknown_discriminator");
         assert!(!error.to_string().contains("Synthetic payload secret"));
         assert!(!format!("{error:?}").contains("payload-unknown.jsonl"));
-        assert_eq!(
-            parse_source_records(&source(path)).unwrap()[0].kind,
-            RecordKind::Other
-        );
 
         let directory = tempdir().unwrap();
         let path = directory.path().join("unknown-block.jsonl");
@@ -1543,11 +1502,10 @@ mod tests {
         .expect_err("unknown content block must fail canonical mapping");
         assert_eq!(error.code(), "unknown_content_block");
         assert!(!error.to_string().contains("synthetic payload"));
-        assert!(parse_source_records(&source(path)).is_ok());
     }
 
     #[test]
-    fn source_parse_failure_is_distinct_and_legacy_stays_available() {
+    fn source_parse_failure_is_distinct() {
         let source = source(crate::test_fixture_path(
             "parser_maturity/non_discovered/schema-drift.jsonl",
         ));
@@ -1557,7 +1515,6 @@ mod tests {
         )
         .expect_err("schema drift must remain a source error");
         assert_eq!(error.code(), "source_parse");
-        assert!(parse_source_records(&source).is_err());
     }
 
     #[test]

@@ -81,8 +81,7 @@ impl ActivityContributions {
         Ok(())
     }
 
-    /// Borrow existing native projection fields; never retain a per-unit map or
-    /// reconstruct a legacy record. Every insertion reserves the batch budget.
+    /// Borrow existing native fields; never retain a per-unit map.
     pub(super) fn observe<'a>(
         &mut self,
         name: Option<&str>,

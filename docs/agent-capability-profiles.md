@@ -4,8 +4,8 @@ This document records what each supported source can expose from its raw store.
 Detection and analyst review must not assume every source has the same visibility.
 
 Legend: **Full** is reliably present and extracted, **Partial** is conditional,
-**Absent** is not present, and **Lossy** exists upstream but is not preserved by
-the record-level compatibility projection.
+**Absent** is not present, and **Lossy** exists upstream but canonical mapping
+does not preserve it as a structured fact.
 
 ## Supported sources
 
@@ -20,9 +20,9 @@ Sources: `codex.sessions`, `codex.archived_sessions`,
 | Tool calls and results | Full | Tool names, arguments, and result content are parsed. |
 | Model, provider, agent | Full | Inherited from session metadata when needed. |
 | Workspace | Partial | Present in some session metadata. |
-| Timestamp and session ID | Full | Source values are used; legacy parsing may use the file stem as a session fallback. |
+| Timestamp and session ID | Full | Source-reported values only. A missing session id fails closed. |
 | Process ID and exit code | Absent | Not reported by this store. |
-| Call ID, error state, content parts | Lossy | Not preserved through the record compatibility projection. |
+| Call ID, error state, content parts | Partial | Preserved when the source reports them. Missing IDs are not fabricated. |
 
 The Canonical Observation v2 adapter covers all three
 registered Codex identities. It does not use filename/path fallback for v2
@@ -40,9 +40,9 @@ Source: `claude.projects` (JSONL).
 | Provider and agent | Partial | Not always source-reported. |
 | Workspace | Absent | Not available in this source contract. |
 | Timestamp | Partial | Not guaranteed on every entry. |
-| Session ID | Full | Source value or legacy file-stem fallback. |
+| Session ID | Full | Source-reported value only. A missing session id is replay unverifiable. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | Canonical acquisition preserves more structure than record compatibility. |
+| Call ID, error state, content parts | Partial | Preserved when the source reports them. Missing IDs are not fabricated. |
 
 ### OpenClaw
 
@@ -55,9 +55,9 @@ Source: `openclaw.agents` (JSONL, including archived/reset suffixes).
 | Model, provider, agent | Full | Preserved when reported; the agent has a source-specific default. |
 | Workspace | Absent | Not available. |
 | Timestamp | Partial | Present on some records. |
-| Session ID | Full | Source value or legacy file-stem fallback. |
+| Session ID | Full | Source-reported value only. A missing session id is replay unverifiable. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | Not preserved by the record compatibility projection. |
+| Call ID, error state, content parts | Partial | Preserved when the source reports them. Missing IDs are not fabricated. |
 
 The canonical adapter reports ToolCall and UserContext **Supported**
 and ToolExecution **Unknown**.
@@ -73,9 +73,9 @@ Source: `qwen.projects` (JSONL).
 | Model, provider, agent | Full | Preserved when reported. |
 | Workspace | Absent | Not available. |
 | Timestamp | Partial | Present on some records. |
-| Session ID | Full | Source value or legacy file-stem fallback. |
+| Session ID | Full | Source-reported value only. A missing session id is replay unverifiable. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | Not preserved by the record compatibility projection. |
+| Call ID, error state, content parts | Partial | Preserved when the source reports them. Missing IDs are not fabricated. |
 
 The canonical adapter reports ToolCall and UserContext **Supported**
 and ToolExecution **Unknown**.
@@ -89,13 +89,14 @@ Source: `opencode.sqlite`.
 | User and assistant messages | Full | Parsed from SQLite message and part data. |
 | Tool calls and results | Full | Selected tool parts preserve their direct lifecycle facts. |
 | Model, provider, agent | Full | Preserved from source JSON. |
-| Workspace | Lossy | Not preserved through the record compatibility projection. |
+| Workspace | Partial | Preserved only when the SQLite row reports it. |
 | Timestamp and session ID | Full | SQLite rows provide source timing and session context. |
 | Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Lossy | Canonical acquisition preserves more structure than record compatibility. |
+| Call ID, error state, content parts | Partial | Selected tool parts preserve reported call identity and lifecycle facts. |
 
 The `opencode.sqlite` canonical adapter feeds the production Detection v2 source
-runtime; record compatibility remains separately available.
+runtime. Caller-supplied record evaluation is a separate API and is not produced
+from this store.
 
 ### GitHub Copilot
 
@@ -107,7 +108,7 @@ Source: `copilot.process_log`.
 | Tool calls | Full | Function-call arrays provide name, arguments, and optional call ID. |
 | Tool results | Partial | Present only on some function-call records. |
 | Model and provider | Partial | Not populated on every record. |
-| Agent | Full | The parser identifies Copilot. |
+| Agent | Full | The adapter identifies Copilot. |
 | Workspace | Partial | Workspace initialization records provide a UUID. |
 | Timestamp | Partial | Leading RFC3339 timestamps are preserved when present. |
 | Session ID | Full | Derived from workspace initialization. |

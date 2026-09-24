@@ -3,9 +3,8 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
-use crate::parser::{
-    ParseError, arguments_field, default_source_file_stem, read_jsonl_values, record_content,
-    session_id_with_fallback, string_field,
+use crate::source_read::{
+    SourceReadError, collect_string_values, nested_string_field, read_jsonl_values,
 };
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -52,10 +51,6 @@ pub(crate) struct QwenNativeRecord {
     pub(crate) source_sequence: u64,
     pub(crate) native_id: Option<String>,
     pub(crate) session_id: Option<String>,
-    pub(crate) legacy_session_id: String,
-    pub(crate) legacy_effective_agent: Option<String>,
-    pub(crate) legacy_effective_provider: Option<String>,
-    pub(crate) legacy_effective_model: Option<String>,
     pub(crate) timestamp: Option<String>,
     pub(crate) source_timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
@@ -65,25 +60,18 @@ pub(crate) struct QwenNativeRecord {
     pub(crate) blocks: Option<Vec<QwenContentBlock>>,
     pub(crate) tool_calls: Vec<QwenToolFields>,
     pub(crate) tool: QwenToolFields,
-    pub(crate) legacy_kind: RecordKind,
-    pub(crate) legacy_tool_name: Option<String>,
-    pub(crate) legacy_arguments: Option<String>,
-    pub(crate) legacy_content: String,
+    pub(crate) contribution_strings: Vec<String>,
 }
 
 pub(crate) fn extract_qwen_native_records(
     source: &Source,
-) -> Result<Vec<QwenNativeRecord>, ParseError> {
+) -> Result<Vec<QwenNativeRecord>, SourceReadError> {
     let values = read_jsonl_values(source)?;
-    let default_session_id = default_source_file_stem(source);
     let mut records = Vec::with_capacity(values.len());
-    let mut effective_agent = None;
-    let mut effective_provider = None;
-    let mut effective_model = None;
 
     for (source_sequence, value) in values.into_iter().enumerate() {
         if !value.is_object() {
-            return Err(ParseError::SchemaDrift {
+            return Err(SourceReadError::SchemaDrift {
                 client: source.client,
                 source_id: source.source_id.clone(),
                 detail: "JSONL record envelope must be an object",
@@ -91,28 +79,21 @@ pub(crate) fn extract_qwen_native_records(
         }
 
         let selected_envelope = qwen_selected_envelope(&value);
-
-        // Keep the pre-v2 lookup for production compatibility. In particular,
-        // string_field retains the existing session_meta inheritance behavior.
-        effective_agent = effective_agent
-            .or_else(|| string_field(&value, "agent_nickname"))
-            .or_else(|| string_field(&value, "agent"));
-        effective_provider = effective_provider
-            .or_else(|| string_field(&value, "model_provider"))
-            .or_else(|| string_field(&value, "providerID"))
-            .or_else(|| string_field(&value, "provider"));
-        effective_model = effective_model
-            .or_else(|| string_field(&value, "model"))
-            .or_else(|| string_field(&value, "model_name"))
-            .or_else(|| string_field(&value, "modelID"));
-
         let discriminator = qwen_discriminator(&value).map(ToOwned::to_owned);
-        let legacy_kind = qwen_record_kind(&value);
-        let legacy_tool_name = qwen_tool_name(&value);
-        let legacy_arguments =
-            arguments_field(&value).or_else(|| qwen_tool_input_as_string(&value));
         let ownership = canonical_session_id(&value);
         let session_id = ownership.as_ref().ok().cloned().flatten();
+        let blocks =
+            content_blocks(&value).map(|blocks| blocks.iter().map(qwen_content_block).collect());
+        let tool_calls = qwen_tool_calls(&value);
+        let tool = qwen_tool_fields(&value);
+        let role = qwen_role(&value);
+        let is_tool_call = qwen_accounting_kind(
+            discriminator.as_deref(),
+            role.as_deref(),
+            &blocks,
+            &tool_calls,
+            &tool,
+        ) == RecordKind::ToolCall;
         let native = QwenNativeRecord {
             attestation: ownership.and_then(|_| {
                 selected_envelope.map_or_else(
@@ -131,25 +112,21 @@ pub(crate) fn extract_qwen_native_records(
             source_sequence: source_sequence as u64,
             native_id: qwen_native_id(&value, discriminator.as_deref()),
             session_id,
-            legacy_session_id: session_id_with_fallback(&value, &default_session_id),
-            legacy_effective_agent: effective_agent.clone(),
-            legacy_effective_provider: effective_provider.clone(),
-            legacy_effective_model: effective_model.clone(),
-            timestamp: string_field(&value, "timestamp"),
+            timestamp: nested_string_field(&value, "timestamp"),
             source_timestamp: selected_envelope
                 .and_then(|envelope| selected_string_field(envelope.value, "timestamp")),
             discriminator,
             payload_discriminator: has_payload_discriminator(&value),
-            role: qwen_role(&value),
+            role,
             message_content: qwen_message_content(&value),
-            blocks: content_blocks(&value)
-                .map(|blocks| blocks.iter().map(qwen_content_block).collect()),
-            tool_calls: qwen_tool_calls(&value),
-            tool: qwen_tool_fields(&value),
-            legacy_kind,
-            legacy_tool_name,
-            legacy_arguments,
-            legacy_content: record_content(&value),
+            contribution_strings: if is_tool_call {
+                collect_string_values(&value)
+            } else {
+                Vec::new()
+            },
+            blocks,
+            tool_calls,
+            tool,
         };
         records.push(native);
     }
@@ -157,49 +134,69 @@ pub(crate) fn extract_qwen_native_records(
     Ok(records)
 }
 
-pub(crate) fn qwen_record_kind(value: &Value) -> RecordKind {
-    let discriminator = qwen_discriminator(value);
-    if discriminator.is_some_and(|kind| !is_known_qwen_discriminator(kind)) {
-        return RecordKind::Other;
+impl QwenNativeRecord {
+    pub(crate) fn accounting_kind(&self) -> RecordKind {
+        qwen_accounting_kind(
+            self.discriminator.as_deref(),
+            self.role.as_deref(),
+            &self.blocks,
+            &self.tool_calls,
+            &self.tool,
+        )
     }
 
-    if legacy_content_blocks(value).is_some_and(|blocks| {
+    pub(crate) fn accounting_tool_name(&self) -> Option<&str> {
+        self.tool_calls
+            .iter()
+            .find_map(|tool| tool.name.as_deref())
+            .or(self.tool.name.as_deref())
+            .or_else(|| {
+                self.blocks.as_ref()?.iter().find_map(|block| match block {
+                    QwenContentBlock::ToolUse { name, .. } => name.as_deref(),
+                    _ => None,
+                })
+            })
+    }
+
+    pub(crate) fn contribution_strings(&self) -> &[String] {
+        &self.contribution_strings
+    }
+}
+
+fn qwen_accounting_kind(
+    discriminator: Option<&str>,
+    role: Option<&str>,
+    blocks: &Option<Vec<QwenContentBlock>>,
+    tool_calls: &[QwenToolFields],
+    tool: &QwenToolFields,
+) -> RecordKind {
+    let has_tool_use = blocks.as_ref().is_some_and(|blocks| {
         blocks
             .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-    }) {
+            .any(|block| matches!(block, QwenContentBlock::ToolUse { .. }))
+    }) || !tool_calls.is_empty()
+        || matches!(discriminator, Some("tool_call"))
+        || (discriminator == Some("tool") && tool.result.is_none() && tool.error.is_none());
+    if has_tool_use {
         return RecordKind::ToolCall;
     }
-    if legacy_content_blocks(value).is_some_and(|blocks| {
+    if blocks.as_ref().is_some_and(|blocks| {
         blocks
             .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-    }) {
+            .any(|block| matches!(block, QwenContentBlock::ToolResult { .. }))
+    }) || matches!(discriminator, Some("tool_result"))
+        || tool.result.is_some()
+        || tool.error.is_some()
+    {
         return RecordKind::ToolResult;
     }
-
-    match discriminator {
-        Some("user_message" | "user") => RecordKind::UserMessage,
-        Some("assistant_message" | "assistant" | "gemini" | "model") => {
-            RecordKind::AssistantMessage
-        }
-        Some("text") if value.get("role").and_then(Value::as_str) == Some("user") => {
+    match (discriminator, role) {
+        (Some("user_message" | "user"), _) | (Some("text"), Some("user")) => {
             RecordKind::UserMessage
         }
-        Some("text")
-            if matches!(
-                value.get("role").and_then(Value::as_str),
-                Some("assistant" | "model")
-            ) =>
-        {
-            RecordKind::AssistantMessage
-        }
-        Some("tool_call") => RecordKind::ToolCall,
-        Some("tool_result") => RecordKind::ToolResult,
-        Some("tool") if qwen_tool_part_is_result(value) => RecordKind::ToolResult,
-        Some("tool") => RecordKind::ToolCall,
-        Some("session_meta") => RecordKind::SessionMeta,
-        _ if value.get("session_meta").is_some() => RecordKind::SessionMeta,
+        (Some("assistant_message" | "assistant" | "gemini" | "model"), _)
+        | (Some("text"), Some("assistant" | "model")) => RecordKind::AssistantMessage,
+        (Some("session_meta"), _) => RecordKind::SessionMeta,
         _ => RecordKind::Other,
     }
 }
@@ -295,55 +292,9 @@ pub(crate) fn is_known_qwen_discriminator(kind: &str) -> bool {
     )
 }
 
-pub(crate) fn qwen_tool_part_is_result(value: &Value) -> bool {
-    value
-        .get("state")
-        .and_then(|state| state.get("status"))
-        .and_then(Value::as_str)
-        .is_some_and(|status| matches!(status, "completed" | "error"))
-        || value
-            .get("state")
-            .and_then(|state| state.get("output").or_else(|| state.get("error")))
-            .is_some()
-}
-
-pub(crate) fn qwen_tool_name(value: &Value) -> Option<String> {
-    string_field(value, "tool_name")
-        .or_else(|| string_field(value, "tool"))
-        .or_else(|| string_field(value, "name"))
-        .or_else(|| {
-            legacy_content_blocks(value)?
-                .iter()
-                .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
-                .get("name")?
-                .as_str()
-                .map(ToString::to_string)
-        })
-}
-
-pub(crate) fn qwen_tool_input_as_string(value: &Value) -> Option<String> {
-    let input = legacy_content_blocks(value)?
-        .iter()
-        .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
-        .get("input")?;
-    match input {
-        Value::String(item) => Some(item.clone()),
-        Value::Null => None,
-        item => serde_json::to_string(item).ok(),
-    }
-}
-
 fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
     let selected = qwen_selected_envelope(value)?;
     selected_field(selected.value, "content").and_then(Value::as_array)
-}
-
-fn legacy_content_blocks(value: &Value) -> Option<&Vec<Value>> {
-    value
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .or_else(|| value.get("content"))
-        .and_then(Value::as_array)
 }
 
 fn qwen_role(value: &Value) -> Option<String> {

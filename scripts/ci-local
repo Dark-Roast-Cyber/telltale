@@ -41,7 +41,7 @@ run_stage 'Package verification' run_make package-verify
 
 printf '\n%s\n' 'Local Linux CI passed.'
 printf '%s\n' 'Validated locally: formatting, Clippy, Rust tests, version metadata, Event 3.0,'
-printf '%s\n' 'producer provenance, LocalEventFeed, OpenCode export, console/headless behavior,'
+printf '%s\n' 'producer provenance, LocalEventFeed, console/headless behavior,'
 printf '%s\n' 'public documentation boundaries, security/supply-chain pins, fixture smoke, and packages.'
 printf '%s\n' 'Not validated locally: Windows behavior, macOS behavior, GitHub clean-room state,'
 printf '%s\n' 'published/native release artifacts, immutable release operations, or native qualification.'

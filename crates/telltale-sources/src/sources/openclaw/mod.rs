@@ -6,7 +6,6 @@ use telltale_schema::clients::SourceKind;
 pub(crate) mod canonical;
 mod install;
 pub(crate) mod native;
-pub(crate) mod parser;
 
 pub(crate) use install::INSTALL;
 

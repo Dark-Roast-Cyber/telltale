@@ -949,11 +949,11 @@ mod tests {
         fs::write(
             &session_path,
             concat!(
-                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:00Z","tool_name":"list_issues","agent":"claude","model":"fixture-model","provider":"anthropic","role":"assistant"}"#,
+                r#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-04-03T06:00:00Z","agent":"claude","model":"fixture-model","provider":"anthropic","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-list","name":"list_issues","input":{}}]}}"#,
                 "\n",
-                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:01Z","tool_name":"create_issue","role":"assistant"}"#,
+                r#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-04-03T06:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-create","name":"create_issue","input":{}}]}}"#,
                 "\n",
-                r#"{"type":"tool_call","session_id":"session-a","timestamp":"2026-04-03T06:00:02Z","tool_name":"view","role":"assistant"}"#,
+                r#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-04-03T06:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-view","name":"view","input":{}}]}}"#,
                 "\n",
             ),
         )
@@ -1036,7 +1036,7 @@ mod tests {
         let session_path = temp.path().join("session-a.jsonl");
         fs::write(
             &session_path,
-            r#"{"type":"tool_call","session_id":"session-a","tool_name":"view","role":"assistant"}"#,
+            r#"{"type":"assistant","sessionId":"session-a","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu-view","name":"view","input":{}}]}}"#,
         )
         .expect("write session");
         let sources = vec![Source {

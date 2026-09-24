@@ -1,50 +1,11 @@
 use std::collections::HashMap;
 
 use crate::timeline::{TimelineRuleAnchor, build_session_timeline};
-#[cfg(all(test, feature = "source-io"))]
-use telltale_rules::load_default_rule_set;
 use telltale_rules::{CompiledRuleSet, MatchResult};
 use telltale_schema::canonical::{NormalizedRecordV1, Provenance};
-#[cfg(all(test, feature = "source-io"))]
-use telltale_schema::event::scanner_error_event;
 use telltale_schema::event::{DetectionEventInput, Event, parse_event_timestamp, path_hash};
 use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::source::Source;
-#[cfg(all(test, feature = "source-io"))]
-use telltale_sources::parser::{ParseError, parse_source_records};
-
-#[cfg(all(test, feature = "source-io"))]
-#[allow(dead_code)]
-pub fn detect_sources(sources: &[Source]) -> Vec<(Source, Event)> {
-    let rule_set = load_default_rule_set().expect("rule set");
-    detect_sources_with_rules(sources, &rule_set)
-}
-
-#[cfg(all(test, feature = "source-io"))]
-pub fn detect_sources_with_rules(
-    sources: &[Source],
-    rule_set: &CompiledRuleSet,
-) -> Vec<(Source, Event)> {
-    sources
-        .iter()
-        .flat_map(|source| {
-            detect_source(source, rule_set)
-                .into_iter()
-                .map(|event| (source.clone(), event))
-        })
-        .collect()
-}
-
-#[cfg(all(test, feature = "source-io"))]
-fn detect_source(source: &Source, rule_set: &telltale_rules::CompiledRuleSet) -> Vec<Event> {
-    let parsed = match parse_source_records(source) {
-        Ok(records) => records,
-        Err(ParseError::Empty) => return vec![],
-        Err(e) => return vec![scanner_error_event(source, &e)],
-    };
-
-    detect_parsed_source_records(source, rule_set, &parsed)
-}
 
 pub fn detect_parsed_source_records(
     source: &Source,
@@ -317,36 +278,15 @@ where
 #[cfg(all(test, feature = "source-io"))]
 #[allow(clippy::useless_conversion)]
 mod tests {
-    use super::{detect_records_with_timeline, detect_sources};
-    use std::collections::BTreeSet;
+    use super::detect_records_with_timeline;
     use std::path::PathBuf;
     use telltale_rules::load_default_rule_set;
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::record::{NormalizedRecord, RecordKind};
     use telltale_schema::source::Source;
-    use telltale_sources::clients::supported_clients;
-    use telltale_sources::discovery::discover_sources_best_effort;
 
-    #[path = "approval_bypass.rs"]
-    mod approval_bypass;
-    #[path = "codex_variants.rs"]
-    mod codex_variants;
     #[path = "direct_record_compatibility.rs"]
     mod direct_record_compatibility;
-    #[path = "download_execute.rs"]
-    mod download_execute;
-    #[path = "mcp_injection.rs"]
-    mod mcp_injection;
-    #[path = "resilience.rs"]
-    mod resilience;
-    #[path = "secret_access.rs"]
-    mod secret_access;
     #[path = "timeline.rs"]
     mod timeline;
-    #[path = "tool_result_coverage.rs"]
-    mod tool_result_coverage;
-    #[path = "uc002.rs"]
-    mod uc002;
-    #[path = "uc003.rs"]
-    mod uc003;
 }

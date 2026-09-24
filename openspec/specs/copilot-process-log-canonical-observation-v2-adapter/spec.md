@@ -3,9 +3,9 @@
 ## Purpose
 Define the bounded Canonical Observation v2 interpretation of the GitHub
 Copilot process log. The authoritative public acquisition API reuses this same
-native state machine and canonical mapping for production source evaluation;
-record-level compatibility parsing remains separately available and Event3
-remains the external projection.
+native state machine and canonical mapping for production source evaluation.
+Source-backed legacy record projection is retired; Event3 remains the external
+projection.
 ## Requirements
 ### Requirement: Stateful source-owned interpretation
 
@@ -17,7 +17,7 @@ become canonical observations. Control phrases MUST be recognized only in the
 trusted Copilot log prefix/control position before an accumulated structured
 payload; phrases in assistant content, tool arguments, direct tool messages or
 results, embedded JSON, heartbeat/object values, and arbitrary operational text
-MUST NOT change either session state. Here, "trusted" means the top-level
+MUST NOT change canonical session state. Here, "trusted" means the top-level
 source-record/control position only; it MUST NOT be treated as authentication of
 the leading timestamp token, which remains metadata and may be opaque or
 invalid. A legitimate control and accumulated-output payload on one line MUST
@@ -25,11 +25,11 @@ remain supported. Native types MUST remain crate-private, MUST NOT retain
 structured payload text in workspace events, and MUST NOT retain
 `encrypted_content`.
 
-#### Scenario: Legacy and canonical share native facts
+#### Scenario: Canonical projection consumes native facts
 
-- **WHEN** the legacy or canonical Copilot projection processes a valid log
+- **WHEN** canonical Copilot projection processes a valid log
 - **THEN** it consumes the native interpretation and does not reconstruct
-  canonical observations from flattened `ParsedRecord` values
+  observations from a flattened record projection
 
 #### Scenario: Non-object output fails native extraction
 
@@ -42,8 +42,8 @@ structured payload text in workspace events, and MUST NOT retain
 - **WHEN** either control phrase appears in an accumulated item, assistant
   content, tool arguments or results, embedded JSON, heartbeat/object value, or
   arbitrary plain operational text
-- **THEN** native extraction does not create, replace, or clear legacy or
-  canonical session state, while a legitimate control followed by accumulated
+- **THEN** native extraction does not create, replace, or clear canonical
+  session state, while a legitimate control followed by accumulated
   output remains consumable
 
 #### Scenario: Workspace events stop at structured payload
@@ -53,22 +53,20 @@ structured payload text in workspace events, and MUST NOT retain
 - **THEN** the workspace event retains only the trusted control prefix and no
   structured payload or sensitive suffix
 
-### Requirement: Dual session state and ordinals
+### Requirement: Canonical session state and ordinals
 
-The adapter MUST maintain separate legacy effective and canonical active session
-state. Legacy state MUST start at the filename stem or `unknown`, update on
-workspace initialization, and remain set after session completion. Canonical
-state MUST start absent, use only the source-reported workspace ID, and clear on
-session completion. Every accumulated-output item MUST consume the next
-zero-based ordinal for its source-reported session, including ignored variants;
-reactivation MUST continue the existing ordinal.
+The adapter MUST maintain one canonical active session. It MUST start absent,
+use only the source-reported workspace ID, and clear on session completion. It
+MUST NOT use a filename stem, path, or `unknown` session fallback. Every
+accumulated-output item MUST consume the next zero-based ordinal for its
+source-reported session, including ignored variants; reactivation MUST continue
+the existing ordinal.
 
-#### Scenario: Completion clears only canonical context
+#### Scenario: Completion clears canonical context
 
 - **WHEN** a session completes and an accumulated-output item occurs before the
   next workspace initialization
-- **THEN** the legacy projection retains its effective session while canonical
-  projection fails closed as replay unverifiable
+- **THEN** canonical projection fails closed as replay unverifiable
 
 #### Scenario: Repeated activation continues sequence
 
@@ -76,23 +74,6 @@ reactivation MUST continue the existing ordinal.
   initialized again in one log
 - **THEN** its later accumulated-output item receives the next ordinal rather
   than ordinal zero
-
-### Requirement: Legacy compatibility projection
-
-The legacy projection MUST preserve current Copilot behavior: workspace lines
-produce SessionMeta, function calls produce ToolCall with missing names as
-`unknown`, direct string messages additionally produce ToolResult, reasoning
-and message items are omitted, explicit unknown types produce the bounded Other
-content, malformed arrays are ignored, and missing types are ignored. It MUST
-NOT expose assistant message text that the current parser omits. It MUST NOT
-map `status: completed` to execution or success.
-
-#### Scenario: Malformed structured output remains legacy-readable
-
-- **WHEN** a recognized accumulated-output array is invalid, truncated, or not
-  an array and workspace metadata exists
-- **THEN** legacy projection ignores the structured output and returns the same
-  workspace record as before
 
 ### Requirement: Exact canonical identity and provenance
 
@@ -158,8 +139,7 @@ MAY be projected by this adapter.
 #### Scenario: Assistant output is structured
 
 - **WHEN** a message item reports role assistant and ordered output_text parts
-- **THEN** one assistant MessageObserved preserves those parts and legacy
-  projection contains none of that assistant text
+- **THEN** one assistant MessageObserved preserves those parts
 
 #### Scenario: Unsupported structured output fails closed
 
@@ -212,7 +192,7 @@ in Display/Debug. Failure MUST NOT return a partial successful batch.
 - **WHEN** accumulated output lacks an active source session, occurs after
   completion, or contains recognized malformed/truncated structured output
 - **THEN** acquisition preserves the reference canonical failure rather than
-  using legacy session fallback, skipping the failure, or returning earlier
+  inventing a session, skipping the failure, or returning earlier
   observations as a successful partial batch
 
 #### Scenario: Invalid identity and kind fail before extraction

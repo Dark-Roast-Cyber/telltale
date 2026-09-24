@@ -81,7 +81,7 @@ fn contribution_budget_failure_returns_no_accounting_or_eligible_progress() {
         lines.push(
             serde_json::json!({"type":"assistant","session_id":format!("s{session}"),
             "content":[{"type":"tool_use","id":"call-a","name":"shell","input":{}}],
-            "legacy_context":hosts})
+            "sibling_context":hosts})
             .to_string(),
         );
     }
@@ -154,7 +154,7 @@ fn all_eight_native_contributions_match_fixed_accounting_expectations() {
                 r#"[{"type":"function_call","name":"shell","call_id":"call-a","arguments":"{\"command\":\"https://example.test/x /home/u/.env\"}","message":"https://ignored-result.test/"}]"#
             )).unwrap();
         } else {
-            std::fs::write(&source.path, r#"{"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{"command":"https://example.test/x /home/u/.env"}}],"legacy_context":"https://sibling.example.test/x /tmp/synthetic"}"#).unwrap();
+            std::fs::write(&source.path, r#"{"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{"command":"https://example.test/x /home/u/.env"}}],"sibling_context":"https://sibling.example.test/x /tmp/synthetic"}"#).unwrap();
         }
         let batch = acquire_source(&source, AcquisitionOptions::new(clock())).unwrap();
         let actual = &batch.accounting.sessions[0].counts.contributions;
@@ -164,13 +164,13 @@ fn all_eight_native_contributions_match_fixed_accounting_expectations() {
                 BTreeMap::from([("example.test".to_string(), 1)]),
             ),
             "opencode.sqlite" => (
-                BTreeMap::from([(PathClass::SecretStore, 4), (PathClass::Other, 1)]),
-                BTreeMap::from([("example.test".to_string(), 3)]),
+                BTreeMap::from([(PathClass::SecretStore, 1)]),
+                BTreeMap::from([("example.test".to_string(), 1)]),
             ),
             _ => (
-                BTreeMap::from([(PathClass::SecretStore, 2), (PathClass::Temp, 1)]),
+                BTreeMap::from([(PathClass::SecretStore, 1), (PathClass::Temp, 1)]),
                 BTreeMap::from([
-                    ("example.test".to_string(), 2),
+                    ("example.test".to_string(), 1),
                     ("sibling.example.test".to_string(), 1),
                 ]),
             ),

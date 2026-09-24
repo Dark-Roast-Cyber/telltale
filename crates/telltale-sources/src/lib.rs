@@ -1,22 +1,20 @@
 //! Telltale's filesystem-facing source layer: session-store discovery,
-//! per-agent source modules, record parsers, and installed-agent inventory.
+//! per-agent native extraction, canonical acquisition, and installed-agent inventory.
 //!
-//! Everything here reads local agent session stores and maps them into current
-//! compatibility records or canonical acquisition values;
-//! detection, scoring, and delivery live in the downstream crates.
+//! Source modules read local agent session stores into source-native facts and
+//! Canonical Observation v2. Caller-supplied normalized records are a separate
+//! compatibility path and are not produced here. Detection, scoring, and
+//! delivery live in the downstream crates.
 
 pub mod acquisition;
 pub mod clients;
 pub mod discovery;
 pub mod install_inventory;
 pub mod journal;
-pub mod parser;
 pub mod paths;
 pub mod projects;
+pub mod source_read;
 pub mod sources;
-
-/// Opt-in native OpenCode export primitive; internal canonical records are not public transcripts.
-pub use sources::opencode::export as opencode_export;
 
 #[cfg(test)]
 pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {

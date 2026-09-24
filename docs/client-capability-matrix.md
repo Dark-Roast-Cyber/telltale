@@ -1,58 +1,49 @@
 # Client Capability Matrix
 
-This matrix documents what Telltale's fixture-backed sources can currently normalize into `NormalizedRecordV1`.
+Production sources do not normalize into `NormalizedRecordV1`. Scan, watch, and
+embedding acquire Canonical Observation v2 and evaluate it with Detection v2.
+Per-source visibility lives in
+[Agent Capability Profiles](agent-capability-profiles.md) and the canonical
+adapter specs. This page records only the caller-supplied
+`NormalizedRecordV1::from_legacy()` conversion contract.
+
+There is no source-backed schema conformance test. `src/schema.rs` is gone.
+Source fixtures are acquired through `acquire_source`, not converted into
+normalized records.
+
+## Direct-record conversion fields
 
 Legend:
 
-- `required`: canonical metadata Telltale expects on every normalized record.
-- `optional`: field is preserved when present in the source.
-- `derived`: Telltale derives the field during legacy conversion.
-- `unavailable`: the current source or legacy conversion cannot expose the field reliably.
-
-## Cross-Client Coverage
-
-| Client | Fixture source ids | Conversation records | Tool calls | Tool results | MCP static inventory | Session metadata | Model/provider | Provenance | Known gaps |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex | `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions` | required | optional | optional | supported | optional | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| Claude Code | `claude.projects` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| OpenClaw | `openclaw.agents` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| Qwen CLI | `qwen.projects` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, and `content_parts` are unavailable through the legacy flat record. |
-| OpenCode | `opencode.sqlite` | required | optional | optional | supported | unavailable | optional | derived | `call_id`, `is_error`, workspace, and `content_parts` are unavailable through the legacy flat record. |
-| GitHub Copilot | `copilot.process_log` | optional | optional | optional | unsupported | unavailable | optional | derived | Process logs are lossy; user intent, `call_id`, `is_error`, workspace, static MCP config inventory, and `content_parts` are unavailable through the legacy flat record. |
-
-## Normalized Field Expectations
+- `required`: metadata `from_legacy()` expects on every converted record.
+- `optional`: field is preserved when the caller record has it.
+- `derived`: produced by the conversion, not copied from a source adapter.
+- `unavailable`: the flat `NormalizedRecord` shape cannot expose the field.
 
 | `NormalizedRecordV1` field | Status | Notes |
 | --- | --- | --- |
-| `meta.session_id` | required | The legacy field is required for grouping. |
-| `meta.client` | required | Must match the source registry client id. |
-| `meta.agent` | optional | Preserved when the source exposes an agent or parser default. |
-| `meta.model` | optional | Preserved when the source exposes model metadata. |
-| `meta.provider` | optional | Preserved when the source exposes provider metadata. |
-| `meta.timestamp` | optional | Preserved when the retained source exposes it. |
-| `meta.provenance` | derived | The conformance test supplies deterministic fixture provenance for conversion coverage. |
-| `meta.extensions.legacy_record_kind` | derived | Required on every record converted through `from_legacy()`. |
-| `meta.extensions.lossy_fields` | derived | Present when legacy conversion cannot preserve canonical fields. |
-| `content_parts` | unavailable | The legacy `NormalizedRecord` shape only carries flat text content. |
-| `ToolCall.arguments` | derived | Parsed from legacy argument strings when they are valid JSON. |
-| `ToolCall.arguments_string` | optional | Preserves the legacy argument string for search and audit. |
-| `ToolCall.call_id` | unavailable | Not exposed by the legacy flat record. |
-| `ToolResult.result` | derived | Parsed from legacy result content when it is valid JSON. |
-| `ToolResult.result_string` | optional | Preserves the legacy result string for search and audit. |
-| `ToolResult.call_id` | unavailable | Not exposed by the legacy flat record. |
-| `ToolResult.is_error` | unavailable | Not exposed by the legacy flat record. |
-| `SessionMeta.workspace` | unavailable | Not exposed by the legacy flat record. |
-
-The fixture-backed conformance test in the CLI's private `src/schema.rs` module
-verifies that every source id in
-`telltale_sources::clients::supported_clients()` is discovered from
-`tests/fixtures/session_stores`, parses at least one record, converts into
-`NormalizedRecordV1`, preserves required metadata, and records the legacy kind
-extension.
+| `meta.session_id` | required | Caller-supplied. Conversion does not invent one. |
+| `meta.client` | required | Caller-supplied label. It does not register a source. |
+| `meta.agent` | optional | Preserved when the caller record has it. |
+| `meta.model` | optional | Preserved when the caller record has it. |
+| `meta.provider` | optional | Preserved when the caller record has it. |
+| `meta.timestamp` | optional | Preserved when the caller record has it. |
+| `meta.provenance` | derived | Supplied by the conversion caller, not by source acquisition. |
+| `meta.extensions.legacy_record_kind` | derived | Set on every record converted through `from_legacy()`. |
+| `meta.extensions.lossy_fields` | derived | Present when the flat shape cannot preserve a typed field. |
+| `content_parts` | unavailable | The flat record carries only text content. |
+| `ToolCall.arguments` | derived | Parsed from argument strings when they are valid JSON. |
+| `ToolCall.arguments_string` | optional | Preserves the caller argument string. |
+| `ToolCall.call_id` | unavailable | Not present on the flat record. |
+| `ToolResult.result` | derived | Parsed from result content when it is valid JSON. |
+| `ToolResult.result_string` | optional | Preserves the caller result string. |
+| `ToolResult.call_id` | unavailable | Not present on the flat record. |
+| `ToolResult.is_error` | unavailable | Not present on the flat record. |
+| `SessionMeta.workspace` | unavailable | Not present on the flat record. |
 
 ## Related Documents
 
-- [Agent Capability Profiles](agent-capability-profiles.md) — per-source raw log field availability and known gaps
+- [Agent Capability Profiles](agent-capability-profiles.md) — per-source canonical visibility and known gaps
 - [MCP Tool Inventory](mcp-tool-inventory.md) — static MCP configuration inventory support and gaps
 - [Source Validation Matrix](source-validation-matrix.md) — fixture and detection coverage status
-- [Normalization Schema](normalization-schema.md) — `NormalizedRecordV1` contract
+- [Normalization Schema](normalization-schema.md) — `NormalizedRecordV1` direct-record contract

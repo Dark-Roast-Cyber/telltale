@@ -1,58 +1,46 @@
-use crate::discovery::discover_sources_best_effort;
-use crate::parser::parse_source_records;
+use crate::source_read::SourceReadError;
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::record::RecordKind;
+use telltale_schema::source::Source;
 
 #[test]
-fn parses_claude_code_jsonl_records() {
-    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Claude
-                && source.kind == SourceKind::Jsonl
-                && source.path.file_name().and_then(|name| name.to_str()) == Some("session-a.jsonl")
-        })
-        .expect("fixture source");
-
-    let records = parse_source_records(&source).expect("records");
-
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0].session_id, "session-a");
-    assert_eq!(records[0].client, "claude");
-    assert_eq!(records[0].kind, RecordKind::UserMessage);
-    assert_eq!(records[0].model.as_deref(), Some("claude-fixture-model"));
-    assert_eq!(records[1].kind, RecordKind::AssistantMessage);
-    assert!(records[1].content.contains("benign fixture response"));
+fn malformed_jsonl_is_a_json_read_error() {
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".to_string(),
+        path: crate::test_fixture_path("rule_samples/malformed-source.jsonl"),
+    };
+    let error = super::native::extract_claude_native_records(&source).expect_err("malformed");
+    let message = error.to_string();
+    assert!(matches!(error, SourceReadError::Json(_)));
+    assert!(message.contains("json parse error"));
+    assert!(!message.contains("malformed-source"));
 }
 
 #[test]
-fn parses_claude_code_tool_use_and_tool_result_blocks() {
-    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Claude
-                && source.kind == SourceKind::Jsonl
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("session-tool-use.jsonl")
-        })
-        .expect("fixture source");
+fn missing_jsonl_is_an_io_read_error() {
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".to_string(),
+        path: "missing-session.jsonl".into(),
+    };
+    let error = super::native::extract_claude_native_records(&source).expect_err("missing");
+    assert!(matches!(error, SourceReadError::Io(_)));
+    assert!(error.to_string().contains("io error"));
+}
 
-    let records = parse_source_records(&source).expect("records");
-
-    assert_eq!(records.len(), 3);
-    assert!(
-        records
-            .iter()
-            .all(|record| { record.session_id == "claude-tool-use" && record.client == "claude" })
-    );
-    assert_eq!(records[0].kind, RecordKind::UserMessage);
-    assert_eq!(records[1].kind, RecordKind::ToolCall);
-    assert_eq!(records[1].tool_name.as_deref(), Some("Read"));
-    assert_eq!(
-        records[1].arguments.as_deref(),
-        Some("{\"file_path\":\"README.md\"}")
-    );
-    assert_eq!(records[1].model.as_deref(), Some("claude-fixture-model"));
-    assert_eq!(records[2].kind, RecordKind::ToolResult);
-    assert!(records[2].content.contains("Synthetic README excerpt"));
+#[test]
+fn non_object_envelope_is_schema_drift() {
+    let source = Source {
+        client: ClientId::Claude,
+        kind: SourceKind::Jsonl,
+        source_id: "claude.projects".to_string(),
+        path: crate::test_fixture_path("parser_maturity/non_discovered/schema-drift.jsonl"),
+    };
+    let error = super::native::extract_claude_native_records(&source).expect_err("drift");
+    let message = error.to_string();
+    assert!(matches!(error, SourceReadError::SchemaDrift { .. }));
+    assert!(message.contains("schema drift"));
+    assert!(!message.contains("Synthetic schema envelope drift"));
 }

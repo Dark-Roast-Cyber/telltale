@@ -133,8 +133,7 @@ pub(crate) fn session_identity<'a>(
     Ok(selected.map(str::to_owned))
 }
 
-/// Exact native-to-legacy record-kind cardinality, not COv2 family/stage counts.
-/// Session attribution is canonical; legacy filename/default grouping is not retained.
+/// Native-unit classification for accounting. Not a canonical observation count.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub struct RecordCounts {
     pub user_message: u64,

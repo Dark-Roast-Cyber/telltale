@@ -6,9 +6,9 @@ Telltale source definitions live in the per-agent modules under
 `crates/telltale-sources/src/sources/` and are collected by
 `sources/registry.rs`, which preserves static client and install registration
 order. Discovered sources are sorted separately for deterministic scans.
-The private exact parser registration table lives in
-`crates/telltale-sources/src/parser.rs`; this document records the current
-source-of-truth host path candidates used by the scanner.
+Acquisition dispatches those identities to source-owned native extraction.
+This document records the current source-of-truth host path candidates used by
+the scanner.
 
 Session-store discovery answers “where can Telltale parse activity from?” It is
 intentionally separate from installed-agent inventory, which answers “which
@@ -76,7 +76,7 @@ escaping rules.
 - When `telltale scan --root` points at a checked-in fixture tree such as `tests/fixtures/session_stores`, Telltale does not use host-path resolution.
 - Fixture discovery still uses each source's `fixture_relative_path` directly.
 - Platform-aware host-path resolution does not change fixture layout or fixture-path expectations.
-- Public verification should prefer checked-in synthetic fixtures and commands that do not touch real agent stores, such as a dry-run fixture scan or focused parser/discovery tests.
+- Public verification should prefer checked-in synthetic fixtures and commands that do not touch real agent stores, such as a dry-run fixture scan or focused acquisition/discovery tests.
 
 ## Host Root Rules
 

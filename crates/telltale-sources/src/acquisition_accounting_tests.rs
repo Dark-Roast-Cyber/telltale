@@ -141,8 +141,6 @@ fn sqlite_accounts_suppressed_parents_selected_parts_and_unscoped_rows() {
             part_max_time_updated: Some(10)
         }
     );
-    let legacy = crate::parser::parse_source_records(&source).unwrap();
-    assert_eq!(legacy.len(), 3);
     let bounded = acquire_opencode_sqlite(
         &source,
         options(),
@@ -197,14 +195,9 @@ fn copilot_counts_items_not_lines_or_observations_and_never_defaults_metadata() 
             ..Default::default()
         }
     );
-    assert_eq!(batch.observations.len(), 2); // empty result is a legacy record but not a COv2 fact
     assert_eq!(session.metadata.agent.known(), Some("native-agent"));
     assert_eq!(session.metadata.model.known(), Some("native-model"));
     assert_eq!(session.metadata.provider.known(), Some("native-provider"));
-    assert_eq!(
-        crate::parser::parse_source_records(&source).unwrap().len(),
-        3
-    );
     std::fs::write(&source.path, "2026-04-27T16:16:57.841Z [INFO] Workspace initialized: synthetic-session (checkpoints: 0)\n").unwrap();
     let missing = acquire_source(&source, options()).unwrap();
     assert!(missing.observations.is_empty());
@@ -428,6 +421,121 @@ fn codex_metadata_only_sessions_and_inheritance_are_not_file_wide() {
 }
 
 #[test]
+fn codex_generic_tool_accounting_distinguishes_requests_from_results() {
+    let directory = tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Codex,
+        source_id: "codex.sessions".into(),
+        kind: SourceKind::Jsonl,
+        path: directory.path().join("synthetic.jsonl"),
+    };
+    for (label, value, expected, tool_name, request_host) in [
+        (
+            "arguments only",
+            serde_json::json!({"type":"tool","session_id":"s","arguments":{"url":"https://request.example.test/"}}),
+            RecordCounts {
+                tool_call: 1,
+                ..Default::default()
+            },
+            "unknown",
+            true,
+        ),
+        (
+            "named request",
+            serde_json::json!({"type":"tool","session_id":"s","name":"shell","arguments":{"command":"true"}}),
+            RecordCounts {
+                tool_call: 1,
+                ..Default::default()
+            },
+            "shell",
+            false,
+        ),
+        (
+            "reported error",
+            serde_json::json!({"type":"tool","session_id":"s","name":"shell","state":{"status":"error","error":"https://error.example.test/"}}),
+            RecordCounts {
+                tool_result: 1,
+                ..Default::default()
+            },
+            "shell",
+            false,
+        ),
+        (
+            "completed output",
+            serde_json::json!({"type":"tool","session_id":"s","name":"shell","state":{"status":"completed","output":"https://output.example.test/"}}),
+            RecordCounts {
+                tool_result: 1,
+                ..Default::default()
+            },
+            "shell",
+            false,
+        ),
+    ] {
+        std::fs::write(&source.path, value.to_string()).unwrap();
+        let batch = acquire_source(&source, options()).unwrap();
+        let counts = &batch.accounting.sessions[0].counts;
+        assert_eq!(counts.record_counts, expected, "{label}");
+        assert_eq!(counts.native_units, 1, "{label}");
+        let is_call = expected.tool_call == 1;
+        assert_eq!(
+            counts.contributions.tool_calls.get(tool_name),
+            is_call.then_some(&1),
+            "{label}"
+        );
+        assert_eq!(
+            counts.tool_usage.get("shell").map(|usage| usage.count),
+            (is_call && tool_name == "shell").then_some(1),
+            "{label}"
+        );
+        assert_eq!(
+            counts
+                .contributions
+                .network_hosts
+                .get("request.example.test"),
+            request_host.then_some(&1),
+            "{label}"
+        );
+        if !is_call {
+            assert!(counts.contributions.network_hosts.is_empty(), "{label}");
+            assert!(counts.contributions.tool_calls.is_empty(), "{label}");
+            assert!(counts.tool_usage.is_empty(), "{label}");
+        }
+    }
+}
+
+#[test]
+fn gemini_native_units_count_as_assistant_messages() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("synthetic.jsonl");
+    for (client, source_id) in [
+        (ClientId::Codex, "codex.sessions"),
+        (ClientId::OpenClaw, "openclaw.agents"),
+        (ClientId::Qwen, "qwen.projects"),
+    ] {
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind: SourceKind::Jsonl,
+            path: path.clone(),
+        };
+        std::fs::write(
+            &path,
+            r#"{"type":"gemini","session_id":"s","content":"synthetic assistant message"}"#,
+        )
+        .unwrap();
+        let batch = acquire_source(&source, options()).unwrap();
+        assert_eq!(
+            batch.accounting.sessions[0].counts.record_counts,
+            RecordCounts {
+                assistant_message: 1,
+                ..Default::default()
+            },
+            "{source_id}"
+        );
+    }
+}
+
+#[test]
 fn selected_message_metadata_is_not_lost_or_resolved_by_precedence() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("synthetic.jsonl");
@@ -526,11 +634,6 @@ fn conflicting_jsonl_ownership_is_atomic_and_private() {
             let error = acquire_source(&source, options()).err().expect(source_id);
             assert_eq!(error.code(), "conflicting_session_ownership");
             assert!(!format!("{error} {error:?}").contains("PRIVATE"));
-            // Canonical validation must not change the production legacy parser.
-            assert_eq!(
-                crate::parser::parse_source_records(&source).unwrap().len(),
-                2
-            );
         }
         std::fs::write(&source.path, r#"{"type":"user","session_id":"same","sessionID":"same","message":{"sessionId":"same","content":"synthetic"}}"#).unwrap();
         let batch = acquire_source(&source, options()).unwrap();
@@ -573,10 +676,6 @@ fn sqlite_ownership_checks_row_data_and_join_without_changing_legacy() {
             .expect("conflict must reject whole batch");
         assert_eq!(error.code(), "conflicting_session_ownership");
         assert!(!format!("{error} {error:?}").contains("PRIVATE"));
-        assert_eq!(
-            crate::parser::parse_source_records(&source).unwrap().len(),
-            2
-        );
     }
 }
 
@@ -616,7 +715,7 @@ fn discarded_native_sibling_retains_semantic_contributions() {
     let mut value = serde_json::json!({"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{"command":"true"}}]});
     std::fs::write(&source.path, value.to_string()).unwrap();
     let before = acquire_source(&source, options()).unwrap();
-    value["legacy_context"] = serde_json::json!("https://internal.example.test/x /home/u/.env");
+    value["sibling_context"] = serde_json::json!("https://internal.example.test/x /home/u/.env");
     std::fs::write(&source.path, value.to_string()).unwrap();
     let after = acquire_source(&source, options()).unwrap();
     assert_eq!(before.observations.len(), after.observations.len());
@@ -692,17 +791,13 @@ fn unscoped_native_contributions_and_private_failures() {
         path: directory.path().join("PRIVATE-path"),
     };
     let text = format!("https://PRIVATE{}", "x".repeat(4096));
-    let value = serde_json::json!({"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{}}],"legacy_context":text});
+    let value = serde_json::json!({"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{}}],"sibling_context":text});
     std::fs::write(&source.path, value.to_string()).unwrap();
     let error = acquire_source(&source, options())
         .err()
         .expect("oversized discarded contribution must fail");
     assert_eq!(error, AcquisitionError::InvalidContribution);
     assert!(!format!("{error} {error:?}").contains("PRIVATE"));
-    assert_eq!(
-        crate::parser::parse_source_records(&source).unwrap().len(),
-        1
-    );
 }
 
 #[test]
@@ -759,7 +854,7 @@ fn multi_record_contribution_budget_is_acquisition_wide() {
             .join(" ");
         serde_json::json!({"type":"assistant","session_id":session,
             "content":[{"type":"tool_use","id":"call-a","name":"shell","input":{}}],
-            "legacy_context":hosts})
+            "sibling_context":hosts})
         .to_string()
     };
     // Two tool keys plus 4,092 host keys across two sessions. Repeated facts
@@ -797,9 +892,6 @@ fn multi_record_contribution_budget_is_acquisition_wide() {
         acquire_source(&source, options()).err().unwrap(),
         AcquisitionError::ContributionCapacity
     );
-    let legacy = crate::parser::parse_source_records(&source).unwrap();
-    assert_eq!(legacy.len(), 4);
-    assert!(legacy[3].content.contains("synthetic-4094.example"));
 }
 
 #[test]
@@ -832,10 +924,11 @@ fn sqlite_private_transport_alias_is_not_json_ownership() {
         AcquisitionError::ConflictingSessionOwnership
     );
 
-    // A joined-row-only coordinate scopes the tool but is not legacy content or
-    // a contribution token. There is no source JSON field in this case.
-    conn.execute_batch(r#"UPDATE message SET session_id = 'transport.example', data = '{"role":"assistant"}';
-        UPDATE part SET session_id = NULL, data = '{"type":"tool","tool":"shell","callID":"call-a","state":{"status":"running","input":{}}}';"#).unwrap();
+    conn.execute_batch(
+        r#"UPDATE message SET session_id = 'transport.example', data = '{"role":"assistant"}';
+        UPDATE part SET session_id = NULL, data = '{"type":"tool","tool":"shell","callID":"call-a","state":{"status":"running","input":{}}}';"#,
+    )
+    .unwrap();
     let batch = acquire_source(&source, options()).unwrap();
     assert_eq!(
         batch.accounting.sessions[0].session_id.value(),
@@ -855,13 +948,6 @@ fn sqlite_private_transport_alias_is_not_json_ownership() {
             .path_classes
             .is_empty()
     );
-    let legacy = crate::parser::parse_source_records(&source).unwrap();
-    let tool = legacy
-        .iter()
-        .find(|r| r.kind == telltale_schema::record::RecordKind::ToolCall)
-        .unwrap();
-    assert!(!tool.content.contains("__telltale_message_session_id"));
-    assert!(!tool.content.contains("transport.example"));
 }
 
 #[test]

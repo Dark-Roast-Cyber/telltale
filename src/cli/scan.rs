@@ -21,7 +21,6 @@ use crate::install_inventory::{
     collect_install_inventory, install_inventory_due, snapshot_to_event,
 };
 use crate::mcp::{discover_mcp_inventory, discover_mcp_inventory_servers};
-use crate::parser::ParseOptions;
 use crate::process_chain::ProcessChainConfig;
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
@@ -36,6 +35,7 @@ use telltale_detect::v2::activity::BaselineReplacement;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::ObservedAt;
 use telltale_schema::source::Source;
+use telltale_sources::acquisition::OpenCodeSqliteReadOptions;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
@@ -767,18 +767,18 @@ fn source_processing_accounting(
     Ok(accounting)
 }
 
-fn parse_options_for_scan_source(
+fn opencode_read_options_for_scan_source(
     source: &Source,
     state: &ScanState,
     backfill: bool,
     dry_run: bool,
-) -> ParseOptions {
-    let mut options = ParseOptions::default();
+) -> OpenCodeSqliteReadOptions {
+    let mut options = OpenCodeSqliteReadOptions::default();
     if backfill || dry_run || !is_opencode_sqlite_source(source) {
         return options;
     }
 
-    options.sqlite_part_min_time_updated = state
+    options.part_min_time_updated = state
         .sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_PART_TABLE)
         .map(|last_seen| last_seen.saturating_sub(OPENCODE_SQLITE_CURSOR_OVERLAP_MS));
     options
@@ -1404,10 +1404,10 @@ fn status_json(
 #[cfg(test)]
 mod tests {
     use crate::event::scanner_error_event;
-    use crate::parser::ParseError;
     use std::fs;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use telltale_sources::acquisition::AcquisitionError;
 
     use super::discovery::ProjectConfigurationAccounting;
     use super::*;
@@ -1453,7 +1453,7 @@ mod tests {
             source_id: "synthetic-selection".to_string(),
             path: PathBuf::from("synthetic-selection.db"),
         };
-        let error = scanner_error_event(&source, &ParseError::Empty);
+        let error = scanner_error_event(&source, &AcquisitionError::SourceRead);
         let event = |kind: &str| {
             let mut event = error.clone();
             event.event_type = kind.to_string();
@@ -1529,17 +1529,17 @@ mod tests {
         let mut state = ScanState::default();
         state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 1_000_000, 42);
 
-        let live_options = parse_options_for_scan_source(&source, &state, false, false);
+        let live_options = opencode_read_options_for_scan_source(&source, &state, false, false);
         assert_eq!(
-            live_options.sqlite_part_min_time_updated,
+            live_options.part_min_time_updated,
             Some(1_000_000 - OPENCODE_SQLITE_CURSOR_OVERLAP_MS)
         );
 
-        let dry_run_options = parse_options_for_scan_source(&source, &state, false, true);
-        assert_eq!(dry_run_options.sqlite_part_min_time_updated, None);
+        let dry_run_options = opencode_read_options_for_scan_source(&source, &state, false, true);
+        assert_eq!(dry_run_options.part_min_time_updated, None);
 
-        let backfill_options = parse_options_for_scan_source(&source, &state, true, false);
-        assert_eq!(backfill_options.sqlite_part_min_time_updated, None);
+        let backfill_options = opencode_read_options_for_scan_source(&source, &state, true, false);
+        assert_eq!(backfill_options.part_min_time_updated, None);
     }
 
     fn opencode_test_source() -> Source {

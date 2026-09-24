@@ -78,7 +78,7 @@ separate source contract.
 
 `gemini.tmp`, `opencode.legacy_json`, `opencode.project_json`, `roocode.tasks`,
 `kilocode.tasks`, and `codex.project_sessions` are retired. They are not hidden
-production paths, parser registrations, or migration candidates.
+production paths or migration candidates. OpenCode retains only `opencode.sqlite`.
 
 The production migration order is:
 
@@ -142,9 +142,9 @@ coverage demonstrates the compatibility gap.
 ## Module Boundaries
 
 - `discovery`: knows where each agent stores sessions.
-- `parser`: client-specific transcript/database parsing. See
-  [Adding an Agent Source](adding-agent-source.md) for the current checklist and
-   exact parser-registration architecture.
+- `sources`: per-agent native extraction and canonical mapping. See
+  [Adding an Agent Source](adding-agent-source.md) for the current checklist.
+  There is no parser registration table and no source-backed record projection.
 - `acquisition`: the public `telltale_sources::acquisition` single router for
   source-native extraction, source-owned canonical mapping, and acquisition
   batches across the supported identities. Its source mappers are crate-private.

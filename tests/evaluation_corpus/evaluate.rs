@@ -2,11 +2,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use telltale_core::Pipeline;
+use telltale_detect::v2::{
+    compile_rule_v1,
+    session::{CanonicalSourceInput, evaluate_source},
+};
 use telltale_rules::{MatchResult, bundled_default_rule_set};
+use telltale_schema::observation::{
+    CanonicalObservationV2, CorrelationId, MessageRole, ObservationBody, ObservationStage,
+    ObservedAt,
+};
 use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::scoring::{RiskContributionType, RiskThresholds, assess_risk_with_thresholds};
 use telltale_schema::source::Source;
-use telltale_sources::parser::parse_source_records;
+use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
 
 use crate::manifest::{
     Case, Client, Input, Manifest, RecordKindName, RuleExpectationKind, VisibilityField,
@@ -20,6 +28,13 @@ pub const CANONICAL_EVALUATION_THRESHOLDS: RiskThresholds = RiskThresholds {
     critical: 90,
 };
 use crate::process_chain::{ProcessChainCoverage, evaluate_process_chain_coverage};
+
+struct FixtureDetection {
+    score: u64,
+    matched_rules: Vec<String>,
+    contributions: Vec<Contribution>,
+    failures: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct Contribution {
@@ -82,6 +97,12 @@ pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evalua
         .build()
         .map_err(|error| error.to_string())?;
     let rule_set = bundled_default_rule_set().map_err(|error| error.to_string())?;
+    let canonical_rules = compile_rule_v1(
+        &telltale_rules::load_default_rule_set()
+            .map_err(|error| error.to_string())?
+            .compatibility_export(),
+    )
+    .map_err(|error| error.to_string())?;
     let enabled_regex = rule_set
         .rules
         .iter()
@@ -105,7 +126,13 @@ pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evalua
         visibility_field_coverage: BTreeMap::new(),
     };
     for case in cases {
-        let result = evaluate_case(case, &pipeline, repo_root, &mut source_coverage)?;
+        let result = evaluate_case(
+            case,
+            &pipeline,
+            &canonical_rules,
+            repo_root,
+            &mut source_coverage,
+        )?;
         results.push(result);
     }
     let rule_coverage = coverage_for(&manifest.cases, &enabled_regex);
@@ -123,10 +150,16 @@ pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evalua
 fn evaluate_case(
     case: &Case,
     pipeline: &Pipeline,
+    canonical_rules: &telltale_detect::v2::RuleV1CompatibilityPlan,
     repo_root: &Path,
     source_coverage: &mut SourceCoverage,
 ) -> Result<CaseEvaluation, String> {
-    let (records, source_id, source_client) = match &case.input {
+    let FixtureDetection {
+        score,
+        matched_rules,
+        contributions,
+        mut failures,
+    } = match &case.input {
         Input::SourceFixture {
             fixture,
             client,
@@ -139,38 +172,29 @@ fn evaluate_case(
                 source_id: source_id.clone(),
                 path: fixture_path(repo_root, fixture),
             };
-            let records = parse_source_records(&source)
-                .map_err(|error| format!("case {} parse failure: {error}", case.id))?;
             record_source_coverage(case, *client, source_id, source_coverage);
-            (
-                records,
-                Some(source_id.clone()),
-                Some(client.client_id().as_str().to_string()),
-            )
+            evaluate_source_fixture(case, canonical_rules, &source)?
         }
-        Input::NormalizedRecords { client, records } => (
-            records
+        Input::NormalizedRecords { client, records } => {
+            let records = records
                 .iter()
                 .map(|record| normalize_record(record, client.client_id().as_str()))
-                .collect(),
-            None,
-            Some(client.client_id().as_str().to_string()),
-        ),
-    };
-    let mut failures = visibility_failures(case, &records);
-    if source_id.is_some()
-        && records
-            .iter()
-            .any(|record| record.client != source_client.as_deref().unwrap_or_default())
-    {
-        failures.push("parsed record client differs from source client".to_string());
-    }
-    let matches = pipeline
-        .evaluate_session(&records)
-        .map_err(|error| format!("case {} evaluation failure: {error}", case.id))?;
-    let (score, matched_rules, contributions) = match matches {
-        Some(result) => match_result(result)?,
-        None => (0, Vec::new(), Vec::new()),
+                .collect::<Vec<_>>();
+            let failures = visibility_failures(case, &records);
+            let matches = pipeline
+                .evaluate_session(&records)
+                .map_err(|error| format!("case {} evaluation failure: {error}", case.id))?;
+            let (score, matched_rules, contributions) = match matches {
+                Some(result) => match_result(result)?,
+                None => (0, Vec::new(), Vec::new()),
+            };
+            FixtureDetection {
+                score,
+                matched_rules,
+                contributions,
+                failures,
+            }
+        }
     };
     let assessment = assess_risk_with_thresholds(score, CANONICAL_EVALUATION_THRESHOLDS);
     let observed_positive_risk = score > 0;
@@ -237,6 +261,142 @@ fn evaluate_case(
         contributions,
         failures,
     })
+}
+
+fn evaluate_source_fixture(
+    case: &Case,
+    rules: &telltale_detect::v2::RuleV1CompatibilityPlan,
+    source: &Source,
+) -> Result<FixtureDetection, String> {
+    let observed_at = ObservedAt::new("2026-09-18T12:00:00Z").expect("fixed observed time");
+    let batch = match acquire_source(source, AcquisitionOptions::new(observed_at)) {
+        Ok(batch) => batch,
+        Err(error) => {
+            return Ok(FixtureDetection {
+                score: 0,
+                matched_rules: Vec::new(),
+                contributions: Vec::new(),
+                failures: vec![format!("canonical acquisition failure: {error}")],
+            });
+        }
+    };
+    if batch.observations.iter().any(|observation| {
+        observation.source().adapter_id() != source.source_id
+            || observation.source().adapter_type().is_empty()
+    }) {
+        return Err(format!(
+            "case {} canonical provenance does not match {}",
+            case.id, source.source_id
+        ));
+    }
+    let instance = CorrelationId::source_reported(format!("evaluation:{}", case.id))
+        .map_err(|error| format!("case {} evaluation instance: {error}", case.id))?;
+    let evaluation = evaluate_source(
+        CanonicalSourceInput {
+            client: source.client,
+            source_id: &source.source_id,
+            source_instance: Some(&instance),
+            observations: &batch.observations,
+        },
+        rules,
+        None,
+    )
+    .map_err(|error| format!("case {} detection failure: {error}", case.id))?;
+    let mut score = 0_u64;
+    let mut matched_rules = BTreeSet::new();
+    let mut contributions = Vec::new();
+    for session in evaluation.sessions() {
+        score = score
+            .checked_add(session.rule_score())
+            .ok_or_else(|| format!("case {} score overflow", case.id))?;
+        matched_rules.extend(session.rule_ids().iter().cloned());
+        for contribution in session.risk_contributions() {
+            contributions.push(Contribution {
+                id: contribution.id().to_string(),
+                contribution_type: contribution.contribution_type(),
+                points: contribution.points(),
+            });
+        }
+    }
+    let failures = observation_visibility_failures(case, &batch.observations);
+    Ok(FixtureDetection {
+        score,
+        matched_rules: matched_rules.into_iter().collect(),
+        contributions,
+        failures,
+    })
+}
+
+fn observation_visibility_failures(
+    case: &Case,
+    observations: &[CanonicalObservationV2],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for required in &case.expected_visibility.required_record_kinds {
+        if !observation_has_kind(required.as_str(), observations) {
+            failures.push(format!(
+                "required record kind unavailable: {}",
+                required.as_str()
+            ));
+        }
+    }
+    for unavailable in &case.expected_visibility.unavailable_fields {
+        if observation_field_available(*unavailable, observations) {
+            failures.push(format!(
+                "field declared unavailable is present: {}",
+                unavailable.as_str()
+            ));
+        }
+    }
+    failures
+}
+
+fn observation_has_kind(kind: &str, observations: &[CanonicalObservationV2]) -> bool {
+    observations.iter().any(|observation| match kind {
+        "user_message" => matches!(
+            observation.body(),
+            ObservationBody::Message(message) if message.role() == Some(MessageRole::User)
+        ),
+        "assistant_message" => matches!(
+            observation.body(),
+            ObservationBody::Message(message) if message.role() == Some(MessageRole::Assistant)
+        ),
+        "tool_call" => {
+            observation.stage() == ObservationStage::ToolRequested
+                && matches!(observation.body(), ObservationBody::Tool(_))
+        }
+        "tool_result" => observation.stage() == ObservationStage::ToolResultReturned,
+        "session_meta" => false,
+        _ => false,
+    })
+}
+
+fn observation_field_available(
+    field: VisibilityField,
+    observations: &[CanonicalObservationV2],
+) -> bool {
+    match field {
+        VisibilityField::Pid | VisibilityField::ParentPid => false,
+        VisibilityField::UserIntent => observation_has_kind("user_message", observations),
+        VisibilityField::Timestamp => observations
+            .iter()
+            .any(|observation| observation.occurred_at().is_some()),
+        VisibilityField::ToolName => observations.iter().any(|observation| {
+            matches!(observation.body(), ObservationBody::Tool(tool) if tool.name().is_some())
+        }),
+        VisibilityField::Arguments => observations.iter().any(|observation| {
+            matches!(
+                observation.body(),
+                ObservationBody::Tool(tool) if tool.arguments().is_some()
+            )
+        }),
+        VisibilityField::Content => observations.iter().any(|observation| match observation.body() {
+            ObservationBody::Message(message) => message.content().is_some(),
+            ObservationBody::Tool(tool) => tool.arguments().is_some() || tool.result().is_some(),
+            _ => false,
+        }),
+        VisibilityField::Agent | VisibilityField::Model | VisibilityField::Provider => false,
+    }
 }
 
 fn normalize_record(record: &crate::manifest::RecordInput, client: &str) -> NormalizedRecord {

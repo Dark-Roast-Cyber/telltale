@@ -16,7 +16,7 @@ use telltale_schema::source::Source;
 use super::native::{
     CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem, extract_copilot_native_events,
 };
-use crate::parser::ParseError;
+use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct CopilotCanonicalOptions {
@@ -30,7 +30,7 @@ impl CopilotCanonicalOptions {
 }
 
 pub(crate) enum CopilotCanonicalError {
-    Source(ParseError),
+    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -91,8 +91,8 @@ impl fmt::Display for CopilotCanonicalError {
 
 impl std::error::Error for CopilotCanonicalError {}
 
-impl From<ParseError> for CopilotCanonicalError {
-    fn from(error: ParseError) -> Self {
+impl From<SourceReadError> for CopilotCanonicalError {
+    fn from(error: SourceReadError) -> Self {
         Self::Source(error)
     }
 }
@@ -455,12 +455,10 @@ mod tests {
         CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
         ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
     };
-    use telltale_schema::record::RecordKind;
     use telltale_schema::source::Source;
     use tempfile::tempdir;
 
     use super::{CopilotCanonicalOptions, project_copilot_canonical_observations};
-    use crate::parser::parse_source_records;
     use crate::sources::copilot::native::{CopilotNativeEvent, extract_copilot_native_events};
 
     const OBSERVED_AT: &str = "2026-09-04T12:00:00Z";
@@ -485,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_fixture_preserves_assistant_parts_and_legacy_omits_them() {
+    fn mixed_fixture_preserves_assistant_parts() {
         let path = crate::test_fixture_path("session_stores/copilot/process-mixed-format.log");
         let observations = project(path.clone());
         assert_eq!(observations.len(), 4);
@@ -532,13 +530,6 @@ mod tests {
             observations[2].observation_id(),
             observations[3].observation_id()
         );
-
-        let legacy = parse_source_records(&source(path)).expect("legacy records");
-        assert_eq!(legacy.len(), 4);
-        assert!(legacy.iter().all(|record| {
-            record.kind != RecordKind::AssistantMessage
-                && !record.content.contains("I will inspect synthetic files")
-        }));
     }
 
     #[test]
@@ -686,12 +677,6 @@ mod tests {
             result.result(),
             Some(&JsonValue::string("Session completed."))
         );
-
-        let legacy = parse_source_records(&source(path)).unwrap();
-        assert_eq!(legacy.len(), 4);
-        assert!(legacy.iter().all(|record| {
-            record.session_id == "real-session" && !record.content.contains("forged-argument")
-        }));
     }
 
     #[test]
@@ -718,7 +703,10 @@ mod tests {
                 .any(|event| matches!(event, CopilotNativeEvent::SessionCompleted))
         );
         assert!(events.iter().all(|event| match event {
-            CopilotNativeEvent::WorkspaceInitialized { content, .. } => {
+            CopilotNativeEvent::WorkspaceInitialized {
+                control_prefix: content,
+                ..
+            } => {
                 !content.contains("forged-session")
                     && !content.contains("encrypted_content")
                     && !content.contains("sensitive")
@@ -726,13 +714,6 @@ mod tests {
             _ => true,
         }));
 
-        let legacy = parse_source_records(&source(path.clone())).unwrap();
-        assert_eq!(legacy.len(), 2);
-        assert!(
-            legacy
-                .iter()
-                .all(|record| record.session_id == "real-session")
-        );
         let observations = project(path);
         assert_eq!(observations.len(), 1);
         assert_eq!(
@@ -779,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn native_control_boundary_is_shared_with_legacy_and_canonical_projections() {
+    fn native_control_boundary_stops_before_structured_payload() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("combined-control-output.log");
         fs::write(
@@ -789,7 +770,11 @@ mod tests {
         .unwrap();
 
         let events = extract_copilot_native_events(&source(path.clone())).unwrap();
-        let CopilotNativeEvent::WorkspaceInitialized { content, .. } = &events[0] else {
+        let CopilotNativeEvent::WorkspaceInitialized {
+            control_prefix: content,
+            ..
+        } = &events[0]
+        else {
             panic!("expected workspace event")
         };
         assert_eq!(
@@ -799,8 +784,6 @@ mod tests {
         assert!(!content.contains("encrypted_content"));
         assert!(!content.contains("fixture-encrypted-reasoning"));
 
-        let legacy = parse_source_records(&source(path.clone())).unwrap();
-        assert_eq!(legacy[0].content, content.as_str());
         let observations = project(path);
         assert_eq!(observations.len(), 1);
         assert_eq!(
@@ -920,10 +903,6 @@ mod tests {
         ] {
             assert!(!rendered.contains(forbidden));
         }
-        assert_eq!(
-            parse_source_records(&source(unknown)).unwrap()[1].content,
-            "unknown Copilot accumulated output item"
-        );
 
         let unscoped = directory.path().join("unscoped.log");
         fs::write(

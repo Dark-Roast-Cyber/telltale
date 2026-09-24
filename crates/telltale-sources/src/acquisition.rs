@@ -8,9 +8,9 @@ use std::fmt;
 
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{CanonicalObservationV2, ObservedAt};
+use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
-use crate::parser::ParseOptions;
 use crate::sources::claude::canonical::{
     ClaudeCanonicalError, ClaudeCanonicalOptions, project_claude_native_records,
 };
@@ -62,21 +62,7 @@ pub enum AcquisitionProgress {
     OpenCodeSqlite { part_max_time_updated: Option<i64> },
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct OpenCodeSqliteReadOptions {
-    pub part_min_time_updated: Option<i64>,
-    pub part_limit: i64,
-}
-
-impl Default for OpenCodeSqliteReadOptions {
-    fn default() -> Self {
-        let options = ParseOptions::default();
-        Self {
-            part_min_time_updated: options.sqlite_part_min_time_updated,
-            part_limit: options.sqlite_part_limit,
-        }
-    }
-}
+pub use crate::sources::opencode::native::OpenCodeSqliteReadOptions;
 
 #[derive(Clone)]
 pub struct AcquisitionOptions {
@@ -157,23 +143,15 @@ pub fn acquire_source(
             let records =
                 extract_claude_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
-                accounting.record(
+                let kind = record.accounting_kind();
+                account_unit(
+                    &mut accounting,
                     record.session_id.as_deref(),
                     &record.attestation,
-                    &[record.legacy_kind],
-                )?;
-                accounting.tool_usage(
-                    record.session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
+                    &[kind],
+                    record.accounting_tool_name(),
                     record.timestamp.as_deref(),
-                )?;
-                accounting.contribute(
-                    record.session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
-                    record.legacy_arguments.as_deref(),
-                    [record.legacy_content.as_str()],
+                    record.contribution_strings(),
                 )?;
             }
             project_claude_native_records(
@@ -186,23 +164,15 @@ pub fn acquire_source(
             let records =
                 extract_codex_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
-                accounting.record(
+                let kind = record.accounting_kind();
+                account_unit(
+                    &mut accounting,
                     record.effective_session_id.as_deref(),
                     &record.attestation,
-                    &[record.legacy_kind],
-                )?;
-                accounting.tool_usage(
-                    record.effective_session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
+                    &[kind],
+                    record.accounting_tool_name(),
                     record.timestamp.as_deref(),
-                )?;
-                accounting.contribute(
-                    record.effective_session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
-                    record.legacy_arguments.as_deref(),
-                    [record.legacy_content.as_str()],
+                    record.contribution_strings(),
                 )?;
             }
             project_codex_native_records(&records, &CodexCanonicalOptions::new(options.observed_at))
@@ -212,23 +182,15 @@ pub fn acquire_source(
             let records = extract_openclaw_native_records(source)
                 .map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
-                accounting.record(
+                let kind = record.accounting_kind();
+                account_unit(
+                    &mut accounting,
                     record.session_id.as_deref(),
                     &record.attestation,
-                    &[record.legacy_kind],
-                )?;
-                accounting.tool_usage(
-                    record.session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
+                    &[kind],
+                    record.accounting_tool_name(),
                     record.source_timestamp.as_deref(),
-                )?;
-                accounting.contribute(
-                    record.session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
-                    record.legacy_arguments.as_deref(),
-                    [record.legacy_content.as_str()],
+                    record.contribution_strings(),
                 )?;
             }
             project_openclaw_native_records(
@@ -241,23 +203,15 @@ pub fn acquire_source(
             let records =
                 extract_qwen_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
-                accounting.record(
+                let kind = record.accounting_kind();
+                account_unit(
+                    &mut accounting,
                     record.session_id.as_deref(),
                     &record.attestation,
-                    &[record.legacy_kind],
-                )?;
-                accounting.tool_usage(
-                    record.session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
+                    &[kind],
+                    record.accounting_tool_name(),
                     record.source_timestamp.as_deref(),
-                )?;
-                accounting.contribute(
-                    record.session_id.as_deref(),
-                    record.legacy_kind,
-                    record.legacy_tool_name.as_deref(),
-                    record.legacy_arguments.as_deref(),
-                    [record.legacy_content.as_str()],
+                    record.contribution_strings(),
                 )?;
             }
             project_qwen_native_records(&records, &QwenCanonicalOptions::new(options.observed_at))
@@ -302,7 +256,6 @@ pub fn acquire_source(
                                 RecordKind::ToolCall,
                                 item.name.as_deref(),
                                 item.arguments.as_deref(),
-                                // Native strings in the legacy call summary; fixed
                                 // punctuation carries no path or host facts.
                                 [
                                     item.name.as_deref().unwrap_or("unknown"),
@@ -343,35 +296,22 @@ pub fn acquire_opencode_sqlite(
         return Err(AcquisitionError::SourceKindMismatch);
     }
 
-    let parse_options = ParseOptions {
-        sqlite_part_min_time_updated: read.part_min_time_updated,
-        sqlite_part_limit: read.part_limit,
-    };
-    let extraction = extract_sqlite_native_source(source, parse_options)
-        .map_err(|_| AcquisitionError::SourceRead)?;
+    let extraction =
+        extract_sqlite_native_source(source, read).map_err(|_| AcquisitionError::SourceRead)?;
     let progress = AcquisitionProgress::OpenCodeSqlite {
         part_max_time_updated: extraction.sqlite_part_max_time_updated,
     };
     let mut accounting = AccountingBuilder::default();
     for record in &extraction.records {
-        let (context, native) = record.accounting();
-        accounting.record(
-            context.session_id.as_deref(),
-            &context.attestation,
-            &[native.kind],
-        )?;
-        accounting.tool_usage(
-            context.session_id.as_deref(),
-            native.kind,
-            native.tool_name.as_deref(),
-            context.occurrence_time.as_deref(),
-        )?;
-        accounting.contribute(
-            context.session_id.as_deref(),
-            native.kind,
-            native.tool_name.as_deref(),
-            native.arguments.as_deref(),
-            [native.content.as_str()],
+        let facts = record.accounting();
+        account_unit(
+            &mut accounting,
+            facts.session_id,
+            facts.attestation,
+            &[facts.kind],
+            facts.tool_name,
+            facts.timestamp,
+            &facts.contribution_strings,
         )?;
     }
     let observations = project_opencode_native_records(&extraction.records, &options.observed_at)
@@ -384,6 +324,29 @@ pub fn acquire_opencode_sqlite(
         // whole-database replacement coverage, even without a lower bound.
         accounting: accounting.finish(AccountingCoverage::PartialSource),
     })
+}
+
+fn account_unit(
+    accounting: &mut AccountingBuilder,
+    session: Option<&str>,
+    attestation: &Result<SessionMetadata, AcquisitionError>,
+    kinds: &[RecordKind],
+    tool_name: Option<&str>,
+    timestamp: Option<&str>,
+    texts: &[String],
+) -> Result<(), AcquisitionError> {
+    accounting.record(session, attestation, kinds)?;
+    for &kind in kinds {
+        accounting.tool_usage(session, kind, tool_name, timestamp)?;
+        accounting.contribute(
+            session,
+            kind,
+            tool_name,
+            None,
+            texts.iter().map(String::as_str),
+        )?;
+    }
+    Ok(())
 }
 
 fn map_canonical_error(error: OpenCodeCanonicalError) -> AcquisitionError {
@@ -460,7 +423,6 @@ mod tests {
         AcquisitionError, AcquisitionOptions, AcquisitionProgress, OpenCodeSqliteReadOptions,
         acquire_opencode_sqlite,
     };
-    use crate::parser::{ParseOptions, parse_source_records_with_options};
     use crate::sources::opencode::canonical::{
         OpenCodeCanonicalOptions, project_opencode_canonical_observations,
     };
@@ -557,7 +519,6 @@ mod tests {
                     _ => codex_path.clone(),
                 },
             };
-            let legacy_before = crate::parser::parse_source_records(&source).unwrap();
             let acquired = super::acquire_source(&source, options()).unwrap();
             let replay = super::acquire_source(&source, options()).unwrap();
             assert_eq!(acquired.progress, AcquisitionProgress::None);
@@ -593,8 +554,6 @@ mod tests {
                     telltale_schema::observation::ObservationStage::ToolRequested
                 );
             }
-            let legacy_after = crate::parser::parse_source_records(&source).unwrap();
-            assert_eq!(format!("{legacy_before:?}"), format!("{legacy_after:?}"));
         }
         assert_eq!(codex_ids.len(), 3);
     }
@@ -868,13 +827,6 @@ mod tests {
                 assert_eq!(error, expected);
                 let rendered = format!("{error} {error:?}");
                 assert!(!rendered.contains("private-"));
-                if expected != AcquisitionError::SourceRead {
-                    assert!(
-                        !crate::parser::parse_source_records(&source)
-                            .unwrap()
-                            .is_empty()
-                    );
-                }
             }
         }
     }
@@ -911,7 +863,6 @@ mod tests {
                 kind: SourceKind::CopilotProcessLog,
                 path,
             };
-            let legacy_before = crate::parser::parse_source_records(&source).unwrap();
             let acquired = super::acquire_source(&source, options()).unwrap();
             let replay = super::acquire_source(&source, options()).unwrap();
             let reference = super::project_copilot_native_events(
@@ -989,14 +940,7 @@ mod tests {
                         .value(),
                     "call_mixed_001"
                 );
-                assert!(
-                    legacy_before
-                        .iter()
-                        .all(|r| r.kind != telltale_schema::record::RecordKind::AssistantMessage)
-                );
             }
-            let legacy_after = crate::parser::parse_source_records(&source).unwrap();
-            assert_eq!(format!("{legacy_before:?}"), format!("{legacy_after:?}"));
         }
     }
 
@@ -1015,39 +959,34 @@ mod tests {
         };
         let init = "Workspace initialized: private-session-marker (checkpoints: 0)\n";
         let item = "Accumulated output items (1): [{\"type\":\"function_call\",\"name\":\"private-tool-marker\",\"call_id\":\"private-call-marker\",\"arguments\":\"private-argument-marker\",\"message\":\"private-result-marker\"}]\n";
-        for (input, expected, legacy_ok) in [
+        for (input, expected) in [
             (
                 item.to_owned(),
                 AcquisitionError::CanonicalMapping {
                     code: "replay_unverifiable",
                 },
-                true,
             ),
             (
                 format!("{init}{item}Session completed.\n{item}"),
                 AcquisitionError::CanonicalMapping {
                     code: "replay_unverifiable",
                 },
-                true,
             ),
             (
                 format!("{init}{item}Accumulated output items (1): [{{private-malformed-marker"),
                 AcquisitionError::CanonicalMapping {
                     code: "malformed_structured_output",
                 },
-                true,
             ),
             (
                 "Accumulated output items (1): [private-malformed-marker".to_owned(),
                 AcquisitionError::CanonicalMapping {
                     code: "replay_unverifiable",
                 },
-                false,
             ),
             (
                 format!("{init}Accumulated output items (1): [42]"),
                 AcquisitionError::SourceRead,
-                false,
             ),
         ] {
             std::fs::write(&path, input).unwrap();
@@ -1060,10 +999,6 @@ mod tests {
             .unwrap_err();
             assert_eq!(error, super::map_copilot_error(reference));
             assert!(!format!("{error} {error:?}").contains("private-"));
-            assert_eq!(
-                crate::parser::parse_source_records(&source).is_ok(),
-                legacy_ok
-            );
         }
         // Each invocation starts fresh, even after a previous initialized stream.
         std::fs::write(&path, format!("{init}{item}")).unwrap();
@@ -1225,7 +1160,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_read_options_return_selected_progress_and_leave_legacy_unchanged() {
+    fn bounded_read_options_return_selected_progress() {
         let (_directory, connection, source) = database();
         drop(connection);
         let read = OpenCodeSqliteReadOptions {
@@ -1248,18 +1183,6 @@ mod tests {
                 part_max_time_updated: Some(2_000)
             }
         );
-
-        let legacy = parse_source_records_with_options(
-            &source,
-            ParseOptions {
-                sqlite_part_min_time_updated: read.part_min_time_updated,
-                sqlite_part_limit: read.part_limit,
-            },
-        )
-        .unwrap();
-        assert_eq!(legacy.records.len(), 2);
-        assert!(legacy.records[1].content.contains("second"));
-        assert_eq!(legacy.sqlite_part_max_time_updated, Some(2_000));
     }
 
     #[test]

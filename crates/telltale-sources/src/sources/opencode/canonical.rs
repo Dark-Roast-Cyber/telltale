@@ -13,35 +13,36 @@ use telltale_schema::observation::{
 };
 use telltale_schema::source::Source;
 
+use super::native::OpenCodeSqliteReadOptions;
 use super::native::{
     OpenCodeMessageContext, OpenCodeMessageNativeRecord, OpenCodeSqliteNativeRecord,
     OpenCodeTextPartNativeRecord, OpenCodeToolPartNativeRecord, OpenCodeToolState,
     extract_sqlite_native_source,
 };
-use crate::parser::{ParseError, ParseOptions};
+use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct OpenCodeCanonicalOptions {
     pub(crate) observed_at: ObservedAt,
-    pub(crate) parse_options: ParseOptions,
+    pub(crate) read: OpenCodeSqliteReadOptions,
 }
 
 impl OpenCodeCanonicalOptions {
     pub(crate) fn new(observed_at: ObservedAt) -> Self {
         Self {
             observed_at,
-            parse_options: ParseOptions::default(),
+            read: OpenCodeSqliteReadOptions::default(),
         }
     }
 
-    pub(crate) fn with_parse_options(mut self, parse_options: ParseOptions) -> Self {
-        self.parse_options = parse_options;
+    pub(crate) fn with_read_options(mut self, read: OpenCodeSqliteReadOptions) -> Self {
+        self.read = read;
         self
     }
 }
 
 pub(crate) enum OpenCodeCanonicalError {
-    Source(ParseError),
+    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -102,8 +103,8 @@ impl fmt::Display for OpenCodeCanonicalError {
 
 impl std::error::Error for OpenCodeCanonicalError {}
 
-impl From<ParseError> for OpenCodeCanonicalError {
-    fn from(error: ParseError) -> Self {
+impl From<SourceReadError> for OpenCodeCanonicalError {
+    fn from(error: SourceReadError) -> Self {
         Self::Source(error)
     }
 }
@@ -131,7 +132,7 @@ pub(crate) fn project_opencode_canonical_observations(
         ));
     }
 
-    let extraction = extract_sqlite_native_source(source, options.parse_options)?;
+    let extraction = extract_sqlite_native_source(source, options.read)?;
     project_opencode_native_records(&extraction.records, &options.observed_at)
 }
 
@@ -688,8 +689,8 @@ mod tests {
     use telltale_schema::source::Source;
     use tempfile::tempdir;
 
+    use super::super::native::OpenCodeSqliteReadOptions;
     use super::{OpenCodeCanonicalOptions, project_opencode_canonical_observations};
-    use crate::parser::{ParseOptions, parse_source_records};
 
     const OBSERVED_AT: &str = "2026-09-03T12:00:00Z";
 
@@ -821,11 +822,12 @@ mod tests {
 
         let observations = project_opencode_canonical_observations(
             &source,
-            OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap())
-                .with_parse_options(ParseOptions {
-                    sqlite_part_min_time_updated: Some(1_001),
-                    sqlite_part_limit: 1,
-                }),
+            OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()).with_read_options(
+                OpenCodeSqliteReadOptions {
+                    part_min_time_updated: Some(1_001),
+                    part_limit: 1,
+                },
+            ),
         )
         .unwrap();
         assert_eq!(observations.len(), 1);
@@ -910,7 +912,6 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code(), "replay_unverifiable");
         assert!(!error.to_string().contains("Synthetic secret marker"));
-        assert!(parse_source_records(&source).is_ok());
     }
 
     #[test]

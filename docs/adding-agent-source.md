@@ -1,17 +1,19 @@
 # Adding an Agent Source
 
 This guide is the repository-native checklist for adding a bundled coding-agent
-source. Telltale discovers source files or databases, parses them into
-normalized records, and then uses the existing detection, scoring, review metadata, and
-event pipeline. New source support must not add source-specific detection logic
-unless a rule genuinely cannot use normalized fields.
+source. Telltale discovers source files or databases, extracts source-native
+facts, and maps them to Canonical Observation v2. Scan, watch, and embedding
+then use Detection v2 and the Event 3.0 projection. New source support must not
+add source-specific detection logic unless a rule genuinely cannot use canonical
+fields.
 
-This is not a runtime extension contract. Public parse entry points exist, and
-operators can select scan roots and project roots through the CLI and project
-configuration. Telltale does not support runtime source/client/parser
-registration or a parser extension API through plugins, external parser
-configuration, dynamic loading, or a trait ABI. New source support is a
-compiled-in registry and parser change.
+This is not a runtime extension contract. Operators can select scan roots and
+project roots through the CLI and project configuration. Telltale does not
+support runtime source/client registration or a parser extension API through
+plugins, external configuration, dynamic loading, or a trait ABI. New source
+support is a compiled-in registry and native-extractor change. Caller-supplied
+`NormalizedRecord` evaluation stays a separate compatibility path and is not a
+source adapter output.
 
 ## Current architecture
 
@@ -20,54 +22,49 @@ compiled-in registry and parser change.
 - `crates/telltale-sources/src/sources/<agent>/mod.rs` owns that agent's static
   `ClientSourceDef` values and install metadata. The static
   source registry in `sources/registry.rs` collects source definitions and
-  preserves static client/install registration order; it does not own parser
-  registration. Registry order is significant for public client/install
-  snapshot stability, while discovered `Source` results are explicitly sorted
-  for deterministic scans.
-- `crates/telltale-sources/src/parser.rs` owns the private, exact,
-  case-sensitive `(ClientId, source_id)` parser registration table. `SourceKind`
-  is checked as expected container/reporting metadata after identity lookup; it
-  never selects semantic parsing.
-- `crates/telltale-sources/src/acquisition.rs` owns the public,
-  cross-source Canonical Observation v2 acquisition router, batch types, and
-  acquisition controls. Its route is source-native extraction -> source-owned
-  canonical mapping -> batch; source mappers remain crate-private.
-- Each modeled source parser uses the internal uniform shape
-  `fn(&Source, ParseOptions) -> Result<ExtractedSourceRecords, ParseError>`.
-  Public `parse_source_records()` and
-  `parse_source_records_with_options()` signatures remain unchanged.
-- `read_jsonl_values()` and `read_json_document()` are neutral shared readers.
-  Semantic extraction and record classification stay in the source module.
-  There is currently no `sources/common/` directory; do not create one just to
-  house a single helper.
-- A known parser or schema failure is terminal. It must not retry through a
-  generic parser. Explicit unknown variants become `RecordKind::Other` or the
-  source's documented diagnostic. There is no secondary fallback after failure.
+  preserves static client/install registration order. Registry order is
+  significant for public client/install snapshot stability, while discovered
+  `Source` results are explicitly sorted for deterministic scans.
+- `crates/telltale-sources/src/acquisition.rs` owns the public, cross-source
+  Canonical Observation v2 acquisition router, batch types, and acquisition
+  controls. Its route is source discovery -> native extraction -> native
+  accounting/progress -> source-owned canonical mapping. Source mappers remain
+  crate-private. `SourceKind` is container/reporting metadata; it never selects
+  semantic extraction.
+- `crates/telltale-sources/src/source_read.rs` owns shared JSONL reading and
+  bounded read errors. It is not a parser, projection, or record model.
+  Semantic extraction stays in the source module. There is currently no
+  `sources/common/` directory; do not create one just to house a single helper.
+- A known extraction or schema failure is terminal. It must not retry through a
+  generic parser. There is no secondary fallback after failure, and no
+  source-backed conversion into `NormalizedRecord`.
 
 The current table has eight exact identities across six agent families, all
-using modeled source-owned parsers. There are no candidate or compatibility
-registrations and no generic parser fallback.
-Parser maturity is not the same claim as live validation or full public support;
-use the [validation matrix](source-validation-matrix.md) for that distinction.
+using modeled source-owned native extractors. There are no candidate or
+compatibility registrations and no generic parser fallback. OpenCode is only
+`opencode.sqlite`.
+Extractor coverage is not the same claim as live validation or full public
+support; use the [validation matrix](source-validation-matrix.md) for that
+distinction.
 
 ## Support levels
 
 - **Research**: format or paths are being investigated; do not claim support.
 - **Experimental**: registered and fixture-tested, but live validation or
   capability documentation is incomplete.
-- **Supported**: discovery, benign parse, tool-call parse, tool-result parse,
-  positive detection, benign/negative behavior, and public capability notes all
-  pass their gates.
+- **Supported**: discovery, benign extraction, tool-call extraction, tool-result
+  extraction, positive detection, benign/negative behavior, and public
+  capability notes all pass their gates.
 
-Project-local candidates may have complete parser/parity coverage while still
+Project-local candidates may have complete fixture coverage while still
 remaining candidates in the support matrix. Do not promote them without the
 existing support gates.
 
 For a new source belonging to an existing `ClientId`, reuse that client's
 module, registry entry, and install definition. Add only the new source
-definition, parser registration, fixtures, tests, snapshots, and documentation
-that the source requires. The client-level wiring below applies when adding an
-entirely new coding agent or harness.
+definition, native extractor, acquisition route, fixtures, tests, snapshots,
+and documentation that the source requires. The client-level wiring below
+applies when adding an entirely new coding agent or harness.
 
 ## Community source checklist
 
@@ -102,38 +99,35 @@ entirely new coding agent or harness.
 - Registry order is part of the public client/install snapshot contract; keep
   it stable. Discovery sorts returned `Source` values independently.
 
-### 4. Add the parser module
+### 4. Add native extraction and canonical mapping
 
-- For modeled semantics, add `sources/<agent>/parser.rs` for a new client or
-  extend the existing client parser module for another source identity.
-- Implement the internal uniform Source/ParseOptions/ExtractedSourceRecords
-  function shape.
-- Keep semantic mapping and classification in the source module.
-- Preserve public parse signatures and normalized fields.
+- For a new client, add `sources/<agent>/native.rs` and
+  `sources/<agent>/canonical.rs`, or extend the existing client modules for
+  another source identity.
+- Keep native structures crate-private. Derive accounting facts from structured
+  native state. Do not add synchronized `legacy_*` fields or a flattened record
+  projection.
 - Treat malformed input and known schema failures as terminal; never retry with
-  another parser.
+  another extractor.
 - Define the source contract for missing or unknown discriminators. Do not infer
   a known kind from an explicit unknown variant.
-- When the source participates in Canonical Observation v2 acquisition, keep
-  native extraction and canonical mapping in the source module, then add its
-  exact identity to the single public acquisition router. Do not add a parallel
-  cross-source facade or make the source mapper public.
+- Require a source-reported session id when canonical identity needs one. Do not
+  fall back to a filename stem, path, or compatibility session.
+- Add the exact identity to the single public acquisition router. Do not add a
+  parallel cross-source facade or make the source mapper public.
 
-### 5. Add exact private registration
+### 5. Keep registry dispatch exact
 
-- Add one obvious exact `(ClientId, source_id)` entry to the private table in
-  `crates/telltale-sources/src/parser.rs`.
-- Point modeled identities at their source-owned parser.
-- Use `GenericFallback(JsonDocument)` only when the source is intentionally
-  unmodeled and its generic shape is verified. There is no generic JSONL
-  fallback in the current table.
+- Acquisition dispatches the exact `(ClientId, source_id)` identity. `SourceKind`
+  is checked as container metadata and does not select extraction.
 - Do not add a parser field to public `ClientSourceDef`.
-- Update hard-coded registry, parser-maturity, and client-count snapshots.
+- Do not add a generic JSONL or JSON-document fallback.
+- Update hard-coded registry and client-count snapshots.
 
 ### 6. Use shared readers only
 
-- Reuse `read_jsonl_values()` or `read_json_document()` for neutral I/O and
-  JSON decoding.
+- Reuse `read_jsonl_values()` for neutral JSONL decoding. SQLite sources own
+  their read options directly.
 - Do not create traits, factories, managers, plugin boundaries, runtime
   registration, external parser configuration, or a speculative common
   framework.
@@ -156,13 +150,13 @@ Cover, as applicable:
 
 - source-definition and bidirectional registry/integrity checks;
 - exact identity, wrong-client, wrong-kind, and unknown-identity behavior;
-- positive and benign normalized records, field inheritance, and order;
+- positive and benign canonical observations, field inheritance, and order;
 - schema drift, malformed input, empty input, explicit unknown variants, and
   no-fallback behavior;
 - emitted source/event tuple identity and ordering;
 - portable discovery, project-local paths, and suffix matching;
 - state, cursor, lock, or source-preference behavior for database sources;
-- detection fixtures proving normalized records reach existing rules.
+- detection fixtures proving canonical observations reach Detection v2.
 - registry/install order and all hard-coded count snapshots;
 
 Use `tempfile` and portable `Path`/`PathBuf` joins for synthetic path tests.
@@ -184,7 +178,7 @@ Avoid exact separators and Unix-only assumptions.
 Run the narrowest relevant tests first, then the source and detection suites:
 
 ```sh
-cargo test -p telltale-sources <agent-or-parser-filter>
+cargo test -p telltale-sources <agent-or-source-filter>
 cargo test -p telltale-sources
 cargo test -p telltale-detect
 cargo test --test cli scan_watch::scan_once_writes_schema_shaped_health_jsonl -- --exact
@@ -200,12 +194,12 @@ Package verification currently runs on Linux and macOS. Keep fixture scans
 read-only or use an explicit development sink.
 
 Run or retain Linux, Windows, and macOS CI coverage for path roots, discovery,
-fixture parsing, and relevant source tests. Do not claim live source-store
-support merely because a fixture parser test passes.
+fixture acquisition, and relevant source tests. Do not claim live source-store
+support merely because a fixture acquisition test passes.
 
 ## Definition of done
 
 A source is ready for its stated support level when discovery is deterministic,
-the exact private parser registration is covered, normalized output and order
-are characterized, known failures cannot fall through, fixtures are synthetic,
+the exact acquisition identity is covered, canonical output and order are
+characterized, known failures cannot fall through, fixtures are synthetic,
 and the relevant install, detection, documentation, and platform gates pass.

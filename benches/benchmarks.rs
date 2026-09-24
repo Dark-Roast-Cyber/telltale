@@ -1,13 +1,8 @@
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use std::fs;
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::path::{Path, PathBuf};
-use tempfile::TempDir;
 
-use telltale_detect::detection::detect_parsed_source_records;
 use telltale_rules::load_default_rule_set;
-use telltale_schema::canonical::Provenance;
 use telltale_sources::discovery::discover_sources_best_effort;
-use telltale_sources::parser::parse_source_records;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,69 +14,6 @@ fn fixture_root() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("session_stores")
-}
-
-/// Build a synthetic Codex JSONL session with `n` tool-call records.
-fn build_synthetic_codex_jsonl(n: usize) -> String {
-    let mut lines = Vec::with_capacity(n);
-    // Initial user message
-    lines.push(
-        serde_json::json!({
-            "type": "message",
-            "role": "user",
-            "content": "Please help me refactor the authentication module.",
-            "id": "msg-user-0",
-        })
-        .to_string(),
-    );
-
-    for i in 0..n {
-        // Assistant tool call
-        lines.push(
-            serde_json::json!({
-                "type": "message",
-                "role": "assistant",
-                "content": "",
-                "id": format!("msg-asst-{}", i),
-                "tool_calls": [{
-                    "id": format!("call-{}", i),
-                    "type": "function",
-                    "function": {
-                        "name": "shell",
-                        "arguments": serde_json::json!({
-                            "command": format!("cat src/auth/module_{}.rs", i % 20),
-                        }).to_string(),
-                    }
-                }]
-            })
-            .to_string(),
-        );
-
-        // Tool result
-        lines.push(
-            serde_json::json!({
-                "type": "message",
-                "role": "tool",
-                "tool_call_id": format!("call-{}", i),
-                "content": format!("File contents for module_{}", i % 20),
-                "id": format!("msg-tool-{}", i),
-            })
-            .to_string(),
-        );
-    }
-    lines.join("\n")
-}
-
-/// Write a synthetic Codex session fixture into a temp dir and return the
-/// Source entries that `discover_sources` would find.
-fn write_synthetic_codex_fixture(tmp: &TempDir, n: usize) {
-    let session_dir = tmp.path().join("codex/sessions/2026/01");
-    fs::create_dir_all(&session_dir).expect("create session dir");
-    fs::write(
-        session_dir.join("bench-session.jsonl"),
-        build_synthetic_codex_jsonl(n),
-    )
-    .expect("write fixture");
 }
 
 // ---------------------------------------------------------------------------
@@ -187,116 +119,10 @@ fn bench_discovery(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_legacy_record_compatibility(c: &mut Criterion) {
-    let rule_set = load_default_rule_set().expect("rule set");
-    let root = fixture_root();
-
-    let mut group = c.benchmark_group("legacy_record_compatibility");
-    group.sample_size(20);
-
-    // Legacy record compatibility benchmark: discover + parse + detect.
-    let sources = discover_sources_best_effort(&root);
-    group.bench_function("all_fixtures_parse_detect", |b| {
-        b.iter(|| {
-            for source in &sources {
-                if let Ok(records) = parse_source_records(source) {
-                    let _ = detect_parsed_source_records(source, &rule_set, &records);
-                }
-            }
-        });
-    });
-
-    // Legacy record compatibility benchmark: parse only (no detection).
-    group.bench_function("all_fixtures_legacy_parse_only", |b| {
-        b.iter(|| {
-            for source in &sources {
-                let _ = parse_source_records(source);
-            }
-        });
-    });
-
-    group.finish();
-}
-
-fn bench_synthetic_legacy_record_compatibility(c: &mut Criterion) {
-    let rule_set = load_default_rule_set().expect("rule set");
-
-    let mut group = c.benchmark_group("synthetic_legacy_record_compatibility");
-    group.sample_size(20);
-
-    for size in [10, 50, 200, 1000] {
-        let tmp = TempDir::new().expect("temp dir");
-        write_synthetic_codex_fixture(&tmp, size);
-        let sources = discover_sources_best_effort(tmp.path());
-
-        group.bench_with_input(
-            BenchmarkId::new("legacy_parse_detect", format!("{}tool_calls", size)),
-            &sources,
-            |b, sources| {
-                b.iter(|| {
-                    for source in sources {
-                        if let Ok(records) = parse_source_records(source) {
-                            let _ = detect_parsed_source_records(source, &rule_set, &records);
-                        }
-                    }
-                });
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("legacy_parse_only", format!("{}tool_calls", size)),
-            &sources,
-            |b, sources| {
-                b.iter(|| {
-                    for source in sources {
-                        let _ = parse_source_records(source);
-                    }
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
-fn bench_conformance(c: &mut Criterion) {
-    let root = fixture_root();
-    let sources = discover_sources_best_effort(&root);
-
-    let mut group = c.benchmark_group("conformance");
-    group.sample_size(50);
-
-    // Benchmark: from_legacy conversion for all sources
-    group.bench_function("from_legacy_all_sources", |b| {
-        b.iter(|| {
-            for source in &sources {
-                if let Ok(records) = parse_source_records(source) {
-                    for record in &records {
-                        let v1 = telltale_schema::canonical::NormalizedRecordV1::from_legacy(
-                            record.clone(),
-                            Provenance {
-                                source_path_hash: "bench_hash".to_string(),
-                                source_event_id: None,
-                                offset: None,
-                            },
-                        );
-                        let _ = v1;
-                    }
-                }
-            }
-        });
-    });
-
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_rule_loading,
     bench_rule_evaluation,
     bench_discovery,
-    bench_legacy_record_compatibility,
-    bench_synthetic_legacy_record_compatibility,
-    bench_conformance,
 );
 criterion_main!(benches);

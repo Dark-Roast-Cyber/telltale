@@ -77,7 +77,7 @@ Qwen, and GitHub Copilot. Current client-level status is:
   and GitHub Copilot.
 - **Fixture-backed only**: OpenClaw and Qwen CLI.
 
-These labels describe parser and source-store validation, not broad live coverage.
+These labels describe source-store validation, not broad live coverage.
 Release archives and CI smoke checks cover binary packaging and execution on
 Linux, macOS, and Windows; they do not establish broad live source-store
 validation. Fixture-backed-only clients remain preview/experimental for live use.
@@ -395,15 +395,15 @@ These files are the source-of-truth for Telltale's current implementation, rules
 
 ### Additional references
 
-- [Session sources](docs/session-sources.md) — discovery paths and parser notes per client
+- [Session sources](docs/session-sources.md) — discovery paths per client
 - [Agent capability profiles](docs/agent-capability-profiles.md) — per-client field availability
-- [Client capability matrix](docs/client-capability-matrix.md) — normalization-level field matrix
+- [Client capability matrix](docs/client-capability-matrix.md) — direct-record conversion fields; source visibility is in the capability profiles
 - [MCP tool inventory](docs/mcp-tool-inventory.md) — MCP configuration inventory emission
 - [Policy modes](docs/policy-modes.md) — observe, alert, simulate-block modes
 - [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content
 - [Adding an agent source](docs/adding-agent-source.md) — contributor checklist for new agent/session-source support
 - [Use cases](docs/use-cases.md) — concrete detection use cases with fixture guidance
-- [Normalization schema](docs/normalization-schema.md) — canonical `NormalizedRecordV1` schema
+- [Normalization schema](docs/normalization-schema.md) — direct-record `NormalizedRecordV1` compatibility contract
 - [Source validation matrix](docs/source-validation-matrix.md) — coverage and validation gates
 - [Requirements](docs/requirements.md) — functional, security, and operational requirements
 - [Trust boundaries](docs/trust-boundaries.md) — trust model for untrusted agent content

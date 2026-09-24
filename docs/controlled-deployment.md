@@ -291,7 +291,6 @@ Before selecting a candidate, run:
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
-make opencode-export-check
 make telltale-console-check
 make local-event-feed-check
 make event3-contract-check
@@ -301,8 +300,8 @@ make release-public-docs-check
 make CARGO_LOCKED=--locked release-fixture-smoke
 ```
 
-Also run canonical evaluation and require exactly 44 corpus cases, 30 scored,
-11 TP, 0 FP, 19 TN, and 0 FN. Verify repository and generated units with
+Also run canonical evaluation and require exactly 37 corpus cases, 29 scored,
+10 TP, 0 FP, 19 TN, and 0 FN. Verify repository and generated units with
 `systemd-analyze verify` where available. Issue #15's absent optional
 `EnvironmentFile` case, the present canonical case, noncanonical rejection, and
 pre-replacement ordering are covered by the installer regression suite.

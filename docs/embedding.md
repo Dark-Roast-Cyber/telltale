@@ -52,8 +52,8 @@ adoption architecture.
 | --- | --- | --- |
 | Consume or emit Telltale events (backend, analytics) | `telltale-schema` | Event model, normalized records, redaction, risk thresholds. Events support Serde serialization; event deserialization is not part of the API. |
 | Evaluate the rule language inline (proxy, gateway) | `telltale-rules` | YAML rule parsing/validation/policy merge and in-memory regex evaluation. I/O-free: no filesystem, watcher, or database access. |
-| Discover and parse agent session stores | `telltale-sources` | Cross-platform discovery, static per-agent source definitions, parser entry points, and install inventory. |
-| Full pipeline in-process (EDR, security tool) | `telltale-core` | The supported embedding facade: discover → parse → detect with one dependency. |
+| Discover and acquire agent session stores | `telltale-sources` | Cross-platform discovery, static per-agent source definitions, canonical acquisition, and install inventory. |
+| Full pipeline in-process (EDR, security tool) | `telltale-core` | The supported embedding facade: discover → native acquisition → canonical detection with one dependency. |
 
 ## Getting the crates
 
@@ -126,8 +126,8 @@ failures are returned to the host and must not be silently dropped.
 
 This is record evaluation, not runtime source registration. Setting an
 arbitrary `NormalizedRecord.client` string does not add a supported client,
-discovery root, or parser. Custom client/source parser registration remains
-unsupported; new sources require a bundled implementation and registry change.
+discovery root, or extractor. New sources require a bundled native extractor
+and registry change.
 
 ### Custom rules and policy
 

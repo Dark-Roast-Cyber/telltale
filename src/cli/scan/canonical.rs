@@ -14,13 +14,11 @@ use telltale_schema::event::path_hash;
 use telltale_schema::observation::ObservedAt;
 #[cfg(test)]
 use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
-use telltale_sources::acquisition::{
-    AcquisitionProgress, OpenCodeSqliteReadOptions, SourceAccounting,
-};
+use telltale_sources::acquisition::{AcquisitionProgress, SourceAccounting};
 
 use super::{
     Event, ProcessChainConfig, ScanState, Source, SourceProcessingStatus,
-    is_opencode_sqlite_source, parse_options_for_scan_source,
+    is_opencode_sqlite_source, opencode_read_options_for_scan_source,
     should_stage_sqlite_ingestion_cursors, sqlite_progress_candidate,
 };
 
@@ -76,12 +74,12 @@ pub(super) fn process_canonical_source(
 ) -> CanonicalProcessingResult {
     let sqlite = if is_opencode_sqlite_source(source) {
         // Reuse scanner-owned cursor/overlap policy, including dry-run/backfill.
-        let bounds =
-            parse_options_for_scan_source(source, state, processing.backfill, processing.dry_run);
-        Some(OpenCodeSqliteReadOptions {
-            part_min_time_updated: bounds.sqlite_part_min_time_updated,
-            part_limit: bounds.sqlite_part_limit,
-        })
+        Some(opencode_read_options_for_scan_source(
+            source,
+            state,
+            processing.backfill,
+            processing.dry_run,
+        ))
     } else {
         None
     };

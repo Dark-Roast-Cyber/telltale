@@ -16,7 +16,7 @@ use super::native::{
     ClaudeContentBlock, ClaudeNativeRecord, extract_claude_native_records,
     is_known_claude_discriminator,
 };
-use crate::parser::ParseError;
+use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct ClaudeCanonicalOptions {
@@ -30,7 +30,7 @@ impl ClaudeCanonicalOptions {
 }
 
 pub(crate) enum ClaudeCanonicalError {
-    Source(ParseError),
+    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -91,8 +91,8 @@ impl fmt::Display for ClaudeCanonicalError {
 
 impl std::error::Error for ClaudeCanonicalError {}
 
-impl From<ParseError> for ClaudeCanonicalError {
-    fn from(error: ParseError) -> Self {
+impl From<SourceReadError> for ClaudeCanonicalError {
+    fn from(error: SourceReadError) -> Self {
         Self::Source(error)
     }
 }
@@ -603,7 +603,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{ClaudeCanonicalOptions, project_claude_canonical_observations};
-    use crate::parser::parse_source_records;
 
     const OBSERVED_AT: &str = "2026-09-02T12:00:00Z";
 
@@ -625,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_conversation_without_source_session_fails_v2_but_keeps_legacy_fallback() {
+    fn basic_conversation_without_source_session_is_replay_unverifiable() {
         let mut source = fixture_source("session_stores/claude/projects/project-a/session-a.jsonl");
         let temp = tempfile::tempdir().unwrap();
         let input = std::fs::read_to_string(&source.path).unwrap();
@@ -641,9 +640,6 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code(), "replay_unverifiable");
-        let legacy = parse_source_records(&source).expect("legacy projection");
-        assert_eq!(legacy.len(), 2);
-        assert!(legacy.iter().all(|record| record.session_id == "session-a"));
     }
 
     #[test]
@@ -854,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn additional_tool_result_fixture_keeps_legacy_detection_evidence_linked() {
+    fn additional_tool_result_fixture_links_call_ids() {
         let observations =
             project("session_stores/claude/projects/project-c/uc001-claude-tool-result.jsonl");
         assert_eq!(observations.len(), 4);
@@ -874,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn assistant_tool_result_is_emitted_after_message_without_affecting_legacy_parse() {
+    fn assistant_tool_result_is_emitted_after_message() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("assistant-tool-result.jsonl");
         fs::write(
@@ -915,7 +911,6 @@ mod tests {
             observations[1].correlation().call_id().unwrap().origin(),
             telltale_schema::observation::CorrelationOrigin::SourceReported
         );
-        assert!(parse_source_records(&source).is_ok());
     }
 
     #[test]
@@ -951,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_failures_are_isolated_from_legacy_projection() {
+    fn canonical_failures_are_bounded() {
         let source = fixture_source("parser_maturity/non_discovered/unknown-variant.jsonl");
         let error = project_claude_canonical_observations(
             &source,
@@ -965,10 +960,6 @@ mod tests {
                 .contains("Synthetic unknown record variant")
         );
         assert!(!format!("{error:?}").contains("Synthetic unknown record variant"));
-
-        let legacy = parse_source_records(&source).expect("legacy projection remains available");
-        assert_eq!(legacy.len(), 1);
-        assert_eq!(legacy[0].kind, telltale_schema::record::RecordKind::Other);
     }
 
     #[test]
@@ -1000,11 +991,10 @@ mod tests {
         )
         .expect_err("tool_use without id must fail");
         assert_eq!(error.code(), "missing_tool_id");
-        assert!(parse_source_records(&source).is_ok());
     }
 
     #[test]
-    fn unknown_content_blocks_fail_without_changing_legacy_parsing() {
+    fn unknown_content_blocks_fail_closed() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("unknown-block.jsonl");
         fs::write(
@@ -1025,6 +1015,5 @@ mod tests {
         .expect_err("unknown content block must fail");
         assert_eq!(error.code(), "unknown_content_block");
         assert!(!error.to_string().contains("synthetic payload"));
-        assert!(parse_source_records(&source).is_ok());
     }
 }

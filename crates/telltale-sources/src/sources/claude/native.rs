@@ -3,9 +3,8 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
-use crate::parser::{
-    ParseError, arguments_field, default_source_file_stem, read_jsonl_values, record_content,
-    session_id_with_fallback, string_field,
+use crate::source_read::{
+    SourceReadError, collect_string_values, nested_string_field, read_jsonl_values,
 };
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -35,51 +34,30 @@ pub(crate) struct ClaudeNativeRecord {
     pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) source_sequence: u64,
     pub(crate) session_id: Option<String>,
-    pub(crate) legacy_session_id: String,
-    pub(crate) agent: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) provider: Option<String>,
     pub(crate) timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
     pub(crate) role: Option<String>,
     pub(crate) message_content: Option<Value>,
     pub(crate) blocks: Option<Vec<ClaudeContentBlock>>,
-    pub(crate) legacy_kind: RecordKind,
-    pub(crate) legacy_tool_name: Option<String>,
-    pub(crate) legacy_arguments: Option<String>,
-    pub(crate) legacy_content: String,
+    /// Source strings scanned for tool-call activity contributions. Empty unless
+    /// this unit is an accounting tool call.
+    pub(crate) contribution_strings: Vec<String>,
 }
 
 pub(crate) fn extract_claude_native_records(
     source: &Source,
-) -> Result<Vec<ClaudeNativeRecord>, ParseError> {
+) -> Result<Vec<ClaudeNativeRecord>, SourceReadError> {
     let values = read_jsonl_values(source)?;
-    let default_session_id = default_source_file_stem(source);
     let mut records = Vec::with_capacity(values.len());
-    let mut agent = None;
-    let mut provider = None;
-    let mut model = None;
 
     for (source_sequence, value) in values.into_iter().enumerate() {
         if !value.is_object() {
-            return Err(ParseError::SchemaDrift {
+            return Err(SourceReadError::SchemaDrift {
                 client: source.client,
                 source_id: source.source_id.clone(),
                 detail: "JSONL record envelope must be an object",
             });
         }
-
-        agent = agent
-            .or_else(|| string_field(&value, "agent_nickname"))
-            .or_else(|| string_field(&value, "agent"));
-        provider = provider
-            .or_else(|| string_field(&value, "model_provider"))
-            .or_else(|| string_field(&value, "providerID"))
-            .or_else(|| string_field(&value, "provider"));
-        model = model
-            .or_else(|| string_field(&value, "model"))
-            .or_else(|| string_field(&value, "model_name"))
-            .or_else(|| string_field(&value, "modelID"));
 
         let ownership =
             session_identity(claude_envelopes(&value).into_iter().flat_map(|envelope| {
@@ -88,33 +66,74 @@ pub(crate) fn extract_claude_native_records(
                     .filter_map(move |key| envelope.get(key))
             }));
         let session_id = ownership.as_ref().ok().cloned().flatten();
-        let legacy_arguments =
-            arguments_field(&value).or_else(|| claude_tool_input_as_string(&value));
-        let legacy_kind = claude_record_kind(&value);
-        let legacy_tool_name = claude_tool_name(&value);
+        let blocks = content_blocks(&value)
+            .map(|blocks| blocks.iter().map(claude_content_block).collect::<Vec<_>>());
+        let is_tool_call = blocks.as_ref().is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| matches!(block, ClaudeContentBlock::ToolUse { .. }))
+        });
         let native = ClaudeNativeRecord {
             attestation: ownership.and_then(|_| claude_attestation(&value)),
             source_sequence: source_sequence as u64,
-            legacy_session_id: session_id_with_fallback(&value, &default_session_id),
             session_id,
-            agent: agent.clone(),
-            model: model.clone(),
-            provider: provider.clone(),
-            timestamp: string_field(&value, "timestamp"),
+            timestamp: nested_string_field(&value, "timestamp"),
             discriminator: claude_discriminator(&value).map(ToOwned::to_owned),
-            role: string_field(&value, "role"),
+            role: nested_string_field(&value, "role"),
             message_content: claude_message_content(&value),
-            blocks: content_blocks(&value)
-                .map(|blocks| blocks.iter().map(claude_content_block).collect::<Vec<_>>()),
-            legacy_kind,
-            legacy_tool_name,
-            legacy_arguments,
-            legacy_content: record_content(&value),
+            contribution_strings: if is_tool_call {
+                collect_string_values(&value)
+            } else {
+                Vec::new()
+            },
+            blocks,
         };
         records.push(native);
     }
 
     Ok(records)
+}
+
+impl ClaudeNativeRecord {
+    pub(crate) fn accounting_kind(&self) -> RecordKind {
+        if self.blocks.as_ref().is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| matches!(block, ClaudeContentBlock::ToolUse { .. }))
+        }) {
+            return RecordKind::ToolCall;
+        }
+        if self.blocks.as_ref().is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| matches!(block, ClaudeContentBlock::ToolResult { .. }))
+        }) {
+            return RecordKind::ToolResult;
+        }
+        match self.discriminator.as_deref() {
+            Some("user_message" | "user") => RecordKind::UserMessage,
+            Some("assistant_message" | "assistant" | "model") => RecordKind::AssistantMessage,
+            Some("text") if self.role.as_deref() == Some("user") => RecordKind::UserMessage,
+            Some("text") if matches!(self.role.as_deref(), Some("assistant" | "model")) => {
+                RecordKind::AssistantMessage
+            }
+            Some("tool_call") => RecordKind::ToolCall,
+            Some("tool_result") => RecordKind::ToolResult,
+            Some("session_meta") => RecordKind::SessionMeta,
+            _ => RecordKind::Other,
+        }
+    }
+
+    pub(crate) fn accounting_tool_name(&self) -> Option<&str> {
+        self.blocks.as_ref()?.iter().find_map(|block| match block {
+            ClaudeContentBlock::ToolUse { name, .. } => name.as_deref(),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn contribution_strings(&self) -> &[String] {
+        &self.contribution_strings
+    }
 }
 
 fn claude_attestation(value: &Value) -> Result<SessionMetadata, AcquisitionError> {
@@ -143,53 +162,6 @@ fn claude_envelopes(value: &Value) -> Vec<&Value> {
         envelopes.push(payload);
     }
     envelopes
-}
-
-pub(crate) fn claude_record_kind(value: &Value) -> RecordKind {
-    let discriminator = claude_discriminator(value);
-    if discriminator.is_some_and(|kind| !is_known_claude_discriminator(kind)) {
-        return RecordKind::Other;
-    }
-
-    if content_blocks(value).is_some_and(|blocks| {
-        blocks
-            .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-    }) {
-        return RecordKind::ToolCall;
-    }
-    if content_blocks(value).is_some_and(|blocks| {
-        blocks
-            .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-    }) {
-        return RecordKind::ToolResult;
-    }
-
-    match discriminator {
-        Some("user_message" | "user") => RecordKind::UserMessage,
-        Some("assistant_message" | "assistant" | "gemini" | "model") => {
-            RecordKind::AssistantMessage
-        }
-        Some("text") if value.get("role").and_then(Value::as_str) == Some("user") => {
-            RecordKind::UserMessage
-        }
-        Some("text")
-            if matches!(
-                value.get("role").and_then(Value::as_str),
-                Some("assistant" | "model")
-            ) =>
-        {
-            RecordKind::AssistantMessage
-        }
-        Some("tool_call") => RecordKind::ToolCall,
-        Some("tool_result") => RecordKind::ToolResult,
-        Some("tool") if claude_tool_part_is_result(value) => RecordKind::ToolResult,
-        Some("tool") => RecordKind::ToolCall,
-        Some("session_meta") => RecordKind::SessionMeta,
-        _ if value.get("session_meta").is_some() => RecordKind::SessionMeta,
-        _ => RecordKind::Other,
-    }
 }
 
 pub(crate) fn claude_discriminator(value: &Value) -> Option<&str> {
@@ -231,50 +203,12 @@ pub(crate) fn is_known_claude_discriminator(kind: &str) -> bool {
     )
 }
 
-pub(crate) fn claude_tool_part_is_result(value: &Value) -> bool {
-    value
-        .get("state")
-        .and_then(|state| state.get("status"))
-        .and_then(Value::as_str)
-        .is_some_and(|status| matches!(status, "completed" | "error"))
-        || value
-            .get("state")
-            .and_then(|state| state.get("output").or_else(|| state.get("error")))
-            .is_some()
-}
-
 pub(crate) fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
     value
         .get("message")
         .and_then(|message| message.get("content"))
         .or_else(|| value.get("content"))
         .and_then(Value::as_array)
-}
-
-pub(crate) fn claude_tool_name(value: &Value) -> Option<String> {
-    string_field(value, "tool_name")
-        .or_else(|| string_field(value, "tool"))
-        .or_else(|| string_field(value, "name"))
-        .or_else(|| {
-            content_blocks(value)?
-                .iter()
-                .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
-                .get("name")?
-                .as_str()
-                .map(ToString::to_string)
-        })
-}
-
-pub(crate) fn claude_tool_input_as_string(value: &Value) -> Option<String> {
-    let input = content_blocks(value)?
-        .iter()
-        .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
-        .get("input")?;
-    match input {
-        Value::String(item) => Some(item.clone()),
-        Value::Null => None,
-        item => serde_json::to_string(item).ok(),
-    }
 }
 
 fn claude_message_content(value: &Value) -> Option<Value> {

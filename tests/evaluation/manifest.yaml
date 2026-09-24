@@ -226,25 +226,19 @@ cases:
         - rule_id: secret.env.read
           expectation: expected_match
         - rule_id: execution.shell
-          expectation: expected_match
+          expectation: expected_absent
         - rule_id: network.download
           expectation: expected_match
         - rule_id: chain.secret_then_network
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 140
+      expected_score: 90
       expected_contributions:
-        - id: execution.shell
-          type: deterministic_rule
-          points: 15
         - id: network.download
           type: deterministic_rule
           points: 20
         - id: secret.env.read
           type: deterministic_rule
-          points: 35
-        - id: chain.download_then_execute
-          type: chain_modifier
           points: 35
         - id: chain.secret_then_network
           type: chain_modifier
@@ -351,7 +345,7 @@ cases:
     expected_detection:
       rule_expectations:
         - rule_id: execution.shell
-          expectation: expected_match
+          expectation: expected_absent
         - rule_id: install.package_manager
           expectation: expected_match
         - rule_id: persistence.shell_profile
@@ -359,11 +353,8 @@ cases:
         - rule_id: chain.install_then_persistence
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 110
+      expected_score: 95
       expected_contributions:
-        - id: execution.shell
-          type: deterministic_rule
-          points: 15
         - id: install.package_manager
           type: deterministic_rule
           points: 20
@@ -385,8 +376,8 @@ cases:
       source_kind: jsonl
     eventfulness: noteworthy
     disposition: malicious
-    expected_security_review: required
-    label_rationale: Outbound upload of session data to an external destination is an exfiltration scenario that should require security review.
+    expected_security_review: not_scored
+    label_rationale: A lone outbound upload whose shell identity is only a tool name has no independent review contract. Canonical command text does not show a shell token, and this corpus does not rewrite the command or retune rules to manufacture one.
     expected_visibility:
       required_record_kinds: [tool_call]
       optional_fields: [timestamp, tool_name, arguments, content]
@@ -395,16 +386,15 @@ cases:
       rule_expectations:
         - rule_id: exfil.outbound_upload
           expectation: expected_match
+        - rule_id: execution.shell
+          expectation: expected_absent
       exact_rule_set: false
-      expected_score: 75
+      expected_score: 60
       expected_contributions:
-        - id: execution.shell
-          type: deterministic_rule
-          points: 15
         - id: exfil.outbound_upload
           type: deterministic_rule
           points: 60
-    tags: [regex_coverage, efficacy, characterization]
+    tags: [regex_coverage, characterization]
 
   - id: RX-ENCODED-HTTP-001
     description: Encoded HTTP egress fixture
@@ -426,21 +416,17 @@ cases:
       rule_expectations:
         - rule_id: exfil.encoded_http
           expectation: expected_match
+        - rule_id: execution.shell
+          expectation: expected_absent
       exact_rule_set: false
-      expected_score: 120
+      expected_score: 70
       expected_contributions:
-        - id: execution.shell
-          type: deterministic_rule
-          points: 15
         - id: exfil.encoded_http
           type: deterministic_rule
           points: 50
         - id: network.download
           type: deterministic_rule
           points: 20
-        - id: chain.download_then_execute
-          type: chain_modifier
-          points: 35
     tags: [regex_coverage, efficacy, characterization]
 
   - id: RX-UC002-001
@@ -467,15 +453,14 @@ cases:
           expectation: expected_match
         - rule_id: chain.credential_then_publish
           expectation: expected_match
+        - rule_id: execution.shell
+          expectation: expected_absent
       exact_rule_set: false
-      expected_score: 150
+      expected_score: 135
       expected_contributions:
         - id: credential.cloud_harvest
           type: deterministic_rule
           points: 50
-        - id: execution.shell
-          type: deterministic_rule
-          points: 15
         - id: supply_chain.publish
           type: deterministic_rule
           points: 45
@@ -536,15 +521,14 @@ cases:
           expectation: expected_match
         - rule_id: chain.harvest_then_exfil
           expectation: expected_match
+        - rule_id: execution.shell
+          expectation: expected_absent
       exact_rule_set: false
-      expected_score: 160
+      expected_score: 145
       expected_contributions:
         - id: credential.cloud_harvest
           type: deterministic_rule
           points: 50
-        - id: execution.shell
-          type: deterministic_rule
-          points: 15
         - id: exfil.outbound_upload
           type: deterministic_rule
           points: 60
@@ -801,11 +785,8 @@ cases:
         - rule_id: supply_chain.publish
           expectation: expected_match
       exact_rule_set: false
-      expected_score: 60
+      expected_score: 45
       expected_contributions:
-        - id: execution.shell
-          type: deterministic_rule
-          points: 15
         - id: supply_chain.publish
           type: deterministic_rule
           points: 45

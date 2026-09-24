@@ -4,10 +4,8 @@ use crate::clients::{ClientSourceDef, PathRoot, SourcePattern};
 use telltale_schema::clients::SourceKind;
 
 pub(crate) mod canonical;
-pub mod export;
 mod install;
 pub(crate) mod native;
-pub(crate) mod parser;
 
 #[cfg(test)]
 mod tests;

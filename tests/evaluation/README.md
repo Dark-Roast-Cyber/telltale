@@ -49,6 +49,8 @@ Golden characterization output and efficacy expectations are reviewable independ
 
 Rule-match correctness is not security-review correctness. A benign case may correctly match `execution.shell` or `secret.env.read` while correctly remaining `not_required`.
 
+Source fixtures are acquired as Canonical Observation v2 and scored by Detection v2. `execution.shell` matches command and argument text, not a tool name. A fixture whose only shell identity is `tool_name: bash` therefore does not match `execution.shell`, and a chain that requires the execution category does not fire from that name alone. `RX-OUTBOUND-001` is characterization-only for that reason: its previous review requirement depended on the retired projection counting the tool name as command text, and this corpus does not rewrite the command or retune rules to restore it. `RX-HARVEST-EXFIL-001` states the harvest-and-upload command in the Codex `command` field so the scenario remains visible without inventing a shell token.
+
 Process-chain coverage retains definition-backed atomic matcher conformance and
 adds fixed canonical Tool contracts through `evaluate_source` and `project_event3`:
 six atomic cases, three observable correlations, ordering, repeat suppression,

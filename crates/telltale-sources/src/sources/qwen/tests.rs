@@ -2,15 +2,12 @@ use std::fs;
 
 use tempfile::tempdir;
 
-use crate::discovery::discover_sources_best_effort;
-use crate::parser::{ParseError, parse_source_records};
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
     CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
     MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
     SemanticReplayVerdict,
 };
-use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
 const OBSERVED_AT: &str = "2026-09-04T12:00:00Z";
@@ -24,126 +21,6 @@ fn qwen_source(path: std::path::PathBuf) -> Source {
     }
 }
 
-#[test]
-fn parses_qwen_jsonl_records() {
-    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Qwen
-                && source.kind == SourceKind::Jsonl
-                && source.path.file_name().and_then(|name| name.to_str()) == Some("session-a.jsonl")
-        })
-        .expect("fixture source");
-
-    let records = parse_source_records(&source).expect("records");
-
-    assert_eq!(records.len(), 2);
-    assert!(
-        records
-            .iter()
-            .all(|record| { record.session_id == "qwen-session-a" && record.client == "qwen" })
-    );
-    assert_eq!(records[0].kind, RecordKind::UserMessage);
-    assert_eq!(records[0].agent.as_deref(), Some("qwen"));
-    assert_eq!(records[0].provider.as_deref(), Some("qwen"));
-    assert_eq!(records[1].kind, RecordKind::AssistantMessage);
-    assert_eq!(records[1].model.as_deref(), Some("qwen3-coder-plus"));
-    assert!(records[1].content.contains("benign Qwen fixture response"));
-}
-
-#[test]
-fn parses_qwen_jsonl_tool_call_and_result_records() {
-    let source = discover_sources_best_effort(&crate::test_fixture_path("session_stores"))
-        .into_iter()
-        .find(|source| {
-            source.client == ClientId::Qwen
-                && source.kind == SourceKind::Jsonl
-                && source.path.file_name().and_then(|name| name.to_str())
-                    == Some("uc001-qwen-tool-result.jsonl")
-        })
-        .expect("fixture source");
-
-    let records = parse_source_records(&source).expect("records");
-
-    assert_eq!(records.len(), 3);
-    assert!(records.iter().all(|record| {
-        record.session_id == "qwen-uc001-tool-result" && record.client == "qwen"
-    }));
-    assert_eq!(records[0].kind, RecordKind::UserMessage);
-    assert_eq!(records[1].kind, RecordKind::ToolCall);
-    assert_eq!(records[1].tool_name.as_deref(), Some("repo_status"));
-    assert_eq!(
-        records[1].arguments.as_deref(),
-        Some("{\"format\":\"json\"}")
-    );
-    assert_eq!(records[2].kind, RecordKind::ToolResult);
-    assert_eq!(records[2].tool_name.as_deref(), Some("repo_status"));
-    assert!(records[2].content.contains("darkroastcyber.io/mcp-lab"));
-}
-
-#[test]
-fn preserves_qwen_metadata_inheritance_and_empty_jsonl() {
-    let temp = tempdir().expect("tempdir");
-    let path = temp.path().join("metadata.jsonl");
-    fs::write(
-        &path,
-        b"{\"type\":\"session_meta\",\"session_id\":\"qwen-metadata\",\"agent\":\"fixture-agent\",\"provider\":\"fixture-provider\",\"model\":\"fixture-model\",\"timestamp\":\"2026-05-04T00:00:00Z\"}\n{\"type\":\"assistant\",\"session_id\":\"qwen-metadata\",\"content\":\"Inherited metadata response.\"}\n",
-    )
-    .expect("metadata fixture");
-
-    let records = parse_source_records(&qwen_source(path)).expect("records");
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0].kind, RecordKind::SessionMeta);
-    assert_eq!(records[1].kind, RecordKind::AssistantMessage);
-    assert_eq!(records[1].agent.as_deref(), Some("fixture-agent"));
-    assert_eq!(records[1].provider.as_deref(), Some("fixture-provider"));
-    assert_eq!(records[1].model.as_deref(), Some("fixture-model"));
-
-    let empty_path = temp.path().join("empty.jsonl");
-    fs::write(&empty_path, b"\n  \n").expect("empty fixture");
-    assert!(
-        parse_source_records(&qwen_source(empty_path))
-            .expect("empty records")
-            .is_empty()
-    );
-}
-
-#[test]
-fn qwen_parser_has_terminal_failure_and_unknown_boundaries() {
-    let cases = [
-        (
-            "parser_maturity/non_discovered/schema-drift.jsonl",
-            "schema",
-        ),
-        (
-            "parser_maturity/non_discovered/malformed-known-parser.jsonl",
-            "json",
-        ),
-        (
-            "parser_maturity/non_discovered/unknown-shaped-discriminators.jsonl",
-            "other",
-        ),
-    ];
-
-    for (fixture, expected) in cases {
-        let result = parse_source_records(&qwen_source(crate::test_fixture_path(fixture)));
-        match expected {
-            "schema" => assert!(matches!(result, Err(ParseError::SchemaDrift { .. }))),
-            "json" => assert!(matches!(result, Err(ParseError::Json(_)))),
-            "other" => {
-                let records = result.expect("unknown discriminator records");
-                assert_eq!(records.len(), 3);
-                assert!(
-                    records
-                        .iter()
-                        .all(|record| record.kind == RecordKind::Other)
-                );
-            }
-            _ => unreachable!("test case marker"),
-        }
-    }
-}
-
 fn project(path: std::path::PathBuf) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
     super::canonical::project_qwen_canonical_observations(
         &qwen_source(path),
@@ -153,7 +30,7 @@ fn project(path: std::path::PathBuf) -> Vec<telltale_schema::observation::Canoni
 }
 
 #[test]
-fn qwen_native_records_feed_exact_legacy_projection() {
+fn qwen_native_records_keep_source_sequence_and_tool_identity() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("native-parity.jsonl");
     fs::write(
@@ -168,24 +45,11 @@ fn qwen_native_records_feed_exact_legacy_projection() {
     assert_eq!(native[0].source_sequence, 0);
     assert_eq!(native[1].source_sequence, 1);
     assert_eq!(native[1].attestation.as_ref().unwrap().agent.known(), None);
-    assert_eq!(
-        native[1].legacy_effective_agent.as_deref(),
-        Some("fixture-agent")
-    );
     assert_eq!(native[1].tool_calls.len(), 1);
     assert_eq!(
         native[1].tool_calls[0].call_id.as_deref(),
         Some("fixture-call")
     );
-
-    let records = parse_source_records(&source).expect("legacy records");
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[1].kind, RecordKind::AssistantMessage);
-    assert_eq!(records[1].tool_name, None);
-    assert_eq!(records[1].arguments, None);
-    assert_eq!(records[1].agent.as_deref(), Some("fixture-agent"));
-    assert_eq!(records[1].provider.as_deref(), Some("fixture-provider"));
-    assert_eq!(records[1].model.as_deref(), Some("fixture-model"));
 }
 
 #[test]
@@ -564,9 +428,6 @@ fn qwen_payload_message_without_evidence_fails_but_top_level_empty_message_remai
     )
     .expect_err("payload message without evidence must fail closed");
     assert_eq!(error.code(), "missing_payload_evidence");
-    let legacy = parse_source_records(&qwen_source(payload_path)).expect("legacy records");
-    assert_eq!(legacy[0].kind, RecordKind::UserMessage);
-    assert!(legacy[0].content.contains("Synthetic outer content."));
 
     let top_level_path = directory.path().join("top-level-empty.jsonl");
     fs::write(
@@ -591,7 +452,7 @@ fn qwen_payload_generic_tool_snapshot_maps_state_facts_without_execution_lifecyc
         r#"{"payload":{"type":"tool","sessionId":"s","tool":"shell","state":{"status":"completed","input":{"command":"printf synthetic"},"output":"ok"}}}"#,
     )
     .unwrap();
-    let source_path = path.clone();
+    let _source_path = path.clone();
     let observations = project(path);
 
     assert_eq!(observations.len(), 2);
@@ -628,12 +489,6 @@ fn qwen_payload_generic_tool_snapshot_maps_state_facts_without_execution_lifecyc
                 ObservationStage::ToolExecutionStarted | ObservationStage::ToolExecutionCompleted
             )
     }));
-
-    let legacy = parse_source_records(&qwen_source(source_path)).expect("legacy records");
-    assert_eq!(legacy.len(), 1);
-    assert_eq!(legacy[0].kind, RecordKind::ToolCall);
-    assert_eq!(legacy[0].tool_name.as_deref(), Some("shell"));
-    assert_eq!(legacy[0].arguments, None);
 }
 
 #[test]
@@ -749,7 +604,7 @@ fn qwen_generic_tool_snapshots_only_emit_direct_facts() {
 }
 
 #[test]
-fn qwen_metadata_inheritance_is_legacy_only() {
+fn qwen_session_metadata_does_not_copy_onto_later_records() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("metadata.jsonl");
     fs::write(
@@ -767,15 +622,7 @@ fn qwen_metadata_inheritance_is_legacy_only() {
         native[1].attestation.as_ref().unwrap().provider.known(),
         None
     );
-    assert_eq!(
-        native[1].legacy_effective_provider.as_deref(),
-        Some("fixture-provider")
-    );
     assert_eq!(native[1].attestation.as_ref().unwrap().agent.known(), None);
-    assert_eq!(
-        native[1].legacy_effective_agent.as_deref(),
-        Some("fixture-agent")
-    );
 
     let observations = project(path);
     assert_eq!(observations.len(), 1);
@@ -804,10 +651,6 @@ fn qwen_session_meta_does_not_supply_canonical_session_identity() {
     assert_eq!(
         super::native::extract_qwen_native_records(&source).unwrap()[1].session_id,
         None
-    );
-    assert_eq!(
-        parse_source_records(&source).unwrap()[1].session_id,
-        "session-meta-only"
     );
 }
 
@@ -869,7 +712,7 @@ fn qwen_message_native_id_precedes_session_coordinate_but_tool_ids_do_not() {
 }
 
 #[test]
-fn qwen_unknown_canonical_inputs_fail_privately_while_legacy_remains_available() {
+fn qwen_unknown_canonical_inputs_fail_privately() {
     let unknown = crate::test_fixture_path("parser_maturity/non_discovered/unknown-variant.jsonl");
     let error = super::canonical::project_qwen_canonical_observations(
         &qwen_source(unknown.clone()),
@@ -879,10 +722,6 @@ fn qwen_unknown_canonical_inputs_fail_privately_while_legacy_remains_available()
     assert_eq!(error.code(), "unknown_discriminator");
     assert!(!error.to_string().contains("Synthetic unknown"));
     assert!(!format!("{error:?}").contains("Synthetic unknown"));
-    assert_eq!(
-        parse_source_records(&qwen_source(unknown)).unwrap()[0].kind,
-        RecordKind::Other
-    );
 
     let directory = tempdir().unwrap();
     let path = directory.path().join("payload-unknown.jsonl");
@@ -899,10 +738,6 @@ fn qwen_unknown_canonical_inputs_fail_privately_while_legacy_remains_available()
     assert_eq!(error.code(), "unknown_discriminator");
     assert!(!error.to_string().contains("Synthetic payload secret"));
     assert!(!format!("{error:?}").contains("payload-unknown.jsonl"));
-    assert_eq!(
-        parse_source_records(&qwen_source(path)).unwrap()[0].kind,
-        RecordKind::Other
-    );
 
     let directory = tempdir().unwrap();
     let path = directory.path().join("unknown-block.jsonl");
@@ -918,7 +753,6 @@ fn qwen_unknown_canonical_inputs_fail_privately_while_legacy_remains_available()
     .expect_err("unknown content block must fail canonical mapping");
     assert_eq!(error.code(), "unknown_content_block");
     assert!(!error.to_string().contains("synthetic payload"));
-    assert!(parse_source_records(&qwen_source(path)).is_ok());
 }
 
 #[test]

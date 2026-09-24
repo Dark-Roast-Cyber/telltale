@@ -7,21 +7,18 @@ use crate::acquisition::{AcquisitionError, SessionMetadata};
 use serde_json::Value;
 use telltale_schema::record::RecordKind;
 
-use crate::parser::{
-    ParseError, default_source_file_stem, model_field, provider_field, string_field,
-};
+use crate::source_read::SourceReadError;
 use telltale_schema::clients::ClientId;
 use telltale_schema::source::Source;
 
 pub(crate) enum CopilotNativeEvent {
     WorkspaceInitialized {
-        legacy_session_id: String,
         source_session_id: Option<String>,
         timestamp: Option<String>,
-        content: String,
+        /// Trusted control prefix only. Structured payload suffixes are not retained.
+        control_prefix: String,
     },
     AccumulatedOutputItem {
-        legacy_session_id: String,
         canonical_session_id: Option<String>,
         ordinal: Option<u64>,
         timestamp: Option<String>,
@@ -53,6 +50,14 @@ pub(crate) enum CopilotContentBlock {
     Unknown,
 }
 
+fn item_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn copilot_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> {
     // Explicit accumulated-item labels only, never the workspace/client defaults.
     SessionMetadata::from_fields(
@@ -65,10 +70,9 @@ fn copilot_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> 
 
 pub(crate) fn extract_copilot_native_events(
     source: &Source,
-) -> Result<Vec<CopilotNativeEvent>, ParseError> {
+) -> Result<Vec<CopilotNativeEvent>, SourceReadError> {
     let raw = fs::read_to_string(&source.path)?;
     let mut events = Vec::new();
-    let mut legacy_effective_session_id = default_source_file_stem(source);
     let mut canonical_active_session_id = None;
     let mut item_ordinals = BTreeMap::<String, u64>::new();
 
@@ -89,15 +93,11 @@ pub(crate) fn extract_copilot_native_events(
             }) = control
         {
             let source_session_id = copilot_workspace_session_id(message);
-            if let Some(session_id) = &source_session_id {
-                legacy_effective_session_id = session_id.clone();
-            }
             canonical_active_session_id = source_session_id.clone();
             events.push(CopilotNativeEvent::WorkspaceInitialized {
-                legacy_session_id: legacy_effective_session_id.clone(),
                 source_session_id,
                 timestamp,
-                content: content.to_owned(),
+                control_prefix: content.to_owned(),
             });
             continue;
         }
@@ -121,15 +121,11 @@ pub(crate) fn extract_copilot_native_events(
         }) = control
         {
             let source_session_id = copilot_workspace_session_id(message);
-            if let Some(session_id) = &source_session_id {
-                legacy_effective_session_id = session_id.clone();
-            }
             canonical_active_session_id = source_session_id.clone();
             events.push(CopilotNativeEvent::WorkspaceInitialized {
-                legacy_session_id: legacy_effective_session_id.clone(),
                 source_session_id,
                 timestamp: timestamp.clone(),
-                content: content.to_owned(),
+                control_prefix: content.to_owned(),
             });
         }
 
@@ -148,7 +144,7 @@ pub(crate) fn extract_copilot_native_events(
             }
         };
         if items.iter().any(|item| !item.is_object()) {
-            return Err(ParseError::SchemaDrift {
+            return Err(SourceReadError::SchemaDrift {
                 client: ClientId::Copilot,
                 source_id: source.source_id.clone(),
                 detail: "Copilot accumulated output items must be objects",
@@ -164,7 +160,6 @@ pub(crate) fn extract_copilot_native_events(
                 current
             });
             events.push(CopilotNativeEvent::AccumulatedOutputItem {
-                legacy_session_id: legacy_effective_session_id.clone(),
                 canonical_session_id: canonical_active_session_id.clone(),
                 ordinal,
                 timestamp: timestamp.clone(),
@@ -224,14 +219,17 @@ impl CopilotOutputItem {
         Self {
             attestation: copilot_metadata(value),
             item_type,
-            id: string_field(value, "id"),
-            call_id: string_field(value, "call_id"),
-            name: string_field(value, "name"),
-            arguments: string_field(value, "arguments"),
-            message: string_field(value, "message"),
-            model: model_field(value),
-            provider: provider_field(value),
-            role: string_field(value, "role"),
+            id: item_string(value, "id"),
+            call_id: item_string(value, "call_id"),
+            name: item_string(value, "name"),
+            arguments: item_string(value, "arguments"),
+            message: value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            model: item_string(value, "modelID").or_else(|| item_string(value, "model")),
+            provider: item_string(value, "providerID").or_else(|| item_string(value, "provider")),
+            role: item_string(value, "role"),
             content_present: content.is_some(),
             content: content
                 .and_then(Value::as_array)

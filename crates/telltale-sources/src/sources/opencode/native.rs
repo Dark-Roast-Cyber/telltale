@@ -1,16 +1,30 @@
 #![allow(dead_code)]
 
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
+use crate::source_read::{SourceReadError, collect_string_values};
 use rusqlite::Connection;
 use serde_json::Value;
-
-use crate::parser::{
-    ParseError, ParseOptions, ParsedRecord, arguments_field, model_field, provider_field,
-    record_content, record_kind, session_id_with_fallback, string_field, tool_name,
-};
+use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
-#[derive(Clone)]
+pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct OpenCodeSqliteReadOptions {
+    pub part_min_time_updated: Option<i64>,
+    pub part_limit: i64,
+}
+
+impl Default for OpenCodeSqliteReadOptions {
+    fn default() -> Self {
+        Self {
+            part_min_time_updated: None,
+            part_limit: SQLITE_PART_LIMIT,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct OpenCodeMessageContext {
     pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) session_id: Option<String>,
@@ -22,7 +36,7 @@ pub(crate) struct OpenCodeMessageContext {
     pub(crate) occurrence_time: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct OpenCodeToolState {
     pub(crate) status: Option<String>,
     pub(crate) status_present: bool,
@@ -38,7 +52,7 @@ pub(crate) struct OpenCodeToolState {
     pub(crate) end_time: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct OpenCodeMessageNativeRecord {
     pub(crate) source_sequence: u64,
     pub(crate) source_id: Option<String>,
@@ -55,10 +69,9 @@ pub(crate) struct OpenCodeMessageNativeRecord {
     pub(crate) error_present: bool,
     pub(crate) tool_state: Option<OpenCodeToolState>,
     pub(crate) tool_state_invalid: bool,
-    pub(crate) legacy: ParsedRecord,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct OpenCodeTextPartNativeRecord {
     pub(crate) source_rowid: i64,
     pub(crate) source_id: Option<String>,
@@ -66,10 +79,9 @@ pub(crate) struct OpenCodeTextPartNativeRecord {
     pub(crate) context: OpenCodeMessageContext,
     pub(crate) text: Option<String>,
     pub(crate) occurrence_time: Option<String>,
-    pub(crate) legacy: ParsedRecord,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct OpenCodeToolPartNativeRecord {
     pub(crate) source_rowid: i64,
     pub(crate) source_id: Option<String>,
@@ -79,31 +91,124 @@ pub(crate) struct OpenCodeToolPartNativeRecord {
     pub(crate) call_id: Option<String>,
     pub(crate) state: OpenCodeToolState,
     pub(crate) tool_state_invalid: bool,
-    pub(crate) legacy: ParsedRecord,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum OpenCodeSqliteNativeRecord {
     Message(OpenCodeMessageNativeRecord),
     Text(OpenCodeTextPartNativeRecord),
     Tool(OpenCodeToolPartNativeRecord),
 }
 
+pub(crate) struct OpenCodeAccountingFacts<'a> {
+    pub(crate) session_id: Option<&'a str>,
+    pub(crate) attestation: &'a Result<SessionMetadata, AcquisitionError>,
+    pub(crate) kind: RecordKind,
+    pub(crate) tool_name: Option<&'a str>,
+    pub(crate) timestamp: Option<&'a str>,
+    pub(crate) contribution_strings: Vec<String>,
+}
+
 impl OpenCodeSqliteNativeRecord {
-    pub(crate) fn accounting(&self) -> (&OpenCodeMessageContext, &ParsedRecord) {
-        match self {
-            Self::Message(record) => (&record.context, &record.legacy),
-            Self::Text(record) => (&record.context, &record.legacy),
-            Self::Tool(record) => (&record.context, &record.legacy),
+    pub(crate) fn accounting(&self) -> OpenCodeAccountingFacts<'_> {
+        let kind = self.accounting_kind();
+        OpenCodeAccountingFacts {
+            session_id: self.context().session_id.as_deref(),
+            attestation: &self.context().attestation,
+            kind,
+            tool_name: self.tool_name(),
+            timestamp: self.context().occurrence_time.as_deref(),
+            contribution_strings: if kind == RecordKind::ToolCall {
+                self.contribution_strings()
+            } else {
+                Vec::new()
+            },
         }
     }
 
-    pub(crate) fn legacy_record(self) -> ParsedRecord {
+    fn context(&self) -> &OpenCodeMessageContext {
         match self {
-            Self::Message(record) => record.legacy,
-            Self::Text(record) => record.legacy,
-            Self::Tool(record) => record.legacy,
+            Self::Message(record) => &record.context,
+            Self::Text(record) => &record.context,
+            Self::Tool(record) => &record.context,
         }
+    }
+
+    fn accounting_kind(&self) -> RecordKind {
+        match self {
+            Self::Message(record) => match record.message_type.as_deref() {
+                Some("tool_result") => RecordKind::ToolResult,
+                Some("tool_call" | "tool") => {
+                    if record.result.is_some() || record.error.is_some() {
+                        RecordKind::ToolResult
+                    } else {
+                        RecordKind::ToolCall
+                    }
+                }
+                _ => match record.context.role.as_deref() {
+                    Some("user") => RecordKind::UserMessage,
+                    Some("assistant") => RecordKind::AssistantMessage,
+                    _ => RecordKind::Other,
+                },
+            },
+            Self::Text(record) => match record.context.role.as_deref() {
+                Some("user") => RecordKind::UserMessage,
+                Some("assistant") => RecordKind::AssistantMessage,
+                _ => RecordKind::Other,
+            },
+            Self::Tool(record) => {
+                if opencode_tool_state_is_result(&record.state) {
+                    RecordKind::ToolResult
+                } else {
+                    RecordKind::ToolCall
+                }
+            }
+        }
+    }
+
+    fn tool_name(&self) -> Option<&str> {
+        match self {
+            Self::Message(record) => record.tool_name.as_deref(),
+            Self::Text(_) => None,
+            Self::Tool(record) => record.tool_name.as_deref(),
+        }
+    }
+
+    fn contribution_strings(&self) -> Vec<String> {
+        let mut strings = Vec::new();
+        match self {
+            Self::Message(record) => {
+                for value in [
+                    &record.arguments,
+                    &record.result,
+                    &record.error,
+                    &record.content,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    strings.extend(collect_string_values(value));
+                }
+            }
+            Self::Text(record) => {
+                if let Some(text) = &record.text {
+                    strings.push(text.clone());
+                }
+            }
+            Self::Tool(record) => {
+                for value in [
+                    &record.state.input,
+                    &record.state.output,
+                    &record.state.error,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    strings.extend(collect_string_values(value));
+                }
+            }
+        }
+        strings
     }
 
     pub(crate) fn message_id(&self) -> Option<&str> {
@@ -115,6 +220,7 @@ impl OpenCodeSqliteNativeRecord {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct OpenCodeSqliteNativeExtraction {
     pub(crate) records: Vec<OpenCodeSqliteNativeRecord>,
     pub(crate) sqlite_part_max_time_updated: Option<i64>,
@@ -122,8 +228,8 @@ pub(crate) struct OpenCodeSqliteNativeExtraction {
 
 pub(crate) fn extract_sqlite_native_source(
     source: &Source,
-    options: ParseOptions,
-) -> Result<OpenCodeSqliteNativeExtraction, ParseError> {
+    options: OpenCodeSqliteReadOptions,
+) -> Result<OpenCodeSqliteNativeExtraction, SourceReadError> {
     let conn = Connection::open(&source.path)?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))?;
     let mut records = Vec::new();
@@ -156,7 +262,7 @@ fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool, rusq
 
 fn extract_sqlite_message_records(
     conn: &Connection,
-) -> Result<Vec<OpenCodeSqliteNativeRecord>, ParseError> {
+) -> Result<Vec<OpenCodeSqliteNativeRecord>, SourceReadError> {
     let mut stmt = conn.prepare("select * from message order by rowid")?;
     let rows = sqlite_rows_as_values(&mut stmt)?;
 
@@ -180,19 +286,18 @@ fn extract_sqlite_message_records(
                 .cloned()
                 .or_else(|| normalized.get("output").cloned())
                 .or_else(|| {
-                    (string_field(&normalized, "type").as_deref() == Some("tool_result"))
+                    (semantic_string(&normalized, "type").as_deref() == Some("tool_result"))
                         .then(|| content.clone())
                         .flatten()
                 });
             let error = normalized.get("error").cloned();
-            let legacy = sqlite_value_record(&normalized, "unknown");
             OpenCodeSqliteNativeRecord::Message(OpenCodeMessageNativeRecord {
                 source_sequence: source_sequence as u64,
                 source_id: source_string_field(&value, "id"),
                 context,
-                message_type: string_field(&normalized, "type"),
+                message_type: semantic_string(&normalized, "type"),
                 content,
-                tool_name: tool_name(&normalized),
+                tool_name: part_tool_name(&normalized),
                 call_id: source_call_id(&normalized),
                 arguments_present: arguments.is_some(),
                 arguments,
@@ -202,7 +307,6 @@ fn extract_sqlite_message_records(
                 error,
                 tool_state: tool_state(&normalized),
                 tool_state_invalid: tool_state_is_invalid(&normalized),
-                legacy,
             })
         })
         .collect())
@@ -210,11 +314,11 @@ fn extract_sqlite_message_records(
 
 fn extract_sqlite_part_records(
     conn: &Connection,
-    options: ParseOptions,
+    options: OpenCodeSqliteReadOptions,
     include_message_context: bool,
-) -> Result<(Vec<OpenCodeSqliteNativeRecord>, Option<i64>), ParseError> {
-    let limit = options.sqlite_part_limit.max(1);
-    let rows = if let Some(min_time_updated) = options.sqlite_part_min_time_updated {
+) -> Result<(Vec<OpenCodeSqliteNativeRecord>, Option<i64>), SourceReadError> {
+    let limit = options.part_limit.max(1);
+    let rows = if let Some(min_time_updated) = options.part_min_time_updated {
         let query = sqlite_part_query(true, include_message_context);
         let mut stmt = conn.prepare(&query)?;
         sqlite_rows_as_values_with_params(&mut stmt, rusqlite::params![min_time_updated, limit])?
@@ -247,8 +351,7 @@ fn sqlite_part_native_record(raw_value: &Value) -> OpenCodeSqliteNativeRecord {
         .session_id
         .or_else(|| source_string_field(raw_value, "__telltale_message_session_id"));
     context.attestation = attestation;
-    let legacy = sqlite_value_record(&value, "unknown");
-    let part_type = string_field(&value, "type");
+    let part_type = direct_string_field(&value, "type");
 
     if part_type.as_deref() == Some("text") {
         return OpenCodeSqliteNativeRecord::Text(OpenCodeTextPartNativeRecord {
@@ -261,7 +364,6 @@ fn sqlite_part_native_record(raw_value: &Value) -> OpenCodeSqliteNativeRecord {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             context,
-            legacy,
         });
     }
 
@@ -269,12 +371,11 @@ fn sqlite_part_native_record(raw_value: &Value) -> OpenCodeSqliteNativeRecord {
         source_rowid,
         source_id,
         message_id,
-        tool_name: tool_name(&value),
+        tool_name: part_tool_name(&value),
         call_id: source_call_id(&value),
         state: tool_state(&value).unwrap_or_else(empty_tool_state),
         context,
         tool_state_invalid: tool_state_is_invalid(&value),
-        legacy,
     })
 }
 
@@ -340,30 +441,42 @@ fn sqlite_rows_as_values_with_params<P: rusqlite::Params>(
     Ok(records)
 }
 
-fn sqlite_value_record(value: &Value, default_session_id: &str) -> ParsedRecord {
-    ParsedRecord {
-        session_id: session_id_with_fallback(value, default_session_id),
-        agent: string_field(value, "agent"),
-        model: model_field(value),
-        provider: provider_field(value),
-        timestamp: string_field(value, "time").or_else(|| string_field(value, "timestamp")),
-        kind: record_kind(value),
-        tool_name: tool_name(value),
-        arguments: arguments_field(value),
-        content: record_content(value),
-    }
+fn opencode_tool_state_is_result(state: &OpenCodeToolState) -> bool {
+    matches!(
+        state.status.as_deref(),
+        Some("completed" | "error" | "cancelled" | "denied")
+    ) || state.output.is_some()
+        || state.error.is_some()
 }
 
-pub(crate) fn opencode_tool_part_is_result(value: &Value) -> bool {
+fn semantic_string(value: &Value, key: &str) -> Option<String> {
+    direct_string_field(value, key).or_else(|| {
+        value
+            .get("message")
+            .and_then(|message| direct_string_field(message, key))
+    })
+}
+
+fn direct_string_field(value: &Value, key: &str) -> Option<String> {
     value
-        .get("state")
-        .and_then(|state| state.get("status"))
+        .get(key)
         .and_then(Value::as_str)
-        .is_some_and(|status| matches!(status, "completed" | "error"))
-        || value
-            .get("state")
-            .and_then(|state| state.get("output").or_else(|| state.get("error")))
-            .is_some()
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn model_label(value: &Value) -> Option<String> {
+    semantic_string(value, "modelID").or_else(|| semantic_string(value, "model"))
+}
+
+fn provider_label(value: &Value) -> Option<String> {
+    semantic_string(value, "providerID").or_else(|| semantic_string(value, "provider"))
+}
+
+fn part_tool_name(value: &Value) -> Option<String> {
+    semantic_string(value, "tool")
+        .or_else(|| semantic_string(value, "tool_name"))
+        .or_else(|| semantic_string(value, "name"))
 }
 
 fn normalize_sqlite_message_value(
@@ -519,19 +632,20 @@ fn message_context(value: &Value) -> OpenCodeMessageContext {
         attestation: opencode_metadata(value),
         session_id: source_session_id(value),
         role: source_role(value),
-        agent: string_field(value, "agent"),
-        model: model_field(value),
-        provider: provider_field(value),
-        parent_id: string_field(value, "parentID").or_else(|| string_field(value, "parent_id")),
+        agent: semantic_string(value, "agent"),
+        model: model_label(value),
+        provider: provider_label(value),
+        parent_id: semantic_string(value, "parentID")
+            .or_else(|| semantic_string(value, "parent_id")),
         occurrence_time: message_occurrence_time(value),
     }
 }
 
 fn source_role(value: &Value) -> Option<String> {
-    string_field(value, "role")
+    semantic_string(value, "role")
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            string_field(value, "type").and_then(|kind| match kind.as_str() {
+            semantic_string(value, "type").and_then(|kind| match kind.as_str() {
                 "user" | "user_message" => Some("user".to_owned()),
                 "assistant" | "assistant_message" | "gemini" | "model" => {
                     Some("assistant".to_owned())

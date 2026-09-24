@@ -19,9 +19,9 @@ Event4 and telemetry/output v2 remain inactive. The
 `compat.v1.url` view remains truthfully absent; direct canonical tests cover
 the resulting visibility gap.
 
-This contract is separate from the SIEM event schema. It preserves typed transcript data that the legacy flat `NormalizedRecord` shape can only represent as strings.
-
-The source pipeline now has a distinct extraction step in `crates/telltale-sources/src/parser.rs` before records are normalized into the legacy flat shape for downstream compatibility.
+This contract is separate from the SIEM event schema and from source acquisition.
+It preserves typed transcript data that a caller-supplied flat `NormalizedRecord`
+can only represent as strings. Source adapters do not produce it.
 
 ## Schema Versioning
 
@@ -29,7 +29,7 @@ The source pipeline now has a distinct extraction step in `crates/telltale-sourc
 - `SCHEMA_VERSION` is the compatibility marker for the canonical normalization contract.
 - Additive changes should keep the same major schema version when they only add optional fields or extension data.
 - Breaking changes to required fields, variant meaning, or metadata layout require a new schema version and an explicit migration path.
-- `NormalizedRecordV1::from_legacy()` is the conversion bridge from the current parser output into this contract.
+- `NormalizedRecordV1::from_legacy()` converts a caller-supplied `NormalizedRecord` into this contract. It is not a source-adapter bridge.
 
 ## Shared Metadata
 

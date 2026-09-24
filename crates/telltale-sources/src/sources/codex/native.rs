@@ -3,9 +3,8 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
-use crate::parser::{
-    ParseError, arguments_field, default_source_file_stem, read_jsonl_values, record_content,
-    session_id_with_fallback, string_field,
+use crate::source_read::{
+    SourceReadError, collect_string_values, nested_string_field, read_jsonl_values,
 };
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -62,55 +61,34 @@ pub(crate) struct CodexNativeRecord {
     pub(crate) session_id: Option<String>,
     pub(crate) inherited_session_id: Option<String>,
     pub(crate) effective_session_id: Option<String>,
-    pub(crate) legacy_session_id: String,
-    pub(crate) agent: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) provider: Option<String>,
     pub(crate) timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
+    pub(crate) session_metadata: bool,
     pub(crate) role: Option<String>,
     pub(crate) envelope: CodexEnvelope,
     pub(crate) payload_source: Option<String>,
     pub(crate) message_content: Option<Value>,
     pub(crate) blocks: Option<Vec<CodexContentBlock>>,
     pub(crate) tool: CodexToolFields,
-    pub(crate) legacy_kind: RecordKind,
-    pub(crate) legacy_tool_name: Option<String>,
-    pub(crate) legacy_arguments: Option<String>,
-    pub(crate) legacy_content: String,
+    /// Source strings scanned for tool-call activity contributions.
+    pub(crate) contribution_strings: Vec<String>,
 }
 
 pub(crate) fn extract_codex_native_records(
     source: &Source,
-) -> Result<Vec<CodexNativeRecord>, ParseError> {
+) -> Result<Vec<CodexNativeRecord>, SourceReadError> {
     let values = read_jsonl_values(source)?;
-    let default_session_id = default_source_file_stem(source);
     let mut records = Vec::with_capacity(values.len());
-    let mut agent = None;
-    let mut provider = None;
-    let mut model = None;
     let mut inherited_session_id = None;
 
     for (source_sequence, value) in values.into_iter().enumerate() {
         if !value.is_object() {
-            return Err(ParseError::SchemaDrift {
+            return Err(SourceReadError::SchemaDrift {
                 client: source.client,
                 source_id: source.source_id.clone(),
                 detail: "JSONL record envelope must be an object",
             });
         }
-
-        agent = agent
-            .or_else(|| string_field(&value, "agent_nickname"))
-            .or_else(|| string_field(&value, "agent"));
-        provider = provider
-            .or_else(|| string_field(&value, "model_provider"))
-            .or_else(|| string_field(&value, "providerID"))
-            .or_else(|| string_field(&value, "provider"));
-        model = model
-            .or_else(|| string_field(&value, "model"))
-            .or_else(|| string_field(&value, "model_name"))
-            .or_else(|| string_field(&value, "modelID"));
 
         let record_value = codex_record_value(&value);
         let envelope = codex_envelope(&value);
@@ -125,12 +103,21 @@ pub(crate) fn extract_codex_native_records(
                 }),
         );
         let session_id = ownership.as_ref().ok().cloned().flatten();
-        let legacy_kind = codex_record_kind(record_value);
-        let legacy_tool_name = codex_tool_name(record_value);
-        let legacy_arguments =
-            arguments_field(record_value).or_else(|| codex_tool_input_as_string(record_value));
+        let discriminator = codex_discriminator(record_value).map(ToOwned::to_owned);
+        let session_metadata = discriminator.as_deref() == Some("session_meta")
+            || (discriminator
+                .as_deref()
+                .is_none_or(|kind| !is_known_codex_discriminator(kind))
+                && value.get("session_meta").is_some());
         let inherited_for_record = inherited_session_id.clone();
         let effective_session_id = session_id.clone().or(inherited_for_record.clone());
+        let blocks = content_blocks(semantic_value)
+            .map(|blocks| blocks.iter().map(codex_content_block).collect());
+        let tool = codex_tool_fields(semantic_value);
+        let role = codex_role(&value, semantic_value);
+        let is_tool_call =
+            codex_accounting_kind(discriminator.as_deref(), role.as_deref(), &blocks, &tool)
+                == RecordKind::ToolCall;
         let native = CodexNativeRecord {
             attestation: ownership.and_then(|_| codex_attestation(&value, semantic_value)),
             source_sequence: source_sequence as u64,
@@ -138,28 +125,23 @@ pub(crate) fn extract_codex_native_records(
             session_id: session_id.clone(),
             inherited_session_id: inherited_for_record,
             effective_session_id,
-            legacy_session_id: session_id_with_fallback(&value, &default_session_id),
-            agent: agent.clone(),
-            model: model.clone(),
-            provider: provider.clone(),
-            timestamp: string_field(&value, "timestamp"),
-            discriminator: codex_discriminator(record_value).map(ToOwned::to_owned),
-            role: codex_role(&value, semantic_value),
+            timestamp: nested_string_field(&value, "timestamp"),
+            discriminator,
+            session_metadata,
+            role: role.clone(),
             envelope,
             payload_source: codex_payload_source(&value),
             message_content: codex_message_content(semantic_value),
-            blocks: content_blocks(semantic_value)
-                .map(|blocks| blocks.iter().map(codex_content_block).collect()),
-            tool: codex_tool_fields(semantic_value),
-            legacy_kind,
-            legacy_tool_name,
-            legacy_arguments,
-            legacy_content: record_content(record_value),
+            contribution_strings: if is_tool_call {
+                collect_string_values(record_value)
+            } else {
+                Vec::new()
+            },
+            blocks,
+            tool,
         };
 
-        if legacy_kind == RecordKind::SessionMeta
-            && let Some(session_id) = session_id
-        {
+        if session_metadata && let Some(session_id) = session_id {
             inherited_session_id = Some(session_id);
         }
         records.push(native);
@@ -207,62 +189,76 @@ pub(crate) fn codex_record_value(value: &Value) -> &Value {
     }
 }
 
-pub(crate) fn codex_record_kind(value: &Value) -> RecordKind {
-    let discriminator = codex_discriminator(value);
-    if discriminator.is_some_and(|kind| !is_known_codex_discriminator(kind)) {
-        return RecordKind::Other;
+impl CodexNativeRecord {
+    pub(crate) fn accounting_kind(&self) -> RecordKind {
+        if self.session_metadata {
+            return RecordKind::SessionMeta;
+        }
+        codex_accounting_kind(
+            self.discriminator.as_deref(),
+            self.role.as_deref(),
+            &self.blocks,
+            &self.tool,
+        )
     }
 
-    if content_blocks(value).is_some_and(|blocks| {
+    pub(crate) fn accounting_tool_name(&self) -> Option<&str> {
+        self.tool.name.as_deref().or_else(|| {
+            self.blocks.as_ref()?.iter().find_map(|block| match block {
+                CodexContentBlock::ToolUse { name, .. } => name.as_deref(),
+                _ => None,
+            })
+        })
+    }
+
+    pub(crate) fn contribution_strings(&self) -> &[String] {
+        &self.contribution_strings
+    }
+}
+
+fn codex_accounting_kind(
+    discriminator: Option<&str>,
+    role: Option<&str>,
+    blocks: &Option<Vec<CodexContentBlock>>,
+    tool: &CodexToolFields,
+) -> RecordKind {
+    if blocks.as_ref().is_some_and(|blocks| {
         blocks
             .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-    }) {
+            .any(|block| matches!(block, CodexContentBlock::ToolUse { .. }))
+    }) || matches!(
+        discriminator,
+        Some("tool_call" | "function_call" | "custom_tool_call")
+    ) {
         return RecordKind::ToolCall;
     }
-    if content_blocks(value).is_some_and(|blocks| {
-        blocks
-            .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-    }) {
+    if discriminator == Some("tool")
+        && (tool.result_present
+            || tool.error_present
+            || matches!(tool.status.as_deref(), Some("completed" | "error")))
+    {
         return RecordKind::ToolResult;
     }
-
-    match discriminator {
-        Some("user_message" | "user") => RecordKind::UserMessage,
-        Some("assistant_message" | "assistant" | "gemini" | "model") => {
-            RecordKind::AssistantMessage
-        }
-        Some("text") if value.get("role").and_then(Value::as_str) == Some("user") => {
+    if blocks.as_ref().is_some_and(|blocks| {
+        blocks
+            .iter()
+            .any(|block| matches!(block, CodexContentBlock::ToolResult { .. }))
+    }) || matches!(
+        discriminator,
+        Some("tool_result" | "function_call_output" | "custom_tool_call_output")
+    ) {
+        return RecordKind::ToolResult;
+    }
+    if discriminator == Some("tool") {
+        return RecordKind::ToolCall;
+    }
+    match (discriminator, role) {
+        (Some("user_message" | "user"), _) | (Some("text" | "message"), Some("user")) => {
             RecordKind::UserMessage
         }
-        Some("text")
-            if matches!(
-                value.get("role").and_then(Value::as_str),
-                Some("assistant" | "model")
-            ) =>
-        {
-            RecordKind::AssistantMessage
-        }
-        Some("message") if value.get("role").and_then(Value::as_str) == Some("user") => {
-            RecordKind::UserMessage
-        }
-        Some("message")
-            if matches!(
-                value.get("role").and_then(Value::as_str),
-                Some("assistant" | "model")
-            ) =>
-        {
-            RecordKind::AssistantMessage
-        }
-        Some("tool_call") => RecordKind::ToolCall,
-        Some("tool_result") => RecordKind::ToolResult,
-        Some("custom_tool_call") => RecordKind::ToolCall,
-        Some("custom_tool_call_output") => RecordKind::ToolResult,
-        Some("tool") if codex_tool_part_is_result(value) => RecordKind::ToolResult,
-        Some("tool") => RecordKind::ToolCall,
-        Some("session_meta") => RecordKind::SessionMeta,
-        _ if value.get("session_meta").is_some() => RecordKind::SessionMeta,
+        (Some("assistant_message" | "assistant" | "gemini" | "model"), _)
+        | (Some("text" | "message"), Some("assistant" | "model")) => RecordKind::AssistantMessage,
+        (Some("session_meta"), _) => RecordKind::SessionMeta,
         _ => RecordKind::Other,
     }
 }
@@ -309,44 +305,6 @@ pub(crate) fn is_known_codex_discriminator(kind: &str) -> bool {
     )
 }
 
-pub(crate) fn codex_tool_part_is_result(value: &Value) -> bool {
-    value
-        .get("state")
-        .and_then(|state| state.get("status"))
-        .and_then(Value::as_str)
-        .is_some_and(|status| matches!(status, "completed" | "error"))
-        || value
-            .get("state")
-            .and_then(|state| state.get("output").or_else(|| state.get("error")))
-            .is_some()
-}
-
-pub(crate) fn codex_tool_name(value: &Value) -> Option<String> {
-    string_field(value, "tool_name")
-        .or_else(|| string_field(value, "tool"))
-        .or_else(|| string_field(value, "name"))
-        .or_else(|| {
-            content_blocks(value)?
-                .iter()
-                .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
-                .get("name")?
-                .as_str()
-                .map(ToString::to_string)
-        })
-}
-
-pub(crate) fn codex_tool_input_as_string(value: &Value) -> Option<String> {
-    let input = content_blocks(value)?
-        .iter()
-        .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))?
-        .get("input")?;
-    match input {
-        Value::String(item) => Some(item.clone()),
-        Value::Null => None,
-        item => serde_json::to_string(item).ok(),
-    }
-}
-
 pub(crate) fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
     value
         .get("message")
@@ -384,7 +342,7 @@ fn codex_semantic_value(value: &Value, envelope: CodexEnvelope) -> &Value {
 }
 
 fn codex_role(value: &Value, semantic_value: &Value) -> Option<String> {
-    string_field(value, "role").or_else(|| {
+    nested_string_field(value, "role").or_else(|| {
         semantic_value
             .get("message")
             .and_then(|message| message.get("role"))
@@ -482,9 +440,9 @@ fn codex_tool_fields(value: &Value) -> CodexToolFields {
         value.get("error").cloned()
     };
     CodexToolFields {
-        name: string_field(value, "tool_name")
-            .or_else(|| string_field(value, "tool"))
-            .or_else(|| string_field(value, "name")),
+        name: nested_string_field(value, "tool_name")
+            .or_else(|| nested_string_field(value, "tool"))
+            .or_else(|| nested_string_field(value, "name")),
         arguments: arguments.cloned(),
         arguments_present: arguments.is_some(),
         call_id: value

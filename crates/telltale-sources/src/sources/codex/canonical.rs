@@ -17,7 +17,7 @@ use super::native::{
     CodexContentBlock, CodexNativeRecord, CodexToolFields, extract_codex_native_records,
     is_known_codex_discriminator,
 };
-use crate::parser::ParseError;
+use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct CodexCanonicalOptions {
@@ -31,7 +31,7 @@ impl CodexCanonicalOptions {
 }
 
 pub(crate) enum CodexCanonicalError {
-    Source(ParseError),
+    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -92,8 +92,8 @@ impl fmt::Display for CodexCanonicalError {
 
 impl std::error::Error for CodexCanonicalError {}
 
-impl From<ParseError> for CodexCanonicalError {
-    fn from(error: ParseError) -> Self {
+impl From<SourceReadError> for CodexCanonicalError {
+    fn from(error: SourceReadError) -> Self {
         Self::Source(error)
     }
 }
@@ -166,7 +166,7 @@ fn project_record(
         ));
     }
 
-    if record.legacy_kind == telltale_schema::record::RecordKind::SessionMeta {
+    if record.session_metadata {
         return Ok(());
     }
 
@@ -726,12 +726,10 @@ mod tests {
         CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
         MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt, ToolStatus,
     };
-    use telltale_schema::record::RecordKind;
     use telltale_schema::source::Source;
     use tempfile::tempdir;
 
     use super::{CodexCanonicalOptions, project_codex_canonical_observations};
-    use crate::parser::parse_source_records;
 
     const OBSERVED_AT: &str = "2026-09-02T12:00:00Z";
 
@@ -792,8 +790,6 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code(), "replay_unverifiable");
-        let legacy = parse_source_records(&source).expect("legacy records");
-        assert_eq!(legacy[1].session_id, "session-a");
     }
 
     #[test]
@@ -934,10 +930,6 @@ mod tests {
         .expect_err("unknown role");
         assert_eq!(error.code(), "unsupported_role");
         assert!(!error.to_string().contains("Synthetic role marker"));
-        assert_eq!(
-            parse_source_records(&source).unwrap()[0].kind,
-            RecordKind::Other
-        );
     }
 
     #[test]
@@ -999,7 +991,7 @@ mod tests {
     }
 
     #[test]
-    fn function_call_records_are_canonical_tools_without_changing_legacy_kind() {
+    fn function_call_records_are_canonical_tools() {
         let (_directory, source) = temp_source(
             "codex.headless_sessions",
             SourceKind::HeadlessJsonl,
@@ -1037,8 +1029,6 @@ mod tests {
             result.result(),
             Some(&JsonValue::object([("exit_code".to_owned(), JsonValue::Integer(0))]).unwrap())
         );
-        let legacy = parse_source_records(&source).expect("legacy records");
-        assert!(legacy.iter().all(|record| record.kind == RecordKind::Other));
     }
 
     #[test]
@@ -1233,7 +1223,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_and_schema_errors_are_safe_and_legacy_is_unchanged() {
+    fn unknown_and_schema_errors_are_privacy_safe() {
         let unknown_source = source(
             "codex.sessions",
             SourceKind::Jsonl,
@@ -1251,8 +1241,6 @@ mod tests {
                 .contains("Synthetic unknown record variant")
         );
         assert!(!format!("{error:?}").contains("Synthetic unknown record variant"));
-        let legacy = parse_source_records(&unknown_source).expect("legacy remains available");
-        assert_eq!(legacy[0].kind, RecordKind::Other);
 
         let drift = source(
             "codex.archived_sessions",
@@ -1268,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_content_block_fails_without_changing_legacy() {
+    fn unknown_content_block_fails_closed() {
         let (_directory, source) = temp_source(
             "codex.sessions",
             SourceKind::Jsonl,
@@ -1281,7 +1269,6 @@ mod tests {
         .expect_err("unknown block");
         assert_eq!(error.code(), "unknown_content_block");
         assert!(!error.to_string().contains("Synthetic payload marker"));
-        assert!(parse_source_records(&source).is_ok());
     }
 
     #[test]
