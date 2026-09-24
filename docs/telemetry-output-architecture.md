@@ -150,7 +150,7 @@ part of canonical bytes.
 
 The proposed multi-schema `CanonicalPayload` is transport-neutral durable
 content, not another semantic event and not a transport envelope. The current
-private `src/sink/outbox.rs::CanonicalPayload` is an Event3-specific durability
+private `src/sink/outbox.rs::Event3DurablePayload` is an Event3-specific durability
 detail, **not** this future envelope. Introduce the generalized form only when
 a real second production terminal payload format needs one authoritative owner
 of durable bytes; it is not preparatory indirection for 0.7:

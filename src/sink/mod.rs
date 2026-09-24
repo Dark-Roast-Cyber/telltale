@@ -575,7 +575,7 @@ impl SinkSet {
             return Ok(Vec::new());
         }
         outbox::ensure_durable_storage_supported_for_platform(is_windows)?;
-        let batch = outbox::canonical_replay_batch(events)?;
+        let batch = outbox::event3_durable_batch(events)?;
         let paths = self.local_persistence_paths();
         if paths.len() != 1 {
             return Err(DeliveryError::new(

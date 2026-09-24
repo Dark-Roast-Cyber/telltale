@@ -176,7 +176,7 @@ fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct CanonicalPayload {
+pub(crate) struct Event3DurablePayload {
     pub(crate) event_id: String,
     pub(crate) bytes: Vec<u8>,
     pub(crate) hash: [u8; 32],
@@ -189,8 +189,8 @@ pub(crate) struct CanonicalPayload {
 /// are handed to the canonical JSONL sink so the event is not serialized again
 /// between the capacity check and the durable first write.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct CanonicalReplayBatch {
-    pub(crate) payloads: Vec<CanonicalPayload>,
+pub(crate) struct Event3DurableBatch {
+    pub(crate) payloads: Vec<Event3DurablePayload>,
     pub(crate) jsonl_bytes: Vec<u8>,
 }
 
@@ -536,7 +536,7 @@ impl Outbox {
     pub(crate) fn check_capacity_for_payloads(
         &self,
         log_path: &Path,
-        prospective: &[CanonicalPayload],
+        prospective: &[Event3DurablePayload],
         limits: CapacityLimits,
     ) -> Result<(), Box<dyn std::error::Error>> {
         validate_capacity_limits(limits)?;
@@ -559,7 +559,7 @@ impl Outbox {
     fn check_capacity_payloads_locked(
         &self,
         log_path: &Path,
-        prospective: &[CanonicalPayload],
+        prospective: &[Event3DurablePayload],
         limits: CapacityLimits,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let inspection = self.inspect_capacity_inputs(log_path)?;
@@ -1640,7 +1640,7 @@ fn generation_is_eligible_with_cursor_snapshot(
 fn generation_origins_match(
     connection: &Connection,
     generation_id: &str,
-    payloads: &[CanonicalPayload],
+    payloads: &[Event3DurablePayload],
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let origin_count: i64 = connection
         .query_row(
@@ -1688,7 +1688,7 @@ struct JournalSnapshot {
 
 #[derive(Debug)]
 struct ReconciliationPlan {
-    payloads: Vec<CanonicalPayload>,
+    payloads: Vec<Event3DurablePayload>,
     cursor: Option<IngestCursor>,
     advance: bool,
     ingested_bytes: usize,
@@ -1698,7 +1698,7 @@ struct ReconciliationPlan {
 struct GenerationProgress {
     next_offset: usize,
     complete: bool,
-    payloads: Vec<CanonicalPayload>,
+    payloads: Vec<Event3DurablePayload>,
 }
 
 fn validate_sink_ids(
@@ -2268,7 +2268,7 @@ fn account_unread_payload(
 
 fn event_is_already_stored(
     connection: &Connection,
-    payload: &CanonicalPayload,
+    payload: &Event3DurablePayload,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let row = connection
         .query_row(
@@ -2311,7 +2311,7 @@ fn event_is_already_stored(
 
 fn insert_payload_transaction(
     transaction: &Transaction<'_>,
-    payload: &CanonicalPayload,
+    payload: &Event3DurablePayload,
     sink_ids: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     match (&payload.generation_id, payload.generation_offset) {
@@ -2641,7 +2641,7 @@ fn verify_cursor_against_snapshot(
 
 fn canonical_payload_from_bytes(
     bytes: &[u8],
-) -> Result<CanonicalPayload, Box<dyn std::error::Error>> {
+) -> Result<Event3DurablePayload, Box<dyn std::error::Error>> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|error| canonical_error(format!("canonical JSONL record is invalid: {error}")))?;
     let event_id = value
@@ -2651,7 +2651,7 @@ fn canonical_payload_from_bytes(
         .to_string();
     validate_canonical_event_bytes(bytes, Some(&event_id))?;
     let hash: [u8; 32] = Sha256::digest(bytes).into();
-    Ok(CanonicalPayload {
+    Ok(Event3DurablePayload {
         event_id,
         bytes: bytes.to_vec(),
         hash,
@@ -2730,14 +2730,14 @@ fn resolve_journal_path(path: &Path) -> Result<PathBuf, PathBuf> {
     Err(absolute)
 }
 
-fn canonical_payload(event: &Event) -> Result<CanonicalPayload, Box<dyn std::error::Error>> {
+fn canonical_payload(event: &Event) -> Result<Event3DurablePayload, Box<dyn std::error::Error>> {
     let mut bytes = Vec::new();
     let mut serializer = serde_json::Serializer::new(&mut bytes);
     serialize_event_for_emission(event, &mut serializer)
         .map_err(|error| canonical_error(format!("serialize Event 3.0 payload: {error}")))?;
     validate_canonical_event_bytes(&bytes, Some(&event.event_id))?;
     let hash: [u8; 32] = Sha256::digest(&bytes).into();
-    Ok(CanonicalPayload {
+    Ok(Event3DurablePayload {
         event_id: event.event_id.clone(),
         bytes,
         hash,
@@ -2746,9 +2746,9 @@ fn canonical_payload(event: &Event) -> Result<CanonicalPayload, Box<dyn std::err
     })
 }
 
-pub(crate) fn canonical_replay_batch(
+pub(crate) fn event3_durable_batch(
     events: &[Event],
-) -> Result<CanonicalReplayBatch, Box<dyn std::error::Error>> {
+) -> Result<Event3DurableBatch, Box<dyn std::error::Error>> {
     let mut payloads = Vec::with_capacity(events.len());
     let mut jsonl_bytes = Vec::new();
     for event in events {
@@ -2757,7 +2757,7 @@ pub(crate) fn canonical_replay_batch(
         jsonl_bytes.push(b'\n');
         payloads.push(payload);
     }
-    Ok(CanonicalReplayBatch {
+    Ok(Event3DurableBatch {
         payloads,
         jsonl_bytes,
     })
@@ -2781,7 +2781,9 @@ fn validate_capacity_limits(limits: CapacityLimits) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-fn validate_capacity_payload(payload: &CanonicalPayload) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_capacity_payload(
+    payload: &Event3DurablePayload,
+) -> Result<(), Box<dyn std::error::Error>> {
     validate_canonical_event_bytes(&payload.bytes, Some(&payload.event_id))?;
     let hash: [u8; 32] = Sha256::digest(&payload.bytes).into();
     if hash != payload.hash {
@@ -3562,8 +3564,8 @@ mod tests {
 
     use super::{
         CapacityLimits, DeliveryState, DeliveryUpdate, GenerationLifecycle, JournalSnapshot,
-        OUTBOX_OPEN_PROFILE, Outbox, canonical_replay_batch, ensure_generation_metadata,
-        ensure_journal_path, journal_namespace, journal_path_hash, make_cursor,
+        OUTBOX_OPEN_PROFILE, Outbox, ensure_generation_metadata, ensure_journal_path,
+        event3_durable_batch, journal_namespace, journal_path_hash, make_cursor,
         mark_generation_prune_pending, read_generation_metadata, write_ingest_cursor,
     };
     use crate::event::{
@@ -4644,8 +4646,8 @@ mod tests {
         let first = marked_event("TT_CAPACITY_EVENT_FIRST_26");
         let second = marked_event("TT_CAPACITY_EVENT_SECOND_26");
         let first_batch =
-            canonical_replay_batch(std::slice::from_ref(&first)).expect("first canonical batch");
-        let both_batch = canonical_replay_batch(&[first, second]).expect("two canonical events");
+            event3_durable_batch(std::slice::from_ref(&first)).expect("first canonical batch");
+        let both_batch = event3_durable_batch(&[first, second]).expect("two canonical events");
         let outbox = Outbox::open(&outbox_path).expect("open outbox");
 
         outbox
@@ -4672,7 +4674,7 @@ mod tests {
         let outbox_path = private_outbox_path(&temp);
         let first = marked_event("TT_CAPACITY_BYTES_FIRST_26");
         let second = marked_event("TT_CAPACITY_BYTES_SECOND_26");
-        let batch = canonical_replay_batch(&[first, second]).expect("canonical batch");
+        let batch = event3_durable_batch(&[first, second]).expect("canonical batch");
         let bytes = batch
             .payloads
             .iter()
@@ -4738,8 +4740,7 @@ mod tests {
             None,
         )
         .expect("dead state");
-        let batch =
-            canonical_replay_batch(std::slice::from_ref(&fifth)).expect("prospective event");
+        let batch = event3_durable_batch(std::slice::from_ref(&fifth)).expect("prospective event");
         outbox
             .check_capacity_for_payloads(&log_path, &batch.payloads, capacity_limits(3, u64::MAX))
             .expect("pending and blocked plus one prospective event fit");
@@ -4758,7 +4759,7 @@ mod tests {
             .reconcile_jsonl(&log_path, &["sink-a", "sink-b"])
             .expect("ingest multi-sink event");
         let batch =
-            canonical_replay_batch(std::slice::from_ref(&prospective)).expect("prospective event");
+            event3_durable_batch(std::slice::from_ref(&prospective)).expect("prospective event");
         outbox
             .check_capacity_for_payloads(&log_path, &batch.payloads, capacity_limits(2, u64::MAX))
             .expect("one event per sink is counted once");
@@ -4772,7 +4773,7 @@ mod tests {
         let first = marked_event("TT_CAPACITY_UNREAD_FIRST_26");
         let second = marked_event("TT_CAPACITY_UNREAD_SECOND_26");
         append_jsonl_events(&log_path, &[first, second]).expect("committed JSONL");
-        let batch = canonical_replay_batch(&[marked_event("TT_CAPACITY_UNREAD_NEXT_26")])
+        let batch = event3_durable_batch(&[marked_event("TT_CAPACITY_UNREAD_NEXT_26")])
             .expect("prospective event");
         let bytes = fs::read_to_string(&log_path)
             .expect("JSONL")
@@ -4815,7 +4816,7 @@ mod tests {
             .expect("represent first event");
         append_jsonl_events(&log_path, std::slice::from_ref(&existing)).expect("duplicate JSONL");
         let duplicate =
-            canonical_replay_batch(std::slice::from_ref(&existing)).expect("duplicate payload");
+            event3_durable_batch(std::slice::from_ref(&existing)).expect("duplicate payload");
         outbox
             .check_capacity_for_payloads(
                 &log_path,
@@ -4823,7 +4824,7 @@ mod tests {
                 capacity_limits(1, duplicate.payloads[0].bytes.len() as u64),
             )
             .expect("represented duplicate does not consume capacity");
-        let next_batch = canonical_replay_batch(std::slice::from_ref(&next)).expect("next payload");
+        let next_batch = event3_durable_batch(std::slice::from_ref(&next)).expect("next payload");
         let error = outbox
             .check_capacity_for_payloads(
                 &log_path,
@@ -4864,7 +4865,7 @@ mod tests {
         append_jsonl_events(&log_path, &[first, second]).expect("committed JSONL");
         let mut outbox = Outbox::open(&outbox_path).expect("open outbox");
         let prospective = marked_event("TT_CAPACITY_RECOVERY_PROSPECTIVE_26");
-        let batch = canonical_replay_batch(std::slice::from_ref(&prospective))
+        let batch = event3_durable_batch(std::slice::from_ref(&prospective))
             .expect("prospective recovery event");
         let error = outbox
             .check_capacity_for_payloads(&log_path, &batch.payloads, capacity_limits(1, u64::MAX))
