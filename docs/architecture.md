@@ -95,10 +95,12 @@ The production migration order is:
 6. retire the remaining legacy NormalizedRecord-centered detector path and
    duplicate scoring/grouping code while retaining deliberate record-level
    compatibility APIs;
-7. decide the remaining Event4 and telemetry activation gates after the internal
-   semantic/detection path is singular.
+7. select Event3-only production output for 0.7 and defer Event4 production
+   activation after the internal semantic/detection path is singular.
 
-Step 4 and coordinated step 5 convergence are complete. Scanner-owned processing
+Steps 1 through 6 established the singular source/acquisition and Detection v2
+path. Step 7's output decision is Event3-only for 0.7; the remaining Issue #55
+cleanup and validation are not yet complete. Scanner-owned processing
 success gates OpenCode cursor eligibility; parse success alone cannot advance that
 cursor. CLI scan/watch and supported embedding use Canonical Observation v2 ->
 Detection v2 -> Event3 compatibility/activity. Event 3.0 is frozen and Event4 is

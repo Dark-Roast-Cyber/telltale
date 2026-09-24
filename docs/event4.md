@@ -5,10 +5,11 @@
 > contract foundation is implemented in `telltale-schema`: typed bodies, the
 > authoritative structural schema, stateless and persistence-neutral contextual
 > validation, and `event4-json-v1` encoding. An experimental Tool-only privacy
-> and materialization boundary is implemented in `telltale-core`. Production privacy projection,
-> emission, persistence, replay, and transport are not implemented. **Existing
-> compatibility:** Event 3.0 remains the current frozen external compatibility
-> and output contract.
+> and materialization boundary is implemented in `telltale-core`. Production
+> Event4 privacy/export projection, emission, persistence, replay, and transport
+> are not implemented. **Existing compatibility:** Event 3.0 remains the frozen
+> current external compatibility and output contract. **0.7 decision:** Event3
+> is the sole production event output; Event4 production activation is deferred.
 
 > **Event 3.0: FROZEN / CURRENT COMPATIBILITY CONTRACT**
 
@@ -46,7 +47,13 @@ Context receives the Phase 1 effect only after validation and canonical encoding
 succeed. Retry means reusing returned canonical bytes, not rerunning emission;
 Phase 1 still supports idempotent validation of already materialized records.
 
-This is callable experimental code, not normal production Event4 output.
+This is callable experimental code, not production Event4 support. Issue #55
+Tranche 2 will remove this Tool-only implementation from `telltale-core`; it
+remains present during Tranche 1. Typed schemas for other families do not mean
+those families have production projectors. Any future Event4 production work
+requires a separately reviewed activation boundary justified by a concrete
+capability Event3 cannot cleanly represent.
+
 Persistence, replay integration, transport, sinks, and Finding/Session/Decision/
 Action/State/Health/Summary projection remain deferred. Event3 is neither called
 nor altered by this boundary.

@@ -3,11 +3,13 @@
 > **Status:** **Accepted architecture.** This is the reviewed intended future
 > telemetry/output contract. **Current implementation:** the non-production
 > Event4 contract, validation kernel, and canonical encoder are implemented in
-> `telltale-schema`. The first Phase 2 tranche adds a callable experimental
+> `telltale-schema`. An earlier Phase 2 tranche added a callable experimental
 > Tool-only privacy/materialization boundary in `telltale-core::event4_output`.
-> CanonicalPayload, production privacy/export projection,
-> telemetry profiles, durability integration, and dual Event3/Event4 output are
-> **not implemented**.
+> The future multi-schema CanonicalPayload, production Event4 privacy/export
+> projection, runtime telemetry profiles, Event4 durability integration, and
+> dual Event3/Event4 output are **not implemented**. Telltale 0.7 intentionally
+> retains Event3-only production output; this future architecture is not a 0.7
+> implementation commitment.
 > **Existing compatibility:** Event 3.0 remains the current frozen external
 > compatibility and output contract.
 
@@ -16,7 +18,8 @@
 Current Event3 JSONL and sink behavior is documented in
 [Telemetry output](telemetry-output.md). Nothing on this page changes current
 defaults or activates a future emitter, profile, serializer, collector, or
-transport.
+transport. `openspec/specs/production-event-output/spec.md` records the 0.7
+activation decision.
 
 The experimental [Tool Event4 boundary](event4.md#experimental-tool-boundary-phase-2-first-tranche)
 is not connected to this production pipeline. It assigns a one-time random
@@ -26,7 +29,7 @@ an in-memory acceptance effect. Returned canonical bytes are the retry unit.
 Persistence/replay/transport and all non-Tool projections remain deferred;
 Event3 projection, defaults, bytes, and sinks are unchanged.
 
-## Pipeline
+## Future pipeline (not active in 0.7)
 
 ```text
 internal semantic truth
@@ -154,8 +157,12 @@ normalize keys to NFC and sort them; arrays preserve item order; absent optional
 keys are omitted. Non-finite numbers are rejected. Destination wrappers are not
 part of canonical bytes.
 
-`CanonicalPayload` is transport-neutral durable content, not another semantic
-event and not a transport envelope:
+The proposed multi-schema `CanonicalPayload` is transport-neutral durable
+content, not another semantic event and not a transport envelope. The current
+private `src/sink/outbox.rs::CanonicalPayload` is an Event3-specific durability
+detail, **not** this future envelope. Introduce the generalized form only when
+a real second production terminal payload format needs one authoritative owner
+of durable bytes; it is not preparatory indirection for 0.7:
 
 | Field | Meaning |
 | --- | --- |
