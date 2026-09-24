@@ -35,8 +35,8 @@ mapping and then an acquisition batch consumed by the shared runtime.
 `process_chain` evaluation, `DetectorResult` -> `Signal` -> atomic `Finding`, and
 the Rule v1 compiler are implemented for Detection v2. The process-chain
 session evaluator parses canonical Tool command evidence into
-private matcher working state and shares one pure repeat/correlation semantic
-kernel with Event3 compatibility projection; it does not manufacture Canonical Process
+private matcher working state and delegates to one pure repeat/correlation semantic
+kernel before Event3 compatibility projection; it does not manufacture Canonical Process
 observations. Advanced detector runtime and a
 Detection Content v2 loader are not implemented.
 

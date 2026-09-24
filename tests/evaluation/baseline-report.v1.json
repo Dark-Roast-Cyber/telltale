@@ -601,18 +601,39 @@
     }
   },
   "process_chain": {
-    "note": "Definition-backed self-match conformance is not process-chain scenario efficacy and is not 100% process-chain detection performance.",
+    "note": "Atomic definition-backed matcher conformance and fixed canonical Tool contracts are not process-chain scenario efficacy. Three correlations require structured parent evidence unavailable from Tool commands; all six retain fixed kernel tests in telltale-detect.",
     "enabled_chain_count": 352,
     "enabled_standalone_count": 13,
     "enabled_correlation_count": 6,
     "enabled_total_count": 371,
-    "definition_conformance_covered": 371,
+    "definition_conformance_covered": 368,
+    "canonical_atomic_contract_ids": [
+      "procchain.collection.cmd_7za",
+      "procchain.credaccess.credential_dump_command",
+      "procchain.discovery.cmd_hostname",
+      "procchain.discovery.cmd_whoami",
+      "procchain.exfil.cmd_rclone",
+      "procchain.lateral.psexec_remote_exec"
+    ],
+    "canonical_correlation_contract_ids": [
+      "procchain.correlation.archive_then_cloud_transfer",
+      "procchain.correlation.discovery_then_remote_exec",
+      "procchain.correlation.host_then_account_discovery"
+    ],
     "independent_scenario_efficacy_count": 0,
     "independent_benign_scenario_count": 0,
-    "uncovered_ids": [],
-    "rationales": {},
-    "evaluator_path": "CompiledProcessChainRules::evaluate + process_chain_event + correlate_process_chain_events",
-    "pipeline_integration": "not_invoked_by_Pipeline_scan_root_detect_records_or_evaluate_session"
+    "uncovered_ids": [
+      "procchain.correlation.office_script_then_download",
+      "procchain.correlation.rmm_then_credential_or_evasion",
+      "procchain.correlation.webshell_then_discovery"
+    ],
+    "rationales": {
+      "procchain.correlation.office_script_then_download": "Requires a structured Office/web-server/RMM parent relationship unavailable from canonical Tool command evidence. Atomic matcher conformance and fixed shipped-correlation kernel tests retain rule coverage; canonical positive coverage awaits truthful Process evidence.",
+      "procchain.correlation.rmm_then_credential_or_evasion": "Requires a structured Office/web-server/RMM parent relationship unavailable from canonical Tool command evidence. Atomic matcher conformance and fixed shipped-correlation kernel tests retain rule coverage; canonical positive coverage awaits truthful Process evidence.",
+      "procchain.correlation.webshell_then_discovery": "Requires a structured Office/web-server/RMM parent relationship unavailable from canonical Tool command evidence. Atomic matcher conformance and fixed shipped-correlation kernel tests retain rule coverage; canonical positive coverage awaits truthful Process evidence."
+    },
+    "evaluator_path": "canonical Tool observations -> evaluate_source -> Detection v2 process_results + process_chain_session -> project_event3; structured-only atomic definitions additionally use CompiledProcessChainRules::evaluate",
+    "pipeline_integration": "canonical_runtime_and_Pipeline_scan_root_use_Detection_v2_process_chain_session; direct_record_Rule_v1_compatibility_does_not"
   },
   "cases": [
     {

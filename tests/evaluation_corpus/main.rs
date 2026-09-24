@@ -221,11 +221,22 @@ fn evaluation_coverage_gate_is_complete() {
         "uncovered modifiers: {:?}",
         evaluation.modifier_coverage.uncovered
     );
-    assert!(
-        evaluation.process_chain_coverage.uncovered_ids.is_empty(),
-        "uncovered process-chain definitions: {:?}",
-        evaluation.process_chain_coverage.uncovered_ids
+    let processes = &evaluation.process_chain_coverage;
+    assert_eq!(
+        processes.uncovered_ids,
+        vec![
+            "procchain.correlation.office_script_then_download",
+            "procchain.correlation.rmm_then_credential_or_evasion",
+            "procchain.correlation.webshell_then_discovery",
+        ],
+        "only the fixed structured-parent visibility gaps may remain"
     );
+    assert_eq!(
+        processes.rationales.keys().cloned().collect::<Vec<_>>(),
+        processes.uncovered_ids
+    );
+    assert_eq!(processes.covered_correlation_ids.len(), 3);
+    assert_eq!(processes.canonical_atomic_ids.len(), 6);
     assert_eq!(
         evaluation.source_coverage.supported_expected,
         evaluation.source_coverage.supported_represented,

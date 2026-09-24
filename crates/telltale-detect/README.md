@@ -27,6 +27,12 @@ Detection v2 evaluation remain I/O-free; consumers can use
 `default-features = false` to omit source I/O, SQLite, and `walkdir`. Pair the
 crate with `telltale-rules` and `telltale-schema` for rule sets and record types.
 
+Process-chain evaluation uses canonical Tool observations through
+`v2::session::evaluate_source` and projects Event3 through `v2::event3`.
+`process_chain::ProcessChainConfig` remains public; command extraction and the
+single suppression/correlation kernel are crate-private. Direct-record
+compatibility covers Rule v1, not a separate process-chain detector.
+
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
 - [API documentation](https://docs.rs/telltale-detect)

@@ -1,9 +1,8 @@
-//! Pure process-chain session semantics shared by the legacy and v2 adapters.
+//! Pure process-chain session semantics for Detection v2.
 //!
 //! This module deliberately knows nothing about Event3, canonical observations,
-//! or DetectorResult.  Adapters provide the small set of facts required to
-//! suppress repeats and walk the compiled process-chain correlations, then
-//! project the decisions into their respective output model.
+//! or DetectorResult. The canonical adapter supplies the facts required to
+//! suppress repeats and walk compiled correlations, then adapts the decisions.
 
 use std::collections::BTreeMap;
 
@@ -109,9 +108,8 @@ pub(crate) fn evaluate_process_chain_session(
     }
 }
 
-/// Apply only repeat suppression.  This is used by the legacy Event3 wrapper
-/// because its public compatibility surface exposes suppression separately.
-pub(crate) fn suppress_repeats(
+/// Apply repeat suppression between atomic occurrences.
+fn suppress_repeats(
     candidates: &[ProcessChainSessionCandidate],
     window: Duration,
 ) -> RepeatSuppression {
@@ -170,7 +168,7 @@ pub(crate) fn suppress_repeats(
 /// Walk the compiled correlation rules over a caller-selected retained set.
 /// The rule slice order is authoritative for both output order and risk-cap
 /// accounting.  Entity grouping is ordered to avoid map-iteration nondeterminism.
-pub(crate) fn correlate_retained(
+fn correlate_retained(
     candidates: &[ProcessChainSessionCandidate],
     retained: &[usize],
     rules: &CompiledProcessChainRules,
@@ -295,6 +293,112 @@ mod tests {
                 OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
                     .unwrap()
             }),
+        }
+    }
+
+    #[test]
+    fn all_shipped_correlation_contracts_use_the_session_kernel() {
+        let rules = telltale_rules::process_chain::load_default_process_chain_rules().unwrap();
+        // Fixed semantic facts, including stronger parent evidence unavailable
+        // from Tool commands. These are kernel contracts, not runtime telemetry.
+        let cases = [
+            (
+                "procchain.correlation.host_then_account_discovery",
+                45,
+                ("procchain.discovery.cmd_hostname", "discovery", "hostname"),
+                ("procchain.discovery.cmd_whoami", "discovery", "whoami"),
+            ),
+            (
+                "procchain.correlation.discovery_then_remote_exec",
+                55,
+                ("procchain.discovery.cmd_whoami", "discovery", "whoami"),
+                (
+                    "procchain.lateral.psexec_remote_exec",
+                    "lateral_movement",
+                    "psexec",
+                ),
+            ),
+            (
+                "procchain.correlation.archive_then_cloud_transfer",
+                65,
+                ("procchain.collection.cmd_7za", "collection", "7za"),
+                ("procchain.exfil.cmd_rclone", "exfiltration", "rclone"),
+            ),
+            (
+                "procchain.correlation.office_script_then_download",
+                70,
+                (
+                    "procchain.execution.winword_powershell",
+                    "execution",
+                    "powershell",
+                ),
+                (
+                    "procchain.c2.certutil_download_cradle",
+                    "command_and_control",
+                    "certutil",
+                ),
+            ),
+            (
+                "procchain.correlation.webshell_then_discovery",
+                80,
+                ("procchain.execution.w3wp_cmd", "execution", "cmd"),
+                ("procchain.discovery.cmd_whoami", "discovery", "whoami"),
+            ),
+            (
+                "procchain.correlation.rmm_then_credential_or_evasion",
+                60,
+                (
+                    "procchain.c2.anydesk_powershell",
+                    "command_and_control",
+                    "powershell",
+                ),
+                (
+                    "procchain.credaccess.credential_dump_command",
+                    "credential_access",
+                    "procdump",
+                ),
+            ),
+        ];
+        assert_eq!(rules.correlations().len(), cases.len());
+        for (id, score, first, second) in cases {
+            let candidates = [
+                candidate(
+                    0,
+                    first.0,
+                    first.1,
+                    first.2,
+                    "first",
+                    Some("synthetic-session"),
+                    Some("2026-01-01T00:00:00Z"),
+                ),
+                candidate(
+                    1,
+                    second.0,
+                    second.1,
+                    second.2,
+                    "second",
+                    Some("synthetic-session"),
+                    Some("2026-01-01T00:00:00Z"),
+                ),
+            ];
+            let config = ProcessChainSessionConfig::default();
+            let result = evaluate_process_chain_session(&candidates, &rules, &config);
+            let decision = result
+                .correlations
+                .iter()
+                .find(|d| rules.correlations()[d.rule_index].id == id)
+                .expect(id);
+            assert_eq!(decision.effective_score, score, "{id}");
+            assert_eq!(decision.candidate_indexes, [0, 1], "{id}");
+            assert!(!decision.risk_capped, "{id}");
+            let reversed = [candidates[1].clone(), candidates[0].clone()];
+            assert!(
+                evaluate_process_chain_session(&reversed, &rules, &config)
+                    .correlations
+                    .iter()
+                    .all(|d| rules.correlations()[d.rule_index].id != id),
+                "{id}"
+            );
         }
     }
 

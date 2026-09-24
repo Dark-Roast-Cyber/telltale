@@ -337,8 +337,6 @@ mod tests {
     mod download_execute;
     #[path = "mcp_injection.rs"]
     mod mcp_injection;
-    #[path = "process_chain.rs"]
-    mod process_chain;
     #[path = "resilience.rs"]
     mod resilience;
     #[path = "secret_access.rs"]

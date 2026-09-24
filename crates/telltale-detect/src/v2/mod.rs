@@ -16,6 +16,8 @@ mod observation_match;
 pub mod policy_accounting;
 #[allow(dead_code)]
 pub(crate) mod process_chain;
+#[cfg(test)]
+mod process_chain_contract_tests;
 pub(crate) mod rule_v1;
 mod selector;
 pub mod session;

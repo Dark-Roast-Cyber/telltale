@@ -11,8 +11,8 @@ exactly eight Rule v1 compatibility views), their capability/provenance/matcher/
 identity contracts, and the read-only Rule v1 export/compatibility compiler and
 source-free session evaluator, source-instance-scoped session
 orchestration, and a source-free Event3 compatibility projection. Process-chain
-repeat/correlation semantics have one pure shared owner used by both the
-Event3 compatibility adapter and this v2 session evaluator. `compat.v1.url`
+repeat/correlation semantics have one pure owner used by the v2 session
+evaluator before Event3 compatibility projection. `compat.v1.url`
 remains compiler-supported but truthfully absent. There is no advanced detector
 runtime, Event4, gateway, or Detection Content v2 runtime
 loader; the Event 3.0 schema remains unchanged.
@@ -325,8 +325,11 @@ MUST materialize through the ordinary Signal and atomic Finding path.
 ### Requirement: Process-chain session semantics
 
 The implementation MUST provide one crate-private, I/O-free process-chain
-session semantic owner for both the legacy Event3 adapter and the Detection v2
-caller-grouped evaluator. The owner MUST operate only on rule ID, category,
+session semantic owner for the Detection v2 caller-grouped evaluator. No parallel
+direct-record process-chain detector or Event-based suppression/correlation
+adapter SHALL remain. Shared configuration SHALL remain public; command
+extraction SHALL have one crate-private implementation. The owner MUST operate
+only on rule ID, category,
 normalized child name, matcher-owned dedupe key, resolved entity, an opaque
 occurrence-group identity, and an optional caller-supplied ordering timestamp.
 The kernel MUST NOT assign or reinterpret timestamp provenance. It MUST remain

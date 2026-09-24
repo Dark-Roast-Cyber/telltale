@@ -4,6 +4,8 @@
 //!
 //! Source discovery and parsing live in `telltale-sources`; source orchestration
 //! lives in `telltale-core`. State persistence and sinks live downstream.
+//! Process-chain evaluation consumes canonical Tool evidence through `v2`;
+//! `process_chain` exposes its configuration, not a direct-record detector.
 
 pub mod allowlist;
 pub mod baseline;

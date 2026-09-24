@@ -171,6 +171,8 @@ struct ProcessChainCoverageReport {
     enabled_correlation_count: u64,
     enabled_total_count: u64,
     definition_conformance_covered: u64,
+    canonical_atomic_contract_ids: Vec<String>,
+    canonical_correlation_contract_ids: Vec<String>,
     independent_scenario_efficacy_count: u64,
     independent_benign_scenario_count: u64,
     uncovered_ids: Vec<String>,
@@ -609,7 +611,7 @@ fn process_chain_coverage(
     coverage: &crate::process_chain::ProcessChainCoverage,
 ) -> ProcessChainCoverageReport {
     ProcessChainCoverageReport {
-        note: "Definition-backed self-match conformance is not process-chain scenario efficacy and is not 100% process-chain detection performance.".to_string(),
+        note: "Atomic definition-backed matcher conformance and fixed canonical Tool contracts are not process-chain scenario efficacy. Three correlations require structured parent evidence unavailable from Tool commands; all six retain fixed kernel tests in telltale-detect.".to_string(),
         enabled_chain_count: coverage.enabled_chain_count as u64,
         enabled_standalone_count: coverage.enabled_standalone_count as u64,
         enabled_correlation_count: coverage.enabled_correlation_count as u64,
@@ -618,6 +620,8 @@ fn process_chain_coverage(
             + coverage.enabled_correlation_count) as u64,
         definition_conformance_covered: coverage.covered_chain_and_standalone_ids.len() as u64
             + coverage.covered_correlation_ids.len() as u64,
+        canonical_atomic_contract_ids: coverage.canonical_atomic_ids.iter().cloned().collect(),
+        canonical_correlation_contract_ids: coverage.covered_correlation_ids.iter().cloned().collect(),
         independent_scenario_efficacy_count: coverage.independent_scenario_tested_count as u64,
         independent_benign_scenario_count: coverage.independent_benign_scenario_count as u64,
         uncovered_ids: coverage.uncovered_ids.clone(),

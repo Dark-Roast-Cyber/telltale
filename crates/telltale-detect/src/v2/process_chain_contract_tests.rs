@@ -1,53 +1,86 @@
-//! End-to-end coverage for the process-chain path: records in, events out.
-
-use std::path::PathBuf;
+//! Permanent process-chain contracts through canonical source evaluation.
 
 use telltale_rules::process_chain::load_default_process_chain_rules;
-use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::record::{NormalizedRecord, RecordKind};
-use telltale_schema::source::Source;
+use telltale_schema::clients::ClientId;
+use telltale_schema::observation::*;
 
-use crate::process_chain::{
-    ProcessChainConfig, detect_process_chains, observations_from_command_line,
+use super::{
+    compile_rule_v1,
+    event3::{Event3CompatibilityContext, project_event3},
+    session::{CanonicalSourceInput, evaluate_source},
 };
-
-fn test_source() -> Source {
-    Source {
-        client: ClientId::Codex,
-        kind: SourceKind::Jsonl,
-        source_id: "codex.sessions".to_string(),
-        path: PathBuf::from("/fixtures/process-chain.jsonl"),
-    }
-}
-
-fn tool_call(command: &str, timestamp: &str) -> NormalizedRecord {
-    NormalizedRecord {
-        session_id: "process-chain".to_string(),
-        client: "codex".to_string(),
-        agent: Some("codex".to_string()),
-        model: Some("test-model".to_string()),
-        provider: Some("test".to_string()),
-        timestamp: Some(timestamp.to_string()),
-        kind: RecordKind::ToolCall,
-        tool_name: Some("shell".to_string()),
-        arguments: None,
-        content: command.to_string(),
-    }
-}
+use crate::process_chain::ProcessChainConfig;
 
 fn events_for(commands: &[(&str, &str)]) -> Vec<telltale_schema::event::Event> {
-    let records = commands
+    let observations = commands
         .iter()
-        .map(|(command, timestamp)| tool_call(command, timestamp))
+        .enumerate()
+        .map(|(index, (command, timestamp))| {
+            CanonicalObservationV2::builder(
+                ObservationBody::Tool(
+                    ToolObservation::new()
+                        .with_name("shell")
+                        .unwrap()
+                        .with_arguments(JsonValue::string(*command)),
+                ),
+                ObservationStage::ToolRequested,
+                ObservedAt::new("2026-05-10T11:00:00Z").unwrap(),
+                SourceProvenance::new(
+                    IngestionMode::SessionStore,
+                    "codex",
+                    "codex.sessions",
+                    Fidelity::FullNative,
+                )
+                .unwrap()
+                .with_native_id(format!("command-{index}"))
+                .unwrap(),
+            )
+            .session_id(CorrelationId::source_reported("process-chain").unwrap())
+            .sequence(index as u64)
+            .fact_metadata(
+                "tool.name",
+                FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+            )
+            .occurred_at(SourceTimestamp::new(*timestamp).unwrap())
+            .fact_metadata(
+                "tool.arguments",
+                FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+            )
+            .build()
+            .unwrap()
+        })
         .collect::<Vec<_>>();
     let rules = load_default_process_chain_rules().expect("pack compiles");
-    detect_process_chains(
-        &test_source(),
-        &rules,
-        &records,
-        &ProcessChainConfig::default(),
+    let plan = compile_rule_v1(
+        &telltale_rules::load_default_rule_set()
+            .unwrap()
+            .compatibility_export(),
     )
-    .expect("risk accounting holds")
+    .unwrap();
+    let instance = CorrelationId::source_reported("synthetic-process-source").unwrap();
+    let evaluation = evaluate_source(
+        CanonicalSourceInput {
+            client: ClientId::Codex,
+            source_id: "codex.sessions",
+            source_instance: Some(&instance),
+            observations: &observations,
+        },
+        &plan,
+        Some((&rules, &ProcessChainConfig::default())),
+    )
+    .unwrap();
+    project_event3(
+        &evaluation,
+        &Event3CompatibilityContext {
+            source_path_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            sessions: &[],
+        },
+    )
+    .unwrap()
+    .events
+    .into_iter()
+    .filter(|event| event.event_type == "process_chain")
+    .collect()
 }
 
 fn event_with_rule<'a>(
@@ -193,12 +226,10 @@ fn matching_is_case_insensitive_and_paths_are_normalized() {
     let process = event.process.as_ref().expect("process context present");
     assert_eq!(process.source_process_name, "cmd");
     assert_eq!(process.target_process_name, "whoami");
-    // The observed spelling is preserved alongside the normalized key.
-    assert!(
-        process
-            .target_process_command_line
-            .as_deref()
-            .is_some_and(|command| command.contains("WHOAMI.EXE"))
+    // Canonical projection redacts path-bearing command text before retention.
+    assert_eq!(
+        process.target_process_command_line.as_deref(),
+        Some("[sensitive-path] [sensitive-path]")
     );
     assert!(!process.source_process_inferred);
 }
@@ -246,7 +277,7 @@ fn informational_events_participate_in_a_correlated_detection() {
 }
 
 #[test]
-fn one_record_correlation_preserves_parser_statement_order() {
+fn one_tool_observation_correlation_preserves_parser_statement_order() {
     let reversed = events_for(&[(
         "cmd.exe /c whoami && cmd.exe /c hostname",
         "2026-05-10T10:00:00Z",
@@ -319,9 +350,6 @@ fn approved_admin_context_reduces_risk_without_deleting_the_event() {
         .approved_admin_users
         .insert("svc_deploy".to_string());
 
-    let mut record = tool_call("cmd.exe /c whoami", "2026-05-10T10:00:00Z");
-    record.session_id = "approved".to_string();
-
     // Feed the user through the observation layer directly; agent transcripts do
     // not carry an OS user, so this is the structured-telemetry path.
     let observation = telltale_rules::process_chain::ProcessObservation {
@@ -341,45 +369,4 @@ fn approved_admin_context_reduces_risk_without_deleting_the_event() {
     assert_eq!(detection.score, 0);
     assert!(detection.informational);
     assert!(detection.risk_adjustment.is_some());
-}
-
-#[test]
-fn command_line_extraction_recovers_explicit_and_inferred_parents() {
-    let observations = observations_from_command_line("cmd.exe /c \"whoami && hostname\"");
-    let explicit = observations
-        .iter()
-        .filter(|observation| !observation.parent_inferred)
-        .map(|observation| {
-            (
-                observation.parent.normalized_name(),
-                observation.child.normalized_name(),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert!(explicit.contains(&("cmd".to_string(), "whoami".to_string())));
-    assert!(explicit.contains(&("cmd".to_string(), "hostname".to_string())));
-
-    // The wrapping `cmd /c` is not reported as its own child: its payload
-    // already describes the real children and repeats the same text.
-    assert!(
-        observations
-            .iter()
-            .all(|observation| observation.child.normalized_name() != "cmd")
-    );
-
-    // An interpreter with no recoverable payload is still reported.
-    let encoded = observations_from_command_line("powershell.exe -enc SQBFAFgAKAA=");
-    assert_eq!(encoded.len(), 1);
-    assert_eq!(encoded[0].child.normalized_name(), "powershell");
-}
-
-#[test]
-fn posix_only_commands_get_no_fabricated_windows_parent() {
-    let observations = observations_from_command_line("git status && ls -la");
-    assert!(
-        observations
-            .iter()
-            .all(|observation| observation.parent.normalized_name().is_empty()),
-        "no Windows shell is invented for POSIX-shaped commands"
-    );
 }

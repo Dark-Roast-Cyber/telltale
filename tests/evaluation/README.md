@@ -49,7 +49,15 @@ Golden characterization output and efficacy expectations are reviewable independ
 
 Rule-match correctness is not security-review correctness. A benign case may correctly match `execution.shell` or `secret.env.read` while correctly remaining `not_required`.
 
-Process-chain coverage is definition-backed self-match through `CompiledProcessChainRules::evaluate` plus correlation. It is not process-chain scenario efficacy and is not invoked by `Pipeline::scan_root`, `detect_records`, or `evaluate_session`.
+Process-chain coverage retains definition-backed atomic matcher conformance and
+adds fixed canonical Tool contracts through `evaluate_source` and `project_event3`:
+six atomic cases, three observable correlations, ordering, repeat suppression,
+and benign commands. Office, web-server, and RMM parent relationships cannot be
+recovered from Tool command text; their three correlation visibility gaps are
+explicit in the report. All six shipped correlations also have fixed session-kernel
+tests in `telltale-detect`. These checks are conformance, not scenario efficacy.
+The canonical runtime and `Pipeline::scan_root` use this Detection v2 path;
+`detect_records` and `evaluate_session` retain direct-record Rule v1 compatibility.
 
 Parser/source-conformance cases are normally `not_scored` unless the same fixture is also an independent efficacy scenario. The supported-source denominator is derived from the public source registry after excluding the two explicitly documented candidate identities, so a newly registered source fails coverage until its status and fixture representation are reviewed.
 

@@ -123,12 +123,17 @@ session kernel, and returns ordinary `DetectorResult` values for both atomic
 and satisfied correlation rules. It does not discover sessions, sources, or
 scanner state.
 
-The pure kernel is shared with the Event3 adapter and owns repeat grouping,
+The pure `process_chain_session` kernel owns repeat grouping,
 repeat-window anchor selection, ordered sequence walking, per-rule/per-entity
 throttling, and per-entity risk-cap accounting. `CompiledProcessChainRules`
 remains the owner of the six correlation definitions and
 `CorrelationStep::matches`; generic `sequence` and `correlation` detector kinds
 remain runtime-unsupported.
+
+`process_chain` retains public configuration and crate-private command extraction.
+`v2::process_chain` is the canonical adapter; `v2::event3` projects its session
+results without re-running suppression or correlation. There is no parallel
+direct-record process-chain detector.
 
 Private matcher variants are grouped into atomic occurrences by supporting
 observation, detector, and matcher dedupe identity. Repeat suppression selects

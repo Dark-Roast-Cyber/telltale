@@ -12,9 +12,11 @@ its own event type. The regex engine, its rule pack, its scoring, and the sessio
 - Rule pack: `crates/telltale-rules/data/process-chain.yaml` (generated)
 - Generator: `scripts/dev/generate-process-chain-rules.py`
 - Matching engine: `crates/telltale-rules/src/process_chain.rs`
-- Extraction, emission, correlation: `crates/telltale-detect/src/process_chain.rs`
-- Detection v2 Tool boundary:
+- Configuration and command extraction: `crates/telltale-detect/src/process_chain.rs`
+- Detection v2 Tool matching/session adapter:
   `crates/telltale-detect/src/v2/process_chain.rs`
+- Shared suppression/correlation kernel: `crates/telltale-detect/src/process_chain_session.rs`
+- Event3 compatibility projection: `crates/telltale-detect/src/v2/event3.rs`
 - Event type: `process_chain`
 
 Behavioural reference: the irflow-timeline process-tree rule library
@@ -39,9 +41,9 @@ parsing creates private matcher working state, not Canonical Process evidence.
 ordinary Detection v2 DetectorResults, Signals, and Findings.
 
 This path is active in the canonical scan/watch/embedding runtime. The pure
-repeat/correlation semantic kernel remains shared by the canonical evaluator and
-the retained record-level compatibility wrapper. Event3 remains the compatibility
-projection; Event4 remains inactive.
+session kernel is the sole repeat/correlation semantic owner. There is no
+direct-record process-chain detector or Event-based correlation adapter.
+Event3 projects the canonical session result; Event4 remains inactive.
 
 ## The core rule: emission and risk are separate decisions
 
@@ -201,7 +203,7 @@ Matches are grouped by **dedup key**:
 - process-name and path indicators: `standalone:{rule_id}:{binary}`
 - command-line indicators: `standalone:{rule_id}` — one command seen at several
   interpreter nesting levels is still one finding
-- correlations: `correlation:{rule_id}:{entity}`
+- correlations: a domain-separated digest over rule identity and canonical session scope
 
 Within a group the highest score wins; ties break on severity, then rule ID for
 determinism. The winner is the only rule that contributes risk. Losers survive
@@ -209,9 +211,9 @@ as `process.secondary_rule_ids`, and **every** technique ID in the group is
 merged into the winner's `mitre_attack_techniques`, so no ATT&CK mapping is
 lost.
 
-Across observations, `suppress_repeats` collapses the same rule against the same
-entity and chain inside the suppression window (1 hour by default). The first
-event survives and records a `repeat_count` evidence entry.
+Across observations, the session kernel collapses the same rule against the same
+entity and matcher dedupe key inside the suppression window (1 hour by default).
+The retained occurrence projects a `repeat_count` evidence entry.
 
 ### Overlaps split by command line, not collapsed
 
@@ -240,8 +242,8 @@ blanket severity-3 mapping would claim.
 
 ## Correlation
 
-Correlation runs over emitted `process_chain` events, grouped by entity and
-ordered by time. Six sequences ship:
+Correlation runs over retained matcher candidates before Event3 projection,
+grouped by entity and ordered by occurrence time. Six sequences ship:
 
 | Rule | Sequence | Window | Score |
 | --- | --- | ---: | ---: |
@@ -267,7 +269,7 @@ Bounds that stop unbounded summation:
 Informational events contribute zero risk directly and still satisfy sequence
 steps, which is the whole point of emitting them.
 
-The non-production v2 session path uses the same six compiled definitions and
+The production v2 session path uses the six compiled definitions and
 step predicates. Its ordered candidates use source-reported `occurred_at`, not
 `observed_at`; a missing occurrence time retains the atomic result but cannot
 participate in timed suppression or correlation. Equal timestamps retain parser
@@ -279,6 +281,11 @@ sessions never correlate. Correlation results remain ordinary
 `DetectorKind::ProcessChain` results with `FindingKind::Correlation` and
 `CorrelationScope::Sequence`, omit aggregate capability context, and do not use
 the reserved generic `Sequence` or `Correlation` kinds.
+
+The Office, web-server, and RMM sequences require structured parent relationships
+that current Tool command evidence cannot supply. The evaluation report records
+these canonical visibility gaps explicitly. Their matcher and session-kernel
+contracts remain tested; no parent facts are manufactured to claim runtime coverage.
 
 ## False-positive controls
 
