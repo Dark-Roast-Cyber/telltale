@@ -254,6 +254,51 @@ fn all_eight_body_families_validate_against_runtime_schema() {
 }
 
 #[test]
+fn tool_actions_require_their_distinct_observation_stages() {
+    let context = Event4InMemoryContext::new();
+    for (action, stage) in [
+        (EventAction::ToolProposed, ObservationStage::Proposed),
+        (EventAction::ToolRequested, ObservationStage::Requested),
+        (
+            EventAction::ToolExecutionStarted,
+            ObservationStage::ExecutionStarted,
+        ),
+        (
+            EventAction::ToolExecutionCompleted,
+            ObservationStage::ExecutionCompleted,
+        ),
+        (
+            EventAction::ToolResultReturned,
+            ObservationStage::ResultReturned,
+        ),
+    ] {
+        let mut candidate = observation("evt-tool-stage");
+        candidate.event_action = action;
+        if let EventBody::Observation(body) = &mut candidate.body {
+            body.kind = ObservationKind::Tool;
+            body.stage = stage;
+        }
+        assert!(
+            validate_terminal(&candidate.materialize(MATERIALIZED), &context).is_ok(),
+            "{action:?} / {stage:?}"
+        );
+    }
+
+    let mut mismatch = observation("evt-tool-mismatch");
+    mismatch.event_action = EventAction::ToolRequested;
+    if let EventBody::Observation(body) = &mut mismatch.body {
+        body.kind = ObservationKind::Tool;
+        body.stage = ObservationStage::Proposed;
+    }
+    assert_eq!(
+        validate_terminal(&mismatch.materialize(MATERIALIZED), &context)
+            .unwrap_err()
+            .code(),
+        Event4ValidationCode::ActionSemanticMismatch
+    );
+}
+
+#[test]
 fn schema_rejects_extra_body_alias_and_bad_rfc3339() {
     let event = summary("evt-structural").materialize(MATERIALIZED);
     let mut value = serde_json::to_value(&event).unwrap();

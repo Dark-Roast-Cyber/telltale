@@ -99,12 +99,11 @@ The production migration order is:
    activation after the internal semantic/detection path is singular.
 
 Steps 1 through 6 established the singular source/acquisition and Detection v2
-path. Step 7's output decision is Event3-only for 0.7; the remaining Issue #55
-cleanup and validation are not yet complete. Scanner-owned processing
-success gates OpenCode cursor eligibility; parse success alone cannot advance that
-cursor. CLI scan/watch and supported embedding use Canonical Observation v2 ->
-Detection v2 -> Event3 compatibility/activity. Event 3.0 is frozen and Event4 is
-inactive.
+path. Step 7 selects Event3-only production output for 0.7 and defers Event4
+production activation. Scanner-owned processing success gates OpenCode cursor
+eligibility; parse success alone cannot advance that cursor. CLI scan/watch and
+supported embedding use Canonical Observation v2 -> Detection v2 -> Event3
+compatibility/activity. Event 3.0 is frozen and Event4 is inactive.
 
 Acquisition is direct source-native extraction followed by source-owned canonical
 mapping; it is not a conversion bridge. Production must not converge by creating

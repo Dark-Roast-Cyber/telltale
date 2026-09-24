@@ -23,7 +23,6 @@ pub mod assignment;
 /// Unstable cross-crate migration seam, not a supported embedding API.
 #[doc(hidden)]
 pub mod canonical_runtime;
-pub mod event4_output;
 pub mod local_event_feed;
 pub mod provenance;
 

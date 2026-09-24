@@ -26,20 +26,18 @@ durability, replay, and platform contracts MUST remain unchanged.
 
 ### Requirement: Event4 foundation does not authorize production activation
 
-Event4 4.0 schema types, validation, and canonical `event4-json-v1` encoding MAY
-exist as non-production foundations. An experimental Tool-only emitter MUST NOT
-be treated as production support or as evidence that other Event4 families have
-production projectors. Any future Event4 production activation MUST have a
-separately reviewed activation boundary, justified by at least one concrete
-production capability that Event3 cannot cleanly represent; conceptual family
-definitions alone MUST NOT trigger activation. Event3 and Event4 MUST be
-independent projections from accepted internal semantics, never conversion
-stages from one event format into the other.
+Event4 4.0 schema types, validation, and canonical `event4-json-v1` encoding
+MUST remain non-production foundations in 0.7; schema support MUST NOT imply a
+production projector for any Event4 family. Any future Event4 production
+activation MUST have a separately reviewed activation boundary, justified by
+at least one concrete production capability that Event3 cannot cleanly
+represent; conceptual family definitions alone MUST NOT trigger activation.
+Event3 and Event4 MUST be independent projections from accepted internal
+semantics, never conversion stages from one event format into the other.
 
 #### Scenario: Schema foundation is present without an output path
 
-- **WHEN** Event4 types, validation, encoding, or the experimental Tool emitter
-  are available
+- **WHEN** Event4 types, validation, or encoding are available
 - **THEN** production output remains Event3-only, and no Event4 family is
   activated by their presence
 
@@ -54,22 +52,20 @@ stages from one event format into the other.
 Telltale 0.7 MUST NOT introduce a production multi-schema `CanonicalPayload`
 envelope. The private Event3 outbox payload representation MUST remain an
 Event3-specific durability detail, not a claim that the future multi-schema
-architecture exists. A generalized `CanonicalPayload` MUST be introduced only
-when a real second production terminal payload format requires one authoritative
-durable-byte owner. Any future output architecture MUST preserve exact durable
-historical Event3 bytes rather than reconstructing them through newer
-structures. Destination sinks and transports MUST NOT own event semantics or
-terminal privacy.
+architecture exists. A generalized `CanonicalPayload` MUST NOT be introduced
+as preparatory indirection; it is deferred until a real second production
+terminal payload format requires shared durable-byte ownership. Existing
+Event3 exact-byte replay, terminal privacy, and sink boundaries remain governed
+by `durable-delivery`, `privacy-boundary`, and `event-schema-conformance`.
 
-#### Scenario: Current Event3 replay
+#### Scenario: Event3-specific outbox remains in use
 
-- **WHEN** an existing Event3 payload is replayed or delivered to a destination
-- **THEN** its exact durable bytes remain authoritative under the existing
-  durable-delivery and privacy contracts; the destination does not reinterpret
-  event meaning or rerun terminal privacy
+- **WHEN** a 0.7 Event3 payload is persisted for durable delivery
+- **THEN** the current Event3-specific outbox remains the durability mechanism,
+  without a production multi-schema payload envelope
 
 #### Scenario: A second production terminal format is considered
 
-- **WHEN** a future production format needs shared durable-byte ownership
-- **THEN** a separately reviewed generalized payload boundary may own terminal
-  bytes without reserializing historical Event3 content
+- **WHEN** a generalized payload boundary is proposed
+- **THEN** it is not introduced without a real second production terminal
+  format needing shared durable-byte ownership
