@@ -18,8 +18,8 @@ document governs.
 
 The earlier dependency-maintenance and repository-cleanup phases are no longer
 active roadmap sections. Completed implementation history belongs in Git history
-and `CHANGELOG.md`; the remaining 0.6.x objective is to converge the accepted
-semantic architecture into one production path before 0.7.0.
+and `CHANGELOG.md`. Semantic architecture convergence is complete through step 6;
+the remaining 0.6.x objective is the final 0.7 event/telemetry decision in step 7.
 
 The migration should reduce parallel machinery as it progresses. New compatibility
 layers are acceptable only when they have a specific migration purpose and a
@@ -84,15 +84,14 @@ The intended convergence order is:
    complete.** The normal production path is Canonical Observation v2 -> Detection
    v2, with Event 3.0 retained as the compatibility projection during the
    migration. Record-level compatibility APIs remain intentionally separate.
-6. **Delete transitional machinery after activation.** Remove source-backed
+6. **Delete transitional machinery after activation - complete.** Source-backed
    legacy record projection APIs, parser registrations, compatibility-only
    source fields, duplicate scoring/grouping logic, shadow/equivalence
    infrastructure, migration-only fixtures and reports, and stale documentation
-   once their replacements are authoritative. OpenCode retains only the current
-   `opencode.sqlite` native/canonical path and its bounded cursor semantics.
-   Source adapters must not retain synchronized `legacy_*` fields merely to
-   reproduce the retired flat record model. Event 3.0 and deliberate
-   caller-provided direct-record compatibility remain separate contracts.
+   have been retired. OpenCode retains only the current `opencode.sqlite`
+   native/canonical path and its bounded cursor semantics. Event 3.0 and
+   deliberate caller-provided direct-record compatibility remain separate
+   contracts.
 7. **Decide the final 0.7 event/telemetry cutover after semantic convergence.**
    Event4 remains an independent projection from accepted semantic truth. Do not
    expand Event4 persistence, dual emission, or transport merely to compensate
@@ -106,6 +105,13 @@ OpenCode cursors do not advance after downstream operational failure. Event 3.0
 remains unchanged in schema, wire contract, constructors, privacy behavior, and
 already persisted bytes; newly emitted canonical evidence, hashes, or severity
 are not required to be identical to legacy output. Event4 remains inactive.
+
+Step 6 convergence completed under Issue #54 with
+`597a86d6ff7c1cf07d15f993969547bb617711f2`
+(`refactor: retire source record compatibility`). Remote CI run
+`35973580992` and CodeQL run `35973576412` passed on that commit across the
+repository's Linux, macOS, Windows, package, test, format, Clippy, security, and
+code-scanning gates.
 
 The accepted semantic direction is documented in:
 

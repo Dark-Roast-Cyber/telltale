@@ -10,7 +10,7 @@ Acquisition dispatches those identities to source-owned native extraction.
 This document records the current source-of-truth host path candidates used by
 the scanner.
 
-Session-store discovery answers “where can Telltale parse activity from?” It is
+Session-store discovery answers “where can Telltale acquire activity from?” It is
 intentionally separate from installed-agent inventory, which answers “which
 agent tools appear installed?” using metadata-only checks in
 `crates/telltale-sources/src/install_inventory.rs` such as executables on `PATH`, package roots, VS
@@ -90,32 +90,32 @@ Linux-specific live validation should use bounded, redacted excerpts and
 fixture-equivalent scans whenever possible. Host-specific shipper setup should
 be reviewed before publication or reuse in another environment.
 
-## Parser Notes
+## Source Adapter Notes
 
-Codex parser notes:
+Codex adapter notes:
 
 - JSONL entries include `session_meta`, `turn_context`, and event payloads.
 - `session_meta.payload.source == "exec"` marks headless sessions.
 - `session_meta.payload.model_provider` and `agent_nickname` can identify provider and agent.
 
-OpenCode parser notes:
+OpenCode adapter notes:
 
 - Newer data lives in `opencode.db`, table `message`, with JSON in `data`.
-- SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a `Locked` parse error instead of hanging indefinitely.
-- Per-source parse operations are sequential; a single slow or contended source blocks the current scan (known limitation).
+- SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a bounded `SourceReadError::Locked` failure instead of hanging indefinitely.
+- Per-source acquisition reads are sequential; a single slow or contended source blocks the current scan (known limitation).
 - OpenCode per-message model attribution reflects the model that generated each message, which may differ from the session's primary model when sub-agents are used.
 - Live OpenCode SQLite stores also carry a top-level `message.session_id` column even when the JSON payload does not.
 - Telltale needs all roles and tool records, not only assistant token-usage rows.
 
-Claude Code parser notes:
+Claude Code adapter notes:
 
 - JSONL entries commonly use top-level `type` values such as `user` and `assistant`.
 - Message payloads can live under `message.role`, `message.model`, and `message.content`.
-- `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; Telltale normalizes `tool_use` blocks as tool calls and `tool_result` blocks as tool results.
+- `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; the adapter maps `tool_use` and `tool_result` blocks to their canonical Tool semantics.
 
-Qwen parser notes:
+Qwen adapter notes:
 
 - JSONL files under `.qwen/projects/**/chats` may contain `type`, `model`, `timestamp`, `sessionId`, and `usageMetadata` fields.
-- `qwen.projects` uses a source-owned modeled JSONL parser with metadata
-  inheritance, tool-call/result classification, and terminal schema/unknown
+- `qwen.projects` uses source-owned modeled JSONL extraction with metadata
+  context, tool-call/result classification, and terminal schema/unknown
   boundaries. It is not a generic JSONL fallback.

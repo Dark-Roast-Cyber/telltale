@@ -159,8 +159,8 @@ secrets, raw JSON, or unnecessary host paths. Unknown input MUST fail closed.
 
 The Qwen slice MUST select native IDs, supported content blocks, metadata paths,
 call-ID forms, capabilities, and lifecycle semantics from source evidence. It
-MUST preserve record-level compatibility output and provide canonical mapping
-consistent with direct Qwen evidence.
+MUST provide canonical mapping consistent with direct Qwen evidence without
+retaining a source-backed record compatibility projection.
 
 #### Scenario: Qwen unsupported evidence is not copied silently
 
@@ -188,11 +188,13 @@ through the shared runtime. Event3 schema/wire/privacy, already-persisted events
 Event4 inactivity, and the absence of a generic adapter framework MUST remain
 unchanged.
 
-#### Scenario: Existing compatibility behavior remains intact
+#### Scenario: Event3 compatibility remains intact
 
-- **WHEN** P15 adapter tests run beside existing Event3 and source regressions
-- **THEN** Event3 bytes/behavior and unrelated adapter output remain unchanged,
-  and no production v2 observations are required
+- **WHEN** OpenClaw and Qwen canonical adapter tests run beside Event3 and source
+  regressions
+- **THEN** Event3 schema, wire, and privacy behavior and unrelated adapter
+  behavior remain unchanged while canonical observations remain the production
+  source input
 
 ### Requirement: Acquisition reuses source-owned canonical mapping
 
