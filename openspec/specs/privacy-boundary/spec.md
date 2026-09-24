@@ -133,7 +133,7 @@ Any future durable delivery outbox or dead-letter payload SHALL persist only can
 
 ### Requirement: Event and processing contracts remain stable
 
-The change SHALL preserve Event 3.0 shape, parser/source identity, explicit parser failures, detector inputs, rule matches, scoring, efficacy labels, and durable-first-write behavior. All adversarial data SHALL be synthetic, and sanitization SHALL use no external model or service.
+The change SHALL preserve Event 3.0 shape, source identity, explicit source-acquisition failures, detector inputs, rule matches, scoring, efficacy labels, and durable-first-write behavior. All adversarial data SHALL be synthetic, and sanitization SHALL use no external model or service.
 
 #### Scenario: Evaluation baseline is rerun
 

@@ -61,6 +61,6 @@ tests in `telltale-detect`. These checks are conformance, not scenario efficacy.
 The canonical runtime and `Pipeline::scan_root` use this Detection v2 path;
 `detect_records` and `evaluate_session` retain direct-record Rule v1 compatibility.
 
-Parser/source-conformance cases are normally `not_scored` unless the same fixture is also an independent efficacy scenario. The supported-source denominator is derived from the public source registry after excluding the two explicitly documented candidate identities, so a newly registered source fails coverage until its status and fixture representation are reviewed.
+Source-conformance cases are normally `not_scored` unless the same fixture is also an independent efficacy scenario. The supported-source denominator is derived from the public source registry after excluding the two explicitly documented candidate identities, so a newly registered source fails coverage until its status and fixture representation are reviewed.
 
 `make evaluation-check` validates the manifest and compares the generated deterministic report with the tracked baseline. `make evaluation-report` writes a current report only under `target/evaluation/`.

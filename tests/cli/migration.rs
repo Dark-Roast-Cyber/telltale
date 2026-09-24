@@ -617,7 +617,7 @@ fn migrated_sqlite_cursor_emits_only_newly_appended_sessions() {
 
     let second_log = temp.path().join("second-events.jsonl");
     let second = scan_opencode(&root, &migrated, &second_log);
-    // The parser's overlap rereads the old row; state deduplication must keep
+    // OpenCode acquisition overlap rereads the old row; state deduplication must keep
     // that row out of durable delivery while the appended session is emitted.
     assert_eq!(second["source_processing"]["parsed_record_count"], 2);
     let events = fs::read_to_string(&second_log)

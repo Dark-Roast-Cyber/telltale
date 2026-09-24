@@ -243,8 +243,8 @@ contract.
 
 This capability MUST NOT modify Event 3.0 schema, IDs, serialization, privacy,
 durable bytes, projection, JSONL first-write behavior, outbox tables, delivery,
-parsers, exact parser ownership, production normalized records, deterministic
-detection, Detection v2 algebra, or production activation.
+source adapters, exact source ownership, canonical production acquisition,
+deterministic detection, Detection v2 algebra, or production activation.
 
 #### Scenario: Event and detection baselines remain exact
 

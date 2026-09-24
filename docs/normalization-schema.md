@@ -44,7 +44,7 @@ Every `NormalizedRecordV1` variant carries `RecordMeta`:
 - `provenance`: required provenance bundle with source path hash, optional source event id, and optional offset/fingerprint.
 - `extensions`: source-specific or conversion-specific extra data.
 
-`extensions` is the escape hatch for data that does not fit the canonical fields. The legacy conversion currently uses it for `legacy_record_kind`, lossy-field markers, and a few recovered legacy values.
+`extensions` is the escape hatch for data that does not fit the canonical fields. The caller-record conversion uses it for `legacy_record_kind`, lossy-field markers, and a few recovered compatibility values.
 
 ## Variants
 
@@ -63,7 +63,7 @@ Optional:
 
 Lossy today:
 
-- `content_parts` is currently unavailable from legacy `NormalizedRecord` conversion.
+- `content_parts` is currently unavailable from caller-supplied `NormalizedRecord` conversion.
 
 ### `AssistantMessage`
 
@@ -99,12 +99,12 @@ Optional:
 
 Derived:
 
-- `arguments` is parsed from the legacy string when the source payload is valid JSON.
-- `arguments_string` preserves the original legacy string for search and auditing.
+- `arguments` is parsed from the caller record's argument string when it is valid JSON.
+- `arguments_string` preserves the original caller-record argument string for search and auditing.
 
 Lossy today:
 
-- `call_id` is not available from the legacy parser shape.
+- `call_id` is not available from the flat caller-record shape.
 - If `arguments` is not valid JSON, Telltale preserves the string form and marks the value as string-only.
 
 ### `ToolResult`
@@ -125,14 +125,14 @@ Optional:
 
 Derived:
 
-- `result` is parsed from the legacy content string when it is valid JSON.
-- `result_string` preserves the original legacy content.
-- Legacy tool-call arguments recovered during conversion may be stored in `meta.extensions` for context.
+- `result` is parsed from the caller-record content string when it is valid JSON.
+- `result_string` preserves the original caller-record content.
+- Tool-call arguments recovered during caller-record conversion may be stored in `meta.extensions` for context.
 
 Lossy today:
 
-- `call_id` is not available from the legacy parser shape.
-- `is_error` is not available from the legacy parser shape.
+- `call_id` is not available from the flat caller-record shape.
+- `is_error` is not available from the flat caller-record shape.
 - If `result` is not valid JSON, Telltale preserves the string form and marks the value as string-only.
 
 ### `SessionMeta`
@@ -150,8 +150,8 @@ Optional:
 
 Lossy today:
 
-- `workspace` is not available from the legacy parser shape.
-- Legacy content is preserved in `fields.legacy_content` when present.
+- `workspace` is not available from the flat caller-record shape.
+- Caller-record content is preserved in `fields.legacy_content` when present.
 
 ### `Other`
 
@@ -166,9 +166,9 @@ Optional:
 
 - `kind_hint`
 
-## Legacy Conversion Notes
+## Caller-Record Conversion Notes
 
-`NormalizedRecordV1::from_legacy()` keeps the legacy record kind in `meta.extensions["legacy_record_kind"]`.
+`NormalizedRecordV1::from_legacy()` keeps the caller record kind in `meta.extensions["legacy_record_kind"]`.
 
 It also records a `lossy_fields` list when the flat legacy shape cannot preserve:
 

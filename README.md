@@ -60,7 +60,7 @@ local Event3 viewer (`cargo run -p telltale-console`). It does not start the
 scanner and is excluded from headless default builds and installs.
 
 - Discovers supported agent session stores on disk.
-- Parses heterogeneous transcript formats into a shared event model.
+- Acquires heterogeneous session-store formats into Canonical Observation v2.
 - Detects suspicious tool activity with YAML-defined rules.
 - Scores related behavior across a session window.
 - Redacts sensitive evidence before writing events.
@@ -354,11 +354,11 @@ Common use cases include:
 
 Telltale is still in early development. The project is usable, but source coverage, detections, and operational ergonomics are still evolving.
 
-PRs, issues, feedback, and active engagement are very welcome. We would especially love testers who can help identify missing features, blind spots, or parsing gaps across different coding-agent platforms and handlers.
+PRs, issues, feedback, and active engagement are very welcome. We would especially love testers who can help identify missing features, blind spots, or source-adapter gaps across different coding-agent platforms and handlers.
 
 ## Project layout
 
-- `src/` — scanner, parser, detection, scoring, and event emission code
+- `src/` — scanner, source acquisition, detection, scoring, and event emission code
 - `tests/` — CLI coverage plus synthetic fixtures
 - `schemas/` — JSON schema for emitted events
 - `config/rules/tool-call-regex.yaml` — bundled detection rules
@@ -381,8 +381,8 @@ These files are the source-of-truth for Telltale's current implementation, rules
 - [Architecture](docs/architecture.md) — pipeline stages and module boundaries
 - [Semantic foundation](docs/semantic-foundation.md) — accepted future semantic boundaries
 - [Event4 architecture](docs/event4.md) — accepted contract with a non-production foundation
-- [Canonical Observation v2](docs/canonical-observation-v2.md) — accepted future evidence contract
-- [Detection v2](docs/detection-v2.md) — canonical runtime evaluator and compatibility model
+- [Canonical Observation v2](docs/canonical-observation-v2.md) — current source-evidence contract
+- [Detection v2](docs/detection-v2.md) — current canonical runtime evaluator and compatibility model
 - [Telemetry/output architecture](docs/telemetry-output-architecture.md) — accepted future output boundary
 - [Development principles](docs/development-principles.md) — authoritative architecture and development philosophy
 - [Detection model](docs/detection-model.md) — risk scoring, rule categories, thresholds

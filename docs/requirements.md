@@ -4,7 +4,7 @@
 
 - Discover local sessions for the supported Claude Code, Codex, OpenCode,
   OpenClaw, Qwen, and GitHub Copilot source contracts.
-- Parse transcripts into ordered user, assistant, tool-call, and tool-result records.
+- Acquire supported session stores into ordered canonical message and tool observations with source provenance.
 - Detect tool calls and suspicious context with static regex rules.
 - Support multiple simultaneous rule matches and cumulative scoring.
 - Log informational events for notable activity such as file reads, downloads, installs, and command execution.
@@ -25,7 +25,7 @@
 
 - Run as `scan --once` and as a periodic background process.
 - Maintain scan state to avoid duplicate alerts.
-- Continue processing if one parser or source fails.
+- Continue processing other sources when one source acquisition fails.
 - Include source file/db path metadata but avoid raw absolute paths when privacy mode is enabled.
 - Use configurable thresholds for informational, low, medium, high, and critical severity.
 

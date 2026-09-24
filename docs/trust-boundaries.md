@@ -6,13 +6,13 @@
 
 Telltale monitors agent session stores that contain a mix of trusted metadata and untrusted content. Agent logs record everything the agent saw: user prompts, model responses, tool calls, tool results, MCP server instructions, remote documentation, and generated code. Much of this content is attacker-controlled or attacker-influenced.
 
-This document defines the trust boundaries Telltale must respect when parsing, normalizing, detecting, and emitting events. Violating these boundaries leads to false negatives (missed detections), false positives (noisy alerts), or evidence leaks (secrets reaching SIEM).
+This document defines the trust boundaries Telltale must respect when acquiring, normalizing, detecting, and emitting events. Violating these boundaries leads to false negatives (missed detections), false positives (noisy alerts), or evidence leaks (secrets reaching SIEM).
 
 ## Core Principle
 
 **Treat agent session content as untrusted by default.** Only structured metadata that Telltale itself generates (client IDs, rule IDs, severity, and timestamps) is trusted without review. Everything extracted from session store files, including session IDs and product metadata, is untrusted input until its emission policy classifies it.
 
-The v0.6 emission boundary is deterministic and local-only: `PrivacySanitizer` in `telltale-schema` sanitizes text after parsing and detection at terminal Event 3.0 serialization, delivery alerts, timeline export, historical JSONL/Elastic export, or stderr/log diagnostics. Inspection first applies a UTF-8-safe 4096-byte bound; if the cut retains an ambiguous terminal lexical fragment, that fragment is neutralized with an idempotent marker before classification and compaction, while safe leading evidence remains bounded and useful. This is bounded inspection, not an arbitrary scanning or perfect-classification claim. Recognized bounded product metadata (`codex`, `gpt-5`, `openai`) and controlled identifiers remain readable only when credential-free; other source actor fields (`agent`, `model`, and `provider`), source-event IDs, dedup keys, and unsafe config/source text become deterministic opaque values where required. Session IDs must be structurally safe and credential-free to remain readable; all other source session IDs use a session-specific domain-separated hash. Source values that imitate terminal opaque-marker syntax are hashed from the raw value rather than trusted. Response strings and risk rationales use bounded summary sanitization so useful safe rationale remains visible. Historical traversal preserves object/array shape while assigning unknown string values to Summary and sanitizing unsafe extension keys; canonical Event 3.0 re-export preserves established hash fields and exact recognized opaque labels. Valid RFC3339 event timestamps retain their values; invalid source timestamps fail closed. It does not alter parser ownership/failures, detector inputs, scores, labels, or Event 3.0 shape, and it makes no network call or use of an external model/service.
+The v0.6 emission boundary is deterministic and local-only: `PrivacySanitizer` in `telltale-schema` sanitizes text after source acquisition and detection at terminal Event 3.0 serialization, delivery alerts, timeline export, historical JSONL/Elastic export, or stderr/log diagnostics. Inspection first applies a UTF-8-safe 4096-byte bound; if the cut retains an ambiguous terminal lexical fragment, that fragment is neutralized with an idempotent marker before classification and compaction, while safe leading evidence remains bounded and useful. This is bounded inspection, not an arbitrary scanning or perfect-classification claim. Recognized bounded product metadata (`codex`, `gpt-5`, `openai`) and controlled identifiers remain readable only when credential-free; other source actor fields (`agent`, `model`, and `provider`), source-event IDs, dedup keys, and unsafe config/source text become deterministic opaque values where required. Session IDs must be structurally safe and credential-free to remain readable; all other source session IDs use a session-specific domain-separated hash. Source values that imitate terminal opaque-marker syntax are hashed from the raw value rather than trusted. Response strings and risk rationales use bounded summary sanitization so useful safe rationale remains visible. Historical traversal preserves object/array shape while assigning unknown string values to Summary and sanitizing unsafe extension keys; canonical Event 3.0 re-export preserves established hash fields and exact recognized opaque labels. Valid RFC3339 event timestamps retain their values; invalid source timestamps fail closed. It does not alter source-adapter ownership/failures, detector inputs, scores, labels, or Event 3.0 shape, and it makes no network call or use of an external model/service.
 
 ### Historical Opaque Marker Boundary
 
@@ -96,7 +96,7 @@ The following content sources in agent session stores should be treated as untru
 **Why untrusted**: Web content can contain prompt injection payloads, hidden instructions, or misleading information designed to steer the agent. An attacker who controls a documentation page can influence any agent that reads it.
 
 **Telltale handling**:
-- When session formats preserve URL fetches or web content, parsers extract them.
+- When session formats preserve URL fetches or web content, source adapters retain that evidence.
 - Detection rules treat fetched content as untrusted context.
 - The `download` and `execution` categories detect fetch-then-execute chains.
 
@@ -134,14 +134,14 @@ The following content sources in agent session stores should be treated as untru
 
 ## Trust Boundary Matrix
 
-| Source | Trust Level | Parser Variant | Primary Detection Categories |
+| Source | Trust Level | Canonical Surface | Primary Detection Categories |
 | --- | --- | --- | --- |
-| User prompts | Low | `UserMessage` | `secret_access`, `credential_pattern`, `approval_bypass` |
-| Model output | Low | `AssistantMessage` | `tool_injection`, `mcp_prompt_injection`, `approval_bypass` |
+| User prompts | Low | `Message` / `MessageObserved` | `secret_access`, `credential_pattern`, `approval_bypass` |
+| Model output | Low | `Message` / `MessageObserved` | `tool_injection`, `mcp_prompt_injection`, `approval_bypass` |
 | MCP server instructions | Very Low | Embedded in metadata | `mcp_prompt_injection`, `mcp_enumeration` |
 | MCP tool descriptions | Very Low | Embedded in metadata | `mcp_prompt_injection` |
-| MCP tool results | Low | `ToolResult` | `mcp_prompt_injection`, `secret_access`, `execution` |
-| Tool call arguments | Low | `ToolCall` | `credential_pattern`, `execution`, `exfiltration`, `secret_access` |
+| MCP tool results | Low | `Tool` / `ToolResultReturned` | `mcp_prompt_injection`, `secret_access`, `execution` |
+| Tool call arguments | Low | `Tool` / `ToolRequested` | `credential_pattern`, `execution`, `exfiltration`, `secret_access` |
 | Remote/web content | Low | Context window | `download`, `execution`, `mcp_prompt_injection` |
 | Install scripts | Low | Context window | `install`, `persistence`, `supply_chain` |
 | Prior session history | Low-Medium | Context window | Cross-session correlation |
@@ -149,15 +149,15 @@ The following content sources in agent session stores should be treated as untru
 | Telltale-generated metadata (client, rule ID, severity) | High | Structured fields | N/A — trusted |
 | Source session and product identifiers | Low until classified | Structured fields | Emitted-session or product-metadata safety policy |
 
-## Parser Guidance
+## Source Adapter Guidance
 
-When writing or modifying parsers for new agent sources:
+When writing or modifying source adapters:
 
 1. **Extract all content as untrusted.** Do not assume any field in a session store file is safe.
 2. **Preserve source provenance.** Record where each piece of content came from (tool call, tool result, user message, assistant message, MCP metadata). This provenance drives trust-level-aware detection.
-3. **Do not evaluate or execute extracted content.** Parsers extract and normalize; they do not run shell commands, evaluate expressions, or follow URLs.
-4. **Handle malformed input gracefully.** Session stores may be truncated, corrupted, or contain unexpected formats. Return `ParseError` variants instead of panicking.
-5. **Bound extracted content size.** Truncate large fields to prevent memory exhaustion. The normalization schema uses bounded context windows.
+3. **Do not evaluate or execute extracted content.** Source adapters extract and canonically map evidence; they do not run shell commands, evaluate expressions, or follow URLs.
+4. **Handle malformed input gracefully.** Session stores may be truncated, corrupted, or contain unexpected formats. Return bounded source-read, mapping, or validation errors instead of panicking.
+5. **Bound extracted content size.** Apply the canonical source contracts' structured-value and context bounds so hostile input cannot drive unbounded memory growth.
 
 ## Detection Guidance
 
@@ -176,8 +176,8 @@ When emitting events to SIEM:
 1. **Approved metadata is structured.** `client`, rule IDs, severities, categories, timestamps, recognized product metadata, and bounded safe identifiers are preserved for indexing. Unsafe source session IDs are domain-separated hashes; source-event IDs and process dedup keys are opaque at emission. Each field is reviewed by provenance rather than treated as transcript excerpts.
 2. **Redacted excerpts are semi-trusted.** They contain bounded, redacted snippets of untrusted content. Evidence, command/result, URL, path, diagnostic, and summary contexts preserve only useful safe structure; process host/user and non-session entity values become deterministic opaque markers.
 3. **Hashes aid correlation but are not encryption.** `source_path_hash` and `evidence_hash` retain deterministic semantics. Low-entropy inputs can be subject to dictionary comparison.
-4. **Canonical JSONL is post-boundary only.** Durable first-write JSONL stores canonical Event 3.0 bytes after sanitization; it must not retain raw parser records as a repair or replay source.
-5. **Never emit raw untrusted content.** Full session transcripts, raw tool arguments, raw tool results, raw MCP metadata, unsafe parser errors, and unsafe sink errors must never appear in Events or stderr/log diagnostics. See [privacy-model.md](privacy-model.md) for the full evidence class contract.
+4. **Canonical JSONL is post-boundary only.** Durable first-write JSONL stores canonical Event 3.0 bytes after sanitization; it must not retain raw source-native records as a repair or replay source.
+5. **Never emit raw untrusted content.** Full session transcripts, raw tool arguments, raw tool results, raw MCP metadata, unsafe source-read or mapping errors, and unsafe sink errors must never appear in Events or stderr/log diagnostics. See [privacy-model.md](privacy-model.md) for the full evidence class contract.
 
 The synthetic controlled-marker corpus covers detection, activity, health, scanner error, operational alert, session risk summary, correlation, process-chain, MCP, and JSONL output paths. It is an adversarial regression oracle, not a claim of perfect secret classification. The serialized-byte checker compares exact decoded JSON keys and string values; supported escaped and percent-encoded forms are established by separate sanitizer regressions rather than implicit normalization in the checker. The checker has explicit 1 MiB input and nesting limits, fails with marker-safe errors, and stops at the first marker. Issue #26 must apply it to outbox, retry, permanent-failure, and dead-letter payloads; no external service is authorized for that work.
 
@@ -185,7 +185,7 @@ The synthetic controlled-marker corpus covers detection, activity, health, scann
 
 Public documentation, release notes, and examples inherit the same evidence
 boundary as SIEM events. Use synthetic fixtures or already-redacted output when
-demonstrating detections, parser behavior, or release readiness. Do not publish
+demonstrating detections, source-adapter behavior, or release readiness. Do not publish
 raw transcripts, live host telemetry, scanner state, local planning notes,
 deployment-specific SIEM configuration, workstation paths, or credential-like
 values as public examples or release evidence.

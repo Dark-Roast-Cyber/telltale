@@ -2,7 +2,7 @@
 //! records or canonical observations, session timelines, baseline state and
 //! deviation, correlation, allowlist suppression, and optional MCP analysis.
 //!
-//! Source discovery and parsing live in `telltale-sources`; source orchestration
+//! Source discovery and canonical acquisition live in `telltale-sources`; source orchestration
 //! lives in `telltale-core`. State persistence and sinks live downstream.
 //! Process-chain evaluation consumes canonical Tool evidence through `v2`;
 //! `process_chain` exposes its configuration, not a direct-record detector.

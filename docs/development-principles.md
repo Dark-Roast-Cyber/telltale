@@ -423,7 +423,7 @@ Never silently:
 - lose security events
 - disable requested enforcement
 - accept incompatible rule or config content
-- switch parsers after a known schema failure and guess at data
+- switch source extractors after a known schema failure and guess at data
 - drop unsupported translated conditions
 - claim an action succeeded when it did not
 

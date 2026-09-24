@@ -5,11 +5,11 @@
 //! tool arguments, tool results, and provenance) that the legacy flat
 //! `NormalizedRecord` cannot represent directly.
 //!
-//! The current parser pipeline still produces `NormalizedRecord` for compatibility;
-//! [`NormalizedRecordV1::from_legacy`] provides the explicit, loss-aware adapter
-//! into the canonical shape.
+//! Source acquisition does not produce either record type. Caller-supplied
+//! `NormalizedRecord` remains a direct-record compatibility surface, and
+//! [`NormalizedRecordV1::from_legacy`] is its explicit, loss-aware adapter.
 
-#![allow(dead_code)] // The canonical adapter is available while sources migrate.
+#![allow(dead_code)] // Retained record-level compatibility surface.
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -140,10 +140,10 @@ pub struct OtherRecord {
 }
 
 impl NormalizedRecordV1 {
-    /// Converts the current flat parser record into the canonical V1 shape.
+    /// Converts a caller-supplied flat `NormalizedRecord` into the V1 compatibility shape.
     ///
     /// This adapter is intentionally conservative: it preserves string-only
-    /// legacy fields alongside any JSON values it can recover, and records
+    /// flat fields alongside any JSON values it can recover, and records
     /// lossy/unavailable mappings in `meta.extensions`.
     pub fn from_legacy(record: NormalizedRecord, provenance: Provenance) -> Self {
         let kind = record.kind;

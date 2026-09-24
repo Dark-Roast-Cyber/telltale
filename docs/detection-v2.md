@@ -146,7 +146,7 @@ Timed v2 semantics use only truthful source-reported `occurred_at`. They never
 substitute `observed_at`, materialization time, Event3 construction time, or the
 wall clock. Missing `occurred_at` retains the atomic match but makes it
 ineligible for timed repeat suppression and correlation. Candidates are ordered
-chronologically, with stable parser and caller order for equal timestamps.
+chronologically, with stable source and caller order for equal timestamps.
 
 Tool-derived matcher input has no truthful host or user. The v2
 Tool session path therefore uses only the opaque canonical session ID as its
@@ -588,7 +588,7 @@ See the [Detection Content v2 draft schema](../schemas/detection-content-v2-draf
 
 The Rule v1 compatibility session evaluator and Tool-derived process-chain
 evaluator run in the canonical source path. Event3 remains supported:
-its Rule v1 IDs, deterministic scoring, thresholds, parser ownership, privacy,
+its Rule v1 IDs, deterministic scoring, thresholds, source ownership, privacy,
 and persisted/replayed bytes remain current. Event4 is independently versioned
 and does not replace Event3 until explicit migration gates pass. Future semantics
 are not backported. Event3 and Event4 are independent projections from common

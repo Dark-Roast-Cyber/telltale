@@ -2,7 +2,7 @@
 name = "telltale-sources"
 version.workspace = true
 edition.workspace = true
-description = "Telltale session-store discovery, per-agent source adapters, parsers, and install inventory"
+description = "Telltale session-store discovery, per-agent source adapters, canonical acquisition, and install inventory"
 license.workspace = true
 authors.workspace = true
 homepage.workspace = true

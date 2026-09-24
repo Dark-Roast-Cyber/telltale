@@ -132,9 +132,9 @@ observations. Potential contribution tokens and retained labels use the same loc
 and each batch permits 4,096 distinct contribution keys across scoped and
 unscoped buckets. One acquisition-owned budget is checked before each new map
 entry, including during derivation, not only after aggregation. Native records
-retain no per-unit contribution maps. Legacy parsers do not compute these
-contributions; canonical acquisition borrows existing native projection fields
-without another source read, reconstructed records, or a new raw-input sidecar.
+retain no per-unit contribution maps. Canonical acquisition derives these contributions directly from native source
+facts during the same extraction, without another source read, reconstructed
+records, or a new raw-input sidecar.
 Internal SQL transport aliases are not source JSON ownership evidence, and ignored
 Copilot items cannot attest metadata. Counts use checked `u64` arithmetic. Invalid/oversized metadata
 or contribution input, capacity exhaustion, and overflow fail with code-only errors. Missing and
@@ -488,7 +488,7 @@ not Event4 or destination JSON.
 > **Event 3.0: FROZEN / CURRENT COMPATIBILITY CONTRACT**
 
 Event3 remains supported. Existing persisted/replayed Event3 bytes, IDs,
-parser ownership, deterministic scoring, privacy behavior, and durable JSONL
+source ownership, deterministic scoring, privacy behavior, and durable JSONL
 semantics are unchanged. Event4 is independently versioned, does not replace
 Event3 until explicit migration gates pass, and future semantics are not
 backported. Event3 and Event4 are independent projections from common accepted

@@ -166,7 +166,7 @@ guessable preimages for low-entropy configuration. The command performs no event
 state, sidecar, journal, outbox, or manifest-file writes. Event 3.0 remains
 unchanged and has no manifest linkage.
 
-The embedded process-chain rules, parser registry, MCP detector definitions,
+The embedded process-chain rules, source-adapter definitions, MCP detector definitions,
 timeline/correlation/baseline algorithms, and Event 3.0 schema are immutable
 binary or frozen-contract assets for this v1 manifest. They are identified by
 the normal Telltale package/build identity rather than an open-ended asset graph;
@@ -246,8 +246,7 @@ otherwise ambiguous zero-detection result without exposing session content:
   `basis=watch_source_index_snapshot` and sets
   `performed_for_current_scan=false`; a full watch reconciliation refreshes the
   current discovery result. `returned_source_count` is before selection, while
-  `operational_source_count` is after client filtering, OpenCode SQLite-over-
-  legacy preference, and `max_sources` for a full scan (or is the canonical
+  `operational_source_count` is after client filtering and `max_sources` for a full scan (or is the canonical
   path-keyed watch index size). Selection order is unchanged.
 - Checked discovery reports only the first error category (`invalid_root`,
   `traversal`, or `other`). On that error, the CLI uses the best-effort partial
@@ -300,7 +299,7 @@ Common event types include:
 - `session_risk_summary`: optional per-session rollups from already-redacted
   activity and detection events.
 - `health`: source-discovery and scanner health status.
-- `scanner_error`: parser or scan errors that should be visible to operators.
+- `scanner_error`: source-acquisition or scan errors that should be visible to operators.
 - `operational_alert`: operator-facing threshold and delivery alerts, including
   `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
   Elastic bulk) could not be delivered to after retries.

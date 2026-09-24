@@ -20,7 +20,7 @@ synthetic reproduction data without secrets or raw session content.
 
 ### Requirement: Repository-specific threat model
 
-The repository SHALL document source/session data, config/rules, parser
+The repository SHALL document source/session data, config/rules, source-adapter
 ownership, local state/outbox, remote sinks, dependencies, build/CI, release,
 publishing, attacker classes, excluded actors, mitigations, and residual risks,
 with links to existing privacy, durable-delivery, installer, and release docs.

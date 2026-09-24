@@ -155,7 +155,7 @@ Negative fixtures live alongside positive fixtures in the same directory structu
 
 ### Cross-Client Coverage
 
-High-signal use cases (UC-001, UC-002, UC-003) should have positive fixtures across all active agent sources (Codex, OpenCode, Copilot) and at least one future source (Claude Code). This ensures parser differences do not hide detections.
+High-signal use cases (UC-001, UC-002, UC-003) should have positive fixtures across all active agent sources (Codex, OpenCode, Copilot) and at least one future source (Claude Code). This ensures source-adapter differences do not hide detections.
 
 See [client-capability-matrix.md](client-capability-matrix.md) for per-client field availability.
 

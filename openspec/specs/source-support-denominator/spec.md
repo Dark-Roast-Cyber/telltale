@@ -52,7 +52,7 @@ Canonical field semantics remain owned by adapter specifications.
 `AcquisitionProgress`. Only OpenCode MAY return its selected extraction's part
 high-water coordinate; all other identities MUST return `None`. Progress MUST NOT
 enter canonical identity, correlation, timestamps, provenance, metadata, or
-capabilities. Copilot parser state MUST remain source-local and non-durable.
+capabilities. Copilot source extraction state MUST remain source-local and non-durable.
 Acquisition MUST NOT own scanner checkpoint persistence, overlap, or retry policy.
 
 Each of the eight adapters MUST satisfy the authoritative canonical session

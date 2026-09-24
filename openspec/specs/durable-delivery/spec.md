@@ -224,7 +224,7 @@ committed transactionally.
 Every payload-bearing outbox, retry, and permanent/dead record SHALL contain
 only canonical terminal/emittable Event 3.0 bytes. The system MUST NOT persist
 raw source/transcript records or manually reconstruct Event JSON. Event 3.0
-shape, `NATIVE_SCHEMA_VERSION`, parser identity, detector inputs, and scoring
+shape, `NATIVE_SCHEMA_VERSION`, source identity, detector inputs, and scoring
 semantics SHALL remain unchanged.
 
 #### Scenario: Persisted payload is checked
