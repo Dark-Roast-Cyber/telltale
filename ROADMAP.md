@@ -53,7 +53,9 @@ and are not built-in discovery or parser paths:
 
 Git history preserves their former implementations and fixtures. They must not
 return as compatibility registrations or receive Canonical Observation v2 work
-without a separately accepted source contract.
+without a separately accepted source contract. OpenCode support for 0.7 is the
+current `opencode.sqlite` database only; prior OpenCode source layouts and
+source-backed record/export compatibility are not protected contracts.
 
 ### Remaining 0.6.x migration sequence
 
@@ -82,10 +84,15 @@ The intended convergence order is:
    complete.** The normal production path is Canonical Observation v2 -> Detection
    v2, with Event 3.0 retained as the compatibility projection during the
    migration. Record-level compatibility APIs remain intentionally separate.
-6. **Delete transitional machinery after activation.** Remove the legacy
-   NormalizedRecord-centered detector path, duplicate scoring/grouping logic,
-   shadow/equivalence infrastructure, migration-only fixtures and reports, and
-   stale documentation once their replacements are authoritative.
+6. **Delete transitional machinery after activation.** Remove source-backed
+   legacy record projection APIs, parser registrations, compatibility-only
+   source fields, duplicate scoring/grouping logic, shadow/equivalence
+   infrastructure, migration-only fixtures and reports, and stale documentation
+   once their replacements are authoritative. OpenCode retains only the current
+   `opencode.sqlite` native/canonical path and its bounded cursor semantics.
+   Source adapters must not retain synchronized `legacy_*` fields merely to
+   reproduce the retired flat record model. Event 3.0 and deliberate
+   caller-provided direct-record compatibility remain separate contracts.
 7. **Decide the final 0.7 event/telemetry cutover after semantic convergence.**
    Event4 remains an independent projection from accepted semantic truth. Do not
    expand Event4 persistence, dual emission, or transport merely to compensate

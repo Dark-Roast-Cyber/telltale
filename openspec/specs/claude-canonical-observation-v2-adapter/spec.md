@@ -3,58 +3,42 @@
 ## Purpose
 This specification covers the Claude Code `claude.projects` adapter. The
 authoritative public acquisition API reuses its native interpretation and
-Canonical Observation v2 mapping for production source evaluation. Record-level
-compatibility parsing remains available and Event3 remains the external projection.
+Canonical Observation v2 mapping for production source evaluation. Source-backed
+legacy record projection is retired; Event3 remains the external projection.
 ## Requirements
 ### Requirement: One Claude-native interpretation
 
 The Claude adapter MUST read `claude.projects` JSONL once into one bounded
-Claude-specific native interpretation. The native record MUST retain enough
-ordered structure for both the retained `ParsedRecord` compatibility projection
-and Canonical Observation v2. Production source evaluation MUST use canonical
-acquisition without routing through compatibility records.
+Claude-specific native interpretation that retains only source facts needed for
+canonical mapping and native accounting. It MUST NOT retain `ParsedRecord` or
+compatibility-only flattened fields.
 
-#### Scenario: One read supports both projections
+#### Scenario: One read feeds canonical semantics
 
-- **WHEN** a valid Claude JSONL source is extracted
-- **THEN** native records are built once and the legacy projection preserves its
-  existing count, order, metadata, kind, flattened arguments, content, and
-  filename-stem session fallback
-
-### Requirement: Legacy behavior remains equivalent
-
-The implementation MUST preserve current Claude legacy behavior, including
-tool-use and tool-result kind rules, `type:tool` completed/error result rules,
-unknown explicit discriminator to `RecordKind::Other`, and object-envelope
-`SchemaDrift` errors. Canonical mapping failures MUST NOT become production
-`ParseError` outcomes.
-
-#### Scenario: Legacy characterization remains stable
-
-- **WHEN** the existing Claude, parity, and detection fixtures are parsed
-- **THEN** records remain behaviorally equivalent to the pre-v2 adapter path
+- **WHEN** a valid Claude JSONL source is acquired
+- **THEN** canonical observations and accounting are derived from the same native
+  interpretation without constructing a legacy record projection
 
 ### Requirement: Canonical projection is production-active
 
 The v2 projection MUST remain source-owned and reached through authoritative
 acquisition. Scan, watch, and embedding MUST consume it through the shared
-canonical runtime. `parse_source_records` remains only a compatibility surface.
+canonical runtime. No source-backed parser compatibility surface is required.
 
 #### Scenario: Production uses canonical acquisition
 
 - **WHEN** the normal scanner processes a `claude.projects` source
 - **THEN** it acquires Canonical Observation v2 without normalized-record detection
 
-### Requirement: Session identity is split between legacy and v2
+### Requirement: Canonical session identity is source-reported
 
 For `claude.projects`, the v2 projection MUST use a source-reported
 `sessionId`, `session_id`, or `sessionID` as the namespace for that record's
 zero-based JSONL ordinal and MUST set the same value as a `SourceReported`
 `session_id` correlation. The ordinal MUST NOT be identity-eligible without
 that explicit scope. If the source session ID is absent, v2 MUST not use a
-filename, path, project directory, or legacy session fallback and MUST fail
-closed with `replay_unverifiable`. Legacy parsing MUST retain its filename-stem
-session behavior.
+filename, path, project directory, or compatibility fallback and MUST fail
+closed with `replay_unverifiable`.
 
 #### Scenario: Source session scopes an ordinal
 
@@ -62,17 +46,11 @@ session behavior.
 - **THEN** its v2 ordinal is scoped by `claude-tool-use`, its canonical session
   correlation is source-reported, and the observation has a stable ID
 
-#### Scenario: Filename fallback is legacy-only
+#### Scenario: Missing source session fails closed
 
 - **WHEN** `session-a.jsonl` has no source session field
-- **THEN** legacy parsing uses `session-a`, while v2 emits no canonical session
-  identity and fails with `replay_unverifiable` rather than creating an ID
-
-#### Scenario: Session-a has different compatibility and canonical identity
-
-- **WHEN** `session-a.jsonl` has no source session field
-- **THEN** legacy `session_id` is `session-a` and every v2 observation has no
-  canonical `session_id`
+- **THEN** canonical acquisition fails with `replay_unverifiable` rather than
+  deriving identity from the filename
 
 ### Requirement: Tool lifecycle is truthful
 
@@ -201,14 +179,13 @@ Process, or Network observations from that parsed path or from message text.
 Unknown explicit Claude record discriminators and unknown content-block types
 inside otherwise known records MUST return safe canonical mapping errors. The v2
 adapter MUST NOT dump arbitrary unknown objects into the `Other` family or
-silently drop an in-scope record. Legacy unknown discriminators MUST remain
-`RecordKind::Other`.
+silently drop an in-scope record.
 
 #### Scenario: Unknown discriminator is isolated
 
 - **WHEN** a Claude record has an explicit future discriminator
-- **THEN** legacy parsing returns `Other`, while v2 returns a mapping error with
-  a code and non-sensitive detail
+- **THEN** canonical mapping returns a bounded error code and non-sensitive
+  detail
 
 ### Requirement: Metadata and privacy boundaries hold
 
@@ -271,11 +248,11 @@ mapping, and validation errors. Failure MUST NOT return successful progress.
 - **THEN** its observations match the reference projection, repeated acquisition
   retains observation identity, and progress is `None`
 
-#### Scenario: Canonical identity cannot use the legacy fallback
+#### Scenario: Canonical identity cannot use filename fallback
 
 - **WHEN** a Claude source has no truthful canonical session coordinate
-- **THEN** acquisition fails with a privacy-safe replay-unverifiable error while
-  legacy parsing retains its existing filename fallback independently
+- **THEN** acquisition fails with a privacy-safe replay-unverifiable error rather
+  than deriving a session from the artifact name
 
 #### Scenario: Invalid acquisition identity or kind is rejected before I/O
 

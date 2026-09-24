@@ -3,23 +3,21 @@
 ## Purpose
 This specification covers the Codex adapter path. The authoritative public
 acquisition API reuses its native interpretation and Canonical Observation v2
-mapping for production source evaluation. Record-level compatibility parsing
-remains available; Event 3.0 remains the external projection.
+mapping for production source evaluation. Source-backed legacy record projection
+is retired; Event 3.0 remains the external projection.
 ## Requirements
 ### Requirement: One Codex-native interpretation
 
 The Codex adapter MUST read each registered Codex JSONL source once into one
-bounded Codex-specific native interpretation. That interpretation MUST retain
-enough ordered structure for both the retained `ParsedRecord` /
-`NormalizedRecordV1` compatibility projection and Canonical Observation v2.
-Production source evaluation MUST use canonical acquisition without routing
-through compatibility records.
+bounded Codex-specific native interpretation containing only source facts needed
+for canonical mapping and native accounting. It MUST NOT retain `ParsedRecord`,
+`NormalizedRecordV1`, or compatibility-only flattened fields.
 
-#### Scenario: One read preserves legacy output
+#### Scenario: One read feeds canonical semantics
 
-- **WHEN** a valid Codex JSONL source is extracted
-- **THEN** legacy record count, order, metadata, kind, flattened arguments,
-  content, and filename-stem session fallback remain unchanged
+- **WHEN** a valid Codex JSONL source is acquired
+- **THEN** canonical observations and accounting are derived from the same native
+  interpretation without constructing a legacy record projection
 
 ### Requirement: Three source identities remain distinct
 
@@ -37,19 +35,6 @@ observations across source IDs.
 - **THEN** provenance uses `codex.archived_sessions`, `ArchivedJsonl`, and no
   live/archive deduplication is attempted
 
-### Requirement: Legacy behavior remains equivalent
-
-Codex legacy extraction MUST preserve current response-item unwrapping,
-event-message flattening, generic tool classification, headless `session_meta`
-fallback, unknown-discriminator `RecordKind::Other`, and object-envelope
-`SchemaDrift` behavior. Canonical mapping failures MUST NOT become production
-`ParseError` outcomes.
-
-#### Scenario: Canonical failure is isolated
-
-- **WHEN** an in-scope Codex record fails canonical mapping
-- **THEN** legacy parsing of the same source remains successful and unchanged
-
 ### Requirement: Canonical session identity is source-reported
 
 For each registered Codex source, the v2 projection MUST use
@@ -58,8 +43,8 @@ ordinal. The effective value MUST come only from a source-reported
 `session_id`, `sessionID`, or `sessionId` on the record, or from a prior
 `session_meta` that explicitly supplied one. A bare producer ordinal MUST remain
 provenance only. If no truthful session ID exists, v2 MUST not use a filename,
-path, project directory, or legacy fallback and MUST fail with
-`replay_unverifiable`; legacy parsing retains its filename-stem behavior.
+path, project directory, or compatibility fallback and MUST fail with
+`replay_unverifiable`.
 
 #### Scenario: Session metadata scopes later records
 
@@ -71,8 +56,8 @@ path, project directory, or legacy fallback and MUST fail with
 #### Scenario: Truthful absence fails closed
 
 - **WHEN** `session-a.jsonl` contains no source-reported session ID
-- **THEN** legacy parsing retains `session-a`, while v2 returns
-  `replay_unverifiable` and creates no collision-prone ID
+- **THEN** canonical mapping returns `replay_unverifiable` and creates no
+  collision-prone ID
 
 #### Scenario: Session metadata is inherited
 
@@ -83,8 +68,7 @@ path, project directory, or legacy fallback and MUST fail with
 #### Scenario: Truthful absence is preserved
 
 - **WHEN** a source has no source-reported session ID
-- **THEN** v2 omits `session_id` while legacy parsing retains its file-stem
-  fallback
+- **THEN** canonical mapping does not derive `session_id` from the file stem
 
 ### Requirement: Truthful messages preserve order
 
@@ -193,8 +177,7 @@ not mutation. Artifact path and filename MUST not participate.
 ### Requirement: Unknown input fails closed without leakage
 
 Unknown explicit discriminators MUST return `unknown_discriminator`, and
-unknown content blocks MUST return `unknown_content_block`, while legacy
-unknown discriminators remain `Other`. Source parse/schema errors MUST remain
+unknown content blocks MUST return `unknown_content_block`. Source parse/schema errors MUST remain
 isolated source errors. Canonical error `Display` and `Debug` MUST NOT contain
 prompts, tool arguments/results, paths, secrets, or arbitrary source payloads.
 
@@ -202,13 +185,13 @@ prompts, tool arguments/results, paths, secrets, or arbitrary source payloads.
 
 - **WHEN** a record contains an unsupported explicit discriminator and synthetic
   source text
-- **THEN** v2 rejects it with a safe mapping code and legacy returns `Other`
+- **THEN** canonical mapping rejects it with a safe mapping code
 
 ### Requirement: Canonical production and Event 3.0 compatibility
 
 Production scanning MUST consume Codex Canonical Observation v2 through the
-shared runtime. Parser registration, exact source identity, Event3 schema and
-privacy behavior, and already-persisted Event3 data MUST remain compatible.
+shared runtime. Exact source identity, Event3 schema and privacy behavior, and
+already-persisted Event3 data MUST remain compatible.
 New canonical evidence, hashes, severity, and constructor-generated IDs/times
 need not be byte-identical to legacy output.
 

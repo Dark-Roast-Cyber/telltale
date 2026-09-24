@@ -1,32 +1,32 @@
 # opencode-sqlite-canonical-observation-v2-adapter Specification
 
 ## Purpose
-This specification covers the OpenCode `opencode.sqlite` adapter. One
-SQLite-native interpretation feeds retained record compatibility and the
-authoritative Canonical Observation v2 acquisition API used by the production
-source runtime. Event 3.0 remains the external projection.
+This specification covers the current OpenCode `opencode.sqlite` adapter.
+One SQLite-native interpretation feeds the authoritative Canonical Observation
+v2 acquisition API used by the production source runtime. Older OpenCode source
+layouts and source-backed record/export compatibility are not part of this
+contract. Event 3.0 remains the external projection.
 ## Requirements
 ### Requirement: One OpenCode SQLite-native interpretation
 
 The `opencode.sqlite` adapter MUST read the existing SQLite message and
 cursor-bounded selected `text`/`tool` part rows into one OpenCode-specific native
-interpretation that retains structured source facts and exact legacy projection
-fields. Record-level compatibility parsing MAY derive `ParsedRecord`/
-`NormalizedRecordV1` from that interpretation. Production source evaluation
-MUST use canonical acquisition and MUST NOT route through those records.
+interpretation containing only facts needed by canonical mapping, native
+accounting, and bounded read progress. It MUST NOT retain `ParsedRecord`,
+`NormalizedRecordV1`, or synchronized legacy-shaped fields for source-backed
+compatibility.
 
-#### Scenario: Existing legacy projection remains equivalent
+#### Scenario: One native interpretation feeds canonical acquisition
 
-- **WHEN** a valid OpenCode SQLite source is parsed
-- **THEN** legacy count, order, session fallback, metadata, kind, flattened
-  arguments, content, part filtering, cursor, limit, and high-water behavior
-  remain unchanged
+- **WHEN** a valid OpenCode SQLite source is acquired
+- **THEN** canonical observations, accounting, and progress are derived from the
+  same bounded native read without constructing a legacy record projection
 
 ### Requirement: SQLite source contract remains bounded
 
 The adapter MUST retain the existing five-second busy timeout, lock mapping,
 uncursored message query, selected `tool`/`text` part filter, limit, cursor
-predicate, inner/outer ordering, and SQLite-over-legacy preference. It MUST NOT
+predicate and inner/outer ordering. It MUST NOT
 read the event table or broaden the selected part set as part of this change.
 
 #### Scenario: Incremental part extraction remains stable
@@ -107,11 +107,11 @@ IDs MUST remain absent. Clear command and file-path arguments MAY become Parsed
 `command.text` and `resource.path` facets. Parsed facets MUST NOT produce File,
 Process, or Network observations.
 
-#### Scenario: Native tool values are not rebuilt from legacy text
+#### Scenario: Native tool values remain structured
 
 - **WHEN** a selected tool part contains structured input and structured output
 - **THEN** canonical tool arguments/results preserve those JSON structures and
-  source call linkage, independent of flattened legacy strings
+  source call linkage without maintaining a parallel flattened representation
 
 ### Requirement: Time, capability, and replay identity are explicit
 
@@ -129,18 +129,18 @@ multiple observations share the complete identity coordinate.
 - **THEN** `observed_at` is the supplied option, `occurred_at` uses lifecycle
   time when valid, and `time_updated` is not used as occurrence time
 
-### Requirement: Canonical failures and compatibility are isolated
+### Requirement: Canonical failures are bounded and source-local
 
 Canonical mapping errors MUST be safe, code-based, and free of raw source
-payloads. Record-level compatibility parse behavior remains separately
-available. Production source evaluation MUST consume the Canonical Observation
-v2 acquisition path and MUST NOT reconstruct normalized records.
+payloads. Production source evaluation MUST consume the Canonical Observation v2
+acquisition path and MUST NOT reconstruct normalized records or fall back to a
+retired OpenCode source projection.
 
-#### Scenario: Canonical failure does not alter legacy parsing
+#### Scenario: Canonical failure does not produce fallback evidence
 
 - **WHEN** canonical mapping rejects a malformed or identity-less selected row
-- **THEN** legacy parsing of that same SQLite source remains available with its
-  existing output and no canonical error is returned through `ParseError`
+- **THEN** acquisition fails with a bounded source/canonical error and does not
+  manufacture compatibility records or checkpointable progress
 
 ### Requirement: OpenCode conformance evidence exists
 

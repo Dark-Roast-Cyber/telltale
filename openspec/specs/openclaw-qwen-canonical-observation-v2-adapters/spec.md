@@ -3,47 +3,25 @@
 ## Purpose
 
 Define the completed P15 adapter contract for OpenClaw and Qwen JSONL sources.
-The contract covers source-owned native interpretation, exact legacy
-compatibility, Canonical Observation v2 projections, authoritative acquisition
-routing and cross-adapter conformance. Production source evaluation
-uses canonical acquisition and Detection v2 with Rule v1 content compatibility.
+The contract covers source-owned native interpretation, Canonical Observation v2
+projections, authoritative acquisition routing and cross-adapter conformance.
+Production source evaluation uses canonical acquisition and Detection v2 with
+Rule v1 content compatibility. Source-backed legacy record projection is retired.
 ## Requirements
 ### Requirement: One source-owned native interpretation
 
 Each in-scope adapter MUST read its JSONL source once into a source-owned native
-record model that retains enough ordered source structure for both the exact
-legacy projection and the Canonical Observation v2 projection. The model MUST
-distinguish direct source-reported agent/provider/model values from effective
-legacy inherited values, and MUST retain a zero-based source-record sequence.
+record model that retains the ordered source structure needed for canonical
+mapping and native accounting. The model MUST preserve direct source-reported
+agent/provider/model values and any explicit source context needed to interpret
+later records, but MUST NOT retain synchronized `legacy_*` fields or flattened
+compatibility copies.
 
-#### Scenario: OpenClaw native record feeds both projections
+#### Scenario: OpenClaw native record feeds canonical acquisition
 
 - **WHEN** an OpenClaw JSONL source is read
-- **THEN** the native records retain ordered content/tool structure and direct
-  metadata, while the production parser maps those records to legacy output
-  without independently rereading or reinterpreting the JSONL
-
-#### Scenario: Inherited metadata is not direct metadata
-
-- **WHEN** an OpenClaw record reports provider/model/agent and the next record
-  omits them
-- **THEN** the legacy projection inherits the first observed values, while the
-  canonical projection does not mark those values as directly reported on the
-  next record
-
-### Requirement: Legacy projections remain unchanged
-
-OpenClaw and Qwen legacy extraction MUST preserve existing record count/order,
-session fallback, metadata inheritance, `RecordKind` classification, tool name,
-legacy argument stringification, content flattening, empty-source behavior, and
-schema/JSON failure behavior. Canonical mapping failures MUST NOT become legacy
-parse failures.
-
-#### Scenario: OpenClaw compatibility remains available after canonical failure
-
-- **WHEN** an OpenClaw record has an unknown canonical content block
-- **THEN** canonical projection fails closed, while the legacy parser retains its
-  existing result or `RecordKind::Other` behavior
+- **THEN** the native records retain ordered content/tool structure and truthful
+  source context without constructing a legacy record projection
 
 ### Requirement: OpenClaw canonical source identity is bounded
 
@@ -68,8 +46,8 @@ MUST take precedence when explicitly present. Call IDs, timestamps, content,
 paths, filenames, project names, and hashes MUST NOT be observation identity.
 When neither a truthful native ID nor a source-reported session-scoped sequence
 is available, canonical construction MUST fail closed with the existing
-`replay_unverifiable` vocabulary. Legacy filename fallback remains permitted
-only for legacy output.
+`replay_unverifiable` vocabulary. Filename fallback is not an accepted
+source-backed compatibility requirement.
 
 #### Scenario: Source session makes an ordinal stable
 
@@ -78,12 +56,12 @@ only for legacy output.
 - **THEN** the corresponding canonical observation IDs are equal and semantic
   comparison is separate from identity
 
-#### Scenario: Filename fallback is legacy-only
+#### Scenario: Missing source identity fails closed
 
 - **WHEN** an OpenClaw record omits source session identity and has no truthful
   native record ID
-- **THEN** legacy parsing uses its existing filename fallback, while canonical
-  projection fails closed rather than using that fallback
+- **THEN** canonical projection fails closed rather than deriving identity from
+  the filename
 
 ### Requirement: OpenClaw and Qwen canonical lifecycle is evidence-bounded
 
@@ -105,7 +83,7 @@ alone.
 
 Known text, tool-use, and tool-result content blocks MUST retain source order.
 Direct assistant `tool_calls` arrays MUST produce ToolRequested observations
-without changing legacy flattening. A record containing only a tool result MUST
+without maintaining a parallel flattened compatibility representation. A record containing only a tool result MUST
 not produce a duplicate empty Message observation. Unknown explicit content
 blocks or unsupported roles MUST fail closed rather than being reinterpreted as
 messages or arbitrary `Other` bodies.
@@ -206,9 +184,9 @@ equal adapter IDs or native coordinates.
 ### Requirement: Event 3.0 and adjacent source compatibility
 
 Production scanning MUST consume OpenClaw and Qwen Canonical Observation v2
-through the shared runtime. Exact parser ownership, Event3 schema/wire/privacy,
-already-persisted events, Event4 inactivity, and the absence of a generic adapter
-framework MUST remain unchanged.
+through the shared runtime. Event3 schema/wire/privacy, already-persisted events,
+Event4 inactivity, and the absence of a generic adapter framework MUST remain
+unchanged.
 
 #### Scenario: Existing compatibility behavior remains intact
 

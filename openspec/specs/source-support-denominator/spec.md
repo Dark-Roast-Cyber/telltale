@@ -8,15 +8,16 @@ Define the authoritative built-in source-support denominator.
 
 ### Requirement: Built-in support contains eight exact identities
 
-The built-in source registry and exact parser registration table MUST contain
-only `claude.projects`, `codex.sessions`, `codex.archived_sessions`,
+The built-in source registry and authoritative acquisition dispatcher MUST
+contain only `claude.projects`, `codex.sessions`, `codex.archived_sessions`,
 `codex.headless_sessions`, `opencode.sqlite`, `openclaw.agents`,
 `qwen.projects`, and `copilot.process_log`. Every registered identity MUST have
-fixture-backed discovery, parsing, and evaluation-corpus representation.
+fixture-backed discovery, canonical acquisition, and evaluation-corpus
+representation.
 
-#### Scenario: Registry and parser denominator agree
+#### Scenario: Registry and acquisition denominator agree
 
-- **WHEN** built-in source definitions and parser registrations are inspected
+- **WHEN** built-in source definitions and acquisition routing are inspected
 - **THEN** both sets contain the same eight exact `(ClientId, source_id)` pairs
 
 ### Requirement: Retired identities have no production machinery
@@ -29,8 +30,8 @@ discovered, parsed, canonically projected, or advertised as built-in support.
 
 - **WHEN** a caller supplies a retired source ID representable under a retained
   client
-- **THEN** exact parser lookup returns `UnsupportedSourceIdentity` before reading
-  the source path
+- **THEN** canonical acquisition returns `UnsupportedSourceIdentity` before
+  reading the source path
 
 ### Requirement: One authoritative canonical acquisition boundary
 
