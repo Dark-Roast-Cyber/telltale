@@ -4,6 +4,29 @@
 
 ---
 
+## 0.7.0 — unreleased
+
+- Complete the 0.6.x architecture-convergence sequence and move the production
+  source path for the supported denominator to Canonical Observation v2 and
+  Detection v2 for CLI scan/watch and the supported embedding facade.
+- Contract the built-in source denominator to eight exact identities across
+  Claude Code, Codex, OpenCode, OpenClaw, Qwen CLI, and GitHub Copilot; retired
+  source identities are not compatibility registrations in the 0.7 line.
+- Keep Rule v1 as the supported content-compatibility format while Detection v2
+  owns canonical evaluation. Caller-provided direct-record compatibility remains
+  separate from source acquisition.
+- Keep Event3 as the sole production event/output contract for 0.7. Event4 stays
+  a non-production schema/validation foundation with production activation,
+  dual emission, telemetry profiles, and generalized `CanonicalPayload` deferred.
+- Preserve the typed `Event3Record` consumer and bounded `LocalEventFeed` as
+  supported local adoption surfaces. Crates.io publication remains a separate
+  decision and does not block the GitHub release.
+- This section describes development toward 0.7.0; it is not a release claim.
+  Exact RC and stable qualification evidence will be added only after those
+  immutable artifacts exist.
+
+---
+
 ## 0.6.0 — published stable (2026-09-12)
 
 - Promoted the accepted `v0.6.0-rc.3` release line to stable package metadata.

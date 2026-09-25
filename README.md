@@ -104,6 +104,8 @@ synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
 real-session-store setup. Explicit state and historical-event
 migration guidance is in the [migration contract](docs/migration-contract.md).
+For the breaking source/runtime changes planned for the next minor release, see
+the [0.7.0 migration guide](docs/migrations/0.7.0.md).
 
 ## Development verification
 
@@ -126,11 +128,11 @@ release.
 
 ## Cargo packages
 
-The repository remains a Cargo workspace with six official packages, but crates.io
-publication is intentionally deferred while the 0.6.x architecture is still
-converging. The project will revisit registry publication after the 0.7.0
-architecture and supported embedding surface are stable enough for deliberate
-external Rust consumers.
+The repository remains a Cargo workspace with six official packages. The 0.6.x
+architecture-convergence sequence is complete; current work is hardening the 0.7.0
+near-production baseline and making the supported embedding surface explicit.
+Crates.io publication remains intentionally deferred until that public Rust
+surface is stable enough for deliberate external consumers.
 
 The six official packages are:
 

@@ -9,7 +9,8 @@ the [Source Validation Matrix](source-validation-matrix.md) for the canonical
 source-support claims and their evidence.
 
 For an exact, non-production development canary and tested rollback from the
-official `v0.5.0` release, use [Controlled development deployment](controlled-deployment.md).
+current official `v0.6.0` release, use [Controlled development deployment](controlled-deployment.md).
+For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md).
 
 ## Prerequisites
 
@@ -42,9 +43,9 @@ statically link the applicable MSVC CRT. These binaries do not require a
 separately installed Microsoft Visual C++ Redistributable. The exact
 `v0.6.0-rc.3` candidate passed five-platform native verification and clean-Windows
 static-CRT and functional acceptance. This policy does not apply retroactively to
-`v0.6.0-rc.2` or the current stable `v0.5.0` artifact.
+`v0.6.0-rc.2` or the immutable `v0.5.0` artifact.
 
-The v0.3.0 release archives and CI smoke checks establish binary packaging and
+Current release archives and CI smoke checks establish binary packaging and
 execution support for Linux, macOS, and Windows. They do not establish broad
 live validation of agent source stores on those platforms; source-store support
 claims remain bounded by the [Source Validation Matrix](source-validation-matrix.md).
@@ -71,7 +72,7 @@ configuration.
 
 ### Selecting an RC candidate
 
-Official stable remains `v0.5.0`. Published `v0.6.0-rc.1` is immutable failed
+Official stable is `v0.6.0`. Published `v0.6.0-rc.1` is immutable failed
 candidate evidence and must not be retried. Published `v0.6.0-rc.2` is immutable
 and passed publication, G-SERVICE, and five-platform native verification, but it
 predates the selected static-CRT policy. Published `v0.6.0-rc.3` is Release ID
@@ -86,7 +87,7 @@ The no-argument installer selects the latest stable GitHub Release. For
 approved candidate validation, select the exact immutable RC tag:
 
 ```sh
-RC_TAG='v0.6.0-rc.N' # replace N with an exact published candidate; use only with approval
+RC_TAG='v<version>-rc.N' # replace with one exact published candidate; use only with approval
 ./scripts/install-telltale --release-tag "$RC_TAG" --no-timer
 ./scripts/install-telltale --release-tag "$RC_TAG" --from-source --no-timer
 ```

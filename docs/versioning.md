@@ -17,6 +17,11 @@ format.
   changes, and install-to-SIEM reliability proof.
 - `v0.6.0` is the current official stable GitHub Release, published from
   `f8e00162a3f9ac1cf8d2f270e6db078d3917d186` after the rc.3 live Linux canary.
+- `0.7.0` is the current near-production development target. The 0.6.x
+  architecture-convergence sequence is complete; 0.7 release hardening must
+  freeze the intended public adoption surface, preserve Event3 as the production
+  output contract, and qualify an immutable release candidate before stable
+  publication.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -163,8 +168,8 @@ its explicit sequence against that graph; Console is not in the publishable set.
    version together. For stable promotion from an accepted RC, prepare that
    reviewed reversible stable-version commit before final preflight; it is not itself
    tagging or publication.
-3. For an RC, first prepare matching `0.6.0-rc.N` package metadata, then use
-   the exact matching `v0.6.0-rc.N` tag only after authorization. The tag, Release
+3. For the next RC, first prepare matching `0.7.0-rc.N` package metadata, then
+   use the exact matching `v0.7.0-rc.N` tag only after authorization. The tag, Release
    metadata, archive names, checksums, attestations, and installer selection
    are immutable evidence; a validation-relevant change requires the next
    reviewed RC rather than reusing a tag or asset.
@@ -175,14 +180,15 @@ its explicit sequence against that graph; Console is not in the publishable set.
    file boundary.
 6. Create the matching `v<version>` tag only after preflight, artifact-boundary,
    and GitHub publication-prerequisite gates pass. Crates.io publication is not
-   part of this GitHub tagging step. The next minor requires `v0.6.0` with
-   package `0.6.0` only after all release-readiness gates pass.
+   part of this GitHub tagging step. Stable `v0.7.0` requires package
+   `0.7.0` only after all 0.7 release-readiness gates pass.
 7. Wait for the release workflow, then inspect the published artifacts and
    checksums before reporting the release complete.
 
-The current 0.5.0 section documents the breaking package and Event 3.0
-changes. The older [0.4.0 migration guide](migrations/0.4.0.md) documents the
-unpublished API hardening work folded into this release.
+The older [0.4.0 migration guide](migrations/0.4.0.md) documents unpublished API
+hardening folded into 0.5.0. The [0.7.0 migration guide](migrations/0.7.0.md)
+records the next minor line's source/runtime compatibility boundary while
+preserving Event3.
 
 ## Crates.io Publication
 
@@ -214,21 +220,22 @@ Before publication, recheck registry ownership and availability for every name.
 Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
-override and confirm the clean consumers and CLI installation using only pinned
-`=0.6.0` registry dependencies while that remains the workspace package
-version. Advance the pin with each reviewed lockstep package version.
+override and confirm the clean consumers and CLI installation using only the
+exact current lockstep registry version. Advance that pin with each reviewed
+workspace package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
 
 ## Pre-Releases
 
-The established supported candidate convention is `0.6.0-rc.N` (a canonical
-nonnegative integer N without leading zeros), only when external validation is useful. A
+The established supported candidate convention is `<minor>.0-rc.N` (a
+canonical nonnegative integer N without leading zeros), only when external
+validation is useful. The next planned candidate line is `0.7.0-rc.N`. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees. GitHub Release metadata must set
 `prerelease=true`; an RC must never be made the normal latest stable Release.
 The checked-in installer keeps no-argument selection on `releases/latest`, while
-`--release-tag v0.6.0-rc.N` selects and validates one exact published candidate
+`--release-tag v<minor>.0-rc.N` selects and validates one exact published candidate
 before any user install or schedule mutation. `--from-source` uses that same
 exact tag, validates its archive provenance, resolves its immutable commit, and
 builds that source revision. Binary

@@ -3,9 +3,9 @@
 Status: operator procedure for validating an exact development build. It does
 not make that build a release or authorize deployment to a live host.
 
-The supported production release remains `v0.5.0` until a newer stable GitHub
-Release exists. Use this procedure only in a lab or on an explicitly approved
-canary target.
+The current official stable release is `v0.6.0`. Use this procedure only for an
+exact unreleased development candidate in a lab or on an explicitly approved
+canary target; it does not replace the normal release process.
 
 ## Identity
 
@@ -30,8 +30,8 @@ still reports `0.5.0` and retains its original archive/binary checksums. Never
 substitute a newer build into that evidence. See the [versioning contract](versioning.md).
 
 Use `telltale-dev-<40-character-sha>-<target>.tar.gz` for the archive name.
-Never name it `telltale-v0.5.0-*`, attach it to the `v0.5.0` Release, or call it
-stable.
+Never give a development archive an official `telltale-v<version>-*` release
+name, attach it to an existing GitHub Release, or call it stable.
 
 ## Compatibility record
 
