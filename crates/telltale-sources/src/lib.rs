@@ -13,7 +13,7 @@ pub mod install_inventory;
 pub mod journal;
 pub mod paths;
 pub mod projects;
-pub mod source_read;
+pub(crate) mod source_read;
 pub mod sources;
 
 #[cfg(test)]
