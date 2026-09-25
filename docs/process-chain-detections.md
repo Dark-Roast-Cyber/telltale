@@ -1,13 +1,17 @@
 # Process-Chain Detections
 
-Telltale's regex rules ask "does this text look risky". Process-chain rules ask
-whether available evidence supports a parent/child matcher relationship and
-what command context accompanies it. Directly observed Process evidence can
-support an execution relationship. Command/tool-derived matcher context is an
-interpretation and does **not** prove that one process spawned another. The
-rules are a second vocabulary that runs alongside the regex engine and emits
-its own event type. The regex engine, its rule pack, its scoring, and the session
-`detection` event are unchanged.
+Telltale's Rule v1 content compatibility asks "does this text look risky".
+Process-chain rules ask whether available evidence supports a parent/child
+matcher relationship and what command context accompanies it. In the production
+path, Detection v2 evaluates both: Rule v1 retains its content-compatibility
+semantics, while the specialized process-chain evaluator uses the compiled
+process-chain rules and shared session kernel. Rule v1 results continue through
+the Event3 `detection` compatibility projection; process-chain results project
+Event3 `process_chain` events. Directly observed Process evidence can support
+an execution relationship. Command/tool-derived matcher context is an
+interpretation and does **not** prove that one process spawned another.
+Process-chain evaluation is not a parallel legacy engine running alongside
+Detection v2.
 
 - Rule pack: `crates/telltale-rules/data/process-chain.yaml` (generated)
 - Generator: `scripts/dev/generate-process-chain-rules.py`
@@ -282,10 +286,18 @@ sessions never correlate. Correlation results remain ordinary
 `CorrelationScope::Sequence`, omit aggregate capability context, and do not use
 the reserved generic `Sequence` or `Correlation` kinds.
 
-The Office, web-server, and RMM sequences require structured parent relationships
-that current Tool command evidence cannot supply. The evaluation report records
-these canonical visibility gaps explicitly. Their matcher and session-kernel
-contracts remain tested; no parent facts are manufactured to claim runtime coverage.
+Three enabled correlations require structured parent relationships that current
+canonical Tool command evidence cannot supply:
+
+- `procchain.correlation.office_script_then_download`
+- `procchain.correlation.webshell_then_discovery`
+- `procchain.correlation.rmm_then_credential_or_evasion`
+
+The evaluation corpus retains definition-backed atomic matcher conformance and
+fixed shipped-correlation session-kernel coverage for these rules, but it does
+not demonstrate positive canonical Tool detections for them. Canonical positive
+coverage awaits truthful structured Process evidence. No parent facts are
+manufactured to claim runtime coverage.
 
 ## False-positive controls
 
