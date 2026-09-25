@@ -399,7 +399,6 @@ These files are the source-of-truth for Telltale's current implementation, rules
 
 - [Session sources](docs/session-sources.md) — discovery paths per client
 - [Agent capability profiles](docs/agent-capability-profiles.md) — per-client field availability
-- [Client capability matrix](docs/client-capability-matrix.md) — direct-record conversion fields; source visibility is in the capability profiles
 - [MCP tool inventory](docs/mcp-tool-inventory.md) — MCP configuration inventory emission
 - [Policy modes](docs/policy-modes.md) — observe, alert, simulate-block modes
 - [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content

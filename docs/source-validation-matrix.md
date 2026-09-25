@@ -149,7 +149,6 @@ local source paths or transcript identifiers.
 
 - [Adding an Agent Source](adding-agent-source.md) — implementation checklist and native acquisition architecture
 - [Agent Capability Profiles](agent-capability-profiles.md) — per-source field availability and known gaps
-- [Client Capability Matrix](client-capability-matrix.md) — field-level availability per client
 - [Canonical Observation v2](canonical-observation-v2.md) — current source observation contract
 - [Detection Content Standard](detection-content-standard.md) — rule metadata and fixture expectations
 - [Session Sources](session-sources.md) — path patterns and discovery notes

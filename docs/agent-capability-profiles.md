@@ -130,7 +130,6 @@ The canonical adapter reports ToolCall **Supported**, UserContext
 
 ## Related documents
 
-- [Client Capability Matrix](client-capability-matrix.md)
 - [Source Validation Matrix](source-validation-matrix.md)
 - [Normalization Schema](normalization-schema.md)
 - [Session Sources](session-sources.md)

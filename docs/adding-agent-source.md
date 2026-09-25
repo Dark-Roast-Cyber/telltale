@@ -165,8 +165,9 @@ Avoid exact separators and Unix-only assumptions.
 ### 9. Update support documentation
 
 - Update `docs/session-sources.md` and `docs/source-validation-matrix.md`.
-- Update `docs/client-capability-matrix.md` and
-  `docs/agent-capability-profiles.md` for user-visible field availability.
+- Update `docs/agent-capability-profiles.md` for user-visible source
+  visibility. Update `docs/normalization-schema.md` only if the separate
+  caller-provided record compatibility contract changes.
 - Update telemetry or schema documentation only if a separately justified
   cross-agent contract changes. Do not fork normalized or event schemas for one
   source.

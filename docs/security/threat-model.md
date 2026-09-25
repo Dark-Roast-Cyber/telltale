@@ -6,12 +6,14 @@ are eliminated.
 
 ## System and trust boundaries
 
-Telltale reads agent session stores and source-specific files, normalizes them
-through the owned `(ClientId, source_id)` parser, applies deterministic rules,
-and emits Event 3.0 telemetry. The normal durable path is:
+Telltale discovers supported agent session stores and source-specific files,
+performs source-native extraction and canonical mapping, evaluates Canonical
+Observation v2 with Detection v2, and projects Event 3.0 telemetry. The normal
+durable path is:
 
 ```text
-session/source files -> parser -> normalized records -> deterministic rules
+session/source files -> source-native acquisition -> Canonical Observation v2
+    -> Detection v2 -> Event3 compatibility projection
     -> terminal privacy boundary -> canonical JSONL -> optional SQLite outbox
     -> configured remote sink
 ```
@@ -20,7 +22,9 @@ The cooperating local process and its OS principal own the configured source
 roots, configuration, rules, canonical JSONL, state, and outbox. A source file,
 session record, rule/config value, sink response, downloaded release, and
 dependency source are untrusted inputs unless a separate integrity check says
-otherwise. The core `Pipeline` is I/O-free; the host owns file and network I/O.
+otherwise. `Pipeline::scan_root` performs discovery and source I/O. The caller-provided
+record evaluation APIs remain in-memory, and the host owns event delivery and
+network I/O.
 
 The public release path is a separate boundary:
 
@@ -38,7 +42,7 @@ because the workflow invokes them.
 | Asset or boundary | Threat | Current mitigation and residual |
 | --- | --- | --- |
 | Session stores, transcripts, and source metadata | Hostile or malformed content causes source-adapter confusion, resource exhaustion, secret leakage, or unsafe diagnostics. | Source-specific adapters fail closed on known read/schema/mapping failures; bounded extraction and the centralized privacy boundary apply before emitted Event 3.0 text. Residual: a cooperating principal can read inputs available to that principal; adapter coverage is finite. |
-| Normalized records and detection evidence | Crafted content causes false matches, missed matches, or evidence that is mistaken for authorization. | Deterministic detection/scoring remains authoritative; evidence is bounded and source ownership is exact. Detection does not itself claim enforcement. Residual: efficacy outside the measured synthetic baseline is not established. |
+| Canonical observations and detection evidence | Crafted content causes false matches, missed matches, or evidence that is mistaken for authorization. | Detection v2 deterministic evaluation remains authoritative for source-backed scanning; evidence is bounded and source ownership is exact. Detection does not itself claim enforcement. Residual: efficacy outside the measured synthetic baseline is not established. |
 | Local config and rules | A local or deployment rule changes detection output, leaks a path, or is mistaken for trusted policy. | Configuration and rule provenance are represented and validated; rule precedence and trust boundaries are documented in [agent policy authoring](../agent-policy-authoring.md) and [trust boundaries](../trust-boundaries.md). Residual: a user who controls the configured local trust boundary can change local behavior. |
 | Source-adapter and discovery boundary | A file is assigned to the wrong client/adapter or malformed known data silently falls through to generic semantics. | Ownership is the exact `(ClientId, source_id)` pair and known source-read or mapping failures are not silently downgraded. Residual: unsupported source families remain outside scope. |
 | Canonical JSONL, scanner state, and SQLite outbox | Same-principal tampering, replacement, truncation, crash, lock contention, full storage, or replay collision causes loss or duplicate delivery. | JSONL is durably first-written before acceptance in durable mode; cursor identity/integrity, private locks, SQLite transactions, capacity checks, collision handling, and fail-closed corruption/permission behavior are covered by the durable-delivery contract. At-least-once replay permits duplicates. Privileged/root/admin actors, same-principal hostile writers, and unsupported network filesystems remain residuals. |
