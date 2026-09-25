@@ -14,12 +14,12 @@ The authoritative architecture philosophy lives in
 and an accepted architecture document differ in technical detail, the architecture
 document governs.
 
-## Current Focus: 0.6.x Architecture Convergence
+## 0.6.x Architecture Convergence
 
 The earlier dependency-maintenance and repository-cleanup phases are no longer
 active roadmap sections. Completed implementation history belongs in Git history
-and `CHANGELOG.md`. Semantic architecture convergence is complete through step 6;
-the remaining 0.6.x objective is the final 0.7 event/telemetry decision in step 7.
+and `CHANGELOG.md`. The 0.6.x architecture-convergence sequence is complete
+through step 7.
 
 The migration should reduce parallel machinery as it progresses. New compatibility
 layers are acceptable only when they have a specific migration purpose and a
@@ -57,7 +57,7 @@ without a separately accepted source contract. OpenCode support for 0.7 is the
 current `opencode.sqlite` database only; prior OpenCode source layouts and
 source-backed record/export compatibility are not protected contracts.
 
-### Remaining 0.6.x migration sequence
+### Completed 0.6.x convergence sequence
 
 The intended convergence order is:
 
@@ -92,10 +92,12 @@ The intended convergence order is:
    native/canonical path and its bounded cursor semantics. Event 3.0 and
    deliberate caller-provided direct-record compatibility remain separate
    contracts.
-7. **Decide the final 0.7 event/telemetry cutover after semantic convergence.**
-   Event4 remains an independent projection from accepted semantic truth. Do not
-   expand Event4 persistence, dual emission, or transport merely to compensate
-   for an unfinished internal migration.
+7. **Finalize the 0.7 event/telemetry boundary — complete.** Event3 remains the
+   sole production output for 0.7; Event4 production activation is deferred.
+   Future Event4 output remains an independent projection from accepted semantic
+   truth. No dual emission, runtime Event4 opt-in, telemetry-profile runtime, or
+   generalized `CanonicalPayload` was introduced to finish the migration;
+   generalized `CanonicalPayload` remains deferred.
 
 Step 5 activation is implemented under Issue #51. The shared source-atomic
 runtime owns CLI scan/watch and the supported embedding facade, including
@@ -113,6 +115,10 @@ Step 6 convergence completed under Issue #54 with
 repository's Linux, macOS, Windows, package, test, format, Clippy, security, and
 code-scanning gates.
 
+Step 7 completed under Issue #55 with final completion commit
+`d3bfbd8aafebda2adc6c9433b1e2937069053526`. CI run `36067578187` and CodeQL
+run `36067577883` passed on that commit.
+
 The accepted semantic direction is documented in:
 
 - [Semantic foundation](docs/semantic-foundation.md)
@@ -123,7 +129,7 @@ The accepted semantic direction is documented in:
 
 Those documents define architecture. They are not task trackers.
 
-## 0.7.0: Near-Production Baseline
+## Current Focus: 0.7.0 Near-Production Baseline
 
 0.7.0 is the first milestone intended to be close to a production-ready,
 long-lived architectural baseline.
@@ -135,8 +141,8 @@ Before final 0.7.0, the normal production tree should satisfy these principles:
 - one authoritative Detection v2 production path;
 - Rule v1 retained as content compatibility rather than a second detector engine;
 - shipped process-chain behavior converged on the same detector result model;
-- Event 3.0 retained only as a deliberate external compatibility contract while
-  the current telemetry contract is finalized;
+- Event 3.0 is the deliberate production/compatibility output for 0.7, with
+  Event4 production activation deferred behind explicit future gates;
 - no normal production feature described as shadow, fixture-only, experimental,
   or a planned replacement for another normal production path;
 - no legacy implementation retained without an explicit continuing compatibility
