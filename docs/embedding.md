@@ -61,8 +61,9 @@ These packages are in current release preparation and are not published to
 crates.io yet. The supported embedding surface is `telltale-core`; consume it
 as a git dependency and pin a revision until publication:
 
-See [Versioning and Releases](versioning.md) before upgrading an existing
-integration; the current 0.5.0 section documents the Event 3.0 migration.
+See [Versioning and Releases](versioning.md) and the planned
+[0.7.0 migration guide](migrations/0.7.0.md) before upgrading an existing
+integration.
 
 ```toml
 [dependencies]
@@ -160,9 +161,40 @@ keeps the rule engine usable in processes with no filesystem access.
 
 ## Stability
 
-Pre-1.0: the `telltale-core` facade (`Pipeline`) and its documented type
-re-exports are the intended stable surface. The lower-level crates may
-reorganize more freely, and `telltale-detect` can be used without source I/O by
-disabling its default `source-io` feature. If you need something the facade does
-not expose, open an issue describing the integration — that feedback drives what
-gets stabilized.
+For 0.7, `telltale-core::Pipeline` (including `scan_root`, its builder, and the
+deliberate caller-provided `detect_records` / `evaluate_session` compatibility
+methods) and the types needed to call it are the supported Rust embedding
+facade. The core re-exports of `Source`, `Event`, `NormalizedRecord`, and rule
+result/error types serve that facade; their presence does not promise that
+every public module of the originating crate is a stable embedding API.
+
+Other intentional adoption contracts have separate owners:
+
+- `telltale_schema::event::Event3Record` consumes one complete, terminal Event3
+  object; native `Event` is the producer type, not an event deserializer.
+- `telltale_core::LocalEventFeed` and its documented config, batch, and notice
+  types support bounded read-only polling of local Event3 JSONL. See
+  [telemetry/output](telemetry-output.md#runtime-neutral-local-journal-polling).
+- `ProducerProvenanceManifestV1` and the public core provenance assembler/
+  `Pipeline::producer_provenance_manifest` describe effective producer
+  configuration, not per-event attestation or CLI path resolution. See
+  [producer provenance](telemetry-output.md#producer--detector-provenance-manifest).
+- Rule v1 **documents** remain supported content compatibility independent of
+  the stability of the `telltale-rules` Rust implementation API.
+
+The other public APIs in `telltale-schema`, `telltale-sources`,
+`telltale-detect`, and `telltale-rules` are usable foundations but do not receive
+a blanket 0.7 Rust API compatibility promise. In particular, Canonical
+Observation v2 and Detection v2 are authoritative *semantic/runtime* contracts,
+not a supported third-party source-adapter or detector plugin ABI.
+`telltale_core::canonical_runtime` is a hidden migration seam, not an embedding
+entry point. The optional `telltale_core::assignment` store has a documented
+fail-closed identity/replay contract but is not used by normal source scans or
+promised as a general-purpose stable storage API. Public visibility alone does
+not authorize removing these modules or weakening their behavior.
+
+Pin a git revision and test upgrades: this is pre-1.0, not a promise of
+unchanged Rust signatures between commits. `telltale-detect` can be used
+without source I/O by disabling its default `source-io` feature. If an
+integration needs a lower-level API stabilized, open an issue describing the
+use case before treating the module layout as a compatibility contract.

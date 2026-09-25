@@ -220,9 +220,9 @@ Before publication, recheck registry ownership and availability for every name.
 Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
-override and confirm the clean consumers and CLI installation using only the
-exact current lockstep registry version. Advance that pin with each reviewed
-workspace package version.
+override and confirm the clean consumers and CLI installation using only pinned
+`=0.6.0` registry dependencies while that remains the workspace package
+version. Advance that pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
 
