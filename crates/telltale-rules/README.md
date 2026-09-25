@@ -1,6 +1,5 @@
 # telltale-rules
 
-[![crates.io](https://img.shields.io/crates/v/telltale-rules.svg)](https://crates.io/crates/telltale-rules)
 
 The I/O-free Telltale rule engine: YAML parsing and validation, policy and rule
 merging, regex compilation, and in-memory evaluation. It does not read files,
@@ -27,5 +26,4 @@ risk-contribution rationale.
 
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
-- [API documentation](https://docs.rs/telltale-rules)
 - [Repository](https://github.com/Dark-Roast-Cyber/telltale)

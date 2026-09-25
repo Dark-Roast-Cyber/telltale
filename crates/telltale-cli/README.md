@@ -1,13 +1,9 @@
 # telltale-cli
 
-[![crates.io](https://img.shields.io/crates/v/telltale-cli.svg)](https://crates.io/crates/telltale-cli)
 
-Telltale's command-line scanner for discovering, parsing, and detecting risky
-AI coding-agent activity. Install it with:
-
-```sh
-cargo install telltale-cli
-```
+Telltale's command-line scanner for discovering, acquiring, and detecting risky
+AI coding-agent activity. The package is not published to crates.io yet; install
+a GitHub release or build from source using the repository install guide.
 
 Do not use `cargo install telltale`: that crates.io package is an unrelated
 session-types crate. The Telltale CLI package is `telltale-cli`.
@@ -16,8 +12,8 @@ The package installs one binary:
 
 - `telltale` is the sole CLI and Cargo binary identity.
 
-The supported Rust embedding surface is [`telltale-core`](https://crates.io/crates/telltale-core),
-imported as `telltale_core`; the CLI package is not the embedding API.
+The supported Rust embedding surface is `telltale-core`, imported as
+`telltale_core`; the CLI package is not the embedding API.
 
 The runtime uses canonical paths and `TELLTALE_*` environment variables. Unknown
 inherited non-canonical variables are ignored. Native events use

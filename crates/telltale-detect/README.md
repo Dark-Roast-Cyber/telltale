@@ -1,6 +1,5 @@
 # telltale-detect
 
-[![crates.io](https://img.shields.io/crates/v/telltale-detect.svg)](https://crates.io/crates/telltale-detect)
 
 Detection over caller-supplied records and canonical observations: rule
 evaluation, timelines, baseline models, correlation, allowlists, and optional
@@ -35,5 +34,4 @@ compatibility covers Rule v1, not a separate process-chain detector.
 
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
-- [API documentation](https://docs.rs/telltale-detect)
 - [Repository](https://github.com/Dark-Roast-Cyber/telltale)

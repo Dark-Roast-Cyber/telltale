@@ -1,6 +1,5 @@
 # telltale-schema
 
-[![crates.io](https://img.shields.io/crates/v/telltale-schema.svg)](https://crates.io/crates/telltale-schema)
 
 Canonical Telltale events, normalized records, source identities, redaction,
 and scoring types. This crate owns data contracts only; it does not discover
@@ -68,5 +67,4 @@ does not by itself make them a stable adopter or plugin API. Callers must not lo
 these types; nested `Debug` implementations can still expose local or sensitive
 values if logged directly.
 
-- [API documentation](https://docs.rs/telltale-schema)
 - [Repository](https://github.com/Dark-Roast-Cyber/telltale)

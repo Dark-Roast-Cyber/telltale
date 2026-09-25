@@ -1,6 +1,5 @@
 # telltale-sources
 
-[![crates.io](https://img.shields.io/crates/v/telltale-sources.svg)](https://crates.io/crates/telltale-sources)
 
 Cross-platform session-store discovery, native extraction, and Canonical
 Observation v2 acquisition for supported AI coding agents, including source
@@ -21,5 +20,4 @@ investigation export helper.
 
 This package follows Telltale's pre-1.0 release and compatibility policy.
 
-- [API documentation](https://docs.rs/telltale-sources)
 - [Repository](https://github.com/Dark-Roast-Cyber/telltale)

@@ -18,10 +18,11 @@ The accepted semantic-foundation contracts are documented in [Semantic
 foundation](semantic-foundation.md) and its related [Event4](event4.md),
 [Canonical Observation v2](canonical-observation-v2.md), [Detection v2](detection-v2.md),
 and [telemetry/output architecture](telemetry-output-architecture.md) pages.
-Those pages distinguish accepted future architecture from any implemented
-non-production foundation; they do not authorize production activation or
-additional work. These principles remain the direction for evaluating future
-work.
+Those pages distinguish the activated Canonical Observation v2 and Detection
+v2 production contracts from future or non-production Event4 and telemetry
+architecture. Describing future architecture does not authorize production
+activation or additional work. These principles remain the direction for
+evaluating future work.
 
 ## Product Direction
 
@@ -506,11 +507,15 @@ Internal crate layout, private traits, module organization, and experimental imp
 
 ## Current Architectural Priority
 
-Before building substantial realtime enforcement or gateway functionality, complete the transition toward canonical observations as the native internal representation.
+The supported source denominator has completed its transition to source-native
+Canonical Observation v2 acquisition and Detection v2 evaluation. The current
+priority is hardening that singular 0.7 baseline rather than rebuilding a
+flattened-record source path.
 
-Source adapters and future direct integrations should emit canonical observations directly rather than relying on a legacy flattened record as the center of the architecture.
-
-This is important because future enforcement and correlation will depend on structured tool calls, exact call/result relationships, errors, timing, provenance, and runtime context that cannot always be reconstructed after flattening.
+Future direct integrations, realtime enforcement, and gateway work should emit
+or consume canonical observations directly. Structured tool calls, exact
+call/result relationships, errors, timing, provenance, and runtime context must
+remain explicit because they cannot always be reconstructed after flattening.
 
 ## Development Heuristics
 
