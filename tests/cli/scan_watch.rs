@@ -135,39 +135,13 @@ fn assert_runtime_snapshot(summary: &Value) {
 }
 
 #[test]
-fn scan_once_writes_schema_shaped_health_jsonl() {
-    let temp = tempdir().expect("tempdir");
-    let log_path = temp.path().join("telltale-events.jsonl");
-    let state_path = temp.path().join("telltale-state.json");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--root",
-            "tests/fixtures/session_stores",
-            "--log-path",
-        ])
-        .arg(&log_path)
-        .args(["--state-path"])
-        .arg(&state_path)
-        .output()
-        .expect("run telltale");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
+fn scan_once_reports_fixture_source_and_detection_accounting() {
+    let summary = &fixture_scan().summary;
     assert_eq!(summary["event_type"], "health");
     // Copilot's mixed-context rules require unsupported UserContext and remain
     // visibility-limited. Commands also no longer include fabricated tool names.
     assert_eq!(summary["detection_count"], 30);
-    assert_runtime_snapshot(&summary);
+    assert_runtime_snapshot(summary);
     assert_eq!(
         summary["effective_configuration"]["local_config"]["mode"],
         "disabled"
@@ -191,8 +165,8 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             .len(),
         1
     );
-    assert_source_processing_accounting(&summary);
-    assert_detection_flow_accounting(&summary, 30, 0);
+    assert_source_processing_accounting(summary);
+    assert_detection_flow_accounting(summary, 30, 0);
     assert_eq!(summary["source_processing"]["selected_source_count"], 57);
     assert_eq!(summary["source_discovery"]["basis"], "current_full_scan");
     assert_eq!(
@@ -249,12 +223,53 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
     assert_eq!(summary["source_counts"]["opencode.sqlite"], 1);
     assert_eq!(summary["source_counts"]["copilot.copilot_process_log"], 5);
 
-    let lines = fs::read_to_string(log_path).expect("log file");
-    let events = lines
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
-        .collect::<Vec<_>>();
+    let events = &fixture_scan().events;
     assert_eq!(events.len(), 32);
+}
+
+struct FixtureScan {
+    summary: Value,
+    events: Vec<Value>,
+}
+
+// Cache one immutable first scan, so independently runnable checks share fresh-state output.
+fn fixture_scan() -> &'static FixtureScan {
+    static SCAN: std::sync::OnceLock<FixtureScan> = std::sync::OnceLock::new();
+    SCAN.get_or_init(|| {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("telltale-events.jsonl");
+        let state_path = temp.path().join("telltale-state.json");
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--root",
+                "tests/fixtures/session_stores",
+                "--log-path",
+            ])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run telltale");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary = serde_json::from_slice(&output.stdout).expect("summary json");
+        let lines = fs::read_to_string(log_path).expect("log file");
+        let events = lines
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("event json"))
+            .collect();
+        FixtureScan { summary, events }
+    })
+}
+
+fn assert_source_visibility_exclusions(events: &[Value]) {
     assert!(
         !events.iter().any(|event| {
             event["event_type"] == "detection" && event["session_id"] == "copilot-uc001-tool-result"
@@ -335,11 +350,15 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
             .iter()
             .any(|event| event["session_id"] == "uc001-negative-domain-only")
     );
+}
 
+#[test]
+fn scan_once_writes_schema_shaped_health_jsonl() {
+    let events = &fixture_scan().events;
     let schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
     let validator = validator_for(&schema).expect("schema validator");
-    for event in &events {
+    for event in events {
         assert!(
             validator.is_valid(event),
             "event failed schema validation: {}",
@@ -425,7 +444,14 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         assert!(!redacted.contains(".jsonl"));
         assert!(!redacted.contains(".sqlite"));
     }
+}
 
+#[test]
+fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
+    let events = &fixture_scan().events;
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
+    let validator = validator_for(&schema).expect("schema validator");
     let detection = events
         .iter()
         .find(|event| event["session_id"] == "uc001-positive")
@@ -619,7 +645,14 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
                 !value.contains(".env") && !value.contains("mcp-lab")
             })
     );
+}
 
+#[test]
+fn scan_once_preserves_source_specific_mcp_tool_results() {
+    let events = &fixture_scan().events;
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
+    let validator = validator_for(&schema).expect("schema validator");
     let claude_tool_result = events
         .iter()
         .find(|event| event["session_id"] == "claude-uc001-tool-result")
@@ -775,7 +808,14 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
                     && !value.contains("mcp-lab")
             })
     );
+}
 
+#[test]
+fn scan_once_emits_token_injection_and_install_detections() {
+    let events = &fixture_scan().events;
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
+    let validator = validator_for(&schema).expect("schema validator");
     let jwt_bearer_token = events
         .iter()
         .find(|event| event["session_id"] == "jwt-bearer-token-pattern")
@@ -839,6 +879,10 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
                 !value.contains(".env") && !value.contains("mcp-lab")
             })
     );
+    let tool_result = events
+        .iter()
+        .find(|event| event["session_id"] == "tool-result-injection")
+        .expect("tool result detection");
     assert!(
         tool_result["rule_ids"]
             .as_array()
@@ -935,7 +979,14 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
                     && !value.contains("~/.bashrc")
             })
     );
+}
 
+#[test]
+fn scan_once_emits_execution_secret_and_api_key_detections() {
+    let events = &fixture_scan().events;
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
+    let validator = validator_for(&schema).expect("schema validator");
     let encoded_payload = events
         .iter()
         .find(|event| event["session_id"] == "encoded-payload-chain")
@@ -1170,7 +1221,12 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
                     && !value.contains("ghp_1234567890abcdef1234")
             })
     );
+}
 
+#[test]
+fn scan_once_excludes_negative_fixture_detections() {
+    let events = &fixture_scan().events;
+    assert_source_visibility_exclusions(events);
     assert!(
         !events.iter().any(|event| event["event_type"] == "detection"
             && event["session_id"] == "uc001-negative-mcp-user-text")
@@ -1244,6 +1300,9 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
         .iter()
         .find(|event| event["session_id"] == "tool-injection-shape-session")
         .expect("tool injection shape session detection");
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
+    let validator = validator_for(&schema).expect("schema validator");
     assert!(
         validator.is_valid(tool_injection_shape_session),
         "tool injection shape session event failed schema validation"

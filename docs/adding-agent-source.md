@@ -182,7 +182,7 @@ Run the narrowest relevant tests first, then the source and detection suites:
 cargo test -p telltale-sources <agent-or-source-filter>
 cargo test -p telltale-sources
 cargo test -p telltale-detect
-cargo test --test cli scan_watch::scan_once_writes_schema_shaped_health_jsonl -- --exact
+cargo test --locked --test cli scan_watch::scan_once_
 cargo run --bin telltale -- scan --once --dry-run --no-local-config \
   --root tests/fixtures/session_stores --client <client-id>
 cargo fmt --check
@@ -190,6 +190,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ./scripts/package-verify
 ```
+
+The `scan_once_` filter runs all fixture-output contract checks, including
+accounting, Event 3.0/privacy, and source-specific detections, plus other
+scan-once CLI checks.
 
 Package verification currently runs on Linux and macOS. Keep fixture scans
 read-only or use an explicit development sink.
