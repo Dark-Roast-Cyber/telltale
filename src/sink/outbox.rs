@@ -4478,6 +4478,54 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn unsafe_outbox_database_is_rejected_without_changing_target() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        for case in ["symlink", "hardlink", "broad-mode"] {
+            let temp = tempdir().expect("temporary directory");
+            let path = private_outbox_path(&temp);
+            let target = path.with_file_name("synthetic-target");
+            fs::write(&target, b"synthetic database bytes").expect("target");
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+                .expect("private target");
+            let expected = match case {
+                "symlink" => {
+                    symlink(&target, &path).expect("symlink");
+                    "outbox database is not a regular file"
+                }
+                "hardlink" => {
+                    fs::hard_link(&target, &path).expect("hardlink");
+                    "outbox database hard links are not allowed"
+                }
+                _ => {
+                    fs::rename(&target, &path).expect("database");
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
+                        .expect("broad mode");
+                    "outbox database permissions are too broad"
+                }
+            };
+
+            let error = Outbox::open(&path).expect_err("unsafe database");
+            let delivery = error
+                .downcast_ref::<DeliveryError>()
+                .expect("storage error");
+            assert_eq!(delivery.class, DeliveryErrorClass::DurableStorage, "{case}");
+            assert!(delivery.message.contains(expected), "{case}: {delivery:?}");
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                b"synthetic database bytes",
+                "{case}"
+            );
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                if case == "broad-mode" { 0o640 } else { 0o600 },
+                "{case}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn broad_outbox_parent_permissions_are_rejected() {
         use std::os::unix::fs::PermissionsExt;
 
