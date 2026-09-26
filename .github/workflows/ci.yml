@@ -92,6 +92,8 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
       - name: Run Linux tests and contract checks
         run: make --silent CARGO_LOCKED=--locked ci-linux-test
+      - name: Test protected assignment opt-in
+        run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests
 
   security:
     name: Security and supply chain
@@ -160,6 +162,10 @@ jobs:
       - name: Test Windows runtime verifier
         shell: pwsh
         run: .\tests\verify_windows_runtime.ps1
+      - name: Compile protected assignment opt-in and fail-closed tests
+        run: cargo check --locked -p telltale-core --features protected-assignment --tests --target x86_64-pc-windows-msvc
+      - name: Test protected assignment unsupported-platform boundary
+        run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Build official Windows release configuration
@@ -198,6 +204,8 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - name: Test protected assignment unsupported-platform boundary
+        run: cargo test --locked -p telltale-core --features protected-assignment --lib assignment::tests::unsupported_platforms_fail_before_state_creation -- --exact
       - name: Build staged native binaries
         run: cargo build --release --bin telltale
       - name: Smoke-test staged native binaries

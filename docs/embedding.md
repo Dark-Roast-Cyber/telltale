@@ -73,6 +73,26 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
 Pin a `rev` (not a branch): the crates are pre-1.0 and APIs may change
 between commits. Update the pin deliberately and re-run your tests.
 
+### Optional protected assignment store
+
+Default builds expose `Pipeline` and `LocalEventFeed` without compiling or
+exposing `telltale_core::assignment`. To use the protected assignment store,
+enable the default-off `protected-assignment` Cargo feature explicitly:
+
+```toml
+[dependencies]
+telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["protected-assignment"] }
+```
+
+Existing git-pinned adopters importing `telltale_core::assignment` must add
+this feature when updating their pin. The enabled API keeps the same module
+path, store format, and replay/privacy guarantees; no state migration is
+required. The store remains Linux-only and fails closed on other platforms.
+Enabling the feature does not activate it in scan/watch or adapter projection.
+Cargo features are additive: another consumer can enable it through feature
+unification. See the [core README](../crates/telltale/README.md#protected-assignment-optional)
+for the caller's replay-association requirements and operational limits.
+
 ## Quick start
 
 ```rust

@@ -49,6 +49,21 @@ a budget, bound, partial frame, unresolved race, or generation gap remains. It
 does not mean that no future events will arrive, that sessions are complete,
 that event time is current, or that excluded Recent history does not exist.
 
+## Protected assignment (optional)
+
+The `assignment` module is available only with the default-off
+`protected-assignment` Cargo feature. Git-pinned adopters using this module
+must enable the feature when updating their revision:
+
+```toml
+[dependencies]
+telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["protected-assignment"] }
+```
+
+Default builds retain `Pipeline` and `LocalEventFeed` but do not compile or
+expose `telltale_core::assignment`. Enabling the feature retains that module
+path and the existing store format and behavior; no state migration is needed.
+
 The opt-in `assignment` module owns a local protected-assignment SQLite store
 for Canonical Observation v2 facts that lack a stable source coordinate. It is
 not wired into production scanning or adapter projection. Callers must provide
@@ -69,6 +84,8 @@ receipt state grows without bound and operators own capacity. Interrupted
 initialization can leave a partial store root that must be removed manually
 before reinitializing; `open` never repairs or recreates state. Replacement of
 the entire trusted store boundary by a same-UID attacker is out of scope.
+
+## Pipeline
 
 Returned native events use the Event 3.0 contract, deterministic `response`
 metadata, and optional top-level `timeline_anchors`; the embedding host owns

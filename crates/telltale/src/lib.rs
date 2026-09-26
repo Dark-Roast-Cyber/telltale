@@ -19,6 +19,7 @@
 use telltale_detect::detection::evaluate_session_matches;
 use telltale_rules::CompiledRuleSet;
 
+#[cfg(feature = "protected-assignment")]
 pub mod assignment;
 /// Unstable cross-crate migration seam, not a supported embedding API.
 #[doc(hidden)]
