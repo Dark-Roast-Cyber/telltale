@@ -35,20 +35,29 @@ for ($tableIndex = 0; $tableIndex -lt $script:Crc32Table.Length; $tableIndex++) 
     $script:Crc32Table[$tableIndex] = [uint32]($tableValue -band $Crc32Mask)
 }
 
-$CanonicalMembers = [ordered]@{
-    'telltale.exe' = 'telltale.exe'
-    'LICENSE' = 'LICENSE'
-    'README.md' = 'README.md'
-    'config/examples/telltale-outputs.yaml' = 'config/examples/telltale-outputs.yaml'
-    'config/examples/telltale-scan.service' = 'config/examples/telltale-scan.service'
-    'config/examples/telltale-scan.timer' = 'config/examples/telltale-scan.timer'
-    'config/examples/telltale-scan-task.xml' = 'config/examples/telltale-scan-task.xml'
-    'config/examples/elastic-telltale-index-template.json' = 'config/examples/elastic-telltale-index-template.json'
-    'config/examples/elastic-telltale-role.json' = 'config/examples/elastic-telltale-role.json'
-}
-
 function Fail([string]$Message) {
     throw "Windows release ZIP validation failed: $Message"
+}
+
+# Repository-only inventory; staged paths already have their archive names.
+$inventoryPath = Join-Path $PSScriptRoot '../release/bundle.tsv'
+$inventory = [System.IO.File]::ReadAllLines($inventoryPath)
+if ($inventory.Count -ne 9 -or $inventory[0] -cne "{binary}`t{binary}`t0755") {
+    Fail 'release bundle inventory must have nine rows starting with the binary'
+}
+$CanonicalMembers = [ordered]@{ 'telltale.exe' = [Convert]::ToInt32('0755', 8) }
+$inventoryNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$inventoryNames.Add('telltale') | Out-Null
+$inventoryNames.Add('telltale.exe') | Out-Null
+$inventoryPathPattern = '\A[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)*\z'
+foreach ($line in $inventory[1..8]) {
+    $fields = $line.Split("`t")
+    if ($fields.Count -ne 3) { Fail 'malformed release bundle inventory row' }
+    if ($fields[0] -cnotmatch $inventoryPathPattern -or $fields[1] -cnotmatch $inventoryPathPattern -or
+        $fields[2] -cne '0644' -or -not $inventoryNames.Add($fields[0])) {
+        Fail 'unsafe, duplicate, or malformed release bundle inventory row'
+    }
+    $CanonicalMembers[$fields[0]] = [Convert]::ToInt32($fields[2], 8)
 }
 
 function Get-RegularFile([string]$Path, [string]$Description) {
@@ -514,6 +523,10 @@ function Validate-FinalizedArchive([string]$Path) {
         }
 
         for ($index = 0; $index -lt $entries.Count; $index++) {
+            $permissions = ($entries[$index].ExternalAttributes -shr 16) -band 0xFFF
+            if ($permissions -ne 0 -and $permissions -ne $CanonicalMembers[$entries[$index].FullName]) {
+                Fail "archive member has an unexpected mode: $($entries[$index].FullName)"
+            }
             Read-EntryToEnd $entries[$index] $metadata[$index]
         }
     } finally {
@@ -577,7 +590,7 @@ if (($bundleAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
 
 $sources = [ordered]@{}
 foreach ($member in $CanonicalMembers.GetEnumerator()) {
-    $source = Join-Path $bundle $member.Value
+    $source = Join-Path $bundle $member.Key
     Get-RegularFile $source "canonical source $($member.Key)" | Out-Null
     $sources[$member.Key] = $source
 }
@@ -590,12 +603,13 @@ try {
         [System.IO.Compression.ZipArchiveMode]::Create
     )
     foreach ($member in $CanonicalMembers.GetEnumerator()) {
-        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+        $entry = [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
             $writer,
             $sources[$member.Key],
             $member.Key,
             [System.IO.Compression.CompressionLevel]::Optimal
-        ) | Out-Null
+        )
+        $entry.ExternalAttributes = (0x8000 -bor $member.Value) -shl 16
     }
 } finally {
     if ($null -ne $writer) {

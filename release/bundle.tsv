@@ -1,0 +1,9 @@
+{binary}	{binary}	0755
+LICENSE	LICENSE	0644
+README.md	release/README.md	0644
+config/examples/telltale-outputs.yaml	config/examples/telltale-outputs.yaml	0644
+config/examples/telltale-scan.service	config/examples/telltale-scan.service	0644
+config/examples/telltale-scan.timer	config/examples/telltale-scan.timer	0644
+config/examples/telltale-scan-task.xml	config/examples/telltale-scan-task.xml	0644
+config/examples/elastic-telltale-index-template.json	config/examples/elastic-telltale-index-template.json	0644
+config/examples/elastic-telltale-role.json	config/examples/elastic-telltale-role.json	0644

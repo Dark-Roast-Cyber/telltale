@@ -3,26 +3,23 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import tarfile
 import zipfile
 from pathlib import Path
 
 
-EXPECTED_EXAMPLES = (
-    "LICENSE",
-    "README.md",
-    "config/examples/telltale-outputs.yaml",
-    "config/examples/telltale-scan.service",
-    "config/examples/telltale-scan.timer",
-    "config/examples/telltale-scan-task.xml",
-    "config/examples/elastic-telltale-index-template.json",
-    "config/examples/elastic-telltale-role.json",
-)
+ROOT = Path(__file__).resolve().parents[1]
+INVENTORY = ROOT / "release/bundle.tsv"
+# TSV columns: archive output, repository source, octal mode. Only the first
+# row's {binary} token is substituted; its source is the explicitly built binary.
+INVENTORY_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)*")
 HEX_DIGEST = re.compile(r"^[0-9a-fA-F]{64}$")
 SBOM_NAME = "telltale-sbom.cdx.json"
 UUID = re.compile(
@@ -34,18 +31,60 @@ def fail(message: str) -> None:
     raise SystemExit(message)
 
 
+def load_inventory(path: Path = INVENTORY, *, windows: bool = False) -> list[tuple[str, str, int]]:
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as error:
+        fail(f"Could not read release bundle inventory: {error}")
+    if len(lines) != 9 or lines[0] != "{binary}\t{binary}\t0755":
+        fail("Release bundle inventory must have nine rows starting with the binary")
+    rows = [("telltale.exe" if windows else "telltale", "{binary}", 0o755)]
+    seen = {"telltale", "telltale.exe"}
+    for line in lines[1:]:
+        fields = line.split("\t")
+        if len(fields) != 3:
+            fail("Malformed release bundle inventory row")
+        name, source, mode = fields
+        if (not INVENTORY_PATH.fullmatch(name) or not INVENTORY_PATH.fullmatch(source)
+                or mode != "0644" or name.lower() in seen):
+            fail("Unsafe, duplicate, or malformed release bundle inventory row")
+        seen.add(name.lower())
+        rows.append((name, source, int(mode, 8)))
+    return rows
+
+
+def stage_bundle(binary: Path, bundle: Path, *, windows: bool = False, root: Path = ROOT) -> None:
+    rows = load_inventory(windows=windows)
+    root = root.resolve(strict=True)
+    sources = [binary if source == "{binary}" else root / source for _, source, _ in rows]
+    for index, source in enumerate(sources):
+        if source.is_symlink() or not source.is_file():
+            fail(f"Release bundle source is not a regular file: {source}")
+        resolved = source.resolve(strict=True)
+        if not resolved.is_relative_to(root):
+            fail(f"Release bundle source resolves outside the checkout: {source}")
+        # Bind copies to the checked paths, including the explicitly built binary.
+        sources[index] = resolved
+    # Never merge an old staging directory into a new release bundle.
+    bundle.mkdir(parents=True, exist_ok=False)
+    for (name, _, mode), source in zip(rows, sources):
+        destination = bundle / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        destination.chmod(mode)
+
+
 def unsafe_member(name: str) -> bool:
     path = Path(name)
     return name.startswith("/") or "\\" in name or ".." in path.parts or "\x00" in name
 
 
 def expected_members(archive: Path) -> set[str]:
-    binary = "telltale.exe" if archive.name.endswith(".zip") else "telltale"
-    return {binary, *EXPECTED_EXAMPLES}
+    return {name for name, _, _ in load_inventory(windows=archive.name.endswith(".zip"))}
 
 
 def expected_mode(name: str) -> int:
-    return 0o755 if name in {"telltale", "telltale.exe"} else 0o644
+    return {member: mode for member, _, mode in load_inventory(windows=name == "telltale.exe")}[name]
 
 
 def validate_names(archive: Path, names: list[str]) -> None:
@@ -180,6 +219,20 @@ def read_checksums(
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument("--stage", nargs=2, metavar=("BINARY", "BUNDLE"))
+    operation.add_argument("--members", action="store_true")
+    parser.add_argument("--platform", choices=("unix", "windows"), default="unix")
+    args = parser.parse_args()
+    if args.stage:
+        stage_bundle(*(Path(path) for path in args.stage), windows=args.platform == "windows")
+        return 0
+    if args.members:
+        for name, _, _ in load_inventory(windows=args.platform == "windows"):
+            print(name)
+        return 0
+    load_inventory()
     directory = Path(os.environ.get("RELEASE_ARTIFACT_DIR", "release-downloads"))
     if not directory.exists():
         print(f"Skipping release artifact manifest: {directory} does not exist.")

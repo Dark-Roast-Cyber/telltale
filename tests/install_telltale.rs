@@ -2645,6 +2645,30 @@ fn installer_requires_exact_canonical_archive_bundle() {
 }
 
 #[test]
+fn installer_rejects_wrong_archive_modes_before_transaction() {
+    for (member, mode, message) in [
+        ("telltale", 0o644, "unexpected canonical binary mode"),
+        ("README.md", 0o755, "unexpected support-member mode"),
+    ] {
+        let temp = tempdir().unwrap();
+        let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+        let selected = archive(temp.path(), &name, "0.5.0", None);
+        let payload = temp.path().join(format!("payload-{name}"));
+        fs::set_permissions(payload.join(member), fs::Permissions::from_mode(mode)).unwrap();
+        let output = Command::new("tar")
+            .arg("czf")
+            .arg(&selected)
+            .arg("-C")
+            .arg(&payload)
+            .args(CANONICAL_ARCHIVE_MEMBERS)
+            .output()
+            .expect("repack wrong-mode archive");
+        assert!(output.status.success(), "{}", output_text(&output));
+        assert_archive_rejected(temp.path(), &selected, message);
+    }
+}
+
+#[test]
 fn source_build_is_pinned_and_produces_only_canonical_binary() {
     let temp = tempdir().unwrap();
     let tag = "v0.5.0-rc.1";

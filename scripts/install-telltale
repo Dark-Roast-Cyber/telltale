@@ -1543,7 +1543,7 @@ resolve_source_revision() {
 }
 
 verify_release_archive() {
-    local archive="$1" archive_members archive_listing member expected mode name
+    local archive="$1" archive_members archive_listing member expected mode name allowed
     local member_count=0
     declare -A seen_members=()
     archive_members="$(tar tzf "$archive")" || die "could not inspect release archive"
@@ -1553,17 +1553,15 @@ verify_release_archive() {
         [[ "$member" != /* ]] || die "release archive contains an absolute path"
         [[ "$member" != *\\* ]] || die "release archive contains an unsafe path"
         case "/${member}/" in */../*) die "release archive contains path traversal" ;; esac
-        case "$member" in
-            telltale|LICENSE|README.md|config/examples/telltale-outputs.yaml|\
-            config/examples/telltale-scan.service|config/examples/telltale-scan.timer|\
-            config/examples/telltale-scan-task.xml|\
-            config/examples/elastic-telltale-index-template.json|\
-            config/examples/elastic-telltale-role.json)
-                ;;
-            *)
-                die "release archive does not match the exact canonical nine-member bundle: unexpected member ${member}"
-                ;;
-        esac
+        allowed=0
+        for expected in "${canonical_archive_members[@]}"; do
+            if [[ "$member" == "$expected" ]]; then
+                allowed=1
+                break
+            fi
+        done
+        [[ "$allowed" -eq 1 ]] \
+            || die "release archive does not match the exact canonical nine-member bundle: unexpected member ${member}"
         [[ -z "${seen_members[$member]+present}" ]] \
             || die "release archive does not match the exact canonical nine-member bundle: duplicate member ${member}"
         seen_members["$member"]=1

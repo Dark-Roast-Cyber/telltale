@@ -1410,28 +1410,13 @@ fn release_artifact_manifest_skips_absent_download_directory() {
 fn release_workflow_packages_only_canonical_identity() {
     let workflow = read_release_workflow();
     assert!(workflow.contains("telltale-${{ github.ref_name }}-${{ matrix.target }}"));
-    assert!(workflow.contains("telltale LICENSE README.md"));
-    assert!(workflow.contains("config/examples/elastic-telltale-index-template.json"));
-    assert!(workflow.contains("config/examples/elastic-telltale-role.json"));
+    assert!(workflow.contains("scripts/release-artifact-manifest --stage"));
+    assert!(workflow.contains("scripts/release-artifact-manifest --platform windows --stage"));
+    assert!(workflow.contains("scripts/release-artifact-manifest --members"));
+    assert!(workflow.contains("-T \"$RUNNER_TEMP/telltale-members\""));
     assert!(!workflow.contains("Compress-Archive"));
     assert!(workflow.contains("& .\\scripts\\release-windows-zip.ps1"));
     assert!(workflow.contains("-BundleDirectory $bundleDir -OutputArchive $archivePath"));
-    for member in [
-        "telltale.exe",
-        "LICENSE",
-        "README.md",
-        "config/examples/telltale-outputs.yaml",
-        "config/examples/telltale-scan.service",
-        "config/examples/telltale-scan.timer",
-        "config/examples/telltale-scan-task.xml",
-        "config/examples/elastic-telltale-index-template.json",
-        "config/examples/elastic-telltale-role.json",
-    ] {
-        assert!(
-            workflow.contains(member),
-            "workflow ZIP is missing {member}"
-        );
-    }
     assert!(workflow.contains(
         "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
     ));
@@ -1450,6 +1435,22 @@ fn release_workflow_packages_only_canonical_identity() {
     assert!(!workflow.contains("refs/heads/"));
     assert!(!workflow.contains("branch-artifact"));
     assert!(!workflow.contains("artifact-reference"));
+}
+
+#[test]
+#[cfg(unix)]
+fn release_bundle_inventory_behavior() {
+    let output = Command::new("python3")
+        .arg("tests/release_bundle_inventory.py")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("release inventory regressions");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -1499,8 +1500,9 @@ fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
     assert!(runtime_block.contains("telltale-bundle\\telltale.exe"));
     let stage_block = &workflow[stage..runtime];
     assert!(stage_block.contains(
-        "Copy-Item \"target\\${{ matrix.target }}\\release\\telltale.exe\" (Join-Path $bundleDir 'telltale.exe')"
+        "python scripts/release-artifact-manifest --platform windows --stage \"target/${{ matrix.target }}/release/telltale.exe\" $bundleDir"
     ));
+    assert!(stage_block.contains("if ($LASTEXITCODE -ne 0) { throw"));
     assert!(package_block.contains("-BundleDirectory $bundleDir"));
 }
 

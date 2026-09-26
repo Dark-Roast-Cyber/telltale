@@ -166,31 +166,11 @@ jobs:
           set -euo pipefail
           bundle_dir="$RUNNER_TEMP/telltale-bundle"
           rm -rf "$bundle_dir"
-          mkdir -p "$bundle_dir/config/examples"
-
-           install -m 0755 "target/${{ matrix.target }}/release/telltale" "$bundle_dir/telltale"
-          install -m 0644 LICENSE "$bundle_dir/LICENSE"
-          install -m 0644 release/README.md "$bundle_dir/README.md"
-          for example in \
-            config/examples/telltale-outputs.yaml \
-            config/examples/telltale-scan.service \
-            config/examples/telltale-scan.timer \
-            config/examples/telltale-scan-task.xml \
-            config/examples/elastic-telltale-index-template.json \
-            config/examples/elastic-telltale-role.json; do
-            install -m 0644 "$example" "$bundle_dir/$example"
-          done
+          python3 scripts/release-artifact-manifest --stage "target/${{ matrix.target }}/release/telltale" "$bundle_dir"
+          python3 scripts/release-artifact-manifest --members > "$RUNNER_TEMP/telltale-members"
 
           archive="telltale-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
-          tar czf "$archive" \
-            -C "$bundle_dir" \
-            telltale LICENSE README.md \
-            config/examples/telltale-outputs.yaml \
-            config/examples/telltale-scan.service \
-            config/examples/telltale-scan.timer \
-            config/examples/telltale-scan-task.xml \
-            config/examples/elastic-telltale-index-template.json \
-            config/examples/elastic-telltale-role.json
+          tar czf "$archive" -C "$bundle_dir" -T "$RUNNER_TEMP/telltale-members"
           tar -tzf "$archive"
       - name: Native staged binary --version smoke (unix)
         if: matrix.archive == 'tar.gz'
@@ -215,22 +195,8 @@ jobs:
           if (Test-Path -LiteralPath $bundleDir) {
             Remove-Item -LiteralPath $bundleDir -Recurse -Force
           }
-          New-Item -ItemType Directory -Path (Join-Path $bundleDir 'config/examples') -Force | Out-Null
-
-          Copy-Item "target\${{ matrix.target }}\release\telltale.exe" (Join-Path $bundleDir 'telltale.exe')
-          Copy-Item 'LICENSE' (Join-Path $bundleDir 'LICENSE')
-          Copy-Item 'release\README.md' (Join-Path $bundleDir 'README.md')
-          $examples = @(
-            'telltale-outputs.yaml',
-            'telltale-scan.service',
-            'telltale-scan.timer',
-            'telltale-scan-task.xml',
-            'elastic-telltale-index-template.json',
-            'elastic-telltale-role.json'
-          )
-          foreach ($example in $examples) {
-            Copy-Item "config\examples\$example" (Join-Path $bundleDir "config/examples/$example")
-          }
+          python scripts/release-artifact-manifest --platform windows --stage "target/${{ matrix.target }}/release/telltale.exe" $bundleDir
+          if ($LASTEXITCODE -ne 0) { throw 'Release bundle staging failed' }
       - name: Verify staged Windows binary has no redistributable MSVC runtime imports
         if: matrix.archive == 'zip'
         shell: pwsh

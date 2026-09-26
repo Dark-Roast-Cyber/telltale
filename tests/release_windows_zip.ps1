@@ -297,6 +297,47 @@ try {
 
     $bundle = Join-Path $temp 'bundle'
     New-StagedBundle $bundle
+
+    # Exercise the Windows workflow's Python staging command on a synthetic checkout.
+    $checkout = Join-Path $temp 'checkout'
+    New-Item -ItemType Directory -Path (Join-Path $checkout 'scripts'), (Join-Path $checkout 'release'), (Join-Path $checkout 'target/release') | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot '../scripts/release-artifact-manifest') (Join-Path $checkout 'scripts/release-artifact-manifest')
+    Copy-Item (Join-Path $PSScriptRoot '../release/bundle.tsv') (Join-Path $checkout 'release/bundle.tsv')
+    foreach ($name in $canonicalNames) {
+        $source = switch -CaseSensitive ($name) {
+            'telltale.exe' { 'target/release/telltale.exe' }
+            'README.md' { 'release/README.md' }
+            default { $name }
+        }
+        $destination = Join-Path $checkout $source
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item (Join-Path $bundle $name) $destination
+    }
+    [System.IO.File]::WriteAllText((Join-Path $checkout 'README.md'), 'wrong repository README')
+    $bundle = Join-Path $temp 'python-bundle'
+    & python (Join-Path $checkout 'scripts/release-artifact-manifest') --platform windows --stage (Join-Path $checkout 'target/release/telltale.exe') $bundle
+    if ($LASTEXITCODE -ne 0) { throw 'Windows Python staging command failed' }
+    if ([System.IO.File]::ReadAllText((Join-Path $bundle 'README.md')) -cne "synthetic README.md`n") {
+        throw 'Windows Python staging did not map release/README.md to README.md'
+    }
+    if ($IsWindows) {
+        foreach ($parent in @('release', 'config', 'target')) {
+            $redirected = Join-Path $checkout $parent
+            $outside = Join-Path $temp "outside-$parent"
+            $rejectedBundle = Join-Path $temp "rejected-$parent"
+            Move-Item -LiteralPath $redirected -Destination $outside
+            New-Item -ItemType Junction -Path $redirected -Target $outside | Out-Null
+            try {
+                $result = & python (Join-Path $checkout 'scripts/release-artifact-manifest') --platform windows --stage (Join-Path $checkout 'target/release/telltale.exe') $rejectedBundle 2>&1
+                if ($LASTEXITCODE -eq 0 -or ($result -join "`n") -notmatch 'outside the checkout' -or (Test-Path -LiteralPath $rejectedBundle)) {
+                    throw "Windows staging did not reject the $parent junction escape before staging"
+                }
+            } finally {
+                [System.IO.Directory]::Delete($redirected)
+                Move-Item -LiteralPath $outside -Destination $redirected
+            }
+        }
+    }
     $productionArchive = Join-Path $temp 'production.zip'
     $production = Invoke-Helper @('-BundleDirectory', $bundle, '-OutputArchive', $productionArchive)
     if (-not $production.Success) {
@@ -306,6 +347,44 @@ try {
         throw 'production package mode did not create the archive'
     }
     Assert-HelperSuccess $productionArchive
+
+    $produced = [System.IO.Compression.ZipFile]::OpenRead($productionArchive)
+    try {
+        foreach ($entry in $produced.Entries) {
+            $expectedMode = if ($entry.FullName -ceq 'telltale.exe') { 0x1ED } else { 0x1A4 }
+            if ((($entry.ExternalAttributes -shr 16) -band 0xFFFF) -ne (0x8000 -bor $expectedMode)) {
+                throw "production ZIP has incorrect type/mode for $($entry.FullName)"
+            }
+        }
+    } finally {
+        $produced.Dispose()
+    }
+
+    # Exercise the repo-side loader without mutating the checkout inventory.
+    $originalHelper = $helper
+    $inventoryText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '../release/bundle.tsv'))
+    $isolated = Join-Path $temp 'isolated'
+    New-Item -ItemType Directory -Path (Join-Path $isolated 'scripts'), (Join-Path $isolated 'release') | Out-Null
+    $helper = Join-Path $isolated 'scripts/release-windows-zip.ps1'
+    Copy-Item -LiteralPath $originalHelper -Destination $helper
+    $badInventories = @(
+        $inventoryText.Replace("LICENSE`tLICENSE", "README.md`tLICENSE"),
+        $inventoryText.Replace("LICENSE`tLICENSE", "../LICENSE`tLICENSE"),
+        $inventoryText.Replace("LICENSE`tLICENSE", "LICENSE`t/absolute"),
+        $inventoryText.Replace("LICENSE`tLICENSE", "LICENSE`tconfig/../LICENSE"),
+        $inventoryText.Replace("LICENSE`tLICENSE", "--option`tLICENSE"),
+        $inventoryText.Replace('0644', '0777'),
+        $inventoryText.Replace('{binary}', '{unknown}'),
+        ($inventoryText + "LICENSE`tLICENSE`t0644`n"),
+        $inventoryText.Replace("`t", ' ')
+    )
+    foreach ($badInventory in $badInventories) {
+        [System.IO.File]::WriteAllText((Join-Path $isolated 'release/bundle.tsv'), $badInventory)
+        Assert-HelperFailureWithMessage $productionArchive 'inventory'
+    }
+    [System.IO.File]::WriteAllText((Join-Path $isolated 'release/bundle.tsv'), $inventoryText)
+    Assert-HelperSuccess $productionArchive
+    $helper = $originalHelper
 
     $cases = @(
         @{ Name = 'empty'; Omit = $canonicalNames },
@@ -322,6 +401,8 @@ try {
         @{ Name = 'data-descriptor'; Flags = 0x08; Expected = 'data-descriptor flag' },
         @{ Name = 'central-encryption'; Flags = 0x2000; Expected = 'encryption flag' },
         @{ Name = 'unix-link'; Attributes = @{ 'README.md' = -1610612736 } },
+        @{ Name = 'wrong-support-mode'; Attributes = @{ 'README.md' = (0x180 -shl 16) }; Expected = 'unexpected mode' },
+        @{ Name = 'wrong-binary-mode'; Attributes = @{ 'telltale.exe' = (0x1A4 -shl 16) }; Expected = 'unexpected mode' },
         @{ Name = 'unsupported-attributes'; Attributes = @{ 'README.md' = 0x80 } }
     )
     foreach ($case in $cases) {

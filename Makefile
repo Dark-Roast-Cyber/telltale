@@ -296,7 +296,7 @@ release-fixture-smoke:
 release-canonical-identity-check:
 	@for expected in config/examples/telltale-scan.service config/examples/telltale-scan.timer config/examples/telltale-scan-task.xml; do test -f "$$expected" || { echo "missing canonical release example: $$expected"; exit 1; }; done
 	@grep -Eq 'target/.*/release/telltale|telltale-[^[:space:]]+\.(tar\.gz|zip)' .github/workflows/release.yml
-	@grep -q 'telltale-scan.service' .github/workflows/release.yml
+	@grep -Fxq "$$(printf 'config/examples/telltale-scan.service\tconfig/examples/telltale-scan.service\t0644')" release/bundle.tsv
 
 ## Public release preflight
 release-preflight: release-context-check release-tag-review release-crate-manifest release-canonical-identity-check event3-contract-check producer-provenance-check local-event-feed-check package-verify release-public-docs-check release-artifact-manifest check release-fixture-smoke
