@@ -61,7 +61,7 @@ These packages are in current release preparation and are not published to
 crates.io yet. The supported embedding surface is `telltale-core`; consume it
 as a git dependency and pin a revision until publication:
 
-See [Versioning and Releases](versioning.md) and the planned
+See [Versioning and Releases](versioning.md) and the
 [0.7.0 migration guide](migrations/0.7.0.md) before upgrading an existing
 integration.
 

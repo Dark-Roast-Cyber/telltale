@@ -17,11 +17,12 @@ format.
   changes, and install-to-SIEM reliability proof.
 - `v0.6.0` is the current official stable GitHub Release, published from
   `f8e00162a3f9ac1cf8d2f270e6db078d3917d186` after the rc.3 live Linux canary.
-- `0.7.0` is the current near-production development target. The 0.6.x
-  architecture-convergence sequence is complete; 0.7 release hardening must
-  freeze the intended public adoption surface, preserve Event3 as the production
-  output contract, and qualify an immutable release candidate before stable
-  publication.
+- `0.7.0-rc.1` is the current workspace package and CLI version, prepared for
+  review but not yet tagged or published. `v0.6.0` remains the latest stable.
+  Event3 schema version stays `3.0` and Rule v1 stays version 1; neither follows
+  the package version. Native candidate qualification requires published
+  candidate artifacts and has not run for rc.1. Stable `v0.7.0` will require
+  separate qualification and a reviewed stable-version promotion.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -117,11 +118,10 @@ The Cargo/package version is not the version of every data contract:
   `state_schema_version: "1.0"`. Legacy unversioned state is not loaded by
   normal scanning; use `telltale migrate state --from <OLD> --to <NEW>`.
   State migration is explicit and does not migrate historical events.
-- **Rule language and bundled rules:** compatible detections and rule updates
-  remain on the current `0.3.x` line, then `0.5.x` after the 0.5.0 release.
-  Removing syntax, changing evaluation meaning incompatibly, or invalidating
-  existing rule documents belongs in the next planned minor milestone, not in a
-  routine patch batch.
+- **Rule language and bundled rules:** Rule v1 content remains compatible in
+  the 0.7 candidate. Removing syntax, changing evaluation meaning incompatibly,
+  or invalidating existing rule documents requires a separately reviewed minor
+  release rather than a routine patch batch.
 
 ## Release Process
 
@@ -140,15 +140,16 @@ the **full matching RC package version**, not
 separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1`,
 `v0.6.0-rc.2`, and `v0.6.0-rc.3` candidates retain separate evidence; native
 qualification verifies existing artifacts and does not create or modify them.
-The active rc.3 native verifier does not alter the historical rc.2 pin or
-evidence.
+The rc.3 native verifier is pinned to that historical published candidate; its
+default and pin cannot qualify an unpublished 0.7 candidate. No 0.7 Release ID,
+checksums, or native evidence exist before publication.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is
 needed. CI uses a full-history/tag checkout; before local release review, fetch
 trusted origin history and tags. Shallow history or no prior stable tags fails
 closed. Development must be newer than every stable tag, including a tag whose
-Release creation failed. When a future `v0.6.0` tag appears, subsequent development
+Release creation failed. After the published `v0.6.0` tag, subsequent development
 at `0.6.0` fails automatically until metadata advances. Development also rejects
 reuse of an already-tagged exact RC package version. Release validation may
 exclude its own exact tag only if it resolves to HEAD; `release-tag-review`
@@ -168,7 +169,7 @@ its explicit sequence against that graph; Console is not in the publishable set.
    version together. For stable promotion from an accepted RC, prepare that
    reviewed reversible stable-version commit before final preflight; it is not itself
    tagging or publication.
-3. For the next RC, first prepare matching `0.7.0-rc.N` package metadata, then
+3. For an RC, first prepare matching `0.7.0-rc.N` package metadata, then
    use the exact matching `v0.7.0-rc.N` tag only after authorization. The tag, Release
    metadata, archive names, checksums, attestations, and installer selection
    are immutable evidence; a validation-relevant change requires the next
@@ -221,7 +222,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.6.0` registry dependencies while that remains the workspace package
+`=0.7.0-rc.1` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
@@ -230,7 +231,7 @@ pass, and do not publish credentials or local release state.
 
 The established supported candidate convention is `<minor>.0-rc.N` (a
 canonical nonnegative integer N without leading zeros), only when external
-validation is useful. The next planned candidate line is `0.7.0-rc.N`. A
+validation is useful. The prepared candidate is `0.7.0-rc.1`. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees. GitHub Release metadata must set
 `prerelease=true`; an RC must never be made the normal latest stable Release.

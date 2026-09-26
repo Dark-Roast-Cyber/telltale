@@ -25,7 +25,10 @@ paths, raw transcript excerpts, SIEM endpoints, scanner state, or credentials.
 
 Version selection and package/tag alignment follow
 [Versioning and Releases](versioning.md). Official `v0.5.0` is published and
-immutable. The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from
+immutable. `0.7.0-rc.1` is prepared in source only: it has no tag, GitHub Release,
+checksums, or candidate-native qualification. The historical rc.3 verifier and
+qualification do not establish 0.7 evidence. The published `v0.6.0-rc.3`
+prerelease is Release ID `386482697` from
 source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`.
 Publication/provenance, the static-CRT publication gate, and five-platform native
 verification passed. Issue #23 clean-Windows static-CRT qualification and functional
@@ -253,7 +256,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.6.0` registry packages while that remains the workspace version, before
+`=0.7.0-rc.1` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not
@@ -340,7 +343,7 @@ The default installer selects the latest stable Release. For candidate
 validation, pass the exact tag, for example:
 
 ```sh
-RC_TAG='v0.5.0-rc.N' # replace N with the exact published candidate number
+RC_TAG='v0.7.0-rc.1' # only after this exact candidate is published
 ./scripts/install-telltale --release-tag "$RC_TAG" --no-timer
 ./scripts/install-telltale --release-tag "$RC_TAG" --from-source --no-timer
 ```

@@ -1,7 +1,10 @@
 # Controlled development deployment
 
-Status: operator procedure for validating an exact development build. It does
-not make that build a release or authorize deployment to a live host.
+Status: operator procedure for validating an exact development build with a
+stable package version. The development-archive installer rejects RC package
+versions; use the published candidate installer path only after an RC Release
+exists. This procedure does not make a build a release or authorize deployment
+to a live host.
 
 The current official stable release is `v0.6.0`. Use this procedure only for an
 exact unreleased development candidate in a lab or on an explicitly approved
@@ -21,12 +24,14 @@ SHA-256 of the exact candidate archive and extracted binary
 The embedded short Git hash from `telltale --version`, package verification,
 producer manifest, and rules fingerprint are corroborating evidence. They do
 not replace the full SHA and checksums. The published candidate source on
-stable `main` reports package `0.6.0`; the official `v0.6.0` GitHub Release is
-published. The exact
-version output alone cannot distinguish an untagged build from the official
-release artifact on that same line. The
-historical Issue #37 artifact from `dd3ef2dc2fa0c7ab256f43a62ce3e0b183957248`
-still reports `0.5.0` and retains its original archive/binary checksums. Never
+stable `main` reported package `0.6.0`; the official `v0.6.0` GitHub Release is
+published. The prepared `0.7.0-rc.1` source reports its own candidate version,
+but has no published artifact yet. For a given package line,
+version output alone cannot distinguish an untagged build from an official
+release artifact.
+The historical Issue #37 artifact from
+`dd3ef2dc2fa0c7ab256f43a62ce3e0b183957248` still reports `0.5.0` and
+retains its original archive/binary checksums. Never
 substitute a newer build into that evidence. See the [versioning contract](versioning.md).
 
 Use `telltale-dev-<40-character-sha>-<target>.tar.gz` for the archive name.
@@ -205,7 +210,7 @@ All five development identity arguments are mandatory and cannot be combined wit
 release-tag, from-source, or checksum-bypass modes.
 
 ```sh
-package_version='0.6.0' # obtain from exact candidate metadata; the historical #37 artifact uses 0.5.0
+package_version='0.6.0' # stable-package development example; obtain from exact build metadata
 ./scripts/install-telltale \
   --development-archive "$archive" \
   --development-sha "$candidate" \

@@ -798,7 +798,7 @@ fn installer_script_is_executable() {
 }
 
 #[test]
-fn exact_development_archive_is_validated_before_transaction_and_installed() {
+fn historical_0_6_exact_development_archive_remains_validated_and_installed() {
     assert_exact_development_archive_is_installed("0.6.0");
 }
 

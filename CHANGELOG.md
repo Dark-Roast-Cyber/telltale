@@ -1,37 +1,33 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. Official stable is `v0.6.0`; `v0.5.0` is the previous stable release. Published `v0.6.0-rc.3` passed publication/provenance, its static-CRT publication gate, five-platform native verification, Issue #23 clean-Windows acceptance, and the Issue #37 live Linux canary. Stable `v0.6.0` is deployed and healthy on the live host; Issues #23 and #37 are complete. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `0.7.0-rc.1` is prepared in source, not tagged or published; `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## 0.7.0 — unreleased
+## 0.7.0-rc.1 — prepared candidate (unpublished)
 
-- Complete the 0.6.x architecture-convergence sequence and move the production
-  source path for the supported denominator to Canonical Observation v2 and
-  Detection v2 for CLI scan/watch and the supported embedding facade.
-- Contract the built-in source denominator to eight exact identities across
-  Claude Code, Codex, OpenCode, OpenClaw, Qwen CLI, and GitHub Copilot; retired
-  source identities are not compatibility registrations in the 0.7 line.
-- Keep Rule v1 as the supported content-compatibility format while Detection v2
-  owns canonical evaluation. Caller-provided direct-record compatibility remains
-  separate from source acquisition.
-- Keep Event3 as the sole production event/output contract for 0.7. Event4 stays
-  a non-production schema/validation foundation with production activation,
-  dual emission, telemetry profiles, and generalized `CanonicalPayload` deferred.
-- Preserve the typed `Event3Record` consumer and bounded `LocalEventFeed` as
-  supported local adoption surfaces. Crates.io publication remains a separate
-  decision and does not block the GitHub release.
-- This section describes development toward 0.7.0; it is not a release claim.
-  Exact RC and stable qualification evidence will be added only after those
-  immutable artifacts exist.
+- Eight exact built-in source identities across six agent families replace the
+  broader legacy denominator. Retired identities are removed, not registered as
+  compatibility aliases; see the [migration guide](docs/migrations/0.7.0.md).
+- Source-native Canonical Observation v2 acquisition and Detection v2 evaluation
+  are authoritative for CLI scan/watch and `telltale-core::Pipeline::scan_root`.
+  Rule v1 remains the content format; process-chain evaluation runs within
+  Detection v2. Caller-supplied `NormalizedRecord` APIs remain separate
+  record-level compatibility surfaces.
+- Event3 (`3.0`) remains the sole production output contract. Rust adopters have
+  documented `telltale-core::Pipeline`, typed `Event3Record`, bounded read-only
+  `LocalEventFeed`, and producer-provenance contracts. Event4 is not activated.
+- Update the locked rustls dependency for RUSTSEC-2026-0285; established
+  installer provenance, security, and release-package gates remain in place.
+  This source candidate has no native artifact qualification, GitHub Release,
+  or crates.io publication yet.
 
 ---
 
 ## 0.6.0 — published stable (2026-09-12)
 
 - Promoted the accepted `v0.6.0-rc.3` release line to stable package metadata.
-  Changes on `main` after rc.3 are limited to CI, release-verifier evidence,
-  documentation, and tests; runtime and release archive construction remain
+  At stable promotion, runtime and release archive construction remained
   materially equivalent to the live-qualified candidate.
 - Exact rc.3 passed manual and timer-triggered scans on the authorized live
   Linux host, with valid Event3 local output and successful configured HEC
