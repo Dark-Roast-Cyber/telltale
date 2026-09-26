@@ -77,6 +77,44 @@ fn git_expect(repo: &Path, args: &[&str]) {
     );
 }
 
+#[cfg(unix)]
+const RELEASE_COMPANION_MEMBERS: &[&str] = &[
+    "LICENSE",
+    "README.md",
+    "config/examples/telltale-outputs.yaml",
+    "config/examples/telltale-scan.service",
+    "config/examples/telltale-scan.timer",
+    "config/examples/telltale-scan-task.xml",
+    "config/examples/elastic-telltale-index-template.json",
+    "config/examples/elastic-telltale-role.json",
+];
+
+#[cfg(unix)]
+fn write_release_payload(payload: &Path, readme: &str) {
+    fs::create_dir_all(payload.join("config/examples")).expect("create release payload");
+    for (path, body) in [
+        ("telltale", "binary\n"),
+        ("LICENSE", "Apache-2.0\n"),
+        ("README.md", readme),
+        ("config/examples/telltale-outputs.yaml", "outputs: {}\n"),
+        ("config/examples/telltale-scan.service", "[Service]\n"),
+        ("config/examples/telltale-scan.timer", "[Timer]\n"),
+        ("config/examples/telltale-scan-task.xml", "<Task/>\n"),
+        (
+            "config/examples/elastic-telltale-index-template.json",
+            "{}\n",
+        ),
+        ("config/examples/elastic-telltale-role.json", "{}\n"),
+    ] {
+        fs::write(payload.join(path), body).expect("write release payload member");
+    }
+    fs::set_permissions(
+        payload.join("telltale"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("canonical binary mode");
+}
+
 // These release-tooling tests invoke the Unix-only Makefile and shell tools.
 #[cfg(unix)]
 #[test]
@@ -670,46 +708,8 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
     let good_payload = temp.path().join("good-payload");
     let bad_payload = temp.path().join("bad-payload");
     fs::create_dir_all(&artifacts).expect("create artifacts");
-    fs::create_dir_all(good_payload.join("config/examples")).expect("create good payload");
+    write_release_payload(&good_payload, "# quick start\n");
     fs::create_dir_all(bad_payload.join("logs")).expect("create bad payload logs");
-    fs::write(good_payload.join("telltale"), "binary\n").expect("write telltale");
-    fs::set_permissions(
-        good_payload.join("telltale"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .expect("canonical binary mode");
-    fs::write(good_payload.join("LICENSE"), "Apache-2.0\n").expect("write LICENSE");
-    fs::write(good_payload.join("README.md"), "# quick start\n").expect("write README");
-    fs::write(
-        good_payload.join("config/examples/telltale-outputs.yaml"),
-        "outputs: {}\n",
-    )
-    .expect("write outputs example");
-    fs::write(
-        good_payload.join("config/examples/telltale-scan.service"),
-        "[Service]\n",
-    )
-    .expect("write service example");
-    fs::write(
-        good_payload.join("config/examples/telltale-scan.timer"),
-        "[Timer]\n",
-    )
-    .expect("write timer example");
-    fs::write(
-        good_payload.join("config/examples/telltale-scan-task.xml"),
-        "<Task/>\n",
-    )
-    .expect("write task example");
-    fs::write(
-        good_payload.join("config/examples/elastic-telltale-index-template.json"),
-        "{}\n",
-    )
-    .expect("write Elastic mapping example");
-    fs::write(
-        good_payload.join("config/examples/elastic-telltale-role.json"),
-        "{}\n",
-    )
-    .expect("write Elastic role example");
     fs::write(bad_payload.join("telltale.exe"), "binary\n").expect("write bad telltale.exe");
     fs::write(bad_payload.join("unexpected.exe"), "binary\n").expect("write unexpected executable");
     fs::write(
@@ -770,14 +770,7 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
         .arg("-C")
         .arg(&good_payload)
         .arg("telltale")
-        .arg("LICENSE")
-        .arg("README.md")
-        .arg("config/examples/telltale-outputs.yaml")
-        .arg("config/examples/telltale-scan.service")
-        .arg("config/examples/telltale-scan.timer")
-        .arg("config/examples/telltale-scan-task.xml")
-        .arg("config/examples/elastic-telltale-index-template.json")
-        .arg("config/examples/elastic-telltale-role.json")
+        .args(RELEASE_COMPANION_MEMBERS)
         .output()
         .expect("tar good archive");
     assert!(
@@ -825,14 +818,7 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
         .arg("-q")
         .arg(&good_zip)
         .arg("telltale.exe")
-        .arg("LICENSE")
-        .arg("README.md")
-        .arg("config/examples/telltale-outputs.yaml")
-        .arg("config/examples/telltale-scan.service")
-        .arg("config/examples/telltale-scan.timer")
-        .arg("config/examples/telltale-scan-task.xml")
-        .arg("config/examples/elastic-telltale-index-template.json")
-        .arg("config/examples/elastic-telltale-role.json")
+        .args(RELEASE_COMPANION_MEMBERS)
         .current_dir(&good_payload)
         .output()
         .expect("zip good archive");
@@ -1032,46 +1018,16 @@ fn release_artifact_manifest_accepts_only_canonical_bundle() {
     let temp = tempdir().expect("tempdir");
     let artifacts = temp.path().join("artifacts");
     let payload = temp.path().join("payload");
-    fs::create_dir_all(payload.join("config/examples")).expect("payload");
+    write_release_payload(&payload, "# release\n");
     fs::create_dir_all(&artifacts).expect("artifacts");
-    for (path, body) in [
-        ("telltale", "binary\n"),
-        ("LICENSE", "Apache-2.0\n"),
-        ("README.md", "# release\n"),
-        ("config/examples/telltale-outputs.yaml", "outputs: {}\n"),
-        ("config/examples/telltale-scan.service", "[Service]\n"),
-        ("config/examples/telltale-scan.timer", "[Timer]\n"),
-        ("config/examples/telltale-scan-task.xml", "<Task/>\n"),
-        (
-            "config/examples/elastic-telltale-index-template.json",
-            "{}\n",
-        ),
-        ("config/examples/elastic-telltale-role.json", "{}\n"),
-    ] {
-        fs::write(payload.join(path), body).expect("payload member");
-    }
-    fs::set_permissions(
-        payload.join("telltale"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .expect("canonical binary mode");
     let archive = artifacts.join("telltale-v0.5.0-x86_64-unknown-linux-gnu.tar.gz");
     let output = Command::new("tar")
         .args(["-czf"])
         .arg(&archive)
-        .args([
-            "-C",
-            payload.to_str().unwrap(),
-            "telltale",
-            "LICENSE",
-            "README.md",
-            "config/examples/telltale-outputs.yaml",
-            "config/examples/telltale-scan.service",
-            "config/examples/telltale-scan.timer",
-            "config/examples/telltale-scan-task.xml",
-            "config/examples/elastic-telltale-index-template.json",
-            "config/examples/elastic-telltale-role.json",
-        ])
+        .arg("-C")
+        .arg(&payload)
+        .arg("telltale")
+        .args(RELEASE_COMPANION_MEMBERS)
         .output()
         .expect("archive");
     assert!(output.status.success());
@@ -1130,41 +1086,11 @@ fn release_artifact_manifest_rejects_link_and_traversal_members() {
     let payload = temp.path().join("payload");
     let link_payload = temp.path().join("link-payload");
     let traversal_payload = temp.path().join("traversal-payload");
-    fs::create_dir_all(payload.join("config/examples")).expect("payload");
+    write_release_payload(&payload, "# release\n");
     fs::create_dir_all(&artifacts).expect("artifacts");
-    for (path, body) in [
-        ("telltale", "binary\n"),
-        ("LICENSE", "Apache-2.0\n"),
-        ("README.md", "# release\n"),
-        ("config/examples/telltale-outputs.yaml", "outputs: {}\n"),
-        ("config/examples/telltale-scan.service", "[Service]\n"),
-        ("config/examples/telltale-scan.timer", "[Timer]\n"),
-        ("config/examples/telltale-scan-task.xml", "<Task/>\n"),
-        (
-            "config/examples/elastic-telltale-index-template.json",
-            "{}\n",
-        ),
-        ("config/examples/elastic-telltale-role.json", "{}\n"),
-    ] {
-        fs::write(payload.join(path), body).expect("payload member");
-    }
-    fs::set_permissions(
-        payload.join("telltale"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .expect("canonical binary mode");
     fs::create_dir_all(link_payload.join("config/examples")).expect("link payload");
     fs::create_dir_all(traversal_payload.join("config/examples")).expect("traversal payload");
-    for path in [
-        "LICENSE",
-        "README.md",
-        "config/examples/telltale-outputs.yaml",
-        "config/examples/telltale-scan.service",
-        "config/examples/telltale-scan.timer",
-        "config/examples/telltale-scan-task.xml",
-        "config/examples/elastic-telltale-index-template.json",
-        "config/examples/elastic-telltale-role.json",
-    ] {
+    for path in RELEASE_COMPANION_MEMBERS {
         fs::copy(payload.join(path), link_payload.join(path)).expect("copy link member");
         fs::copy(payload.join(path), traversal_payload.join(path)).expect("copy traversal member");
     }
@@ -1176,17 +1102,8 @@ fn release_artifact_manifest_rejects_link_and_traversal_members() {
     let zip = Command::new("zip")
         .args(["-q", "-y"])
         .arg(&link_archive)
-        .args([
-            "telltale.exe",
-            "LICENSE",
-            "README.md",
-            "config/examples/telltale-outputs.yaml",
-            "config/examples/telltale-scan.service",
-            "config/examples/telltale-scan.timer",
-            "config/examples/telltale-scan-task.xml",
-            "config/examples/elastic-telltale-index-template.json",
-            "config/examples/elastic-telltale-role.json",
-        ])
+        .arg("telltale.exe")
+        .args(RELEASE_COMPANION_MEMBERS)
         .current_dir(&link_payload)
         .output()
         .expect("link archive");
@@ -1222,18 +1139,9 @@ fn release_artifact_manifest_rejects_link_and_traversal_members() {
     let zip = Command::new("zip")
         .arg("-q")
         .arg(&traversal_archive)
-        .args([
-            "telltale.exe",
-            "LICENSE",
-            "README.md",
-            "config/examples/telltale-outputs.yaml",
-            "config/examples/telltale-scan.service",
-            "config/examples/telltale-scan.timer",
-            "config/examples/telltale-scan-task.xml",
-            "config/examples/elastic-telltale-index-template.json",
-            "config/examples/elastic-telltale-role.json",
-            "../escape.txt",
-        ])
+        .arg("telltale.exe")
+        .args(RELEASE_COMPANION_MEMBERS)
+        .arg("../escape.txt")
         .current_dir(&traversal_payload)
         .output()
         .expect("traversal archive");
