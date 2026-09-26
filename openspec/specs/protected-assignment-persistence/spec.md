@@ -251,3 +251,23 @@ deterministic detection, Detection v2 algebra, or production activation.
 - **WHEN** the full regression and deterministic report checks run
 - **THEN** Event 3 retains its frozen schema hash and Detection v2 retains its
   15-case, 17-session, 306-evaluation report and published report hash
+
+### Requirement: Protected assignment availability is an explicit build-time opt-in
+
+The `telltale-core` package MUST expose its protected assignment API only when
+the `protected-assignment` Cargo feature is enabled. Default core builds MUST
+not activate or compile the assignment module; enabling the feature MUST retain
+the existing protected store and its fail-closed runtime semantics. Other core
+embedding entry points MUST remain available without this feature.
+
+#### Scenario: Default core build does not opt into protected assignment
+
+- **WHEN** a consumer builds `telltale-core` with its default features
+- **THEN** the protected assignment module is not compiled and normal core
+  pipeline and local Event3 feed APIs remain usable
+
+#### Scenario: Explicit feature preserves the existing store contract
+
+- **WHEN** a consumer builds `telltale-core` with `protected-assignment` enabled
+- **THEN** the existing protected assignment API is available with unchanged
+  replay, privacy, storage, and platform-failure behavior
