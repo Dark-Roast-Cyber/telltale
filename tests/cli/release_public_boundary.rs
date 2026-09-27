@@ -2244,13 +2244,24 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
     serde_yaml::from_str::<serde_yaml::Value>(&workflow).expect("native workflow YAML");
     for required in [
         "workflow_dispatch:",
-        "default: v0.6.0-rc.3",
+        "type: string",
         "permissions: {}",
         "fail-fast: false",
         "contents: read",
         "attestations: read",
         "gh release download",
-        "scripts/release-native-verify-rc3.json",
+        "--select-pin --pins-dir scripts --release-tag \"${RELEASE_TAG}\" --target \"${TARGET}\"",
+        "release_tag is not a supported tag",
+        "selection_output=\"${selection_output//$'\\r'/}\"",
+        "tag_commit != pin.get(\"source_sha\")",
+        "target.get(\"archive\") != archive_name",
+        "release.get(\"id\") != pin[\"release_id\"]",
+        "release.get(\"tag_name\") != pin[\"release_tag\"]",
+        "release.get(\"draft\") is not False",
+        "release.get(\"prerelease\") is not True",
+        "\"sha256:\" + target[\"archive_sha256\"]",
+        "test \"$(git rev-parse HEAD^{commit})\" = \"${GITHUB_SHA}\"",
+        "fetch-depth: 0",
         "scripts/validate-event-jsonl",
         "scripts/release-artifact-manifest",
         "windows-latest",
@@ -2272,6 +2283,7 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
     assert!(!workflow.contains("v0.6.0-rc.2"));
     assert!(!workflow.contains("v0.6.0-rc.1"));
     assert!(!workflow.contains("v0.5.0-rc.7"));
+    assert!(!workflow.contains("            archive:"));
     for forbidden in [
         "contents: write",
         "attestations: write",
@@ -2284,6 +2296,13 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
         "HEC",
         "Splunk",
         "runner.temp",
+        "v0.6.0-rc.3",
+        "db9cf63434a6e1fdf1373e82d96d709f6fbabc58",
+        "386482697",
+        "telltale-v0.6.0-rc.3-",
+        "type: choice",
+        "options:",
+        "inputs.release_tag ==",
     ] {
         assert!(
             !workflow.contains(forbidden),
@@ -2313,6 +2332,10 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
     assert!(
         driver.contains("Published SHA256SUMS must contain exactly one entry for"),
         "native verify must select the target line from the published multi-entry SHA256SUMS"
+    );
+    assert!(
+        driver.contains("path.as_posix()"),
+        "pin selection must emit a POSIX path so Windows runners accept the pin"
     );
 }
 
@@ -2491,7 +2514,7 @@ fn release_native_verify_rc2_pin_remains_exact_historical_evidence() {
 }
 
 #[test]
-fn release_native_verify_rc3_pin_and_workflow_are_exact() {
+fn release_native_verify_rc3_pin_remains_exact_and_workflow_is_candidate_bound() {
     let pin: Value = serde_json::from_str(
         &fs::read_to_string("scripts/release-native-verify-rc3.json").expect("rc.3 release pin"),
     )
@@ -2579,20 +2602,9 @@ fn release_native_verify_rc3_pin_and_workflow_are_exact() {
     let workflow = fs::read_to_string(".github/workflows/release-native-verify.yml")
         .expect("native verification workflow")
         .replace("\r\n", "\n");
-    assert!(workflow.contains("default: v0.6.0-rc.3"));
-    assert!(workflow.contains("PIN_FILE: scripts/release-native-verify-rc3.json"));
-    assert!(workflow.contains("test \"${RELEASE_TAG}\" = \"v0.6.0-rc.3\""));
-    assert!(workflow.contains("test \"${PIN_FILE}\" = \"scripts/release-native-verify-rc3.json\""));
-    assert!(
-        workflow.contains("test \"${tag_commit}\" = \"db9cf63434a6e1fdf1373e82d96d709f6fbabc58\"")
-    );
-    assert!(
-        workflow
-            .contains("pin.get(\"source_sha\") != \"db9cf63434a6e1fdf1373e82d96d709f6fbabc58\"")
-    );
-    assert!(workflow.contains("pin.get(\"release_tag\") != \"v0.6.0-rc.3\""));
-    assert!(workflow.contains("or pin.get(\"package_version\") != \"0.6.0-rc.3\""));
-    assert!(workflow.contains("or pin.get(\"release_id\") != 386482697"));
+    assert!(workflow.contains("--select-pin --pins-dir scripts"));
+    assert!(workflow.contains("tag_commit != pin.get(\"source_sha\")"));
+    assert!(workflow.contains("tag != \"v\" + str(pin.get(\"package_version\", \"\"))"));
     assert!(workflow.contains("release.get(\"id\") != pin[\"release_id\"]"));
     assert!(workflow.contains("release.get(\"tag_name\") != pin[\"release_tag\"]"));
     assert!(workflow.contains("release.get(\"prerelease\") is not True"));
@@ -2600,11 +2612,11 @@ fn release_native_verify_rc3_pin_and_workflow_are_exact() {
     assert!(workflow.contains("target.get(\"archive\") != archive_name"));
     assert!(workflow.contains("test \"${GITHUB_REF}\" = \"refs/heads/main\""));
     for matrix_entry in [
-        "- os: ubuntu-24.04-arm\n            target: aarch64-unknown-linux-gnu\n            archive: telltale-v0.6.0-rc.3-aarch64-unknown-linux-gnu.tar.gz",
-        "- os: windows-latest\n            target: x86_64-pc-windows-msvc\n            archive: telltale-v0.6.0-rc.3-x86_64-pc-windows-msvc.zip",
-        "- os: macos-15-intel\n            target: x86_64-apple-darwin\n            archive: telltale-v0.6.0-rc.3-x86_64-apple-darwin.tar.gz",
-        "- os: macos-latest\n            target: aarch64-apple-darwin\n            archive: telltale-v0.6.0-rc.3-aarch64-apple-darwin.tar.gz",
-        "- os: ubuntu-latest\n            target: x86_64-unknown-linux-gnu\n            archive: telltale-v0.6.0-rc.3-x86_64-unknown-linux-gnu.tar.gz",
+        "- os: ubuntu-24.04-arm\n            target: aarch64-unknown-linux-gnu",
+        "- os: windows-latest\n            target: x86_64-pc-windows-msvc",
+        "- os: macos-15-intel\n            target: x86_64-apple-darwin",
+        "- os: macos-latest\n            target: aarch64-apple-darwin",
+        "- os: ubuntu-latest\n            target: x86_64-unknown-linux-gnu",
     ] {
         assert!(
             workflow.contains(matrix_entry),
@@ -2617,24 +2629,90 @@ fn release_native_verify_rc3_pin_and_workflow_are_exact() {
     assert!(!workflow.contains("v0.6.0-rc.1"));
     assert!(!workflow.contains("v0.5.0-rc.7"));
 
-    let tag_guard = workflow
-        .lines()
-        .find_map(|line| {
-            line.trim()
-                .strip_prefix("test \"${RELEASE_TAG}\" = \"")
-                .and_then(|value| value.strip_suffix('"'))
-        })
-        .expect("exact release tag guard");
-    assert_eq!(tag_guard, "v0.6.0-rc.3");
-    for rejected in [
-        "v0.6.0",
-        "v0.6.0-rc.2",
-        "v0.6.0-rc.1",
-        "v0.5.0-rc.7",
-        "arbitrary user input",
-    ] {
-        assert_ne!(rejected, tag_guard);
+    assert!(!workflow.contains("inputs.release_tag =="));
+}
+
+#[test]
+fn release_native_verify_rc1_pin_matches_published_artifacts() {
+    let pin: Value = serde_json::from_str(
+        &fs::read_to_string("scripts/release-native-verify-0.7.0-rc.1.json")
+            .expect("RC1 native verification pin"),
+    )
+    .expect("RC1 native verification pin JSON");
+    assert_eq!(pin["release_tag"], "v0.7.0-rc.1");
+    assert_eq!(pin["package_version"], "0.7.0-rc.1");
+    assert_eq!(
+        pin["source_sha"],
+        "e2386cb53454a8384449ea0729f0e3b71072006c"
+    );
+    assert_eq!(pin["version_prefix"], "telltale 0.7.0-rc.1 (e2386cb53454");
+    assert_eq!(pin["release_id"], 397543935);
+
+    let expected = [
+        (
+            "x86_64-pc-windows-msvc",
+            "telltale-v0.7.0-rc.1-x86_64-pc-windows-msvc.zip",
+            "50c143ae8dc4b5753affe61ad517a40a2c0cbaddbe9ec7eab032fa89e41eaeda",
+            "132d89d010d3bc493aeac8c189cbb3f8e5debd240bb5cda3d6a1ea4a36516629",
+            "windows-latest",
+            "Windows",
+            serde_json::json!(["AMD64", "x86_64"]),
+        ),
+        (
+            "x86_64-apple-darwin",
+            "telltale-v0.7.0-rc.1-x86_64-apple-darwin.tar.gz",
+            "7a541ad5d7f8a53b8ce97e25ace240aafcc254c0783deef1610c4f7bd9590b42",
+            "465580625eb15876d83b2bca5abfea30899395391fed39d7b10393dcd59ab9a2",
+            "macos-15-intel",
+            "macOS",
+            serde_json::json!(["x86_64"]),
+        ),
+        (
+            "aarch64-apple-darwin",
+            "telltale-v0.7.0-rc.1-aarch64-apple-darwin.tar.gz",
+            "e45c6bf1a349ea92b13951d6df017131224becf7e9350f5d866f9a55ecde67b3",
+            "d383d0b00b9a14e6105a8bcca18fce230125b2305e17e2b874526d892efd0a2c",
+            "macos-latest",
+            "macOS",
+            serde_json::json!(["arm64", "aarch64"]),
+        ),
+        (
+            "x86_64-unknown-linux-gnu",
+            "telltale-v0.7.0-rc.1-x86_64-unknown-linux-gnu.tar.gz",
+            "0da936ff86dbafbf3d2f9260a3579bb44535977de188912c31da0bc87d1ccfaa",
+            "0fffed5248f6d46f42e97e3107c131b3e2d6525b449327ffc9ab775827fdf1fe",
+            "ubuntu-latest",
+            "Linux",
+            serde_json::json!(["x86_64"]),
+        ),
+        (
+            "aarch64-unknown-linux-gnu",
+            "telltale-v0.7.0-rc.1-aarch64-unknown-linux-gnu.tar.gz",
+            "dc8905841954bc7ced9f66e8b7ce585cb2fdd790c5f5b88d4ff7916fc42069ea",
+            "4e3fbb683bcc6ffeb0c8def846f2b43b9551efa4f952006216f07f278e980af3",
+            "ubuntu-24.04-arm",
+            "Linux",
+            serde_json::json!(["aarch64", "arm64"]),
+        ),
+    ];
+
+    for (target, archive, archive_hash, binary_hash, runner, os, unames) in expected {
+        assert_eq!(pin["targets"][target]["archive"], archive);
+        assert_eq!(pin["targets"][target]["archive_sha256"], archive_hash);
+        assert_eq!(
+            pin["targets"][target]["binary"],
+            if os == "Windows" {
+                "telltale.exe"
+            } else {
+                "telltale"
+            }
+        );
+        assert_eq!(pin["targets"][target]["binary_sha256"], binary_hash);
+        assert_eq!(pin["targets"][target]["runner"], runner);
+        assert_eq!(pin["targets"][target]["expected_os"], os);
+        assert_eq!(pin["targets"][target]["expected_unames"], unames);
     }
+    assert_eq!(pin["targets"].as_object().unwrap().len(), 5);
 }
 
 #[cfg(unix)]
@@ -2752,6 +2830,162 @@ fn release_native_verify_script_rejects_malformed_pin_and_target_mismatches() {
     let output = run_native_verify_pin_probe(&absent, target, runner);
     assert!(!output.status.success());
     assert!(native_output(&output).contains("Target is not present"));
+}
+
+#[cfg(unix)]
+fn select_native_pin(dir: &Path, tag: &str, target: &str) -> std::process::Output {
+    Command::new("python3")
+        .args([
+            "scripts/release-native-verify",
+            "--select-pin",
+            "--pins-dir",
+        ])
+        .arg(dir)
+        .args(["--release-tag", tag, "--target", target])
+        .output()
+        .expect("select native release pin")
+}
+
+#[cfg(unix)]
+#[test]
+fn release_native_verify_select_pin_fails_closed() {
+    let temp = tempdir().expect("tempdir");
+    let dir = temp.path();
+    let pin = fs::read("scripts/release-native-verify-rc3.json").expect("historical pin");
+    let target = "x86_64-unknown-linux-gnu";
+    let output = select_native_pin(dir, "v0.6.0-rc.3", target);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("found 0"));
+
+    fs::write(dir.join("release-native-verify-one.json"), &pin).expect("pin");
+    let output = select_native_pin(dir, "v0.6.0-rc.3", target);
+    assert!(output.status.success(), "{}", native_output(&output));
+    assert!(
+        native_output(&output).contains("telltale-v0.6.0-rc.3-x86_64-unknown-linux-gnu.tar.gz")
+    );
+    for (tag, architecture, message) in [
+        ("v0.6.0-rc.3", "unknown", "Unsupported native target"),
+        ("v0.6.0-rc.3/../../other", target, "v-prefixed SemVer"),
+    ] {
+        let output = select_native_pin(dir, tag, architecture);
+        assert!(!output.status.success());
+        assert!(native_output(&output).contains(message));
+    }
+
+    fs::write(dir.join("release-native-verify-two.json"), &pin).expect("duplicate pin");
+    let output = select_native_pin(dir, "v0.6.0-rc.3", target);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("found 2"));
+    fs::remove_file(dir.join("release-native-verify-two.json")).expect("remove duplicate");
+    fs::write(dir.join("release-native-verify-bad.json"), "{invalid").expect("bad JSON");
+    let output = select_native_pin(dir, "v0.6.0-rc.3", target);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("Could not load release pin"));
+    fs::write(dir.join("release-native-verify-bad.json"), "[]").expect("non-object");
+    let output = select_native_pin(dir, "v0.6.0-rc.3", target);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("not a JSON object"));
+    fs::remove_file(dir.join("release-native-verify-bad.json")).expect("remove bad pin");
+    symlink(
+        dir.join("release-native-verify-one.json"),
+        dir.join("release-native-verify-link.json"),
+    )
+    .expect("symlink pin");
+    let output = select_native_pin(dir, "v0.6.0-rc.3", target);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("not a regular file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn release_native_verify_checks_archive_binary_and_release_id_against_real_fixture_bytes() {
+    let temp = tempdir().expect("tempdir");
+    let payload = temp.path().join("payload");
+    let downloads = temp.path().join("downloads");
+    let pin_path = temp.path().join("pin.json");
+    let metadata_path = temp.path().join("release.json");
+    fs::create_dir(&downloads).expect("downloads");
+    write_release_payload(&payload, "# synthetic release\n");
+    let target_name = "x86_64-unknown-linux-gnu";
+    let mut pin: Value =
+        serde_json::from_slice(&fs::read("scripts/release-native-verify-rc3.json").unwrap())
+            .unwrap();
+    let archive_name = pin["targets"][target_name]["archive"].as_str().unwrap();
+    let archive = downloads.join(archive_name);
+    let tar = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&payload)
+        .arg("telltale")
+        .args(RELEASE_COMPANION_MEMBERS)
+        .output()
+        .expect("tar synthetic bundle");
+    assert!(tar.status.success(), "{}", native_output(&tar));
+    let digest = format!("{:x}", sha2::Sha256::digest(fs::read(&archive).unwrap()));
+    let binary_digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(fs::read(payload.join("telltale")).unwrap())
+    );
+    fs::write(
+        downloads.join("SHA256SUMS"),
+        format!("{digest}  {archive_name}\n"),
+    )
+    .unwrap();
+    fs::write(
+        &metadata_path,
+        serde_json::json!({
+            "id": pin["release_id"], "tag_name": pin["release_tag"],
+            "draft": false, "prerelease": true,
+            "assets": [{"name": archive_name, "digest": format!("sha256:{digest}")}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let probe = |pin: &Value| {
+        fs::write(&pin_path, serde_json::to_vec(pin).unwrap()).unwrap();
+        Command::new("python3")
+            .arg("scripts/release-native-verify")
+            .arg("--repo-root")
+            .arg(env!("CARGO_MANIFEST_DIR"))
+            .arg("--pin")
+            .arg(&pin_path)
+            .arg("--target")
+            .arg(target_name)
+            .arg("--release-metadata")
+            .arg(&metadata_path)
+            .arg("--download-dir")
+            .arg(&downloads)
+            .args([
+                "--manifest-helper",
+                "scripts/release-artifact-manifest",
+                "--event-validator",
+                "scripts/validate-event-jsonl",
+            ])
+            .env("RUNNER_LABEL", "ubuntu-latest")
+            .output()
+            .expect("native fixture probe")
+    };
+    let output = probe(&pin);
+    assert!(!output.status.success());
+    assert!(native_output(&output).contains("Archive hash does not match"));
+    pin["targets"][target_name]["archive_sha256"] = Value::String(digest);
+    let output = probe(&pin);
+    assert!(!output.status.success());
+    assert!(
+        native_output(&output).contains("Extracted binary hash does not match"),
+        "{}",
+        native_output(&output)
+    );
+    pin["targets"][target_name]["binary_sha256"] = Value::String(binary_digest);
+    pin["release_id"] = Value::Number(123.into());
+    let output = probe(&pin);
+    assert!(!output.status.success());
+    assert!(
+        native_output(&output).contains("metadata does not match"),
+        "{}",
+        native_output(&output)
+    );
 }
 
 #[cfg(unix)]

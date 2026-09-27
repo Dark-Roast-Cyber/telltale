@@ -25,8 +25,9 @@ The embedded short Git hash from `telltale --version`, package verification,
 producer manifest, and rules fingerprint are corroborating evidence. They do
 not replace the full SHA and checksums. The published candidate source on
 stable `main` reported package `0.6.0`; the official `v0.6.0` GitHub Release is
-published. The prepared `0.7.0-rc.1` source reports its own candidate version,
-but has no published artifact yet. For a given package line,
+published. The `v0.7.0-rc.1` prerelease is published (Release ID `397543935`
+from `e2386cb53454a8384449ea0729f0e3b71072006c`), but five-platform native
+qualification remains pending. For a given package line,
 version output alone cannot distinguish an untagged build from an official
 release artifact.
 The historical Issue #37 artifact from

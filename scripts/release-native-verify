@@ -218,6 +218,37 @@ def validate_pin(pin: object) -> dict:
     return pin
 
 
+def select_pin(pins_dir: Path, release_tag: str, target_name: str) -> tuple[Path, str]:
+    if not SEMVER.fullmatch(release_tag.removeprefix("v")) or not release_tag.startswith("v"):
+        fail("Requested release tag is not a v-prefixed SemVer value")
+    if target_name not in TARGET_CONTRACTS:
+        fail(f"Unsupported native target: {target_name}")
+    if not pins_dir.is_dir() or pins_dir.is_symlink():
+        fail("Pins directory must be a real directory")
+    directory = pins_dir.resolve(strict=True)
+    matches = []
+    for path in sorted(pins_dir.glob("release-native-verify-*.json")):
+        if ".." in path.name or "\n" in path.name or "\r" in path.name:
+            fail(f"Unsafe checked-in release pin filename: {path}")
+        regular_file(path, "Checked-in release pin")
+        if path.resolve(strict=True).parent != directory:
+            fail(f"Release pin escapes pins directory: {path}")
+        try:
+            pin = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            fail(f"Could not load release pin {path}: {error}")
+        if not isinstance(pin, dict):
+            fail(f"Release pin is not a JSON object: {path}")
+        if pin.get("release_tag") == release_tag:
+            matches.append((path, validate_pin(pin)))
+    if len(matches) != 1:
+        fail(f"Expected exactly one checked-in pin for {release_tag}, found {len(matches)}")
+    path, pin = matches[0]
+    if target_name not in pin["targets"]:
+        fail(f"Target is not present in the release pin: {target_name}")
+    return path, pin["targets"][target_name]["archive"]
+
+
 def validate_release_metadata(metadata_path: Path, pin: dict, archive_name: str, archive_hash: str) -> None:
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -308,14 +339,31 @@ def validate_native_paths(paths: list[Path], expected_os: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", required=True, type=Path)
-    parser.add_argument("--pin", required=True, type=Path)
+    parser.add_argument("--select-pin", action="store_true")
+    parser.add_argument("--pins-dir", type=Path)
+    parser.add_argument("--release-tag")
+    parser.add_argument("--repo-root", type=Path)
+    parser.add_argument("--pin", type=Path)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--release-metadata", required=True, type=Path)
-    parser.add_argument("--download-dir", required=True, type=Path)
-    parser.add_argument("--manifest-helper", required=True, type=Path)
-    parser.add_argument("--event-validator", required=True, type=Path)
+    parser.add_argument("--release-metadata", type=Path)
+    parser.add_argument("--download-dir", type=Path)
+    parser.add_argument("--manifest-helper", type=Path)
+    parser.add_argument("--event-validator", type=Path)
     args = parser.parse_args()
+    if args.select_pin:
+        if args.pins_dir is None or args.release_tag is None:
+            parser.error("--select-pin requires --pins-dir and --release-tag")
+        path, archive = select_pin(args.pins_dir, args.release_tag, args.target)
+        # POSIX form is required: Windows Python stringifies Path with backslashes,
+        # which the workflow's checked-in pin path check rejects.
+        print(path.as_posix())
+        print(archive)
+        return 0
+    if any(value is None for value in (
+        args.repo_root, args.pin, args.release_metadata, args.download_dir,
+        args.manifest_helper, args.event_validator,
+    )):
+        parser.error("verification requires --repo-root, --pin, --release-metadata, --download-dir, --manifest-helper and --event-validator")
 
     try:
         pin = json.loads(args.pin.read_text(encoding="utf-8"))

@@ -17,12 +17,16 @@ format.
   changes, and install-to-SIEM reliability proof.
 - `v0.6.0` is the current official stable GitHub Release, published from
   `f8e00162a3f9ac1cf8d2f270e6db078d3917d186` after the rc.3 live Linux canary.
-- `0.7.0-rc.1` is the current workspace package and CLI version, prepared for
-  review but not yet tagged or published. `v0.6.0` remains the latest stable.
-  Event3 schema version stays `3.0` and Rule v1 stays version 1; neither follows
-  the package version. Native candidate qualification requires published
-  candidate artifacts and has not run for rc.1. Stable `v0.7.0` will require
-  separate qualification and a reviewed stable-version promotion.
+- `v0.7.0-rc.1` is the published prerelease from
+  `e2386cb53454a8384449ea0729f0e3b71072006c` (Release ID `397543935`). Its
+  five-target publication workflow passed (run `36299868695`). Downloaded archive
+  digests match Release metadata and `SHA256SUMS`; extracted binary digests were
+  computed, and the Linux x86_64 binary passed `--version`. Five-target native
+  qualification is pending; the historical rc.3 verifier result is not 0.7
+  evidence. `v0.6.0` remains the latest stable. Event3 schema version stays
+  `3.0` and Rule v1 stays version 1; neither follows the package version. Stable
+  `v0.7.0` will require separate qualification and a reviewed stable-version
+  promotion.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -140,9 +144,9 @@ the **full matching RC package version**, not
 separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1`,
 `v0.6.0-rc.2`, and `v0.6.0-rc.3` candidates retain separate evidence; native
 qualification verifies existing artifacts and does not create or modify them.
-The rc.3 native verifier is pinned to that historical published candidate; its
-default and pin cannot qualify an unpublished 0.7 candidate. No 0.7 Release ID,
-checksums, or native evidence exist before publication.
+The native verifier selects a reviewed checked-in pin for the requested published
+tag; rc.3 remains historical evidence, and `v0.7.0-rc.1` has its own Release ID
+and checksums. Five-platform native qualification remains pending.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is
@@ -231,7 +235,7 @@ pass, and do not publish credentials or local release state.
 
 The established supported candidate convention is `<minor>.0-rc.N` (a
 canonical nonnegative integer N without leading zeros), only when external
-validation is useful. The prepared candidate is `0.7.0-rc.1`. A
+validation is useful. The published prerelease candidate is `v0.7.0-rc.1`. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees. GitHub Release metadata must set
 `prerelease=true`; an RC must never be made the normal latest stable Release.

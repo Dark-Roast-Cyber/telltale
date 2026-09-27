@@ -1,10 +1,10 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `0.7.0-rc.1` is prepared in source, not tagged or published; `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.1` is published as prerelease ID `397543935` from `e2386cb53454a8384449ea0729f0e3b71072006c`; native qualification is pending. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
 
 ---
 
-## 0.7.0-rc.1 — prepared candidate (unpublished)
+## 0.7.0-rc.1 — published prerelease (native qualification pending)
 
 - Eight exact built-in source identities across six agent families replace the
   broader legacy denominator. Retired identities are removed, not registered as
@@ -19,8 +19,8 @@
   `LocalEventFeed`, and producer-provenance contracts. Event4 is not activated.
 - Update the locked rustls dependency for RUSTSEC-2026-0285; established
   installer provenance, security, and release-package gates remain in place.
-  This source candidate has no native artifact qualification, GitHub Release,
-  or crates.io publication yet.
+  This published candidate has no five-platform native qualification or crates.io
+  publication yet.
 
 ---
 

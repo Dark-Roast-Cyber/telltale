@@ -6,7 +6,6 @@ on:
       release_tag:
         description: Immutable release tag to verify
         required: true
-        default: v0.6.0-rc.3
         type: string
 
 permissions: {}
@@ -24,24 +23,17 @@ jobs:
         include:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            archive: telltale-v0.6.0-rc.3-aarch64-unknown-linux-gnu.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: telltale-v0.6.0-rc.3-x86_64-pc-windows-msvc.zip
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            archive: telltale-v0.6.0-rc.3-x86_64-apple-darwin.tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: telltale-v0.6.0-rc.3-aarch64-apple-darwin.tar.gz
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive: telltale-v0.6.0-rc.3-x86_64-unknown-linux-gnu.tar.gz
     env:
       RELEASE_TAG: ${{ inputs.release_tag }}
-      PIN_FILE: scripts/release-native-verify-rc3.json
       TARGET: ${{ matrix.target }}
-      ARCHIVE: ${{ matrix.archive }}
       RUNNER_LABEL: ${{ matrix.os }}
 
     steps:
@@ -62,7 +54,7 @@ jobs:
             printf 'python=python3\n' >> "${GITHUB_OUTPUT}"
           fi
 
-      - name: Verify immutable Release identity
+      - name: Select checked-in release pin and verify immutable Release identity
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,13 +65,25 @@ jobs:
           RELEASE_METADATA="${RUNNER_TEMP}/telltale-release.json"
           printf 'DOWNLOAD_DIR=%s\n' "${DOWNLOAD_DIR}" >> "${GITHUB_ENV}"
           printf 'RELEASE_METADATA=%s\n' "${RELEASE_METADATA}" >> "${GITHUB_ENV}"
-          test "${RELEASE_TAG}" = "v0.6.0-rc.3"
-          test "${PIN_FILE}" = "scripts/release-native-verify-rc3.json"
           test "${GITHUB_REF}" = "refs/heads/main"
-          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           test "$(git rev-parse HEAD^{commit})" = "${GITHUB_SHA}"
+          tag_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if ! [[ "${RELEASE_TAG}" =~ ${tag_re} ]]; then
+            echo "release_tag is not a supported tag" >&2
+            exit 1
+          fi
+          selection_output="$("${PYTHON}" scripts/release-native-verify \
+            --select-pin --pins-dir scripts --release-tag "${RELEASE_TAG}" --target "${TARGET}")"
+          selection_output="${selection_output//$'\r'/}"
+          mapfile -t selection <<< "${selection_output}"
+          test "${#selection[@]}" -eq 2
+          PIN_FILE="${selection[0]}"
+          ARCHIVE="${selection[1]}"
+          [[ "${PIN_FILE}" =~ ^scripts/release-native-verify-[A-Za-z0-9._-]+\.json$ && "${PIN_FILE}" != *..* ]]
+          [[ "${ARCHIVE}" == "telltale-${RELEASE_TAG}-${TARGET}.tar.gz" || "${ARCHIVE}" == "telltale-${RELEASE_TAG}-${TARGET}.zip" ]]
+          printf 'PIN_FILE=%s\nARCHIVE=%s\n' "${PIN_FILE}" "${ARCHIVE}" >> "${GITHUB_ENV}"
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
-          test "${tag_commit}" = "db9cf63434a6e1fdf1373e82d96d709f6fbabc58"
           printf 'verification_workflow_sha=%s\n' "${GITHUB_SHA}"
           printf 'candidate_source_sha=%s\n' "${tag_commit}"
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > "${RELEASE_METADATA}"
@@ -87,20 +91,27 @@ jobs:
           import json
           import sys
 
-          pin_path, tag, source_sha, metadata_path, target_name, archive_name = sys.argv[1:]
+          from pathlib import Path
+
+          pin_path, tag, tag_commit, metadata_path, target_name, archive_name = sys.argv[1:]
+          path = Path(pin_path)
+          if ("\\" in pin_path or path.parent != Path("scripts")
+                  or not path.name.startswith("release-native-verify-")
+                  or not path.name.endswith(".json") or ".." in path.name or path.is_symlink() or not path.is_file()
+                  or path.resolve().parent != Path("scripts").resolve()):
+              raise SystemExit("Selected pin is not a regular checked-in pin file")
           with open(pin_path, encoding="utf-8") as stream:
               pin = json.load(stream)
-          if (
-              pin.get("release_tag") != "v0.6.0-rc.3"
-              or pin.get("package_version") != "0.6.0-rc.3"
-              or pin.get("source_sha") != "db9cf63434a6e1fdf1373e82d96d709f6fbabc58"
-              or pin.get("release_id") != 386482697
-          ):
-              raise SystemExit("release pin has been changed")
-          if tag != pin["release_tag"] or source_sha != pin["source_sha"]:
+          if not isinstance(pin, dict):
+              raise SystemExit("Selected pin must be an object")
+          if tag != pin.get("release_tag") or tag_commit != pin.get("source_sha"):
               raise SystemExit("workflow input or source SHA is not the pinned candidate")
-          target = pin["targets"].get(target_name)
-          if not isinstance(target, dict) or target.get("archive") != archive_name:
+          if tag != "v" + str(pin.get("package_version", "")):
+              raise SystemExit("release pin tag and package version do not agree")
+          target = pin.get("targets", {}).get(target_name)
+          suffix = ".zip" if target_name == "x86_64-pc-windows-msvc" else ".tar.gz"
+          if (not isinstance(target, dict) or target.get("archive") != archive_name
+                  or archive_name != f"telltale-{tag}-{target_name}{suffix}"):
               raise SystemExit("workflow target does not match the release pin")
 
           with open(metadata_path, encoding="utf-8") as stream:
