@@ -75,7 +75,7 @@ fn telltale_binary(path: &Path, version: &str, _identity_fixture: bool) {
     executable(
         path,
         &format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '{identity} {version} (synthetic)'; fi\nif [ -n \"${{FAKE_EVENT_LOG:-}}\" ]; then printf 'binary:%s:%s\\n' \"$0\" \"$*\" >> \"$FAKE_EVENT_LOG\"; fi\nif [ \"${{FAKE_REQUIRE_SMOKE_FIXTURE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ]; then smoke_root=''; previous=''; for arg in \"$@\"; do if [ \"$previous\" = --root ]; then smoke_root=$arg; fi; previous=$arg; done; [ -f \"$smoke_root/codex/sessions/2026/04/telltale-installer-smoke.jsonl\" ] || exit 77; fi\nif [ \"${{FAKE_REENABLE_DURING_SMOKE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ] && [ -n \"${{FAKE_SYSTEMCTL_STATE:-}}\" ]; then awk '$1 == \"telltale-scan.timer\" {{ $3=1; $4=1 }} {{ print }}' \"$FAKE_SYSTEMCTL_STATE\" > \"$FAKE_SYSTEMCTL_STATE.tmp\"; mv \"$FAKE_SYSTEMCTL_STATE.tmp\" \"$FAKE_SYSTEMCTL_STATE\"; fi\nexit 0\n"
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf '%s\\n' '{identity} {version} (synthetic)'; fi\nif [ -n \"${{FAKE_EVENT_LOG:-}}\" ]; then printf 'binary:%s:%s\\n' \"$0\" \"$*\" >> \"$FAKE_EVENT_LOG\"; fi\nif [ -n \"${{FAKE_SECOND_SOURCE_MARKER:-}}\" ] && [ -n \"${{TELLTALE_PROJECT_CONFIG:-}}\" ]; then if [ \"$1\" = scan ]; then second_store=$(awk '/    path:/ {{ print $2 }}' \"$TELLTALE_PROJECT_CONFIG\"); cat \"$second_store/synthetic-session.jsonl\" > \"$FAKE_SECOND_SOURCE_MARKER\"; elif [ \"$1\" = rules ]; then printf 'parent-config-retained\\n' >> \"$FAKE_EVENT_LOG\"; fi; fi\nif [ \"${{FAKE_REQUIRE_SMOKE_FIXTURE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ]; then smoke_root=''; previous=''; for arg in \"$@\"; do if [ \"$previous\" = --root ]; then smoke_root=$arg; fi; previous=$arg; done; [ -f \"$smoke_root/codex/sessions/2026/04/telltale-installer-smoke.jsonl\" ] || exit 77; fi\nif [ \"${{FAKE_REENABLE_DURING_SMOKE:-0}}\" = 1 ] && [ \"$1\" = \"scan\" ] && [ -n \"${{FAKE_SYSTEMCTL_STATE:-}}\" ]; then awk '$1 == \"telltale-scan.timer\" {{ $3=1; $4=1 }} {{ print }}' \"$FAKE_SYSTEMCTL_STATE\" > \"$FAKE_SYSTEMCTL_STATE.tmp\"; mv \"$FAKE_SYSTEMCTL_STATE.tmp\" \"$FAKE_SYSTEMCTL_STATE\"; fi\nexit 0\n"
         ),
     );
 }
@@ -1454,6 +1454,46 @@ fn piped_install_uses_deterministic_synthetic_smoke_fixture() {
     assert_success(&output);
     assert!(output_text(&output).contains("deterministic synthetic fixture"));
     assert!(install.join("telltale").is_file());
+}
+
+#[test]
+fn installer_fixture_scan_ignores_inherited_project_config() {
+    let temp = tempdir().unwrap();
+    let second_store = temp.path().join("second-synthetic-store");
+    fs::create_dir(&second_store).unwrap();
+    fs::write(second_store.join("synthetic-session.jsonl"), "synthetic\n").unwrap();
+    let project_config = temp.path().join("synthetic-project.yaml");
+    fs::write(
+        &project_config,
+        format!(
+            "projects:\n  - name: synthetic\n    path: {}\n",
+            second_store.display()
+        ),
+    )
+    .unwrap();
+    let marker = temp.path().join("second-store-visited");
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+    let sums = temp.path().join("SHA256SUMS");
+    checksum(&selected, &sums);
+    let tools = tools(temp.path(), true);
+    let install = temp.path().join("home/bin");
+    let mut command = installer_command(temp.path(), &metadata, temp.path(), Some(&sums), &tools);
+    command
+        .env("TELLTALE_PROJECT_CONFIG", &project_config)
+        .env("FAKE_SECOND_SOURCE_MARKER", &marker)
+        .args(["--no-timer", "--install-dir", install.to_str().unwrap()]);
+    let output = command.output().unwrap();
+    assert_success(&output);
+    assert!(
+        !marker.exists(),
+        "fixture scan consumed inherited second store"
+    );
+    let events = fs::read_to_string(temp.path().join("events.log")).unwrap();
+    assert!(events.contains("binary:"));
+    assert!(events.contains("scan --once --dry-run --no-local-config"));
+    assert!(events.contains("parent-config-retained"));
 }
 
 #[test]

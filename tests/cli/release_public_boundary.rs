@@ -2991,6 +2991,25 @@ fn release_native_verify_checks_archive_binary_and_release_id_against_real_fixtu
     );
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn release_native_verify_fixture_environment_isolated() {
+    let output = Command::new("python3")
+        .arg("tests/test_release_native_fixture_env.py")
+        .output()
+        .expect("run synthetic native verifier fixture test");
+    assert!(
+        output.status.success(),
+        "native fixture environment regression failed: {}",
+        native_output(&output)
+    );
+    assert!(
+        native_output(&output).contains("Ran 1 test"),
+        "native fixture environment regression was not executed: {}",
+        native_output(&output)
+    );
+}
+
 #[cfg(unix)]
 fn run_native_verify_pin_probe(pin: &Value, target: &str, runner: &str) -> std::process::Output {
     let temp = tempdir().expect("native pin probe tempdir");

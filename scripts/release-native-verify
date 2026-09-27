@@ -133,8 +133,8 @@ def extract_archive(archive: Path, destination: Path) -> None:
             fail(f"Could not extract tar archive: {result.stderr.strip()}")
 
 
-def run_checked(command: list[str], description: str, *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+def run_checked(command: list[str], description: str, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
     if result.returncode != 0:
         fail(
             f"{description} failed with exit code {result.returncode}: "
@@ -456,6 +456,7 @@ def main() -> int:
                 str(log_path),
             ],
             "positive fixture scan",
+            env={key: value for key, value in os.environ.items() if key.upper() != "TELLTALE_PROJECT_CONFIG"},
         )
 
         validator = args.repo_root / args.event_validator

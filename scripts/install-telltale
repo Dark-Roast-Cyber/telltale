@@ -1967,7 +1967,7 @@ else
 EOF
 fi
 info "running smoke test with ${smoke_source}"
-run_bounded "$INSTALL_DIR/telltale" scan --once --dry-run --no-local-config \
+run_bounded env -u TELLTALE_PROJECT_CONFIG "$INSTALL_DIR/telltale" scan --once --dry-run --no-local-config \
     --root "$smoke_root" --max-sources 5 --state-path "$tmpdir/smoke-state.json" \
     --log-path "$tmpdir/smoke-events.jsonl" >/dev/null \
     || die "fixture dry-run smoke test failed"
