@@ -239,7 +239,7 @@ release-tag-review:
 release-crate-manifest:
 	@$(MAKE) --no-print-directory package-manifest
 
-## List and validate all Phase 0.6 Cargo package inventories
+## List and validate Cargo package inventories
 package-manifest:
 	@python3 scripts/version-consistency-check --check-publication-order $(PACKAGE_ORDER)
 	@set -eu; \

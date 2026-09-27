@@ -24,12 +24,13 @@ fn project_claude(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("claude-vector.jsonl");
     fs::write(&path, contents).expect("Claude vector");
-    let result = super::claude::canonical::project_claude_canonical_observations(
+    let result = crate::acquisition::acquire_source(
         &source(ClientId::Claude, "claude.projects", SourceKind::Jsonl, path),
-        super::claude::canonical::ClaudeCanonicalOptions::new(
+        crate::acquisition::AcquisitionOptions::new(
             ObservedAt::new(OBSERVED_AT).expect("observed time"),
         ),
     )
+    .map(|batch| batch.observations)
     .map_err(|error| error.code().to_owned());
     (directory, result)
 }
@@ -38,12 +39,13 @@ fn project_codex(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2>
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("codex-vector.jsonl");
     fs::write(&path, contents).expect("Codex vector");
-    let result = super::codex::canonical::project_codex_canonical_observations(
+    let result = crate::acquisition::acquire_source(
         &source(ClientId::Codex, "codex.sessions", SourceKind::Jsonl, path),
-        super::codex::canonical::CodexCanonicalOptions::new(
+        crate::acquisition::AcquisitionOptions::new(
             ObservedAt::new(OBSERVED_AT).expect("observed time"),
         ),
     )
+    .map(|batch| batch.observations)
     .map_err(|error| error.code().to_owned());
     (directory, result)
 }
@@ -52,17 +54,18 @@ fn project_openclaw(contents: &str) -> (TempDir, Result<Vec<CanonicalObservation
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("openclaw-vector.jsonl");
     fs::write(&path, contents).expect("OpenClaw vector");
-    let result = super::openclaw::canonical::project_openclaw_canonical_observations(
+    let result = crate::acquisition::acquire_source(
         &source(
             ClientId::OpenClaw,
             "openclaw.agents",
             SourceKind::Jsonl,
             path,
         ),
-        super::openclaw::canonical::OpenClawCanonicalOptions::new(
+        crate::acquisition::AcquisitionOptions::new(
             ObservedAt::new(OBSERVED_AT).expect("observed time"),
         ),
     )
+    .map(|batch| batch.observations)
     .map_err(|error| error.code().to_owned());
     (directory, result)
 }
@@ -71,12 +74,13 @@ fn project_qwen(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV2>,
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("qwen-vector.jsonl");
     fs::write(&path, contents).expect("Qwen vector");
-    let result = super::qwen::canonical::project_qwen_canonical_observations(
+    let result = crate::acquisition::acquire_source(
         &source(ClientId::Qwen, "qwen.projects", SourceKind::Jsonl, path),
-        super::qwen::canonical::QwenCanonicalOptions::new(
+        crate::acquisition::AcquisitionOptions::new(
             ObservedAt::new(OBSERVED_AT).expect("observed time"),
         ),
     )
+    .map(|batch| batch.observations)
     .map_err(|error| error.code().to_owned());
     (directory, result)
 }
@@ -85,25 +89,26 @@ fn project_copilot(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("copilot-vector.log");
     fs::write(&path, contents).expect("Copilot vector");
-    let result = super::copilot::canonical::project_copilot_canonical_observations(
+    let result = crate::acquisition::acquire_source(
         &source(
             ClientId::Copilot,
             "copilot.process_log",
             SourceKind::CopilotProcessLog,
             path,
         ),
-        super::copilot::canonical::CopilotCanonicalOptions::new(
+        crate::acquisition::AcquisitionOptions::new(
             ObservedAt::new(OBSERVED_AT).expect("observed time"),
         ),
     )
+    .map(|batch| batch.observations)
     .map_err(|error| error.code().to_owned());
     (directory, result)
 }
 
-fn project_opencode(
+fn opencode_fixture(
     messages: &[(&str, &str, serde_json::Value)],
     parts: &[(&str, &str, i64, serde_json::Value)],
-) -> (TempDir, Result<Vec<CanonicalObservationV2>, String>) {
+) -> (TempDir, Source) {
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("opencode-vector.db");
     let connection = Connection::open(&path).expect("OpenCode vector database");
@@ -137,16 +142,46 @@ fn project_opencode(
             .expect("OpenCode part vector");
     }
     drop(connection);
-    let result = super::opencode::canonical::project_opencode_canonical_observations(
-        &source(
+    (
+        directory,
+        source(
             ClientId::OpenCode,
             "opencode.sqlite",
             SourceKind::Sqlite,
             path,
         ),
-        super::opencode::canonical::OpenCodeCanonicalOptions::new(
+    )
+}
+
+fn project_opencode(
+    messages: &[(&str, &str, serde_json::Value)],
+    parts: &[(&str, &str, i64, serde_json::Value)],
+) -> (TempDir, Result<Vec<CanonicalObservationV2>, String>) {
+    let (directory, source) = opencode_fixture(messages, parts);
+    let result = crate::acquisition::acquire_source(
+        &source,
+        crate::acquisition::AcquisitionOptions::new(
             ObservedAt::new(OBSERVED_AT).expect("observed time"),
         ),
+    )
+    .map(|batch| batch.observations)
+    .map_err(|error| error.code().to_owned());
+    (directory, result)
+}
+
+fn project_opencode_native(
+    messages: &[(&str, &str, serde_json::Value)],
+    parts: &[(&str, &str, i64, serde_json::Value)],
+) -> (TempDir, Result<Vec<CanonicalObservationV2>, String>) {
+    let (directory, source) = opencode_fixture(messages, parts);
+    let native = super::opencode::native::extract_sqlite_native_source(
+        &source,
+        super::opencode::native::OpenCodeSqliteReadOptions::default(),
+    )
+    .expect("OpenCode native vector");
+    let result = super::opencode::canonical::project_opencode_native_records(
+        &native.records,
+        &ObservedAt::new(OBSERVED_AT).expect("observed time"),
     )
     .map_err(|error| error.code().to_owned());
     (directory, result)
@@ -583,7 +618,7 @@ fn opencode_sqlite_messages_join_shared_message_semantics() {
 
 #[test]
 fn opencode_sqlite_tool_overlap_preserves_call_linkage_values_and_facets() {
-    let (_directory, opencode) = project_opencode(
+    let (_directory, opencode) = project_opencode_native(
         &[(
             "tool-context",
             "opencode-tool-conformance",
@@ -658,7 +693,7 @@ fn opencode_sqlite_tool_overlap_preserves_call_linkage_values_and_facets() {
 
 #[test]
 fn opencode_sqlite_missing_call_id_is_absent_and_not_derived() {
-    let (_directory, opencode) = project_opencode(
+    let (_directory, opencode) = project_opencode_native(
         &[(
             "tool-context",
             "opencode-missing-call",
@@ -685,7 +720,7 @@ fn opencode_sqlite_missing_call_id_is_absent_and_not_derived() {
 
 #[test]
 fn opencode_sqlite_direct_lifecycle_is_supported_without_inferred_success() {
-    let (_directory, opencode) = project_opencode(
+    let (_directory, opencode) = project_opencode_native(
         &[(
             "tool-context",
             "opencode-lifecycle",

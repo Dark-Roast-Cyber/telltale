@@ -335,8 +335,9 @@ architecture.
 
 ### Event 3.0 freeze policy
 
-Event 3.0 is the stable external compatibility contract for the v0.6 scanner
-and deterministic detection layer. After this freeze, only
+Event 3.0 is the stable external compatibility contract for the scanner and
+deterministic detection layer, established and frozen in v0.6 and still current
+for v0.7. After this freeze, only
 security, privacy, correctness, documentation, and compatibility fixes may
 change its implementation or evidence. New runtime observation lifecycle,
 gateway telemetry, decisions, actions, approvals, or runtime/browser/OS

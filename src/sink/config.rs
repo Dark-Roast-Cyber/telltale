@@ -277,8 +277,6 @@ impl Default for DeliveryConfig {
 
 pub(crate) struct LoadedOutputsConfig {
     pub(crate) sinks: Vec<SinkSpec>,
-    /// Retained for durable-mode construction; Batch 4+ reads it for dispatch wiring.
-    #[allow(dead_code)]
     pub(crate) delivery: DeliveryConfig,
 }
 

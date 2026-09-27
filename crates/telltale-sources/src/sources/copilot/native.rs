@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -14,8 +12,9 @@ use telltale_schema::source::Source;
 pub(crate) enum CopilotNativeEvent {
     WorkspaceInitialized {
         source_session_id: Option<String>,
-        timestamp: Option<String>,
         /// Trusted control prefix only. Structured payload suffixes are not retained.
+        // Read by native extraction tests; unused in production mapping.
+        #[cfg_attr(not(test), allow(dead_code))]
         control_prefix: String,
     },
     AccumulatedOutputItem {
@@ -33,12 +32,18 @@ pub(crate) enum CopilotNativeEvent {
 pub(crate) struct CopilotOutputItem {
     pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) item_type: Option<String>,
+    // Read by native extraction tests; unused in production mapping.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) id: Option<String>,
     pub(crate) call_id: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) arguments: Option<String>,
     pub(crate) message: Option<String>,
+    // Read by native extraction tests; unused in production mapping.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) model: Option<String>,
+    // Read by native extraction tests; unused in production mapping.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) provider: Option<String>,
     pub(crate) role: Option<String>,
     pub(crate) content_present: bool,
@@ -96,7 +101,6 @@ pub(crate) fn extract_copilot_native_events(
             canonical_active_session_id = source_session_id.clone();
             events.push(CopilotNativeEvent::WorkspaceInitialized {
                 source_session_id,
-                timestamp,
                 control_prefix: content.to_owned(),
             });
             continue;
@@ -124,7 +128,6 @@ pub(crate) fn extract_copilot_native_events(
             canonical_active_session_id = source_session_id.clone();
             events.push(CopilotNativeEvent::WorkspaceInitialized {
                 source_session_id,
-                timestamp: timestamp.clone(),
                 control_prefix: content.to_owned(),
             });
         }

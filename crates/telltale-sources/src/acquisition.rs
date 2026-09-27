@@ -351,7 +351,6 @@ fn account_unit(
 
 fn map_canonical_error(error: OpenCodeCanonicalError) -> AcquisitionError {
     match error {
-        OpenCodeCanonicalError::Source(_) => AcquisitionError::SourceRead,
         OpenCodeCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
         OpenCodeCanonicalError::Observation(error) => {
             AcquisitionError::CanonicalValidation { code: error.code() }
@@ -361,7 +360,6 @@ fn map_canonical_error(error: OpenCodeCanonicalError) -> AcquisitionError {
 
 fn map_claude_error(error: ClaudeCanonicalError) -> AcquisitionError {
     match error {
-        ClaudeCanonicalError::Source(_) => AcquisitionError::SourceRead,
         ClaudeCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
         ClaudeCanonicalError::Observation(error) => {
             AcquisitionError::CanonicalValidation { code: error.code() }
@@ -371,7 +369,6 @@ fn map_claude_error(error: ClaudeCanonicalError) -> AcquisitionError {
 
 fn map_codex_error(error: CodexCanonicalError) -> AcquisitionError {
     match error {
-        CodexCanonicalError::Source(_) => AcquisitionError::SourceRead,
         CodexCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
         CodexCanonicalError::Observation(error) => {
             AcquisitionError::CanonicalValidation { code: error.code() }
@@ -381,7 +378,6 @@ fn map_codex_error(error: CodexCanonicalError) -> AcquisitionError {
 
 fn map_openclaw_error(error: OpenClawCanonicalError) -> AcquisitionError {
     match error {
-        OpenClawCanonicalError::Source(_) => AcquisitionError::SourceRead,
         OpenClawCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
         OpenClawCanonicalError::Observation(error) => {
             AcquisitionError::CanonicalValidation { code: error.code() }
@@ -391,7 +387,6 @@ fn map_openclaw_error(error: OpenClawCanonicalError) -> AcquisitionError {
 
 fn map_qwen_error(error: QwenCanonicalError) -> AcquisitionError {
     match error {
-        QwenCanonicalError::Source(_) => AcquisitionError::SourceRead,
         QwenCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
         QwenCanonicalError::Observation(error) => {
             AcquisitionError::CanonicalValidation { code: error.code() }
@@ -401,7 +396,6 @@ fn map_qwen_error(error: QwenCanonicalError) -> AcquisitionError {
 
 fn map_copilot_error(error: CopilotCanonicalError) -> AcquisitionError {
     match error {
-        CopilotCanonicalError::Source(_) => AcquisitionError::SourceRead,
         CopilotCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
         CopilotCanonicalError::Observation(error) => {
             AcquisitionError::CanonicalValidation { code: error.code() }
@@ -422,9 +416,6 @@ mod tests {
     use super::{
         AcquisitionError, AcquisitionOptions, AcquisitionProgress, OpenCodeSqliteReadOptions,
         acquire_opencode_sqlite,
-    };
-    use crate::sources::opencode::canonical::{
-        OpenCodeCanonicalOptions, project_opencode_canonical_observations,
     };
 
     const OBSERVED_AT: &str = "2026-09-18T12:00:00Z";
@@ -946,9 +937,6 @@ mod tests {
 
     #[test]
     fn copilot_acquisition_failures_preserve_strict_reference_behavior() {
-        use crate::sources::copilot::canonical::{
-            CopilotCanonicalOptions, project_copilot_canonical_observations,
-        };
         let directory = tempdir().unwrap();
         let path = directory.path().join("private-path-marker.log");
         let source = Source {
@@ -992,12 +980,6 @@ mod tests {
             std::fs::write(&path, input).unwrap();
             let error = acquisition_error(super::acquire_source(&source, options()));
             assert_eq!(error, expected);
-            let reference = project_copilot_canonical_observations(
-                &source,
-                CopilotCanonicalOptions::new(options().observed_at),
-            )
-            .unwrap_err();
-            assert_eq!(error, super::map_copilot_error(reference));
             assert!(!format!("{error} {error:?}").contains("private-"));
         }
         // Each invocation starts fresh, even after a previous initialized stream.
@@ -1131,25 +1113,21 @@ mod tests {
         drop(connection);
 
         let acquired = super::acquire_source(&source, options()).unwrap();
-        let projected = project_opencode_canonical_observations(
-            &source,
-            OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
-        )
-        .unwrap();
-
-        assert_eq!(acquired.observations.len(), projected.len());
-        for (acquired, projected) in acquired.observations.iter().zip(&projected) {
-            assert_eq!(acquired.observation_id(), projected.observation_id());
-            assert_eq!(acquired.kind(), projected.kind());
-            assert_eq!(acquired.stage(), projected.stage());
-            assert_eq!(acquired.body(), projected.body());
-            assert_eq!(acquired.facets(), projected.facets());
-            assert_eq!(acquired.fact_metadata(), projected.fact_metadata());
+        assert_eq!(acquired.observations.len(), 3);
+        for (observation, (id, text)) in acquired.observations.iter().zip([
+            ("part-first", "first"),
+            ("part-second", "second"),
+            ("part-third", "third"),
+        ]) {
+            assert_eq!(observation.source().native_id(), Some(id));
+            assert_eq!(observation.observed_at().as_str(), OBSERVED_AT);
+            let ObservationBody::Message(message) = observation.body() else {
+                panic!("expected text part message")
+            };
             assert_eq!(
-                acquired.source().native_id(),
-                projected.source().native_id()
+                message.content(),
+                Some(&telltale_schema::observation::JsonValue::string(text))
             );
-            assert_eq!(acquired.observed_at().as_str(), OBSERVED_AT);
         }
         assert_eq!(
             acquired.progress,

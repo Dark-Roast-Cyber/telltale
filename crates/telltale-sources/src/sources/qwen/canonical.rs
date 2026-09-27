@@ -1,8 +1,5 @@
-#![allow(dead_code)]
-
 use std::fmt;
 
-use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
     ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
@@ -10,13 +7,10 @@ use telltale_schema::observation::{
     ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
     SourceTimestamp, ToolObservation,
 };
-use telltale_schema::source::Source;
 
 use super::native::{
-    QwenContentBlock, QwenNativeRecord, QwenToolFields, extract_qwen_native_records,
-    is_known_qwen_discriminator,
+    QwenContentBlock, QwenNativeRecord, QwenToolFields, is_known_qwen_discriminator,
 };
-use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct QwenCanonicalOptions {
@@ -30,7 +24,6 @@ impl QwenCanonicalOptions {
 }
 
 pub(crate) enum QwenCanonicalError {
-    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -39,12 +32,9 @@ pub(crate) enum QwenCanonicalError {
 }
 
 impl QwenCanonicalError {
+    #[cfg(test)]
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                "source_parse"
-            }
             Self::Mapping { code, .. } => code,
             Self::Observation(error) => error.code(),
         }
@@ -54,10 +44,6 @@ impl QwenCanonicalError {
 impl fmt::Debug for QwenCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("QwenCanonicalError::Source")
-            }
             Self::Mapping { code, detail } => formatter
                 .debug_struct("QwenCanonicalError::Mapping")
                 .field("code", code)
@@ -74,10 +60,6 @@ impl fmt::Debug for QwenCanonicalError {
 impl fmt::Display for QwenCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("Qwen source could not be parsed")
-            }
             Self::Mapping { code, detail } => {
                 write!(
                     formatter,
@@ -91,37 +73,10 @@ impl fmt::Display for QwenCanonicalError {
 
 impl std::error::Error for QwenCanonicalError {}
 
-impl From<SourceReadError> for QwenCanonicalError {
-    fn from(error: SourceReadError) -> Self {
-        Self::Source(error)
-    }
-}
-
 impl From<ObservationError> for QwenCanonicalError {
     fn from(error: ObservationError) -> Self {
         Self::Observation(error)
     }
-}
-
-pub(crate) fn project_qwen_canonical_observations(
-    source: &Source,
-    options: QwenCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, QwenCanonicalError> {
-    if source.client != ClientId::Qwen || source.source_id != "qwen.projects" {
-        return Err(mapping(
-            "unsupported_source_identity",
-            "canonical projection requires the Qwen projects source",
-        ));
-    }
-    if source.kind != SourceKind::Jsonl {
-        return Err(mapping(
-            "unsupported_source_kind",
-            "canonical projection requires JSONL input",
-        ));
-    }
-
-    let records = extract_qwen_native_records(source)?;
-    project_qwen_native_records(&records, &options)
 }
 
 pub(crate) fn project_qwen_native_records(

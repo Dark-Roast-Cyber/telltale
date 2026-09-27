@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use crate::source_read::{SourceReadError, collect_string_values};
 use rusqlite::Connection;
@@ -209,14 +207,6 @@ impl OpenCodeSqliteNativeRecord {
             }
         }
         strings
-    }
-
-    pub(crate) fn message_id(&self) -> Option<&str> {
-        match self {
-            Self::Message(record) => record.source_id.as_deref(),
-            Self::Text(record) => record.message_id.as_deref(),
-            Self::Tool(record) => record.message_id.as_deref(),
-        }
     }
 }
 

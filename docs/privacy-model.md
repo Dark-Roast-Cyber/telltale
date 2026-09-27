@@ -4,7 +4,7 @@
 
 Telltale monitors agent session stores that contain sensitive material: API keys, credentials, private keys, file paths, conversation bodies, and tool-call arguments. The privacy model defines how Telltale classifies, transforms, and emits evidence so SIEM events remain useful without becoming a new secret-leak surface.
 
-## Tested v0.6 Boundary
+## Current Contract (Established in v0.6)
 
 `Event`, `Event::emittable()`, and `serialize_event_for_emission()` are equivalent, authoritative, deterministic, local-only privacy boundaries. Serialization terminal-sanitizes a clone without changing the raw in-memory `Event`; production JSONL, HEC, and Elastic serializers use that canonical representation. Native Event 3.0 emission always uses the trusted compile-time Telltale package version; arbitrary public version mutations, including credential-bearing SemVer metadata, are replaced before emission. Canonical Event 3.0 emission preserves only established 64-character lowercase-hex `source_path_hash`/evidence hashes; arbitrary post-construction source-hash values become deterministic SHA-256 values. MITRE ATT&CK technique IDs preserve the current `T1234`/`T1234.001` forms, while other values become deterministic `mitre:<sha256>` fallbacks. Known `source_counts` keys remain `<client>.<source-kind>` identifiers; noncanonical keys become deterministic `source_count:<sha256>` keys with collision suffixes. `workspace` is not a native Event 3.0 field; source workspace metadata remains part of the local normalized-input model and, when selected as evidence, is emitted only through the evidence path sanitizer. `telltale-schema` exposes `PrivacySanitizer` and `SanitizationContext`; the legacy `redact_sensitive_text()` helper delegates to that authority. There is no external redaction model or service, and sanitization happens after source acquisition and deterministic detection/scoring, not on detector inputs.
 
@@ -277,7 +277,7 @@ and cite the fixture-safe command that reproduces it.
 
 ## Future Privacy Work
 
-The dedicated deterministic redaction stage is current v0.6 behavior, not future work. External or LLM-based privacy classification is not part of the v0.6 architecture: raw source text is not sent to a hosted redaction service, and no downstream sink is trusted to repair unsafe event content. Future privacy changes require a separately reviewed threat model and must preserve this fail-closed local boundary unless explicitly superseded.
+The dedicated deterministic redaction stage was established and frozen in v0.6 and remains the current contract for v0.7. External or LLM-based privacy classification was not part of the v0.6 architecture and remains outside the current contract: raw source text is not sent to a hosted redaction service, and no downstream sink is trusted to repair unsafe event content. Future privacy changes require a separately reviewed threat model and must preserve this fail-closed local boundary unless explicitly superseded.
 
 ### Local Context Opt-In
 

@@ -1,48 +1,20 @@
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::fmt;
 
 use serde_json::Value;
-use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, FactMetadata,
     FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
     ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
-use telltale_schema::source::Source;
 
-use super::native::OpenCodeSqliteReadOptions;
 use super::native::{
     OpenCodeMessageContext, OpenCodeMessageNativeRecord, OpenCodeSqliteNativeRecord,
     OpenCodeTextPartNativeRecord, OpenCodeToolPartNativeRecord, OpenCodeToolState,
-    extract_sqlite_native_source,
 };
-use crate::source_read::SourceReadError;
-
-#[derive(Clone)]
-pub(crate) struct OpenCodeCanonicalOptions {
-    pub(crate) observed_at: ObservedAt,
-    pub(crate) read: OpenCodeSqliteReadOptions,
-}
-
-impl OpenCodeCanonicalOptions {
-    pub(crate) fn new(observed_at: ObservedAt) -> Self {
-        Self {
-            observed_at,
-            read: OpenCodeSqliteReadOptions::default(),
-        }
-    }
-
-    pub(crate) fn with_read_options(mut self, read: OpenCodeSqliteReadOptions) -> Self {
-        self.read = read;
-        self
-    }
-}
 
 pub(crate) enum OpenCodeCanonicalError {
-    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -51,12 +23,9 @@ pub(crate) enum OpenCodeCanonicalError {
 }
 
 impl OpenCodeCanonicalError {
+    #[cfg(test)]
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                "source_parse"
-            }
             Self::Mapping { code, .. } => code,
             Self::Observation(error) => error.code(),
         }
@@ -66,10 +35,6 @@ impl OpenCodeCanonicalError {
 impl fmt::Debug for OpenCodeCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("OpenCodeCanonicalError::Source")
-            }
             Self::Mapping { code, detail } => formatter
                 .debug_struct("OpenCodeCanonicalError::Mapping")
                 .field("code", code)
@@ -86,10 +51,6 @@ impl fmt::Debug for OpenCodeCanonicalError {
 impl fmt::Display for OpenCodeCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("OpenCode source could not be parsed")
-            }
             Self::Mapping { code, detail } => {
                 write!(
                     formatter,
@@ -103,37 +64,10 @@ impl fmt::Display for OpenCodeCanonicalError {
 
 impl std::error::Error for OpenCodeCanonicalError {}
 
-impl From<SourceReadError> for OpenCodeCanonicalError {
-    fn from(error: SourceReadError) -> Self {
-        Self::Source(error)
-    }
-}
-
 impl From<ObservationError> for OpenCodeCanonicalError {
     fn from(error: ObservationError) -> Self {
         Self::Observation(error)
     }
-}
-
-pub(crate) fn project_opencode_canonical_observations(
-    source: &Source,
-    options: OpenCodeCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, OpenCodeCanonicalError> {
-    if source.client != ClientId::OpenCode || source.source_id != "opencode.sqlite" {
-        return Err(mapping(
-            "unsupported_source_identity",
-            "canonical projection requires the OpenCode SQLite source",
-        ));
-    }
-    if source.kind != SourceKind::Sqlite {
-        return Err(mapping(
-            "unsupported_source_kind",
-            "canonical projection requires SQLite input",
-        ));
-    }
-
-    let extraction = extract_sqlite_native_source(source, options.read)?;
-    project_opencode_native_records(&extraction.records, &options.observed_at)
 }
 
 pub(crate) fn project_opencode_native_records(
@@ -690,7 +624,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::super::native::OpenCodeSqliteReadOptions;
-    use super::{OpenCodeCanonicalOptions, project_opencode_canonical_observations};
+    use super::project_opencode_native_records;
 
     const OBSERVED_AT: &str = "2026-09-03T12:00:00Z";
 
@@ -706,9 +640,14 @@ mod tests {
     fn project(
         path: std::path::PathBuf,
     ) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
-        project_opencode_canonical_observations(
-            &source(path),
-            OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        project_opencode_native_records(
+            &super::super::native::extract_sqlite_native_source(
+                &source(path),
+                OpenCodeSqliteReadOptions::default(),
+            )
+            .unwrap()
+            .records,
+            &ObservedAt::new(OBSERVED_AT).unwrap(),
         )
         .expect("canonical observations")
     }
@@ -820,14 +759,17 @@ mod tests {
             serde_json::json!({"type":"text","text":"new"}),
         );
 
-        let observations = project_opencode_canonical_observations(
+        let native = super::super::native::extract_sqlite_native_source(
             &source,
-            OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()).with_read_options(
-                OpenCodeSqliteReadOptions {
-                    part_min_time_updated: Some(1_001),
-                    part_limit: 1,
-                },
-            ),
+            OpenCodeSqliteReadOptions {
+                part_min_time_updated: Some(1_001),
+                part_limit: 1,
+            },
+        )
+        .unwrap();
+        let observations = project_opencode_native_records(
+            &native.records,
+            &ObservedAt::new(OBSERVED_AT).unwrap(),
         )
         .unwrap();
         assert_eq!(observations.len(), 1);
@@ -905,9 +847,14 @@ mod tests {
             1,
             serde_json::json!({"type":"text","text":"Synthetic secret marker"}),
         );
-        let error = project_opencode_canonical_observations(
-            &source,
-            OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_opencode_native_records(
+            &super::super::native::extract_sqlite_native_source(
+                &source,
+                OpenCodeSqliteReadOptions::default(),
+            )
+            .unwrap()
+            .records,
+            &ObservedAt::new(OBSERVED_AT).unwrap(),
         )
         .unwrap_err();
         assert_eq!(error.code(), "replay_unverifiable");
@@ -1092,9 +1039,14 @@ mod tests {
                 }),
             );
 
-            let error = project_opencode_canonical_observations(
-                &source,
-                OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            let error = project_opencode_native_records(
+                &super::super::native::extract_sqlite_native_source(
+                    &source,
+                    OpenCodeSqliteReadOptions::default(),
+                )
+                .unwrap()
+                .records,
+                &ObservedAt::new(OBSERVED_AT).unwrap(),
             )
             .unwrap_err();
             assert_eq!(error.code(), "unknown_tool_status");
@@ -1116,9 +1068,14 @@ mod tests {
             }),
         );
 
-        let error = project_opencode_canonical_observations(
-            &source,
-            OpenCodeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_opencode_native_records(
+            &super::super::native::extract_sqlite_native_source(
+                &source,
+                OpenCodeSqliteReadOptions::default(),
+            )
+            .unwrap()
+            .records,
+            &ObservedAt::new(OBSERVED_AT).unwrap(),
         )
         .unwrap_err();
         assert_eq!(error.code(), "invalid_tool_state");

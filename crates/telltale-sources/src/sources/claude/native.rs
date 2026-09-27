@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 

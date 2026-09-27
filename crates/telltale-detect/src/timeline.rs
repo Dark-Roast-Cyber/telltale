@@ -4,8 +4,6 @@
 //! detection and downstream response consumers a shared ordered view without
 //! changing current detection behavior.
 
-#![allow(dead_code)] // Consumed incrementally as P13 wiring lands.
-
 use std::collections::BTreeMap;
 
 use serde::Serialize;

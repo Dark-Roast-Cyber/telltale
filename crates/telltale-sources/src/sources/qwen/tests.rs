@@ -22,9 +22,9 @@ fn qwen_source(path: std::path::PathBuf) -> Source {
 }
 
 fn project(path: std::path::PathBuf) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
-    super::canonical::project_qwen_canonical_observations(
-        &qwen_source(path),
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+    super::canonical::project_qwen_native_records(
+        &super::native::extract_qwen_native_records(&qwen_source(path)).unwrap(),
+        &super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
     .expect("Qwen canonical observations")
 }
@@ -422,9 +422,9 @@ fn qwen_payload_message_without_evidence_fails_but_top_level_empty_message_remai
         r#"{"content":"Synthetic outer content.","sessionId":"outer-session","payload":{"type":"user","sessionId":"payload-empty-session","name":"x"}}"#,
     )
     .unwrap();
-    let error = super::canonical::project_qwen_canonical_observations(
-        &qwen_source(payload_path.clone()),
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+    let error = super::canonical::project_qwen_native_records(
+        &super::native::extract_qwen_native_records(&qwen_source(payload_path.clone())).unwrap(),
+        &super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
     .expect_err("payload message without evidence must fail closed");
     assert_eq!(error.code(), "missing_payload_evidence");
@@ -642,9 +642,9 @@ fn qwen_session_meta_does_not_supply_canonical_session_identity() {
     )
     .unwrap();
     let source = qwen_source(path.clone());
-    let error = super::canonical::project_qwen_canonical_observations(
-        &source,
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+    let error = super::canonical::project_qwen_native_records(
+        &super::native::extract_qwen_native_records(&source).unwrap(),
+        &super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
     .expect_err("session meta must not scope the following record");
     assert_eq!(error.code(), "replay_unverifiable");
@@ -714,9 +714,9 @@ fn qwen_message_native_id_precedes_session_coordinate_but_tool_ids_do_not() {
 #[test]
 fn qwen_unknown_canonical_inputs_fail_privately() {
     let unknown = crate::test_fixture_path("parser_maturity/non_discovered/unknown-variant.jsonl");
-    let error = super::canonical::project_qwen_canonical_observations(
-        &qwen_source(unknown.clone()),
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+    let error = super::canonical::project_qwen_native_records(
+        &super::native::extract_qwen_native_records(&qwen_source(unknown.clone())).unwrap(),
+        &super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
     .expect_err("unknown discriminator must fail canonical mapping");
     assert_eq!(error.code(), "unknown_discriminator");
@@ -730,9 +730,9 @@ fn qwen_unknown_canonical_inputs_fail_privately() {
         r#"{"payload":{"type":"future_payload_kind","content":"Synthetic payload secret."}}"#,
     )
     .unwrap();
-    let error = super::canonical::project_qwen_canonical_observations(
-        &qwen_source(path.clone()),
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+    let error = super::canonical::project_qwen_native_records(
+        &super::native::extract_qwen_native_records(&qwen_source(path.clone())).unwrap(),
+        &super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
     .expect_err("unknown payload discriminator must fail canonical mapping");
     assert_eq!(error.code(), "unknown_discriminator");
@@ -746,9 +746,9 @@ fn qwen_unknown_canonical_inputs_fail_privately() {
         br#"{"type":"assistant","sessionId":"unknown-block","content":[{"type":"future_block","value":"synthetic payload"}]}"#,
     )
     .unwrap();
-    let error = super::canonical::project_qwen_canonical_observations(
-        &qwen_source(path.clone()),
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+    let error = super::canonical::project_qwen_native_records(
+        &super::native::extract_qwen_native_records(&qwen_source(path.clone())).unwrap(),
+        &super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
     .expect_err("unknown content block must fail canonical mapping");
     assert_eq!(error.code(), "unknown_content_block");
@@ -757,29 +757,33 @@ fn qwen_unknown_canonical_inputs_fail_privately() {
 
 #[test]
 fn qwen_canonical_rejects_wrong_identity_without_reading_path() {
-    let error = super::canonical::project_qwen_canonical_observations(
+    let error = crate::acquisition::acquire_source(
         &Source {
             client: ClientId::Qwen,
             kind: SourceKind::Json,
             source_id: "qwen.projects".to_owned(),
             path: "does-not-exist.jsonl".into(),
         },
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
-    .unwrap_err();
-    assert_eq!(error.code(), "unsupported_source_kind");
+    .err()
+    .expect("wrong kind must fail before reading");
+    assert_eq!(error.code(), "source_kind_mismatch");
     assert!(!error.to_string().contains("does-not-exist"));
+    assert!(!format!("{error:?}").contains("does-not-exist"));
 
-    let error = super::canonical::project_qwen_canonical_observations(
+    let error = crate::acquisition::acquire_source(
         &Source {
             client: ClientId::Qwen,
             kind: SourceKind::Jsonl,
             source_id: "Qwen.projects".to_owned(),
             path: "does-not-exist.jsonl".into(),
         },
-        super::canonical::QwenCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
     )
-    .unwrap_err();
+    .err()
+    .expect("wrong identity must fail before reading");
     assert_eq!(error.code(), "unsupported_source_identity");
+    assert!(!error.to_string().contains("does-not-exist"));
     assert!(!format!("{error:?}").contains("does-not-exist"));
 }

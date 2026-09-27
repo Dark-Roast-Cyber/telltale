@@ -1,9 +1,6 @@
-#![allow(dead_code)]
-
 use std::fmt;
 
 use serde_json::Value;
-use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
     ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
@@ -11,13 +8,10 @@ use telltale_schema::observation::{
     ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
     SourceTimestamp, ToolObservation, ToolStatus,
 };
-use telltale_schema::source::Source;
 
 use super::native::{
-    CodexContentBlock, CodexNativeRecord, CodexToolFields, extract_codex_native_records,
-    is_known_codex_discriminator,
+    CodexContentBlock, CodexNativeRecord, CodexToolFields, is_known_codex_discriminator,
 };
-use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct CodexCanonicalOptions {
@@ -31,7 +25,6 @@ impl CodexCanonicalOptions {
 }
 
 pub(crate) enum CodexCanonicalError {
-    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -40,12 +33,9 @@ pub(crate) enum CodexCanonicalError {
 }
 
 impl CodexCanonicalError {
+    #[cfg(test)]
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                "source_parse"
-            }
             Self::Mapping { code, .. } => code,
             Self::Observation(error) => error.code(),
         }
@@ -55,10 +45,6 @@ impl CodexCanonicalError {
 impl fmt::Debug for CodexCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("CodexCanonicalError::Source")
-            }
             Self::Mapping { code, detail } => formatter
                 .debug_struct("CodexCanonicalError::Mapping")
                 .field("code", code)
@@ -75,10 +61,6 @@ impl fmt::Debug for CodexCanonicalError {
 impl fmt::Display for CodexCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("Codex source could not be parsed")
-            }
             Self::Mapping { code, detail } => {
                 write!(
                     formatter,
@@ -92,37 +74,10 @@ impl fmt::Display for CodexCanonicalError {
 
 impl std::error::Error for CodexCanonicalError {}
 
-impl From<SourceReadError> for CodexCanonicalError {
-    fn from(error: SourceReadError) -> Self {
-        Self::Source(error)
-    }
-}
-
 impl From<ObservationError> for CodexCanonicalError {
     fn from(error: ObservationError) -> Self {
         Self::Observation(error)
     }
-}
-
-pub(crate) fn project_codex_canonical_observations(
-    source: &Source,
-    options: CodexCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, CodexCanonicalError> {
-    if source.client != ClientId::Codex || !is_registered_source_id(&source.source_id) {
-        return Err(mapping(
-            "unsupported_source_identity",
-            "canonical projection requires a registered Codex source",
-        ));
-    }
-    if !matching_source_kind(&source.source_id, source.kind) {
-        return Err(mapping(
-            "unsupported_source_kind",
-            "canonical projection requires the registered source kind",
-        ));
-    }
-
-    let records = extract_codex_native_records(source)?;
-    project_codex_native_records(&records, &options)
 }
 
 pub(crate) fn project_codex_native_records(
@@ -134,22 +89,6 @@ pub(crate) fn project_codex_native_records(
         project_record(record, options, &mut observations)?;
     }
     Ok(observations)
-}
-
-fn is_registered_source_id(source_id: &str) -> bool {
-    matches!(
-        source_id,
-        "codex.sessions" | "codex.archived_sessions" | "codex.headless_sessions"
-    )
-}
-
-fn matching_source_kind(source_id: &str, kind: SourceKind) -> bool {
-    matches!(
-        (source_id, kind),
-        ("codex.sessions", SourceKind::Jsonl)
-            | ("codex.archived_sessions", SourceKind::ArchivedJsonl)
-            | ("codex.headless_sessions", SourceKind::HeadlessJsonl)
-    )
 }
 
 fn project_record(
@@ -413,15 +352,11 @@ fn block_tool(
 ) -> Result<Option<(CodexToolFields, ObservationStage)>, CodexCanonicalError> {
     match block {
         CodexContentBlock::ToolUse {
-            id,
-            name,
-            input,
-            input_present,
+            id, name, input, ..
         } => Ok(Some((
             CodexToolFields {
                 name: name.clone(),
                 arguments: input.clone(),
-                arguments_present: *input_present,
                 call_id: id.clone(),
                 ..CodexToolFields::default()
             },
@@ -720,16 +655,16 @@ impl CodexContentBlock {
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::source::Source;
+
     use telltale_schema::observation::{
         CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
         MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt, ToolStatus,
     };
-    use telltale_schema::source::Source;
     use tempfile::tempdir;
 
-    use super::{CodexCanonicalOptions, project_codex_canonical_observations};
+    use super::{CodexCanonicalOptions, project_codex_native_records};
 
     const OBSERVED_AT: &str = "2026-09-02T12:00:00Z";
 
@@ -762,9 +697,9 @@ mod tests {
     }
 
     fn project(source: &Source) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
-        project_codex_canonical_observations(
-            source,
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        project_codex_native_records(
+            &super::super::native::extract_codex_native_records(source).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("canonical observations")
     }
@@ -784,9 +719,9 @@ mod tests {
             input.replace("\"session_id\":\"session-a\",", ""),
         )
         .unwrap();
-        let error = super::project_codex_canonical_observations(
-            &source,
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "replay_unverifiable");
@@ -847,14 +782,14 @@ mod tests {
             source_id: "codex.sessions".to_owned(),
             path,
         };
-        let first = project_codex_canonical_observations(
-            &source(first_path),
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let first = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source(first_path)).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
-        let moved = project_codex_canonical_observations(
-            &source(second_path),
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let moved = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source(second_path)).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
         assert_eq!(first[0].observation_id(), moved[0].observation_id());
@@ -867,9 +802,9 @@ mod tests {
             r#"{"type":"user","sessionId":"synthetic-session","content":"Synthetic changed message."}"#,
         )
         .unwrap();
-        let changed = project_codex_canonical_observations(
-            &source(changed_path),
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let changed = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source(changed_path)).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
         assert_eq!(first[0].observation_id(), changed[0].observation_id());
@@ -903,14 +838,14 @@ mod tests {
             source_id: "codex.sessions".to_owned(),
             path,
         };
-        let first = project_codex_canonical_observations(
-            &source(first_path),
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let first = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source(first_path)).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
-        let second = project_codex_canonical_observations(
-            &source(second_path),
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let second = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source(second_path)).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
         assert_ne!(first[0].observation_id(), second[0].observation_id());
@@ -923,9 +858,9 @@ mod tests {
             SourceKind::Jsonl,
             r#"{"type":"message","role":"system","content":"Synthetic role marker."}"#,
         );
-        let error = super::project_codex_canonical_observations(
-            &source,
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown role");
         assert_eq!(error.code(), "unsupported_role");
@@ -1229,9 +1164,9 @@ mod tests {
             SourceKind::Jsonl,
             "parser_maturity/non_discovered/unknown-variant.jsonl",
         );
-        let error = super::project_codex_canonical_observations(
-            &unknown_source,
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&unknown_source).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown discriminator");
         assert_eq!(error.code(), "unknown_discriminator");
@@ -1247,12 +1182,17 @@ mod tests {
             SourceKind::ArchivedJsonl,
             "parser_maturity/non_discovered/schema-drift.jsonl",
         );
-        let error = super::project_codex_canonical_observations(
+        let error = crate::acquisition::acquire_source(
             &drift,
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .expect_err("schema drift");
-        assert_eq!(error.code(), "source_parse");
+        .err()
+        .expect("schema drift");
+        assert_eq!(error.code(), "source_read");
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains("schema-drift.jsonl"));
+            assert!(!rendered.contains("Synthetic"));
+        }
     }
 
     #[test]
@@ -1262,9 +1202,9 @@ mod tests {
             SourceKind::Jsonl,
             r#"{"type":"assistant","content":[{"type":"future_block","value":"Synthetic payload marker."}]}"#,
         );
-        let error = super::project_codex_canonical_observations(
-            &source,
-            CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown block");
         assert_eq!(error.code(), "unknown_content_block");

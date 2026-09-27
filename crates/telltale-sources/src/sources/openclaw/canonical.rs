@@ -1,8 +1,5 @@
-#![allow(dead_code)]
-
 use std::fmt;
 
-use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
     ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
@@ -10,13 +7,10 @@ use telltale_schema::observation::{
     ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
     SourceTimestamp, ToolObservation,
 };
-use telltale_schema::source::Source;
 
 use super::native::{
-    OpenClawContentBlock, OpenClawNativeRecord, OpenClawToolFields,
-    extract_openclaw_native_records, is_known_openclaw_discriminator,
+    OpenClawContentBlock, OpenClawNativeRecord, OpenClawToolFields, is_known_openclaw_discriminator,
 };
-use crate::source_read::SourceReadError;
 
 #[derive(Clone)]
 pub(crate) struct OpenClawCanonicalOptions {
@@ -30,7 +24,6 @@ impl OpenClawCanonicalOptions {
 }
 
 pub(crate) enum OpenClawCanonicalError {
-    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -39,12 +32,9 @@ pub(crate) enum OpenClawCanonicalError {
 }
 
 impl OpenClawCanonicalError {
+    #[cfg(test)]
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                "source_parse"
-            }
             Self::Mapping { code, .. } => code,
             Self::Observation(error) => error.code(),
         }
@@ -54,10 +44,6 @@ impl OpenClawCanonicalError {
 impl fmt::Debug for OpenClawCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("OpenClawCanonicalError::Source")
-            }
             Self::Mapping { code, detail } => formatter
                 .debug_struct("OpenClawCanonicalError::Mapping")
                 .field("code", code)
@@ -74,10 +60,6 @@ impl fmt::Debug for OpenClawCanonicalError {
 impl fmt::Display for OpenClawCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("OpenClaw source could not be parsed")
-            }
             Self::Mapping { code, detail } => {
                 write!(
                     formatter,
@@ -91,37 +73,10 @@ impl fmt::Display for OpenClawCanonicalError {
 
 impl std::error::Error for OpenClawCanonicalError {}
 
-impl From<SourceReadError> for OpenClawCanonicalError {
-    fn from(error: SourceReadError) -> Self {
-        Self::Source(error)
-    }
-}
-
 impl From<ObservationError> for OpenClawCanonicalError {
     fn from(error: ObservationError) -> Self {
         Self::Observation(error)
     }
-}
-
-pub(crate) fn project_openclaw_canonical_observations(
-    source: &Source,
-    options: OpenClawCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, OpenClawCanonicalError> {
-    if source.client != ClientId::OpenClaw || source.source_id != "openclaw.agents" {
-        return Err(mapping(
-            "unsupported_source_identity",
-            "canonical projection requires the OpenClaw agents source",
-        ));
-    }
-    if source.kind != SourceKind::Jsonl {
-        return Err(mapping(
-            "unsupported_source_kind",
-            "canonical projection requires JSONL input",
-        ));
-    }
-
-    let records = extract_openclaw_native_records(source)?;
-    project_openclaw_native_records(&records, &options)
 }
 
 pub(crate) fn project_openclaw_native_records(
@@ -715,17 +670,17 @@ fn mapping(code: &'static str, detail: &'static str) -> OpenClawCanonicalError {
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::source::Source;
+
     use telltale_schema::observation::{
         CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IdentityCoordinateKind,
         IdentityCoordinateValue, IngestionMode, JsonValue, MessageRole, ObservationBody,
         ObservationFamily, ObservationStage, ObservedAt, SemanticReplayVerdict,
     };
-    use telltale_schema::source::Source;
     use tempfile::tempdir;
 
-    use super::{OpenClawCanonicalOptions, project_openclaw_canonical_observations};
+    use super::{OpenClawCanonicalOptions, project_openclaw_native_records};
 
     const OBSERVED_AT: &str = "2026-09-04T12:00:00Z";
 
@@ -741,9 +696,9 @@ mod tests {
     fn project(
         path: std::path::PathBuf,
     ) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
-        project_openclaw_canonical_observations(
-            &source(path),
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        project_openclaw_native_records(
+            &super::super::native::extract_openclaw_native_records(&source(path)).unwrap(),
+            &OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("OpenClaw canonical observations")
     }
@@ -1246,9 +1201,10 @@ mod tests {
             r#"{"content":"Synthetic outer content.","sessionId":"outer-session","payload":{"type":"user","sessionId":"payload-empty-session","name":"x"}}"#,
         )
         .unwrap();
-        let error = project_openclaw_canonical_observations(
-            &source(payload_path.clone()),
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_openclaw_native_records(
+            &super::super::native::extract_openclaw_native_records(&source(payload_path.clone()))
+                .unwrap(),
+            &OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("payload message without evidence must fail closed");
         assert_eq!(error.code(), "missing_payload_evidence");
@@ -1391,9 +1347,9 @@ mod tests {
             b"{\"type\":\"session_meta\",\"sessionId\":\"meta-session\"}\n{\"type\":\"assistant\",\"content\":\"Synthetic response.\"}\n",
         )
         .unwrap();
-        let error = project_openclaw_canonical_observations(
-            &source(path.clone()),
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_openclaw_native_records(
+            &super::super::native::extract_openclaw_native_records(&source(path.clone())).unwrap(),
+            &OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("session meta must not scope the following record");
         assert_eq!(error.code(), "replay_unverifiable");
@@ -1463,9 +1419,10 @@ mod tests {
     fn unknown_canonical_inputs_fail_closed() {
         let unknown =
             crate::test_fixture_path("parser_maturity/non_discovered/unknown-variant.jsonl");
-        let error = project_openclaw_canonical_observations(
-            &source(unknown.clone()),
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_openclaw_native_records(
+            &super::super::native::extract_openclaw_native_records(&source(unknown.clone()))
+                .unwrap(),
+            &OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown discriminator must fail canonical mapping");
         assert_eq!(error.code(), "unknown_discriminator");
@@ -1479,9 +1436,9 @@ mod tests {
             r#"{"payload":{"type":"future_payload_kind","content":"Synthetic payload secret."}}"#,
         )
         .unwrap();
-        let error = project_openclaw_canonical_observations(
-            &source(path.clone()),
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_openclaw_native_records(
+            &super::super::native::extract_openclaw_native_records(&source(path.clone())).unwrap(),
+            &OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown payload discriminator must fail canonical mapping");
         assert_eq!(error.code(), "unknown_discriminator");
@@ -1495,9 +1452,9 @@ mod tests {
             br#"{"type":"assistant","sessionId":"unknown-block","content":[{"type":"future_block","value":"synthetic payload"}]}"#,
         )
         .unwrap();
-        let error = project_openclaw_canonical_observations(
-            &source(path.clone()),
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_openclaw_native_records(
+            &super::super::native::extract_openclaw_native_records(&source(path.clone())).unwrap(),
+            &OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown content block must fail canonical mapping");
         assert_eq!(error.code(), "unknown_content_block");
@@ -1505,16 +1462,21 @@ mod tests {
     }
 
     #[test]
-    fn source_parse_failure_is_distinct() {
+    fn source_read_failure_is_distinct() {
         let source = source(crate::test_fixture_path(
             "parser_maturity/non_discovered/schema-drift.jsonl",
         ));
-        let error = project_openclaw_canonical_observations(
+        let error = crate::acquisition::acquire_source(
             &source,
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .expect_err("schema drift must remain a source error");
-        assert_eq!(error.code(), "source_parse");
+        .err()
+        .expect("schema drift must remain a source error");
+        assert_eq!(error.code(), "source_read");
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains("schema-drift.jsonl"));
+            assert!(!rendered.contains("Synthetic"));
+        }
     }
 
     #[test]
@@ -1525,13 +1487,15 @@ mod tests {
             source_id: "openclaw.other".to_owned(),
             path: "does-not-exist.jsonl".into(),
         };
-        let error = project_openclaw_canonical_observations(
+        let error = crate::acquisition::acquire_source(
             &wrong_identity,
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap_err();
+        .err()
+        .expect("wrong identity must fail before reading");
         assert_eq!(error.code(), "unsupported_source_identity");
         assert!(!error.to_string().contains("does-not-exist"));
+        assert!(!format!("{error:?}").contains("does-not-exist"));
 
         let wrong_kind = Source {
             client: ClientId::OpenClaw,
@@ -1539,12 +1503,14 @@ mod tests {
             source_id: "openclaw.agents".to_owned(),
             path: "does-not-exist.jsonl".into(),
         };
-        let error = project_openclaw_canonical_observations(
+        let error = crate::acquisition::acquire_source(
             &wrong_kind,
-            OpenClawCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap_err();
-        assert_eq!(error.code(), "unsupported_source_kind");
+        .err()
+        .expect("wrong kind must fail before reading");
+        assert_eq!(error.code(), "source_kind_mismatch");
         assert!(!error.to_string().contains("does-not-exist"));
+        assert!(!format!("{error:?}").contains("does-not-exist"));
     }
 }

@@ -1,11 +1,7 @@
-#![allow(dead_code)]
-
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
-use crate::source_read::{
-    SourceReadError, collect_string_values, nested_string_field, read_jsonl_values,
-};
+use crate::source_read::{SourceReadError, collect_string_values, read_jsonl_values};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -42,7 +38,6 @@ pub(crate) struct QwenToolFields {
     pub(crate) error_present: bool,
     pub(crate) is_error: Option<bool>,
     pub(crate) is_error_present: bool,
-    pub(crate) status: Option<String>,
 }
 
 #[derive(Clone)]
@@ -51,7 +46,6 @@ pub(crate) struct QwenNativeRecord {
     pub(crate) source_sequence: u64,
     pub(crate) native_id: Option<String>,
     pub(crate) session_id: Option<String>,
-    pub(crate) timestamp: Option<String>,
     pub(crate) source_timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
     pub(crate) payload_discriminator: bool,
@@ -112,7 +106,6 @@ pub(crate) fn extract_qwen_native_records(
             source_sequence: source_sequence as u64,
             native_id: qwen_native_id(&value, discriminator.as_deref()),
             session_id,
-            timestamp: nested_string_field(&value, "timestamp"),
             source_timestamp: selected_envelope
                 .and_then(|envelope| selected_string_field(envelope.value, "timestamp")),
             discriminator,
@@ -460,9 +453,6 @@ fn qwen_tool_fields(value: &Value) -> QwenToolFields {
         error: error.cloned(),
         is_error: selected_field(value, "is_error").and_then(Value::as_bool),
         is_error_present: selected_field(value, "is_error").is_some(),
-        status: selected_state_field(value, "status")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
     }
 }
 

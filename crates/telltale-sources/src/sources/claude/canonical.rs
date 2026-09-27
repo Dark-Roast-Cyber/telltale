@@ -1,8 +1,5 @@
-#![allow(dead_code)]
-
 use std::fmt;
 
-use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
     ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
@@ -10,13 +7,8 @@ use telltale_schema::observation::{
     ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
     SourceTimestamp, ToolObservation,
 };
-use telltale_schema::source::Source;
 
-use super::native::{
-    ClaudeContentBlock, ClaudeNativeRecord, extract_claude_native_records,
-    is_known_claude_discriminator,
-};
-use crate::source_read::SourceReadError;
+use super::native::{ClaudeContentBlock, ClaudeNativeRecord, is_known_claude_discriminator};
 
 #[derive(Clone)]
 pub(crate) struct ClaudeCanonicalOptions {
@@ -30,7 +22,6 @@ impl ClaudeCanonicalOptions {
 }
 
 pub(crate) enum ClaudeCanonicalError {
-    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -39,12 +30,9 @@ pub(crate) enum ClaudeCanonicalError {
 }
 
 impl ClaudeCanonicalError {
+    #[cfg(test)]
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                "source_parse"
-            }
             Self::Mapping { code, .. } => code,
             Self::Observation(error) => error.code(),
         }
@@ -54,10 +42,6 @@ impl ClaudeCanonicalError {
 impl fmt::Debug for ClaudeCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("ClaudeCanonicalError::Source")
-            }
             Self::Mapping { code, detail } => formatter
                 .debug_struct("ClaudeCanonicalError::Mapping")
                 .field("code", code)
@@ -74,10 +58,6 @@ impl fmt::Debug for ClaudeCanonicalError {
 impl fmt::Display for ClaudeCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("Claude source could not be parsed")
-            }
             Self::Mapping { code, detail } => {
                 write!(
                     formatter,
@@ -91,37 +71,10 @@ impl fmt::Display for ClaudeCanonicalError {
 
 impl std::error::Error for ClaudeCanonicalError {}
 
-impl From<SourceReadError> for ClaudeCanonicalError {
-    fn from(error: SourceReadError) -> Self {
-        Self::Source(error)
-    }
-}
-
 impl From<ObservationError> for ClaudeCanonicalError {
     fn from(error: ObservationError) -> Self {
         Self::Observation(error)
     }
-}
-
-pub(crate) fn project_claude_canonical_observations(
-    source: &Source,
-    options: ClaudeCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, ClaudeCanonicalError> {
-    if source.client != ClientId::Claude || source.source_id != "claude.projects" {
-        return Err(mapping(
-            "unsupported_source_identity",
-            "canonical projection requires the Claude projects source",
-        ));
-    }
-    if source.kind != telltale_schema::clients::SourceKind::Jsonl {
-        return Err(mapping(
-            "unsupported_source_kind",
-            "canonical projection requires JSONL input",
-        ));
-    }
-
-    let records = extract_claude_native_records(source)?;
-    project_claude_native_records(&records, &options)
 }
 
 pub(crate) fn project_claude_native_records(
@@ -593,16 +546,16 @@ fn mapping(code: &'static str, detail: &'static str) -> ClaudeCanonicalError {
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::source::Source;
+
     use telltale_schema::observation::{
         CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
         MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
     };
-    use telltale_schema::source::Source;
     use tempfile::tempdir;
 
-    use super::{ClaudeCanonicalOptions, project_claude_canonical_observations};
+    use super::{ClaudeCanonicalOptions, project_claude_native_records};
 
     const OBSERVED_AT: &str = "2026-09-02T12:00:00Z";
 
@@ -616,9 +569,10 @@ mod tests {
     }
 
     fn project(relative: &str) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
-        project_claude_canonical_observations(
-            &fixture_source(relative),
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&fixture_source(relative))
+                .unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("canonical observations")
     }
@@ -634,9 +588,9 @@ mod tests {
             input.replace("\"sessionId\":\"session-a\",", ""),
         )
         .unwrap();
-        let error = project_claude_canonical_observations(
-            &source,
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "replay_unverifiable");
@@ -780,14 +734,14 @@ mod tests {
             source_id: "claude.projects".to_owned(),
             path,
         };
-        let first = project_claude_canonical_observations(
-            &source(first_path),
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let first = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source(first_path)).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
-        let moved = project_claude_canonical_observations(
-            &source(second_path),
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let moved = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source(second_path)).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
         assert_eq!(first[0].observation_id(), moved[0].observation_id());
@@ -800,9 +754,9 @@ mod tests {
             r#"{"type":"user","sessionId":"synthetic-session","content":"Synthetic changed message."}"#,
         )
         .unwrap();
-        let changed = project_claude_canonical_observations(
-            &source(changed_path),
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let changed = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source(changed_path)).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
         assert_eq!(first[0].observation_id(), changed[0].observation_id());
@@ -836,14 +790,14 @@ mod tests {
             source_id: "claude.projects".to_owned(),
             path,
         };
-        let first = project_claude_canonical_observations(
-            &source(first_path),
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let first = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source(first_path)).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
-        let second = project_claude_canonical_observations(
-            &source(second_path),
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let second = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source(second_path)).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap();
         assert_ne!(first[0].observation_id(), second[0].observation_id());
@@ -885,9 +839,9 @@ mod tests {
             path,
         };
 
-        let observations = project_claude_canonical_observations(
-            &source,
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let observations = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("assistant tool result should project");
 
@@ -948,9 +902,9 @@ mod tests {
     #[test]
     fn canonical_failures_are_bounded() {
         let source = fixture_source("parser_maturity/non_discovered/unknown-variant.jsonl");
-        let error = project_claude_canonical_observations(
-            &source,
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown discriminator must fail canonical mapping");
         assert_eq!(error.code(), "unknown_discriminator");
@@ -965,12 +919,17 @@ mod tests {
     #[test]
     fn source_schema_errors_remain_distinct_and_missing_call_ids_fail_closed() {
         let drift = fixture_source("parser_maturity/non_discovered/schema-drift.jsonl");
-        let error = project_claude_canonical_observations(
+        let error = crate::acquisition::acquire_source(
             &drift,
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .expect_err("schema drift must remain a source error");
-        assert_eq!(error.code(), "source_parse");
+        .err()
+        .expect("schema drift must remain a source error");
+        assert_eq!(error.code(), "source_read");
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains("schema-drift.jsonl"));
+            assert!(!rendered.contains("Synthetic"));
+        }
 
         let directory = tempdir().unwrap();
         let path = directory.path().join("missing-id.jsonl");
@@ -985,9 +944,9 @@ mod tests {
             source_id: "claude.projects".to_owned(),
             path,
         };
-        let error = project_claude_canonical_observations(
-            &source,
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("tool_use without id must fail");
         assert_eq!(error.code(), "missing_tool_id");
@@ -1008,9 +967,9 @@ mod tests {
             source_id: "claude.projects".to_owned(),
             path,
         };
-        let error = project_claude_canonical_observations(
-            &source,
-            ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_claude_native_records(
+            &super::super::native::extract_claude_native_records(&source).unwrap(),
+            &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect_err("unknown content block must fail");
         assert_eq!(error.code(), "unknown_content_block");

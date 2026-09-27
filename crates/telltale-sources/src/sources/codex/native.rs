@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use serde_json::Value;
 
@@ -41,7 +39,6 @@ pub(crate) enum CodexContentBlock {
 pub(crate) struct CodexToolFields {
     pub(crate) name: Option<String>,
     pub(crate) arguments: Option<Value>,
-    pub(crate) arguments_present: bool,
     pub(crate) call_id: Option<String>,
     pub(crate) result: Option<Value>,
     pub(crate) result_present: bool,
@@ -58,15 +55,11 @@ pub(crate) struct CodexNativeRecord {
     pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) source_sequence: u64,
     pub(crate) adapter_id: String,
-    pub(crate) session_id: Option<String>,
-    pub(crate) inherited_session_id: Option<String>,
     pub(crate) effective_session_id: Option<String>,
     pub(crate) timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
     pub(crate) session_metadata: bool,
     pub(crate) role: Option<String>,
-    pub(crate) envelope: CodexEnvelope,
-    pub(crate) payload_source: Option<String>,
     pub(crate) message_content: Option<Value>,
     pub(crate) blocks: Option<Vec<CodexContentBlock>>,
     pub(crate) tool: CodexToolFields,
@@ -109,8 +102,7 @@ pub(crate) fn extract_codex_native_records(
                 .as_deref()
                 .is_none_or(|kind| !is_known_codex_discriminator(kind))
                 && value.get("session_meta").is_some());
-        let inherited_for_record = inherited_session_id.clone();
-        let effective_session_id = session_id.clone().or(inherited_for_record.clone());
+        let effective_session_id = session_id.clone().or(inherited_session_id.clone());
         let blocks = content_blocks(semantic_value)
             .map(|blocks| blocks.iter().map(codex_content_block).collect());
         let tool = codex_tool_fields(semantic_value);
@@ -122,15 +114,11 @@ pub(crate) fn extract_codex_native_records(
             attestation: ownership.and_then(|_| codex_attestation(&value, semantic_value)),
             source_sequence: source_sequence as u64,
             adapter_id: source.source_id.clone(),
-            session_id: session_id.clone(),
-            inherited_session_id: inherited_for_record,
             effective_session_id,
             timestamp: nested_string_field(&value, "timestamp"),
             discriminator,
             session_metadata,
             role: role.clone(),
-            envelope,
-            payload_source: codex_payload_source(&value),
             message_content: codex_message_content(semantic_value),
             contribution_strings: if is_tool_call {
                 collect_string_values(record_value)
@@ -444,7 +432,6 @@ fn codex_tool_fields(value: &Value) -> CodexToolFields {
             .or_else(|| nested_string_field(value, "tool"))
             .or_else(|| nested_string_field(value, "name")),
         arguments: arguments.cloned(),
-        arguments_present: arguments.is_some(),
         call_id: value
             .get("call_id")
             .or_else(|| value.get("tool_use_id"))
@@ -465,19 +452,4 @@ fn codex_tool_fields(value: &Value) -> CodexToolFields {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
     }
-}
-
-fn codex_payload_source(value: &Value) -> Option<String> {
-    value
-        .get("payload")
-        .and_then(|payload| payload.get("source"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            value
-                .get("session_meta")
-                .and_then(|meta| meta.get("payload"))
-                .and_then(|payload| payload.get("source"))
-                .and_then(Value::as_str)
-        })
-        .map(ToOwned::to_owned)
 }

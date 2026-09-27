@@ -1,9 +1,6 @@
-#![allow(dead_code)]
-
 use std::fmt;
 
 use serde_json::Value;
-use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
     ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
@@ -11,12 +8,8 @@ use telltale_schema::observation::{
     ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
     SourceTimestamp, ToolObservation,
 };
-use telltale_schema::source::Source;
 
-use super::native::{
-    CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem, extract_copilot_native_events,
-};
-use crate::source_read::SourceReadError;
+use super::native::{CopilotContentBlock, CopilotNativeEvent, CopilotOutputItem};
 
 #[derive(Clone)]
 pub(crate) struct CopilotCanonicalOptions {
@@ -30,7 +23,6 @@ impl CopilotCanonicalOptions {
 }
 
 pub(crate) enum CopilotCanonicalError {
-    Source(SourceReadError),
     Mapping {
         code: &'static str,
         detail: &'static str,
@@ -39,12 +31,9 @@ pub(crate) enum CopilotCanonicalError {
 }
 
 impl CopilotCanonicalError {
+    #[cfg(test)]
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                "source_parse"
-            }
             Self::Mapping { code, .. } => code,
             Self::Observation(error) => error.code(),
         }
@@ -54,10 +43,6 @@ impl CopilotCanonicalError {
 impl fmt::Debug for CopilotCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("CopilotCanonicalError::Source")
-            }
             Self::Mapping { code, detail } => formatter
                 .debug_struct("CopilotCanonicalError::Mapping")
                 .field("code", code)
@@ -74,10 +59,6 @@ impl fmt::Debug for CopilotCanonicalError {
 impl fmt::Display for CopilotCanonicalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Source(error) => {
-                let _ = error;
-                formatter.write_str("Copilot source could not be parsed")
-            }
             Self::Mapping { code, detail } => {
                 write!(
                     formatter,
@@ -91,37 +72,10 @@ impl fmt::Display for CopilotCanonicalError {
 
 impl std::error::Error for CopilotCanonicalError {}
 
-impl From<SourceReadError> for CopilotCanonicalError {
-    fn from(error: SourceReadError) -> Self {
-        Self::Source(error)
-    }
-}
-
 impl From<ObservationError> for CopilotCanonicalError {
     fn from(error: ObservationError) -> Self {
         Self::Observation(error)
     }
-}
-
-pub(crate) fn project_copilot_canonical_observations(
-    source: &Source,
-    options: CopilotCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, CopilotCanonicalError> {
-    if source.client != ClientId::Copilot || source.source_id != "copilot.process_log" {
-        return Err(mapping(
-            "unsupported_source_identity",
-            "canonical projection requires the Copilot process log source",
-        ));
-    }
-    if source.kind != SourceKind::CopilotProcessLog {
-        return Err(mapping(
-            "unsupported_source_kind",
-            "canonical projection requires Copilot process-log input",
-        ));
-    }
-
-    let events = extract_copilot_native_events(source)?;
-    project_copilot_native_events(events, &options)
 }
 
 pub(crate) fn project_copilot_native_events(
@@ -449,16 +403,16 @@ fn mapping(code: &'static str, detail: &'static str) -> CopilotCanonicalError {
 #[cfg(test)]
 mod tests {
     use std::fs;
-
     use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::source::Source;
+
     use telltale_schema::observation::{
         CapabilityAvailability, CapabilityId, ContentPartKind, Fidelity, IngestionMode, JsonValue,
         ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
     };
-    use telltale_schema::source::Source;
     use tempfile::tempdir;
 
-    use super::{CopilotCanonicalOptions, project_copilot_canonical_observations};
+    use super::{CopilotCanonicalOptions, project_copilot_native_events};
     use crate::sources::copilot::native::{CopilotNativeEvent, extract_copilot_native_events};
 
     const OBSERVED_AT: &str = "2026-09-04T12:00:00Z";
@@ -475,9 +429,9 @@ mod tests {
     fn project(
         path: std::path::PathBuf,
     ) -> Vec<telltale_schema::observation::CanonicalObservationV2> {
-        project_copilot_canonical_observations(
-            &source(path),
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        project_copilot_native_events(
+            extract_copilot_native_events(&source(path)).unwrap(),
+            &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("Copilot canonical observations")
     }
@@ -821,9 +775,9 @@ mod tests {
             "Workspace initialized: message-shapes-session (checkpoints: 0)\nAccumulated output items (1): [{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"unknown_block\",\"text\":\"secret-marker\"}]}]\n",
         )
         .unwrap();
-        let error = project_copilot_canonical_observations(
-            &source(message),
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_copilot_native_events(
+            extract_copilot_native_events(&source(message)).unwrap(),
+            &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "unknown_content_block");
@@ -835,9 +789,9 @@ mod tests {
             "Workspace initialized: message-role-session (checkpoints: 0)\nAccumulated output items (1): [{\"type\":\"message\",\"role\":\"user\",\"content\":[]}]\n",
         )
         .unwrap();
-        let error = project_copilot_canonical_observations(
-            &source(role),
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_copilot_native_events(
+            extract_copilot_native_events(&source(role)).unwrap(),
+            &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "unsupported_role");
@@ -862,9 +816,9 @@ mod tests {
             "Workspace initialized: malformed-session (checkpoints: 0)\nAccumulated output items (1): [{\"type\":\"function_call\"}\n",
         )
         .unwrap();
-        let error = project_copilot_canonical_observations(
-            &source(malformed),
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_copilot_native_events(
+            extract_copilot_native_events(&source(malformed)).unwrap(),
+            &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "malformed_structured_output");
@@ -876,9 +830,9 @@ mod tests {
             "Workspace initialized: non-array-session (checkpoints: 0)\nAccumulated output items (1): {\"type\":\"function_call\"}\n",
         )
         .unwrap();
-        let error = project_copilot_canonical_observations(
-            &source(non_array),
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_copilot_native_events(
+            extract_copilot_native_events(&source(non_array)).unwrap(),
+            &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "malformed_structured_output");
@@ -889,9 +843,9 @@ mod tests {
             "Workspace initialized: unknown-session (checkpoints: 0)\nAccumulated output items (1): [{\"type\":\"future_variant_secret_marker\",\"encrypted_content\":\"fixture-encrypted-reasoning\"}]\n",
         )
         .unwrap();
-        let error = project_copilot_canonical_observations(
-            &source(unknown.clone()),
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_copilot_native_events(
+            extract_copilot_native_events(&source(unknown.clone())).unwrap(),
+            &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "unknown_output_item_type");
@@ -910,9 +864,9 @@ mod tests {
             "Accumulated output items (1): [{\"type\":\"function_call\",\"name\":\"view\"}]\n",
         )
         .unwrap();
-        let error = project_copilot_canonical_observations(
-            &source(unscoped),
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        let error = project_copilot_native_events(
+            extract_copilot_native_events(&source(unscoped)).unwrap(),
+            &CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .unwrap_err();
         assert_eq!(error.code(), "replay_unverifiable");
@@ -923,12 +877,15 @@ mod tests {
         let source_path = std::path::PathBuf::from("does-not-exist-process.log");
         let mut wrong = source(source_path);
         wrong.kind = SourceKind::Jsonl;
-        let error = project_copilot_canonical_observations(
+        let error = crate::acquisition::acquire_source(
             &wrong,
-            CopilotCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            crate::acquisition::AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap_err();
-        assert_eq!(error.code(), "unsupported_source_kind");
+        .err()
+        .expect("wrong kind must fail before reading");
+        assert_eq!(error.code(), "source_kind_mismatch");
+        assert!(!error.to_string().contains("does-not-exist"));
+        assert!(!format!("{error:?}").contains("does-not-exist"));
 
         let observations = project(crate::test_fixture_path(
             "session_stores/copilot/process-uc001.log",

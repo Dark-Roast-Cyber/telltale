@@ -819,8 +819,8 @@ impl FindingMetadata {
     }
 }
 
-/// Experimental detector output; this is not a production scanner or Event
-/// representation.
+/// Authoritative internal runtime result from the source-backed Detection v2
+/// production evaluator; Event 3.0 remains the frozen external output.
 #[derive(Clone)]
 pub struct DetectorResult {
     detector: DetectorIdentity,
@@ -1218,7 +1218,8 @@ impl DetectorResult {
     }
 }
 
-/// Experimental materialization of an evaluated Detection v2 result.
+/// Authoritative internal runtime materialization of an evaluated Detection v2
+/// result; Event 3.0 remains the frozen external output.
 ///
 /// Its ID hashes `["telltale:detection-v2-signal", 2, kind, id,
 /// version|null, engine|null, content_ref|null, rule_version|null,
@@ -1440,7 +1441,8 @@ fn signal_identity_tuple_for_digest(
     ]))
 }
 
-/// Experimental atomic Finding materialized from one Detection v2 Signal.
+/// Authoritative internal runtime Finding materialized from one Detection v2
+/// Signal; Event 3.0 remains the frozen external output.
 #[derive(Clone)]
 pub struct Finding {
     finding_id: String,
