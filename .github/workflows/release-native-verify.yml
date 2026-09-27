@@ -75,11 +75,17 @@ jobs:
           selection_output="$("${PYTHON}" scripts/release-native-verify \
             --select-pin --pins-dir scripts --release-tag "${RELEASE_TAG}" --target "${TARGET}")"
           selection_output="${selection_output//$'\r'/}"
-          mapfile -t selection <<< "${selection_output}"
-          test "${#selection[@]}" -eq 2
-          PIN_FILE="${selection[0]}"
-          ARCHIVE="${selection[1]}"
-          [[ "${PIN_FILE}" =~ ^scripts/release-native-verify-[A-Za-z0-9._-]+\.json$ && "${PIN_FILE}" != *..* ]]
+          # macOS /bin/bash is 3.2, so parse the two selection lines with sed.
+          PIN_FILE="$(printf '%s\n' "${selection_output}" | sed -n '1p')"
+          ARCHIVE="$(printf '%s\n' "${selection_output}" | sed -n '2p')"
+          test "$(printf '%s\n' "${selection_output}" | sed -n '$=')" = "2"
+          case "${PIN_FILE}" in
+            scripts/release-native-verify-*.json) ;;
+            *) echo "selected pin path is not a checked-in pin" >&2; exit 1 ;;
+          esac
+          case "${PIN_FILE#scripts/release-native-verify-}" in
+            */*|*..*) echo "selected pin path is not a checked-in pin" >&2; exit 1 ;;
+          esac
           [[ "${ARCHIVE}" == "telltale-${RELEASE_TAG}-${TARGET}.tar.gz" || "${ARCHIVE}" == "telltale-${RELEASE_TAG}-${TARGET}.zip" ]]
           printf 'PIN_FILE=%s\nARCHIVE=%s\n' "${PIN_FILE}" "${ARCHIVE}" >> "${GITHUB_ENV}"
           git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"

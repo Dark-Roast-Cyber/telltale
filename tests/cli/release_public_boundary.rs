@@ -2253,6 +2253,8 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
         "--select-pin --pins-dir scripts --release-tag \"${RELEASE_TAG}\" --target \"${TARGET}\"",
         "release_tag is not a supported tag",
         "selection_output=\"${selection_output//$'\\r'/}\"",
+        "printf '%s\\n' \"${selection_output}\" | sed -n '1p'",
+        "macOS /bin/bash is 3.2, so parse the two selection lines with sed.",
         "tag_commit != pin.get(\"source_sha\")",
         "target.get(\"archive\") != archive_name",
         "release.get(\"id\") != pin[\"release_id\"]",
@@ -2303,6 +2305,7 @@ fn release_native_verify_pin_and_workflow_are_fail_closed() {
         "type: choice",
         "options:",
         "inputs.release_tag ==",
+        "mapfile",
     ] {
         assert!(
             !workflow.contains(forbidden),
