@@ -106,6 +106,33 @@ the accepted candidate artifacts. The resulting `v0.5.0` tag and stable GitHub
 Release are now published and immutable. Subsequent development version alignment
 does not replace those artifacts or the separately pinned controlled-development lab.
 
+## 0.7 RC1 current-host qualification
+
+[Issue #66](https://github.com/Dark-Roast-Cyber/telltale/issues/66#issuecomment-5860306266)
+records the 2026-09-27 qualification of the exact published RC1 on Fedora 44
+x86_64 with systemd 259.9. This was an existing installation, not a clean host.
+Source-bound attestation and pinned archive/binary checks were observed passing.
+Synthetic G-SERVICE one-shot and genuine timer-triggered runs were observed
+passing with `PrivateTmp=yes`, `NoNewPrivileges=yes`, `--no-local-config`, and
+zero remote sinks. All six synthetic records passed Event3 and candidate-version
+checks: two health, two activity, and two expected detections.
+
+The bounded live canary did **not** pass: a one-source Codex dry run exited zero
+but reported one parse failure and no successfully parsed sources or records.
+The writing scan was withheld. The underlying error was not retained, so this
+does not establish a candidate defect or successful live qualification. Official
+`v0.6.0` was restored, rollback synthetic health passed, and the original timer
+and configuration were restored. Post-restart inspection confirmed stable binary
+identity, canonical units, and removal of qualification overrides.
+
+Evidence limitation: detailed private execution logs and backups were unavailable
+after a server restart. Retained execution summaries establish the observations
+above; surviving journal metadata corroborates service starts but does not replace
+the lost Event3 or provenance artifacts. Issue #66 remains open, clean-Windows
+qualification is blocked on an available host, and no clean-host or stable
+promotion gate is marked complete by this result. RC1 evidence applies only to
+`e2386cb53454a8384449ea0729f0e3b71072006c`, not subsequent substantive changes.
+
 ## Historical RC Candidate Handoff
 
 The `v0.5.0-rc.7` handoff completed before stable publication: the reviewed commit was tagged and its
