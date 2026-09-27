@@ -26,8 +26,10 @@ producer manifest, and rules fingerprint are corroborating evidence. They do
 not replace the full SHA and checksums. The published candidate source on
 stable `main` reported package `0.6.0`; the official `v0.6.0` GitHub Release is
 published. The `v0.7.0-rc.1` prerelease is published (Release ID `397543935`
-from `e2386cb53454a8384449ea0729f0e3b71072006c`), but five-platform native
-qualification remains pending. For a given package line,
+from `e2386cb53454a8384449ea0729f0e3b71072006c`) and five-platform native
+qualification passed in run `36305581215` using verifier tooling
+`c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`. Clean-host qualification remains a
+separate pre-stable gate. For a given package line,
 version output alone cannot distinguish an untagged build from an official
 release artifact.
 The historical Issue #37 artifact from

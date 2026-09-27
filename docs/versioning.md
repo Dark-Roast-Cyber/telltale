@@ -21,9 +21,9 @@ format.
   `e2386cb53454a8384449ea0729f0e3b71072006c` (Release ID `397543935`). Its
   five-target publication workflow passed (run `36299868695`). Downloaded archive
   digests match Release metadata and `SHA256SUMS`; extracted binary digests were
-  computed, and the Linux x86_64 binary passed `--version`. Five-target native
-  qualification is pending; the historical rc.3 verifier result is not 0.7
-  evidence. `v0.6.0` remains the latest stable. Event3 schema version stays
+  computed. Five-platform native qualification passed in run `36305581215` using
+  verifier tooling `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`; the historical
+  rc.3 verifier result is not 0.7 evidence. `v0.6.0` remains the latest stable. Event3 schema version stays
   `3.0` and Rule v1 stays version 1; neither follows the package version. Stable
   `v0.7.0` will require separate qualification and a reviewed stable-version
   promotion.
@@ -146,7 +146,8 @@ separate from creating a tag or GitHub Release. The published `v0.6.0-rc.1`,
 qualification verifies existing artifacts and does not create or modify them.
 The native verifier selects a reviewed checked-in pin for the requested published
 tag; rc.3 remains historical evidence, and `v0.7.0-rc.1` has its own Release ID
-and checksums. Five-platform native qualification remains pending.
+and checksums. RC1 five-platform native qualification passed in run `36305581215`
+using verifier tooling `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`.
 
 Fetched immutable stable Git tags are the conservative published-version floor.
 No manually maintained latest-release constant or live GitHub Release lookup is

@@ -29,9 +29,12 @@ immutable. `v0.7.0-rc.1` is published from
 `e2386cb53454a8384449ea0729f0e3b71072006c` as Release ID `397543935`; its
 five-target publication workflow passed (run `36299868695`). Downloaded archive
 digests match Release metadata and `SHA256SUMS`; extracted binary digests were
-computed, and the Linux x86_64 binary passed `--version`. Five-target
-candidate-native qualification remains pending. The historical rc.3 verifier
-and qualification do not establish 0.7 evidence. The published `v0.6.0-rc.3`
+computed. Five-platform candidate-native qualification passed in run
+`36305581215` using verifier tooling
+`c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`; each job exercised the exact
+published archive, attestation, pinned archive and binary identity, bundled
+rules, synthetic positive fixture, and Event 3.0 validation. The historical
+rc.3 verifier and qualification do not establish 0.7 evidence. The published `v0.6.0-rc.3`
 prerelease is Release ID `386482697` from
 source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`.
 Publication/provenance, the static-CRT publication gate, and five-platform native

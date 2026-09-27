@@ -130,7 +130,10 @@ release.
 
 The repository remains a Cargo workspace with six official packages. The 0.6.x
 architecture-convergence sequence is complete; the published `v0.7.0-rc.1`
-candidate documents the supported embedding surface. Native qualification is pending.
+candidate documents the supported embedding surface. Five-platform native
+qualification passed in run `36305581215` using verifier tooling
+`c5c955f57a83cbfc7bd9827932a5e7d54a2fd077` against the immutable published
+artifacts. Clean-host qualification and stable promotion remain separate.
 Crates.io publication remains intentionally deferred until that public Rust
 surface is stable enough for deliberate external consumers.
 
