@@ -172,6 +172,9 @@ products inside the repository.
 
 Likely later areas include:
 
+- a [resource-bounded continuous observer](docs/continuous-observer-plan.md),
+  with explicit start/stop/service-status commands and opt-in reboot persistence,
+  while preserving one-shot scanning and external lifecycle ownership;
 - direct harness integrations and lower-latency observation;
 - inference-gateway observation and policy boundaries;
 - Claude and Codex desktop-app-specific acquisition when separate source work is
