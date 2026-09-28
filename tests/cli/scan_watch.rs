@@ -3337,7 +3337,7 @@ fn observed_inotify_directories(pid: u32) -> Result<Vec<(u64, u64)>, String> {
 }
 
 fn fail_watch(child: &mut std::process::Child, reason: &str) -> ! {
-    if child.try_wait().expect("poll failed watch").is_none() {
+    if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
     }
     let _ = child.wait();
@@ -3391,73 +3391,22 @@ fn wait_for_watch_ready(_child: &mut std::process::Child, _directory: &Path) {
 }
 
 #[cfg(unix)]
-fn sigterm_caught(mask: &str) -> bool {
-    u64::from_str_radix(mask.trim(), 16)
-        .is_ok_and(|bits| bits & (1_u64 << (libc::SIGTERM - 1)) != 0)
-}
-
-#[cfg(target_os = "linux")]
-fn observed_sigterm_catch(pid: u32) -> Result<String, String> {
-    let status =
-        fs::read_to_string(format!("/proc/{pid}/status")).map_err(|error| error.to_string())?;
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("SigCgt:"))
-        .map(|mask| mask.trim().to_owned())
-        .ok_or_else(|| "missing SigCgt in /proc status".to_owned())
-}
-
-#[cfg(target_os = "macos")]
-fn observed_sigterm_catch(pid: u32) -> Result<String, String> {
-    let output = Command::new("/bin/ps")
-        .args(["-p", &pid.to_string(), "-o", "sigcatch="])
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err(format!("ps sigcatch failed: {:?}", output.status));
-    }
-    let mask = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
-    let mask = mask.trim();
-    if mask.is_empty() || u64::from_str_radix(mask, 16).is_err() {
-        return Err(format!("invalid ps sigcatch mask: {mask:?}"));
-    }
-    Ok(mask.to_owned())
-}
-
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn observed_sigterm_catch(_pid: u32) -> Result<String, String> {
-    Err("SIGTERM disposition observation unsupported on this Unix platform".to_owned())
+fn is_sigterm_watch_summary(line: &str) -> bool {
+    serde_json::from_str::<Value>(line).is_ok_and(|summary| {
+        summary["event_type"] == "health"
+            && summary["source_processing"]["parsed_record_count"]
+                .as_u64()
+                .is_some_and(|count| count >= 3)
+    })
 }
 
 #[cfg(unix)]
-fn wait_for_sigterm_handler(child: &mut std::process::Child) {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        if let Some(status) = child.try_wait().expect("poll SIGTERM readiness") {
-            fail_watch(
-                child,
-                &format!("watch exited before SIGTERM handler installation: {status:?}"),
-            );
-        }
-        let mask = observed_sigterm_catch(child.id()).unwrap_or_else(|error| {
-            fail_watch(
-                child,
-                &format!("cannot inspect SIGTERM disposition: {error}"),
-            )
-        });
-        if sigterm_caught(&mask) {
-            return;
-        }
-        if Instant::now() >= deadline {
-            fail_watch(
-                child,
-                &format!(
-                    "watch did not catch SIGTERM before deadline; observed mask {mask:?}, expected bit 0x4000"
-                ),
-            );
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+fn append_sigterm_watch_trigger(session: &Path, attempt: u32) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new().append(true).open(session)?;
+    writeln!(
+        file,
+        "{{\"type\":\"event_msg\",\"timestamp\":\"2026-04-01T00:00:02Z\",\"payload\":{{\"type\":\"user_message\",\"message\":\"synthetic SIGTERM watch trigger {attempt}\"}}}}"
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -3535,11 +3484,45 @@ fn watch_readiness_waits_for_nested_directory_registration() {
 
 #[cfg(unix)]
 #[test]
-fn watch_readiness_requires_caught_sigterm_bit() {
-    assert!(!sigterm_caught("0000000000000000"));
-    assert!(!sigterm_caught(" 0000000000000002\n"));
-    assert!(sigterm_caught(" 0000000000004000\n"));
-    assert!(!sigterm_caught("invalid"));
+fn watch_sigterm_readiness_requires_completed_source_scan() {
+    assert!(!is_sigterm_watch_summary("not JSON"));
+    assert!(!is_sigterm_watch_summary(
+        r#"{"event_type":"activity","source_processing":{"parsed_record_count":3}}"#
+    ));
+    assert!(!is_sigterm_watch_summary(
+        r#"{"event_type":"health","source_processing":{"parsed_record_count":2}}"#
+    ));
+    assert!(is_sigterm_watch_summary(
+        r#"{"event_type":"health","source_processing":{"parsed_record_count":3}}"#
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn watch_sigterm_trigger_appends_complete_synthetic_records() {
+    let temp = tempdir().expect("tempdir");
+    let session = temp.path().join("session.jsonl");
+    fs::copy(
+        "tests/fixtures/session_stores/codex/sessions/2026/04/session-a.jsonl",
+        &session,
+    )
+    .expect("copy synthetic fixture");
+    append_sigterm_watch_trigger(&session, 1).expect("append first synthetic record");
+    append_sigterm_watch_trigger(&session, 2).expect("append second synthetic record");
+    let records = fs::read_to_string(&session)
+        .expect("read synthetic fixture")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("complete JSONL record"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 4);
+    assert_eq!(
+        records[2]["payload"]["message"],
+        "synthetic SIGTERM watch trigger 1"
+    );
+    assert_eq!(
+        records[3]["payload"]["message"],
+        "synthetic SIGTERM watch trigger 2"
+    );
 }
 
 #[test]
@@ -4362,20 +4345,97 @@ fn watch_exits_cleanly_on_sigterm() {
         Path::new("tests/fixtures/session_stores/codex"),
         &root.join("codex"),
     );
+    let session = root.join("codex/sessions/2026/04/session-a.jsonl");
+    let log_path = temp.path().join("telltale-events.jsonl");
+    let state_path = temp.path().join("telltale-state.json");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args(["watch", "--dry-run", "--no-local-config", "--root"])
+        .args([
+            "watch",
+            "--dry-run",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--root",
+        ])
         .arg(&root)
+        .arg("--log-path")
+        .arg(&log_path)
+        .arg("--state-path")
+        .arg(&state_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn telltale watch");
 
-    wait_for_sigterm_handler(&mut child);
+    let stdout = child.stdout.take().expect("watch stdout");
+    let (line_tx, line_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if line_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut next_trigger = Instant::now();
+    let mut attempts = 0;
+    let mut last_line = String::new();
+    // Retries schedule work; only the completed scan summary establishes readiness.
+    loop {
+        if let Some(status) = child.try_wait().expect("poll watch scan readiness") {
+            fail_watch(
+                &mut child,
+                &format!(
+                    "watch exited before a completed scan: {status:?}; attempts={attempts}; last stdout line: {last_line:?}"
+                ),
+            );
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            fail_watch(
+                &mut child,
+                &format!(
+                    "watch did not complete a triggered scan within 20s; attempts={attempts}; last stdout line: {last_line:?}"
+                ),
+            );
+        }
+        if now >= next_trigger {
+            attempts += 1;
+            append_sigterm_watch_trigger(&session, attempts).unwrap_or_else(|error| {
+                fail_watch(
+                    &mut child,
+                    &format!("append synthetic watch trigger failed: {error}"),
+                )
+            });
+            next_trigger = Instant::now() + Duration::from_millis(250);
+        }
+        match line_rx.recv_timeout(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(50)),
+        ) {
+            Ok(Ok(line)) => {
+                if is_sigterm_watch_summary(&line) && Instant::now() < deadline {
+                    break;
+                }
+                last_line = line;
+            }
+            Ok(Err(error)) => {
+                fail_watch(&mut child, &format!("watch stdout reader failed: {error}"))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => fail_watch(
+                &mut child,
+                &format!(
+                    "watch stdout disconnected before completed scan; attempts={attempts}; last stdout line: {last_line:?}"
+                ),
+            ),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
     let kill = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()
-        .expect("send SIGTERM");
+        .unwrap_or_else(|error| fail_watch(&mut child, &format!("send SIGTERM failed: {error}")));
     if !kill.success() {
         fail_watch(&mut child, &format!("send SIGTERM failed: {kill:?}"));
     }
