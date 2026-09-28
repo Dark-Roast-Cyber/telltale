@@ -1,6 +1,6 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use crate::source_read::{SourceReadError, collect_string_values};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -220,7 +220,7 @@ pub(crate) fn extract_sqlite_native_source(
     source: &Source,
     options: OpenCodeSqliteReadOptions,
 ) -> Result<OpenCodeSqliteNativeExtraction, SourceReadError> {
-    let conn = Connection::open(&source.path)?;
+    let conn = Connection::open_with_flags(&source.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))?;
     let mut records = Vec::new();
     let mut sqlite_part_max_time_updated = None;
@@ -256,11 +256,10 @@ fn extract_sqlite_message_records(
     let mut stmt = conn.prepare("select * from message order by rowid")?;
     let rows = sqlite_rows_as_values(&mut stmt)?;
 
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .enumerate()
         .map(|(source_sequence, value)| {
-            let (normalized, attestation) = normalize_sqlite_message_value(value.clone());
+            let (normalized, attestation) = normalize_sqlite_message_value(value.clone())?;
             let mut context = message_context(&normalized);
             context.attestation = attestation;
             let content = normalized
@@ -281,25 +280,27 @@ fn extract_sqlite_message_records(
                         .flatten()
                 });
             let error = normalized.get("error").cloned();
-            OpenCodeSqliteNativeRecord::Message(OpenCodeMessageNativeRecord {
-                source_sequence: source_sequence as u64,
-                source_id: source_string_field(&value, "id"),
-                context,
-                message_type: semantic_string(&normalized, "type"),
-                content,
-                tool_name: part_tool_name(&normalized),
-                call_id: source_call_id(&normalized),
-                arguments_present: arguments.is_some(),
-                arguments,
-                result_present: result.is_some(),
-                result,
-                error_present: error.is_some(),
-                error,
-                tool_state: tool_state(&normalized),
-                tool_state_invalid: tool_state_is_invalid(&normalized),
-            })
+            Ok(OpenCodeSqliteNativeRecord::Message(
+                OpenCodeMessageNativeRecord {
+                    source_sequence: source_sequence as u64,
+                    source_id: source_string_field(&value, "id"),
+                    context,
+                    message_type: semantic_string(&normalized, "type"),
+                    content,
+                    tool_name: part_tool_name(&normalized),
+                    call_id: source_call_id(&normalized),
+                    arguments_present: arguments.is_some(),
+                    arguments,
+                    result_present: result.is_some(),
+                    result,
+                    error_present: error.is_some(),
+                    error,
+                    tool_state: tool_state(&normalized),
+                    tool_state_invalid: tool_state_is_invalid(&normalized),
+                },
+            ))
         })
-        .collect())
+        .collect()
 }
 
 fn extract_sqlite_part_records(
@@ -311,7 +312,23 @@ fn extract_sqlite_part_records(
     let rows = if let Some(min_time_updated) = options.part_min_time_updated {
         let query = sqlite_part_query(true, include_message_context);
         let mut stmt = conn.prepare(&query)?;
-        sqlite_rows_as_values_with_params(&mut stmt, rusqlite::params![min_time_updated, limit])?
+        let lookahead = limit.checked_add(1).ok_or(SourceReadError::SchemaDrift {
+            client: telltale_schema::clients::ClientId::OpenCode,
+            source_id: "opencode.sqlite".to_owned(),
+            detail: "part limit overflow",
+        })?;
+        let rows = sqlite_rows_as_values_with_params(
+            &mut stmt,
+            rusqlite::params![min_time_updated, lookahead],
+        )?;
+        if rows.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
+            return Err(SourceReadError::SchemaDrift {
+                client: telltale_schema::clients::ClientId::OpenCode,
+                source_id: "opencode.sqlite".to_owned(),
+                detail: "incremental part limit exceeded",
+            });
+        }
+        rows
     } else {
         let query = sqlite_part_query(false, include_message_context);
         let mut stmt = conn.prepare(&query)?;
@@ -471,25 +488,36 @@ fn part_tool_name(value: &Value) -> Option<String> {
 
 fn normalize_sqlite_message_value(
     value: Value,
-) -> (Value, Result<SessionMetadata, AcquisitionError>) {
+) -> Result<(Value, Result<SessionMetadata, AcquisitionError>), SourceReadError> {
     let row_metadata = opencode_attestation(&value);
     let Value::Object(object) = value else {
-        return (value, row_metadata);
+        return Ok((value, row_metadata));
     };
 
-    let Some(data) = object.get("data").and_then(Value::as_str) else {
-        return (Value::Object(object), row_metadata);
+    let Some(data) = object.get("data") else {
+        return Ok((Value::Object(object), row_metadata));
     };
 
+    let Some(data) = data.as_str() else {
+        return Err(invalid_message_data());
+    };
     let Ok(Value::Object(mut data_object)) = serde_json::from_str::<Value>(data) else {
-        return (Value::Object(object), row_metadata);
+        return Err(invalid_message_data());
     };
 
     for (key, value) in object {
         data_object.entry(key).or_insert(value);
     }
 
-    (Value::Object(data_object), row_metadata)
+    Ok((Value::Object(data_object), row_metadata))
+}
+
+fn invalid_message_data() -> SourceReadError {
+    SourceReadError::SchemaDrift {
+        client: telltale_schema::clients::ClientId::OpenCode,
+        source_id: "opencode.sqlite".to_owned(),
+        detail: "invalid message data",
+    }
 }
 
 fn normalize_sqlite_part_value(value: Value) -> (Value, Result<SessionMetadata, AcquisitionError>) {

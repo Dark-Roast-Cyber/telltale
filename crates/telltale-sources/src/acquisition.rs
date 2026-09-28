@@ -1108,6 +1108,145 @@ mod tests {
     }
 
     #[test]
+    fn missing_opencode_database_is_not_created_by_either_acquisition_entry() {
+        let directory = tempdir().unwrap();
+        let source = source(directory.path().join("missing.db"));
+        for error in [
+            acquisition_error(super::acquire_source(&source, options())),
+            acquisition_error(acquire_opencode_sqlite(
+                &source,
+                options(),
+                OpenCodeSqliteReadOptions::default(),
+            )),
+        ] {
+            assert_eq!(error, AcquisitionError::SourceRead);
+            assert!(!source.path.exists());
+        }
+    }
+
+    #[test]
+    fn malformed_serialized_message_data_fails_atomically_but_metadata_only_succeeds() {
+        let (_directory, connection, source) = database();
+        connection.execute("delete from part", []).unwrap();
+        connection.execute("delete from message", []).unwrap();
+        connection
+            .execute(
+                "insert into message values ('metadata', 'session', 1, 1, '{}')",
+                [],
+            )
+            .unwrap();
+        let valid = super::acquire_source(&source, options()).unwrap();
+        assert_eq!(valid.accounting.sessions[0].counts.native_units, 1);
+        for invalid in ["not-json", "null", "[]", "42", "\"text\""] {
+            connection
+                .execute(
+                    "insert into message values ('malformed', 'session', 2, 2, ?1)",
+                    [invalid],
+                )
+                .unwrap();
+            assert_eq!(
+                acquisition_error(super::acquire_source(&source, options())),
+                AcquisitionError::SourceRead,
+            );
+            connection
+                .execute("delete from message where id = 'malformed'", [])
+                .unwrap();
+        }
+        connection
+            .execute(
+                "insert into message values ('malformed', 'session', 2, 2, NULL)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            acquisition_error(super::acquire_source(&source, options())),
+            AcquisitionError::SourceRead,
+        );
+    }
+
+    #[test]
+    fn incremental_parts_must_fit_the_effective_limit_or_fail_atomically() {
+        let (_directory, connection, source) = database();
+        connection.execute("delete from part", []).unwrap();
+        for i in 0..7 {
+            connection.execute(
+                "insert into part values (?1, 'message-acquisition', 'session-acquisition', 1, ?2, '{\"type\":\"text\",\"text\":\"synthetic\"}')",
+                (format!("part-{i}"), if i < 5 { 100 } else { 100 + i }),
+            ).unwrap();
+        }
+        let read = |min, limit| {
+            acquire_opencode_sqlite(
+                &source,
+                options(),
+                OpenCodeSqliteReadOptions {
+                    part_min_time_updated: min,
+                    part_limit: limit,
+                },
+            )
+        };
+        for (limit, expected) in [(8, 7), (7, 7), (6, 6)] {
+            let batch = read(Some(i64::MIN), limit);
+            if limit == 6 {
+                assert_eq!(acquisition_error(batch), AcquisitionError::SourceRead);
+            } else {
+                assert_eq!(batch.unwrap().observations.len(), expected);
+            }
+        }
+        for limit in [0, -1, 1, 2, 3, 4, 5, i64::MAX] {
+            assert_eq!(
+                acquisition_error(read(Some(100), limit)),
+                AcquisitionError::SourceRead,
+            );
+        }
+        for limit in [0, -1, 1] {
+            let one = read(Some(106), limit).unwrap();
+            assert_eq!(one.observations.len(), 1);
+            assert_eq!(
+                one.progress,
+                AcquisitionProgress::OpenCodeSqlite {
+                    part_max_time_updated: Some(106)
+                }
+            );
+        }
+        assert_eq!(read(Some(105), 2).unwrap().observations.len(), 2);
+        // Bootstrap still selects the newest bounded rows without overflow.
+        assert_eq!(read(None, 2).unwrap().observations.len(), 2);
+        let empty = read(Some(i64::MAX), 1).unwrap();
+        assert!(empty.observations.is_empty());
+        assert_eq!(
+            empty.progress,
+            AcquisitionProgress::OpenCodeSqlite {
+                part_max_time_updated: None
+            }
+        );
+        connection.execute("delete from part", []).unwrap();
+        assert!(read(Some(i64::MIN), 1).unwrap().observations.is_empty());
+    }
+
+    #[test]
+    fn dense_distinct_incremental_timestamps_fail_instead_of_truncating() {
+        let (_directory, connection, source) = database();
+        connection.execute("delete from part", []).unwrap();
+        for i in 0..7_i64 {
+            connection.execute(
+                "insert into part values (?1, 'message-acquisition', 'session-acquisition', 1, ?2, '{\"type\":\"text\",\"text\":\"synthetic\"}')",
+                (format!("part-{i}"), 1_000 + i),
+            ).unwrap();
+        }
+        assert_eq!(
+            acquisition_error(acquire_opencode_sqlite(
+                &source,
+                options(),
+                OpenCodeSqliteReadOptions {
+                    part_min_time_updated: Some(1_000),
+                    part_limit: 5
+                },
+            )),
+            AcquisitionError::SourceRead,
+        );
+    }
+
+    #[test]
     fn default_acquisition_preserves_canonical_semantics_and_observed_time() {
         let (_directory, connection, source) = database();
         drop(connection);
@@ -1142,7 +1281,7 @@ mod tests {
         let (_directory, connection, source) = database();
         drop(connection);
         let read = OpenCodeSqliteReadOptions {
-            part_min_time_updated: Some(1_001),
+            part_min_time_updated: Some(3_000),
             part_limit: 1,
         };
 
@@ -1153,12 +1292,12 @@ mod tests {
         };
         assert_eq!(
             message.content(),
-            Some(&telltale_schema::observation::JsonValue::string("second"))
+            Some(&telltale_schema::observation::JsonValue::string("third"))
         );
         assert_eq!(
             acquired.progress,
             AcquisitionProgress::OpenCodeSqlite {
-                part_max_time_updated: Some(2_000)
+                part_max_time_updated: Some(3_000)
             }
         );
     }

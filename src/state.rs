@@ -373,8 +373,15 @@ impl ScanState {
         last_time_updated: i64,
         observed_at_unix_ms: u64,
     ) {
+        let key = sqlite_ingestion_cursor_key(source, table);
+        let last_time_updated = self
+            .sqlite_ingestion_cursors
+            .get(&key)
+            .map_or(last_time_updated, |prior| {
+                last_time_updated.max(prior.last_time_updated)
+            });
         self.sqlite_ingestion_cursors.insert(
-            sqlite_ingestion_cursor_key(source, table),
+            key,
             SqliteIngestionCursor {
                 client: source.client.as_str().to_string(),
                 source_id: source.source_id.clone(),
@@ -1394,6 +1401,23 @@ mod tests {
         assert_eq!(
             reloaded.sqlite_ingestion_cursor_time_updated(&source, "message"),
             None
+        );
+    }
+
+    #[test]
+    fn sqlite_cursor_high_water_cannot_regress_after_successful_observation() {
+        let source = Source {
+            client: ClientId::OpenCode,
+            kind: SourceKind::Sqlite,
+            source_id: "opencode.sqlite".into(),
+            path: "synthetic.db".into(),
+        };
+        let mut state = ScanState::default();
+        state.observe_sqlite_ingestion_cursor(&source, "part", 1_000, 1);
+        state.observe_sqlite_ingestion_cursor(&source, "part", 900, 2);
+        assert_eq!(
+            state.sqlite_ingestion_cursor_time_updated(&source, "part"),
+            Some(1_000)
         );
     }
 

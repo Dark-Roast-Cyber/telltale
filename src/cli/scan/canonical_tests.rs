@@ -651,6 +651,100 @@ fn database(path: &std::path::Path) -> Source {
 }
 
 #[test]
+fn saturated_incremental_scan_never_stages_cursor_or_baseline() {
+    let dir = tempdir().unwrap();
+    let source = database(&dir.path().join("synthetic.db"));
+    let mut conn = rusqlite::Connection::open(&source.path).unwrap();
+    let transaction = conn.transaction().unwrap();
+    for i in 0..10000 {
+        transaction.execute(
+            "INSERT INTO part VALUES (?1, 'm', 's', 1000, 1000, '{\"type\":\"text\",\"text\":\"synthetic\"}')",
+            [format!("extra-{i}")],
+        ).unwrap();
+    }
+    transaction.commit().unwrap();
+    let plan = plan("url");
+    let mut state = ScanState::default();
+    state.observe_sqlite_ingestion_cursor(&source, "part", 1000, 1);
+    let prior = state.canonical_bytes().unwrap();
+    for _ in 0..2 {
+        let failed = process_canonical_source(
+            &source,
+            &state,
+            CanonicalProcessingOptions::default(),
+            clock(),
+            &plan,
+            None,
+        );
+        assert_eq!(failed.status, SourceProcessingStatus::Failed);
+        assert_eq!(failed.events.len(), 1);
+        assert_eq!(failed.events[0].event_type, "scanner_error");
+        assert!(failed.accounting.is_none());
+        assert_eq!(failed.progress, AcquisitionProgress::None);
+        assert_eq!(failed.sqlite_progress_candidate(false, false), None);
+        assert_eq!(
+            failed.baseline_replacement,
+            BaselineReplacement::NoReplacement
+        );
+        assert_eq!(state.canonical_bytes().unwrap(), prior);
+    }
+    for (dry_run, backfill) in [(true, false), (false, true)] {
+        let bootstrap = process_canonical_source(
+            &source,
+            &state,
+            CanonicalProcessingOptions {
+                dry_run,
+                backfill,
+                ..Default::default()
+            },
+            clock(),
+            &plan,
+            None,
+        );
+        assert_eq!(bootstrap.status, SourceProcessingStatus::Succeeded);
+        assert_eq!(bootstrap.sqlite_progress_candidate(dry_run, backfill), None);
+        assert_eq!(
+            bootstrap.baseline_replacement,
+            BaselineReplacement::NoReplacement
+        );
+    }
+}
+
+#[test]
+fn malformed_message_after_valid_part_never_stages_scan_progress_or_baseline() {
+    let dir = tempdir().unwrap();
+    let source = database(&dir.path().join("synthetic.db"));
+    let conn = rusqlite::Connection::open(&source.path).unwrap();
+    conn.execute(
+        "INSERT INTO message VALUES ('bad', 's', 1001, 1001, '[]')",
+        [],
+    )
+    .unwrap();
+    let mut state = ScanState::default();
+    state.observe_sqlite_ingestion_cursor(&source, "part", 1000, 1);
+    let before = state.canonical_bytes().unwrap();
+    let failed = process_canonical_source(
+        &source,
+        &state,
+        CanonicalProcessingOptions::default(),
+        clock(),
+        &plan("url"),
+        None,
+    );
+    assert_eq!(failed.status, SourceProcessingStatus::Failed);
+    assert_eq!(failed.events.len(), 1);
+    assert_eq!(failed.events[0].event_type, "scanner_error");
+    assert_eq!(failed.progress, AcquisitionProgress::None);
+    assert!(failed.accounting.is_none());
+    assert_eq!(failed.sqlite_progress_candidate(false, false), None);
+    assert_eq!(
+        failed.baseline_replacement,
+        BaselineReplacement::NoReplacement
+    );
+    assert_eq!(state.canonical_bytes().unwrap(), before);
+}
+
+#[test]
 fn benign_opencode_sqlite_partial_source_has_no_canonical_detection() {
     use telltale_sources::acquisition::AccountingCoverage;
 

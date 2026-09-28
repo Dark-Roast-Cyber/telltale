@@ -47,6 +47,37 @@ fn sqlite_without_supported_tables_is_empty() {
 }
 
 #[test]
+fn readonly_acquisition_reads_wal_and_preserves_five_second_busy_timeout() {
+    let temp = tempdir().unwrap();
+    let wal_path = temp.path().join("wal.db");
+    let writer = Connection::open(&wal_path).unwrap();
+    writer.execute_batch("pragma journal_mode=WAL; create table message (id text, session_id text, data text); insert into message values ('m', 's', '{}');").unwrap();
+    writer
+        .execute_batch("begin immediate; insert into message values ('n', 's', '{}');")
+        .unwrap();
+    let read =
+        extract_sqlite_native_source(&source(wal_path), OpenCodeSqliteReadOptions::default())
+            .unwrap();
+    assert_eq!(read.records.len(), 1);
+    writer.execute_batch("rollback").unwrap();
+
+    let locked_path = temp.path().join("locked.db");
+    let exclusive = Connection::open(&locked_path).unwrap();
+    exclusive
+        .execute_batch(
+            "create table message (id text, session_id text, data text); begin exclusive;",
+        )
+        .unwrap();
+    let started = std::time::Instant::now();
+    let err =
+        extract_sqlite_native_source(&source(locked_path), OpenCodeSqliteReadOptions::default())
+            .expect_err("locked read must fail");
+    assert!(matches!(err, SourceReadError::Locked(_)));
+    assert!(started.elapsed() >= std::time::Duration::from_millis(4_800));
+    exclusive.execute_batch("rollback").unwrap();
+}
+
+#[test]
 fn part_cursor_is_inclusive_and_reports_selected_high_water() {
     let temp = tempdir().expect("tempdir");
     let path = temp.path().join("opencode.db");
@@ -83,20 +114,31 @@ fn part_cursor_is_inclusive_and_reports_selected_high_water() {
     }
     drop(conn);
 
+    let selected_source = source(path);
+    assert!(matches!(
+        extract_sqlite_native_source(
+            &selected_source,
+            OpenCodeSqliteReadOptions {
+                part_min_time_updated: Some(2_000),
+                part_limit: 1,
+            },
+        ),
+        Err(SourceReadError::SchemaDrift { .. })
+    ));
     let extracted = extract_sqlite_native_source(
-        &source(path),
+        &selected_source,
         OpenCodeSqliteReadOptions {
             part_min_time_updated: Some(2_000),
-            part_limit: 1,
+            part_limit: 2,
         },
     )
     .expect("bounded read");
-    assert_eq!(extracted.records.len(), 1);
+    assert_eq!(extracted.records.len(), 2);
     let OpenCodeSqliteNativeRecord::Text(part) = &extracted.records[0] else {
         panic!("expected text part");
     };
     assert_eq!(part.text.as_deref(), Some("second"));
-    assert_eq!(extracted.sqlite_part_max_time_updated, Some(2_000));
+    assert_eq!(extracted.sqlite_part_max_time_updated, Some(3_000));
 }
 
 #[test]
