@@ -879,6 +879,21 @@ fn release_artifact_manifest_accepts_workflow_shaped_bundles_and_rejects_extra_e
         "missing zip checksum verification: {stdout}"
     );
 
+    let missing_sbom = release_fixture_make_command()
+        .args(["--silent", "-f"])
+        .arg(&makefile)
+        .arg("release-artifact-manifest")
+        .arg(format!("RELEASE_ARTIFACT_DIR={}", artifacts.display()))
+        .env("REQUIRE_SBOM", "1")
+        .env("MAKEFLAGS", "")
+        .output()
+        .expect("manifest without required SBOM");
+    assert!(!missing_sbom.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_sbom.stderr)
+            .contains("telltale-sbom.cdx.json is required when REQUIRE_SBOM is enabled")
+    );
+
     fs::write(
         artifacts.join("telltale-sbom.cdx.json"),
         r#"{
@@ -1298,20 +1313,62 @@ fn makefile_build_install_and_scan_targets_use_primary_binary() {
 
 #[cfg(unix)]
 #[test]
-fn release_artifact_manifest_skips_absent_download_directory() {
+fn release_artifact_manifest_requires_archives_only_in_strict_mode() {
     let temp = tempdir().expect("tempdir");
     let absent = temp.path().join("no-downloaded-artifacts");
+    let empty = temp.path().join("empty-artifacts");
+    fs::create_dir(&empty).expect("create empty artifacts directory");
+    let sbom_only = temp.path().join("sbom-only-artifacts");
+    fs::create_dir(&sbom_only).expect("create SBOM-only artifacts directory");
+    fs::write(
+        sbom_only.join("telltale-sbom.cdx.json"),
+        r#"{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"serialNumber":"urn:uuid:00000000-0000-0000-0000-000000000001","metadata":{},"components":[{"bom-ref":"pkg:cargo/synthetic@1.0.0"}],"dependencies":[]}"#,
+    )
+    .expect("write synthetic SBOM without archives");
     let makefile = Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile");
-    let output = release_fixture_make_command()
-        .args(["--silent", "-f"])
-        .arg(&makefile)
-        .arg("release-artifact-manifest")
-        .arg(format!("RELEASE_ARTIFACT_DIR={}", absent.display()))
-        .env("MAKEFLAGS", "")
-        .output()
-        .expect("manifest skip check");
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Skipping release artifact manifest"));
+    for (directory, reason) in [
+        (&absent, "does not exist"),
+        (&empty, "no archives"),
+        (&sbom_only, "no archives"),
+    ] {
+        let run = |require_sbom: Option<&str>| {
+            let mut command = release_fixture_make_command();
+            command
+                .args(["--silent", "-f"])
+                .arg(&makefile)
+                .arg("release-artifact-manifest")
+                .arg(format!("RELEASE_ARTIFACT_DIR={}", directory.display()))
+                .env_remove("REQUIRE_SBOM")
+                .env("MAKEFLAGS", "");
+            if let Some(value) = require_sbom {
+                command.env("REQUIRE_SBOM", value);
+            }
+            command.output().expect("manifest directory check")
+        };
+
+        for value in [None, Some("0")] {
+            let output = run(value);
+            assert!(
+                output.status.success(),
+                "non-strict {directory:?}: {output:?}"
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(stdout.contains("Skipping release artifact manifest"));
+            assert!(stdout.contains(reason), "unexpected skip: {stdout}");
+        }
+        for value in ["1", "TrUe", "YES"] {
+            let output = run(Some(value));
+            assert!(
+                !output.status.success(),
+                "strict REQUIRE_SBOM={value} must reject {directory:?}: {output:?}"
+            );
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                diagnostic.contains("REQUIRE_SBOM") && diagnostic.contains(reason),
+                "unexpected strict diagnostic: {diagnostic}"
+            );
+        }
+    }
 }
 
 #[test]

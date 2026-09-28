@@ -234,7 +234,10 @@ def main() -> int:
         return 0
     load_inventory()
     directory = Path(os.environ.get("RELEASE_ARTIFACT_DIR", "release-downloads"))
+    require_sbom = os.environ.get("REQUIRE_SBOM", "").lower() in {"1", "true", "yes"}
     if not directory.exists():
+        if require_sbom:
+            fail(f"Release artifact directory {directory} does not exist when REQUIRE_SBOM is enabled")
         print(f"Skipping release artifact manifest: {directory} does not exist.")
         return 0
     if directory.is_symlink() or not directory.is_dir():
@@ -246,6 +249,8 @@ def main() -> int:
         if path.name.endswith((".tar.gz", ".zip"))
     )
     if not candidates:
+        if require_sbom:
+            fail(f"Release artifact directory {directory} has no archives when REQUIRE_SBOM is enabled")
         print(f"Skipping release artifact manifest: no archives in {directory}.")
         return 0
 
@@ -262,7 +267,6 @@ def main() -> int:
     if sbom_path.exists() or sbom_path.is_symlink():
         validate_sbom(sbom_path)
         sbom = sbom_path
-    require_sbom = os.environ.get("REQUIRE_SBOM", "").lower() in {"1", "true", "yes"}
     if require_sbom and sbom is None:
         fail(f"{SBOM_NAME} is required when REQUIRE_SBOM is enabled")
 
