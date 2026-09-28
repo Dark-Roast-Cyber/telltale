@@ -851,7 +851,20 @@ modifiers: []
                     )),
                     "{error}"
                 );
-                assert!(error.contains(&path.display().to_string()), "{error}");
+                let tier = if path == &deployment {
+                    "deployment"
+                } else {
+                    "local-ui"
+                };
+                assert!(
+                    error.contains(&format!("invalid rule document '{tier}:")),
+                    "{error}"
+                );
+                let filename = path.file_name().expect("rule filename").to_string_lossy();
+                assert!(
+                    error.contains(&format!("{filename}#document:0'")),
+                    "{error}"
+                );
             }
         }
     }
