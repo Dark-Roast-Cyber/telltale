@@ -66,10 +66,12 @@ pub(crate) fn ensure_durable_storage_supported_for_platform(
 pub(crate) const DEFAULT_MAX_PENDING_EVENTS: u64 = 100_000;
 pub(crate) const DEFAULT_MAX_PENDING_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Acquire the per-outbox admission owner. Durable writers hold this sidecar
-/// lock from recovery and capacity inspection through the canonical append and
-/// follow-up reconciliation. It coordinates local Telltale writers without
-/// making the outbox a distributed lock service.
+/// Acquire the per-outbox admission and dispatch owner. Durable writers hold
+/// this sidecar from recovery and capacity inspection through canonical append and
+/// follow-up reconciliation. Standalone dispatch holds it from before opening
+/// the outbox through all selections, transport attempts, and result commits.
+/// It coordinates local Telltale writers without making the outbox a distributed
+/// lock service.
 pub(crate) fn acquire_admission_lock(
     path: &Path,
 ) -> Result<SidecarLock, Box<dyn std::error::Error>> {

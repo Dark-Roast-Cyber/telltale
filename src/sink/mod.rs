@@ -738,10 +738,19 @@ impl SinkSet {
             return Ok(Vec::new());
         };
         self.validate_persistent_replay_paths()?;
+        let admission_lock = outbox::acquire_admission_lock(outbox_path)
+            .map_err(|error| storage_admission_error("dispatch lock", error))?;
         let mut outbox = outbox::Outbox::open(outbox_path)?;
-        self.dispatch_durable_with_outbox(&mut outbox, clock)
+        let failures = self.dispatch_durable_with_outbox(&mut outbox, clock)?;
+        drop(outbox);
+        admission_lock
+            .verify_lock()
+            .map_err(|error| storage_admission_error("verify", error))?;
+        Ok(failures)
     }
 
+    /// Caller holds the outbox admission owner across selection, transport, and
+    /// result commit. Admission predrain must not recursively acquire that owner.
     fn dispatch_durable_with_outbox(
         &self,
         outbox: &mut outbox::Outbox,
@@ -1327,6 +1336,330 @@ mod tests {
                 (false, class, error.to_string())
             }
         }
+    }
+
+    // Channels order transport completion, not timing. Dropping the release
+    // guard also unblocks scoped workers if the coordinator assertion panics.
+    struct ReleaseSend(Option<std::sync::mpsc::Sender<()>>);
+
+    impl ReleaseSend {
+        fn release(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    impl Drop for ReleaseSend {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    struct ControlledDurableSink {
+        entered: std::sync::mpsc::Sender<bool>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        calls: Arc<AtomicI64>,
+        fails: bool,
+    }
+
+    impl EventSink for ControlledDurableSink {
+        fn name(&self) -> &str {
+            "remote"
+        }
+
+        fn emit(&self, _: &[Event]) -> Result<(), Box<dyn std::error::Error>> {
+            unreachable!("only canonical attempts are expected")
+        }
+
+        fn emit_canonical_once(&self, _: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.send(true)?;
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(10))?;
+            if self.fails {
+                Err(DeliveryError::new(
+                    DeliveryErrorClass::SinkApplicationRejected,
+                    1,
+                    "synthetic rejection",
+                )
+                .into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn paired_sink_set(
+        log: &Path,
+        outbox: &Path,
+        remote: Box<dyn EventSink + Send + Sync>,
+    ) -> SinkSet {
+        let mut sinks = SinkSet::new();
+        sinks.add_canonical_first_write_path_with_rotation(
+            "jsonl",
+            Box::new(LocalJsonlSink::with_rotation(
+                log,
+                RotationConfig::disabled(),
+            )),
+            log.to_path_buf(),
+            None,
+        );
+        sinks.add_best_effort("synthetic", remote);
+        sinks.enable_persistent_replay_with_capacity(
+            outbox.to_path_buf(),
+            vec!["remote".into()],
+            CapacityLimits::default(),
+        );
+        sinks
+    }
+
+    fn assert_dispatch_ownership(first_admits: bool, second_admits: bool) {
+        use std::sync::mpsc::channel;
+        let directory = tempdir().unwrap();
+        let log = directory.path().join("events.jsonl");
+        let path = directory.path().join("private/outbox.sqlite");
+        let event = make_health_event();
+        let prospective = make_health_event();
+        LocalJsonlSink::with_rotation(&log, RotationConfig::disabled())
+            .emit(std::slice::from_ref(&event))
+            .unwrap();
+        let mut outbox = Outbox::open(&path).unwrap();
+        outbox.reconcile_jsonl(&log, &["remote"]).unwrap();
+        let cursor_before = outbox.ingest_cursor().unwrap();
+        drop(outbox);
+        let journal_before = fs::read(&log).unwrap();
+        let _state_a =
+            crate::state::StateLock::acquire(&directory.path().join("a-state.json")).unwrap();
+        let _state_b =
+            crate::state::StateLock::acquire(&directory.path().join("b-state.json")).unwrap();
+        let (a_tx, a_rx) = channel();
+        let (b_tx, b_rx) = channel();
+        let (release_a, wait_a) = channel();
+        let (release_b, wait_b) = channel();
+        let a_calls = Arc::new(AtomicI64::new(0));
+        let b_calls = Arc::new(AtomicI64::new(0));
+        let a = paired_sink_set(
+            &log,
+            &path,
+            Box::new(ControlledDurableSink {
+                entered: a_tx,
+                release: Mutex::new(wait_a),
+                calls: a_calls.clone(),
+                fails: false,
+            }),
+        );
+        let b = paired_sink_set(
+            &log,
+            &path,
+            Box::new(ControlledDurableSink {
+                entered: b_tx.clone(),
+                release: Mutex::new(wait_b),
+                calls: b_calls.clone(),
+                fails: true,
+            }),
+        );
+        let (entered, result_b, ack_before_late_failure) = std::thread::scope(|scope| {
+            let mut release_a = ReleaseSend(Some(release_a));
+            let mut release_b = ReleaseSend(Some(release_b));
+            let first = scope.spawn(|| {
+                let result = if first_admits {
+                    a.persist_for_durable_replay_with_failures(&[])
+                } else {
+                    a.dispatch_durable_with_clock(&FakeClock::new(1_000))
+                };
+                result
+                    .map(|failures| failures.len())
+                    .map_err(|e| e.to_string())
+            });
+            assert!(
+                a_rx.recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap()
+            );
+            let second = scope.spawn(|| {
+                let result = if second_admits {
+                    b.persist_for_durable_replay_with_failures(std::slice::from_ref(&prospective))
+                } else {
+                    b.dispatch_durable_with_clock(&FakeClock::new(1_000))
+                };
+                let result = result.map(|failures| failures.len()).map_err(|e| {
+                    let delivery = e
+                        .downcast_ref::<DeliveryError>()
+                        .expect("structured failure");
+                    (delivery.class, delivery.attempts)
+                });
+                let _ = b_tx.send(false);
+                result
+            });
+            let entered = b_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            release_a.release();
+            assert_eq!(first.join().unwrap(), Ok(0));
+            let row = Outbox::open(&path)
+                .unwrap()
+                .get_delivery(&event.event_id, "remote")
+                .unwrap()
+                .unwrap();
+            release_b.release();
+            (entered, second.join().unwrap(), row.state)
+        });
+        let outbox = Outbox::open(&path).unwrap();
+        let row = outbox
+            .get_delivery(&event.event_id, "remote")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ack_before_late_failure, DeliveryState::Acked);
+        if entered {
+            assert_eq!(
+                row.state,
+                DeliveryState::Dead,
+                "old-code late failure overwrites committed ACK"
+            );
+        }
+        assert!(
+            !entered,
+            "second dispatcher entered send; committed ACK regressed to {:?}",
+            row.state
+        );
+        assert_eq!(result_b, Err((DeliveryErrorClass::DurableStorage, 0)));
+        assert_eq!(row.state, DeliveryState::Acked);
+        assert_eq!(row.attempts, 1);
+        assert_eq!(row.last_error_class, None);
+        assert_eq!(outbox.ingest_cursor().unwrap(), cursor_before);
+        assert_eq!(fs::read(&log).unwrap(), journal_before);
+        assert!(
+            outbox
+                .get_delivery(&prospective.event_id, "remote")
+                .unwrap()
+                .is_none()
+        );
+        drop(outbox);
+        assert!(
+            b.dispatch_durable_with_clock(&FakeClock::new(2_000))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(a_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(b_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn dispatch_owner_serializes_standalone_ack_and_late_failure() {
+        assert_dispatch_ownership(false, false);
+    }
+
+    #[test]
+    fn dispatch_owner_serializes_admission_before_standalone() {
+        assert_dispatch_ownership(true, false);
+    }
+
+    #[test]
+    fn dispatch_owner_serializes_standalone_before_admission() {
+        assert_dispatch_ownership(false, true);
+    }
+
+    #[test]
+    fn dispatch_owner_failure_preserves_rows_cursor_and_eligible_rotation() {
+        let directory = tempdir().unwrap();
+        let log = directory.path().join("events.jsonl");
+        let path = directory.path().join("private/outbox.sqlite");
+        let local = LocalJsonlSink::with_rotation(
+            &log,
+            RotationConfig {
+                max_size_bytes: 1,
+                keep: 0,
+            },
+        )
+        .with_durable_rotation();
+        let namespace = local.rotation_namespace().unwrap();
+        let first = make_health_event();
+        local.emit(std::slice::from_ref(&first)).unwrap();
+        local.emit(&[make_health_event()]).unwrap();
+        let mut outbox = Outbox::open(&path).unwrap();
+        outbox.reconcile_jsonl(&log, &["remote"]).unwrap();
+        let cursor = outbox.ingest_cursor().unwrap();
+        let row = outbox.get_delivery(&first.event_id, "remote").unwrap();
+        drop(outbox);
+        let generations = super::jsonl::discover_jsonl_generations(&log).unwrap();
+        assert_eq!(generations.len(), 2);
+        let journal = fs::read(&log).unwrap();
+        let (remote, calls) = ScriptedDurableSink::new("remote", []);
+        let mut sinks = durable_sink_set(&path, remote, retry_config(3, 1));
+        sinks.add_canonical_first_write_path_with_rotation_and_keep(
+            "jsonl",
+            Box::new(local),
+            log.clone(),
+            namespace,
+            Some(0),
+        );
+        let lock = super::outbox::acquire_admission_lock(&path).unwrap();
+        let result = sinks.deliver_durable_with_clock(&FakeClock::new(1_000));
+        drop(lock);
+        let error = result.expect_err("busy owner must reject before send or pruning");
+        let error = error.downcast_ref::<DeliveryError>().unwrap();
+        assert_eq!(
+            (error.class, error.attempts),
+            (DeliveryErrorClass::DurableStorage, 0)
+        );
+        assert!(calls.lock().unwrap().is_empty());
+        let outbox = Outbox::open(&path).unwrap();
+        assert_eq!(outbox.get_delivery(&first.event_id, "remote").unwrap(), row);
+        assert_eq!(outbox.ingest_cursor().unwrap(), cursor);
+        drop(outbox);
+        assert_eq!(fs::read(&log).unwrap(), journal);
+        assert_eq!(
+            super::jsonl::discover_jsonl_generations(&log)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            sinks
+                .deliver_durable_with_clock(&FakeClock::new(1_000))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(calls.lock().unwrap().len(), 2);
+        assert_eq!(
+            super::jsonl::discover_jsonl_generations(&log)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn dispatch_owner_unsafe_sidecar_rejects_before_send_or_update() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("private/outbox.sqlite");
+        let event = make_health_event();
+        seed_pending(&path, &[&event], &["remote"]).unwrap();
+        let before = Outbox::open(&path)
+            .unwrap()
+            .get_delivery(&event.event_id, "remote")
+            .unwrap();
+        fs::create_dir(path.with_extension("sqlite.lock")).unwrap();
+        let (remote, calls) = ScriptedDurableSink::new("remote", []);
+        let sinks = durable_sink_set(&path, remote, retry_config(3, 1));
+        let error = sinks
+            .deliver_durable_with_clock(&FakeClock::new(1_000))
+            .unwrap_err();
+        let error = error.downcast_ref::<DeliveryError>().unwrap();
+        assert_eq!(
+            (error.class, error.attempts),
+            (DeliveryErrorClass::DurableStorage, 0)
+        );
+        assert!(calls.lock().unwrap().is_empty());
+        assert_eq!(
+            Outbox::open(&path)
+                .unwrap()
+                .get_delivery(&event.event_id, "remote")
+                .unwrap(),
+            before
+        );
     }
 
     #[test]
