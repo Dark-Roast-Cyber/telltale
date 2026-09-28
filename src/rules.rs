@@ -210,6 +210,12 @@ struct DefinitionLocation {
 fn merge_rule_documents(
     documents: Vec<RuleDocument>,
 ) -> Result<(RuleSet, RuleResolutionDiagnostics), Box<dyn std::error::Error>> {
+    for document in &documents {
+        document
+            .rule_set
+            .validate_version()
+            .map_err(|error| format!("invalid rule document '{}': {error}", document.source))?;
+    }
     let mut descriptions = Vec::new();
     let mut rules = Vec::new();
     let mut modifiers = Vec::new();
@@ -796,6 +802,58 @@ modifiers: []
         assert!(first.winner.contains("local-ui:"));
         assert_eq!(first.replaced_sources.len(), 1);
         assert!(first.replaced_sources[0].contains("deployment:"));
+    }
+
+    #[test]
+    fn unsupported_pack_versions_fail_even_when_shadowed_or_disabled() {
+        let temp = tempdir().expect("tempdir");
+        let deployment = temp.path().join("rules.d/deployment.yaml");
+        let local = temp.path().join("ui-rules.d/local.yaml");
+        write_rule(&deployment, "pack.same", "first", 1);
+        write_rule(&local, "pack.same", "replacement", 2);
+        let paths = RulePackPaths {
+            deployment: vec![deployment.clone()],
+            local: vec![local.clone()],
+            ..RulePackPaths::default()
+        };
+        let valid = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+            &paths,
+            &[],
+            None,
+            RuleLoadMode::CustomOnly,
+            &[],
+            &[],
+        )
+        .expect("v1 pack replacement");
+        assert_eq!(valid.merged_rule_set.version, 1);
+        assert_eq!(valid.merged_rule_set.rules[0].score, 2);
+        assert_eq!(valid.diagnostics.provenance[0].replaced_sources.len(), 1);
+
+        for version in [0, 2] {
+            for path in [&deployment, &local] {
+                let raw = rule_yaml("pack.same", "first", 1)
+                    .replacen("version: 1", &format!("version: {version}"), 1)
+                    .replacen("enabled: true", "enabled: false", 1);
+                let error =
+                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                        &paths,
+                        &[],
+                        None,
+                        RuleLoadMode::CustomOnly,
+                        &[],
+                        &[(path.clone(), &raw)],
+                    )
+                    .expect_err("unsupported pack version must not be laundered")
+                    .to_string();
+                assert!(
+                    error.contains(&format!(
+                        "unsupported rule set version {version}; only version 1 is supported"
+                    )),
+                    "{error}"
+                );
+                assert!(error.contains(&path.display().to_string()), "{error}");
+            }
+        }
     }
 
     #[test]

@@ -659,7 +659,40 @@ document.getElementById('preview-rules').addEventListener('click', () => {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_rule_yaml, preview_rules_request, rule_summary_json};
+    use super::{
+        compile_rule_yaml, preview_rules_request, rule_summary_json, validate_rules_request,
+    };
+
+    #[test]
+    fn preview_and_validation_reject_unsupported_rule_versions() {
+        let valid = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules: []\nmodifiers: []\n";
+        let default = compile_rule_yaml(valid, None).expect("v1 compiles");
+        for version in [0, 2] {
+            let raw = valid.replacen("version: 1", &format!("version: {version}"), 1);
+            let validate = serde_json::to_vec(&serde_json::json!({ "rules_yaml": raw })).unwrap();
+            let response = validate_rules_request(&validate).expect("validation response");
+            assert_eq!(response.status_code, 400);
+            assert!(
+                response.body["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("unsupported rule set version {version}"))
+            );
+            let preview = serde_json::to_vec(&serde_json::json!({
+                "rules_yaml": raw,
+                "fixture_path": "tests/fixtures/rule_samples/privacy-session-id.jsonl"
+            }))
+            .unwrap();
+            let response = preview_rules_request(&preview, &default).expect("preview response");
+            assert_eq!(response.status_code, 400);
+            assert!(
+                response.body["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("unsupported rule set version {version}"))
+            );
+        }
+    }
 
     #[test]
     fn preview_rejects_unsafe_source_sessions_without_leaking() {

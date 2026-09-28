@@ -355,6 +355,9 @@ pub fn load_rule_set_from_documents(
 }
 
 pub fn merge_rule_sets(rule_sets: Vec<RuleSet>) -> Result<RuleSet, Box<dyn std::error::Error>> {
+    for rule_set in &rule_sets {
+        rule_set.validate_version()?;
+    }
     let mut ids = BTreeSet::new();
     let mut descriptions = Vec::new();
     let mut rules = Vec::new();
@@ -490,10 +493,22 @@ fn case_insensitive_pattern(pattern: &str) -> String {
 }
 
 impl RuleSet {
+    pub fn validate_version(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.version != 1 {
+            return Err(format!(
+                "unsupported rule set version {}; only version 1 is supported",
+                self.version
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     pub fn compile(
         self,
         policy: Option<&RulePolicy>,
     ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
+        self.validate_version()?;
         validate_rule_ids(&self)?;
         let case_insensitive = self.defaults.case_insensitive;
         let rules = self
@@ -1065,6 +1080,44 @@ mod tests {
         }
         .compile(None)
         .expect("compile rules")
+    }
+
+    #[test]
+    fn rule_set_version_is_checked_before_merge_and_compile() {
+        let valid = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules: []\nmodifiers: []\n";
+        let v1: RuleSet = serde_yaml::from_str(valid).expect("synthetic v1");
+        assert_eq!(v1.version, 1);
+        assert!(v1.clone().compile(None).is_ok());
+        assert!(super::merge_rule_sets(vec![v1.clone()]).is_ok());
+        for version in [0, 2] {
+            let mut unsupported = v1.clone();
+            unsupported.version = version;
+            let expected =
+                format!("unsupported rule set version {version}; only version 1 is supported");
+            assert_eq!(
+                unsupported.clone().compile(None).unwrap_err().to_string(),
+                expected
+            );
+            assert_eq!(
+                super::merge_rule_sets(vec![unsupported.clone()])
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+            assert_eq!(
+                super::merge_rule_sets(vec![v1.clone(), unsupported])
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+            let raw = valid.replacen("version: 1", &format!("version: {version}"), 1);
+            assert_eq!(
+                super::load_rule_set_from_documents(&[&raw], None)
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+        }
     }
 
     #[test]
