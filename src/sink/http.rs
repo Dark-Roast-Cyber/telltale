@@ -67,6 +67,10 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    pub(crate) fn retry_config(&self) -> &RetryConfig {
+        &self.retry
+    }
+
     pub fn new(
         timeout: Duration,
         retry: RetryConfig,

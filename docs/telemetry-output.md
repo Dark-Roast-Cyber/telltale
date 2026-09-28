@@ -385,6 +385,36 @@ delivery attempts, while the JSONL record remains available to an external
 shipper when JSONL is enabled. Uncertain responses and retries can produce
 duplicate delivery.
 
+Splunk HEC delivery requires an HTTP 2xx response containing a JSON object with
+integer `code: 0`; HTTP success alone is not acceptance. Known transient HEC
+codes (8–9, 17–20, 23–27) share the bounded retry budget with transport failures,
+429, and 5xx. Token/authentication codes (1–4, 21–22) block durable rows; known
+payload rejections (5–7, 10–16) dead-letter them. Unknown codes and missing or
+malformed responses block durable rows for operator investigation, rather than
+acknowledging or declaring the event poison. Response text is never included in
+delivery diagnostics. This checks HEC request acceptance, not indexer acknowledgment.
+
+**Durable rollback boundary (Issue 69):** HEC response validation adds persisted
+`sink_application_retryable` and `sink_response_blocked` error classes. This
+build reads existing outboxes, but builds predating this change reject rows
+containing either new class when decoding delivery state, even though the SQLite
+schema version is unchanged. A binary-only downgrade is not supported once these
+classes have been written. Best-effort sinks have no outbox migration.
+
+Before upgrading a durable deployment, stop all scanners, dispatchers, and
+schedules and take a verified, coordinated snapshot of the old binary,
+configuration, scanner state, canonical JSONL with rotations, and outbox with
+its SQLite/coordination sidecars. See the inventory and quiescing guidance in
+[controlled deployment](controlled-deployment.md#back-up-and-quiesce). For
+rollback, stop writers again, quarantine the complete post-upgrade state set,
+and restore the matching pre-upgrade snapshot together with the old binary;
+never mix a newer outbox or scanner cursor with the restored set. Retain the
+quarantined data for explicit reconciliation of post-snapshot events; restoring
+the snapshot alone does not deliver those events, and replay can duplicate
+already accepted events. Without a verified pre-upgrade snapshot, keep the
+compatible binary and repair forward. There is no outbox downgrade conversion:
+do not rename error classes, delete rows, or silently reset the queue.
+
 Remote-only output is valid but has no built-in persistent replay. After retry
 exhaustion, or process exit/restart while the endpoint is unavailable, events
 may be lost. Elastic uses `_id = event_id`, so a redelivery overwrites the same
@@ -514,7 +544,8 @@ exactly-once delivery.
 ### Releasing blocked deliveries
 
 After repairing a sink's credentials or endpoint, an operator can explicitly
-release all of that sink's authentication-blocked rows for retry:
+release all of that sink's blocked rows for retry (including ambiguous HEC
+responses, after investigating the endpoint):
 
 ```sh
 telltale delivery retry-blocked \

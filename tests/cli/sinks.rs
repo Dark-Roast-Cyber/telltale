@@ -140,7 +140,7 @@ fn start_mock_hec_server() -> (
                     let _ = tx.send(String::from_utf8_lossy(&request).to_string());
                     stream
                         .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"text\":\"ok\"}\n",
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}",
                         )
                         .expect("write mock hec response");
                 }

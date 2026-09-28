@@ -3353,6 +3353,10 @@ fn decode_error_class(
         "sink_application_rejected" if status.is_none() => {
             DeliveryErrorClass::SinkApplicationRejected
         }
+        "sink_application_retryable" if status.is_none() => {
+            DeliveryErrorClass::SinkApplicationRetryable
+        }
+        "sink_response_blocked" if status.is_none() => DeliveryErrorClass::SinkResponseBlocked,
         "authentication_blocked" => DeliveryErrorClass::AuthenticationBlocked {
             status: status.ok_or_else(|| storage_message("authentication status is missing"))?,
         },
@@ -3575,6 +3579,46 @@ mod tests {
     use crate::sink::jsonl::{JsonlGeneration, discover_jsonl_generations};
     use crate::sink::{DeliveryError, DeliveryErrorClass, EventSink, LocalJsonlSink};
     use telltale_schema::clients::ClientId;
+
+    #[test]
+    fn unknown_persisted_error_class_fails_closed_without_rewriting_row() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("private/outbox.sqlite");
+        let event = marked_event("TT_SYNTHETIC_EVENT");
+        let mut outbox = Outbox::open(&path).unwrap();
+        outbox.insert_event(&event, &["remote"]).unwrap();
+        drop(outbox);
+        let connection = Connection::open(&path).unwrap();
+        connection.execute(
+            "UPDATE deliveries SET last_error_class = 'future_application_class' WHERE sink_id = 'remote'",
+            [],
+        ).unwrap();
+        drop(connection);
+
+        let outbox = Outbox::open(&path).unwrap();
+        let error = outbox.get_delivery(&event.event_id, "remote").unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<DeliveryError>().unwrap().class,
+            DeliveryErrorClass::DurableStorage
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("stored delivery error class is invalid")
+        );
+        assert!(!error.to_string().contains("future_application_class"));
+        drop(outbox);
+        let connection = Connection::open(&path).unwrap();
+        let (state, class): (String, String) = connection
+            .query_row(
+                "SELECT state, last_error_class FROM deliveries WHERE sink_id = 'remote'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "pending");
+        assert_eq!(class, "future_application_class");
+    }
 
     fn record_delivery_for_test(
         outbox: &mut Outbox,

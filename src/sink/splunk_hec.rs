@@ -4,7 +4,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::event::{EmittableEvent, Event, parse_event_timestamp};
-use crate::sink::http::{HttpClient, RetryConfig, TlsOptions, chunk_segments};
+use crate::sink::http::{HttpClient, HttpResponse, RetryConfig, TlsOptions, chunk_segments};
 use crate::sink::{DeliveryError, DeliveryErrorClass, EventSink};
 
 const DEFAULT_HEC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -66,6 +66,53 @@ impl SplunkHecHttpSink {
         self.max_batch_bytes = max_batch_bytes;
         Ok(self)
     }
+
+    fn post_once(&self, headers: &[(&str, &str)], body: &[u8]) -> Result<(), DeliveryError> {
+        let response = self
+            .client
+            .post_once(&self.url, headers, "application/json", body)
+            .map_err(splunk_transport_error)?;
+        splunk_response_result(&response)
+    }
+
+    fn post(&self, headers: &[(&str, &str)], body: &[u8]) -> Result<(), DeliveryError> {
+        let retry = self.client.retry_config();
+        let mut delay = Duration::from_millis(retry.base_delay_ms);
+        let mut last_response_error = None;
+        // One budget covers transport, HTTP, and HEC application failures.
+        for attempt in 1..=retry.max_attempts.max(1) {
+            match self.post_once(headers, body) {
+                Ok(()) => return Ok(()),
+                Err(mut error) => {
+                    let no_response = matches!(
+                        error.class,
+                        DeliveryErrorClass::TransportNoResponse | DeliveryErrorClass::Timeout
+                    );
+                    error.attempts = attempt;
+                    let retryable = match error.class {
+                        DeliveryErrorClass::HttpStatus { status } => {
+                            status == 429 || (500..600).contains(&status)
+                        }
+                        class => class.is_retryable(),
+                    };
+                    if !retryable || attempt == retry.max_attempts.max(1) {
+                        if no_response {
+                            // Preserve the last observed rejection when later attempts obtain no response.
+                            error = last_response_error.unwrap_or(error);
+                            error.attempts = attempt;
+                        }
+                        return Err(error);
+                    }
+                    if !no_response {
+                        last_response_error = Some(error);
+                    }
+                    std::thread::sleep(delay);
+                    delay = delay.saturating_mul(2);
+                }
+            }
+        }
+        unreachable!("at least one attempt")
+    }
 }
 
 impl EventSink for SplunkHecHttpSink {
@@ -85,13 +132,7 @@ impl EventSink for SplunkHecHttpSink {
             ("X-Splunk-Request-Channel", self.request_channel.as_str()),
         ];
         for chunk in chunk_segments(&segments, self.max_batch_bytes) {
-            let response = self
-                .client
-                .post(&self.url, &headers, "application/json", &chunk)
-                .map_err(splunk_transport_error)?;
-            if !(200..300).contains(&response.status) {
-                return Err(splunk_status_error(response.status, response.attempts).into());
-            }
+            self.post(&headers, &chunk)?;
         }
         Ok(())
     }
@@ -103,15 +144,40 @@ impl EventSink for SplunkHecHttpSink {
             ("Authorization", auth.as_str()),
             ("X-Splunk-Request-Channel", self.request_channel.as_str()),
         ];
-        let response = self
-            .client
-            .post_once(&self.url, &headers, "application/json", &body)
-            .map_err(splunk_transport_error)?;
-        if !(200..300).contains(&response.status) {
-            return Err(splunk_status_error(response.status, response.attempts).into());
-        }
+        self.post_once(&headers, &body)?;
         Ok(())
     }
+}
+
+fn splunk_response_result(response: &HttpResponse) -> Result<(), DeliveryError> {
+    if !(200..300).contains(&response.status) {
+        return Err(splunk_status_error(response.status, response.attempts));
+    }
+    // Never carry response text or JSON parser errors across the diagnostic boundary.
+    let code = serde_json::from_str::<serde_json::Value>(&response.body)
+        .ok()
+        .and_then(|value| value.as_object()?.get("code")?.as_i64());
+    let class = match code {
+        Some(0) => return Ok(()),
+        Some(1..=4 | 21..=22) => DeliveryErrorClass::AuthenticationBlocked {
+            status: response.status,
+        },
+        Some(5..=7 | 10..=16) => DeliveryErrorClass::SinkApplicationRejected,
+        Some(8..=9 | 17..=20 | 23..=27) => DeliveryErrorClass::SinkApplicationRetryable,
+        _ => DeliveryErrorClass::SinkResponseBlocked,
+    };
+    let detail = match code {
+        Some(code) => format!("HEC code {code}"),
+        None => "invalid HEC response".to_string(),
+    };
+    Err(DeliveryError::new(
+        class,
+        response.attempts,
+        format!(
+            "Splunk HEC request failed with HTTP {}: {detail}",
+            response.status
+        ),
+    ))
 }
 
 fn splunk_transport_error(err: crate::sink::http::HttpPostError) -> DeliveryError {
@@ -312,6 +378,344 @@ mod tests {
         })
     }
 
+    fn mock_responses(responses: Vec<(u16, String)>) -> (String, thread::JoinHandle<Vec<Vec<u8>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("synthetic listener");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let address = listener.local_addr().expect("address");
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "missing synthetic request");
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(_) => panic!("synthetic accept failed"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                loop {
+                    let count = stream.read(&mut buffer).expect("read request");
+                    assert_ne!(count, 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if let Some(split) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..split]).to_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        if request.len() >= split + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                requests.push(request);
+                if status == 0 {
+                    // Synthetic peer disconnect after receiving the request.
+                    continue;
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .expect("synthetic response");
+            }
+            requests
+        });
+        (format!("http://{address}/services/collector"), handle)
+    }
+
+    fn fast_sink(url: String, attempts: u32) -> SplunkHecHttpSink {
+        SplunkHecHttpSink::new(url, "synthetic-token".into(), SplunkHecConfig::default())
+            .with_transport_warning(
+                Duration::from_secs(2),
+                crate::sink::http::RetryConfig {
+                    max_attempts: attempts,
+                    base_delay_ms: 1,
+                },
+                &crate::sink::http::TlsOptions::default(),
+                super::DEFAULT_HEC_MAX_BATCH_BYTES,
+                false,
+            )
+            .unwrap()
+    }
+
+    fn response_cases() -> Vec<(String, Option<&'static str>)> {
+        let mut cases = vec![(r#"{"code":0,"text":"TT_PRIVATE_RESPONSE"}"#.into(), None)];
+        for code in 1..=27 {
+            let class = match code {
+                1..=4 | 21..=22 => "authentication_blocked",
+                5..=7 | 10..=16 => "sink_application_rejected",
+                _ => "sink_application_retryable",
+            };
+            cases.push((
+                format!(r#"{{"code":{code},"text":"TT_PRIVATE_RESPONSE"}}"#),
+                Some(class),
+            ));
+        }
+        for body in [
+            r#"{"code":999,"text":"TT_PRIVATE_RESPONSE"}"#,
+            r#"{"text":"TT_PRIVATE_RESPONSE"}"#,
+            "TT_PRIVATE_RESPONSE",
+            "",
+            "[]",
+            "null",
+            r#"{"code":"0"}"#,
+            r#"{"code":0.0}"#,
+            r#"{"code":false}"#,
+        ] {
+            cases.push((body.into(), Some("sink_response_blocked")));
+        }
+        cases
+    }
+
+    #[test]
+    fn hec_response_contract_for_single_batch_and_canonical() {
+        use crate::sink::{DeliveryError, EventSink};
+        for (body, expected) in response_cases() {
+            for mode in 0..3 {
+                let (url, server) = mock_responses(vec![(200, body.clone())]);
+                let sink = fast_sink(url, 1);
+                let event = make_health_event();
+                let result = match mode {
+                    0 => sink.emit(std::slice::from_ref(&event)),
+                    1 => sink.emit(&[event.clone(), event.clone()]),
+                    _ => sink.emit_canonical_once(&serde_json::to_vec(&event.emittable()).unwrap()),
+                };
+                assert_eq!(server.join().unwrap().len(), 1);
+                if let Some(class) = expected {
+                    let error = result.expect_err("HEC response must not be accepted");
+                    let delivery = error
+                        .downcast_ref::<DeliveryError>()
+                        .expect("structured error");
+                    assert_eq!(delivery.class.as_str(), class);
+                    assert_eq!(delivery.attempts, 1);
+                    assert!(!format!("{error:?} {error}").contains("TT_PRIVATE_RESPONSE"));
+                } else {
+                    result.expect("HEC code zero accepted");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hec_preserves_retryable_response_when_later_attempt_disconnects() {
+        use crate::sink::{DeliveryError, DeliveryErrorClass, EventSink};
+        for (status, body, expected) in [
+            (
+                503,
+                "TT_PRIVATE_RESPONSE",
+                DeliveryErrorClass::HttpStatus { status: 503 },
+            ),
+            (
+                200,
+                r#"{"code":9,"text":"TT_PRIVATE_RESPONSE"}"#,
+                DeliveryErrorClass::SinkApplicationRetryable,
+            ),
+        ] {
+            let (url, server) = mock_responses(vec![(status, body.into()), (0, String::new())]);
+            let error = fast_sink(url, 2).emit(&[make_health_event()]).unwrap_err();
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0], requests[1]);
+            let delivery = error.downcast_ref::<DeliveryError>().unwrap();
+            assert_eq!(delivery.class, expected);
+            assert_eq!(delivery.attempts, 2);
+            assert!(!format!("{error:?} {error}").contains("TT_PRIVATE_RESPONSE"));
+        }
+    }
+
+    #[test]
+    fn hec_retries_share_one_bounded_attempt_budget() {
+        use crate::sink::{DeliveryError, EventSink};
+        for responses in [
+            vec![(200, r#"{"code":9}"#), (200, r#"{"code":0}"#)],
+            vec![
+                (429, "TT_PRIVATE_RESPONSE"),
+                (200, r#"{"code":9}"#),
+                (503, "TT_PRIVATE_RESPONSE"),
+            ],
+            vec![(200, r#"{"code":9}"#); 3],
+            vec![(401, "TT_PRIVATE_RESPONSE")],
+        ] {
+            let count = responses.len();
+            let success = responses.last().unwrap().1 == r#"{"code":0}"#;
+            let (url, server) =
+                mock_responses(responses.into_iter().map(|(s, b)| (s, b.into())).collect());
+            let result = fast_sink(url, 3).emit(&[make_health_event()]);
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), count);
+            assert!(requests.windows(2).all(|pair| pair[0] == pair[1]));
+            if success {
+                result.unwrap();
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.downcast_ref::<DeliveryError>().unwrap().attempts,
+                    count as u32
+                );
+                assert!(!error.to_string().contains("TT_PRIVATE_RESPONSE"));
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn hec_durable_response_states_survive_reopen() {
+        use crate::sink::{
+            SinkSet,
+            outbox::{CapacityLimits, DeliveryState, Outbox},
+        };
+        for (body, expected) in response_cases() {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("private/outbox.sqlite");
+            let event = make_health_event();
+            Outbox::open(&path)
+                .unwrap()
+                .insert_event(&event, &["remote"])
+                .unwrap();
+            let (url, server) = mock_responses(vec![(200, body)]);
+            let mut sinks = SinkSet::new();
+            sinks.add_best_effort_with_retry(
+                "splunk_hec",
+                Box::new(fast_sink(url, 3).with_name("remote")),
+                crate::sink::http::RetryConfig {
+                    max_attempts: 3,
+                    base_delay_ms: 1000,
+                },
+            );
+            sinks.enable_persistent_replay_with_capacity(
+                path.clone(),
+                vec!["remote".into()],
+                CapacityLimits::default(),
+            );
+            let failures = sinks
+                .dispatch_durable_with_clock(&crate::sink::outbox::SystemDeliveryClock)
+                .unwrap();
+            assert_eq!(server.join().unwrap().len(), 1);
+            assert!(
+                failures
+                    .iter()
+                    .all(|failure| !failure.error.contains("TT_PRIVATE_RESPONSE"))
+            );
+            let outbox = Outbox::open(&path).unwrap();
+            let row = outbox
+                .get_delivery(&event.event_id, "remote")
+                .unwrap()
+                .unwrap();
+            let state = match expected {
+                None => DeliveryState::Acked,
+                Some("sink_application_retryable") => DeliveryState::Pending,
+                Some("sink_application_rejected") => DeliveryState::Dead,
+                _ => DeliveryState::Blocked,
+            };
+            assert_eq!(row.state, state);
+            assert_eq!(row.attempts, 1);
+            assert_eq!(row.last_error_class.map(|class| class.as_str()), expected);
+            assert_eq!(
+                row.next_attempt_at.is_some(),
+                state == DeliveryState::Pending
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn hec_durable_retry_is_scheduled_and_bounded() {
+        use crate::sink::{
+            SinkSet,
+            outbox::{CapacityLimits, DeliveryClock, DeliveryState, Outbox},
+        };
+        struct Clock(i64);
+        impl DeliveryClock for Clock {
+            fn now_millis(&self) -> i64 {
+                self.0
+            }
+        }
+        for final_code in [0, 9] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("private/outbox.sqlite");
+            let event = make_health_event();
+            Outbox::open(&path)
+                .unwrap()
+                .insert_event(&event, &["remote"])
+                .unwrap();
+            let (url, server) = mock_responses(vec![
+                (200, r#"{"code":9,"text":"TT_PRIVATE_RESPONSE"}"#.into()),
+                (
+                    200,
+                    format!(r#"{{"code":{final_code},"text":"TT_PRIVATE_RESPONSE"}}"#),
+                ),
+            ]);
+            let mut sinks = SinkSet::new();
+            sinks.add_best_effort_with_retry(
+                "splunk_hec",
+                Box::new(fast_sink(url, 5).with_name("remote")),
+                crate::sink::http::RetryConfig {
+                    max_attempts: 2,
+                    base_delay_ms: 10,
+                },
+            );
+            sinks.enable_persistent_replay_with_capacity(
+                path.clone(),
+                vec!["remote".into()],
+                CapacityLimits::default(),
+            );
+            let failures = sinks.dispatch_durable_with_clock(&Clock(1000)).unwrap();
+            assert_eq!(failures.len(), 1);
+            assert!(!failures[0].error.contains("TT_PRIVATE_RESPONSE"));
+            let row = Outbox::open(&path)
+                .unwrap()
+                .get_delivery(&event.event_id, "remote")
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.state, DeliveryState::Pending);
+            assert_eq!(row.attempts, 1);
+            assert_eq!(row.next_attempt_at, Some(1010));
+            assert!(
+                sinks
+                    .dispatch_durable_with_clock(&Clock(1009))
+                    .unwrap()
+                    .is_empty()
+            );
+            sinks.dispatch_durable_with_clock(&Clock(1010)).unwrap();
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0], requests[1]);
+            let row = Outbox::open(&path)
+                .unwrap()
+                .get_delivery(&event.event_id, "remote")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                row.state,
+                if final_code == 0 {
+                    DeliveryState::Acked
+                } else {
+                    DeliveryState::Dead
+                }
+            );
+            assert_eq!(row.attempts, 2);
+            assert_eq!(row.next_attempt_at, None);
+            assert!(
+                sinks
+                    .dispatch_durable_with_clock(&Clock(2000))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
     #[test]
     fn splunk_hec_envelope_wraps_canonical_event_with_transport_metadata() {
         let mut event = make_health_event();
@@ -377,7 +781,7 @@ mod tests {
                             .expect("request capture");
                         stream
                             .write_all(
-                                b"HTTP/1.1 200 OK\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"text\":\"ok\"}\n",
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}",
                             )
                             .expect("mock hec response");
                         return;

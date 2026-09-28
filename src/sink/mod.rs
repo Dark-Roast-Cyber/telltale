@@ -42,6 +42,8 @@ pub(crate) enum DeliveryErrorClass {
     Timeout,
     HttpStatus { status: u16 },
     SinkApplicationRejected,
+    SinkApplicationRetryable,
+    SinkResponseBlocked,
     AuthenticationBlocked { status: u16 },
     PayloadCollision,
     DurableStorage,
@@ -55,6 +57,8 @@ impl DeliveryErrorClass {
             Self::Timeout => "timeout",
             Self::HttpStatus { .. } => "http_status",
             Self::SinkApplicationRejected => "sink_application_rejected",
+            Self::SinkApplicationRetryable => "sink_application_retryable",
+            Self::SinkResponseBlocked => "sink_response_blocked",
             Self::AuthenticationBlocked { .. } => "authentication_blocked",
             Self::PayloadCollision => "payload_collision",
             Self::DurableStorage => "durable_storage",
@@ -68,11 +72,12 @@ impl DeliveryErrorClass {
     #[allow(dead_code)]
     pub(crate) fn is_retryable(self) -> bool {
         match self {
-            Self::TransportNoResponse | Self::Timeout => true,
+            Self::TransportNoResponse | Self::Timeout | Self::SinkApplicationRetryable => true,
             Self::HttpStatus { status } => {
                 status == 408 || status == 429 || (500..600).contains(&status)
             }
             Self::SinkApplicationRejected
+            | Self::SinkResponseBlocked
             | Self::AuthenticationBlocked { .. }
             | Self::PayloadCollision
             | Self::DurableStorage
@@ -812,23 +817,25 @@ impl SinkSet {
                             }
                             class => class,
                         };
-                        let (state, next_attempt_at) =
-                            if matches!(class, DeliveryErrorClass::AuthenticationBlocked { .. }) {
-                                (outbox::DeliveryState::Blocked, None)
-                            } else if class.is_retryable()
-                                && attempt < entry.retry.max_attempts.max(1)
-                            {
-                                (
-                                    outbox::DeliveryState::Pending,
-                                    Some(outbox::next_retry_at(
-                                        now,
-                                        entry.retry.base_delay_ms,
-                                        attempt,
-                                    )),
-                                )
-                            } else {
-                                (outbox::DeliveryState::Dead, None)
-                            };
+                        let (state, next_attempt_at) = if matches!(
+                            class,
+                            DeliveryErrorClass::AuthenticationBlocked { .. }
+                                | DeliveryErrorClass::SinkResponseBlocked
+                        ) {
+                            (outbox::DeliveryState::Blocked, None)
+                        } else if class.is_retryable() && attempt < entry.retry.max_attempts.max(1)
+                        {
+                            (
+                                outbox::DeliveryState::Pending,
+                                Some(outbox::next_retry_at(
+                                    now,
+                                    entry.retry.base_delay_ms,
+                                    attempt,
+                                )),
+                            )
+                        } else {
+                            (outbox::DeliveryState::Dead, None)
+                        };
                         outbox.record_delivery_at(
                             &ready.row.event_id,
                             sink_id,
