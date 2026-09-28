@@ -353,7 +353,7 @@ fn splunk_hec_time(timestamp: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -378,6 +378,54 @@ mod tests {
         })
     }
 
+    fn read_mock_request(stream: &mut TcpStream) -> Vec<u8> {
+        // Accepted sockets may inherit nonblocking mode on macOS and Windows.
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        loop {
+            let count = stream.read(&mut buffer).expect("read request");
+            assert_ne!(count, 0);
+            request.extend_from_slice(&buffer[..count]);
+            if let Some(split) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..split]).to_lowercase();
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                if request.len() >= split + 4 + length {
+                    return request;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mock_request_reader_handles_nonblocking_socket_and_fragmented_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        // Reproduce platforms that inherit the listener's nonblocking mode.
+        server.set_nonblocking(true).unwrap();
+        client
+            .write_all(b"POST / HTTP/1.1\r\nContent-Length: 4\r\n")
+            .unwrap();
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            client.write_all(b"\r\nab").unwrap();
+            thread::sleep(Duration::from_millis(50));
+            client.write_all(b"cd").unwrap();
+        });
+        let request = read_mock_request(&mut server);
+        writer.join().unwrap();
+        assert_eq!(request, b"POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nabcd");
+    }
+
     fn mock_responses(responses: Vec<(u16, String)>) -> (String, thread::JoinHandle<Vec<Vec<u8>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("synthetic listener");
         listener.set_nonblocking(true).expect("nonblocking");
@@ -396,29 +444,7 @@ mod tests {
                         Err(_) => panic!("synthetic accept failed"),
                     }
                 };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0; 1024];
-                loop {
-                    let count = stream.read(&mut buffer).expect("read request");
-                    assert_ne!(count, 0);
-                    request.extend_from_slice(&buffer[..count]);
-                    if let Some(split) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-                        let headers = String::from_utf8_lossy(&request[..split]).to_lowercase();
-                        let length: usize = headers
-                            .lines()
-                            .find_map(|line| line.strip_prefix("content-length: "))
-                            .unwrap()
-                            .parse()
-                            .unwrap();
-                        if request.len() >= split + 4 + length {
-                            break;
-                        }
-                    }
-                }
-                requests.push(request);
+                requests.push(read_mock_request(&mut stream));
                 if status == 0 {
                     // Synthetic peer disconnect after receiving the request.
                     continue;
