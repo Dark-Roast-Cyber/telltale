@@ -202,10 +202,14 @@ enum WatchScanAction {
 struct PendingWatchChanges {
     paths: BTreeSet<PathBuf>,
     saw_remove: bool,
+    saw_rescan: bool,
 }
 
 impl PendingWatchChanges {
     fn absorb(&mut self, event: &NotifyEvent) {
+        if event.need_rescan() {
+            self.saw_rescan = true;
+        }
         if !matches!(
             event.kind,
             EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
@@ -223,11 +227,11 @@ impl PendingWatchChanges {
     }
 
     fn is_empty(&self) -> bool {
-        self.paths.is_empty() && !self.saw_remove
+        self.paths.is_empty() && !self.saw_remove && !self.saw_rescan
     }
 
     fn scan_action(&self, source_index: &BTreeMap<PathBuf, Source>) -> WatchScanAction {
-        if self.saw_remove {
+        if self.saw_remove || self.saw_rescan {
             return WatchScanAction::Full;
         }
         let mut targets = Vec::new();
@@ -346,10 +350,51 @@ mod tests {
         };
         pending.absorb(&event);
 
+        assert!(!pending.is_empty());
         match pending.scan_action(&index) {
             WatchScanAction::Targeted(targets) => assert_eq!(targets, vec![db_source]),
             _ => panic!("expected targeted scan"),
         }
+    }
+
+    #[test]
+    fn pending_rescan_without_paths_requires_full_scan_even_when_coalesced() {
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".to_string(),
+            path: PathBuf::from("/watch-test/codex/sessions/session-a.jsonl"),
+        };
+        let index = BTreeMap::from([(source.path.clone(), source.clone())]);
+        let mut pending = PendingWatchChanges::default();
+        pending.absorb(&NotifyEvent::new(EventKind::Other).set_flag(notify::event::Flag::Rescan));
+        assert!(!pending.is_empty(), "rescan must wake the pending loop");
+        assert!(matches!(pending.scan_action(&index), WatchScanAction::Full));
+
+        pending.absorb(
+            &NotifyEvent::new(EventKind::Modify(notify::event::ModifyKind::Any))
+                .add_path(source.path),
+        );
+        assert!(matches!(pending.scan_action(&index), WatchScanAction::Full));
+    }
+
+    #[test]
+    fn pending_rescan_flag_precedes_kind_filter_but_plain_other_is_ignored() {
+        let index = BTreeMap::new();
+        let mut pending = PendingWatchChanges::default();
+        pending.absorb(
+            &NotifyEvent::new(EventKind::Other)
+                .add_path(PathBuf::from("/watch-test/ignored.jsonl")),
+        );
+        assert!(pending.is_empty());
+        assert!(matches!(pending.scan_action(&index), WatchScanAction::Skip));
+
+        pending.absorb(
+            &NotifyEvent::new(EventKind::Access(notify::event::AccessKind::Any))
+                .set_flag(notify::event::Flag::Rescan),
+        );
+        assert!(!pending.is_empty());
+        assert!(matches!(pending.scan_action(&index), WatchScanAction::Full));
     }
 
     #[test]
