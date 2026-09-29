@@ -2230,7 +2230,8 @@ mod tests {
         let first_id = first.event_id.clone();
         let second_id = second.event_id.clone();
 
-        let (first_remote, _) = ScriptedDurableSink::new("remote", [ScriptedOutcome::Success]);
+        // Persistence-only admission cannot free capacity through predrain,
+        // even when the threads acquire ownership sequentially.
         let mut first_sinks = SinkSet::new();
         first_sinks.add_canonical_first_write_path_with_rotation(
             "jsonl",
@@ -2241,18 +2242,12 @@ mod tests {
             log_path.clone(),
             None,
         );
-        first_sinks.add_best_effort_with_retry(
-            "synthetic",
-            Box::new(first_remote),
-            retry_config(3, 1),
-        );
         first_sinks.enable_persistent_replay_with_capacity(
             outbox_path.clone(),
             vec!["remote".to_string()],
             capacity_limits(1, u64::MAX),
         );
 
-        let (second_remote, _) = ScriptedDurableSink::new("remote", [ScriptedOutcome::Success]);
         let mut second_sinks = SinkSet::new();
         second_sinks.add_canonical_first_write_path_with_rotation(
             "jsonl",
@@ -2262,11 +2257,6 @@ mod tests {
             )),
             log_path.clone(),
             None,
-        );
-        second_sinks.add_best_effort_with_retry(
-            "synthetic",
-            Box::new(second_remote),
-            retry_config(3, 1),
         );
         second_sinks.enable_persistent_replay_with_capacity(
             outbox_path.clone(),
@@ -2291,13 +2281,21 @@ mod tests {
             second_handle.join().expect("second admission thread"),
         ];
 
-        assert_eq!(results.iter().filter(|result| result.0).count(), 1);
+        assert_eq!(
+            results.iter().filter(|result| result.0).count(),
+            1,
+            "admission results: {results:?}"
+        );
         let loser = results
             .iter()
             .find(|result| !result.0)
             .expect("one admission must lose");
-        assert_eq!(loser.1, Some(DeliveryErrorClass::DurableStorage));
-        assert!(!loser.2.is_empty());
+        assert_eq!(
+            loser.1,
+            Some(DeliveryErrorClass::DurableStorage),
+            "admission results: {results:?}"
+        );
+        assert!(!loser.2.is_empty(), "admission results: {results:?}");
 
         let bytes = fs::read(&log_path).expect("canonical JSONL after contention");
         assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
