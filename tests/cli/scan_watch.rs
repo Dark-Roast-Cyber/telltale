@@ -15,8 +15,13 @@ fn assert_source_processing_accounting(summary: &Value) {
         source_processing["parse_success_source_count"]
             .as_u64()
             .unwrap()
-            + source_processing["empty_source_count"].as_u64().unwrap()
             + source_processing["parse_error_source_count"]
+                .as_u64()
+                .unwrap()
+    );
+    assert!(
+        source_processing["empty_source_count"].as_u64().unwrap()
+            <= source_processing["parse_success_source_count"]
                 .as_u64()
                 .unwrap()
     );

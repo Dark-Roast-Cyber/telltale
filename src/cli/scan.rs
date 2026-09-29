@@ -731,6 +731,7 @@ fn source_processing_accounting(
         match &result.accounting {
             Some(source) => {
                 accounting.parse_success_source_count += 1;
+                let prior_record_count = accounting.parsed_record_count;
                 for counts in source
                     .sessions
                     .iter()
@@ -758,6 +759,9 @@ fn source_processing_accounting(
                             .checked_add(count)
                             .ok_or(RiskAccountingError::Overflow)?;
                     }
+                }
+                if accounting.parsed_record_count == prior_record_count {
+                    accounting.empty_source_count += 1;
                 }
             }
             None => accounting.parse_error_source_count += 1,
@@ -1407,7 +1411,9 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use telltale_sources::acquisition::AcquisitionError;
+    use telltale_sources::acquisition::{
+        AcquisitionError, AcquisitionProgress, RecordCounts, SessionAccounting, SourceAccounting,
+    };
 
     use super::discovery::ProjectConfigurationAccounting;
     use super::*;
@@ -1762,6 +1768,87 @@ mod tests {
     }
 
     #[test]
+    fn source_processing_counts_empty_successes_across_sessions_and_unscoped_records() {
+        use telltale_schema::observation::CorrelationId;
+
+        let result = |accounting: Option<SourceAccounting>| canonical::CanonicalProcessingResult {
+            events: vec![],
+            status: if accounting.is_some() {
+                SourceProcessingStatus::Succeeded
+            } else {
+                SourceProcessingStatus::Failed
+            },
+            progress: AcquisitionProgress::None,
+            completion: None,
+            accounting,
+            baseline_replacement: BaselineReplacement::NoReplacement,
+            policy_accounting: None,
+        };
+        let mut nonempty = SourceAccounting::default();
+        nonempty.sessions.push(SessionAccounting {
+            session_id: CorrelationId::source_reported("synthetic-session").unwrap(),
+            metadata: Default::default(),
+            counts: Default::default(),
+        });
+        nonempty.sessions[0].counts.record_counts = RecordCounts {
+            user_message: 1,
+            tool_call: 2,
+            ..Default::default()
+        };
+        nonempty.unscoped.record_counts = RecordCounts {
+            other: 3,
+            ..Default::default()
+        };
+        for (source, successes, empties, errors, records) in [
+            (Some(SourceAccounting::default()), 1, 1, 0, 0),
+            (Some(nonempty.clone()), 1, 0, 0, 6),
+            (None, 0, 0, 1, 0),
+        ] {
+            let counts = source_processing_accounting(&[result(source)]).unwrap();
+            assert_eq!(counts.selected_source_count, 1);
+            assert_eq!(counts.parse_success_source_count, successes);
+            assert_eq!(counts.empty_source_count, empties);
+            assert_eq!(counts.parse_error_source_count, errors);
+            assert_eq!(counts.parsed_record_count, records);
+        }
+
+        let counts = source_processing_accounting(&[
+            result(Some(SourceAccounting::default())),
+            result(Some(nonempty)),
+            result(None),
+        ])
+        .unwrap();
+        assert_eq!(counts.selected_source_count, 3);
+        assert_eq!(counts.parse_success_source_count, 2);
+        assert_eq!(counts.empty_source_count, 1);
+        assert_eq!(counts.parse_error_source_count, 1);
+        assert_eq!(counts.parsed_record_count, 6);
+        assert_eq!(counts.record_kind_counts["user_message"], 1);
+        assert_eq!(counts.record_kind_counts["tool_call"], 2);
+        assert_eq!(counts.record_kind_counts["other"], 3);
+        let flow = DetectionFlowAccounting {
+            effective_detection_candidate_count: 0,
+            matched_rule_id_count: 0,
+            allowlist_marked_detection_count: 0,
+            state_deduplicated_detection_count: 0,
+            emitted_detection_count: 0,
+            policy_match_accounting: PolicyMatchAccountingState::NotApplicable,
+        };
+        assert_eq!(
+            warning_codes(&diagnostic_warnings(
+                &test_discovery_accounting(),
+                &counts,
+                &flow,
+                18
+            )),
+            vec![
+                "source_parse_error_observed",
+                "no_effective_detection_candidates"
+            ]
+        );
+    }
+
+    #[test]
     fn policy_accounting_compile_failure_is_bounded_and_private() {
         let state = compute_policy_match_accounting(true, false, &[]);
         let flow = DetectionFlowAccounting {
@@ -1806,7 +1893,7 @@ mod tests {
 
         let empty_sources = SourceProcessingAccounting {
             selected_source_count: 2,
-            parse_success_source_count: 0,
+            parse_success_source_count: 2,
             empty_source_count: 2,
             parse_error_source_count: 0,
             parsed_record_count: 0,
@@ -1814,10 +1901,7 @@ mod tests {
         };
         assert_eq!(
             warning_codes(&diagnostic_warnings(&discovery, &empty_sources, &flow, 18)),
-            vec![
-                "selected_sources_produced_no_records",
-                "all_selected_sources_parse_failed_or_empty"
-            ]
+            vec!["selected_sources_produced_no_records"]
         );
 
         let productive_sources = SourceProcessingAccounting {
