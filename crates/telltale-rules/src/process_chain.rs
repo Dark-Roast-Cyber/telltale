@@ -68,6 +68,10 @@ pub enum ProcessChainError {
         score: u64,
     },
     EmptySequence(String),
+    InvalidCorrelationWindow {
+        rule_id: String,
+        window_seconds: u64,
+    },
 }
 
 impl std::fmt::Display for ProcessChainError {
@@ -120,6 +124,14 @@ impl std::fmt::Display for ProcessChainError {
             Self::EmptySequence(id) => {
                 write!(formatter, "correlation {id} declares no sequence steps")
             }
+            Self::InvalidCorrelationWindow {
+                rule_id,
+                window_seconds,
+            } => write!(
+                formatter,
+                "correlation {rule_id} window_seconds {window_seconds} exceeds {}",
+                i64::MAX
+            ),
         }
     }
 }
@@ -550,6 +562,12 @@ fn compile_pack(pack: ProcessChainPack) -> Result<CompiledProcessChainRules, Pro
         validate_score_band(&definition.id, &definition.severity, definition.score)?;
         if definition.sequence.is_empty() {
             return Err(ProcessChainError::EmptySequence(definition.id.clone()));
+        }
+        if definition.window_seconds > i64::MAX as u64 {
+            return Err(ProcessChainError::InvalidCorrelationWindow {
+                rule_id: definition.id,
+                window_seconds: definition.window_seconds,
+            });
         }
         correlations.push(CompiledCorrelationRule {
             steps: definition
@@ -1084,8 +1102,8 @@ fn apply_context(
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessChainContext, ProcessObservation, ProcessRef, load_default_process_chain_rules,
-        normalize_process_name,
+        ProcessChainContext, ProcessChainPack, ProcessObservation, ProcessRef, compile_pack,
+        load_default_process_chain_rules, load_process_chain_rules, normalize_process_name,
     };
 
     fn observation(parent: &str, child: &str, command_line: &str) -> ProcessObservation {
@@ -1104,6 +1122,63 @@ mod tests {
         assert!(rules.chain_rule_count() > 300);
         assert!(rules.standalone_rule_count() >= 13);
         assert_eq!(rules.correlations().len(), 6);
+        assert!(
+            rules
+                .correlations()
+                .iter()
+                .all(|rule| (600..=3600).contains(&rule.window_seconds))
+        );
+    }
+
+    #[test]
+    fn correlation_window_must_fit_session_duration() {
+        let document = |window| {
+            format!(
+                r#"
+version: 1
+description: synthetic window bounds
+defaults: {{ enabled: true, risk_entity: host, suppression_window_seconds: 3600 }}
+categories:
+  discovery: {{ detection_class: security_detection, analytic_intent: alert }}
+correlations:
+  - id: procchain.correlation.window_bound
+    title: window bound
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: high
+    reason: synthetic
+    window_seconds: {window}
+    entity: host
+    sequence: [{{ any_category: [discovery] }}]
+"#
+            )
+        };
+
+        for window in [0, i64::MAX as u64] {
+            let yaml = document(window);
+            let loaded = load_process_chain_rules(&yaml).expect("representable YAML window");
+            assert_eq!(loaded.correlations()[0].window_seconds, window);
+            let pack: ProcessChainPack = serde_yaml::from_str(&yaml).unwrap();
+            let compiled = compile_pack(pack).expect("representable typed pack window");
+            assert_eq!(compiled.correlations()[0].window_seconds, window);
+        }
+
+        let yaml = document(u64::MAX);
+        let error = load_process_chain_rules(&yaml).unwrap_err().to_string();
+        assert!(
+            error.contains("procchain.correlation.window_bound"),
+            "{error}"
+        );
+        assert!(error.contains("window_seconds"), "{error}");
+        assert!(error.contains("9223372036854775807"), "{error}");
+        let pack: ProcessChainPack = serde_yaml::from_str(&yaml).unwrap();
+        let error = compile_pack(pack).unwrap_err().to_string();
+        assert!(
+            error.contains("procchain.correlation.window_bound"),
+            "{error}"
+        );
+        assert!(error.contains("window_seconds"), "{error}");
     }
 
     #[test]

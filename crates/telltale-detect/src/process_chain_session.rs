@@ -403,6 +403,62 @@ mod tests {
     }
 
     #[test]
+    fn zero_window_matches_ordered_equal_timestamps_only() {
+        let yaml = r#"
+version: 1
+description: synthetic zero window
+defaults: { enabled: true, risk_entity: host, suppression_window_seconds: 3600 }
+categories:
+  discovery: { detection_class: security_detection, analytic_intent: alert }
+correlations:
+  - { id: procchain.correlation.zero, title: zero, category: discovery, severity: medium, score: 45, confidence: high, reason: synthetic, window_seconds: 0, entity: host, sequence: [{ any_rule_id: [rule.first] }, { any_rule_id: [rule.second] }] }
+"#;
+        let rules = load_process_chain_rules(yaml).unwrap();
+        let first = candidate(
+            0,
+            "rule.first",
+            "discovery",
+            "first",
+            "first",
+            Some("session"),
+            Some("2026-01-01T00:00:00Z"),
+        );
+        let second = candidate(
+            1,
+            "rule.second",
+            "discovery",
+            "second",
+            "second",
+            Some("session"),
+            Some("2026-01-01T00:00:00Z"),
+        );
+        let config = ProcessChainSessionConfig::default();
+        let result =
+            evaluate_process_chain_session(&[first.clone(), second.clone()], &rules, &config);
+        assert_eq!(result.correlations.len(), 1);
+        assert_eq!(result.correlations[0].candidate_indexes, [0, 1]);
+        assert!(
+            evaluate_process_chain_session(&[second.clone(), first.clone()], &rules, &config)
+                .correlations
+                .is_empty()
+        );
+        let later = candidate(
+            1,
+            "rule.second",
+            "discovery",
+            "second",
+            "second",
+            Some("session"),
+            Some("2026-01-01T00:00:01Z"),
+        );
+        assert!(
+            evaluate_process_chain_session(&[first, later], &rules, &config)
+                .correlations
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn suppression_groups_by_rule_entity_and_matcher_key() {
         let candidates = vec![
             candidate(
