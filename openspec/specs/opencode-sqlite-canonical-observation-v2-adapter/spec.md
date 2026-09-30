@@ -25,15 +25,42 @@ compatibility.
 ### Requirement: SQLite source contract remains bounded
 
 The adapter MUST retain the existing five-second busy timeout, lock mapping,
-uncursored message query, selected `tool`/`text` part filter, limit, cursor
-predicate and inner/outer ordering. It MUST NOT
-read the event table or broaden the selected part set as part of this change.
+uncursored message query, selected `tool`/`text` part filter, cursor predicate
+and inner/outer ordering. It MUST open existing SQLite databases read-only
+without creating a missing database. Uncursored parts MUST retain newest-L
+sampling, where L is the supplied part limit clamped to at least one.
+Incremental parts with a supplied minimum timestamp MUST return the complete
+selected result when it contains at most L rows, or fail the entire acquisition
+when it contains more than L selected rows. Checked L+1 lookahead MUST use that
+same selected SQL result; a truncated successful incremental result MUST NOT be
+returned. The adapter MUST NOT read the event table or broaden the selected part
+set. This bounds selected part rows, not whole-cycle CPU, bytes, or message count,
+and does not guarantee eventual backlog coverage.
 
 #### Scenario: Incremental part extraction remains stable
 
-- **WHEN** a part cursor and limit are supplied
+- **WHEN** a part cursor and limit are supplied and the selected result contains
+  L or fewer rows
 - **THEN** only the existing selected rows are projected and
   `sqlite_part_max_time_updated` is calculated from those rows exactly as before
+
+#### Scenario: Incremental part extraction exceeds the budget
+
+- **WHEN** the selected incremental result contains more than L rows, or the L+1
+  limit cannot be represented
+- **THEN** acquisition fails without observations, accounting, or checkpointable
+  progress, even when the first L rows could have been mapped
+
+#### Scenario: Bootstrap retains bounded sampling
+
+- **WHEN** no minimum timestamp is supplied and more than L matching parts exist
+- **THEN** the newest L are selected without incremental overflow failure; a
+  subsequent incremental overlap poll can fail if it selects more than L parts
+
+#### Scenario: Missing database is not created
+
+- **WHEN** acquisition is requested for an absent SQLite database
+- **THEN** source opening fails without creating a database
 
 ### Requirement: Native identity and source session are truthful
 
@@ -66,13 +93,21 @@ a message; the message row MUST serve as context and MUST NOT create a duplicate
 message envelope observation. Text parts with truthful user/assistant context
 MUST map to `MessageObserved`. Message-only rows MAY map known role/content or
 independent tool facts; unknown future message variants MUST fail closed or be
-skipped without arbitrary canonical meaning.
+skipped without arbitrary canonical meaning. Present serialized message data
+MUST be a string encoding a JSON object; malformed or non-object data MUST fail
+acquisition source-atomically. A valid metadata-only JSON object MUST remain
+supported.
 
 #### Scenario: Joined text is one message observation
 
 - **WHEN** a selected text part joins an assistant message
 - **THEN** one Message observation carries the assistant role and text content,
   with no separate envelope duplicate
+
+#### Scenario: Invalid serialized message data
+
+- **WHEN** any read message row has present malformed or non-object serialized data
+- **THEN** acquisition fails without a successful prefix, accounting, or progress
 
 ### Requirement: Direct OpenCode tool lifecycle is preserved
 
@@ -170,6 +205,11 @@ the selected extraction's optional part `time_updated` high-water coordinate.
 The progress coordinate MUST NOT enter canonical evidence, provenance,
 observation identity, or occurrence time, and the acquisition boundary MUST NOT
 persist cursor or scanner state.
+Failed extraction MUST NOT return observations, accounting, or progress. The
+scanner MUST stage a successful incremental high-water at no less than the
+previously stored high-water and MUST NOT stage cursor or baseline replacement
+on source failure. Dry-run and backfill MUST NOT stage a cursor. Required output
+persistence MUST still gate scanner-state installation.
 
 #### Scenario: Bounded acquisition returns matching progress
 
@@ -188,9 +228,9 @@ persist cursor or scanner state.
   error that does not expose the path, source payload, session ID, call ID,
   arguments, or result
 
-#### Scenario: Authoritative acquisition remains pre-cutover
+#### Scenario: Successful incremental read does not regress cursor
 
-- **WHEN** the authoritative public acquisition API is available before the
-  coordinated production runtime cutover
-- **THEN** scan, watch, detection, embedding, Event 3.0, Event4, and durable scan
-  state behavior remain unchanged
+- **WHEN** selected parts on a successful incremental scanner poll are older than
+  the stored timestamp or no parts are selected
+- **THEN** scanner installation retains the prior high-water or stages no new
+  candidate, respectively

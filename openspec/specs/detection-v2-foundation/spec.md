@@ -180,6 +180,14 @@ integer round-trips exactly to a finite `f64`; otherwise it is
 
 ### Requirement: Rule v1 compatibility
 
+Every RuleSet document MUST declare version 1 to load, merge, or compile. Direct
+document loading, library merge, CLI tiered pack resolution, and direct RuleSet
+compilation MUST reject other versions before source documents are merged or
+enabled content is filtered. The error MUST explicitly state that only version 1
+is supported; shadowed or disabled definitions MUST NOT bypass this check.
+Supported version 1 MUST retain existing tier, override, provenance, rule
+identity, matcher, and scoring behavior.
+
 `telltale-rules` MUST expose only an effective read-only Rule v1 compatibility
 view containing compiled target/regex pairs and optional target exclusions,
 exact IDs, effective metadata,
@@ -229,6 +237,19 @@ DetectorResults, Signals, Findings, or native v2 detector kinds.
 - **THEN** each active rule becomes an observation-match detector with its exact
   ID, Rule v1 version, score, severity, class mapping, and ATLAS tags, while
   modifiers remain plans
+
+#### Scenario: Unsupported documents cannot become Rule v1
+
+- **WHEN** a document declares version 0 or 2 but otherwise parses against the
+  Rule v1 shape
+- **THEN** loading, merging, or direct compilation fails instead of returning a
+  merged version-1 set
+
+#### Scenario: Shadowed and disabled content is still checked
+
+- **WHEN** a tiered pack declares an unsupported version and its definitions would
+  be shadowed by another tier or filtered out as disabled
+- **THEN** pack resolution fails before tier precedence or enabled-content filters
 
 #### Scenario: Unmappable class fails closed
 

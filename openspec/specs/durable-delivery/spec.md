@@ -290,6 +290,33 @@ sink/application rejection, authentication/authorization blocked, payload or
 collision, durable-storage failure, and unknown/internal failure, while
 remaining extensible for later protocols.
 
+Both direct and durable Splunk HEC sends MUST require HTTP 2xx containing a JSON
+object with integer `code: 0` before reporting success or acknowledging a row.
+Codes 8–9, 17–20, and 23–27 MUST be `SinkApplicationRetryable`; codes 1–4 and
+21–22 MUST be `AuthenticationBlocked`; codes 5–7 and 10–16 MUST be permanent
+`SinkApplicationRejected`. Unknown codes or missing, malformed, or noninteger
+codes MUST be `SinkResponseBlocked`, retaining durable rows blocked for operator
+action rather than acknowledging or dead-lettering them as event poison.
+Response bodies and parser diagnostics MUST NOT appear in delivery diagnostics.
+Direct retries MUST share one configured total attempt budget across application,
+HTTP, and transport failures. Durable sends MUST perform one transport attempt
+per selected row per dispatch and retain existing persistent retry limits.
+Non-2xx classification MUST remain unchanged. HEC request acceptance MUST NOT be
+described as indexer acknowledgment.
+
+Outbox persistence MUST read existing supported classes and MUST NOT silently
+convert, drop, or reset unknown classes. Persisted `sink_application_retryable`
+and `sink_response_blocked` classes MUST have a documented rollback boundary:
+older binaries cannot decode them despite an unchanged SQLite schema version.
+Rollback MUST require a verified coordinated pre-upgrade snapshot taken with
+writers and schedules stopped. It MUST quarantine post-upgrade data and restore
+the matching old binary, configuration, scanner state, JSONL and rotations, and
+outbox with sidecars together. Post-snapshot events MUST remain available for
+explicit reconciliation; snapshot restoration alone does not deliver them and
+replay may duplicate already accepted events. Without that snapshot, guidance
+MUST require keeping the compatible binary and repairing forward, not a
+binary-only downgrade or in-place class conversion, row deletion, or queue reset.
+
 #### Scenario: Network failure is retryable
 
 - **WHEN** no response is obtained from an otherwise configured endpoint
@@ -315,6 +342,48 @@ remaining extensible for later protocols.
   immediate next-attempt time, its attempt and error history is preserved, and
   rows for other sinks or states are unchanged; the command reports the number
   of released rows
+
+#### Scenario: Successful HEC response
+
+- **WHEN** either HEC path receives HTTP 200 with integer code zero
+- **THEN** the request succeeds and durable dispatch may acknowledge its row
+
+#### Scenario: HEC rejection despite HTTP success
+
+- **WHEN** HEC returns HTTP 200 with a known nonzero code
+- **THEN** delivery fails with the specified retryable, blocked, or permanent
+  classification and a bounded diagnostic excluding response text
+
+#### Scenario: Ambiguous HEC response
+
+- **WHEN** a 2xx response has an unknown code or lacks a valid integer code
+- **THEN** delivery fails and durable dispatch retains the row blocked for
+  explicit operator release
+
+#### Scenario: HEC retry budget is not multiplied
+
+- **WHEN** transient HEC errors alternate with transport or HTTP retryable errors
+- **THEN** direct sends use at most the configured total attempts, while durable
+  sends perform one attempt per selected row per scheduler dispatch
+
+#### Scenario: Retryable rejection precedes a transport failure
+
+- **WHEN** a direct send observes a retryable HTTP or HEC rejection and later
+  exhausts its budget without receiving another response
+- **THEN** it preserves the last observed retryable rejection classification and
+  body-free diagnostic with the total attempt count
+
+#### Scenario: Older binary cannot decode new delivery classifications
+
+- **WHEN** rollback is needed after the new classifications were stored
+- **THEN** guidance requires restoring the coordinated pre-upgrade snapshot with
+  its old binary, not a binary-only downgrade or in-place class conversion
+
+#### Scenario: No verified pre-upgrade snapshot exists
+
+- **WHEN** downgrade is requested without the coordinated snapshot
+- **THEN** guidance requires retaining the compatible binary and repairing
+  forward rather than resetting or dropping delivery rows
 
 ### Requirement: Poison events do not wedge delivery
 
@@ -345,6 +414,18 @@ rows SHALL be attempted without sleeping or hot-looping: successfully
 acknowledged rows release pending capacity, while blocked and retry-delayed rows
 continue to consume it. Cooperating durable writers MUST therefore not both
 admit against the same observed headroom.
+
+The same private admission sidecar MUST serialize standalone delivery selection,
+transport attempts, and result commits, including dispatchers with distinct
+scanner-state paths. Standalone dispatch MUST acquire ownership after
+path/platform validation and before opening the outbox, retain it throughout the
+drain, close the outbox before final lock verification, and release by guard
+lifetime. Admission predrain MUST reuse its already-held owner without recursive
+acquisition. Contention MUST fail immediately with structured `DurableStorage`
+and zero transport attempts; the losing invocation MUST NOT send, update delivery
+state, or prune generations. This does not roll back previously accepted
+journal/outbox work or scanner progress. A subsequent invocation MAY retry after
+owner release. At-least-once crash/uncertain-success duplicates remain permitted.
 
 #### Scenario: Pending queue reaches its limit
 
@@ -379,6 +460,26 @@ admit against the same observed headroom.
 - **THEN** the sidecar serialization permits at most one new batch to pass the
   capacity gate, and JSONL, outbox rows, and the ingest cursor remain mutually
   consistent
+
+#### Scenario: Independent state paths cannot regress a committed ACK
+
+- **WHEN** cooperating standalone dispatchers share a JSONL/outbox pair but hold
+  different scanner-state locks and one is inside a transport attempt
+- **THEN** the second fails ownership acquisition before selection or send and
+  cannot overwrite the first dispatcher's committed ACK with a stale failure
+
+#### Scenario: Admission and standalone dispatch share ownership
+
+- **WHEN** admission predrain overlaps standalone dispatch in either order
+- **THEN** only the owner may select, send, and commit; the losing admission also
+  rejects before prospective append or cursor movement, without recursive locking
+
+#### Scenario: Unavailable ownership preserves replay and pruning state
+
+- **WHEN** ownership acquisition encounters contention or an unsafe sidecar
+- **THEN** dispatch reports structured storage failure with zero attempts, leaves
+  delivery history and cursor unchanged, and does not prune eligible rotations
+- **AND** after owner release, an uncontended invocation can dispatch normally
 
 ### Requirement: Durable alert follow-up is non-recursive
 

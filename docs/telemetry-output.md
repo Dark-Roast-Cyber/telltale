@@ -438,8 +438,13 @@ outbox sidecar lock. A ready-work drain runs before the capacity gate, so an
 acknowledged pending row can release capacity without a restart; blocked and
 retry-delayed rows remain capacity-consuming until their normal state transition
 or an explicit blocked-delivery release. The admission lock covers recovery,
-capacity inspection, JSONL append, and reconciliation, but it is not a
-distributed lock service.
+ready-work selection, transport attempts and result commits, capacity inspection,
+JSONL append, and reconciliation. Standalone dispatch uses the same owner across
+selection, transport, and result commit, even with distinct scanner-state paths;
+admission predrain reuses its held owner without recursive locking. Contention
+fails immediately with structured `DurableStorage`: the losing invocation does
+not send, update delivery state, or prune generations. This is not a distributed
+lock service and does not prevent at-least-once crash replay duplicates.
 
 Persistent durable delivery currently has one explicit platform boundary:
 Windows durable private storage is rejected fail-closed before outbox or
