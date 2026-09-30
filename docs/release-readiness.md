@@ -133,6 +133,26 @@ qualification is blocked on an available host, and no clean-host or stable
 promotion gate is marked complete by this result. RC1 evidence applies only to
 `e2386cb53454a8384449ea0729f0e3b71072006c`, not subsequent substantive changes.
 
+## 0.7 development-commit local host test
+
+On 2026-09-30 a reversible local host test exercised the exact development
+commit `0f4350085c5c611f980b910f1b800682a8ad942c` (which includes the
+post-RC1 hardening, OpenCode incremental recovery, and recovery test
+hardening). A synthetic-only one-shot run and a genuine timer-triggered run
+both passed on Fedora 44 x86_64 with systemd 259.9: six Event3-valid records
+(health, activity, and expected detection per run), deterministic producer
+provenance, candidate version identity, `--no-local-config`, and zero remote
+sinks. The original `v0.6.0` installation, configuration, state, and units
+were byte-verified and restored, with the original timer resumed only after
+integrity verification. Evidence is retained privately.
+
+This was a manual reversible installation, not installer qualification: the
+local installer mode rejects RC-versioned development builds, so the supported
+installer path was not exercised. It is not published-artifact, clean-host,
+Windows, or live-source qualification, does not satisfy any Issue #66 gate, and
+applies only to that development commit. Splunk/reporting catch-up after the
+test window was not assessed.
+
 ## Historical RC Candidate Handoff
 
 The `v0.5.0-rc.7` handoff completed before stable publication: the reviewed commit was tagged and its
