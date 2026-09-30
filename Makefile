@@ -26,6 +26,13 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect 
 
 .PHONY: telltale-console-check
 .PHONY: version-consistency-check
+.PHONY: session-investigation-check
+
+## Check read-only session investigation using only synthetic source fixtures
+session-investigation-check:
+	cargo test --locked -p telltale-core investigation --lib
+	cargo test --locked -p telltale-sources acquisition --lib
+	git diff --check
 
 ## Show this help
 help:

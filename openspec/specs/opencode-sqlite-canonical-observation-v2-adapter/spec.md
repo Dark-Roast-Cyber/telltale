@@ -5,7 +5,10 @@ This specification covers the current OpenCode `opencode.sqlite` adapter.
 One SQLite-native interpretation feeds the authoritative Canonical Observation
 v2 acquisition API used by the production source runtime. Older OpenCode source
 layouts and source-backed record/export compatibility are not part of this
-contract. Event 3.0 remains the external projection.
+contract. This production adapter is not an investigation provider: on-demand
+OpenCode investigation is deferred and MUST fail before source I/O or native
+invocation, as specified by session-investigation. Event 3.0 remains the external
+projection.
 ## Requirements
 ### Requirement: One OpenCode SQLite-native interpretation
 

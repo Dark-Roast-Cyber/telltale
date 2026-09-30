@@ -67,10 +67,21 @@ pub(crate) struct CodexNativeRecord {
     pub(crate) contribution_strings: Vec<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn extract_codex_native_records(
     source: &Source,
 ) -> Result<Vec<CodexNativeRecord>, SourceReadError> {
-    let values = read_jsonl_values(source)?;
+    extract_codex_native_records_with_limits(source, None)
+}
+
+pub(crate) fn extract_codex_native_records_with_limits(
+    source: &Source,
+    limits: Option<crate::acquisition::DirectReadLimits>,
+) -> Result<Vec<CodexNativeRecord>, SourceReadError> {
+    let values = match limits {
+        Some(limits) => crate::source_read::read_jsonl_values_with_limits(source, Some(limits))?,
+        None => read_jsonl_values(source)?,
+    };
     let mut records = Vec::with_capacity(values.len());
     let mut inherited_session_id = None;
 

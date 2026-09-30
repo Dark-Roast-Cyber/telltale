@@ -30,6 +30,7 @@ telltale-detect.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+libc = "0.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json.workspace = true
 tempfile = "3.14"

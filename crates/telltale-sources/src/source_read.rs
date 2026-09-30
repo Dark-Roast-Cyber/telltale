@@ -6,6 +6,7 @@
 use serde_json::Value;
 use std::fmt;
 use std::fs;
+use std::io::Read;
 
 use telltale_schema::clients::ClientId;
 use telltale_schema::source::Source;
@@ -76,11 +77,103 @@ impl SourceReadError {
 }
 
 pub(crate) fn read_jsonl_values(source: &Source) -> Result<Vec<Value>, SourceReadError> {
+    read_jsonl_values_with_limits(source, None)
+}
+
+pub(crate) fn read_jsonl_values_with_limits(
+    source: &Source,
+    limits: Option<crate::acquisition::DirectReadLimits>,
+) -> Result<Vec<Value>, SourceReadError> {
+    if let Some(limits) = limits {
+        let bytes = bounded_file_bytes(&source.path, limits.bytes)
+            .map_err(|_| std::io::Error::other("bounded source read failed"))?;
+        check_json_depth(&bytes, limits.json_depth)
+            .map_err(|_| std::io::Error::other("source JSON depth exceeded"))?;
+        let mut values = Vec::new();
+        for line in bytes
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+        {
+            if values.len() == limits.records {
+                return Err(std::io::Error::other("source record limit exceeded").into());
+            }
+            values.push(serde_json::from_slice(line)?);
+        }
+        return Ok(values);
+    }
     let raw = fs::read_to_string(&source.path)?;
     raw.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str::<Value>(line).map_err(SourceReadError::from))
         .collect()
+}
+
+// Validate the opened object, not a pathname precheck. Nonblocking open avoids
+// hanging on a replacement FIFO; no-follow rejects symlinks at the final component.
+pub(crate) fn bounded_file_bytes(path: &std::path::Path, cap: usize) -> Result<Vec<u8>, ()> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(|_| ())?;
+    let metadata = file.metadata().map_err(|_| ())?;
+    if !metadata.is_file() || metadata.len() > cap as u64 {
+        return Err(());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err(());
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(cap as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() > cap {
+        return Err(());
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn check_json_depth(bytes: &[u8], cap: usize) -> Result<(), ()> {
+    let (mut depth, mut string, mut escape) = (0usize, false, false);
+    for &b in bytes {
+        if string {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                string = false;
+            }
+        } else {
+            match b {
+                b'"' => string = true,
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > cap {
+                        return Err(());
+                    }
+                }
+                b'}' | b']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Nested string lookup used by adapters that store timestamps and labels inside

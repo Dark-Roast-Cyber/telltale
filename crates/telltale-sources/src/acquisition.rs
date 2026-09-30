@@ -14,11 +14,11 @@ use telltale_schema::source::Source;
 use crate::sources::claude::canonical::{
     ClaudeCanonicalError, ClaudeCanonicalOptions, project_claude_native_records,
 };
-use crate::sources::claude::native::extract_claude_native_records;
+use crate::sources::claude::native::extract_claude_native_records_with_limits;
 use crate::sources::codex::canonical::{
     CodexCanonicalError, CodexCanonicalOptions, project_codex_native_records,
 };
-use crate::sources::codex::native::extract_codex_native_records;
+use crate::sources::codex::native::extract_codex_native_records_with_limits;
 use crate::sources::copilot::canonical::{
     CopilotCanonicalError, CopilotCanonicalOptions, project_copilot_native_events,
 };
@@ -26,7 +26,7 @@ use crate::sources::copilot::native::extract_copilot_native_events;
 use crate::sources::openclaw::canonical::{
     OpenClawCanonicalError, OpenClawCanonicalOptions, project_openclaw_native_records,
 };
-use crate::sources::openclaw::native::extract_openclaw_native_records;
+use crate::sources::openclaw::native::extract_openclaw_native_records_with_limits;
 use crate::sources::opencode::canonical::{
     OpenCodeCanonicalError, project_opencode_native_records,
 };
@@ -34,7 +34,12 @@ use crate::sources::opencode::native::extract_sqlite_native_source;
 use crate::sources::qwen::canonical::{
     QwenCanonicalError, QwenCanonicalOptions, project_qwen_native_records,
 };
-use crate::sources::qwen::native::extract_qwen_native_records;
+use crate::sources::qwen::native::extract_qwen_native_records_with_limits;
+
+#[cfg(test)]
+use crate::sources::{
+    openclaw::native::extract_openclaw_native_records, qwen::native::extract_qwen_native_records,
+};
 
 mod accounting;
 mod contributions;
@@ -120,6 +125,58 @@ pub fn acquire_source(
     source: &Source,
     options: AcquisitionOptions,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
+    acquire_source_impl(source, options, None)
+}
+
+/// Finite direct JSONL read controls for on-demand investigation. These do not
+/// alter production scanning or enable retired source identities.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectReadLimits {
+    pub bytes: usize,
+    pub records: usize,
+    pub json_depth: usize,
+}
+
+impl Default for DirectReadLimits {
+    fn default() -> Self {
+        Self {
+            bytes: 8 * 1024 * 1024,
+            records: 8192,
+            json_depth: 64,
+        }
+    }
+}
+
+impl DirectReadLimits {
+    pub fn is_valid(self) -> bool {
+        let max = Self::default();
+        self.bytes > 0
+            && self.bytes <= max.bytes
+            && self.records > 0
+            && self.records <= max.records
+            && self.json_depth > 0
+            && self.json_depth <= max.json_depth
+    }
+}
+
+/// Same authoritative dispatcher and native mapping, with a bounded direct-file
+/// reader. Non-JSONL identities fail before I/O; OpenCode investigation is deferred.
+pub fn acquire_source_bounded(
+    source: &Source,
+    options: AcquisitionOptions,
+    limits: DirectReadLimits,
+) -> Result<AcquisitionBatch, AcquisitionError> {
+    if !limits.is_valid() {
+        return Err(AcquisitionError::SourceRead);
+    }
+    acquire_source_impl(source, options, Some(limits))
+}
+
+fn acquire_source_impl(
+    source: &Source,
+    options: AcquisitionOptions,
+    limits: Option<DirectReadLimits>,
+) -> Result<AcquisitionBatch, AcquisitionError> {
     let expected_kind = match (source.client, source.source_id.as_str()) {
         (ClientId::Claude, "claude.projects")
         | (ClientId::Codex, "codex.sessions")
@@ -127,8 +184,13 @@ pub fn acquire_source(
         | (ClientId::Qwen, "qwen.projects") => SourceKind::Jsonl,
         (ClientId::Codex, "codex.archived_sessions") => SourceKind::ArchivedJsonl,
         (ClientId::Codex, "codex.headless_sessions") => SourceKind::HeadlessJsonl,
-        (ClientId::Copilot, "copilot.process_log") => SourceKind::CopilotProcessLog,
+        (ClientId::Copilot, "copilot.process_log") if limits.is_none() => {
+            SourceKind::CopilotProcessLog
+        }
         (ClientId::OpenCode, "opencode.sqlite") => {
+            if limits.is_some() {
+                return Err(AcquisitionError::UnsupportedSourceIdentity);
+            }
             return acquire_opencode_sqlite(source, options, OpenCodeSqliteReadOptions::default());
         }
         _ => return Err(AcquisitionError::UnsupportedSourceIdentity),
@@ -140,8 +202,8 @@ pub fn acquire_source(
     let mut accounting = AccountingBuilder::default();
     let observations = match source.client {
         ClientId::Claude => {
-            let records =
-                extract_claude_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
+            let records = extract_claude_native_records_with_limits(source, limits)
+                .map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -161,8 +223,8 @@ pub fn acquire_source(
             .map_err(map_claude_error)?
         }
         ClientId::Codex => {
-            let records =
-                extract_codex_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
+            let records = extract_codex_native_records_with_limits(source, limits)
+                .map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -179,7 +241,7 @@ pub fn acquire_source(
                 .map_err(map_codex_error)?
         }
         ClientId::OpenClaw => {
-            let records = extract_openclaw_native_records(source)
+            let records = extract_openclaw_native_records_with_limits(source, limits)
                 .map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
                 let kind = record.accounting_kind();
@@ -200,8 +262,8 @@ pub fn acquire_source(
             .map_err(map_openclaw_error)?
         }
         ClientId::Qwen => {
-            let records =
-                extract_qwen_native_records(source).map_err(|_| AcquisitionError::SourceRead)?;
+            let records = extract_qwen_native_records_with_limits(source, limits)
+                .map_err(|_| AcquisitionError::SourceRead)?;
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -276,6 +338,9 @@ pub fn acquire_source(
         }
         _ => unreachable!("exact acquisition identity was validated"),
     };
+    if limits.is_some_and(|limits| observations.len() > limits.records) {
+        return Err(AcquisitionError::SourceRead);
+    }
     Ok(AcquisitionBatch {
         observations,
         progress: AcquisitionProgress::None,

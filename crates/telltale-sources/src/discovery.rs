@@ -76,6 +76,108 @@ pub fn discover_sources(root: &Path) -> Result<Vec<Source>, DiscoveryError> {
     discover_sources_with_projects(root, &[])
 }
 
+/// Payload-free failure for finite on-demand discovery. An incomplete traversal
+/// cannot prove unique ownership and never returns a successful partial listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundedDiscoveryError;
+
+/// Discover one client's home/data sources using the existing registry and root
+/// resolution. Project-local process logs are outside session investigation.
+/// Limits count all visited entries, not merely matched files. Symlink roots and
+/// descendants are not followed. No session files or databases are opened.
+pub fn discover_sources_bounded(
+    root: &Path,
+    client: ClientId,
+    max_entries: usize,
+) -> Result<Vec<Source>, BoundedDiscoveryError> {
+    const MAX_DEPTH: usize = 32;
+    if max_entries == 0 || max_entries > 16384 {
+        return Err(BoundedDiscoveryError);
+    }
+    let mut remaining = max_entries;
+    let mut sources = Vec::new();
+    for def in supported_clients().iter().filter(|def| def.id == client) {
+        for source_def in def
+            .sources
+            .iter()
+            .filter(|def| def.root != PathRoot::ProjectLocal)
+        {
+            let search = source_search_root(root, *source_def);
+            match fs::symlink_metadata(&search) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(BoundedDiscoveryError),
+                Ok(meta) if meta.file_type().is_symlink() => return Err(BoundedDiscoveryError),
+                _ => {}
+            }
+            bounded_paths(
+                &search,
+                client,
+                *source_def,
+                &mut remaining,
+                MAX_DEPTH,
+                &mut sources,
+            )?;
+        }
+    }
+    sources.sort_by(|a, b| (&a.source_id, &a.path).cmp(&(&b.source_id, &b.path)));
+    Ok(sources)
+}
+
+fn bounded_paths(
+    path: &Path,
+    client: ClientId,
+    def: ClientSourceDef,
+    remaining: &mut usize,
+    depth: usize,
+    sources: &mut Vec<Source>,
+) -> Result<(), BoundedDiscoveryError> {
+    if *remaining == 0 {
+        return Err(BoundedDiscoveryError);
+    }
+    *remaining -= 1;
+    let metadata = fs::symlink_metadata(path).map_err(|_| BoundedDiscoveryError)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_file() {
+        let matched = match def.pattern {
+            SourcePattern::Extension(ext) => path.extension().is_some_and(|v| v == ext),
+            SourcePattern::ExactFile(name) => path.file_name().is_some_and(|v| v == name),
+            SourcePattern::FileNameContains(needle) => path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .is_some_and(|v| v.contains(needle)),
+        };
+        if matched {
+            sources.push(new_source(client, def, path.to_path_buf()));
+        }
+    } else if metadata.is_dir() {
+        if depth == 0 {
+            return Err(BoundedDiscoveryError);
+        }
+        // Do not let a walker collect a directory before the budget sees its
+        // entries. ReadDir streams one entry at a time; recursion holds at most
+        // MAX_DEPTH directory handles and a bounded path stack.
+        for entry in fs::read_dir(path).map_err(|_| BoundedDiscoveryError)? {
+            let entry = entry.map_err(|_| BoundedDiscoveryError)?;
+            if !def.recursive
+                && entry
+                    .file_type()
+                    .map_err(|_| BoundedDiscoveryError)?
+                    .is_dir()
+            {
+                if *remaining == 0 {
+                    return Err(BoundedDiscoveryError);
+                }
+                *remaining -= 1;
+                continue;
+            }
+            bounded_paths(&entry.path(), client, def, remaining, depth - 1, sources)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn discover_sources_best_effort(root: &Path) -> Vec<Source> {
     discover_sources_with_projects_best_effort(root, &[])
 }

@@ -14,9 +14,16 @@ println!("{} sources", sources.len());
 The public acquisition route is source discovery, native extraction, native
 accounting and progress, then source-owned canonical mapping. There is no
 parser registry and no source-backed conversion into `NormalizedRecord`.
-OpenCode is only `opencode.sqlite`. Its SQLite read options, busy timeout, part
-limit, and cursor overlap stay on that native path. There is no OpenCode
-investigation export helper.
+Production OpenCode remains only `opencode.sqlite`. Its SQLite read options,
+busy timeout, part limit, and cursor overlap stay on that native path.
+
+Opt-in investigation uses `acquisition::acquire_source_bounded` for the existing
+JSONL identities and the same source-owned Canonical Observation v2 mapping,
+without restoring a parser registry or source-backed normalized records.
+Bounded direct acquisition rejects OpenCode before I/O. There is no native
+export helper, spawning path, or export configuration: OpenCode investigation
+is deferred until a genuinely read-only capability exists. See the core crate's
+investigation contract for privacy, finite limits, and availability semantics.
 
 This package follows Telltale's pre-1.0 release and compatibility policy.
 

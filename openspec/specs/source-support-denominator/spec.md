@@ -68,6 +68,14 @@ batches or checkpointable progress.
 Scan, watch, and embedding MUST consume this boundary through the shared
 canonical runtime and Detection v2. Event4 MUST remain inactive.
 
+On-demand session investigation MAY lower finite direct JSONL read limits through
+the same dispatcher and native mapping. Bounded investigation acquisition MUST
+reject `opencode.sqlite` before I/O: native export performs store initialization,
+checkpointing, and migrations, so its read-only capability remains deferred. It
+MUST NOT invoke native OpenCode, interpret SQLite/WAL/SHM for investigation,
+enable retired JSON identities, or produce source-backed normalized records.
+Production read controls and runtime behavior remain unchanged.
+
 No parallel cross-source canonical projection router, compatibility alias, or
 wrapper MAY remain. Roadmap steps 4 and 5 are complete.
 

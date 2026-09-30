@@ -24,6 +24,7 @@ pub mod assignment;
 /// Unstable cross-crate migration seam, not a supported embedding API.
 #[doc(hidden)]
 pub mod canonical_runtime;
+pub mod investigation;
 pub mod local_event_feed;
 pub mod provenance;
 
@@ -209,6 +210,9 @@ impl PipelineBuilder {
 
 #[cfg(test)]
 mod canonical_embedding_tests;
+
+#[cfg(test)]
+mod investigation_tests;
 
 #[cfg(test)]
 mod tests {

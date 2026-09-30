@@ -76,6 +76,116 @@ pub struct TimelineEvidenceSummary {
     pub hash: String,
 }
 
+/// Content-free investigation bridge from the authoritative native canonical
+/// path. Unlike transcript export, it never constructs evidence summaries (even
+/// redacted prose is record content). The existing exported timeline contract
+/// remains unchanged; empty evidence is intentional for this surface.
+pub fn build_content_free_canonical_timeline(
+    observations: &[telltale_schema::observation::CanonicalObservationV2],
+    client: &str,
+) -> Option<ExportedSessionTimeline> {
+    use telltale_schema::observation::{MessageRole, ObservationBody, ObservationStage};
+    let session = observations.first()?.session_id()?.value();
+    let mut entries = Vec::new();
+    for (index, observation) in observations.iter().enumerate() {
+        if observation.session_id()?.value() != session {
+            return None;
+        }
+        let (kind, tool_name, call_id) = match observation.body() {
+            ObservationBody::Message(message) => (
+                match message.role() {
+                    Some(MessageRole::User) => TimelineEntryKind::UserMessage,
+                    Some(MessageRole::Assistant) => TimelineEntryKind::AssistantMessage,
+                    _ => TimelineEntryKind::Other,
+                },
+                None,
+                None,
+            ),
+            ObservationBody::Tool(tool) => (
+                if observation.stage() == ObservationStage::ToolResultReturned {
+                    TimelineEntryKind::ToolResult
+                } else {
+                    TimelineEntryKind::ToolCall
+                },
+                tool.name().map(ToOwned::to_owned),
+                observation
+                    .correlation()
+                    .call_id()
+                    .map(|id| id.value().to_owned()),
+            ),
+            ObservationBody::Session(_) => (TimelineEntryKind::SessionMeta, None, None),
+            _ => (TimelineEntryKind::Other, None, None),
+        };
+        entries.push(TimelineEntry {
+            index,
+            kind,
+            session_id: session.to_owned(),
+            client: client.to_owned(),
+            timestamp: observation.occurred_at().map(|v| v.as_str().to_owned()),
+            tool_name,
+            call_id,
+            linked_entry_index: None,
+        });
+    }
+    // Only one call and one later result may link. Repeated lifecycle stages or
+    // reused call IDs are not guessed into pairs.
+    let mut counts = BTreeMap::<&str, (usize, usize)>::new();
+    for entry in &entries {
+        if let Some(id) = entry.call_id.as_deref() {
+            let count = counts.entry(id).or_default();
+            match entry.kind {
+                TimelineEntryKind::ToolCall => count.0 += 1,
+                TimelineEntryKind::ToolResult => count.1 += 1,
+                _ => {}
+            }
+        }
+    }
+    let ambiguous = counts
+        .into_iter()
+        .filter(|(_, v)| *v != (1, 1))
+        .map(|(k, _)| k.to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    link_tool_pairs(&mut entries);
+    for entry in &mut entries {
+        if entry
+            .call_id
+            .as_ref()
+            .is_some_and(|id| ambiguous.contains(id))
+        {
+            entry.linked_entry_index = None;
+        }
+    }
+    let entries = entries
+        .into_iter()
+        .map(|entry| ExportedTimelineEntry {
+            index: entry.index,
+            timestamp: entry.timestamp.as_deref().map(terminal_timeline_timestamp),
+            event_type: exported_entry_type(&entry.kind),
+            client: terminal_identifier("client", client),
+            tool_name: entry
+                .tool_name
+                .as_deref()
+                .map(|v| terminal_identifier("tool", v)),
+            call_id: entry
+                .call_id
+                .as_deref()
+                .map(|v| opaque_identifier("call", v)),
+            linked_entry_index: entry.linked_entry_index,
+            evidence: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    Some(ExportedSessionTimeline {
+        event_type: "timeline",
+        session_id: terminal_session_id(session),
+        client: terminal_identifier("client", client),
+        agent: None,
+        model: None,
+        provider: None,
+        entry_count: entries.len(),
+        entries,
+    })
+}
+
 impl SessionTimeline {
     /// Returns a bounded context window around an entry index, inclusive.
     pub fn context_window(

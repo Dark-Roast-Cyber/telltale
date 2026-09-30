@@ -49,6 +49,48 @@ a budget, bound, partial frame, unresolved race, or generation gap remains. It
 does not mean that no future events will arrive, that sessions are complete,
 that event time is current, or that excluded Recent history does not exist.
 
+## Local session investigation (opt-in)
+
+`investigation::SessionInvestigator` accepts a consumed `Event3Record` and returns
+typed `Found`, `SourceUnavailable`, `SessionUnavailable`, or
+`NotLocallyResolvable`. Configure a discovery root and optionally a caller-owned
+snapshot of known sources; there is no persistent index or automatic discovery
+of additional roots. Correlation requires exact client and existing `path_hash`,
+then confirmation of the source-reported terminal session identity. Missing or
+ambiguous correlation never triggers a session-ID-only search.
+
+`Found.timeline` uses `ExportedSessionTimeline` but contains **no record content**:
+every entry's evidence is empty; agent/model/provider metadata is omitted. Safe
+tool labels, opaque call IDs, timestamps, ordering, and unambiguous call/result
+links remain. Existing transcript timeline exports are unchanged. Anchors expose
+only the recorded index and whether a current entry exists at that index, not an
+immutable-history or fuzzy-match guarantee. Event3 remains authoritative.
+
+The direct reader supports the existing Claude, Codex, OpenClaw, and Qwen JSONL
+identities, including a single JSON object in such a source. No new JSON source
+layouts are enabled. Retired JSON layouts and Copilot process logs are not
+session investigation providers.
+
+**OpenCode investigation is unavailable and deferred.** Source-correlatable
+OpenCode requests return `SourceUnavailable` before discovery, source I/O, or
+process spawning. This denotes an unavailable provider, not confirmation that
+the source exists. There is no executable/export configuration or public native
+export acquisition API, and no SQLite/WAL/SHM fallback. The native OpenCode CLI
+initializes, checkpoints, and migrates its store even for export, violating the
+no-mutation boundary. [Issue #42](https://github.com/Dark-Roast-Cyber/telltale/issues/42)
+remains incomplete pending a genuinely read-only OpenCode capability. Production
+scan/watch OpenCode acquisition is unchanged.
+
+Defaults cap discovery at 16,384 visited entries and depth 32, known sources at
+1,024, direct input at 8 MiB, input/observation counts at 8,192, and JSON
+depth at 64. Limits can only be lowered. Incomplete
+discovery fails closed; read/parse/limit/provider failures expose no raw errors.
+Direct reads validate a regular opened file and bound bytes including growth;
+they are not filesystem snapshots or hard wall-clock bounds on OS file I/O.
+
+Focused gate: `make session-investigation-check` (synthetic sources and fake
+executable no-launch sentinel only; no host session access).
+
 ## Protected assignment (optional)
 
 The `assignment` module is available only with the default-off

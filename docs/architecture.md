@@ -114,6 +114,17 @@ old and new internal models.
 
 ## Pipeline
 
+The opt-in [local session investigation backend](../crates/telltale/README.md#local-session-investigation-opt-in)
+is separate from scan/watch, detection, Event3 production, and LocalEventFeed.
+It correlates a consumed Event3 by exact client/path hash and terminal session
+identity, reads current supported JSONL context,
+and projects canonical observations directly into a content-free
+`ExportedSessionTimeline`. It creates no persistent state and restores no legacy
+source-record conversion. OpenCode investigation fails closed before discovery,
+source I/O, or spawning: native export initializes/checkpoints/migrates the store
+and cannot satisfy the no-mutation contract. Issue #42 remains incomplete pending
+a genuinely read-only OpenCode capability; production OpenCode scanning is unchanged.
+
 Telltale currently runs a repeatable batch pipeline:
 
 1. **Discover**: enumerate known session stores for enabled clients.
