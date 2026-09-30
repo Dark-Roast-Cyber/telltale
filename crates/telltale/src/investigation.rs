@@ -10,10 +10,11 @@ use telltale_schema::event::{
 use telltale_schema::observation::ObservedAt;
 use telltale_schema::source::Source;
 use telltale_sources::acquisition::{
-    AcquisitionError, AcquisitionOptions, DirectReadLimits, acquire_source_bounded,
+    AcquisitionError, AcquisitionOptions, BoundedReadError, DirectReadLimits,
+    acquire_source_bounded,
 };
 use telltale_sources::clients::supported_clients;
-use telltale_sources::discovery::discover_sources_bounded;
+use telltale_sources::discovery::{BoundedDiscoveryError, discover_sources_bounded};
 
 #[derive(Debug, Clone)]
 pub struct InvestigationLimits {
@@ -56,9 +57,88 @@ pub enum InvestigationResult {
     Found(InvestigatedSession),
     /// Source context cannot be read, including a deferred provider such as
     /// OpenCode. Provider deferral does not confirm local source existence.
-    SourceUnavailable,
-    SessionUnavailable,
-    NotLocallyResolvable,
+    SourceUnavailable(SourceUnavailableReason),
+    SessionUnavailable(SessionUnavailableReason),
+    NotLocallyResolvable(NotLocallyResolvableReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceUnavailableReason {
+    ReadOnlyProviderUnavailable,
+    Missing,
+    PermissionDenied,
+    Unreadable,
+    NonRegularSource,
+    LimitExceeded,
+    MalformedSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionUnavailableReason {
+    ExactSessionAbsent,
+    NoTimeline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotLocallyResolvableReason {
+    InvalidLimits,
+    EventLimitExceeded,
+    MissingCorrelation,
+    UnsupportedClient,
+    UnknownSource,
+    AmbiguousSource,
+    UnsupportedSource,
+    InvalidEventTimestamp,
+    DiscoveryLimitExceeded,
+    DiscoveryPermissionDenied,
+    DiscoveryUnavailable,
+    DiscoverySymlinkRoot,
+    ConflictingSessionOwnership,
+    AmbiguousSession,
+}
+
+impl InvestigationResult {
+    /// Stable bounded codes only: no paths, content, or diagnostic strings.
+    pub fn reason_code(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Found(_) => return None,
+            Self::SourceUnavailable(reason) => match reason {
+                SourceUnavailableReason::ReadOnlyProviderUnavailable => {
+                    "read_only_provider_unavailable"
+                }
+                SourceUnavailableReason::Missing => "source_missing",
+                SourceUnavailableReason::PermissionDenied => "source_permission_denied",
+                SourceUnavailableReason::Unreadable => "source_unreadable",
+                SourceUnavailableReason::NonRegularSource => "non_regular_source",
+                SourceUnavailableReason::LimitExceeded => "source_limit_exceeded",
+                SourceUnavailableReason::MalformedSource => "malformed_source",
+            },
+            Self::SessionUnavailable(reason) => match reason {
+                SessionUnavailableReason::ExactSessionAbsent => "exact_session_absent",
+                SessionUnavailableReason::NoTimeline => "session_has_no_timeline",
+            },
+            Self::NotLocallyResolvable(reason) => match reason {
+                NotLocallyResolvableReason::InvalidLimits => "invalid_limits",
+                NotLocallyResolvableReason::EventLimitExceeded => "event_limit_exceeded",
+                NotLocallyResolvableReason::MissingCorrelation => "missing_correlation",
+                NotLocallyResolvableReason::UnsupportedClient => "unsupported_client",
+                NotLocallyResolvableReason::UnknownSource => "unknown_source",
+                NotLocallyResolvableReason::AmbiguousSource => "ambiguous_source",
+                NotLocallyResolvableReason::UnsupportedSource => "unsupported_source",
+                NotLocallyResolvableReason::InvalidEventTimestamp => "invalid_event_timestamp",
+                NotLocallyResolvableReason::DiscoveryLimitExceeded => "discovery_limit_exceeded",
+                NotLocallyResolvableReason::DiscoveryPermissionDenied => {
+                    "discovery_permission_denied"
+                }
+                NotLocallyResolvableReason::DiscoveryUnavailable => "discovery_unavailable",
+                NotLocallyResolvableReason::DiscoverySymlinkRoot => "discovery_symlink_root",
+                NotLocallyResolvableReason::ConflictingSessionOwnership => {
+                    "conflicting_session_ownership"
+                }
+                NotLocallyResolvableReason::AmbiguousSession => "ambiguous_session",
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,34 +170,63 @@ impl SessionInvestigator {
             json_depth: self.config.limits.json_depth,
         };
         if !direct.is_valid() || self.config.known_sources.len() > 1024 {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::InvalidLimits,
+            );
         }
         if event.common().session_id.len() > 256
             || matches!(event.family(), Event3Family::Detection(v) if v.timeline_anchors.len() > direct.records)
         {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::EventLimitExceeded,
+            );
         }
         let Some(hash) = source_hash(event) else {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::MissingCorrelation,
+            );
         };
         let Some(client) = supported_clients()
             .iter()
             .find(|def| def.id.as_str() == event.common().client)
             .map(|def| def.id)
         else {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::UnsupportedClient,
+            );
         };
         // Native OpenCode export initializes/checkpoints/migrates its store.
         // No read-only provider is available; do not discover, read, or spawn.
         if client == telltale_schema::clients::ClientId::OpenCode {
-            return InvestigationResult::SourceUnavailable;
+            return InvestigationResult::SourceUnavailable(
+                SourceUnavailableReason::ReadOnlyProviderUnavailable,
+            );
         }
-        let Ok(mut sources) = discover_sources_bounded(
+        let mut sources = match discover_sources_bounded(
             &self.config.root,
             client,
             self.config.limits.discovery_entries,
-        ) else {
-            return InvestigationResult::NotLocallyResolvable;
+        ) {
+            Ok(sources) => sources,
+            Err(error) => {
+                return InvestigationResult::NotLocallyResolvable(match error {
+                    BoundedDiscoveryError::InvalidLimit => {
+                        NotLocallyResolvableReason::InvalidLimits
+                    }
+                    BoundedDiscoveryError::LimitExceeded => {
+                        NotLocallyResolvableReason::DiscoveryLimitExceeded
+                    }
+                    BoundedDiscoveryError::SymlinkRoot => {
+                        NotLocallyResolvableReason::DiscoverySymlinkRoot
+                    }
+                    BoundedDiscoveryError::PermissionDenied => {
+                        NotLocallyResolvableReason::DiscoveryPermissionDenied
+                    }
+                    BoundedDiscoveryError::Traversal => {
+                        NotLocallyResolvableReason::DiscoveryUnavailable
+                    }
+                });
+            }
         };
         sources.extend(
             self.config
@@ -131,7 +240,11 @@ impl SessionInvestigator {
             .sort_by(|a, b| (&a.source_id, &a.path, a.kind).cmp(&(&b.source_id, &b.path, b.kind)));
         sources.dedup();
         let [source] = sources.as_slice() else {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(if sources.is_empty() {
+                NotLocallyResolvableReason::UnknownSource
+            } else {
+                NotLocallyResolvableReason::AmbiguousSource
+            });
         };
         let valid = supported_clients()
             .iter()
@@ -146,18 +259,26 @@ impl SessionInvestigator {
                     | telltale_schema::clients::SourceKind::HeadlessJsonl
             )
         {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::UnsupportedSource,
+            );
         }
         let Ok(observed_at) = ObservedAt::new(event.common().observed_at.clone()) else {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::InvalidEventTimestamp,
+            );
         };
         let options = AcquisitionOptions::new(observed_at);
         let batch = match acquire_source_bounded(source, options, direct) {
             Ok(batch) => batch,
             Err(AcquisitionError::ConflictingSessionOwnership) => {
-                return InvestigationResult::NotLocallyResolvable;
+                return InvestigationResult::NotLocallyResolvable(
+                    NotLocallyResolvableReason::ConflictingSessionOwnership,
+                );
             }
-            Err(_) => return InvestigationResult::SourceUnavailable,
+            Err(error) => {
+                return InvestigationResult::SourceUnavailable(source_failure_reason(error));
+            }
         };
         let identities = batch
             .accounting
@@ -167,10 +288,14 @@ impl SessionInvestigator {
             .filter(|session| terminal_session_id(session) == event.common().session_id)
             .collect::<BTreeSet<_>>();
         if identities.len() > 1 {
-            return InvestigationResult::NotLocallyResolvable;
+            return InvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::AmbiguousSession,
+            );
         }
         let Some(session) = identities.first() else {
-            return InvestigationResult::SessionUnavailable;
+            return InvestigationResult::SessionUnavailable(
+                SessionUnavailableReason::ExactSessionAbsent,
+            );
         };
         let observations = batch
             .observations
@@ -179,7 +304,7 @@ impl SessionInvestigator {
             .collect::<Vec<_>>();
         let Some(timeline) = build_content_free_canonical_timeline(&observations, client.as_str())
         else {
-            return InvestigationResult::SessionUnavailable;
+            return InvestigationResult::SessionUnavailable(SessionUnavailableReason::NoTimeline);
         };
         let anchors = if let Event3Family::Detection(detection) = event.family() {
             detection
@@ -197,6 +322,31 @@ impl SessionInvestigator {
             Vec::new()
         };
         InvestigationResult::Found(InvestigatedSession { timeline, anchors })
+    }
+}
+
+fn source_failure_reason(error: AcquisitionError) -> SourceUnavailableReason {
+    match error {
+        AcquisitionError::BoundedSourceRead(reason) => match reason {
+            BoundedReadError::Missing => SourceUnavailableReason::Missing,
+            BoundedReadError::PermissionDenied => SourceUnavailableReason::PermissionDenied,
+            BoundedReadError::Unreadable => SourceUnavailableReason::Unreadable,
+            BoundedReadError::NonRegularSource => SourceUnavailableReason::NonRegularSource,
+            BoundedReadError::LimitExceeded => SourceUnavailableReason::LimitExceeded,
+            BoundedReadError::MalformedSource => SourceUnavailableReason::MalformedSource,
+        },
+        AcquisitionError::SourceRead => SourceUnavailableReason::Unreadable,
+        AcquisitionError::ContributionCapacity
+        | AcquisitionError::AttestationCapacity
+        | AcquisitionError::AccountingOverflow => SourceUnavailableReason::LimitExceeded,
+        AcquisitionError::InvalidAttestation
+        | AcquisitionError::InvalidContribution
+        | AcquisitionError::CanonicalMapping { .. }
+        | AcquisitionError::CanonicalValidation { .. } => SourceUnavailableReason::MalformedSource,
+        // These are rejected before acquisition; keep failure private if reached.
+        AcquisitionError::UnsupportedSourceIdentity
+        | AcquisitionError::SourceKindMismatch
+        | AcquisitionError::ConflictingSessionOwnership => SourceUnavailableReason::MalformedSource,
     }
 }
 

@@ -124,6 +124,10 @@ source-record conversion. OpenCode investigation fails closed before discovery,
 source I/O, or spawning: native export initializes/checkpoints/migrates the store
 and cannot satisfy the no-mutation contract. Issue #42 remains incomplete pending
 a genuinely read-only OpenCode capability; production OpenCode scanning is unchanged.
+The four investigation outcomes retain their names; unavailable outcomes carry
+closed, content-free reasons distinguishing provider deferral, observed read
+failures, incomplete discovery, and exact correlation/session failures. Operator
+actions and limits are documented with the embedding API; there is no retry state.
 
 Telltale currently runs a repeatable batch pipeline:
 

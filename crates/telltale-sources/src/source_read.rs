@@ -16,6 +16,7 @@ use telltale_schema::source::Source;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SourceReadError {
+    Bounded(BoundedReadError),
     Io(std::io::Error),
     Json(serde_json::Error),
     Sqlite(rusqlite::Error),
@@ -30,6 +31,7 @@ pub enum SourceReadError {
 impl fmt::Display for SourceReadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Bounded(error) => formatter.write_str(error.code()),
             Self::Io(error) => write!(formatter, "io error: {error}"),
             Self::Json(error) => write!(formatter, "json parse error: {error}"),
             Self::Sqlite(error) => write!(formatter, "sqlite error: {error}"),
@@ -43,6 +45,38 @@ impl fmt::Display for SourceReadError {
                 "schema drift for ({}, {source_id}): {detail}",
                 client.as_str()
             ),
+        }
+    }
+}
+
+/// Closed, content-free classifications for direct on-demand reads only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundedReadError {
+    Missing,
+    PermissionDenied,
+    Unreadable,
+    NonRegularSource,
+    LimitExceeded,
+    MalformedSource,
+}
+
+impl BoundedReadError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Missing => "source_missing",
+            Self::PermissionDenied => "source_permission_denied",
+            Self::Unreadable => "source_unreadable",
+            Self::NonRegularSource => "non_regular_source",
+            Self::LimitExceeded => "source_limit_exceeded",
+            Self::MalformedSource => "malformed_source",
+        }
+    }
+
+    fn from_io(error: std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::NotFound => Self::Missing,
+            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
+            _ => Self::Unreadable,
         }
     }
 }
@@ -85,17 +119,17 @@ pub(crate) fn read_jsonl_values_with_limits(
     limits: Option<crate::acquisition::DirectReadLimits>,
 ) -> Result<Vec<Value>, SourceReadError> {
     if let Some(limits) = limits {
-        let bytes = bounded_file_bytes(&source.path, limits.bytes)
-            .map_err(|_| std::io::Error::other("bounded source read failed"))?;
+        let bytes =
+            bounded_file_bytes(&source.path, limits.bytes).map_err(SourceReadError::Bounded)?;
         check_json_depth(&bytes, limits.json_depth)
-            .map_err(|_| std::io::Error::other("source JSON depth exceeded"))?;
+            .map_err(|_| SourceReadError::Bounded(BoundedReadError::LimitExceeded))?;
         let mut values = Vec::new();
         for line in bytes
             .split(|b| *b == b'\n')
             .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
         {
             if values.len() == limits.records {
-                return Err(std::io::Error::other("source record limit exceeded").into());
+                return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
             }
             values.push(serde_json::from_slice(line)?);
         }
@@ -110,7 +144,10 @@ pub(crate) fn read_jsonl_values_with_limits(
 
 // Validate the opened object, not a pathname precheck. Nonblocking open avoids
 // hanging on a replacement FIFO; no-follow rejects symlinks at the final component.
-pub(crate) fn bounded_file_bytes(path: &std::path::Path, cap: usize) -> Result<Vec<u8>, ()> {
+pub(crate) fn bounded_file_bytes(
+    path: &std::path::Path,
+    cap: usize,
+) -> Result<Vec<u8>, BoundedReadError> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -123,10 +160,13 @@ pub(crate) fn bounded_file_bytes(path: &std::path::Path, cap: usize) -> Result<V
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let file = options.open(path).map_err(|_| ())?;
-    let metadata = file.metadata().map_err(|_| ())?;
-    if !metadata.is_file() || metadata.len() > cap as u64 {
-        return Err(());
+    let file = options.open(path).map_err(BoundedReadError::from_io)?;
+    let metadata = file.metadata().map_err(BoundedReadError::from_io)?;
+    if !metadata.is_file() {
+        return Err(BoundedReadError::NonRegularSource);
+    }
+    if metadata.len() > cap as u64 {
+        return Err(BoundedReadError::LimitExceeded);
     }
     #[cfg(windows)]
     {
@@ -135,15 +175,15 @@ pub(crate) fn bounded_file_bytes(path: &std::path::Path, cap: usize) -> Result<V
             & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
             != 0
         {
-            return Err(());
+            return Err(BoundedReadError::NonRegularSource);
         }
     }
     let mut bytes = Vec::new();
     file.take(cap as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| ())?;
+        .map_err(BoundedReadError::from_io)?;
     if bytes.len() > cap {
-        return Err(());
+        return Err(BoundedReadError::LimitExceeded);
     }
     Ok(bytes)
 }
@@ -224,5 +264,50 @@ fn collect_string_values_into(value: &Value, output: &mut Vec<String>) {
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_read_io_classification_discards_diagnostics() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::NotFound, BoundedReadError::Missing),
+            (
+                std::io::ErrorKind::PermissionDenied,
+                BoundedReadError::PermissionDenied,
+            ),
+            (std::io::ErrorKind::WouldBlock, BoundedReadError::Unreadable),
+            (std::io::ErrorKind::Other, BoundedReadError::Unreadable),
+        ] {
+            let reason = BoundedReadError::from_io(std::io::Error::new(
+                kind,
+                "/synthetic/private/DIAGNOSTIC_CANARY token=SECRET_CANARY",
+            ));
+            assert_eq!(reason, expected);
+            let public = format!("{reason:?} {}", reason.code());
+            assert!(!public.contains("CANARY"));
+            assert!(!public.contains("/synthetic"));
+        }
+    }
+
+    #[test]
+    fn bounded_read_observes_missing_regular_and_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("PRIVATE_PATH_CANARY");
+        assert_eq!(bounded_file_bytes(&path, 4), Err(BoundedReadError::Missing));
+        fs::write(&path, b"1234").unwrap();
+        assert_eq!(bounded_file_bytes(&path, 4).unwrap(), b"1234");
+        assert_eq!(
+            bounded_file_bytes(&path, 3),
+            Err(BoundedReadError::LimitExceeded)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            bounded_file_bytes(dir.path(), 4),
+            Err(BoundedReadError::NonRegularSource)
+        );
     }
 }

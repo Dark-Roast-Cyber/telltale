@@ -59,6 +59,13 @@ of additional roots. Correlation requires exact client and existing `path_hash`,
 then confirmation of the source-reported terminal session identity. Missing or
 ambiguous correlation never triggers a session-ID-only search.
 
+The three unavailable outcomes carry closed reason enums; `reason_code()` returns
+an optional static code (`None` for `Found`). Reasons contain no paths, source
+content, native messages, or raw diagnostic strings, including through `Debug`.
+Embedding callers must update unit-variant matches to payload matches, for example
+`InvestigationResult::SourceUnavailable(reason)` (or `SourceUnavailable(_)`).
+The four outcome names and `Found` payload are unchanged; Event3 is unchanged.
+
 `Found.timeline` uses `ExportedSessionTimeline` but contains **no record content**:
 every entry's evidence is empty; agent/model/provider metadata is omitted. Safe
 tool labels, opaque call IDs, timestamps, ordering, and unambiguous call/result
@@ -72,7 +79,7 @@ layouts are enabled. Retired JSON layouts and Copilot process logs are not
 session investigation providers.
 
 **OpenCode investigation is unavailable and deferred.** Source-correlatable
-OpenCode requests return `SourceUnavailable` before discovery, source I/O, or
+OpenCode requests return `SourceUnavailable(ReadOnlyProviderUnavailable)` before discovery, source I/O, or
 process spawning. This denotes an unavailable provider, not confirmation that
 the source exists. There is no executable/export configuration or public native
 export acquisition API, and no SQLite/WAL/SHM fallback. The native OpenCode CLI
@@ -87,6 +94,38 @@ depth at 64. Limits can only be lowered. Incomplete
 discovery fails closed; read/parse/limit/provider failures expose no raw errors.
 Direct reads validate a regular opened file and bound bytes including growth;
 they are not filesystem snapshots or hard wall-clock bounds on OS file I/O.
+
+### Availability reasons and operator actions
+
+These codes describe the current attempt, not historical source state. The host
+owns any later invocation; the backend keeps no retry state and never retries.
+Do not weaken access controls, raise the documented maxima, or use native export
+as a fallback to make an unavailable result succeed.
+
+| Outcome | Reason code | Operator action |
+| --- | --- | --- |
+| `SourceUnavailable` | `read_only_provider_unavailable` | OpenCode is deferred. Keep Event3 as the evidence; wait for a separately accepted read-only provider. This is not a missing-store, permission, or busy diagnosis. |
+| `SourceUnavailable` | `source_missing` | The exact correlated path was absent at the read attempt (often a known source that moved/disappeared). Check local retention/location; no alternate-path lookup occurs. |
+| `SourceUnavailable` | `source_permission_denied` | The OS reported permission denial. Check the caller's intended access locally without broadening permissions automatically. |
+| `SourceUnavailable` | `source_unreadable` | Other read/open failure, including an unclassified rejected symlink. Check source type and local filesystem availability; no busy/access diagnosis is inferred. |
+| `SourceUnavailable` | `non_regular_source` | The opened object was not an accepted regular file. Check the configured source; pipes/devices/reparse points are not investigation inputs. |
+| `SourceUnavailable` | `source_limit_exceeded` | Bytes, input/observation records, JSON depth, or acquisition/accounting capacity exceeded a bound. Use Event3; smaller caller limits may be restored only up to the documented maxima. |
+| `SourceUnavailable` | `malformed_source` | JSON, native envelope, attestation, or canonical mapping/validation failed. Check local source integrity and supported layout; there is no parser fallback or partial timeline. |
+| `SessionUnavailable` | `exact_session_absent` | The acquired source did not attest the exact terminal session identity. Check retention; never substitute a similarly named session. |
+| `SessionUnavailable` | `session_has_no_timeline` | The exact identity was attested but has no projectable observations (for example, metadata only). Use Event3; this does not assert that the session never existed. |
+| `NotLocallyResolvable` | `unknown_source` | No exact client/path-hash source was discovered or supplied. Check the caller-owned root/known-source snapshot; the backend cannot diagnose a missing file without that correlation. |
+| `NotLocallyResolvable` | `missing_correlation`, `unsupported_client`, `unsupported_source` | The event family lacks source correlation or the client/source is not a direct investigation provider. Use Event3; no session-ID-only lookup occurs. |
+| `NotLocallyResolvable` | `ambiguous_source`, `ambiguous_session`, `conflicting_session_ownership` | Exact ownership is not unique/consistent. Check the caller snapshot or source integrity locally; no candidate is selected. |
+| `NotLocallyResolvable` | `invalid_limits`, `event_limit_exceeded`, `invalid_event_timestamp` | Correct caller limits or inspect the consumed event locally. Do not bypass the consumed Event3 contract. |
+| `NotLocallyResolvable` | `discovery_limit_exceeded` | Entry/depth budget exhausted. Use a narrower valid root or restore a lowered entry limit within the maximum; no partial discovery is used. |
+| `NotLocallyResolvable` | `discovery_permission_denied`, `discovery_unavailable`, `discovery_symlink_root` | Discovery was incomplete due to an observed denial, other traversal error, or rejected symlink search root. Check the root/access locally. A known-source snapshot does not bypass incomplete discovery. |
+
+Support remains the registered direct JSONL layouts, not a new client-version
+compatibility matrix. Linux synthetic tests exercise direct reads and OpenCode
+no-launch/no-open/no-read probes. Platform-specific regular-object rejection is
+implemented for Unix and Windows; this change does not independently qualify
+macOS/Windows native client versions. OpenCode investigation is unavailable for
+all versions/platforms in this tranche, regardless of production scanner support.
 
 Focused gate: `make session-investigation-check` (synthetic sources and fake
 executable no-launch sentinel only; no host session access).

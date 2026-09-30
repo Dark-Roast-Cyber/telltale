@@ -79,7 +79,22 @@ pub fn discover_sources(root: &Path) -> Result<Vec<Source>, DiscoveryError> {
 /// Payload-free failure for finite on-demand discovery. An incomplete traversal
 /// cannot prove unique ownership and never returns a successful partial listing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BoundedDiscoveryError;
+pub enum BoundedDiscoveryError {
+    InvalidLimit,
+    LimitExceeded,
+    SymlinkRoot,
+    PermissionDenied,
+    Traversal,
+}
+
+impl BoundedDiscoveryError {
+    fn from_io(error: std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
+            _ => Self::Traversal,
+        }
+    }
+}
 
 /// Discover one client's home/data sources using the existing registry and root
 /// resolution. Project-local process logs are outside session investigation.
@@ -92,7 +107,7 @@ pub fn discover_sources_bounded(
 ) -> Result<Vec<Source>, BoundedDiscoveryError> {
     const MAX_DEPTH: usize = 32;
     if max_entries == 0 || max_entries > 16384 {
-        return Err(BoundedDiscoveryError);
+        return Err(BoundedDiscoveryError::InvalidLimit);
     }
     let mut remaining = max_entries;
     let mut sources = Vec::new();
@@ -105,8 +120,10 @@ pub fn discover_sources_bounded(
             let search = source_search_root(root, *source_def);
             match fs::symlink_metadata(&search) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(_) => return Err(BoundedDiscoveryError),
-                Ok(meta) if meta.file_type().is_symlink() => return Err(BoundedDiscoveryError),
+                Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(BoundedDiscoveryError::SymlinkRoot);
+                }
                 _ => {}
             }
             bounded_paths(
@@ -132,10 +149,10 @@ fn bounded_paths(
     sources: &mut Vec<Source>,
 ) -> Result<(), BoundedDiscoveryError> {
     if *remaining == 0 {
-        return Err(BoundedDiscoveryError);
+        return Err(BoundedDiscoveryError::LimitExceeded);
     }
     *remaining -= 1;
-    let metadata = fs::symlink_metadata(path).map_err(|_| BoundedDiscoveryError)?;
+    let metadata = fs::symlink_metadata(path).map_err(BoundedDiscoveryError::from_io)?;
     if metadata.file_type().is_symlink() {
         return Ok(());
     }
@@ -153,21 +170,21 @@ fn bounded_paths(
         }
     } else if metadata.is_dir() {
         if depth == 0 {
-            return Err(BoundedDiscoveryError);
+            return Err(BoundedDiscoveryError::LimitExceeded);
         }
         // Do not let a walker collect a directory before the budget sees its
         // entries. ReadDir streams one entry at a time; recursion holds at most
         // MAX_DEPTH directory handles and a bounded path stack.
-        for entry in fs::read_dir(path).map_err(|_| BoundedDiscoveryError)? {
-            let entry = entry.map_err(|_| BoundedDiscoveryError)?;
+        for entry in fs::read_dir(path).map_err(BoundedDiscoveryError::from_io)? {
+            let entry = entry.map_err(BoundedDiscoveryError::from_io)?;
             if !def.recursive
                 && entry
                     .file_type()
-                    .map_err(|_| BoundedDiscoveryError)?
+                    .map_err(BoundedDiscoveryError::from_io)?
                     .is_dir()
             {
                 if *remaining == 0 {
-                    return Err(BoundedDiscoveryError);
+                    return Err(BoundedDiscoveryError::LimitExceeded);
                 }
                 *remaining -= 1;
                 continue;
@@ -858,6 +875,31 @@ mod tests {
             })
             .find(|(_, source)| source.id == id)
             .expect("source definition")
+    }
+
+    #[test]
+    fn bounded_discovery_classifies_only_observed_permission() {
+        for (kind, expected) in [
+            (
+                std::io::ErrorKind::PermissionDenied,
+                super::BoundedDiscoveryError::PermissionDenied,
+            ),
+            (
+                std::io::ErrorKind::NotFound,
+                super::BoundedDiscoveryError::Traversal,
+            ),
+            (
+                std::io::ErrorKind::WouldBlock,
+                super::BoundedDiscoveryError::Traversal,
+            ),
+        ] {
+            let error = super::BoundedDiscoveryError::from_io(std::io::Error::new(
+                kind,
+                "/synthetic/private/DIAGNOSTIC_CANARY",
+            ));
+            assert_eq!(error, expected);
+            assert!(!format!("{error:?}").contains("CANARY"));
+        }
     }
 
     #[test]

@@ -57,6 +57,7 @@ fn investigation_jsonl_is_content_free_and_preserves_artifacts() {
     assert_eq!(found.timeline.entries[0].linked_entry_index, Some(1));
     assert_eq!(found.timeline.entries[1].linked_entry_index, Some(0));
     assert!(found.timeline.entries.iter().all(|e| e.evidence.is_empty()));
+    assert_eq!(result.reason_code(), None);
     let public = format!(
         "{result:?} {}",
         serde_json::to_string(&found.timeline).unwrap()
@@ -83,23 +84,23 @@ fn investigation_exact_identity_and_known_source_loss() {
     let backend = SessionInvestigator::new(config);
     assert_eq!(
         backend.investigate(&event(&source, "different-session")),
-        InvestigationResult::SessionUnavailable
+        InvestigationResult::SessionUnavailable(SessionUnavailableReason::ExactSessionAbsent)
     );
     let mut other_client = source.clone();
     other_client.client = ClientId::Claude;
     assert_eq!(
         backend.investigate(&event(&other_client, "synthetic-session")),
-        InvestigationResult::NotLocallyResolvable
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::UnknownSource)
     );
     fs::rename(&source.path, source.path.with_file_name("moved.jsonl")).unwrap();
     assert_eq!(
         backend.investigate(&event(&source, "synthetic-session")),
-        InvestigationResult::SourceUnavailable
+        InvestigationResult::SourceUnavailable(SourceUnavailableReason::Missing)
     );
     let fresh = SessionInvestigator::new(InvestigationConfig::new(dir.path()));
     assert_eq!(
         fresh.investigate(&event(&source, "synthetic-session")),
-        InvestigationResult::NotLocallyResolvable
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::UnknownSource)
     );
 }
 
@@ -112,13 +113,15 @@ fn investigation_bounds_and_ambiguous_source_fail_closed() {
     config.limits.source_bytes = 16;
     assert_eq!(
         SessionInvestigator::new(config).investigate(&input),
-        InvestigationResult::SourceUnavailable
+        InvestigationResult::SourceUnavailable(SourceUnavailableReason::LimitExceeded)
     );
     let mut config = InvestigationConfig::new(dir.path());
     config.limits.discovery_entries = 1;
     assert_eq!(
         SessionInvestigator::new(config).investigate(&input),
-        InvestigationResult::NotLocallyResolvable
+        InvestigationResult::NotLocallyResolvable(
+            NotLocallyResolvableReason::DiscoveryLimitExceeded
+        )
     );
     let mut conflicting = source.clone();
     conflicting.source_id = "codex.archived_sessions".into();
@@ -127,7 +130,7 @@ fn investigation_bounds_and_ambiguous_source_fail_closed() {
     config.known_sources = vec![conflicting, source];
     assert_eq!(
         SessionInvestigator::new(config).investigate(&input),
-        InvestigationResult::NotLocallyResolvable
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::AmbiguousSource)
     );
 }
 
@@ -146,7 +149,7 @@ fn investigation_non_regular_source_never_blocks() {
     config.known_sources = vec![source];
     assert_eq!(
         SessionInvestigator::new(config).investigate(&input),
-        InvestigationResult::SourceUnavailable
+        InvestigationResult::SourceUnavailable(SourceUnavailableReason::NonRegularSource)
     );
 }
 
@@ -166,7 +169,7 @@ fn investigation_malformed_depth_and_exact_byte_record_bounds() {
         fs::write(&source.path, payload).unwrap();
         assert_eq!(
             SessionInvestigator::new(InvestigationConfig::new(dir.path())).investigate(&input),
-            InvestigationResult::SourceUnavailable
+            InvestigationResult::SourceUnavailable(SourceUnavailableReason::MalformedSource)
         );
         assert_eq!(fs::read_to_string(&source.path).unwrap(), payload);
     }
@@ -182,10 +185,176 @@ fn investigation_malformed_depth_and_exact_byte_record_bounds() {
         config.limits.json_depth = depth;
         assert_eq!(
             SessionInvestigator::new(config).investigate(&input),
-            InvestigationResult::SourceUnavailable
+            InvestigationResult::SourceUnavailable(SourceUnavailableReason::LimitExceeded)
         );
     }
     assert_eq!(fs::read_to_string(&source.path).unwrap(), JSONL);
+}
+
+#[test]
+fn investigation_failure_reasons_are_private_and_stateless() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = codex(dir.path(), JSONL);
+    let input = event(&source, "synthetic-session");
+    let backend = SessionInvestigator::new(InvestigationConfig::new(dir.path()));
+    for (payload, expected) in [
+        (
+            "{PRIVATE_PARSE_CANARY",
+            SourceUnavailableReason::MalformedSource,
+        ),
+        (
+            r#"{"type":"PRIVATE_DISCRIMINATOR_CANARY","session_id":"synthetic-session"}"#,
+            SourceUnavailableReason::MalformedSource,
+        ),
+    ] {
+        fs::write(&source.path, payload).unwrap();
+        let result = backend.investigate(&input);
+        assert_eq!(result, InvestigationResult::SourceUnavailable(expected));
+        let public = format!("{result:?} {}", result.reason_code().unwrap());
+        assert!(!public.contains("PRIVATE_"));
+        assert!(!public.contains(dir.path().to_str().unwrap()));
+        assert_eq!(fs::read_to_string(&source.path).unwrap(), payload);
+    }
+    fs::write(
+        &source.path,
+        r#"{"type":"user","session_id":"synthetic-session","sessionId":"PRIVATE_OWNER_CANARY"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        backend.investigate(&input),
+        InvestigationResult::NotLocallyResolvable(
+            NotLocallyResolvableReason::ConflictingSessionOwnership
+        )
+    );
+    fs::write(&source.path, JSONL).unwrap();
+    assert!(matches!(
+        backend.investigate(&input),
+        InvestigationResult::Found(_)
+    ));
+}
+
+#[test]
+fn investigation_duplicate_selection_is_order_independent() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = codex(dir.path(), JSONL);
+    let input = event(&source, "synthetic-session");
+    let mut conflicting = source.clone();
+    conflicting.source_id = "PRIVATE_SOURCE_ID_CANARY".into();
+    for sources in [
+        vec![source.clone(), source.clone()],
+        vec![source.clone(), conflicting.clone()],
+        vec![conflicting, source.clone()],
+    ] {
+        let ambiguous = sources[0] != sources[1];
+        let mut config = InvestigationConfig::new(dir.path());
+        config.known_sources = sources;
+        let result = SessionInvestigator::new(config).investigate(&input);
+        if ambiguous {
+            assert_eq!(
+                result,
+                InvestigationResult::NotLocallyResolvable(
+                    NotLocallyResolvableReason::AmbiguousSource
+                )
+            );
+        } else {
+            assert!(matches!(result, InvestigationResult::Found(_)));
+        }
+        assert!(!format!("{result:?}").contains("PRIVATE_SOURCE_ID_CANARY"));
+    }
+}
+
+#[test]
+fn investigation_invalid_limits_and_unsupported_source_are_distinct() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = codex(dir.path(), JSONL);
+    let input = event(&source, "synthetic-session");
+    let mut config = InvestigationConfig::new(dir.path());
+    config.limits.source_bytes = 0;
+    assert_eq!(
+        SessionInvestigator::new(config).investigate(&input),
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::InvalidLimits)
+    );
+    let mut config = InvestigationConfig::new(dir.path());
+    config.limits.discovery_entries = 0;
+    assert_eq!(
+        SessionInvestigator::new(config).investigate(&input),
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::InvalidLimits)
+    );
+    let unsupported = Source {
+        client: ClientId::Copilot,
+        kind: SourceKind::CopilotProcessLog,
+        source_id: "copilot.process_log".into(),
+        path: dir.path().join("PRIVATE_PATH_CANARY"),
+    };
+    let mut config = InvestigationConfig::new(dir.path());
+    config.known_sources.push(unsupported.clone());
+    assert_eq!(
+        SessionInvestigator::new(config).investigate(&event(&unsupported, "synthetic-session")),
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::UnsupportedSource)
+    );
+}
+
+#[test]
+fn investigation_event_correlation_and_metadata_only_session_are_explicit() {
+    use telltale_schema::event::{HealthEventInput, health_event_with_metadata};
+    let dir = tempfile::tempdir().unwrap();
+    let source = codex(dir.path(), JSONL);
+    let backend = SessionInvestigator::new(InvestigationConfig::new(dir.path()));
+    let health = health_event_with_metadata(HealthEventInput {
+        sources: &[],
+        source_inventory_change: None,
+        scan_duration_ms: 0,
+        rule_count: 0,
+        threshold_config: telltale_schema::scoring::RiskThresholds {
+            low: 1,
+            medium: 2,
+            high: 3,
+            critical: 4,
+        },
+        active_policy_name: None,
+        emitted_count: 0,
+        suppressed_count: 0,
+        scanner_error_count: 0,
+    });
+    let health = Event3Record::from_json(&serde_json::to_vec(&health).unwrap()).unwrap();
+    assert_eq!(
+        backend.investigate(&health),
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::MissingCorrelation)
+    );
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&event_json(&source, "synthetic-session")).unwrap();
+    value["client"] = "PRIVATE_CLIENT_CANARY".into();
+    let unknown = Event3Record::from_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(
+        backend.investigate(&unknown),
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::UnsupportedClient)
+    );
+    fs::write(
+        &source.path,
+        "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"synthetic-session\"}}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        backend.investigate(&event(&source, "synthetic-session")),
+        InvestigationResult::SessionUnavailable(SessionUnavailableReason::NoTimeline)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn investigation_discovery_failure_is_not_source_loss() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let source = codex(dir.path(), JSONL);
+    let input = event(&source, "synthetic-session");
+    fs::rename(dir.path().join("codex/sessions"), dir.path().join("saved")).unwrap();
+    symlink(dir.path().join("saved"), dir.path().join("codex/sessions")).unwrap();
+    let mut config = InvestigationConfig::new(dir.path());
+    config.known_sources.push(source);
+    assert_eq!(
+        SessionInvestigator::new(config).investigate(&input),
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::DiscoverySymlinkRoot)
+    );
 }
 
 #[test]
@@ -262,7 +431,7 @@ fn investigation_json_object_and_jsonl_with_same_session_keep_clients_separate()
     wrong_client.client = ClientId::Claude;
     assert_eq!(
         backend.investigate(&event(&wrong_client, "synthetic-session")),
-        InvestigationResult::NotLocallyResolvable
+        InvestigationResult::NotLocallyResolvable(NotLocallyResolvableReason::UnknownSource)
     );
     assert_eq!(fs::read_to_string(&claude_source.path).unwrap(), payload);
 }
@@ -302,6 +471,28 @@ fn investigation_opencode_is_deferred_without_launch_or_artifact_changes() {
             .unwrap()
             .success()
     );
+    #[cfg(target_os = "linux")]
+    let access_probe = {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::ffi::OsStrExt;
+        // SAFETY: inotify takes no pointers; ownership is transferred once.
+        let raw = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(raw >= 0);
+        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        for path in [dir.path(), store.as_path()]
+            .into_iter()
+            .chain(paths.iter().map(|p| p.as_path()))
+        {
+            let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: valid descriptor and NUL-terminated synthetic pathname.
+            assert!(
+                unsafe {
+                    libc::inotify_add_watch(raw, path.as_ptr(), libc::IN_OPEN | libc::IN_ACCESS)
+                } >= 0
+            );
+        }
+        fd
+    };
     // Only this child receives a synthetic PATH; no process-global environment
     // mutation or installed/live OpenCode executable can enter the test.
     let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -322,6 +513,27 @@ fn investigation_opencode_is_deferred_without_launch_or_artifact_changes() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let mut buffer = [0u8; 4096];
+        // SAFETY: writable buffer with its exact length and a live descriptor.
+        let read = unsafe {
+            libc::read(
+                access_probe.as_raw_fd(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+            )
+        };
+        assert_eq!(
+            read, -1,
+            "investigation opened/read a synthetic source or discovery directory"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
     assert!(!bin.join("launched").exists());
     assert_eq!(fs::read_dir(&store).unwrap().count(), 3);
     let after = paths.each_ref().map(|path| {
@@ -351,12 +563,16 @@ fn investigation_opencode_deferred_probe() {
     for session in ["ses_synthetic", "ses_SYNTHETIC_Mixed"] {
         for known in [false, true] {
             let mut config = InvestigationConfig::new(&root);
+            // A traversal would exhaust this budget; provider deferral wins.
+            config.limits.discovery_entries = 1;
             if known {
                 config.known_sources.push(source.clone());
             }
             assert_eq!(
                 SessionInvestigator::new(config).investigate(&event(&source, session)),
-                InvestigationResult::SourceUnavailable
+                InvestigationResult::SourceUnavailable(
+                    SourceUnavailableReason::ReadOnlyProviderUnavailable
+                )
             );
         }
     }
@@ -372,6 +588,8 @@ fn investigation_opencode_deferred_probe() {
     assert_eq!(
         SessionInvestigator::new(InvestigationConfig::new(root.join("absent")))
             .investigate(&event(&source, "ses_synthetic")),
-        InvestigationResult::SourceUnavailable
+        InvestigationResult::SourceUnavailable(
+            SourceUnavailableReason::ReadOnlyProviderUnavailable
+        )
     );
 }

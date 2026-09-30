@@ -19,12 +19,27 @@ record content, or raw diagnostics. Missing correlation, unsupported providers,
 and ambiguity MUST fail closed without session-ID-only or fuzzy lookup. A
 caller-owned bounded known-source snapshot MAY distinguish lost sources from
 never-resolvable sources, but MUST NOT become a persisted index.
+The three unavailable outcomes MUST carry closed reason enums and expose only
+bounded static reason codes, including through Debug. Reasons MUST distinguish
+missing correlation, unsupported client/source, unknown source, ambiguous source
+or session, conflicting ownership, invalid/event limits, and exact session absent
+versus an attested session with no projectable timeline. The four outcome names
+and Found payload MUST remain unchanged; Rust unit-variant matches may require
+payload-pattern updates.
 
 #### Scenario: Moved source and distinct clients
 
 - **WHEN** a source moves or another client has the same session ID
 - **THEN** only the exact client/path hash can correlate; a known lost source is
-  unavailable and an unknown missing source is not locally resolvable
+   unavailable and an unknown missing source is not locally resolvable
+
+#### Scenario: Failure classification remains private and deterministic
+
+- **WHEN** a source read, mapping, discovery, or ownership check fails with synthetic
+  private path/content/diagnostic canaries
+- **THEN** only closed reason values/codes are exposed, duplicate identical source
+  candidates are deduplicated, distinct matching candidates remain ambiguous
+  regardless of caller ordering, and a later valid invocation is unaffected
 
 ### Requirement: Current canonical acquisition remains authoritative
 
@@ -39,12 +54,20 @@ executable configuration. There MUST NOT be a SQLite/WAL/SHM fallback.
 Native export initializes, checkpoints, and migrates the store; a genuinely
 read-only OpenCode capability requires future accepted work. Production OpenCode
 scan/watch/acquisition MUST remain unchanged.
+OpenCode deferral MUST use `ReadOnlyProviderUnavailable` and MUST NOT imply
+missing, unreadable, permission-denied, or busy store state. Direct read reasons
+MUST use actual opened-object/OS failures rather than a pathname precheck or raw
+diagnostic matching: missing, permission denied, other unreadable, rejected
+non-regular opened object, limit exceeded, and malformed source. Unobserved busy
+or access diagnoses MUST NOT be invented. Bounded acquisition MAY preserve these
+closed classifications; production acquisition failure meaning MUST NOT change.
 
 #### Scenario: OpenCode export cannot mutate investigation artifacts
 
 - **WHEN** an OpenCode event is investigated with a fake executable available
 - **THEN** no executable is launched, no database/sidecar is read or created, the
-  result is payload-free unavailable, and synthetic DB/WAL/SHM bytes stay unchanged
+  result contains only the bounded provider reason, and synthetic DB/WAL/SHM bytes
+  stay unchanged; Linux synthetic access probes observe no opens or reads
 
 ### Requirement: Timeline investigation contains no prose evidence
 
@@ -71,6 +94,12 @@ regular object, bound bytes including growth, and bound JSON depth and records.
 Investigation MUST NOT run any native OpenCode command. Bounds MAY only be lowered from documented
 maxima. OS filesystem I/O has no hard wall-clock bound.
 Event3, detection, provenance, LocalEventFeed, and UI semantics MUST be unchanged.
+Discovery reasons MUST distinguish invalid/budget/depth limits, rejected symlink
+search roots, observed permission denial, and other traversal failure, without
+returning partial candidates or using known sources to bypass failed discovery.
+The backend MUST remain stateless with no automatic retries. Operator guidance
+MUST map reason codes to local actions without suggesting weaker permissions,
+raised maxima, native export fallback, or unsupported platform/version claims.
 
 #### Scenario: Synthetic preservation and direct read failure
 

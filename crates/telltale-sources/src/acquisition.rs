@@ -4,6 +4,8 @@
 //! canonical evidence or persisted scanner state. Production runtime cutover is
 //! separate from this API; acquisition performs no detection or event delivery.
 
+pub use crate::source_read::BoundedReadError;
+use crate::source_read::SourceReadError;
 use std::fmt;
 
 use telltale_schema::clients::{ClientId, SourceKind};
@@ -85,6 +87,7 @@ pub enum AcquisitionError {
     UnsupportedSourceIdentity,
     SourceKindMismatch,
     SourceRead,
+    BoundedSourceRead(BoundedReadError),
     InvalidAttestation,
     ConflictingSessionOwnership,
     InvalidContribution,
@@ -101,6 +104,7 @@ impl AcquisitionError {
             Self::UnsupportedSourceIdentity => "unsupported_source_identity",
             Self::SourceKindMismatch => "source_kind_mismatch",
             Self::SourceRead => "source_read",
+            Self::BoundedSourceRead(reason) => reason.code(),
             Self::InvalidAttestation => "invalid_session_attestation",
             Self::ConflictingSessionOwnership => "conflicting_session_ownership",
             Self::InvalidContribution => "invalid_native_contribution",
@@ -167,7 +171,9 @@ pub fn acquire_source_bounded(
     limits: DirectReadLimits,
 ) -> Result<AcquisitionBatch, AcquisitionError> {
     if !limits.is_valid() {
-        return Err(AcquisitionError::SourceRead);
+        return Err(AcquisitionError::BoundedSourceRead(
+            BoundedReadError::LimitExceeded,
+        ));
     }
     acquire_source_impl(source, options, Some(limits))
 }
@@ -203,7 +209,7 @@ fn acquire_source_impl(
     let observations = match source.client {
         ClientId::Claude => {
             let records = extract_claude_native_records_with_limits(source, limits)
-                .map_err(|_| AcquisitionError::SourceRead)?;
+                .map_err(|error| map_source_read(error, limits))?;
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -224,7 +230,7 @@ fn acquire_source_impl(
         }
         ClientId::Codex => {
             let records = extract_codex_native_records_with_limits(source, limits)
-                .map_err(|_| AcquisitionError::SourceRead)?;
+                .map_err(|error| map_source_read(error, limits))?;
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -242,7 +248,7 @@ fn acquire_source_impl(
         }
         ClientId::OpenClaw => {
             let records = extract_openclaw_native_records_with_limits(source, limits)
-                .map_err(|_| AcquisitionError::SourceRead)?;
+                .map_err(|error| map_source_read(error, limits))?;
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -263,7 +269,7 @@ fn acquire_source_impl(
         }
         ClientId::Qwen => {
             let records = extract_qwen_native_records_with_limits(source, limits)
-                .map_err(|_| AcquisitionError::SourceRead)?;
+                .map_err(|error| map_source_read(error, limits))?;
             for record in &records {
                 let kind = record.accounting_kind();
                 account_unit(
@@ -339,12 +345,27 @@ fn acquire_source_impl(
         _ => unreachable!("exact acquisition identity was validated"),
     };
     if limits.is_some_and(|limits| observations.len() > limits.records) {
-        return Err(AcquisitionError::SourceRead);
+        return Err(AcquisitionError::BoundedSourceRead(
+            BoundedReadError::LimitExceeded,
+        ));
     }
     Ok(AcquisitionBatch {
         observations,
         progress: AcquisitionProgress::None,
         accounting: accounting.finish(AccountingCoverage::CompleteSource),
+    })
+}
+
+fn map_source_read(error: SourceReadError, limits: Option<DirectReadLimits>) -> AcquisitionError {
+    if limits.is_none() {
+        return AcquisitionError::SourceRead;
+    }
+    AcquisitionError::BoundedSourceRead(match error {
+        SourceReadError::Bounded(reason) => reason,
+        SourceReadError::Json(_) | SourceReadError::SchemaDrift { .. } => {
+            BoundedReadError::MalformedSource
+        }
+        _ => BoundedReadError::Unreadable,
     })
 }
 
@@ -479,8 +500,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        AcquisitionError, AcquisitionOptions, AcquisitionProgress, OpenCodeSqliteReadOptions,
-        acquire_opencode_sqlite,
+        AcquisitionError, AcquisitionOptions, AcquisitionProgress, BoundedReadError,
+        OpenCodeSqliteReadOptions, acquire_opencode_sqlite,
     };
 
     const OBSERVED_AT: &str = "2026-09-18T12:00:00Z";
@@ -505,6 +526,30 @@ mod tests {
             SourceKind::HeadlessJsonl,
         ),
     ];
+
+    #[test]
+    fn bounded_source_errors_do_not_change_production_classification() {
+        for reason in [
+            BoundedReadError::Missing,
+            BoundedReadError::PermissionDenied,
+            BoundedReadError::Unreadable,
+            BoundedReadError::NonRegularSource,
+            BoundedReadError::LimitExceeded,
+            BoundedReadError::MalformedSource,
+        ] {
+            assert_eq!(
+                super::map_source_read(super::SourceReadError::Bounded(reason), None),
+                AcquisitionError::SourceRead
+            );
+            assert_eq!(
+                super::map_source_read(
+                    super::SourceReadError::Bounded(reason),
+                    Some(super::DirectReadLimits::default())
+                ),
+                AcquisitionError::BoundedSourceRead(reason)
+            );
+        }
+    }
 
     #[test]
     fn acquisition_denominator_matches_builtin_sources() {
