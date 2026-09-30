@@ -2268,6 +2268,29 @@ fn scan_once_can_emit_activity_events() {
 #[test]
 fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
     let temp = tempdir().expect("tempdir");
+    let rules_path = temp.path().join("recovery-rule.yaml");
+    fs::write(
+        &rules_path,
+        r#"
+version: 1
+description: Synthetic page-two recovery test.
+defaults: { case_insensitive: false, enabled: true }
+modifiers: []
+rules:
+  - id: synthetic.recovery.page_two
+    title: Synthetic recovery marker
+    tags: [synthetic]
+    category: synthetic
+    severity: high
+    score: 70
+    detection:
+      selection:
+        assistant_context: 'synthetic-page-two-security-marker'
+      condition: selection
+    explanation: Synthetic persisted recovery evidence.
+"#,
+    )
+    .unwrap();
     let root = temp.path().join("home");
     let opencode_dir = root.join(".local/share/opencode");
     fs::create_dir_all(&opencode_dir).expect("opencode dir");
@@ -2333,6 +2356,8 @@ fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
                 "--root",
             ])
             .arg(&root)
+            .args(["--no-default-rules", "--rules"])
+            .arg(&rules_path)
             .args(["--log-path"])
             .arg(&log_path)
             .args(["--state-path"])
@@ -2366,6 +2391,15 @@ fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
         tx.execute("insert into part values (?1,'message-a','session-a',1775000002000,1775000002000,'{\"type\":\"text\",\"text\":\"synthetic recovery\"}')", [format!("extra-{i}")]).unwrap();
     }
     tx.commit().unwrap();
+    writer
+        .execute(
+            "update part set data=?1 where id='extra-4999'",
+            [
+                serde_json::json!({"type": "text", "text": "synthetic-page-two-security-marker"})
+                    .to_string(),
+            ],
+        )
+        .unwrap();
     writer
         .execute(
             "update part set time_updated='invalid' where id='extra-4999'",
@@ -2407,6 +2441,22 @@ fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
     let summary: Value = serde_json::from_slice(&restarted.stdout).unwrap();
     assert_eq!(summary["source_processing"]["parsed_record_count"], 5002);
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    let events: Vec<Value> = fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "detection"
+                && event["client"] == "opencode"
+                && event["session_id"] == "session-a"
+                && event["rule_ids"].as_array().is_some_and(|ids| {
+                    ids.contains(&Value::String("synthetic.recovery.page_two".to_owned()))
+                })
+        }),
+        "page-two security detection must reach persisted JSONL"
+    );
     let recovered: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
     assert_eq!(
         recovered["sqlite_ingestion_cursors"]

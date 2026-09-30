@@ -115,6 +115,8 @@ one read snapshot, including ties in `time_updated`; the complete selection is
 mapped and evaluated once. All messages are still read. The public acquisition
 default and CLI bootstrap, `--backfill` and `--dry-run` remain newest-5,000
 sampling. Those modes do not recover or advance an existing production cursor.
+An ordinary bootstrap can initialize a timestamp cursor while omitting older
+parts; this sampling does not establish complete historical coverage.
 
 Recognition and safe response:
 
@@ -126,6 +128,8 @@ Recognition and safe response:
    selection; required output persistence gates cursor installation. A failed
    acquisition or required output write leaves the committed cursor unchanged.
    Restart retries the whole selection from that timestamp minus ten minutes.
+   If that unchanged overlap selection still exceeds a budget, retries and
+   restarts can remain saturated; they do not drain it in smaller batches.
 3. If failures persist, preserve the database, state and output artifacts under
    their existing privacy controls and seek support. More than 25,000 selected
    parts, malformed data, or independent canonical/projection budgets still fail

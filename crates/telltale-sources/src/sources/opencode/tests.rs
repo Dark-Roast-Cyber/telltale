@@ -9,7 +9,7 @@ use telltale_schema::source::Source;
 
 use super::native::{
     OpenCodeSqliteNativeRecord, OpenCodeSqliteReadOptions, extract_incremental_parts,
-    extract_sqlite_native_source,
+    extract_sqlite_native_source, on_next_incremental_page,
 };
 
 fn source(path: std::path::PathBuf) -> Source {
@@ -305,50 +305,72 @@ fn small_pages_check_exact_cap_overflow_order_and_later_errors() {
 fn read_snapshot_excludes_concurrent_message_and_part_updates() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("snapshot.db");
-    let writer = Connection::open(&path).unwrap();
+    let mut writer = Connection::open(&path).unwrap();
     writer.execute_batch("pragma journal_mode=WAL;
         create table message (id text, session_id text, data text);
         create table part (id text, message_id text, session_id text, time_updated integer, data text);
-        insert into message values ('m','s','{\"role\":\"user\"}');
-        insert into part values ('a','m','s',10,'{\"type\":\"text\",\"text\":\"before\"}'), ('b','m','s',10,'{\"type\":\"text\",\"text\":\"before\"}');").unwrap();
-    let mut reader =
-        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    let snapshot = reader.transaction().unwrap();
-    // The schema read is the same first snapshot-pinning read as acquisition.
-    snapshot
-        .query_row(
-            "select exists(select 1 from sqlite_master where name='message')",
-            [],
-            |row| row.get::<_, bool>(0),
+        insert into message values ('m','s','{\"role\":\"user\"}');").unwrap();
+    let tx = writer.transaction().unwrap();
+    for i in 0..5001 {
+        tx.execute(
+            r#"insert into part values (?1,'m','s',10,'{"type":"text","text":"before"}')"#,
+            [format!("part-{i}")],
         )
         .unwrap();
-    writer
-        .execute_batch(
-            "begin immediate;
+    }
+    tx.commit().unwrap();
+    let mutated = std::rc::Rc::new(std::cell::Cell::new(false));
+    let callback_ran = mutated.clone();
+    let _callback_guard = on_next_incremental_page(move || {
+        writer
+            .execute_batch(
+                "begin immediate;
         update message set data='{\"role\":\"assistant\"}';
         update part set time_updated=20, data='{\"type\":\"text\",\"text\":\"after\"}';
         insert into part values ('c','m','s',20,'{\"type\":\"text\",\"text\":\"after\"}'); commit;",
-        )
-        .unwrap();
-    let (records, max) = extract_incremental_parts(&snapshot, 10, 3, true, 1).unwrap();
-    assert_eq!(max, Some(10));
-    assert_eq!(records.len(), 2);
-    for record in records {
-        let OpenCodeSqliteNativeRecord::Text(part) = record else {
-            panic!("text")
-        };
-        assert_eq!(part.text.as_deref(), Some("before"));
-        assert_eq!(part.context.role.as_deref(), Some("user"));
+            )
+            .unwrap();
+        callback_ran.set(true);
+    });
+    let options = OpenCodeSqliteReadOptions {
+        part_min_time_updated: Some(10),
+        part_limit: 6000,
+    };
+    let acquired = extract_sqlite_native_source(&source(path.clone()), options).unwrap();
+    assert!(mutated.get(), "writer must commit between production pages");
+    assert_eq!(acquired.sqlite_part_max_time_updated, Some(10));
+    assert_eq!(acquired.records.len(), 5002);
+    let mut ids = Vec::new();
+    for record in acquired.records {
+        match record {
+            OpenCodeSqliteNativeRecord::Message(message) => {
+                assert_eq!(message.context.role.as_deref(), Some("user"));
+            }
+            OpenCodeSqliteNativeRecord::Text(part) => {
+                assert_eq!(part.text.as_deref(), Some("before"));
+                assert_eq!(part.context.role.as_deref(), Some("user"));
+                ids.push(part.source_id.unwrap());
+            }
+            _ => panic!("expected message or text"),
+        }
     }
-    snapshot.commit().unwrap();
-    let next = extract_sqlite_native_source(
-        &source(path),
-        OpenCodeSqliteReadOptions {
-            part_min_time_updated: Some(10),
-            part_limit: 3,
-        },
-    )
-    .unwrap();
+    assert_eq!(
+        ids,
+        (0..5001).map(|i| format!("part-{i}")).collect::<Vec<_>>()
+    );
+    let next = extract_sqlite_native_source(&source(path), options).unwrap();
     assert_eq!(next.sqlite_part_max_time_updated, Some(20));
-    assert_eq!(next.records.len(), 4);
+    assert_eq!(next.records.len(), 5003);
+    for record in next.records {
+        match record {
+            OpenCodeSqliteNativeRecord::Message(message) => {
+                assert_eq!(message.context.role.as_deref(), Some("assistant"));
+            }
+            OpenCodeSqliteNativeRecord::Text(part) => {
+                assert_eq!(part.text.as_deref(), Some("after"));
+                assert_eq!(part.context.role.as_deref(), Some("assistant"));
+            }
+            _ => panic!("expected message or text"),
+        }
+    }
 }

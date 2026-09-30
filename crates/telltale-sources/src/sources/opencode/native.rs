@@ -7,6 +7,32 @@ use telltale_schema::source::Source;
 
 pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_INCREMENTAL_PAGE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) struct IncrementalPageCallbackGuard;
+
+#[cfg(test)]
+impl Drop for IncrementalPageCallbackGuard {
+    fn drop(&mut self) {
+        AFTER_INCREMENTAL_PAGE.with(|callback| callback.borrow_mut().take());
+    }
+}
+
+#[cfg(test)]
+pub(super) fn on_next_incremental_page(
+    callback: impl FnOnce() + 'static,
+) -> IncrementalPageCallbackGuard {
+    AFTER_INCREMENTAL_PAGE.with(|slot| {
+        assert!(slot.borrow().is_none());
+        *slot.borrow_mut() = Some(Box::new(callback));
+    });
+    IncrementalPageCallbackGuard
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct OpenCodeSqliteReadOptions {
     pub part_min_time_updated: Option<i64>,
@@ -398,6 +424,10 @@ pub(super) fn extract_incremental_parts(
         }
         if exhausted {
             return Ok((records, after.map(|key| key.0)));
+        }
+        #[cfg(test)]
+        if let Some(callback) = AFTER_INCREMENTAL_PAGE.with(|slot| slot.borrow_mut().take()) {
+            callback();
         }
     }
 }
