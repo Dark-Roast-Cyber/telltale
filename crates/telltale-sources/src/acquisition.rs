@@ -320,8 +320,8 @@ pub fn acquire_opencode_sqlite(
     Ok(AcquisitionBatch {
         observations,
         progress,
-        // Selected parts and separate SQL statement snapshots cannot establish
-        // whole-database replacement coverage, even without a lower bound.
+        // A coherent selected-part snapshot is still not whole-database
+        // replacement coverage, even without a lower bound.
         accounting: accounting.finish(AccountingCoverage::PartialSource),
     })
 }

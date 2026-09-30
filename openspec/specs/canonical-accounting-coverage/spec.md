@@ -78,12 +78,11 @@ selected-part high-water behavior. Accounting MUST describe that acquired native
 batch without a hidden second read. Lack of a lower bound, a larger limit, an
 empty result, or high-water advancement MUST NOT establish CompleteSource.
 
-Current schema checks, message extraction, and part extraction do not share an
-explicit SQLite transaction snapshot. The API MUST NOT claim a complete coherent
-database accounting snapshot from those separate statements. Any future operation
-claiming complete database accounting across multiple queries MUST establish one
-consistent read snapshot over the entire replacement scope and be separately
-specified and validated; no such operation is introduced here.
+Schema checks, message extraction and selected part pages share one explicit
+SQLite read transaction snapshot. This coherence MUST NOT promote selected-part
+accounting to complete database replacement coverage. Any future operation
+claiming complete database accounting MUST cover the entire replacement scope
+and be separately specified and validated; no such operation is introduced here.
 
 #### Scenario: Overlap would lose or duplicate contributions
 

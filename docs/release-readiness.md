@@ -175,6 +175,24 @@ that `0.5.0` commit, public artifact-boundary review, and GitHub publication
 prerequisites. Crates.io publication is a separate later distribution action
 and does not block stable GitHub `v0.5.0`.
 
+## OpenCode incremental coverage qualification (#77)
+
+The accepted development recovery is source-atomic and finite: incremental CLI
+selections up to 25,000 text/tool parts use 5,000-row snapshot-scoped keyset pages
+and one canonical evaluation. The public default and uncursored CLI modes remain
+5,000-part sampling; persisted timestamp state and output-gated installation are
+unchanged. Older binaries can read this state but may again saturate at 5,000.
+This is not a persisted cross-cycle continuation or arbitrary-backlog guarantee.
+Independent canonical/projection limits can reject a selection below 25,000.
+
+Before claiming recovery in a candidate, retain synthetic evidence for tied
+timestamps across pages, aggregate exhaustion/overflow, coherent concurrent
+updates, cross-page suppression/correlation, and failure/restart cursor replay.
+Bind that evidence to the candidate's reviewed source; current development tests
+do not qualify a previously published artifact. Preserve the residual limitation
+and [safe operator response](session-sources.md#opencode-incremental-saturation-and-recovery)
+in candidate coverage claims. No release or stable promotion is authorized here.
+
 ## Pre-Release Checks
 
 Run these checks from a clean working tree in the local Telltale checkout before

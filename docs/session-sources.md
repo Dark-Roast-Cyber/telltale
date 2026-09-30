@@ -107,6 +107,36 @@ OpenCode adapter notes:
 - Live OpenCode SQLite stores also carry a top-level `message.session_id` column even when the JSON payload does not.
 - Telltale needs all roles and tool records, not only assistant token-usage rows.
 
+### OpenCode incremental saturation and recovery
+
+Current development supports source-atomic recovery of an incremental selection
+up to 25,000 text/tool parts. Queries return at most 5,000 parts per page from
+one read snapshot, including ties in `time_updated`; the complete selection is
+mapped and evaluated once. All messages are still read. The public acquisition
+default and CLI bootstrap, `--backfill` and `--dry-run` remain newest-5,000
+sampling. Those modes do not recover or advance an existing production cursor.
+
+Recognition and safe response:
+
+1. Check scan summaries for an OpenCode parse failure and the bounded
+   `canonical_acquisition_failed` scanner error. This can indicate saturation,
+   schema/payload failure or contention; it does not uniquely diagnose overflow.
+2. Retry ordinary scans with the same state using a binary containing this
+   recovery implementation. Successful incremental acquisition must exhaust its
+   selection; required output persistence gates cursor installation. A failed
+   acquisition or required output write leaves the committed cursor unchanged.
+   Restart retries the whole selection from that timestamp minus ten minutes.
+3. If failures persist, preserve the database, state and output artifacts under
+   their existing privacy controls and seek support. More than 25,000 selected
+   parts, malformed data, or independent canonical/projection budgets still fail
+   closed. There is no supported arbitrary-backlog recovery command. Do not
+   delete state, shrink overlap, or use backfill/dry-run as a recovery workaround.
+
+The cap bounds selected part count, not total memory, source bytes, message count
+or SQLite query work. A snapshot captures currently visible rows, not deleted
+rows or overwritten intermediate revisions; backdated writes outside overlap
+are not guaranteed. Accounting remains partial, not whole-database coverage.
+
 Claude Code adapter notes:
 
 - JSONL entries commonly use top-level `type` values such as `user` and `assistant`.

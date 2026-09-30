@@ -656,7 +656,7 @@ fn saturated_incremental_scan_never_stages_cursor_or_baseline() {
     let source = database(&dir.path().join("synthetic.db"));
     let mut conn = rusqlite::Connection::open(&source.path).unwrap();
     let transaction = conn.transaction().unwrap();
-    for i in 0..10000 {
+    for i in 0..25000 {
         transaction.execute(
             "INSERT INTO part VALUES (?1, 'm', 's', 1000, 1000, '{\"type\":\"text\",\"text\":\"synthetic\"}')",
             [format!("extra-{i}")],
@@ -708,6 +708,108 @@ fn saturated_incremental_scan_never_stages_cursor_or_baseline() {
             BaselineReplacement::NoReplacement
         );
     }
+}
+
+#[test]
+fn incremental_backlog_over_one_page_recovers_ties_and_overlap_updates() {
+    let dir = tempdir().unwrap();
+    let source = database(&dir.path().join("recovery.db"));
+    let mut conn = rusqlite::Connection::open(&source.path).unwrap();
+    let tx = conn.transaction().unwrap();
+    for i in 0..5000 {
+        tx.execute("INSERT INTO part VALUES (?1,'m','s',1000,1000,'{\"type\":\"text\",\"text\":\"synthetic\"}')", [format!("extra-{i}")]).unwrap();
+    }
+    tx.commit().unwrap();
+    conn.execute_batch("UPDATE part SET data='{\"type\":\"text\",\"text\":\"synthetic\"}' WHERE id='p';
+        INSERT INTO message VALUES ('later','s',1000,1000,'{\"role\":\"user\",\"content\":\"needle envelope\"}');").unwrap();
+    for (id, message_id, command, start) in [
+        ("extra-4998", "m", "hostname", 1000),
+        ("extra-4999", "later", "whoami", 2000),
+    ] {
+        conn.execute("UPDATE part SET message_id=?1, data=?2 WHERE id=?3", rusqlite::params![
+            message_id,
+            serde_json::json!({"type":"tool","tool":"bash","callID":id,"state":{"status":"running","input":{"command":command},"time":{"start":start}}}).to_string(),
+            id,
+        ]).unwrap();
+    }
+    let process_rules = telltale_rules::process_chain::load_process_chain_rules(r#"
+version: 1
+description: synthetic page boundary
+defaults: { enabled: true, risk_entity: host, suppression_window_seconds: 3600 }
+categories:
+  discovery: { detection_class: security_detection, analytic_intent: alert, investigation_fields: [], falsepositives: [] }
+rules: []
+standalone:
+  - { id: procchain.synthetic.hostname, title: command, category: discovery, severity: informational, score: 0, confidence: low, match: command_line, patterns: ["\\bhostname\\b"], mitre: [T1082], reason: command }
+  - { id: procchain.synthetic.whoami, title: command, category: discovery, severity: informational, score: 0, confidence: low, match: command_line, patterns: ["\\bwhoami\\b"], mitre: [T1082], reason: command }
+correlations:
+  - id: procchain.correlation.synthetic_children
+    title: child sequence
+    category: discovery
+    severity: medium
+    score: 45
+    confidence: medium
+    mitre: [T1082]
+    reason: child sequence
+    window_seconds: 60
+    entity: host
+    sequence:
+      - { any_rule_id: [procchain.synthetic.hostname], any_child: [hostname] }
+      - { any_rule_id: [procchain.synthetic.whoami], any_child: [whoami] }
+"#).unwrap();
+    let process_config = ProcessChainConfig::default();
+    let mut state = ScanState::default();
+    state.observe_sqlite_ingestion_cursor(&source, "part", 1000, 1);
+    let plan = plan("user_context");
+    let read = |state: &ScanState| {
+        process_canonical_source(
+            &source,
+            state,
+            CanonicalProcessingOptions::default(),
+            clock(),
+            &plan,
+            Some((&process_rules, &process_config)),
+        )
+    };
+    let first = read(&state);
+    assert_eq!(first.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(
+        first.accounting.as_ref().unwrap().sessions[0]
+            .counts
+            .native_units,
+        5003
+    );
+    assert_eq!(first.sqlite_progress_candidate(false, false), Some(1000));
+    assert!(!first.events.iter().any(|e| e.event_type == "detection"));
+    assert!(
+        first.events.iter().any(|e| {
+            e.rule_ids
+                .iter()
+                .any(|id| id == "procchain.correlation.synthetic_children")
+        }),
+        "event rules: {:?}",
+        first
+            .events
+            .iter()
+            .map(|e| (&e.event_type, &e.rule_ids))
+            .collect::<Vec<_>>()
+    );
+    state.observe_sqlite_ingestion_cursor(&source, "part", 2000, 2);
+    conn.execute("UPDATE part SET data='{\"type\":\"text\",\"text\":\"needle changed\"}', time_updated=1500 WHERE id='extra-4999'", []).unwrap();
+    let changed = read(&state);
+    assert_eq!(changed.status, SourceProcessingStatus::Succeeded);
+    assert!(changed.events.iter().any(|e| {
+        e.event_type == "detection"
+            && e.evidence
+                .iter()
+                .any(|v| v.redacted_value.contains("changed"))
+    }));
+    assert_eq!(changed.sqlite_progress_candidate(false, false), Some(1500));
+    state.observe_sqlite_ingestion_cursor(&source, "part", 1500, 3);
+    assert_eq!(
+        state.sqlite_ingestion_cursor_time_updated(&source, "part"),
+        Some(2000)
+    );
 }
 
 #[test]

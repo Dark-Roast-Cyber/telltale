@@ -39,6 +39,7 @@ use telltale_sources::acquisition::OpenCodeSqliteReadOptions;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
 const OPENCODE_SQLITE_CURSOR_OVERLAP_MS: i64 = 10 * 60 * 1_000;
+const OPENCODE_SQLITE_INCREMENTAL_PART_LIMIT: i64 = 25_000;
 
 #[cfg(test)]
 mod activation_tests;
@@ -785,6 +786,9 @@ fn opencode_read_options_for_scan_source(
     options.part_min_time_updated = state
         .sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_PART_TABLE)
         .map(|last_seen| last_seen.saturating_sub(OPENCODE_SQLITE_CURSOR_OVERLAP_MS));
+    if options.part_min_time_updated.is_some() {
+        options.part_limit = OPENCODE_SQLITE_INCREMENTAL_PART_LIMIT;
+    }
     options
 }
 
@@ -1536,6 +1540,7 @@ mod tests {
         state.observe_sqlite_ingestion_cursor(&source, OPENCODE_SQLITE_PART_TABLE, 1_000_000, 42);
 
         let live_options = opencode_read_options_for_scan_source(&source, &state, false, false);
+        assert_eq!(live_options.part_limit, 25_000);
         assert_eq!(
             live_options.part_min_time_updated,
             Some(1_000_000 - OPENCODE_SQLITE_CURSOR_OVERLAP_MS)
@@ -1543,9 +1548,16 @@ mod tests {
 
         let dry_run_options = opencode_read_options_for_scan_source(&source, &state, false, true);
         assert_eq!(dry_run_options.part_min_time_updated, None);
+        assert_eq!(dry_run_options.part_limit, 5_000);
 
         let backfill_options = opencode_read_options_for_scan_source(&source, &state, true, false);
         assert_eq!(backfill_options.part_min_time_updated, None);
+        assert_eq!(backfill_options.part_limit, 5_000);
+        assert_eq!(
+            opencode_read_options_for_scan_source(&source, &ScanState::default(), false, false)
+                .part_limit,
+            5_000
+        );
     }
 
     fn opencode_test_source() -> Source {

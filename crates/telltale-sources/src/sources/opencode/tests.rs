@@ -8,7 +8,8 @@ use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::source::Source;
 
 use super::native::{
-    OpenCodeSqliteNativeRecord, OpenCodeSqliteReadOptions, extract_sqlite_native_source,
+    OpenCodeSqliteNativeRecord, OpenCodeSqliteReadOptions, extract_incremental_parts,
+    extract_sqlite_native_source,
 };
 
 fn source(path: std::path::PathBuf) -> Source {
@@ -239,4 +240,115 @@ fn sqlite_busy_error_maps_to_locked() {
         SourceReadError::from_sqlite(error),
         SourceReadError::Locked(_)
     ));
+}
+
+#[test]
+fn incremental_parts_reject_non_integer_continuation_time() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("invalid-key.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("create table part (id text, message_id text, session_id text, time_updated, data text);
+        insert into part values ('p','m','s','invalid','{\"type\":\"text\",\"text\":\"synthetic\"}');").unwrap();
+    assert!(
+        extract_sqlite_native_source(
+            &source(path),
+            OpenCodeSqliteReadOptions {
+                part_min_time_updated: Some(0),
+                part_limit: 10,
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn small_pages_check_exact_cap_overflow_order_and_later_errors() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "create table part (id text, message_id text, session_id text, time_updated, data text);
+        insert into part values ('a','m','s',10,'{\"type\":\"text\",\"text\":\"a\"}'),
+          ('b','m','s',10,'{\"type\":\"text\",\"text\":\"b\"}'),
+          ('c','m','s',10,'{\"type\":\"text\",\"text\":\"c\"}'),
+          ('d','m','s',11,'{\"type\":\"text\",\"text\":\"d\"}');",
+    )
+    .unwrap();
+    let (records, high_water) = extract_incremental_parts(&conn, 10, 4, false, 2).unwrap();
+    assert_eq!(high_water, Some(11));
+    let ids = records
+        .iter()
+        .map(|r| match r {
+            OpenCodeSqliteNativeRecord::Text(p) => p.source_id.as_deref().unwrap(),
+            _ => panic!("expected text"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["a", "b", "c", "d"]);
+    assert!(extract_incremental_parts(&conn, 10, 3, false, 2).is_err());
+    assert!(extract_incremental_parts(&conn, 10, i64::MAX, false, 2).is_err());
+    conn.execute(
+        "insert into part values ('e','m','s',12,'{\"type\":\"text\"}')",
+        [],
+    )
+    .unwrap();
+    assert!(extract_incremental_parts(&conn, 10, 4, false, 2).is_err());
+    conn.execute("update part set time_updated='invalid' where id='e'", [])
+        .unwrap();
+    assert!(extract_incremental_parts(&conn, 10, 6, false, 2).is_err());
+    conn.execute(
+        "update part set time_updated=12, data='not json' where id='e'",
+        [],
+    )
+    .unwrap();
+    assert!(extract_incremental_parts(&conn, 10, 6, false, 2).is_err());
+}
+
+#[test]
+fn read_snapshot_excludes_concurrent_message_and_part_updates() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("snapshot.db");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("pragma journal_mode=WAL;
+        create table message (id text, session_id text, data text);
+        create table part (id text, message_id text, session_id text, time_updated integer, data text);
+        insert into message values ('m','s','{\"role\":\"user\"}');
+        insert into part values ('a','m','s',10,'{\"type\":\"text\",\"text\":\"before\"}'), ('b','m','s',10,'{\"type\":\"text\",\"text\":\"before\"}');").unwrap();
+    let mut reader =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let snapshot = reader.transaction().unwrap();
+    // The schema read is the same first snapshot-pinning read as acquisition.
+    snapshot
+        .query_row(
+            "select exists(select 1 from sqlite_master where name='message')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap();
+    writer
+        .execute_batch(
+            "begin immediate;
+        update message set data='{\"role\":\"assistant\"}';
+        update part set time_updated=20, data='{\"type\":\"text\",\"text\":\"after\"}';
+        insert into part values ('c','m','s',20,'{\"type\":\"text\",\"text\":\"after\"}'); commit;",
+        )
+        .unwrap();
+    let (records, max) = extract_incremental_parts(&snapshot, 10, 3, true, 1).unwrap();
+    assert_eq!(max, Some(10));
+    assert_eq!(records.len(), 2);
+    for record in records {
+        let OpenCodeSqliteNativeRecord::Text(part) = record else {
+            panic!("text")
+        };
+        assert_eq!(part.text.as_deref(), Some("before"));
+        assert_eq!(part.context.role.as_deref(), Some("user"));
+    }
+    snapshot.commit().unwrap();
+    let next = extract_sqlite_native_source(
+        &source(path),
+        OpenCodeSqliteReadOptions {
+            part_min_time_updated: Some(10),
+            part_limit: 3,
+        },
+    )
+    .unwrap();
+    assert_eq!(next.sqlite_part_max_time_updated, Some(20));
+    assert_eq!(next.records.len(), 4);
 }

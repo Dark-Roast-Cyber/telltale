@@ -220,21 +220,23 @@ pub(crate) fn extract_sqlite_native_source(
     source: &Source,
     options: OpenCodeSqliteReadOptions,
 ) -> Result<OpenCodeSqliteNativeExtraction, SourceReadError> {
-    let conn = Connection::open_with_flags(&source.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut conn = Connection::open_with_flags(&source.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+    let snapshot = conn.transaction()?;
     let mut records = Vec::new();
     let mut sqlite_part_max_time_updated = None;
 
-    let has_message_table = sqlite_table_exists(&conn, "message")?;
+    let has_message_table = sqlite_table_exists(&snapshot, "message")?;
     if has_message_table {
-        records.extend(extract_sqlite_message_records(&conn)?);
+        records.extend(extract_sqlite_message_records(&snapshot)?);
     }
-    if sqlite_table_exists(&conn, "part")? {
+    if sqlite_table_exists(&snapshot, "part")? {
         let (part_records, max_time_updated) =
-            extract_sqlite_part_records(&conn, options, has_message_table)?;
+            extract_sqlite_part_records(&snapshot, options, has_message_table)?;
         records.extend(part_records);
         sqlite_part_max_time_updated = max_time_updated;
     }
+    snapshot.commit()?;
 
     Ok(OpenCodeSqliteNativeExtraction {
         records,
@@ -309,31 +311,18 @@ fn extract_sqlite_part_records(
     include_message_context: bool,
 ) -> Result<(Vec<OpenCodeSqliteNativeRecord>, Option<i64>), SourceReadError> {
     let limit = options.part_limit.max(1);
-    let rows = if let Some(min_time_updated) = options.part_min_time_updated {
-        let query = sqlite_part_query(true, include_message_context);
-        let mut stmt = conn.prepare(&query)?;
-        let lookahead = limit.checked_add(1).ok_or(SourceReadError::SchemaDrift {
-            client: telltale_schema::clients::ClientId::OpenCode,
-            source_id: "opencode.sqlite".to_owned(),
-            detail: "part limit overflow",
-        })?;
-        let rows = sqlite_rows_as_values_with_params(
-            &mut stmt,
-            rusqlite::params![min_time_updated, lookahead],
-        )?;
-        if rows.len() > usize::try_from(limit).unwrap_or(usize::MAX) {
-            return Err(SourceReadError::SchemaDrift {
-                client: telltale_schema::clients::ClientId::OpenCode,
-                source_id: "opencode.sqlite".to_owned(),
-                detail: "incremental part limit exceeded",
-            });
-        }
-        rows
-    } else {
-        let query = sqlite_part_query(false, include_message_context);
-        let mut stmt = conn.prepare(&query)?;
-        sqlite_rows_as_values_with_params(&mut stmt, rusqlite::params![limit])?
-    };
+    if let Some(min_time_updated) = options.part_min_time_updated {
+        return extract_incremental_parts(
+            conn,
+            min_time_updated,
+            limit,
+            include_message_context,
+            SQLITE_PART_LIMIT,
+        );
+    }
+    let query = sqlite_part_query(include_message_context);
+    let mut stmt = conn.prepare(&query)?;
+    let rows = sqlite_rows_as_values_with_params(&mut stmt, rusqlite::params![limit])?;
 
     let max_time_updated = rows.iter().filter_map(sqlite_time_updated).max();
     let records = rows
@@ -342,6 +331,75 @@ fn extract_sqlite_part_records(
         .collect();
 
     Ok((records, max_time_updated))
+}
+
+fn part_read_error(detail: &'static str) -> SourceReadError {
+    SourceReadError::SchemaDrift {
+        client: telltale_schema::clients::ClientId::OpenCode,
+        source_id: "opencode.sqlite".to_owned(),
+        detail,
+    }
+}
+
+pub(super) fn extract_incremental_parts(
+    conn: &Connection,
+    min_time_updated: i64,
+    limit: i64,
+    include_message_context: bool,
+    page_size: i64,
+) -> Result<(Vec<OpenCodeSqliteNativeRecord>, Option<i64>), SourceReadError> {
+    limit
+        .checked_add(1)
+        .ok_or_else(|| part_read_error("part limit overflow"))?;
+    let select = sqlite_part_select(include_message_context);
+    let query = format!(
+        "{select}
+        where json_extract(part.data, '$.type') in ('tool', 'text')
+          and part.time_updated >= ?1
+          and (?2 is null or (part.time_updated, part.rowid) > (?2, ?3))
+        order by part.time_updated, part.rowid limit ?4"
+    );
+    let mut stmt = conn.prepare(&query)?;
+    let mut records = Vec::new();
+    let mut remaining = limit;
+    let mut after: Option<(i64, i64)> = None;
+    loop {
+        let query_limit = page_size.min(remaining + 1);
+        let rows = sqlite_rows_as_values_with_params(
+            &mut stmt,
+            rusqlite::params![
+                min_time_updated,
+                after.map(|key| key.0),
+                after.map(|key| key.1),
+                query_limit,
+            ],
+        )?;
+        let exhausted = rows.len()
+            < usize::try_from(query_limit)
+                .map_err(|_| part_read_error("part page limit overflow"))?;
+        for value in rows {
+            let key = (
+                sqlite_time_updated(&value)
+                    .ok_or_else(|| part_read_error("invalid part continuation time"))?,
+                value
+                    .get("__telltale_rowid")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| part_read_error("invalid part continuation rowid"))?,
+            );
+            if key.0 < min_time_updated || after.is_some_and(|previous| key <= previous) {
+                return Err(part_read_error("invalid part continuation order"));
+            }
+            if remaining == 0 {
+                return Err(part_read_error("incremental part limit exceeded"));
+            }
+            records.push(sqlite_part_native_record(&value));
+            remaining -= 1;
+            after = Some(key);
+        }
+        if exhausted {
+            return Ok((records, after.map(|key| key.0)));
+        }
+    }
 }
 
 fn sqlite_part_native_record(raw_value: &Value) -> OpenCodeSqliteNativeRecord {
@@ -386,32 +444,24 @@ fn sqlite_part_native_record(raw_value: &Value) -> OpenCodeSqliteNativeRecord {
     })
 }
 
-fn sqlite_part_query(has_min_time_updated: bool, include_message_context: bool) -> String {
-    let select = if include_message_context {
+fn sqlite_part_select(include_message_context: bool) -> &'static str {
+    if include_message_context {
         "select part.*, part.rowid as __telltale_rowid, message.data as __telltale_message_data, message.session_id as __telltale_message_session_id \
          from part left join message on message.id = part.message_id"
     } else {
         "select part.*, part.rowid as __telltale_rowid from part"
-    };
-    let min_filter = if has_min_time_updated {
-        " and part.time_updated >= ?1"
-    } else {
-        ""
-    };
-    let limit_param = if has_min_time_updated { "?2" } else { "?1" };
-    let order = if has_min_time_updated {
-        "part.time_updated, part.rowid"
-    } else {
-        "part.time_updated desc, part.rowid desc"
-    };
+    }
+}
+
+fn sqlite_part_query(include_message_context: bool) -> String {
+    let select = sqlite_part_select(include_message_context);
 
     format!(
         "select * from (
             {select}
             where json_extract(part.data, '$.type') in ('tool', 'text')
-              {min_filter}
-            order by {order}
-            limit {limit_param}
+             order by part.time_updated desc, part.rowid desc
+             limit ?1
          ) order by time_updated, __telltale_rowid"
     )
 }

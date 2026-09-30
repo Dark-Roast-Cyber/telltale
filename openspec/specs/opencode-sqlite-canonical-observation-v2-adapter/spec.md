@@ -24,18 +24,29 @@ compatibility.
 
 ### Requirement: SQLite source contract remains bounded
 
-The adapter MUST retain the existing five-second busy timeout, lock mapping,
-uncursored message query, selected `tool`/`text` part filter, cursor predicate
-and inner/outer ordering. It MUST open existing SQLite databases read-only
-without creating a missing database. Uncursored parts MUST retain newest-L
-sampling, where L is the supplied part limit clamped to at least one.
-Incremental parts with a supplied minimum timestamp MUST return the complete
-selected result when it contains at most L rows, or fail the entire acquisition
-when it contains more than L selected rows. Checked L+1 lookahead MUST use that
-same selected SQL result; a truncated successful incremental result MUST NOT be
-returned. The adapter MUST NOT read the event table or broaden the selected part
-set. This bounds selected part rows, not whole-cycle CPU, bytes, or message count,
-and does not guarantee eventual backlog coverage.
+The adapter MUST retain the five-second busy timeout, lock mapping, uncursored
+message query and selected `tool`/`text` part filter. It MUST open existing SQLite
+databases read-only without creating a missing database and establish one read
+transaction before schema inspection, covering messages and every part page.
+Uncursored parts MUST retain newest-L sampling and ascending returned ordering,
+where L is the supplied aggregate part limit clamped to at least one.
+Incremental parts MUST retain the inclusive minimum timestamp and strictly
+ascending `(time_updated, rowid)` selection, using internal keyset pages of at
+most 5,000 rows. Continuation coordinates MUST be integer and strictly increasing;
+invalid coordinates MUST fail the whole extraction, not be defaulted or coerced.
+Incremental reads MUST return the complete selected result when it contains at
+most L rows, or fail the entire acquisition when it contains more than L rows.
+Checked L+1 lookahead MUST check exhaustion even after an exact full page; a
+truncated successful incremental result MUST NOT be returned. Native records
+MUST be accumulated before one canonical projection and evaluation, preserving
+cross-page message suppression and process-chain correlation. The public default
+L remains 5,000. CLI scans with an actual incremental lower bound MUST use
+L=25,000; bootstrap, dry-run and backfill retain newest-5,000 sampling.
+Independent canonical and projection budgets MUST remain enforced. The adapter
+MUST NOT read the event table or broaden the selected part set. Page and aggregate
+limits bound selected part rows, not whole-cycle CPU, bytes or message count.
+Recovery covers only the finite selected snapshot, not arbitrary backlogs,
+deleted or overwritten history, or backdated updates outside overlap.
 
 #### Scenario: Incremental part extraction remains stable
 
@@ -61,6 +72,26 @@ and does not guarantee eventual backlog coverage.
 
 - **WHEN** acquisition is requested for an absent SQLite database
 - **THEN** source opening fails without creating a database
+
+#### Scenario: Equal timestamps cross page boundaries
+
+- **WHEN** more than 5,000 selected incremental rows share a timestamp and fit L
+- **THEN** strict timestamp/rowid continuation returns every row in stable order
+  and evaluation sees one batch, not separate page-local correlation domains
+
+#### Scenario: Exact page boundary and later failure
+
+- **WHEN** the selection fills L exactly, exceeds L by one, or a later page has
+  an invalid continuation coordinate or source payload
+- **THEN** exact L succeeds only after exhaustion is checked; overflow or source
+  failure returns no observations, accounting or checkpointable progress
+
+#### Scenario: Concurrent updates and restart
+
+- **WHEN** a writer commits after schema inspection pins the read snapshot
+- **THEN** all message context and part pages reflect the pinned snapshot
+- **AND** subsequent polls reread updates inside the existing ten-minute overlap;
+  restart or failed required output persistence retries from committed progress
 
 ### Requirement: Native identity and source session are truthful
 

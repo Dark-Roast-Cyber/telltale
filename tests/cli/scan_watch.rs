@@ -2266,7 +2266,7 @@ fn scan_once_can_emit_activity_events() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn scan_once_persists_opencode_sqlite_part_cursor() {
+fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path().join("home");
     let opencode_dir = root.join(".local/share/opencode");
@@ -2320,22 +2320,27 @@ fn scan_once_persists_opencode_sqlite_part_cursor() {
 
     let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("telltale-state.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--emit-activity",
-            "--client",
-            "opencode",
-            "--root",
-        ])
-        .arg(&root)
-        .args(["--log-path"])
-        .arg(&log_path)
-        .args(["--state-path"])
-        .arg(&state_path)
-        .output()
-        .expect("run telltale");
+    let scan = || {
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--emit-activity",
+                "--no-local-config",
+                "--install-inventory-disabled",
+                "--client",
+                "opencode",
+                "--root",
+            ])
+            .arg(&root)
+            .args(["--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .output()
+            .expect("run telltale")
+    };
+    let output = scan();
 
     assert!(
         output.status.success(),
@@ -2345,7 +2350,7 @@ fn scan_once_persists_opencode_sqlite_part_cursor() {
     let summary: Value = serde_json::from_slice(&output.stdout).expect("summary json");
     assert_eq!(summary["source_counts"]["opencode.sqlite"], 1);
 
-    let state: Value = serde_json::from_str(&fs::read_to_string(state_path).expect("state file"))
+    let state: Value = serde_json::from_str(&fs::read_to_string(&state_path).expect("state file"))
         .expect("state json");
     let cursors = state["sqlite_ingestion_cursors"]
         .as_object()
@@ -2354,6 +2359,64 @@ fn scan_once_persists_opencode_sqlite_part_cursor() {
     let cursor = cursors.values().next().expect("cursor");
     assert_eq!(cursor["table"], "part");
     assert_eq!(cursor["last_time_updated"], 1_775_000_001_000_i64);
+
+    let mut writer = Connection::open(&db_path).unwrap();
+    let tx = writer.transaction().unwrap();
+    for i in 0..5000 {
+        tx.execute("insert into part values (?1,'message-a','session-a',1775000002000,1775000002000,'{\"type\":\"text\",\"text\":\"synthetic recovery\"}')", [format!("extra-{i}")]).unwrap();
+    }
+    tx.commit().unwrap();
+    writer
+        .execute(
+            "update part set time_updated='invalid' where id='extra-4999'",
+            [],
+        )
+        .unwrap();
+    let malformed = scan();
+    assert!(
+        malformed.status.success(),
+        "source errors remain scanner events"
+    );
+    let summary: Value = serde_json::from_slice(&malformed.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
+    let after_error: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    assert_eq!(
+        after_error["sqlite_ingestion_cursors"],
+        state["sqlite_ingestion_cursors"]
+    );
+    writer
+        .execute(
+            "update part set time_updated=1775000002000 where id='extra-4999'",
+            [],
+        )
+        .unwrap();
+    let before_output_failure = fs::read(&state_path).unwrap();
+    // A directory at the canonical JSONL path fails the actual required write.
+    fs::remove_file(&log_path).unwrap();
+    fs::create_dir(&log_path).unwrap();
+    let failed = scan();
+    assert!(!failed.status.success());
+    assert_eq!(fs::read(&state_path).unwrap(), before_output_failure);
+    fs::remove_dir(&log_path).unwrap();
+    let restarted = scan();
+    assert!(
+        restarted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&restarted.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 5002);
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    let recovered: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    assert_eq!(
+        recovered["sqlite_ingestion_cursors"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()["last_time_updated"],
+        1_775_000_002_000_i64
+    );
 }
 
 #[test]
