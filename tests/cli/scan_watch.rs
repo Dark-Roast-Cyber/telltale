@@ -365,11 +365,16 @@ fn watch_idle_durable_validates_before_output_activation() {
             thread::sleep(Duration::from_millis(1500));
             assert!(child.child_mut().try_wait().unwrap().is_none());
         } else {
+            // This bounds process startup, not validation latency: no source activity is sent.
             while child.child_mut().try_wait().unwrap().is_none() {
-                assert!(
-                    started.elapsed() < Duration::from_secs(3),
-                    "{case}: validation was delayed until source activity"
-                );
+                if started.elapsed() >= Duration::from_secs(20) {
+                    child.child_mut().kill().expect("stop stalled watch");
+                    let output = child.disarm().wait_with_output().unwrap();
+                    panic!(
+                        "{case}: watch did not reject idle configuration within 20s; stderr: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
                 thread::sleep(Duration::from_millis(25));
             }
             let output = child.disarm().wait_with_output().unwrap();

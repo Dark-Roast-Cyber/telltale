@@ -354,7 +354,6 @@ fn splunk_hec_time(timestamp: &str) -> Option<f64> {
 mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
-    use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -770,56 +769,7 @@ mod tests {
 
     #[test]
     fn splunk_hec_http_sink_posts_batched_envelopes_to_collector() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("mock hec listener");
-        listener
-            .set_nonblocking(true)
-            .expect("nonblocking listener");
-        let addr = listener.local_addr().expect("listener addr");
-        let (tx, rx) = mpsc::channel();
-        let handle = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while Instant::now() < deadline {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(2)))
-                            .expect("read timeout");
-                        let mut request = Vec::new();
-                        let mut buf = [0_u8; 1024];
-                        while let Ok(read) = stream.read(&mut buf) {
-                            if read == 0 {
-                                break;
-                            }
-                            request.extend_from_slice(&buf[..read]);
-                            let text = String::from_utf8_lossy(&request).to_lowercase();
-                            if let Some((headers, body)) = text.split_once("\r\n\r\n") {
-                                let content_length = headers
-                                    .lines()
-                                    .find_map(|line| line.strip_prefix("content-length: "))
-                                    .and_then(|value| value.trim().parse::<usize>().ok())
-                                    .unwrap_or(0);
-                                if body.len() >= content_length {
-                                    break;
-                                }
-                            }
-                        }
-                        tx.send(String::from_utf8_lossy(&request).to_string())
-                            .expect("request capture");
-                        stream
-                            .write_all(
-                                b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}",
-                            )
-                            .expect("mock hec response");
-                        return;
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(20));
-                    }
-                    Err(err) => panic!("mock hec accept failed: {err}"),
-                }
-            }
-            panic!("mock hec listener timed out");
-        });
+        let (url, handle) = mock_responses(vec![(200, r#"{"code":0}"#.into())]);
 
         let marker = "TT_PRIVACY_HEC_25";
         let mut first = make_health_event();
@@ -839,16 +789,14 @@ mod tests {
         });
         let mut second = make_health_event();
         second.timestamp = "2026-05-18T02:05:00.000Z".to_string();
-        let sink = SplunkHecHttpSink::new(
-            format!("http://{addr}/services/collector"),
-            "test-token".to_string(),
-            SplunkHecConfig::default(),
-        )
-        .with_timeout(Duration::from_secs(2));
+        let sink =
+            SplunkHecHttpSink::new(url, "test-token".to_string(), SplunkHecConfig::default())
+                .with_timeout(Duration::from_secs(2));
 
         emit_events(&sink, &[first, second]).expect("emit hec events");
-        let request = rx.recv_timeout(Duration::from_secs(2)).expect("request");
-        handle.join().expect("mock hec join");
+        let requests = handle.join().expect("mock hec join");
+        assert_eq!(requests.len(), 1);
+        let request = String::from_utf8(requests.into_iter().next().unwrap()).expect("request");
 
         assert!(request.starts_with("POST /services/collector HTTP/1.1"));
         let lowercase = request.to_lowercase();

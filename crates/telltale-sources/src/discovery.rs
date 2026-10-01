@@ -263,6 +263,11 @@ fn discover_sources_with_projects_impl(
         }
     }
 
+    sort_and_dedup_sources(&mut sources);
+    Ok(sources)
+}
+
+fn sort_and_dedup_sources(sources: &mut Vec<Source>) {
     sources.sort_by(|left, right| {
         (
             left.client.as_str(),
@@ -280,7 +285,6 @@ fn discover_sources_with_projects_impl(
             ))
     });
     sources.dedup();
-    Ok(sources)
 }
 
 fn validate_root(root: &Path) -> Result<(), DiscoveryError> {
@@ -1083,6 +1087,37 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn exact_dedup_preserves_paths_with_identical_lossy_display() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        // APFS rejects these filenames; exact path identity needs no filesystem.
+        let paths = [0xfe, 0xff].map(|byte| {
+            let mut name = b"process-".to_vec();
+            name.push(byte);
+            name.extend_from_slice(b".log");
+            std::path::PathBuf::from(OsString::from_vec(name))
+        });
+        assert_ne!(paths[0], paths[1]);
+        assert_eq!(paths[0].to_string_lossy(), paths[1].to_string_lossy());
+        let expected = paths.map(|path| telltale_schema::source::Source {
+            client: ClientId::Copilot,
+            kind: SourceKind::CopilotProcessLog,
+            source_id: "copilot.process_log".to_string(),
+            path,
+        });
+        let mut sources = vec![
+            expected[1].clone(),
+            expected[0].clone(),
+            expected[1].clone(),
+            expected[0].clone(),
+        ];
+        super::sort_and_dedup_sources(&mut sources);
+        assert_eq!(sources, expected);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discovery_preserves_paths_with_identical_lossy_display() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
 
