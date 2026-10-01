@@ -154,6 +154,101 @@ The release archive does not include the Linux installer script itself. Active
 release assets and units use only the canonical identity; historical migration
 files are not runtime aliases.
 
+### macOS
+
+Download the release archive for your architecture and extract the binary:
+
+```sh
+# Apple Silicon (aarch64)
+curl -fsSLO https://github.com/Dark-Roast-Cyber/telltale/releases/latest/download/telltale-$(curl -fsSL https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')-aarch64-apple-darwin.tar.gz
+tar xzf telltale-*-aarch64-apple-darwin.tar.gz
+sudo mv telltale /usr/local/bin/telltale
+```
+
+Or build from source:
+
+```sh
+git clone https://github.com/Dark-Roast-Cyber/telltale.git
+cd telltale
+cargo build --release
+sudo cp target/release/telltale /usr/local/bin/telltale
+```
+
+The default `user` path profile writes telemetry to
+`~/Library/Logs/Telltale/telltale-events.jsonl` and state to
+`~/Library/Application Support/Telltale/telltale-state.json`. No sudo is needed
+for scans — run as your user.
+
+For periodic scans, create a user LaunchAgent at
+`~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.agentarchaeology.telltale</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/telltale</string>
+        <string>scan</string>
+        <string>--once</string>
+        <string>--emit-activity</string>
+        <string>--root</string>
+        <string>/Users/YOUR_USERNAME</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+```
+
+Load it with:
+
+```sh
+launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
+```
+
+### Windows
+
+Download the canonical release archive and extract `telltale.exe`:
+
+```powershell
+# PowerShell
+$release = Invoke-RestMethod "https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest"
+$tag = $release.tag_name
+$asset = $release.assets | Where-Object { $_.name -eq "telltale-$tag-x86_64-pc-windows-msvc.zip" }
+Invoke-WebRequest $asset.browser_download_url -OutFile "telltale-$tag.zip"
+Expand-Archive "telltale-$tag.zip" -DestinationPath "$env:LOCALAPPDATA\Telltale"
+```
+
+Or build from source:
+
+```powershell
+git clone https://github.com/Dark-Roast-Cyber/telltale.git
+cd telltale
+cargo build --release
+Copy-Item target\release\telltale.exe $env:LOCALAPPDATA\Telltale\telltale.exe
+```
+
+Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `telltale` from any
+terminal. The default `user` path profile writes telemetry to
+`%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` and state to
+`%LOCALAPPDATA%\Telltale\State\telltale-state.json`. No elevation is needed for
+scans — run as your user.
+
+For periodic scans, create a Scheduled Task at user logon:
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\Telltale\telltale.exe" -Argument "scan --once --emit-activity --root $env:USERPROFILE"
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RepeatInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 365)
+Register-ScheduledTask -TaskName "TelltaleScan" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited
+```
+
 ### Windows Scheduled Task example
 
 The Windows task example is `config/examples/telltale-scan-task.xml`.
@@ -294,6 +389,14 @@ overrides:
 Use `--config-dir <path>` to use explicit config roots instead of the default
 roots, and `--no-local-config` when a command should ignore local config.
 Explicit config roots must exist so path typos fail closed.
+Missing default roots and missing config subdirectories are optional. Present
+roots and subdirectories must be directories; metadata or enumeration failures
+are errors, not a reason to fall back to defaults. Discovered `.yaml`/`.yml`
+entries must resolve to regular files. Valid symlinks are followed, but dangling
+configuration symlinks and wrong-type YAML entries fail discovery before scan
+outputs or state are activated. Metadata diagnostics report a bounded error
+classification without configuration paths or contents. `rules` commands do
+not discover `allowlists.d` or `outputs.d`; `--no-local-config` bypasses discovery.
 
 Use `telltale config validate` as the local config preflight before running scans with
 custom content. It resolves config the same way as `scan` and `watch`, validates

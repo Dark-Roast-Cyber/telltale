@@ -3161,7 +3161,12 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
     let readme = fs::read_to_string("README.md").expect("read README");
     assert!(readme.contains("./scripts/install-telltale"));
     assert!(!readme.contains("https://agentarchaeology.ai/telltale_install.sh"));
-    let windows = text_between(&readme, "### Windows", "Before pushing public history");
+    let install = fs::read_to_string("docs/install.md").expect("read install guide");
+    let windows = text_between(
+        &install,
+        "### Windows",
+        "### Windows Scheduled Task example",
+    );
     let source_build = text_between(windows, "Or build from source:", "For periodic scans");
     assert!(source_build.contains("target\\release\\telltale.exe"));
     assert!(source_build.contains("telltale-events.jsonl"));

@@ -304,6 +304,20 @@ per selected row per dispatch and retain existing persistent retry limits.
 Non-2xx classification MUST remain unchanged. HEC request acceptance MUST NOT be
 described as indexer acknowledgment.
 
+Durable Elasticsearch single-event Bulk sends MUST acknowledge only exactly one
+`index` item with the stored event's `_id`, `errors: false`, no error field, and
+status/result `200`/`updated` or `201`/`created`. A matching single-item rejection
+with `errors: true`, an error object with a nonempty string `type`, and no result
+field SHALL classify item
+408, 429, and 5xx as retryable `HttpStatus`, 401/403 as
+`AuthenticationBlocked`, and 400/413/422 as permanent `SinkApplicationRejected`.
+Malformed, inconsistent, mismatched, or otherwise unrecognized outcomes MUST be
+`SinkResponseBlocked`, not acknowledged or declared event poison. Diagnostics
+MUST exclude endpoint-controlled content. Durable sends MUST retain one transport
+attempt per selected row and the existing persisted scheduling and budget.
+Best-effort Elastic item-error reporting and lack of item retries MUST remain
+unchanged.
+
 Outbox persistence MUST read existing supported classes and MUST NOT silently
 convert, drop, or reset unknown classes. Persisted `sink_application_retryable`
 and `sink_response_blocked` classes MUST have a documented rollback boundary:

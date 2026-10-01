@@ -1,4 +1,5 @@
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 const SYSTEM_CONFIG_ROOT: &str = "/etc/telltale";
@@ -87,25 +88,51 @@ pub fn resolve_allowlist_path(
 fn active_config_roots(
     explicit_roots: &[PathBuf],
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
-    if explicit_roots.is_empty() {
-        return Ok(default_config_roots()
-            .into_iter()
-            .filter(|root| root.is_dir())
-            .collect());
-    }
-
+    let optional = explicit_roots.is_empty();
+    let candidates = if optional {
+        default_config_roots()
+    } else {
+        explicit_roots.to_vec()
+    };
     let mut roots = Vec::new();
-    for root in explicit_roots {
-        if !root.is_dir() {
-            return Err(format!(
-                "local config root '{}' does not exist or is not a directory",
-                root.display()
-            )
-            .into());
+    for root in candidates {
+        let Some(metadata) = config_metadata(&root, optional)? else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            return Err("local config root is not a directory".into());
         }
-        roots.push(root.clone());
+        roots.push(root);
     }
     Ok(roots)
+}
+
+fn config_metadata(path: &Path, optional: bool) -> io::Result<Option<fs::Metadata>> {
+    config_metadata_result(path, optional, fs::metadata(path))
+}
+
+fn config_metadata_result(
+    path: &Path,
+    optional: bool,
+    result: io::Result<fs::Metadata>,
+) -> io::Result<Option<fs::Metadata>> {
+    let result = match result {
+        Err(error) if optional && error.kind() == io::ErrorKind::NotFound => {
+            // Following a dangling symlink is not the same as absent optional config.
+            match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error),
+                Ok(_) => Err(error),
+            }
+        }
+        result => result.map(Some),
+    };
+    result.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("local config metadata failed: {:?}", error.kind()),
+        )
+    })
 }
 
 fn default_config_roots() -> Vec<PathBuf> {
@@ -134,14 +161,22 @@ fn discover_yaml_files(
     let mut discovered = Vec::new();
     for root in roots {
         let dir = root.join(subdir);
-        if !dir.is_dir() {
+        let Some(metadata) = config_metadata(&dir, true)? else {
             continue;
+        };
+        if !metadata.is_dir() {
+            return Err("local config subdirectory is not a directory".into());
         }
         let mut files = fs::read_dir(&dir)?
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<Result<Vec<_>, _>>()?;
-        files.retain(|path| path.is_file() && is_yaml_file(path));
+        files.retain(|path| is_yaml_file(path));
         files.sort();
+        for path in &files {
+            if !config_metadata(path, false)?.is_some_and(|metadata| metadata.is_file()) {
+                return Err("local config YAML entry is not a regular file".into());
+            }
+        }
         discovered.extend(files);
     }
     Ok(discovered)
@@ -181,6 +216,7 @@ fn resolve_single_discovered_path(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io;
     use std::path::Path;
 
     use tempfile::tempdir;
@@ -193,6 +229,53 @@ mod tests {
     fn write(path: &Path) {
         fs::create_dir_all(path.parent().expect("parent dir")).expect("create parent");
         fs::write(path, "---\n").expect("write file");
+    }
+
+    #[test]
+    fn optional_metadata_skips_only_genuinely_absent_paths() {
+        let temp = tempdir().expect("tempdir");
+        let missing = temp.path().join("missing");
+        assert!(
+            super::config_metadata(&missing, true)
+                .expect("optional absent path")
+                .is_none()
+        );
+        assert!(super::config_metadata(&missing, false).is_err());
+        assert!(
+            super::config_metadata(temp.path(), true)
+                .expect("present optional root")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn metadata_errors_are_not_optional_and_have_bounded_diagnostics() {
+        let temp = tempdir().expect("tempdir");
+        for optional in [false, true] {
+            for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+                let error = super::config_metadata_result(
+                    temp.path(),
+                    optional,
+                    Err(io::Error::new(kind, "CONTROLLED_METADATA_SECRET")),
+                )
+                .expect_err("metadata failure is not absence");
+                assert_eq!(error.kind(), kind);
+                assert_eq!(
+                    error.to_string(),
+                    format!("local config metadata failed: {kind:?}")
+                );
+                assert!(!format!("{error:?}").contains("CONTROLLED_METADATA_SECRET"));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn optional_broken_root_symlink_is_not_absent() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::os::unix::fs::symlink("missing-target", &root).expect("broken root link");
+        super::config_metadata(&root, true).expect_err("broken optional root must fail");
     }
 
     #[test]
@@ -280,6 +363,97 @@ mod tests {
         assert!(discovered.override_paths.is_empty());
         assert!(discovered.policy_paths.is_empty());
         assert!(discovered.allowlist_paths.is_empty());
+        assert!(discovered.output_paths.is_empty());
+    }
+
+    #[test]
+    fn present_config_subdirs_must_be_directories() {
+        for subdir in ["rules.d", "policies.d", "outputs.d"] {
+            let temp = tempdir().expect("tempdir");
+            write(&temp.path().join(subdir));
+            let error = discover_local_config_files(
+                &[temp.path().to_path_buf()],
+                false,
+                LocalConfigDiscoveryKind::Scan,
+            )
+            .expect_err("present config subdir with wrong type must fail");
+            assert!(error.to_string().contains("not a directory"));
+        }
+    }
+
+    #[test]
+    fn yaml_entries_must_be_regular_files() {
+        for subdir in ["rules.d", "outputs.d"] {
+            let temp = tempdir().expect("tempdir");
+            fs::create_dir_all(temp.path().join(subdir).join("invalid.yaml"))
+                .expect("YAML directory");
+            let error = discover_local_config_files(
+                &[temp.path().to_path_buf()],
+                false,
+                LocalConfigDiscoveryKind::Scan,
+            )
+            .expect_err("YAML entry with wrong type must fail");
+            assert!(error.to_string().contains("not a regular file"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_yaml_symlinks_are_errors_not_absent_configuration() {
+        for subdir in ["rules.d", "outputs.d"] {
+            let temp = tempdir().expect("tempdir");
+            let dir = temp.path().join(subdir);
+            fs::create_dir_all(&dir).expect("config subdir");
+            std::os::unix::fs::symlink("missing-target", dir.join("broken.yaml"))
+                .expect("broken YAML symlink");
+            discover_local_config_files(
+                &[temp.path().to_path_buf()],
+                false,
+                LocalConfigDiscoveryKind::Scan,
+            )
+            .expect_err("broken YAML symlink must fail");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_config_subdir_symlinks_are_errors() {
+        let temp = tempdir().expect("tempdir");
+        std::os::unix::fs::symlink("missing-target", temp.path().join("rules.d"))
+            .expect("broken subdir symlink");
+        discover_local_config_files(
+            &[temp.path().to_path_buf()],
+            false,
+            LocalConfigDiscoveryKind::Scan,
+        )
+        .expect_err("broken subdir symlink must fail");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn valid_config_symlinks_are_followed_and_non_yaml_entries_ignored() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().expect("tempdir");
+        let target_root = temp.path().join("target");
+        let rule = target_root.join("rule.yaml");
+        write(&rule);
+        let target_dir = temp.path().join("rule-files");
+        fs::create_dir_all(&target_dir).expect("target directory");
+        symlink(&rule, target_dir.join("linked.yml")).expect("valid YAML symlink");
+        symlink("missing-target", target_dir.join("ignored.txt")).expect("non-YAML symlink");
+        fs::create_dir(target_dir.join("nested")).expect("ignored directory");
+        symlink(&target_dir, target_root.join("rules.d")).expect("valid directory symlink");
+        let root = temp.path().join("linked-root");
+        symlink(&target_root, &root).expect("valid root symlink");
+
+        let discovered = discover_local_config_files(
+            std::slice::from_ref(&root),
+            false,
+            LocalConfigDiscoveryKind::Scan,
+        )
+        .expect("discover symlink configuration");
+        assert_eq!(discovered.rule_paths, vec![root.join("rules.d/linked.yml")]);
     }
 
     #[test]
@@ -295,8 +469,18 @@ mod tests {
         .expect_err("explicit missing config root should fail")
         .to_string();
 
-        assert!(error.contains("local config root"));
-        assert!(error.contains(&missing.display().to_string()));
+        assert!(error.contains("local config metadata failed: NotFound"));
+        assert!(!error.contains(&missing.display().to_string()));
+    }
+
+    #[test]
+    fn explicit_config_root_must_be_a_directory() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        write(&root);
+        let error = discover_local_config_files(&[root], false, LocalConfigDiscoveryKind::Scan)
+            .expect_err("wrong-type root must fail");
+        assert_eq!(error.to_string(), "local config root is not a directory");
     }
 
     #[test]
@@ -305,6 +489,7 @@ mod tests {
         let root = temp.path().join("config");
         write(&root.join("rules.d/local.yaml"));
         write(&root.join("overrides.d/local.yaml"));
+        write(&root.join("outputs.d"));
 
         let discovered = discover_local_config_files(&[root], true, LocalConfigDiscoveryKind::Scan)
             .expect("discover config");
@@ -323,6 +508,7 @@ mod tests {
         write(&root.join("policies.d/local.yaml"));
         write(&root.join("allowlists.d/one.yaml"));
         write(&root.join("allowlists.d/two.yml"));
+        write(&root.join("outputs.d"));
 
         let discovered = discover_local_config_files(
             std::slice::from_ref(&root),
@@ -341,6 +527,7 @@ mod tests {
             vec![root.join("policies.d/local.yaml")]
         );
         assert!(discovered.allowlist_paths.is_empty());
+        assert!(discovered.output_paths.is_empty());
     }
 
     #[test]

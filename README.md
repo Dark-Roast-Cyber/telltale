@@ -163,6 +163,18 @@ on a typical single-user workstation, instead of `tests/fixtures/`.
 For continuous local monitoring, `telltale watch` accepts the same repeated
 `--client <id>` filters as `telltale scan`, so watched runs can stay scoped to one
 or more supported client IDs such as `codex` or `opencode`.
+Keep scanner state, canonical JSONL, and any durable outbox outside the actual
+watched session-store directories (including project roots). `watch` rejects
+runtime storage inside those directories before activation, so its own sidecars,
+rotation, and delivery writes cannot trigger source scans. Other directories
+under the broader `--root` remain valid output locations.
+Notification admission is nonblocking and capped at 256 relevant queued events,
+64 relevant paths per event, and 4096 distinct coalesced paths. Ignored access and
+SQLite reader-sidecar notifications do not count toward these caps. Exceeding a
+cap retains an independent full-reconciliation signal, so source changes during
+scanning or delivery are rediscovered on a subsequent scan; watcher errors still
+stop the run. These are application queue limits, not bounds on OS/backend buffers
+or total process memory.
 
 ### Local rule configuration
 
@@ -206,128 +218,16 @@ See [Install](docs/install.md) for the YAML format and `--project-config` usage.
 - Install and setup guide: [docs/install.md](docs/install.md)
 - Controlled development upgrade and rollback: [docs/controlled-deployment.md](docs/controlled-deployment.md)
 
-Tagged GitHub releases publish platform-specific `telltale-*` binary archives
-when available. Source builds remain supported; the install guide covers the
-fixture-safe verification step.
-
-### Linux
-
-The checked-in Linux installer downloads the latest canonical release, verifies
-its published `SHA256SUMS`, and installs only `telltale` to `~/.local/bin`
-without sudo. The hosted one-line installer is not advertised here because its
-hosted-site cutover is outside this repository's release boundary; use the
-checked-in script from a checkout instead:
-
-The installer installs a user-level systemd timer only when `--with-timer` is
-provided. The hosted-site copy is outside this repository's release cutover;
-use the checked-in script for a reviewed install.
-
-```sh
-./scripts/install-telltale
-./scripts/install-telltale --with-timer
-```
-
-With `--from-source`, the installer still downloads and validates the selected
-release's canonical archive provenance, resolves that tag to an immutable commit,
-and builds that exact source revision with Cargo; it does not skip the prebuilt
-archive download. `--no-timer` leaves the canonical timer disabled and leaves
-unrelated resources untouched. The installer does not create system accounts or
-configure SIEM shippers.
-
-### macOS
-
-Download the release archive for your architecture and extract the binary:
-
-```sh
-# Apple Silicon (aarch64)
-curl -fsSLO https://github.com/Dark-Roast-Cyber/telltale/releases/latest/download/telltale-$(curl -fsSL https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"tag_name": *"//;s/"$//')-aarch64-apple-darwin.tar.gz
-tar xzf telltale-*-aarch64-apple-darwin.tar.gz
-sudo mv telltale /usr/local/bin/telltale
-```
-
-Or build from source:
-
-```sh
-git clone https://github.com/Dark-Roast-Cyber/telltale.git
-cd telltale
-cargo build --release
-sudo cp target/release/telltale /usr/local/bin/telltale
-```
-
-The default `user` path profile writes telemetry to
-`~/Library/Logs/Telltale/telltale-events.jsonl` and state to
-`~/Library/Application Support/Telltale/telltale-state.json`. No sudo is needed
-for scans — run as your user.
-
-For periodic scans, create a user LaunchAgent at
-`~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>ai.agentarchaeology.telltale</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/telltale</string>
-        <string>scan</string>
-        <string>--once</string>
-        <string>--emit-activity</string>
-        <string>--root</string>
-        <string>/Users/YOUR_USERNAME</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>1800</integer>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-```
-
-Load it with:
-
-```sh
-launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
-```
-
-### Windows
-
-Download the canonical release archive and extract `telltale.exe`:
-
-```powershell
-# PowerShell
-$release = Invoke-RestMethod "https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest"
-$tag = $release.tag_name
-$asset = $release.assets | Where-Object { $_.name -eq "telltale-$tag-x86_64-pc-windows-msvc.zip" }
-Invoke-WebRequest $asset.browser_download_url -OutFile "telltale-$tag.zip"
-Expand-Archive "telltale-$tag.zip" -DestinationPath "$env:LOCALAPPDATA\Telltale"
-```
-
-Or build from source:
-
-```powershell
-git clone https://github.com/Dark-Roast-Cyber/telltale.git
-cd telltale
-cargo build --release
-Copy-Item target\release\telltale.exe $env:LOCALAPPDATA\Telltale\telltale.exe
-```
-
-Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `telltale` from any
-terminal. The default `user` path profile writes telemetry to
-`%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` and state to
-`%LOCALAPPDATA%\Telltale\State\telltale-state.json`. No elevation is needed for
-scans — run as your user.
-
-For periodic scans, create a Scheduled Task at user logon:
-
-```powershell
-$action = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\Telltale\telltale.exe" -Argument "scan --once --emit-activity --root $env:USERPROFILE"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RepeatInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 365)
-Register-ScheduledTask -TaskName "TelltaleScan" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited
-```
+Tagged GitHub releases provide platform-specific archives when available. See
+the [Linux](docs/install.md#quick-install-linux),
+[macOS](docs/install.md#macos), and
+[Windows](docs/install.md#windows) installation and scheduling instructions.
+On Linux, run `./scripts/install-telltale` from a checkout; `--with-timer` opts
+into its user-level systemd timer.
+The guide also covers checksum and attestation verification, source builds, and
+platform caveats. Start with its fixture-safe verification before scanning real
+session stores; binary packaging support does not establish broad source-store
+validation.
 
 Before pushing public history, run `make public-push-review` to review the
 current branch, public remote URLs, working-tree status, and staged path list.

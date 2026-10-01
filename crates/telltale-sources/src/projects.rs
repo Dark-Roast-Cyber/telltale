@@ -37,11 +37,7 @@ pub fn load_project_configs(paths: &[PathBuf]) -> Vec<ProjectDef> {
     for path in paths {
         match load_project_config(path) {
             Ok(projects) => all.extend(projects),
-            Err(e) => eprintln!(
-                "warning: failed to load project config {}: {}",
-                path.display(),
-                e
-            ),
+            Err(_) => eprintln!("warning: failed_project_configuration"),
         }
     }
     all
@@ -113,6 +109,82 @@ mod tests {
 
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn bulk_loader_diagnostics_are_fixed_and_best_effort() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("PRIVATE_PROJECT_PATH_CANARY");
+        fs::create_dir(&root).expect("synthetic root");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "projects::tests::bulk_loader_diagnostic_worker",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("TELLTALE_PROJECT_LOADER_TEST_ROOT", &root)
+            .output()
+            .expect("diagnostic worker");
+        assert!(output.status.success(), "diagnostic worker failed");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        assert!(
+            output.stderr == b"warning: failed_project_configuration\n".repeat(4),
+            "project configuration stderr must contain only fixed classifications"
+        );
+    }
+
+    #[test]
+    #[ignore = "invoked in a subprocess to capture public loader stderr"]
+    fn bulk_loader_diagnostic_worker() {
+        let root = PathBuf::from(
+            std::env::var_os("TELLTALE_PROJECT_LOADER_TEST_ROOT").expect("synthetic root"),
+        );
+        let project = root.join("project");
+        fs::create_dir(&project).expect("project directory");
+        let good = root.join("good.yaml");
+        fs::write(
+            &good,
+            format!(
+                "projects:\n  - name: good\n    path: '{}'\n",
+                project.display()
+            ),
+        )
+        .expect("valid config");
+        let scalar = root.join("scalar.yaml");
+        fs::write(&scalar, "projects: ORDINARY_PROSE_SECRET_CANARY\n")
+            .expect("invalid scalar config");
+        let missing_project = root.join("missing-project.yaml");
+        fs::write(
+            &missing_project,
+            format!(
+                "projects:\n  - name: good\n    path: '{}'\n  - name: missing\n    path: '{}'\n",
+                project.display(),
+                root.join("MISSING_PROJECT_PATH_CANARY").display()
+            ),
+        )
+        .expect("missing project config");
+        let non_directory = root.join("non-directory.yaml");
+        fs::write(
+            &non_directory,
+            format!(
+                "projects:\n  - name: file\n    path: '{}'\n",
+                good.display()
+            ),
+        )
+        .expect("non-directory config");
+        let expected = load_project_config(&good).expect("valid project");
+        assert!(load_project_configs(&[]).is_empty());
+        assert_eq!(load_project_configs(std::slice::from_ref(&good)), expected);
+        let loaded = load_project_configs(&[
+            good.clone(),
+            scalar,
+            root.join("MISSING_CONFIG_PATH_CANARY.yaml"),
+            missing_project,
+            non_directory,
+            good,
+        ]);
+        assert_eq!(loaded, [expected.clone(), expected].concat());
+    }
 
     #[test]
     fn loads_valid_yaml() {

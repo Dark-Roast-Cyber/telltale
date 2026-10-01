@@ -2,6 +2,409 @@ use super::*;
 
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(target_os = "linux")]
+fn idle_durable_watch_case(
+    first_status: u16,
+    future_pending: bool,
+    dry_run: bool,
+    receiver_delay: Duration,
+) {
+    let _guard = watch_process_guard();
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let source = sessions.join("idle.jsonl");
+    fs::write(&source, b"").unwrap();
+    // Sibling storage under the broad --root remains supported: only actual
+    // session-store roots are recursively watched.
+    let log = root.join("runtime/events.jsonl");
+    let state = root.join("runtime/state.json");
+    let outbox = root.join("runtime/private/outbox.sqlite");
+    let config = temp.path().join("config");
+    fs::create_dir_all(config.join("outputs.d")).unwrap();
+    let yaml = |path: &Path| {
+        serde_yaml::to_string(&path.to_string_lossy())
+            .unwrap()
+            .trim()
+            .to_owned()
+    };
+    let outputs = config.join("outputs.d/outputs.yaml");
+    fs::write(&outputs, format!("version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n", yaml(&outbox), yaml(&log))).unwrap();
+    let setup = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--config-dir")
+        .arg(&config)
+        .arg("--state-path")
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(
+        setup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    let state_before = fs::read(&state).unwrap();
+    let event = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000001",
+        "2026-01-01T00:00:00Z",
+        "informational",
+        "codex",
+        "idle",
+        &[],
+    );
+    // Complete canonical record beyond the committed ingest cursor: the crash gap.
+    let mut journal = fs::OpenOptions::new().append(true).open(&log).unwrap();
+    writeln!(journal, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+    journal.sync_all().unwrap();
+    let log_before = fs::read(&log).unwrap();
+    let connection = Connection::open(&outbox).unwrap();
+    // Synthetic configured-identity fixture; production rejects identity changes.
+    connection
+        .execute(
+            "UPDATE meta SET value = '[\"remote\"]' WHERE key = 'durable_sink_ids'",
+            [],
+        )
+        .unwrap();
+    let event_id: String = connection
+        .query_row("SELECT event_id FROM events LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+    let eligible_at = now + if future_pending { 1800 } else { 0 };
+    connection.execute("INSERT INTO deliveries (event_id, sink_id, state, attempt_count, next_attempt_at, updated_at) VALUES (?1, 'remote', 'pending', 0, ?2, ?3)", rusqlite::params![event_id, eligible_at as i64, now as i64]).unwrap();
+    drop(connection);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    fs::write(&outputs, format!("{}  - name: remote\n    type: splunk_hec\n    endpoint: http://{}\n    token: synthetic-idle-token\n    retry: {{ max_attempts: 2, base_delay_ms: 1500 }}\n", fs::read_to_string(&outputs).unwrap(), listener.local_addr().unwrap())).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+    command
+        .args([
+            "watch",
+            "--allow-fixtures",
+            "--iterations",
+            "1",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--config-dir")
+        .arg(&config)
+        .arg("--state-path")
+        .arg(&state)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if dry_run {
+        command.arg("--dry-run");
+    }
+    let mut child = WatchChildGuard::new(command.spawn().unwrap());
+    let started = Instant::now();
+    let mut attempts = BTreeMap::<String, usize>::new();
+    let mut request_timeline = Vec::new();
+    let expected = match first_status {
+        401 => ("blocked", 1),
+        503 => ("dead", 2),
+        500 => ("acked", 2),
+        _ => ("acked", 1),
+    };
+    let delivery_state =
+        Connection::open_with_flags(&outbox, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let mut terminal_since = None;
+    thread::sleep(receiver_delay);
+    loop {
+        if child.child_mut().try_wait().unwrap().is_some() {
+            let output = child.disarm().wait_with_output().unwrap();
+            panic!(
+                "idle watch exited: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        if dry_run {
+            if started.elapsed() >= Duration::from_secs(6) {
+                break;
+            }
+        } else {
+            let terminal: u32 = delivery_state.query_row(
+                "SELECT COUNT(*) FROM deliveries WHERE sink_id = 'remote' AND state = ?1 AND attempt_count = ?2",
+                rusqlite::params![expected.0, expected.1 as u32], |row| row.get(0),
+            ).unwrap();
+            if terminal == 2 {
+                // Observe two more delivery intervals after the result commits,
+                // rather than treating request receipt as a persisted outcome.
+                let since = terminal_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_secs(2) {
+                    break;
+                }
+            } else {
+                terminal_since = None;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "terminal delivery deadline exceeded: terminal={terminal}; requests={request_timeline:?}; attempts={attempts:?}"
+            );
+        }
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                assert!(!dry_run, "dry run sent telemetry");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                let id = body["event"]["event_id"].as_str().unwrap().to_owned();
+                request_timeline.push((id.clone(), started.elapsed()));
+                if future_pending && id == event_id {
+                    assert!(
+                        time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
+                            >= now + 1800
+                    );
+                }
+                let count = attempts.entry(id).or_default();
+                *count += 1;
+                let status = if *count == 1 || first_status == 503 {
+                    first_status
+                } else {
+                    200
+                };
+                write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{{\"code\":0}}").unwrap();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(25))
+            }
+            Err(error) => panic!("accept: {error}"),
+        }
+    }
+    assert_eq!(fs::read(&state).unwrap(), state_before);
+    assert_eq!(
+        fs::read(&log).unwrap(),
+        log_before,
+        "idle failures must not generate events"
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"");
+    if !dry_run {
+        let connection = Connection::open(&outbox).unwrap();
+        let rows: Vec<(String, String, usize)> = connection
+            .prepare(
+                "SELECT event_id, state, attempt_count FROM deliveries WHERE sink_id = 'remote'",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get::<_, u32>(2)? as usize))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2, "startup must reconcile the JSONL crash gap");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.0.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                event_id.as_str(),
+                event["event_id"].as_str().unwrap()
+            ])
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.1 == expected.0 && row.2 == expected.1),
+            "rows={rows:?}; requests={request_timeline:?}; attempts={attempts:?}; elapsed={:?}",
+            started.elapsed()
+        );
+        assert_eq!(attempts.len(), 2);
+        assert!(attempts.values().all(|count| *count == expected.1));
+    } else {
+        assert!(attempts.is_empty());
+    }
+    let stop_started = Instant::now();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    while child.child_mut().try_wait().unwrap().is_none() {
+        assert!(
+            stop_started.elapsed() < Duration::from_secs(2),
+            "idle shutdown stalled"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    let output = child.disarm().wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "idle wakeups must not emit scan summaries"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_idle_durable_future_pending_and_crash_gap_recover() {
+    idle_durable_watch_case(500, true, false, Duration::ZERO);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_idle_durable_attempt_budget_is_terminal() {
+    idle_durable_watch_case(503, false, false, Duration::ZERO);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_idle_durable_attempt_budget_with_delayed_receiver() {
+    idle_durable_watch_case(503, false, false, Duration::from_millis(5500));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_idle_durable_blocked_does_not_retry() {
+    idle_durable_watch_case(401, false, false, Duration::ZERO);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_idle_durable_dry_run_does_not_send_or_write() {
+    idle_durable_watch_case(200, true, true, Duration::ZERO);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watch_idle_durable_validates_before_output_activation() {
+    let _guard = watch_process_guard();
+    for case in [
+        "dry-run",
+        "overlap",
+        "fixture",
+        "empty-root",
+        "watched-outbox",
+        "watched-outbox-alias",
+        "watched-outbox-alias-parent",
+        "watched-log",
+        "watched-state",
+    ] {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("stores");
+        fs::create_dir_all(&root).unwrap();
+        if case != "empty-root" {
+            fs::create_dir_all(root.join("codex/sessions")).unwrap();
+        }
+        let output_dir = temp.path().join("new-output");
+        let watched_storage = root.join("codex/sessions/private");
+        let log = if case == "watched-log" {
+            watched_storage.join("events.jsonl")
+        } else {
+            output_dir.join("events.jsonl")
+        };
+        let state = if case == "watched-state" {
+            watched_storage.join("state.json")
+        } else if case == "overlap" {
+            log.clone()
+        } else {
+            output_dir.join("state.json")
+        };
+        let outbox = if case == "watched-outbox-alias" || case == "watched-outbox-alias-parent" {
+            let alias = temp.path().join("sessions-alias");
+            std::os::unix::fs::symlink(root.join("codex/sessions"), &alias).unwrap();
+            if case == "watched-outbox-alias-parent" {
+                alias.join("../sessions/private/outbox.sqlite")
+            } else {
+                alias.join("private/outbox.sqlite")
+            }
+        } else if case == "watched-outbox" {
+            watched_storage.join("outbox.sqlite")
+        } else {
+            output_dir.join("private/outbox.sqlite")
+        };
+        let config = temp.path().join("config");
+        fs::create_dir_all(config.join("outputs.d")).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        fs::write(config.join("outputs.d/outputs.yaml"), format!("version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n  - name: remote\n    type: splunk_hec\n    endpoint: http://{}\n    token: synthetic-idle-token\n", outbox.display(), log.display(), listener.local_addr().unwrap())).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .args(["watch", "--install-inventory-disabled", "--root"])
+            .arg(&root)
+            .arg("--config-dir")
+            .arg(&config)
+            .arg("--state-path")
+            .arg(&state)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if case == "dry-run" {
+            command.arg("--dry-run");
+        }
+        if case != "fixture" {
+            command.arg("--allow-fixtures");
+        }
+        let mut child = WatchChildGuard::new(command.spawn().unwrap());
+        let started = Instant::now();
+        if case == "dry-run" {
+            thread::sleep(Duration::from_millis(1500));
+            assert!(child.child_mut().try_wait().unwrap().is_none());
+        } else {
+            while child.child_mut().try_wait().unwrap().is_none() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(3),
+                    "{case}: validation was delayed until source activity"
+                );
+                thread::sleep(Duration::from_millis(25));
+            }
+            let output = child.disarm().wait_with_output().unwrap();
+            assert!(!output.status.success(), "{case}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let expected = match case {
+                "fixture" => "refusing to write fixture/demo",
+                "empty-root" => "no existing Telltale session-store roots",
+                "watched-outbox"
+                | "watched-outbox-alias"
+                | "watched-outbox-alias-parent"
+                | "watched-log"
+                | "watched-state" => "runtime storage must be outside watched session-store roots",
+                _ => "overlap",
+            };
+            assert!(stderr.contains(expected), "{case}: {stderr}");
+            assert!(
+                output.stdout.is_empty(),
+                "{case}: runtime notifications consumed scan iterations"
+            );
+        }
+        assert!(
+            !output_dir.exists(),
+            "{case}: created output storage before activation"
+        );
+        assert!(
+            !watched_storage.exists(),
+            "{case}: activated watched runtime storage"
+        );
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    }
+}
+
 fn watch_process_guard() -> std::sync::MutexGuard<'static, ()> {
     WATCH_PROCESS_MUTEX
         .lock()

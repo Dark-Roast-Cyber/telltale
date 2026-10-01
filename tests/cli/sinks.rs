@@ -91,13 +91,247 @@ fn blocked_outbox_fixture() -> (TempDir, PathBuf, String) {
     (temp, outbox_path, event_id)
 }
 
+#[cfg(not(windows))]
+#[test]
+fn status_keeps_valid_outbox_health_when_journal_is_unavailable() {
+    let (temp, outbox_path, event_id) = blocked_outbox_fixture();
+    let connection = Connection::open(&outbox_path).unwrap();
+    for (sink, state) in [
+        ("pending-sink", "pending"),
+        ("dead-sink", "dead"),
+        ("acked-sink", "acked"),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO deliveries (event_id, sink_id, state, attempt_count, updated_at)
+             VALUES (?1, ?2, ?3, 1, 12)",
+                params![&event_id, sink, state],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sink_health (sink_id) VALUES (?1)",
+                params![sink],
+            )
+            .unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO sink_health (sink_id, last_error_at, last_error_class, last_error_status)
+         VALUES ('remote', 11, 'authentication_blocked', 403)",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    let activity = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000012",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "codex",
+        "content-canary",
+        &[],
+    )
+    .to_string();
+    let historical = serde_json::json!({"schema_version":"1.0", "event_id":"historical-status", "event_type":"activity", "timestamp":"2026-05-01T00:00:00Z", "severity":"informational", "risk_score":0, "client":"codex", "session_id":"content-canary"}).to_string();
+    let log_path = temp.path().join("path-canary-journal.jsonl");
+    let state_path = temp.path().join("absent-state/state.json");
+    let before = fs::read(&outbox_path).unwrap();
+    let parent_entries = fs::read_dir(outbox_path.parent().unwrap()).unwrap().count();
+    for (contents, reason) in [
+        (None, "no_native_health"),
+        (Some(""), "no_native_health"),
+        (Some("{content-canary"), "journal_read_failed"),
+        (Some(activity.as_str()), "no_native_health"),
+    ] {
+        if let Some(contents) = contents {
+            fs::write(&log_path, contents).unwrap();
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["status", "--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path)
+            .args(["--outbox-path"])
+            .arg(&outbox_path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(status["status"], "unavailable");
+        assert_eq!(
+            status["journal_status"],
+            serde_json::json!({"availability":"unavailable", "reason":reason})
+        );
+        assert_eq!(status["last_scan_time"], Value::Null);
+        assert_eq!(status["health_check_status"], Value::Null);
+        assert_eq!(status["detection_count"], Value::Null);
+        let health = &status["durable_queue_health"];
+        assert_eq!(health["mode"], "durable");
+        assert_eq!(health["sinks"]["remote"]["pending_depth"], 1);
+        assert_eq!(
+            health["sinks"]["remote"]["last_error"]["class"],
+            "authentication_blocked"
+        );
+        assert_eq!(health["sinks"]["pending-sink"]["pending_depth"], 1);
+        assert!(
+            health["sinks"]["pending-sink"]["pending_bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(health["sinks"]["dead-sink"]["dead_count"], 1);
+        assert_eq!(health["sinks"]["dead-sink"]["pending_depth"], 0);
+        assert_eq!(health["sinks"]["acked-sink"]["pending_depth"], 0);
+        let displayed = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!displayed.contains("path-canary"));
+        assert!(!displayed.contains("content-canary"));
+        assert!(!displayed.contains(&temp.path().to_string_lossy().to_string()));
+        assert!(output.stderr.is_empty());
+        assert_eq!(fs::read(&outbox_path).unwrap(), before);
+        assert_eq!(
+            fs::read_dir(outbox_path.parent().unwrap()).unwrap().count(),
+            parent_entries
+        );
+        assert!(!state_path.parent().unwrap().exists());
+    }
+    // Historical-only status remains a successful, explicitly non-native result.
+    fs::write(&log_path, historical).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["status", "--log-path"])
+        .arg(&log_path)
+        .args(["--state-path"])
+        .arg(&state_path)
+        .args(["--outbox-path"])
+        .arg(&outbox_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["status"], "historical_only");
+    assert!(status.get("journal_status").is_none());
+}
+
+#[cfg(not(windows))]
+#[test]
+fn status_preserves_native_shape_and_unavailable_outbox_semantics() {
+    let (temp, outbox_path, _) = blocked_outbox_fixture();
+    let log_path = temp.path().join("status-journal.jsonl");
+    let state_path = temp.path().join("absent-state/state.json");
+    let health = native_test_event(
+        "health",
+        "telltale-00000000-0000-4000-8000-000000000014",
+        "2026-05-01T00:00:00.000Z",
+        "informational",
+        "scanner",
+        "scanner",
+        &[],
+    )
+    .to_string();
+    fs::write(&log_path, &health).unwrap();
+    let run = |outbox: Option<&Path>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .args(["status", "--log-path"])
+            .arg(&log_path)
+            .args(["--state-path"])
+            .arg(&state_path);
+        if let Some(path) = outbox {
+            command.arg("--outbox-path").arg(path);
+        }
+        command.output().unwrap()
+    };
+    let mut legacy: Value = serde_json::from_slice(&run(None).stdout).unwrap();
+    let output = run(Some(&outbox_path));
+    assert!(output.status.success());
+    let mut native: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(native["status"], "ok");
+    assert!(native.get("journal_status").is_none());
+    assert_eq!(native["durable_queue_health"]["mode"], "durable");
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("durable_queue_health");
+    native
+        .as_object_mut()
+        .unwrap()
+        .remove("durable_queue_health");
+    assert_eq!(native, legacy);
+
+    let missing = temp.path().join("absent-outbox/outbox.sqlite");
+    let corrupt = temp.path().join("corrupt.sqlite");
+    fs::write(&corrupt, b"synthetic-corrupt-outbox-content-canary").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&corrupt, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let connection = Connection::open(&outbox_path).unwrap();
+    connection.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    for path in [&missing, &corrupt, &outbox_path] {
+        fs::write(&log_path, &health).unwrap();
+        let output = run(Some(path));
+        assert!(output.status.success());
+        let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(status["status"], "ok");
+        assert_eq!(status["durable_queue_health"]["mode"], "unavailable");
+        assert_eq!(
+            status["durable_queue_health"]["error"]["class"],
+            "durable_storage"
+        );
+        assert!(status.get("journal_status").is_none());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("content-canary"));
+        fs::remove_file(&log_path).unwrap();
+        let output = run(Some(path));
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("no_native_health"));
+    }
+    connection.execute_batch("ROLLBACK").unwrap();
+    assert!(!missing.parent().unwrap().exists());
+    assert!(!state_path.parent().unwrap().exists());
+    assert_eq!(
+        fs::read(&corrupt).unwrap(),
+        b"synthetic-corrupt-outbox-content-canary"
+    );
+    let output = run(None);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
 fn start_mock_hec_server() -> (
     String,
     mpsc::Receiver<String>,
     mpsc::Sender<()>,
     thread::JoinHandle<()>,
 ) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock hec server");
+    start_mock_http_server(
+        "/services/collector",
+        1024,
+        "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}"
+            .to_string(),
+    )
+}
+
+fn start_mock_http_server(
+    endpoint_path: &str,
+    buffer_size: usize,
+    response: String,
+) -> (
+    String,
+    mpsc::Receiver<String>,
+    mpsc::Sender<()>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
     listener
         .set_nonblocking(true)
         .expect("nonblocking listener");
@@ -117,32 +351,32 @@ fn start_mock_hec_server() -> (
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .expect("read timeout");
                     let mut request = Vec::new();
-                    let mut buf = [0_u8; 1024];
+                    let mut buf = vec![0_u8; buffer_size];
                     while let Ok(read) = stream.read(&mut buf) {
                         if read == 0 {
                             break;
                         }
                         request.extend_from_slice(&buf[..read]);
-                        // Header matching is case-insensitive: the ureq
-                        // transport sends lowercase header names.
-                        let text = String::from_utf8_lossy(&request).to_lowercase();
-                        if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                        if let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n")
+                        {
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
                             let content_length = headers
                                 .lines()
-                                .find_map(|line| line.strip_prefix("content-length: "))
+                                .filter_map(|line| line.split_once(':'))
+                                .find_map(|(name, value)| {
+                                    name.eq_ignore_ascii_case("content-length").then_some(value)
+                                })
                                 .and_then(|value| value.trim().parse::<usize>().ok())
                                 .unwrap_or(0);
-                            if body.len() >= content_length {
+                            if request.len() - header_end - 4 >= content_length {
                                 break;
                             }
                         }
                     }
                     let _ = tx.send(String::from_utf8_lossy(&request).to_string());
                     stream
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}",
-                        )
-                        .expect("write mock hec response");
+                        .write_all(response.as_bytes())
+                        .expect("write mock HTTP response");
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -152,11 +386,56 @@ fn start_mock_hec_server() -> (
         }
     });
     (
-        format!("http://{addr}/services/collector"),
+        format!("http://{addr}{endpoint_path}"),
         rx,
         shutdown_tx,
         handle,
     )
+}
+
+#[test]
+fn mock_http_server_frames_bytes_and_bounds_partial_requests_and_shutdown() {
+    let (endpoint, requests, shutdown, handle) = start_mock_hec_server();
+    let address = endpoint
+        .strip_prefix("http://")
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap();
+    for termination in ["complete", "eof", "timeout"] {
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let header = b"POST /services/collector HTTP/1.1\r\nCoNtEnT-LeNgTh: 2\r\n\r\n";
+        stream.write_all(header).unwrap();
+        stream.write_all(&[0xc4]).unwrap();
+        assert!(matches!(
+            requests.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        match termination {
+            "complete" => stream.write_all(&[0xb0]).unwrap(),
+            "eof" => stream.shutdown(std::net::Shutdown::Write).unwrap(),
+            _ => {}
+        }
+        let request = requests.recv_timeout(Duration::from_secs(4)).unwrap();
+        let mut expected = header.to_vec();
+        expected.push(0xc4);
+        if termination == "complete" {
+            expected.push(0xb0);
+        }
+        assert_eq!(request, String::from_utf8_lossy(&expected));
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.ends_with("{\"code\":0}"));
+    }
+    shutdown.send(()).unwrap();
+    assert!(matches!(
+        requests.recv_timeout(Duration::from_secs(2)),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+    handle.join().unwrap();
 }
 
 #[test]
@@ -1005,63 +1284,16 @@ fn start_mock_elastic_server() -> (
     mpsc::Sender<()>,
     thread::JoinHandle<()>,
 ) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock elastic server");
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking listener");
-    let addr = listener.local_addr().expect("listener addr");
-    let (tx, rx) = mpsc::channel();
-    let (shutdown_tx, shutdown_rx) = mpsc::channel();
-    let handle = thread::spawn(move || {
-        loop {
-            match shutdown_rx.try_recv() {
-                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
-                Err(mpsc::TryRecvError::Empty) => {}
-            }
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    stream.set_nonblocking(false).expect("blocking stream");
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .expect("read timeout");
-                    let mut request = Vec::new();
-                    let mut buf = [0_u8; 4096];
-                    while let Ok(read) = stream.read(&mut buf) {
-                        if read == 0 {
-                            break;
-                        }
-                        request.extend_from_slice(&buf[..read]);
-                        let text = String::from_utf8_lossy(&request).to_lowercase();
-                        if let Some((headers, body)) = text.split_once("\r\n\r\n") {
-                            let content_length = headers
-                                .lines()
-                                .find_map(|line| line.strip_prefix("content-length: "))
-                                .and_then(|value| value.trim().parse::<usize>().ok())
-                                .unwrap_or(0);
-                            if body.len() >= content_length {
-                                break;
-                            }
-                        }
-                    }
-                    let _ = tx.send(String::from_utf8_lossy(&request).to_string());
-                    let body = r#"{"took":1,"errors":false,"items":[]}"#;
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    stream
-                        .write_all(response.as_bytes())
-                        .expect("write mock elastic response");
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    (format!("http://{addr}"), rx, shutdown_tx, handle)
+    let body = r#"{"took":1,"errors":false,"items":[]}"#;
+    start_mock_http_server(
+        "",
+        4096,
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    )
 }
 
 #[test]

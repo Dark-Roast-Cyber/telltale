@@ -249,8 +249,8 @@ impl SinkSet {
     }
 
     /// Activate persistent replay after pure sink/configuration validation.
-    /// Normal runtime construction calls this eagerly; validation and dry-run
-    /// construction deliberately do not.
+    /// Scan/watch activate only after command guards; validation and dry-run
+    /// construction deliberately do not activate.
     pub(crate) fn activate_persistent_replay(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if self.durable_outbox_path.is_none() {
             return Ok(());
@@ -463,6 +463,10 @@ impl SinkSet {
             .collect()
     }
 
+    pub(crate) fn durable_outbox_path(&self) -> Option<&std::path::Path> {
+        self.durable_outbox_path.as_deref()
+    }
+
     pub(crate) fn local_rotation_namespaces(&self) -> Vec<RotationNamespace> {
         self.entries
             .iter()
@@ -552,7 +556,9 @@ impl SinkSet {
     /// ready work is dispatched before the prospective capacity check so an
     /// endpoint recovery can release queue capacity without a restart. The
     /// returned failures are only from that pre-admission drain; the newly
-    /// admitted batch is dispatched by the caller's normal delivery step.
+    /// admitted batch is dispatched by the caller's normal delivery step. An
+    /// empty batch performs recovery and ready-work dispatch only, without a
+    /// prospective capacity check or canonical append.
     pub(crate) fn persist_for_durable_replay(
         &self,
         events: &[Event],
@@ -640,19 +646,21 @@ impl SinkSet {
             // an unrelated dispatch configuration error.
             Vec::new()
         };
-        outbox.check_capacity_for_payloads(
-            log_path,
-            &batch.payloads,
-            self.durable_capacity_limits,
-        )?;
-        for entry in self
-            .entries
-            .iter()
-            .filter(|entry| entry.persistence_role == PersistenceRole::CanonicalFirstWrite)
-        {
-            entry.sink.emit_canonical_jsonl_bytes(&batch.jsonl_bytes)?;
+        if !events.is_empty() {
+            outbox.check_capacity_for_payloads(
+                log_path,
+                &batch.payloads,
+                self.durable_capacity_limits,
+            )?;
+            for entry in self
+                .entries
+                .iter()
+                .filter(|entry| entry.persistence_role == PersistenceRole::CanonicalFirstWrite)
+            {
+                entry.sink.emit_canonical_jsonl_bytes(&batch.jsonl_bytes)?;
+            }
+            outbox.reconcile_jsonl(log_path, &sink_ids)?;
         }
-        outbox.reconcile_jsonl(log_path, &sink_ids)?;
         drop(outbox);
         admission_lock
             .verify_lock()
@@ -2035,6 +2043,11 @@ mod tests {
             fs::read(&log_path).expect("canonical JSONL unchanged"),
             before
         );
+        sinks.durable_capacity_limits = capacity_limits(0, 0);
+        sinks
+            .persist_for_durable_replay(&[])
+            .expect("recovery-only admission must not reject already accepted work");
+        assert_eq!(fs::read(&log_path).expect("no empty append"), before);
         assert_eq!(
             fs::read_to_string(&log_path)
                 .expect("canonical JSONL")

@@ -155,7 +155,13 @@ pub(crate) fn extract_copilot_native_events(
         }
 
         for item in items {
-            let item = CopilotOutputItem::from_value(&item);
+            let item = CopilotOutputItem::from_value(&item).map_err(|detail| {
+                SourceReadError::SchemaDrift {
+                    client: ClientId::Copilot,
+                    source_id: source.source_id.clone(),
+                    detail,
+                }
+            })?;
             let ordinal = canonical_active_session_id.as_ref().map(|session_id| {
                 let ordinal = item_ordinals.entry(session_id.clone()).or_default();
                 let current = *ordinal;
@@ -191,10 +197,16 @@ impl CopilotOutputItem {
         }
     }
 
-    fn from_value(value: &Value) -> Self {
+    fn from_value(value: &Value) -> Result<Self, &'static str> {
         let object = value
             .as_object()
             .expect("native schema checked before conversion");
+        if object
+            .get("type")
+            .is_some_and(|value| !matches!(value, Value::Null | Value::String(_)))
+        {
+            return Err("Copilot output item type must be a string or null");
+        }
         let item_type = object
             .get("type")
             .and_then(Value::as_str)
@@ -203,7 +215,7 @@ impl CopilotOutputItem {
             item_type.as_deref(),
             Some("function_call") | Some("message")
         ) {
-            return Self {
+            return Ok(Self {
                 attestation: Ok(SessionMetadata::default()),
                 item_type,
                 id: None,
@@ -216,10 +228,18 @@ impl CopilotOutputItem {
                 role: None,
                 content_present: false,
                 content: None,
-            };
+            });
+        }
+        for key in ["id", "call_id", "name", "arguments", "message", "role"] {
+            if object
+                .get(key)
+                .is_some_and(|value| !matches!(value, Value::Null | Value::String(_)))
+            {
+                return Err("Copilot known output item string field has an invalid type");
+            }
         }
         let content = object.get("content");
-        Self {
+        Ok(Self {
             attestation: copilot_metadata(value),
             item_type,
             id: item_string(value, "id"),
@@ -237,7 +257,7 @@ impl CopilotOutputItem {
             content: content
                 .and_then(Value::as_array)
                 .map(|blocks| blocks.iter().map(CopilotContentBlock::from_value).collect()),
-        }
+        })
     }
 }
 
@@ -257,6 +277,88 @@ mod tests {
             kind: SourceKind::CopilotProcessLog,
             source_id: "copilot.process_log".to_owned(),
             path,
+        }
+    }
+
+    #[test]
+    fn malformed_known_strings_fail_extraction_and_acquisition_atomically() {
+        use crate::acquisition::{AcquisitionError, AcquisitionOptions, acquire_source};
+        use serde_json::json;
+        use telltale_schema::observation::ObservedAt;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("private-path-marker.log");
+        let source = source(path.clone());
+        for field in [
+            "type",
+            "id",
+            "call_id",
+            "name",
+            "arguments",
+            "message",
+            "role",
+        ] {
+            for invalid in [
+                json!({"command": "private-command-marker"}),
+                json!(["private-array-marker"]),
+                json!(42),
+                json!(false),
+            ] {
+                for same_array in [false, true] {
+                    let good = json!({"type": "function_call", "name": "bash", "arguments": "{\"command\":\"synthetic-command\"}"});
+                    let mut bad = good.clone();
+                    bad[field] = invalid.clone();
+                    let rows = if same_array {
+                        format!("Accumulated output items (2): {}\n", json!([good, bad]))
+                    } else {
+                        format!(
+                            "Accumulated output items (1): {}\nAccumulated output items (1): {}\n",
+                            json!([good]),
+                            json!([bad])
+                        )
+                    };
+                    fs::write(
+                        &path,
+                        format!(
+                            "Workspace initialized: private-session-marker (checkpoints: 0)\n{rows}"
+                        ),
+                    )
+                    .unwrap();
+                    let error = extract_copilot_native_events(&source)
+                        .err()
+                        .expect("malformed known field must reject all native events");
+                    assert!(
+                        matches!(
+                            error,
+                            crate::source_read::SourceReadError::SchemaDrift { .. }
+                        ),
+                        "{field}"
+                    );
+                    assert!(!format!("{error} {error:?}").contains("private-"));
+                    let error = acquire_source(
+                        &source,
+                        AcquisitionOptions::new(ObservedAt::new("2026-09-04T12:00:00Z").unwrap()),
+                    )
+                    .err()
+                    .expect("no successful prefix, accounting, or progress");
+                    assert_eq!(error, AcquisitionError::SourceRead, "{field}");
+                    assert_eq!(format!("{error}"), "source_read");
+                    assert!(!format!("{error:?}").contains("private-"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multiple_malformed_fields_and_message_item_strings_are_rejected() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("malformed.log");
+        for bad in [
+            serde_json::json!({"type":"function_call", "name":"bash", "arguments":{"command":"synthetic-command"}, "call_id":42, "message":false}),
+            serde_json::json!({"type":"message", "role":"assistant", "id":42, "content":[{"type":"output_text", "text":"synthetic-text"}]}),
+        ] {
+            fs::write(&path, format!("Workspace initialized: synthetic-session (checkpoints: 0)\nAccumulated output items (1): {}\n", serde_json::json!([bad]))).unwrap();
+            assert!(extract_copilot_native_events(&source(path.clone())).is_err());
         }
     }
 

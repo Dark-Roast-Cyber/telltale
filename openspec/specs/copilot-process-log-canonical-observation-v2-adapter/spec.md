@@ -37,6 +37,18 @@ structured payload text in workspace events, and MUST NOT retain
 - **THEN** native extraction fails with the existing bounded SchemaDrift error
   and no partial projection is returned
 
+#### Scenario: Malformed known string fields fail native extraction atomically
+
+- **WHEN** an accumulated item has a non-null non-string `type`, or a supported
+  `function_call`/`message` item has a non-null non-string `id`, `call_id`, `name`,
+  `arguments`, `message`, or `role`, even after valid earlier items or lines
+- **THEN** native extraction fails with bounded SchemaDrift and acquisition
+  returns its existing source-read failure without a successful prefix,
+  accounting, or progress, and without raw field values, content, or paths
+- **AND** absent/null optional fields and existing empty-string semantics remain
+  unchanged; valid JSON argument strings are parsed and invalid JSON argument
+  strings retain the reported-text fallback, without accepting argument objects
+
 #### Scenario: Control phrases require the trusted log position
 
 - **WHEN** either control phrase appears in an accumulated item, assistant

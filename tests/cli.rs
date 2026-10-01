@@ -728,3 +728,59 @@ mod rules_config;
 mod scan_watch;
 #[path = "cli/sinks.rs"]
 mod sinks;
+
+#[test]
+fn scan_max_sources_preserves_full_string_nested_hyphen_order() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(sessions.join("a")).expect("sessions");
+    let hyphen = sessions.join("a-b.jsonl");
+    let nested = sessions.join("a/b.jsonl");
+    for path in [&hyphen, &nested] {
+        fs::write(path, concat!(
+            "{\"type\":\"session_meta\",\"session_id\":\"synthetic\",\"timestamp\":\"2026-04-01T00:00:00Z\",\"payload\":{\"source\":\"cli\"}}\n",
+            "{\"type\":\"event_msg\",\"timestamp\":\"2026-04-01T00:00:01Z\",\"payload\":{\"type\":\"user_message\",\"message\":\"synthetic fixture\"}}\n"
+        )).expect("source");
+    }
+    let log = temp.path().join("events.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--emit-activity",
+            "--no-local-config",
+            "--client",
+            "codex",
+            "--max-sources",
+            "1",
+            "--root",
+        ])
+        .arg(&root)
+        .arg("--log-path")
+        .arg(&log)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .output()
+        .expect("scan");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).expect("summary");
+    assert_eq!(summary["source_discovery"]["returned_source_count"], 2);
+    assert_eq!(summary["source_discovery"]["operational_source_count"], 1);
+    let events = fs::read_to_string(log)
+        .expect("events")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event"))
+        .collect::<Vec<_>>();
+    let activity = events
+        .iter()
+        .find(|event| event["event_type"] == "activity")
+        .expect("activity");
+    assert_eq!(activity["source_path_hash"], path_hash(&hyphen));
+    assert_ne!(activity["source_path_hash"], path_hash(&nested));
+}

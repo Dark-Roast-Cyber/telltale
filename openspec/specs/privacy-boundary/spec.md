@@ -87,6 +87,12 @@ Scanner and delivery diagnostics SHALL remove controlled secret values and sensi
 - **WHEN** a sink error contains URL userinfo, a credential query value, or a sensitive path
 - **THEN** neither operational Event JSON nor stderr/log diagnostic output contains the controlled values
 
+#### Scenario: Local configuration metadata failure
+
+- **WHEN** metadata inspection of a local configuration root, supported subdirectory, or discovered YAML entry fails, or an entry has the wrong type or is a dangling symlink
+- **THEN** discovery fails before scan output or state activation and its diagnostic contains only a bounded classification, not raw configuration paths, contents, or underlying error text
+- **AND** genuinely absent optional default roots and subdirectories remain optional, explicit roots remain mandatory, valid configuration symlinks remain supported, and `--no-local-config` bypasses discovery
+
 ### Requirement: Controlled marker validation covers every textual event family
 
 The privacy test system SHALL serialize representative events for every Event 3.0 family capable of carrying source-derived text or errors and SHALL fail if a controlled marker survives serialization.

@@ -597,7 +597,7 @@ impl ScanExecutionArgs {
             },
             &loaded_outputs.delivery,
             true,
-            !self.dry_run,
+            false,
         )?;
         let outputs = output_snapshot_value(
             output_specs,
@@ -644,6 +644,16 @@ impl ScanExecutionArgs {
 }
 
 impl PreparedScanExecution {
+    fn activate(&mut self, runtime: &serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+        scan::validate_scan_execution(self.config(runtime))?;
+        if !self.dry_run {
+            self.sink_set.activate_persistent_replay()?;
+            self.effective_configuration["outputs"]["delivery"]["durable_queue_health"] =
+                self.sink_set.durable_health_json();
+        }
+        Ok(())
+    }
+
     fn config<'a>(&'a self, runtime: &'a serde_json::Value) -> scan::ScanExecutionConfig<'a> {
         scan::ScanExecutionConfig {
             root: &self.root,
@@ -1396,10 +1406,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             rebuild_baselines,
             max_sources,
         }) => {
-            let prepared = execution.prepare(SplunkCliOverrides {
+            let mut prepared = execution.prepare(SplunkCliOverrides {
                 endpoint: splunk_hec_endpoint.as_deref(),
                 token: splunk_hec_token.as_deref(),
             })?;
+            if !once && interval_seconds.is_none() {
+                return Err("scan requires --once or --interval-seconds".into());
+            }
+            prepared.activate(&runtime.value)?;
             let scan_config = scan::ScanConfig {
                 execution: prepared.config(&runtime.value),
                 backfill,
@@ -1606,7 +1620,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             debounce_ms,
             min_scan_interval_ms,
         }) => {
-            let prepared = execution.prepare(SplunkCliOverrides::default())?;
+            let mut prepared = execution.prepare(SplunkCliOverrides::default())?;
+            let watch_roots = scan::watch::validate_watch_roots(prepared.config(&runtime.value))?;
+            prepared.activate(&runtime.value)?;
             let watch_config = scan::watch::WatchConfig {
                 execution: prepared.config(&runtime.value),
                 trigger: scan::watch::WatchTriggerConfig {
@@ -1615,7 +1631,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     min_scan_interval: std::time::Duration::from_millis(min_scan_interval_ms),
                 },
             };
-            scan::watch::run_watch(watch_config)?;
+            scan::watch::run_watch(watch_config, watch_roots)?;
         }
         Command::Status {
             path_profile,

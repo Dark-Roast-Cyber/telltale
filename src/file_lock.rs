@@ -799,23 +799,16 @@ fn existing_identity(path: &Path) -> Result<Option<FileIdentity>, Box<dyn std::e
 }
 
 pub(crate) fn normalized_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let absolute = std::path::absolute(path)?;
-    let mut normalized = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    let mut ancestor = normalized.clone();
+    // Resolve existing prefixes before interpreting `..`: collapsing it
+    // lexically changes the target when the preceding component is a symlink.
+    let mut ancestor = std::path::absolute(path)?;
     let mut suffix = Vec::new();
     loop {
         match fs::symlink_metadata(&ancestor) {
             Ok(_) => break,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // A missing prefix followed by `..` is not traversable. Only
+                // normal missing descendants may be appended after canonicalization.
                 let name = ancestor
                     .file_name()
                     .ok_or("could not resolve persistence path ancestor")?
@@ -1599,6 +1592,53 @@ mod tests {
         let state = alias.join("nested/state.json");
         let log = real.join("nested/state.json");
         assert!(validate_runtime_paths(&state, std::slice::from_ref(&log), &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_path_preserves_filesystem_order_for_symlink_parent() {
+        let temp = tempdir().unwrap();
+        let sessions = temp.path().join("stores/codex/sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let alias = temp.path().join("sessions-alias");
+        std::os::unix::fs::symlink(&sessions, &alias).unwrap();
+        let target = alias.join("../sessions/private/outbox.sqlite");
+        let expected = fs::canonicalize(&sessions)
+            .unwrap()
+            .join("private/outbox.sqlite");
+        assert_eq!(super::normalized_path(&target).unwrap(), expected);
+        assert!(super::paths_identity_equivalent(&target, &expected).unwrap());
+        assert_eq!(
+            SidecarLock::lock_order_key(&target).unwrap(),
+            SidecarLock::lock_order_key(&expected).unwrap()
+        );
+        fs::create_dir_all(sessions.join("private")).unwrap();
+        fs::write(sessions.join("private/outbox.sqlite"), b"synthetic").unwrap();
+        assert_eq!(
+            super::normalized_path(&target).unwrap(),
+            fs::canonicalize(&target).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_path_rejects_missing_intermediate_before_parent() {
+        let temp = tempdir().unwrap();
+        let target = temp.path().join("missing/../outbox.sqlite");
+        assert!(super::normalized_path(&target).is_err());
+        assert!(!temp.path().join("missing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_path_propagates_invalid_ancestor_errors() {
+        let temp = tempdir().unwrap();
+        let file = temp.path().join("file");
+        fs::write(&file, b"synthetic").unwrap();
+        assert!(super::normalized_path(&file.join("child")).is_err());
+        let alias = temp.path().join("loop");
+        std::os::unix::fs::symlink(&alias, &alias).unwrap();
+        assert!(super::normalized_path(&alias.join("child")).is_err());
     }
 
     #[test]

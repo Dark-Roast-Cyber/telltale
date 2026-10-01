@@ -12,6 +12,59 @@ fn discovered_config_file(directory: &Path, file_name: &str) -> PathBuf {
         .expect("discovered config file")
 }
 
+#[cfg(unix)]
+#[test]
+fn local_config_metadata_failure_precedes_output_and_state_activation() {
+    for subdir in ["rules.d", "outputs.d"] {
+        let temp = tempdir().expect("tempdir");
+        let marker = "CONTROLLED_CONFIG_METADATA_PATH";
+        let config_root = temp.path().join(marker);
+        let dir = config_root.join(subdir);
+        fs::create_dir_all(&dir).expect("config subdir");
+        std::os::unix::fs::symlink("missing-target", dir.join(format!("{marker}.yaml")))
+            .expect("broken YAML symlink");
+        let scan_root = temp.path().join("empty-root");
+        fs::create_dir(&scan_root).expect("empty scan root");
+        let activation_dir = temp.path().join("must-not-be-created");
+        let log_path = activation_dir.join("events.jsonl");
+        let state_path = activation_dir.join("state.json");
+        let outbox_path = activation_dir.join("outbox/outbox.sqlite");
+        let outputs_dir = config_root.join("outputs.d");
+        fs::create_dir_all(&outputs_dir).expect("outputs directory");
+        fs::write(
+            outputs_dir.join("valid.yaml"),
+            format!(
+                "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n",
+                serde_yaml::to_string(&outbox_path.to_string_lossy().to_string())
+                    .expect("YAML outbox path")
+                    .trim(),
+            ),
+        )
+        .expect("valid durable outputs document");
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["scan", "--once", "--install-inventory-disabled", "--root"])
+            .arg(&scan_root)
+            .arg("--config-dir")
+            .arg(&config_root)
+            .arg("--log-path")
+            .arg(&log_path)
+            .arg("--state-path")
+            .arg(&state_path)
+            .output()
+            .expect("run scan with broken configuration");
+        assert!(!output.status.success(), "broken configuration must fail");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("local config metadata failed"), "{stderr}");
+        assert!(!stderr.contains(marker), "path canary leaked");
+        assert!(stderr.len() < 128, "unbounded metadata diagnostic");
+        assert!(output.stdout.is_empty());
+        assert!(
+            !activation_dir.exists(),
+            "output/state activated before failure"
+        );
+    }
+}
+
 fn assert_diagnostic_only_scan(
     output: &std::process::Output,
     log_path: &Path,

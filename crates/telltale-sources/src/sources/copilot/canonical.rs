@@ -437,6 +437,93 @@ mod tests {
     }
 
     #[test]
+    fn optional_tool_strings_preserve_absent_null_empty_and_valid_compatibility() {
+        use crate::acquisition::{AcquisitionOptions, AcquisitionProgress, acquire_source};
+        use serde_json::json;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("optional-strings.log");
+        for optional in [None, Some(json!(null)), Some(json!(""))] {
+            let mut item = json!({"type": "function_call", "name": "bash"});
+            if let Some(value) = optional {
+                for field in ["id", "call_id", "arguments", "message", "role"] {
+                    item[field] = value.clone();
+                }
+            }
+            fs::write(&path, format!("Workspace initialized: optional-session (checkpoints: 0)\nAccumulated output items (1): {}\n", json!([item]))).unwrap();
+            let acquired = acquire_source(
+                &source(path.clone()),
+                AcquisitionOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            )
+            .unwrap();
+            assert_eq!(acquired.progress, AcquisitionProgress::None);
+            assert_eq!(acquired.observations.len(), 1);
+            let observation = &acquired.observations[0];
+            assert_eq!(observation.sequence(), Some(0));
+            assert!(observation.correlation().call_id().is_none());
+            let ObservationBody::Tool(tool) = observation.body() else {
+                panic!("expected tool")
+            };
+            assert_eq!(tool.name(), Some("bash"));
+            assert!(tool.arguments().is_none());
+            assert!(tool.searchable_arguments().is_none());
+            let repeated = project(path.clone());
+            assert_eq!(observation.observation_id(), repeated[0].observation_id());
+        }
+        for optional in [None, Some(json!(null)), Some(json!(""))] {
+            let mut item = json!({"type": "function_call", "arguments": "not-json-synthetic"});
+            if let Some(value) = optional {
+                item["name"] = value;
+            }
+            fs::write(&path, format!("Workspace initialized: optional-session (checkpoints: 0)\nAccumulated output items (1): {}\n", json!([item]))).unwrap();
+            let observations = project(path.clone());
+            let ObservationBody::Tool(tool) = observations[0].body() else {
+                panic!("expected tool")
+            };
+            assert!(tool.name().is_none());
+            assert_eq!(
+                tool.arguments(),
+                Some(&JsonValue::string("not-json-synthetic"))
+            );
+        }
+        for optional in [None, Some(json!(null)), Some(json!(""))] {
+            let mut item = json!({"arguments": {"ignored": true}});
+            if let Some(value) = optional {
+                item["type"] = value;
+            }
+            fs::write(&path, format!("Workspace initialized: optional-session (checkpoints: 0)\nAccumulated output items (1): {}\n", json!([item]))).unwrap();
+            assert!(project(path.clone()).is_empty());
+        }
+        fs::write(&path, "Workspace initialized: valid-session (checkpoints: 0)\nAccumulated output items (2): [{\"type\":\"function_call\",\"name\":\"bash\",\"call_id\":\"call-a\",\"arguments\":\"{\\\"command\\\":\\\"synthetic-command\\\"}\",\"message\":\"synthetic-result\"},{\"type\":\"function_call\",\"arguments\":\"not-json-synthetic\"}]\n").unwrap();
+        let observations = project(path);
+        assert_eq!(observations.len(), 3);
+        assert_eq!(
+            observations[0].correlation().call_id().unwrap().value(),
+            "call-a"
+        );
+        assert_eq!(
+            observations[1].correlation().call_id(),
+            observations[0].correlation().call_id()
+        );
+        assert_eq!(
+            observations[1].stage(),
+            ObservationStage::ToolResultReturned
+        );
+        assert_eq!(
+            observations[0].facets()["command.text"].value(),
+            &JsonValue::string("synthetic-command")
+        );
+        let ObservationBody::Tool(tool) = observations[2].body() else {
+            panic!("expected tool")
+        };
+        assert_eq!(
+            tool.arguments(),
+            Some(&JsonValue::string("not-json-synthetic"))
+        );
+        assert_eq!(tool.searchable_arguments(), Some("not-json-synthetic"));
+    }
+
+    #[test]
     fn mixed_fixture_preserves_assistant_parts() {
         let path = crate::test_fixture_path("session_stores/copilot/process-mixed-format.log");
         let observations = project(path.clone());

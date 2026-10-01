@@ -145,6 +145,45 @@ fn ensure_durable_scan_platform(
     Ok(())
 }
 
+fn validate_scan_execution_paths(
+    execution: ScanExecutionConfig<'_>,
+    is_windows: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ensure_durable_scan_platform(execution.sinks, is_windows)?;
+    validate_runtime_paths(
+        execution.state_path,
+        &execution.sinks.local_persistence_paths(),
+        &execution.sinks.local_rotation_namespaces(),
+    )?;
+    if !execution.dry_run && !execution.allow_fixtures && is_fixture_root(execution.root) {
+        return Err(
+            "refusing to write fixture/demo data to log path; use --dry-run or --allow-fixtures"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn validate_scan_execution(
+    execution: ScanExecutionConfig<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    validate_scan_execution_paths(
+        execution,
+        crate::sink::outbox::current_platform_is_windows(),
+    )?;
+    let resolution = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+        execution.rule_pack_paths,
+        execution.rule_paths,
+        execution.policy_path,
+        execution.rule_load_mode,
+        execution.override_paths,
+        &[],
+    )?;
+    telltale_detect::v2::compile_rule_v1(&resolution.rule_set.compatibility_export())?;
+    load_allowlist(execution.allowlist_path)?;
+    Ok(())
+}
+
 pub(crate) fn run_scan_once(config: ScanConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     run_scan(config, ScanTargets::Full, StateSavePolicy::Always).map(|_| ())
 }
@@ -168,20 +207,8 @@ fn run_scan_for_platform(
     save_policy: StateSavePolicy,
     is_windows: bool,
 ) -> Result<ScanRunResult, Box<dyn std::error::Error>> {
-    ensure_durable_scan_platform(config.execution.sinks, is_windows)?;
+    validate_scan_execution_paths(config.execution, is_windows)?;
     let scan_started = Instant::now();
-    validate_runtime_paths(
-        config.execution.state_path,
-        &config.execution.sinks.local_persistence_paths(),
-        &config.execution.sinks.local_rotation_namespaces(),
-    )?;
-    let fixture_root = is_fixture_root(config.execution.root);
-    if !config.execution.dry_run && !config.execution.allow_fixtures && fixture_root {
-        return Err(
-            "refusing to write fixture/demo data to log path; use --dry-run or --allow-fixtures"
-                .into(),
-        );
-    }
     let (mut sources, targeted, source_discovery) = match targets {
         ScanTargets::Targeted { sources, discovery } => (sources, true, discovery),
         ScanTargets::Full => {
@@ -990,12 +1017,35 @@ pub(crate) fn run_status(
     state_path: &Path,
     durable_health: serde_json::Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let status = match journal_status_json(log_path, state_path, durable_health.clone()) {
+        Ok(status) => status,
+        Err((reason, _)) if durable_health["mode"] == "durable" => {
+            let mut status =
+                status_json("unavailable", None, 0, log_path, state_path, durable_health);
+            status["detection_count"] = serde_json::Value::Null;
+            status["journal_status"] = serde_json::json!({
+                "availability": "unavailable",
+                "reason": reason,
+            });
+            status
+        }
+        Err((_, error)) => return Err(error),
+    };
+    println!("{}", serde_json::to_string(&status)?);
+    Ok(())
+}
+
+fn journal_status_json(
+    log_path: &Path,
+    state_path: &Path,
+    durable_health: serde_json::Value,
+) -> Result<serde_json::Value, (&'static str, Box<dyn std::error::Error>)> {
     if !log_path.exists() {
-        return Err("no_native_health".into());
+        return Err(("no_native_health", "no_native_health".into()));
     }
-    let records = read_jsonl_records(log_path)?;
+    let records = read_jsonl_records(log_path).map_err(|error| ("journal_read_failed", error))?;
     if records.is_empty() {
-        return Err("no_native_health".into());
+        return Err(("no_native_health", "no_native_health".into()));
     }
     let native_health_index = records.iter().rposition(|record| {
         record.kind == EventRecordKind::Native && event_record_has_type(record, "health")
@@ -1036,10 +1086,9 @@ pub(crate) fn run_status(
             durable_health,
         )
     } else {
-        return Err("no_native_health".into());
+        return Err(("no_native_health", "no_native_health".into()));
     };
-    println!("{}", serde_json::to_string(&status)?);
-    Ok(())
+    Ok(status)
 }
 
 fn event_record_has_type(record: &JsonlEventRecord, expected: &str) -> bool {

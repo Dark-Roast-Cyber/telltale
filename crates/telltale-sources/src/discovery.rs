@@ -269,14 +269,17 @@ fn discover_sources_with_projects_impl(
             left.kind.as_str(),
             left.source_id.as_str(),
             left.path.to_string_lossy(),
+            left.path.as_os_str().as_encoded_bytes(),
         )
             .cmp(&(
                 right.client.as_str(),
                 right.kind.as_str(),
                 right.source_id.as_str(),
                 right.path.to_string_lossy(),
+                right.path.as_os_str().as_encoded_bytes(),
             ))
     });
+    sources.dedup();
     Ok(sources)
 }
 
@@ -1010,6 +1013,104 @@ mod tests {
             error,
             DiscoveryError::Traversal { ref source_id, .. } if source_id == "codex.sessions"
         ));
+    }
+
+    #[test]
+    fn repeated_and_overlapping_projects_return_exact_sources_once() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let workspace = temp.path().join("workspace");
+        let project = workspace.join("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(project.join("logs/copilot")).expect("logs");
+        let path = project.join("logs/copilot/process.log");
+        fs::write(&path, b"synthetic log\n").expect("log");
+        let projects =
+            [workspace, project.clone(), project].map(|path| crate::projects::ProjectDef {
+                name: "synthetic".to_string(),
+                path,
+            });
+        let expected = vec![telltale_schema::source::Source {
+            client: ClientId::Copilot,
+            kind: SourceKind::CopilotProcessLog,
+            source_id: "copilot.process_log".to_string(),
+            path,
+        }];
+        assert_eq!(
+            discover_sources_with_projects(&home, &projects).expect("checked"),
+            expected
+        );
+        assert_eq!(
+            super::discover_sources_with_projects_best_effort(&home, &projects),
+            expected
+        );
+        let roots = discover_watch_roots_with_projects(&home, &[ClientId::Copilot], &projects);
+        assert_eq!(
+            roots,
+            vec![expected[0].path.parent().expect("parent").to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn overlapping_fixture_and_project_discovery_preserves_source_ownership() {
+        let root = crate::test_fixture_path("session_stores");
+        let expected = discover_sources(&root).expect("fixture sources");
+        let projects = [crate::projects::ProjectDef {
+            name: "fixture".to_string(),
+            path: root.clone(),
+        }];
+        assert_eq!(
+            discover_sources_with_projects(&root, &projects).expect("overlap"),
+            expected
+        );
+        assert_eq!(
+            super::discover_sources_with_projects_best_effort(&root, &projects),
+            expected
+        );
+        for id in [
+            "codex.sessions",
+            "codex.archived_sessions",
+            "codex.headless_sessions",
+        ] {
+            assert!(
+                expected
+                    .iter()
+                    .any(|source| source.client == ClientId::Codex && source.source_id == id)
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_dedup_preserves_paths_with_identical_lossy_display() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp = tempdir().expect("tempdir");
+        let logs = temp.path().join("logs/copilot");
+        fs::create_dir_all(&logs).expect("logs");
+        for byte in [0xfe, 0xff] {
+            let mut name = b"process-".to_vec();
+            name.push(byte);
+            name.extend_from_slice(b".log");
+            fs::write(logs.join(OsString::from_vec(name)), b"synthetic log\n").expect("log");
+        }
+        let project = crate::projects::ProjectDef {
+            name: "synthetic".to_string(),
+            path: temp.path().to_path_buf(),
+        };
+        let sources = discover_sources_with_projects(temp.path(), &[project.clone(), project])
+            .expect("discovery");
+        assert_eq!(sources.len(), 2);
+        assert_ne!(sources[0].path, sources[1].path);
+        assert_eq!(
+            sources[0].path.to_string_lossy(),
+            sources[1].path.to_string_lossy()
+        );
+        assert!(
+            sources[0].path.as_os_str().as_encoded_bytes()
+                < sources[1].path.as_os_str().as_encoded_bytes()
+        );
     }
 
     #[test]

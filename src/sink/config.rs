@@ -1204,7 +1204,7 @@ sinks:
 
     #[cfg(unix)]
     #[test]
-    fn pure_durable_validation_rejects_nonexistent_lexical_alias_without_artifacts() {
+    fn pure_durable_validation_rejects_nontraversable_parent_path_without_artifacts() {
         let temp = tempdir().expect("tempdir");
         let log_path = temp.path().join("journal").join("events.jsonl");
         let outbox_path = temp
@@ -1216,11 +1216,37 @@ sinks:
 
         let error = match pure_durable_sink_set(&log_path, &outbox_path) {
             Err(error) => error,
-            Ok(_) => panic!("lexical durable path alias must be rejected"),
+            Ok(_) => panic!("nontraversable durable path must be rejected"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("could not resolve persistence path ancestor"),
+            "error: {error}"
+        );
+        assert!(!log_path.exists());
+        assert!(!outbox_path.parent().expect("outbox parent").exists());
+        assert!(!temp.path().join("missing").exists());
+        assert!(!temp.path().join("journal").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pure_durable_validation_rejects_traversable_parent_alias_without_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        let intermediate = temp.path().join("existing");
+        std::fs::create_dir(&intermediate).expect("traversable intermediate");
+        let log_path = temp.path().join("journal/events.jsonl");
+        let outbox_path = intermediate.join("../journal/events.jsonl");
+
+        let error = match pure_durable_sink_set(&log_path, &outbox_path) {
+            Err(error) => error,
+            Ok(_) => panic!("traversable durable path alias must be rejected"),
         };
         assert!(error.to_string().contains("collides"), "error: {error}");
         assert!(!log_path.exists());
         assert!(!outbox_path.parent().expect("outbox parent").exists());
+        assert!(!temp.path().join("journal").exists());
     }
 
     #[cfg(unix)]

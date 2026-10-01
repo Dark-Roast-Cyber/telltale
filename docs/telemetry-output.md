@@ -419,8 +419,15 @@ Remote-only output is valid but has no built-in persistent replay. After retry
 exhaustion, or process exit/restart while the endpoint is unavailable, events
 may be lost. Elastic uses `_id = event_id`, so a redelivery overwrites the same
 document rather than duplicating it, but this is not an exactly-once guarantee.
-Elastic item-level Bulk API errors are observable failures and are not retried by
-the current sink. These are at-least-once-oriented handoff semantics, not an
+Best-effort Elastic item-level Bulk API errors are observable failures and are
+not retried by the sink. Durable single-event sends instead require exactly one
+`index` item with the matching `_id`, a consistent `errors` flag, and status/result
+`200`/`updated` or `201`/`created` before acknowledgment. Item statuses 408, 429,
+and 5xx use the persisted retry budget; 401/403 block for operator action;
+confirmed 400/413/422 item rejections are permanent. Malformed, mismatched,
+inconsistent, or otherwise unrecognized outcomes block rather than acknowledge
+or declare the event poison. Diagnostics exclude response content. These are
+at-least-once-oriented handoff semantics, not an
 exactly-once guarantee: crashes around delivery, retries, and external rotation
 can still require downstream deduplication.
 Durable delivery is at-least-once; receivers should deduplicate by `event_id`
@@ -545,6 +552,18 @@ delivery. Queue health is not a cross-sink total: independent sinks can have
 different depth, age, dead, success, and error values. These metrics describe
 local durable replay state only and do not prove receiver acceptance or
 exactly-once delivery.
+
+If the outbox lookup succeeds but the optional status journal is missing,
+empty, lacks native health, or cannot be strictly read, `status --outbox-path`
+still prints the valid queue health and exits successfully. The top-level
+`status` is `unavailable`, scanner-health fields and `detection_count` are null,
+and an additive `journal_status` object reports `availability: unavailable`
+with the bounded reason `no_native_health` or `journal_read_failed`. No raw
+reader diagnostic is included; queue availability does not imply scanner health.
+Native-health and historical-only output shapes are unchanged. Without a valid
+outbox lookup, journal failures retain their existing error/exit behavior.
+Status inspection does not create storage or parents, reconcile, prune, or
+change delivery state.
 
 ### Releasing blocked deliveries
 

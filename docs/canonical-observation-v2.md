@@ -56,6 +56,11 @@ persist a cursor. The other seven identities return
 Copilot reuses source-local stateful native interpretation, but has no durable
 progress coordinate or durable local acquisition state. Its active session and
 ordinal state is rebuilt on each acquisition.
+For supported Copilot tool/message items, present non-null known string fields
+must be strings; malformed types reject the whole source, not just the item.
+Absent/null optional fields and existing empty-string behavior remain unchanged.
+Tool arguments remain source strings: valid JSON strings are parsed, and invalid
+JSON strings retain the reported-text fallback; argument objects are not supported.
 
 The all-eight adapter coverage gate and ROADMAP step 4 convergence are complete.
 The acquisition module is the single public cross-source router. Scanner-owned
