@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+case "$#:${1-}" in
+    0:) run_tests=true ;;
+    1:--checks-only) run_tests=false ;;
+    *) echo "Usage: $0 [--checks-only]" >&2; exit 2 ;;
+esac
+
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 CHECK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/telltale-producer-provenance.XXXXXX")
 RUN_DIR="$CHECK_DIR/run"
@@ -14,12 +20,14 @@ trap cleanup 0 HUP INT TERM
 
 cd "$REPO_ROOT"
 
-echo "== Producer provenance focused tests =="
-cargo test --locked -p telltale-schema provenance
-cargo test --locked -p telltale-rules provenance
-cargo test --locked -p telltale-detect allowlist
-cargo test --locked -p telltale-core provenance
-cargo test --locked --test cli provenance
+if "$run_tests"; then
+    echo "== Producer provenance focused tests =="
+    cargo test --locked -p telltale-schema provenance
+    cargo test --locked -p telltale-rules provenance
+    cargo test --locked -p telltale-detect allowlist
+    cargo test --locked -p telltale-core provenance
+    cargo test --locked --test cli provenance
+fi
 
 mkdir "$RUN_DIR"
 echo "== Producer provenance CLI determinism and no-write check =="

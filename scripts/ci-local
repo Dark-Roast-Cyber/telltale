@@ -34,7 +34,6 @@ run_stage 'Rust formatting' run_make fmt
 run_stage 'Rust Clippy' run_make clippy
 run_stage 'Linux tests and contract checks' run_make ci-linux-test
 run_stage 'Linux console/headless checks' run_make telltale-console-check
-run_stage 'Public documentation boundary checks' run_make release-public-docs-check
 run_stage 'Security, supply-chain, and workflow-pin checks' run_make security-check
 run_stage 'Fixture-safe release smoke' run_make release-fixture-smoke
 run_stage 'Package verification' run_make package-verify

@@ -361,6 +361,130 @@ fn selector_registry_has_only_contract_backed_names() {
 }
 
 #[test]
+fn selector_tool_text_and_compatibility_fallbacks_are_equivalent() {
+    let registry = SelectorRegistry::new();
+    for availability in [
+        CapabilityAvailability::Supported,
+        CapabilityAvailability::Unsupported,
+        CapabilityAvailability::Unknown,
+    ] {
+        for (value, searchable, expected) in [
+            (None, None, None),
+            (Some(JsonValue::string("raw")), None, Some("raw")),
+            (Some(JsonValue::Object(BTreeMap::new())), None, None),
+            (
+                Some(JsonValue::string("raw")),
+                Some("search"),
+                Some("search"),
+            ),
+            (
+                Some(JsonValue::Object(BTreeMap::new())),
+                Some("search"),
+                Some("search"),
+            ),
+        ] {
+            let mut body = ToolObservation::new().with_name("synthetic").expect("name");
+            if let Some(value) = &value {
+                body = body
+                    .with_arguments(value.clone())
+                    .with_result(value.clone());
+            }
+            if let Some(searchable) = searchable {
+                body = body
+                    .with_searchable_arguments(searchable)
+                    .expect("arguments")
+                    .with_searchable_result(searchable)
+                    .expect("result");
+            }
+            let mut builder = CanonicalObservationV2::builder(
+                ObservationBody::Tool(body),
+                ObservationStage::ToolRequested,
+                ObservedAt::new(OBSERVED_AT).expect("observed at"),
+                source("selector-fallback"),
+            )
+            .capability_context(capabilities(availability))
+            .fact_metadata("tool.name", FactMetadata::reported().expect("metadata"));
+            if value.is_some() {
+                for path in ["tool.arguments", "tool.result"] {
+                    builder =
+                        builder.fact_metadata(path, FactMetadata::reported().expect("metadata"));
+                }
+            }
+            if searchable.is_some() {
+                for path in ["tool.searchable_arguments", "tool.searchable_result"] {
+                    builder = builder.fact_metadata(
+                        path,
+                        FactMetadata::new(
+                            FactProvenance::Inferred,
+                            telltale_schema::observation::Sensitivity::Normal,
+                        )
+                        .expect("metadata"),
+                    );
+                }
+            }
+            let observation = builder.build().expect("tool observation");
+            for (native, compat) in [
+                ("tool.arguments.text", SelectorId::CompatArguments),
+                ("tool.result.text", SelectorId::CompatToolResult),
+            ] {
+                let native = SelectorId::parse(native).expect("selector");
+                let native_resolution = registry.resolve(native, &observation);
+                let compat_resolution = registry.resolve(compat, &observation);
+                assert_eq!(native_resolution.selector(), native);
+                assert_eq!(compat_resolution.selector(), compat);
+                assert_eq!(
+                    native_resolution.required_capability(),
+                    Some(CapabilityId::ToolCall)
+                );
+                assert_eq!(
+                    compat_resolution.required_capability(),
+                    native_resolution.required_capability()
+                );
+                assert_eq!(compat_resolution.presence(), native_resolution.presence());
+                assert_eq!(
+                    compat_resolution.value(),
+                    expected.map(JsonValue::string).as_ref()
+                );
+                assert_eq!(compat_resolution.value(), native_resolution.value());
+                assert_eq!(compat_resolution.metadata(), native_resolution.metadata());
+                assert_eq!(
+                    compat_resolution.presence(),
+                    if expected.is_some() {
+                        SelectorPresence::Present
+                    } else {
+                        SelectorPresence::Absent
+                    }
+                );
+                if expected.is_some() {
+                    assert_eq!(
+                        compat_resolution.metadata().expect("metadata").provenance(),
+                        if searchable.is_some() {
+                            FactProvenance::Inferred
+                        } else {
+                            FactProvenance::Reported
+                        }
+                    );
+                }
+            }
+        }
+    }
+    let observation = message(MessageRole::Assistant, "synthetic", "non-tool");
+    for name in [
+        "tool.arguments.text",
+        "tool.result.text",
+        "compat.v1.arguments",
+        "compat.v1.tool_result",
+    ] {
+        let selector = SelectorId::parse(name).expect("selector");
+        let resolution = registry.resolve(selector, &observation);
+        assert_eq!(resolution.selector(), selector);
+        assert_eq!(resolution.presence(), SelectorPresence::Absent);
+        assert_eq!(resolution.value(), None);
+        assert_eq!(resolution.metadata(), None);
+    }
+}
+
+#[test]
 fn generic_namespace_facets_do_not_extend_typed_selector_backing() {
     let observation = add_facet(
         tool("synthetic", "facet-governance"),

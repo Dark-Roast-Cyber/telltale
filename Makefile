@@ -101,9 +101,9 @@ check: fmt clippy test
 ## Verify the Linux CI test and contract slice used by local CI and GitHub CI
 ci-linux-test: ci-version-consistency-check
 	cargo test $(CARGO_LOCKED) --quiet
-	$(MAKE) --no-print-directory --silent CARGO_LOCKED=$(CARGO_LOCKED) event3-contract-check
-	$(MAKE) --no-print-directory --silent CARGO_LOCKED=$(CARGO_LOCKED) producer-provenance-check
-	$(MAKE) --no-print-directory --silent CARGO_LOCKED=$(CARGO_LOCKED) local-event-feed-check
+	@scripts/event3-contract-check --checks-only
+	@scripts/producer-provenance-check --checks-only
+	@scripts/local-event-feed-check --checks-only
 
 ## Verify package metadata without release-tag or public-branch preflight semantics
 ci-version-consistency-check:

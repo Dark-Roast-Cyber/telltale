@@ -3200,7 +3200,6 @@ dependencies = [
  "jsonschema",
  "libc",
  "notify",
- "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3215,7 +3214,6 @@ dependencies = [
  "time",
  "ureq",
  "uuid",
- "walkdir",
  "windows-sys 0.59.0",
 ]
 

@@ -585,10 +585,10 @@ impl SelectorRegistry {
                 message_context(selector, observation, false, required_capability)
             }
             SelectorId::CompatArguments => {
-                compat_tool_string(selector, observation, true, required_capability)
+                tool_text(selector, observation, true, required_capability)
             }
             SelectorId::CompatToolResult => {
-                compat_tool_string(selector, observation, false, required_capability)
+                tool_text(selector, observation, false, required_capability)
             }
             SelectorId::CompatToolName => {
                 let mut resolved =
@@ -1073,53 +1073,6 @@ fn tool_argument_keys(
             ),
             _ => absent(selector, required_capability),
         },
-        _ => absent(selector, required_capability),
-    }
-}
-
-fn compat_tool_string(
-    selector: SelectorId,
-    observation: &CanonicalObservationV2,
-    arguments: bool,
-    required_capability: Option<CapabilityId>,
-) -> SelectorResolution {
-    match observation.body() {
-        ObservationBody::Tool(body) => {
-            let (search_path, search, value_path, value) = if arguments {
-                (
-                    "tool.searchable_arguments",
-                    body.searchable_arguments(),
-                    "tool.arguments",
-                    body.arguments(),
-                )
-            } else {
-                (
-                    "tool.searchable_result",
-                    body.searchable_result(),
-                    "tool.result",
-                    body.result(),
-                )
-            };
-            if let Some(value) = search {
-                return field(
-                    selector,
-                    observation,
-                    search_path,
-                    JsonValue::string(value),
-                    required_capability,
-                );
-            }
-            match value {
-                Some(JsonValue::String(value)) => field(
-                    selector,
-                    observation,
-                    value_path,
-                    JsonValue::string(value),
-                    required_capability,
-                ),
-                _ => absent(selector, required_capability),
-            }
-        }
         _ => absent(selector, required_capability),
     }
 }

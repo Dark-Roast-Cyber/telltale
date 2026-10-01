@@ -1,11 +1,19 @@
 #!/bin/sh
 set -eu
 
-echo "== LocalEventFeed focused checks =="
-cargo test --locked -p telltale-sources journal
-cargo test --locked -p telltale-core local_event_feed
-cargo test --locked --test cli rotation
-cargo test --locked -p telltale-schema consumer
+case "$#:${1-}" in
+    0:) run_tests=true ;;
+    1:--checks-only) run_tests=false ;;
+    *) echo "Usage: $0 [--checks-only]" >&2; exit 2 ;;
+esac
+
+if "$run_tests"; then
+    echo "== LocalEventFeed focused checks =="
+    cargo test --locked -p telltale-sources journal
+    cargo test --locked -p telltale-core local_event_feed
+    cargo test --locked --test cli rotation
+    cargo test --locked -p telltale-schema consumer
+fi
 
 echo "== LocalEventFeed diff safety =="
 git diff --check
