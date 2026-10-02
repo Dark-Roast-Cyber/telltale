@@ -3268,6 +3268,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "telltale-equivalence"
+version = "0.7.0-rc.1"
+dependencies = [
+ "rusqlite",
+ "serde_json",
+ "telltale-detect",
+ "telltale-inference",
+ "telltale-rules",
+ "telltale-schema",
+ "telltale-sources",
+ "tempfile",
+]
+
+[[package]]
 name = "telltale-inference"
 version = "0.7.0-rc.1"
 dependencies = [

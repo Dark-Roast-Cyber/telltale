@@ -129,7 +129,10 @@ fn linux_aggregate_runs_full_tests_once_and_retains_independent_checks() {
             .iter()
             .filter(|s| s.starts_with("test "))
             .collect::<Vec<_>>(),
-        vec!["test --locked --quiet"]
+        vec![
+            "test --locked --quiet",
+            "test --locked -p telltale-equivalence --quiet",
+        ]
     );
     assert_eq!(calls.iter().filter(|s| s.starts_with("run ")).count(), 2);
     for call in calls.iter().filter(|s| s.starts_with("run ")) {

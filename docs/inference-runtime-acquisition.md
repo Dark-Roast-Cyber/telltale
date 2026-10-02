@@ -369,6 +369,50 @@ macOS/Windows qualification and deployed OpenShell/provider interoperability
 are separate later evidence gates, not blockers or implied coverage of the
 Linux synthetic normalizer/mapping acceptance above.
 
+## Equivalence harness
+
+The non-publishable, non-default workspace member `telltale-equivalence` owns the test-only
+`inference_session_equivalence` harness. It uses local synthetic JSON/streams and
+temporary native stores, not live inference or production integration. It compares
+message role/text, tool name/object arguments,
+explicit call IDs, string results, captured error state, and definition name/change.
+Observation IDs, adapter/native coordinates, time and provenance are not semantic
+equality keys. Absent usage remains absent; reported usage is tested separately.
+
+Pinned capability differences include proposal versus harness-request stages,
+inference's unsupported execution, Copilot's unsupported user context and missing
+error state, and unknown execution visibility in OpenClaw/Qwen/Copilot. An
+OpenCode execution-state fixture is distinct from a returned result. Command-text
+detector hits never establish observed execution. Comparisons classify equivalent
+facts, expected capability differences, or defects; defects fail the harness.
+
+Claude object tool-request arguments now derive the parsed `command.text` facet
+from a string `command`, falling back to a string `cmd`, like other native adapters.
+Results do not derive this facet, and command text does not establish execution.
+The inference command-facet omission is also corrected within its supported mapping.
+An additional synthetic Rule v1 `command` positive gate exercises the command
+member of the shared object payload through the existing `command.text` selector,
+alongside a tool-name positive and explicit non-matches. This does not require
+generic structured-argument matching or detector-eligibility changes. Direct
+cross-profile projections compare shared messages, tool fields, definitions and
+call-ID values; unsupported error-state fields and inference lifecycle/origin are
+excluded from that projection.
+
+Additional synthetic coverage exercises `cmd`-only objects across all four
+inference profiles (JSON and streams) and all six native adapters, including
+Rule v1 command matches and bundled process-chain outcomes. Inference proposals
+now use string `command`, then string `cmd`, with parsed provenance and unchanged
+sensitivity; returned results never derive command text. Precedence, non-string
+fallback, and result isolation are pinned separately. Synthetic `file_path` and
+`path` objects preserve arguments but pin an expected path-selector difference;
+the benign fixture does not change bundled detector outcomes, so no inference
+`resource.path` derivation is added.
+
+Read-only, bounded characterization of discovered local Linux stores was reduced
+to minimal synthetic fixtures. No raw store content was retained in the repository.
+SQLite inspection was structure-only, and absent or unsampled stores establish no
+coverage. This characterization is not live interoperability evidence.
+
 ## Remaining evidence-dependent decisions
 
 - Which supported OpenShell release/emission sites provide direct Process/Network
