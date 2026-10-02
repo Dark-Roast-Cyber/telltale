@@ -358,50 +358,71 @@ fn all_profiles_isolate_installations_and_keep_results_unjoined() {
 fn invalid_streams_never_release_a_partial_batch() {
     for profile in PROFILES {
         let (format, wire) = stream(profile);
-        let mut cases = vec![
-            format!("{wire}{wire}"),
-            format!("{wire}SECRET_MARKER"),
-            wire[..wire.len() / 2].to_owned(),
-        ];
-        match profile {
-            Profile::AnthropicMessages => {
-                cases.push(wire.replace("content_block_stop", "unknown_semantic_event"));
-                cases.push(wire.replace("\"type\":\"ping\"", "\"type\":\"error\""));
-                cases.push(wire.replace("\"index\":1", "\"index\":0"));
-                cases.push(wire.replace("\"id\":\"call-1\",", ""));
-                cases.push(wire.replace("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n", ""));
-                cases.push(wire.replace("\\\"SECRET_MARKER\\\"}", "\\\"SECRET_MARKER\\\""));
+        let lf = wire.replace("\r\n", "\n");
+        for newline in ["\n", "\r\n"] {
+            let wire = lf.replace('\n', newline);
+            assert!(run(profile, format, wire.as_bytes(), 0).is_ok());
+            let mut cases = vec![
+                format!("{wire}{wire}"),
+                format!("{wire}SECRET_MARKER"),
+                wire[..wire.len() / 2].to_owned(),
+            ];
+            match profile {
+                Profile::AnthropicMessages => {
+                    cases.push(wire.replace("content_block_stop", "unknown_semantic_event"));
+                    cases.push(wire.replace("\"type\":\"ping\"", "\"type\":\"error\""));
+                    cases.push(wire.replace("\"index\":1", "\"index\":0"));
+                    cases.push(wire.replace("\"id\":\"call-1\",", ""));
+                    let invalid = wire.replace(&format!("event: content_block_stop{newline}data: {{\"type\":\"content_block_stop\",\"index\":1}}{newline}{newline}"), "");
+                    assert_ne!(
+                        invalid, wire,
+                        "invalid stream mutation must change the input"
+                    );
+                    for split in 0..=invalid.len() {
+                        let error = run(profile, format, invalid.as_bytes(), split).unwrap_err();
+                        assert!(!format!("{error:?} {error}").contains("SECRET_MARKER"));
+                    }
+                    cases.push(wire.replace("\\\"SECRET_MARKER\\\"}", "\\\"SECRET_MARKER\\\""));
+                }
+                Profile::OpenAiResponses => {
+                    cases.push(wire.replace("response.completed", "response.failed"));
+                    cases.push(wire.replace("response.completed", "response.incomplete"));
+                    cases.push(
+                        wire.replace("response.function_call_arguments.delta", "response.unknown"),
+                    );
+                    cases.push(wire.replacen(
+                        "\"item_id\":\"item-1\"",
+                        "\"item_id\":\"call-1\"",
+                        1,
+                    ));
+                    cases.push(wire.replacen("\"output_index\":0", "\"output_index\":1", 1));
+                    cases.push(wire.replacen("\"sequence_number\":3", "\"sequence_number\":2", 1));
+                    cases.push(wire.replacen("\"call_id\":\"call-1\"", "\"call_id\":\"wrong\"", 1));
+                }
+                Profile::OllamaChat => {
+                    cases.push(wire.replace("\"done\":true", "\"done\":false"));
+                    cases.push(wire.replace("12000000", "-1"));
+                    cases.push(wire.replace("12000000", "1.5"));
+                    cases.push(wire.replace(
+                        "\"total_duration\":",
+                        "\"duration_unit\":\"seconds\",\"total_duration\":",
+                    ));
+                    cases.push(wire.replace(
+                        "\"content\":\"SECRET_MARKER\"",
+                        "\"thinking\":\"SECRET_MARKER\",\"content\":\"\"",
+                    ));
+                }
+                _ => unreachable!(),
             }
-            Profile::OpenAiResponses => {
-                cases.push(wire.replace("response.completed", "response.failed"));
-                cases.push(wire.replace("response.completed", "response.incomplete"));
-                cases.push(
-                    wire.replace("response.function_call_arguments.delta", "response.unknown"),
+            for invalid in cases {
+                assert_ne!(
+                    invalid, wire,
+                    "invalid stream mutation must change the input"
                 );
-                cases.push(wire.replacen("\"item_id\":\"item-1\"", "\"item_id\":\"call-1\"", 1));
-                cases.push(wire.replacen("\"output_index\":0", "\"output_index\":1", 1));
-                cases.push(wire.replacen("\"sequence_number\":3", "\"sequence_number\":2", 1));
-                cases.push(wire.replacen("\"call_id\":\"call-1\"", "\"call_id\":\"wrong\"", 1));
-            }
-            Profile::OllamaChat => {
-                cases.push(wire.replace("\"done\":true", "\"done\":false"));
-                cases.push(wire.replace("12000000", "-1"));
-                cases.push(wire.replace("12000000", "1.5"));
-                cases.push(wire.replace(
-                    "\"total_duration\":",
-                    "\"duration_unit\":\"seconds\",\"total_duration\":",
-                ));
-                cases.push(wire.replace(
-                    "\"content\":\"SECRET_MARKER\"",
-                    "\"thinking\":\"SECRET_MARKER\",\"content\":\"\"",
-                ));
-            }
-            _ => unreachable!(),
-        }
-        for invalid in cases {
-            for split in [0, invalid.len() / 2, invalid.len()] {
-                let error = run(profile, format, invalid.as_bytes(), split).unwrap_err();
-                assert!(!format!("{error:?} {error}").contains("SECRET_MARKER"));
+                for split in [0, invalid.len() / 2, invalid.len()] {
+                    let error = run(profile, format, invalid.as_bytes(), split).unwrap_err();
+                    assert!(!format!("{error:?} {error}").contains("SECRET_MARKER"));
+                }
             }
         }
         for reason in [

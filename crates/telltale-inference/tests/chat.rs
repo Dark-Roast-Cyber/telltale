@@ -316,24 +316,29 @@ fn installation_isolation_replay_retry_and_content_changes() {
 }
 #[test]
 fn malformed_conflicting_and_unknown_streams_fail_atomically() {
-    let wire = std::str::from_utf8(RICH_SSE).unwrap();
-    let invalid = [
-        wire.replace("[DONE]", "[UNKNOWN]"),
-        wire.replace("data: [DONE]\n\n", ""),
-        wire.replacen("\"index\":2", "\"index\":0", 1),
-        wire.replacen("\"model\":\"resolved\"", "\"model\":\"different\"", 1),
-        wire.replacen("\"id\":\"response-2\"", "\"id\":\"different\"", 1),
-        wire.replace(
-            "\"finish_reason\":\"tool_calls\"",
-            "\"finish_reason\":\"mystery\"",
-        ),
-        wire.replacen("\"arguments\":\"{\"", "\"arguments\":\"[\"", 1),
-        wire.replace("\"role\":\"assistant\"", "\"role\":\"tool\""),
-        wire.replace("\"delta\":{", "\"delta\":{\"opaque\":\"SECRET_MARKER\","),
-    ];
-    for bytes in invalid {
-        for split in 0..=bytes.len() {
-            assert!(rich(ResponseFormat::Sse, bytes.as_bytes(), split).is_err());
+    let lf = std::str::from_utf8(RICH_SSE).unwrap().replace("\r\n", "\n");
+    for newline in ["\n", "\r\n"] {
+        let wire = lf.replace('\n', newline);
+        assert!(rich(ResponseFormat::Sse, wire.as_bytes(), 0).is_ok());
+        let invalid = [
+            wire.replace("[DONE]", "[UNKNOWN]"),
+            wire.replace(&format!("data: [DONE]{newline}{newline}"), ""),
+            wire.replacen("\"index\":2", "\"index\":0", 1),
+            wire.replacen("\"model\":\"resolved\"", "\"model\":\"different\"", 1),
+            wire.replacen("\"id\":\"response-2\"", "\"id\":\"different\"", 1),
+            wire.replace(
+                "\"finish_reason\":\"tool_calls\"",
+                "\"finish_reason\":\"mystery\"",
+            ),
+            wire.replacen("\"arguments\":\"{\"", "\"arguments\":\"[\"", 1),
+            wire.replace("\"role\":\"assistant\"", "\"role\":\"tool\""),
+            wire.replace("\"delta\":{", "\"delta\":{\"opaque\":\"SECRET_MARKER\","),
+        ];
+        for bytes in invalid {
+            assert_ne!(bytes, wire, "invalid stream mutation must change the input");
+            for split in 0..=bytes.len() {
+                assert!(rich(ResponseFormat::Sse, bytes.as_bytes(), split).is_err());
+            }
         }
     }
     for bytes in [b"{bad SECRET_MARKER".as_slice(),br#"{"model":"a","model":"b","messages":[]}"#,
