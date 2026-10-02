@@ -370,6 +370,22 @@ fn emit_tool(
     for path in paths {
         builder = builder.fact_metadata(path, normal_reported()?);
     }
+    if let ClaudeContentBlock::ToolUse {
+        input: Some(serde_json::Value::Object(input)),
+        ..
+    } = block
+        && let Some(command) = input
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| input.get("cmd").and_then(serde_json::Value::as_str))
+    {
+        builder = builder
+            .facet(
+                "command.text",
+                SemanticFacet::new(JsonValue::string(command)),
+            )?
+            .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+    }
     if let Some(path) = facet {
         builder = builder
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
@@ -801,6 +817,111 @@ mod tests {
         )
         .unwrap();
         assert_ne!(first[0].observation_id(), second[0].observation_id());
+    }
+
+    #[test]
+    fn object_command_facets_preserve_paths_without_result_or_execution_inference() {
+        use serde_json::json;
+        use telltale_schema::observation::{FactProvenance, Sensitivity};
+
+        let directory = tempdir().unwrap();
+        let source = Source {
+            client: ClientId::Claude,
+            kind: SourceKind::Jsonl,
+            source_id: "claude.projects".to_owned(),
+            path: directory.path().join("synthetic-command-facets.jsonl"),
+        };
+        for (case, mut input, expected) in [
+            (
+                "command",
+                json!({"command":"printf synthetic"}),
+                Some("printf synthetic"),
+            ),
+            (
+                "cmd",
+                json!({"cmd":"synthetic fallback"}),
+                Some("synthetic fallback"),
+            ),
+            (
+                "precedence",
+                json!({"command":"printf synthetic","cmd":"synthetic fallback"}),
+                Some("printf synthetic"),
+            ),
+            ("non-string", json!({"command":7}), None),
+            (
+                "non-string-fallback",
+                json!({"command":7,"cmd":"synthetic fallback"}),
+                Some("synthetic fallback"),
+            ),
+            ("no-command", json!({"cmd":false}), None),
+        ] {
+            input["file_path"] = json!("synthetic-file.txt");
+            let request = json!({"type":"assistant","sessionId":"synthetic-command-session","message":{"role":"assistant","content":[{"type":"tool_use","id":"synthetic-call","name":"shell","input":input}]}});
+            let result = json!({"type":"user","sessionId":"synthetic-command-session","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"synthetic-call","content":"printf synthetic"}]}});
+            fs::write(&source.path, format!("{request}\n{result}\n")).unwrap();
+            let observations = project_claude_native_records(
+                &super::super::native::extract_claude_native_records(&source).unwrap(),
+                &ClaudeCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            )
+            .unwrap();
+            let request = observations
+                .iter()
+                .find(|o| o.stage() == ObservationStage::ToolRequested)
+                .unwrap();
+            assert!(
+                request
+                    .facets()
+                    .get("command.text")
+                    .map(|facet| facet.value())
+                    == expected.map(JsonValue::string).as_ref(),
+                "{case}: command.text"
+            );
+            if expected.is_some() {
+                let metadata = &request.fact_metadata()["command.text"];
+                assert!(
+                    metadata.provenance() == FactProvenance::Parsed,
+                    "{case}: command.provenance"
+                );
+                assert!(
+                    metadata.sensitivity() == Sensitivity::Normal,
+                    "{case}: command.sensitivity"
+                );
+            } else {
+                assert!(
+                    !request.fact_metadata().contains_key("command.text"),
+                    "{case}: command.metadata_absent"
+                );
+            }
+            assert!(
+                request.facets()["resource.path"].value()
+                    == &JsonValue::string("synthetic-file.txt"),
+                "{case}: resource.path"
+            );
+            assert!(
+                request.fact_metadata()["resource.path"].provenance() == FactProvenance::Parsed,
+                "{case}: resource.provenance"
+            );
+            let result = observations
+                .iter()
+                .find(|o| o.stage() == ObservationStage::ToolResultReturned)
+                .unwrap();
+            assert!(result.facets().is_empty(), "{case}: result.facets_absent");
+            assert!(
+                !result.fact_metadata().contains_key("command.text"),
+                "{case}: result.command_metadata_absent"
+            );
+            assert!(
+                observations
+                    .iter()
+                    .all(|o| o.kind() != ObservationFamily::Process
+                        && !matches!(
+                            o.stage(),
+                            ObservationStage::ToolExecutionStarted
+                                | ObservationStage::ToolExecutionCompleted
+                        )),
+                "{case}: execution.absent"
+            );
+        }
     }
 
     #[test]
