@@ -128,6 +128,12 @@ release.
 
 ## Cargo packages
 
+The experimental, non-production `telltale-inference`
+crate implements synthetic-tested OpenAI Chat, Anthropic Messages, OpenAI Responses
+HTTP and Ollama native chat normalization subsets. Its crate README defines the
+supported subsets. It is not a gateway, live-provider interoperability claim or
+additional production source.
+
 The repository remains a Cargo workspace with six official packages. The 0.6.x
 architecture-convergence sequence is complete; the published `v0.7.0-rc.1`
 candidate documents the supported embedding surface. Five-platform native

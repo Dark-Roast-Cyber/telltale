@@ -59,6 +59,11 @@ OpenShell source that reports Process, Network, Runtime, policy, enforcement, or
 action-result evidence, remains separate from command-derived Tool
 interpretation; no OpenShell integration exists today.
 
+The inference and runtime acquisition document (`docs/inference-runtime-acquisition.md`)
+covers an implemented experimental local normalizer and deferred production
+integration for Issue #49. It is not shipped production behavior and does not
+change the supported source denominator or Event3-only output.
+
 ## 0.7 convergence boundary
 
 The 0.7 production migration is intentionally scoped to the source families that

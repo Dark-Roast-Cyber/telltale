@@ -3268,6 +3268,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "telltale-inference"
+version = "0.7.0-rc.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "telltale-schema",
+]
+
+[[package]]
 name = "telltale-rules"
 version = "0.7.0-rc.1"
 dependencies = [

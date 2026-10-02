@@ -1,0 +1,3 @@
+{"model":"resolved","message":{"role":"assistant","content":"hé "},"done":false}
+{"model":"resolved","message":{"role":"assistant","content":"SECRET_MARKER","tool_calls":[{"function":{"name":"shell","arguments":{"command":"SECRET_MARKER"}}}]},"done":false}
+{"model":"resolved","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":7,"eval_count":9,"total_duration":12000000}

@@ -1,0 +1,16 @@
+[package]
+name = "telltale-inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Pure bounded Chat inference acquisition into canonical observations"
+readme = "README.md"
+
+[dependencies]
+telltale-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true

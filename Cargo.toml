@@ -2,6 +2,7 @@
 members = [
     "apps/telltale-console",
     "crates/telltale-schema",
+    "crates/telltale-inference",
     "crates/telltale-rules",
     "crates/telltale-sources",
     "crates/telltale-detect",
@@ -10,6 +11,7 @@ members = [
 default-members = [
     ".",
     "crates/telltale-schema",
+    "crates/telltale-inference",
     "crates/telltale-rules",
     "crates/telltale-sources",
     "crates/telltale-detect",
@@ -38,6 +40,7 @@ time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 unicode-normalization = "0.1"
 uuid = { version = "1.11", features = ["v4"] }
 telltale-schema = { path = "crates/telltale-schema", version = "=0.7.0-rc.1" }
+telltale-inference = { path = "crates/telltale-inference", version = "=0.7.0-rc.1" }
 telltale-rules = { path = "crates/telltale-rules", version = "=0.7.0-rc.1" }
 telltale-sources = { path = "crates/telltale-sources", version = "=0.7.0-rc.1" }
 telltale-detect = { path = "crates/telltale-detect", version = "=0.7.0-rc.1" }
