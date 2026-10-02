@@ -9,6 +9,97 @@ fn clock() -> ObservedAt {
     ObservedAt::new("2026-09-19T00:00:00Z").unwrap()
 }
 
+fn tree_snapshot(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        entries: &mut std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
+    ) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            if entry.file_type().unwrap().is_dir() {
+                entries.insert(relative, None);
+                visit(root, &path, entries);
+            } else {
+                assert!(entry.file_type().unwrap().is_file());
+                entries.insert(relative, Some(std::fs::read(path).unwrap()));
+            }
+        }
+    }
+    let mut entries = std::collections::BTreeMap::new();
+    visit(root, root, &mut entries);
+    entries
+}
+
+#[test]
+fn canonical_embedding_scan_sources_selects_exact_source_without_writes() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join(".claude/projects/synthetic");
+    std::fs::create_dir_all(&directory).unwrap();
+    let selected_path = directory.join("selected.jsonl");
+    std::fs::write(&selected_path, concat!(
+        "{\"type\":\"user\",\"sessionId\":\"selected\",\"message\":{\"role\":\"user\",\"content\":\"needle first\"}}\n",
+        "{\"type\":\"user\",\"sessionId\":\"selected\",\"message\":{\"role\":\"user\",\"content\":\"needle second\"}}\n"
+    )).unwrap();
+    std::fs::write(directory.join("sibling.jsonl"), "{\"type\":\"user\",\"sessionId\":\"sibling\",\"message\":{\"role\":\"user\",\"content\":\"needle sibling\"}}\n").unwrap();
+    let before = tree_snapshot(root.path());
+    let sources = telltale_sources::discovery::discover_sources(root.path()).unwrap();
+    assert_eq!(sources.len(), 2);
+    let selected = sources
+        .iter()
+        .find(|source| source.path == selected_path)
+        .unwrap();
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    let root_events = pipeline.scan_root(root.path()).unwrap();
+    assert!(
+        root_events
+            .iter()
+            .any(|(source, event)| source != selected && event.session_id == "sibling")
+    );
+    let events = pipeline
+        .scan_sources(std::slice::from_ref(selected))
+        .unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(
+        events
+            .iter()
+            .all(|(source, event)| source == selected && event.session_id == "selected")
+    );
+    let filtered = root_events
+        .iter()
+        .filter(|(source, _)| source == selected)
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), filtered.len());
+    for ((_, event), (_, expected)) in events.iter().zip(filtered) {
+        assert_eq!(event.event_type, expected.event_type);
+        assert_eq!(event.rule_ids, expected.rule_ids);
+        assert_eq!(
+            serde_json::to_value(&event.timeline_anchors).unwrap(),
+            serde_json::to_value(&expected.timeline_anchors).unwrap()
+        );
+    }
+    let detection = &events[0].1;
+    assert_eq!(detection.event_type, "detection");
+    assert_eq!(detection.rule_ids, ["synthetic.target"]);
+    // Two matching actions remain one session detection with occurrence anchors.
+    assert_eq!(detection.timeline_anchors.len(), 2);
+    for (index, anchor) in detection.timeline_anchors.iter().enumerate() {
+        assert_eq!(anchor.entry_index, index);
+        assert_eq!(anchor.rule_ids, ["synthetic.target"]);
+        assert_eq!(anchor.evidence_fields, ["user_context"]);
+    }
+    assert_eq!(events[1].1.event_type, "activity");
+    assert!(events[1].1.timeline_anchors.is_empty());
+    assert!(pipeline.scan_sources(&[]).unwrap().is_empty());
+    assert_eq!(tree_snapshot(root.path()), before);
+}
+
 #[test]
 fn canonical_embedding_is_stateless_and_deterministic() {
     let root = tempfile::tempdir().unwrap();
@@ -143,18 +234,15 @@ fn canonical_embedding_opencode_remains_partial_without_persisting_progress() {
         INSERT INTO message VALUES ('m','s','{"role":"assistant"}');
         INSERT INTO part VALUES ('p','m','s',10,'{"type":"tool","tool":"shell","callID":"call-a","state":{"status":"running","input":{"command":"echo synthetic"}}}');"#).unwrap();
     drop(conn);
-    let before = std::fs::read(&path).unwrap();
+    let before = tree_snapshot(dir.path());
     let sources = [Source {
         client: ClientId::OpenCode,
         source_id: "opencode.sqlite".into(),
         kind: SourceKind::Sqlite,
         path: path.clone(),
     }];
-    let result = Pipeline::builder()
-        .build()
-        .unwrap()
-        .scan_canonical_sources(&sources, clock())
-        .unwrap();
+    let pipeline = Pipeline::builder().build().unwrap();
+    let result = pipeline.scan_canonical_sources(&sources, clock()).unwrap();
     assert_eq!(
         result[0].1.as_ref().unwrap().accounting.coverage,
         AccountingCoverage::PartialSource
@@ -172,8 +260,14 @@ fn canonical_embedding_opencode_remains_partial_without_persisting_progress() {
             .iter()
             .any(|event| event.event_type == "activity")
     );
-    assert_eq!(std::fs::read(path).unwrap(), before);
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    let public = pipeline.scan_sources(&sources).unwrap();
+    assert!(public.iter().all(|(source, _)| source == &sources[0]));
+    assert!(
+        public
+            .iter()
+            .any(|(_, event)| event.event_type == "activity")
+    );
+    assert_eq!(tree_snapshot(dir.path()), before);
 }
 
 #[test]
@@ -204,12 +298,21 @@ fn scan_root_returns_scanner_error_for_malformed_synthetic_source() {
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(directory.join("malformed.jsonl"), "not-json\n").unwrap();
 
-    let events = Pipeline::builder()
-        .build()
-        .unwrap()
-        .scan_root(root.path())
-        .unwrap();
+    let before = tree_snapshot(root.path());
+    let sources = telltale_sources::discovery::discover_sources(root.path()).unwrap();
+    let pipeline = Pipeline::builder().build().unwrap();
+    let events = pipeline.scan_root(root.path()).unwrap();
 
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1.event_type, "scanner_error");
+    let selected = pipeline.scan_sources(&sources).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].0, events[0].0);
+    assert_eq!(selected[0].1.event_type, events[0].1.event_type);
+    assert_eq!(selected[0].1.rule_ids, events[0].1.rule_ids);
+    assert_eq!(
+        serde_json::to_value(&selected[0].1.evidence).unwrap(),
+        serde_json::to_value(&events[0].1.evidence).unwrap()
+    );
+    assert_eq!(tree_snapshot(root.path()), before);
 }

@@ -13,12 +13,21 @@ persistence and delivery while using the same analytic and event semantics.
 
 ## Delivery boundary
 
-`Pipeline::scan_root` uses the shared canonical source runtime and returns the
-same Event 3 detection/activity compatibility projection as CLI scan/watch.
+`Pipeline::scan_root` and `Pipeline::scan_sources` use the shared canonical source
+runtime and return the same Event 3 detection/activity compatibility projection
+as CLI scan/watch.
 Acquisition is source-native Canonical Observation v2 followed by authoritative
 Detection v2 evaluation. The runtime remains a private implementation seam; it
 does not add a second public embedding abstraction. See the [canonical runtime
 boundary](canonical-observation-v2.md#shared-canonical-source-runtime).
+
+Hosts can discover sources with `telltale_sources::discovery::discover_sources`,
+select them, then pass those exact `Source` values to `scan_sources(&sources)`.
+Unlike `scan_root`, it performs no discovery; neither method persists state or
+output. Both preserve session-scoped detections and `timeline_anchors`, not
+per-action detection events, and map source failures to `scanner_error` events.
+Removed parser registration and source-backed flat-record projection are not
+compatibility paths.
 
 `detect_records` and `evaluate_session` remain deliberate Rule v1 record-level
 compatibility APIs accepting `NormalizedRecord`. They cannot supply native
@@ -181,10 +190,10 @@ keeps the rule engine usable in processes with no filesystem access.
 
 ## Stability
 
-For 0.7, `telltale-core::Pipeline` (including `scan_root`, its builder, and the
-deliberate caller-provided `detect_records` / `evaluate_session` compatibility
-methods) and the types needed to call it are the supported Rust embedding
-facade. The core re-exports of `Source`, `Event`, `NormalizedRecord`, and rule
+For 0.7, `telltale-core::Pipeline` (including `scan_root`, `scan_sources`, its
+builder, and the deliberate caller-provided `detect_records` / `evaluate_session`
+compatibility methods) and the types needed to call it are the supported Rust
+embedding facade. The core re-exports of `Source`, `Event`, `NormalizedRecord`, and rule
 result/error types serve that facade; their presence does not promise that
 every public module of the originating crate is a stable embedding API.
 

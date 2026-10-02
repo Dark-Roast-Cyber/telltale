@@ -88,11 +88,20 @@ impl Pipeline {
     /// and rule compilation failures return `Err`. No baseline or cursor is persisted.
     pub fn scan_root(&self, root: &Path) -> Result<Vec<(Source, Event)>, BoxError> {
         let sources = telltale_sources::discovery::discover_sources(root)?;
+        self.scan_sources(&sources)
+    }
+
+    /// Run canonical detection and activity over exactly the supplied sources.
+    /// Uses one UTC observation time per call and the same session-scoped Event 3
+    /// projection (including timeline anchors) as [`Self::scan_root`]. Source
+    /// processing failures surface as `scanner_error` events. No discovery,
+    /// baseline, cursor, or output persistence is performed.
+    pub fn scan_sources(&self, sources: &[Source]) -> Result<Vec<(Source, Event)>, BoxError> {
         let now = time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)?;
         let observed_at = telltale_schema::observation::ObservedAt::new(now)?;
         Ok(self
-            .scan_canonical_sources(&sources, observed_at)?
+            .scan_canonical_sources(sources, observed_at)?
             .into_iter()
             .flat_map(|(source, result)| {
                 result
@@ -104,7 +113,7 @@ impl Pipeline {
             .collect())
     }
 
-    /// Stateless adapter. One observation time for the entire root scan.
+    /// Stateless adapter. One observation time for the entire source batch.
     /// No prior baseline means no deviation history; replacement remains data.
     fn scan_canonical_sources(
         &self,
