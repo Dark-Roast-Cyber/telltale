@@ -768,9 +768,7 @@ fn assert_source_visibility_exclusions(events: &[Value]) {
 #[test]
 fn scan_once_writes_schema_shaped_health_jsonl() {
     let events = &fixture_scan().events;
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     for event in events {
         assert!(
             validator.is_valid(event),
@@ -862,9 +860,7 @@ fn scan_once_writes_schema_shaped_health_jsonl() {
 #[test]
 fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
     let events = &fixture_scan().events;
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     let detection = events
         .iter()
         .find(|event| event["session_id"] == "uc001-positive")
@@ -1063,9 +1059,7 @@ fn scan_once_preserves_mcp_metadata_and_tool_result_detections() {
 #[test]
 fn scan_once_preserves_source_specific_mcp_tool_results() {
     let events = &fixture_scan().events;
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     let claude_tool_result = events
         .iter()
         .find(|event| event["session_id"] == "claude-uc001-tool-result")
@@ -1226,9 +1220,7 @@ fn scan_once_preserves_source_specific_mcp_tool_results() {
 #[test]
 fn scan_once_emits_token_injection_and_install_detections() {
     let events = &fixture_scan().events;
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     let jwt_bearer_token = events
         .iter()
         .find(|event| event["session_id"] == "jwt-bearer-token-pattern")
@@ -1397,9 +1389,7 @@ fn scan_once_emits_token_injection_and_install_detections() {
 #[test]
 fn scan_once_emits_execution_secret_and_api_key_detections() {
     let events = &fixture_scan().events;
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     let encoded_payload = events
         .iter()
         .find(|event| event["session_id"] == "encoded-payload-chain")
@@ -1713,9 +1703,7 @@ fn scan_once_excludes_negative_fixture_detections() {
         .iter()
         .find(|event| event["session_id"] == "tool-injection-shape-session")
         .expect("tool injection shape session detection");
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     assert!(
         validator.is_valid(tool_injection_shape_session),
         "tool injection shape session event failed schema validation"
@@ -2940,9 +2928,7 @@ fn scan_once_activity_includes_static_mcp_inventory_events() {
                 && event["tool_name"] == "mcp::github"
         })
         .expect("mcp inventory event");
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     assert!(
         validator.is_valid(inventory),
         "mcp inventory activity event should match schema: {inventory}"
@@ -3040,9 +3026,7 @@ fn scan_once_can_emit_session_risk_summary_events() {
         .filter(|event| event["event_type"] == "session_risk_summary")
         .collect::<Vec<_>>();
     assert!(!summary_events.is_empty(), "session risk summary events");
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     for summary_event in &summary_events {
         assert!(
             validator.is_valid(summary_event),
@@ -5216,9 +5200,7 @@ fn scan_once_uses_canonical_threshold_without_network() {
     assert!(detection.get("triage").is_none());
     assert!(detection["response"].is_object());
 
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     assert!(
         validator.is_valid(&detection),
         "native detection event failed schema validation"
@@ -5310,9 +5292,7 @@ fn operational_alert_emitted_when_scanner_errors_exceed_threshold() {
     );
 
     // Validate against the event schema.
-    let schema: Value =
-        serde_json::from_str(include_str!("../../schemas/event.schema.json")).expect("schema json");
-    let validator = validator_for(&schema).expect("schema validator");
+    let validator = event_schema_validator();
     assert!(
         validator.is_valid(alert),
         "operational_alert event failed schema validation"

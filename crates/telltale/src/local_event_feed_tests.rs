@@ -2,10 +2,10 @@ use super::{
     Cursor, FeedLimits, FeedNotice, FeedNoticeCode, LocalEventFeed, LocalEventFeedConfig,
     LocalEventFeedErrorCode, PollContext, RecentPhase, StartupMode,
 };
-use std::collections::BTreeMap;
+use crate::test_support::tree_snapshot as snapshot;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use telltale_schema::event::{Event3ErrorCategory, Event3Record};
 use telltale_sources::journal::{JournalFile, JournalGeneration};
 use telltale_sources::paths::{PathProfile, resolve_log_path};
@@ -62,36 +62,6 @@ fn parser_notice(body: &[u8]) -> FeedNoticeCode {
         Event3ErrorCategory::Semantic => FeedNoticeCode::ParserSemantic,
         Event3ErrorCategory::Family => FeedNoticeCode::ParserFamily,
     }
-}
-
-fn snapshot(root: &Path) -> BTreeMap<PathBuf, (&'static str, u64)> {
-    fn visit(root: &Path, path: &Path, result: &mut BTreeMap<PathBuf, (&'static str, u64)>) {
-        let metadata = fs::symlink_metadata(path).expect("snapshot metadata");
-        let kind = if metadata.file_type().is_symlink() {
-            "symlink"
-        } else if metadata.is_dir() {
-            "directory"
-        } else if metadata.is_file() {
-            "file"
-        } else {
-            "other"
-        };
-        result.insert(
-            path.strip_prefix(root)
-                .expect("snapshot path")
-                .to_path_buf(),
-            (kind, metadata.len()),
-        );
-        if metadata.is_dir() {
-            for entry in fs::read_dir(path).expect("snapshot directory") {
-                visit(root, &entry.expect("snapshot entry").path(), result);
-            }
-        }
-    }
-
-    let mut result = BTreeMap::new();
-    visit(root, root, &mut result);
-    result
 }
 
 #[test]
@@ -1986,6 +1956,8 @@ fn dedup_identical_record_replayed_after_rotation_is_suppressed() {
 fn readonly_feed_operations_preserve_fixture_artifacts_across_lifecycle() {
     let directory = tempdir().expect("tempdir");
     let path = directory.path().join("events.jsonl");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("events.jsonl", directory.path().join("synthetic.link")).unwrap();
     let before_missing = snapshot(directory.path());
     let mut feed = LocalEventFeed::from_path(&path, StartupMode::Beginning).expect("config");
     assert_eq!(snapshot(directory.path()), before_missing);

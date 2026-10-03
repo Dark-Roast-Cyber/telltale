@@ -1373,33 +1373,97 @@ fn release_artifact_manifest_requires_archives_only_in_strict_mode() {
 
 #[test]
 fn release_workflow_packages_only_canonical_identity() {
-    let workflow = read_release_workflow();
-    assert!(workflow.contains("telltale-${{ github.ref_name }}-${{ matrix.target }}"));
-    assert!(workflow.contains("scripts/release-artifact-manifest --stage"));
-    assert!(workflow.contains("scripts/release-artifact-manifest --platform windows --stage"));
-    assert!(workflow.contains("scripts/release-artifact-manifest --members"));
-    assert!(workflow.contains("-T \"$RUNNER_TEMP/telltale-members\""));
-    assert!(!workflow.contains("Compress-Archive"));
-    assert!(workflow.contains("& .\\scripts\\release-windows-zip.ps1"));
-    assert!(workflow.contains("-BundleDirectory $bundleDir -OutputArchive $archivePath"));
-    assert!(workflow.contains(
-        "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
-    ));
-    assert!(workflow.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
-    assert!(workflow.contains("overwrite_files: false"));
-    assert!(workflow.contains("Fail closed if the tag already has a Release"));
-    assert!(workflow.contains("releases?per_page=100"));
-    assert!(
-        workflow.contains(
-            "concurrency:\n  group: release-${{ github.ref }}\n  cancel-in-progress: false"
-        )
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&read_release_workflow()).expect("release workflow YAML");
+    let triggers = workflow["on"].as_mapping().expect("workflow triggers");
+    assert_eq!(triggers.len(), 1, "publication must be tag-push only");
+    let push = workflow["on"]["push"].as_mapping().expect("push trigger");
+    assert_eq!(push.len(), 1, "no branch or path publication triggers");
+    assert_eq!(
+        workflow["on"]["push"]["tags"],
+        serde_yaml::to_value(["v*"]).unwrap()
     );
-    assert!(workflow.contains("on:\n  push:\n    tags:"));
-    assert!(!workflow.contains("workflow_dispatch:"));
-    assert!(!workflow.contains("branches:"));
-    assert!(!workflow.contains("refs/heads/"));
-    assert!(!workflow.contains("branch-artifact"));
-    assert!(!workflow.contains("artifact-reference"));
+    assert_eq!(
+        workflow["concurrency"]["group"],
+        "release-${{ github.ref }}"
+    );
+    assert_eq!(workflow["concurrency"]["cancel-in-progress"], false);
+
+    let steps = workflow["jobs"]["build"]["steps"].as_sequence().unwrap();
+    let unix = &steps[workflow_step_index(steps, "run", "--members")];
+    assert_eq!(unix["if"], "matrix.archive == 'tar.gz'");
+    let script = unix["run"].as_str().unwrap();
+    for required in [
+        "scripts/release-artifact-manifest",
+        "--stage",
+        "--members",
+        "telltale-${{ github.ref_name }}-${{ matrix.target }}.tar.gz",
+    ] {
+        assert!(
+            script.contains(required),
+            "missing canonical packaging input: {required}"
+        );
+    }
+    assert!(script.contains("-T") || script.contains("--files-from"));
+    assert!(script.contains("$RUNNER_TEMP/telltale-members"));
+    let windows = &steps[workflow_step_index(steps, "run", "release-windows-zip.ps1")];
+    let script = windows["run"].as_str().unwrap();
+    let tokens = script.split_whitespace().collect::<Vec<_>>();
+    for required in [
+        "$bundleDir = Join-Path $env:RUNNER_TEMP 'telltale-bundle'",
+        "$archive = \"telltale-${{ github.ref_name }}-${{ matrix.target }}.zip\"",
+        "$archivePath = Join-Path (Get-Location) $archive",
+        "& .\\scripts\\release-windows-zip.ps1",
+        "-BundleDirectory $bundleDir",
+        "-OutputArchive $archivePath",
+    ] {
+        let required_tokens = required.split_whitespace().collect::<Vec<_>>();
+        assert!(
+            tokens
+                .windows(required_tokens.len())
+                .any(|window| window == required_tokens),
+            "missing Windows packaging wiring: {required}"
+        );
+    }
+    assert!(!steps.iter().any(|step| {
+        step["run"]
+            .as_str()
+            .is_some_and(|run| run.contains("Compress-Archive"))
+    }));
+    let attest = &steps[workflow_step_index(steps, "uses", "actions/attest@")];
+    assert_eq!(
+        attest["with"]["subject-path"],
+        "telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
+    );
+
+    // Existing guard/reservation behavior tests exercise fail-closed immutability.
+    let steps = workflow["jobs"]["release"]["steps"].as_sequence().unwrap();
+    let publish = &steps[workflow_step_index(steps, "uses", "softprops/action-gh-release@")];
+    assert_eq!(publish["with"]["tag_name"], "${{ github.ref_name }}");
+    assert_eq!(
+        publish["with"]["prerelease"],
+        "${{ contains(github.ref_name, '-') }}"
+    );
+    assert_eq!(publish["with"]["overwrite_files"], false);
+}
+
+fn workflow_step_index(steps: &[serde_yaml::Value], field: &str, marker: &str) -> usize {
+    let matches = steps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| {
+            step[field]
+                .as_str()
+                .filter(|value| value.contains(marker))
+                .map(|_| index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected one {field} step containing {marker:?}"
+    );
+    matches[0]
 }
 
 #[test]
@@ -1420,55 +1484,67 @@ fn release_bundle_inventory_behavior() {
 
 #[test]
 fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
-    let workflow = read_release_workflow();
-    let stage = workflow
-        .find("- name: Stage release bundle (windows)")
-        .expect("Windows stage step");
-    let runtime = workflow
-        .find("- name: Verify staged Windows binary has no redistributable MSVC runtime imports")
-        .expect("Windows runtime linkage step");
-    let package = workflow
-        .find("- name: Package release bundle (windows)")
-        .expect("Windows package step");
-    let smoke = workflow
-        .find("- name: Mandatory Windows staged binary --version smoke")
-        .expect("Windows smoke step");
-    let attestation = workflow
-        .find("- name: Attest release archive")
-        .expect("archive attestation step");
-    let upload = workflow
-        .find("- name: Upload artifact")
-        .expect("artifact upload step");
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&read_release_workflow()).expect("release workflow YAML");
+    let steps = workflow["jobs"]["build"]["steps"].as_sequence().unwrap();
+    let stage = workflow_step_index(steps, "run", "--platform windows");
+    let runtime = workflow_step_index(steps, "run", "verify-windows-runtime.ps1");
+    let package = workflow_step_index(steps, "run", "release-windows-zip.ps1");
+    let smoke = workflow_step_index(steps, "run", "telltale-bundle/$binary");
+    let attestation = workflow_step_index(steps, "uses", "actions/attest@");
+    let upload = workflow_step_index(steps, "uses", "actions/upload-artifact@");
     assert!(stage < runtime && runtime < package && package < smoke);
     assert!(smoke < attestation && attestation < upload);
 
-    let package_block = &workflow[package..smoke];
-    assert!(package_block.contains("$archivePath = Join-Path (Get-Location) $archive"));
-    assert!(package_block.contains("& .\\scripts\\release-windows-zip.ps1"));
+    for index in [stage, runtime, package, smoke, attestation, upload] {
+        let step = &steps[index];
+        assert!(step["continue-on-error"].is_null() || step["continue-on-error"] == false);
+        if index < attestation {
+            assert_eq!(step["if"], "matrix.archive == 'zip'");
+            assert_eq!(step["shell"], "pwsh");
+        } else {
+            assert!(
+                step["if"].is_null(),
+                "evidence must use the default success gate"
+            );
+        }
+    }
+    let package_block = steps[package]["run"].as_str().unwrap();
     for forbidden in [
         "[System.IO.Compression.ZipFile]::Open",
         "[System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile",
-        "continue-on-error",
         "catch",
-        "always()",
     ] {
         assert!(
             !package_block.contains(forbidden),
             "Windows package block must not bypass helper failure: {forbidden}"
         );
     }
-    assert!(workflow.contains(
-        "subject-path: telltale-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}"
-    ));
-    let runtime_block = &workflow[runtime..package];
-    assert!(runtime_block.contains("scripts\\verify-windows-runtime.ps1"));
+    let runtime_block = steps[runtime]["run"].as_str().unwrap();
     assert!(runtime_block.contains("telltale-bundle\\telltale.exe"));
-    let stage_block = &workflow[stage..runtime];
-    assert!(stage_block.contains(
-        "python scripts/release-artifact-manifest --platform windows --stage \"target/${{ matrix.target }}/release/telltale.exe\" $bundleDir"
-    ));
-    assert!(stage_block.contains("if ($LASTEXITCODE -ne 0) { throw"));
-    assert!(package_block.contains("-BundleDirectory $bundleDir"));
+    let stage_block = steps[stage]["run"].as_str().unwrap();
+    let stage_tokens = stage_block.split_whitespace().collect::<Vec<_>>();
+    assert!(stage_tokens.windows(5).any(|window| window
+        == [
+            "$bundleDir",
+            "=",
+            "Join-Path",
+            "$env:RUNNER_TEMP",
+            "'telltale-bundle'"
+        ]));
+    for required in [
+        "scripts/release-artifact-manifest",
+        "--stage",
+        "target/${{ matrix.target }}/release/telltale.exe",
+        "$LASTEXITCODE",
+        "throw",
+    ] {
+        assert!(
+            stage_block.contains(required),
+            "missing fail-closed Windows staging input: {required}"
+        );
+    }
+    assert!(package_block.contains("$ErrorActionPreference = 'Stop'"));
 }
 
 #[test]

@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use jsonschema::validator_for;
+
 #[cfg(target_os = "linux")]
 use rusqlite::Connection;
 use serde_json::Value;
@@ -26,6 +27,15 @@ use telltale_schema::event::{
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use telltale_schema::source::Source;
 use tempfile::tempdir;
+
+fn event_schema_validator() -> &'static jsonschema::Validator {
+    static VALIDATOR: std::sync::OnceLock<jsonschema::Validator> = std::sync::OnceLock::new();
+    VALIDATOR.get_or_init(|| {
+        let schema: Value = serde_json::from_str(include_str!("../schemas/event.schema.json"))
+            .expect("event schema");
+        validator_for(&schema).expect("event schema validator")
+    })
+}
 
 fn native_test_event(
     event_type: &str,
@@ -248,9 +258,7 @@ fn native_test_event(
 
 #[test]
 fn every_native_event_constructor_emits_schema_valid_json() {
-    let schema: Value =
-        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
-    let validator = validator_for(&schema).expect("event schema validator");
+    let validator = event_schema_validator();
     let evidence = || {
         vec![Evidence {
             field: "synthetic".to_string(),
@@ -519,9 +527,7 @@ fn native_constructor_family_registry_covers_the_reviewed_current_corpus() {
 
 #[test]
 fn sparse_native_event_constructors_remain_schema_valid() {
-    let schema: Value =
-        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
-    let validator = validator_for(&schema).expect("event schema validator");
+    let validator = event_schema_validator();
     let timestamp = "2026-05-01T00:00:00Z";
 
     for event_type in [
@@ -574,9 +580,7 @@ fn sparse_native_event_constructors_remain_schema_valid() {
 
 #[test]
 fn native_event_schema_rejects_the_removed_workspace_surface() {
-    let schema: Value =
-        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
-    let validator = validator_for(&schema).expect("event schema validator");
+    let validator = event_schema_validator();
     let mut event = native_test_event(
         "activity",
         "telltale-00000000-0000-4000-8000-000000000301",
@@ -604,9 +608,7 @@ fn current_and_frozen_event_3_schemas_are_byte_identical() {
 
 #[test]
 fn source_count_key_terminalization_remains_strict_schema_valid() {
-    let schema: Value =
-        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
-    let validator = validator_for(&schema).expect("event schema validator");
+    let validator = event_schema_validator();
     let marker = "TT_PRIVACY_SOURCE_COUNTS_SCHEMA_KEY_30";
     let canonical_fallback = format!("source_count:{}", evidence_hash(marker));
     let mut source_counts = BTreeMap::new();
@@ -653,9 +655,7 @@ fn source_count_key_terminalization_remains_strict_schema_valid() {
 
 #[test]
 fn telltale_version_terminalization_remains_strict_schema_valid() {
-    let schema: Value =
-        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
-    let validator = validator_for(&schema).expect("event schema validator");
+    let validator = event_schema_validator();
     let credential_version = format!("1.2.3-AKIA{}", "T".repeat(16));
     let mut event = health_event_with_metadata(HealthEventInput {
         sources: &[],
@@ -687,9 +687,7 @@ fn telltale_version_terminalization_remains_strict_schema_valid() {
 
 #[test]
 fn health_constructor_normalizes_blank_policy_names_for_schema() {
-    let schema: Value =
-        serde_json::from_str(include_str!("../schemas/event.schema.json")).expect("event schema");
-    let validator = validator_for(&schema).expect("event schema validator");
+    let validator = event_schema_validator();
 
     for active_policy_name in [Some(""), Some(" \t\n ")] {
         let event = serde_json::to_value(health_event_with_metadata(HealthEventInput {

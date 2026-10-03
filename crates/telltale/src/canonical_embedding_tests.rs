@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::tree_snapshot;
 use telltale_detect::v2::activity::BaselineReplacement;
 use telltale_schema::observation::ObservedAt;
 use telltale_sources::acquisition::{AccountingCoverage, AcquisitionProgress};
@@ -9,32 +10,7 @@ fn clock() -> ObservedAt {
     ObservedAt::new("2026-09-19T00:00:00Z").unwrap()
 }
 
-fn tree_snapshot(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
-    fn visit(
-        root: &Path,
-        directory: &Path,
-        entries: &mut std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
-    ) {
-        for entry in std::fs::read_dir(directory).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            let relative = path.strip_prefix(root).unwrap().to_path_buf();
-            if entry.file_type().unwrap().is_dir() {
-                entries.insert(relative, None);
-                visit(root, &path, entries);
-            } else {
-                assert!(entry.file_type().unwrap().is_file());
-                entries.insert(relative, Some(std::fs::read(path).unwrap()));
-            }
-        }
-    }
-    let mut entries = std::collections::BTreeMap::new();
-    visit(root, root, &mut entries);
-    entries
-}
-
-#[test]
-fn canonical_embedding_public_occurrences_share_the_session_projection() {
+fn occurrence_fixture() -> (tempfile::TempDir, Source, Pipeline) {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join(".claude/projects/synthetic");
     std::fs::create_dir_all(&directory).unwrap();
@@ -43,7 +19,8 @@ fn canonical_embedding_public_occurrences_share_the_session_projection() {
         "{\"type\":\"user\",\"sessionId\":\"occurrence-session\",\"timestamp\":\"2026-09-17T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"needle\"}}\n",
         "{\"type\":\"user\",\"sessionId\":\"occurrence-session\",\"message\":{\"role\":\"user\",\"content\":\"needle\"}}\n"
     )).unwrap();
-    let before = tree_snapshot(root.path());
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("occurrences.jsonl", directory.join("synthetic.link")).unwrap();
     let source = Source {
         client: ClientId::Claude,
         source_id: "claude.projects".into(),
@@ -55,6 +32,13 @@ fn canonical_embedding_public_occurrences_share_the_session_projection() {
         .rules_document(RULE)
         .build()
         .unwrap();
+    (root, source, pipeline)
+}
+
+#[test]
+fn canonical_embedding_occurrence_identities_are_private_and_stable() {
+    let (root, source, pipeline) = occurrence_fixture();
+    let before = tree_snapshot(root.path());
     let first = pipeline
         .scan_sources_with_occurrences(std::slice::from_ref(&source))
         .unwrap();
@@ -86,7 +70,7 @@ fn canonical_embedding_public_occurrences_share_the_session_projection() {
             "needle",
             "occurrence-session",
             "occurrences.jsonl",
-            path.to_str().unwrap(),
+            source.path.to_str().unwrap(),
         ] {
             assert!(!id.contains(excluded));
         }
@@ -102,6 +86,19 @@ fn canonical_embedding_public_occurrences_share_the_session_projection() {
         assert_eq!(occurrence.identity, second[0].occurrences[index].identity);
         assert_ne!(id, detection.event_id);
         assert_ne!(id, second[0].events[0].event_id);
+    }
+    assert_ne!(detection.event_id, second[0].events[0].event_id);
+    assert_eq!(tree_snapshot(root.path()), before);
+}
+
+#[test]
+fn canonical_embedding_occurrences_link_to_session_timeline_and_source_time() {
+    let (_root, source, pipeline) = occurrence_fixture();
+    let scans = pipeline.scan_sources_with_occurrences(&[source]).unwrap();
+    let scan = &scans[0];
+    let detection = &scan.events[0];
+    assert_eq!(scan.occurrences.len(), 2);
+    for (index, occurrence) in scan.occurrences.iter().enumerate() {
         assert_eq!(occurrence.finding_index, 0);
         assert_eq!(occurrence.session_id, detection.session_id);
         assert_eq!(occurrence.timeline_index, Some(index));
@@ -116,7 +113,16 @@ fn canonical_embedding_public_occurrences_share_the_session_projection() {
         Some("2026-09-17T00:00:00Z")
     );
     assert_eq!(scan.occurrences[1].occurred_at, None);
-    assert_ne!(detection.event_id, second[0].events[0].event_id);
+}
+
+#[test]
+fn canonical_embedding_occurrence_and_flattened_apis_share_the_session_projection_without_writes() {
+    let (root, source, pipeline) = occurrence_fixture();
+    let before = tree_snapshot(root.path());
+    let scans = pipeline
+        .scan_sources_with_occurrences(std::slice::from_ref(&source))
+        .unwrap();
+    let scan = &scans[0];
     let richer_root = pipeline.scan_root_with_occurrences(root.path()).unwrap();
     assert_eq!(
         richer_root[0].occurrences[0].identity,
@@ -148,11 +154,18 @@ fn canonical_embedding_public_occurrences_share_the_session_projection() {
             .is_empty()
     );
     assert_eq!(tree_snapshot(root.path()), before);
-    std::fs::write(&path, "not-json\n").unwrap();
+}
+
+#[test]
+fn canonical_embedding_malformed_source_has_no_public_occurrences() {
+    let (root, source, pipeline) = occurrence_fixture();
+    std::fs::write(&source.path, "not-json\n").unwrap();
+    let before = tree_snapshot(root.path());
     let failed = pipeline.scan_sources_with_occurrences(&[source]).unwrap();
     assert_eq!(failed[0].events.len(), 1);
     assert_eq!(failed[0].events[0].event_type, "scanner_error");
     assert!(failed[0].occurrences.is_empty());
+    assert_eq!(tree_snapshot(root.path()), before);
 }
 
 #[test]

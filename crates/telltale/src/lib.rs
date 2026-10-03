@@ -319,6 +319,9 @@ impl PipelineBuilder {
 mod canonical_embedding_tests;
 
 #[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod investigation_tests;
 
 #[cfg(test)]
