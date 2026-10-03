@@ -72,13 +72,39 @@ path, project directory, or compatibility fallback and MUST fail with
 
 ### Requirement: Truthful messages preserve order
 
-User and assistant records MUST produce `MessageObserved` observations with
-truthful user/assistant roles. Simple records, event-message payloads, and
+Supported message records MUST produce `MessageObserved` observations with
+truthful roles. Exact explicit `system`, `developer`, `user`, and `assistant`
+roles MUST retain their corresponding canonical MessageRole; the existing
+`model` alias MUST retain assistant semantics. Simple records, event-message payloads, and
 response-item messages MUST be supported. Ordered `input_text`, `output_text`,
 and supported tool content blocks MUST remain ordered content parts. Unknown
 roles and in-scope unknown content blocks MUST fail closed. When one source
 record emits a message and tools, the message MUST be emitted first, followed
 by tools in native content order.
+
+Explicit system/developer roles on plain messages MUST take precedence over
+user/assistant discriminator aliases for native `Other` accounting.
+Tool-bearing records MUST retain existing tool accounting.
+
+Public role evidence at commit `47379efd5289cba801c5a66273064fbe3bf92f60`
+includes developer instruction construction in
+`codex-rs/core/src/context/developer_instructions.rs`, response-item persistence
+in `codex-rs/core/src/session/mod.rs` and `codex-rs/rollout/src/policy.rs`, and
+the serialized system-role resumed-history fixture in
+`codex-rs/core/tests/suite/client.rs`. The fixture establishes a public shape,
+not production generation of system messages on every turn.
+
+#### Scenario: Public instruction response items retain roles without context leakage
+
+- **WHEN** any of the three exact Codex identities contains response-item
+  messages with explicit system/developer roles and supported text parts
+- **THEN** canonical messages retain those roles and ordered parts, plain
+  instruction records count as native Other rather than user/assistant messages,
+  and shared user/assistant-context analytics do not match their content or
+  add role-specific risk to Event 3.0
+- **AND** ordering and replay identity remain deterministic, Event 3.0 remains
+  unchanged, and a later unsupported role or unknown content block rejects the
+  whole source without partial observations or accounting
 
 #### Scenario: Response item retains ordered message parts
 
@@ -173,6 +199,63 @@ not mutation. Artifact path and filename MUST not participate.
 
 - **WHEN** a Codex source is projected twice with the same `ObservedAt`
 - **THEN** observation IDs, source sequences, and child ordinals are identical
+
+### Requirement: Closed auxiliary envelopes produce no canonical observations
+
+The adapter MUST accept only these auxiliary shapes: outer `turn_context` with
+an object payload containing neither a `type` nor a `payload` key (regardless of
+the keys' value types, including null); outer `response_item` with an object payload whose direct
+`type` is `reasoning`; and outer `event_msg` with an object payload whose direct
+`type` is one of `task_started`, `task_complete`, `token_count`, `agent_reasoning`,
+`agent_reasoning_raw_content`, `agent_reasoning_section_break`,
+`reasoning_content_delta`, or `reasoning_raw_content_delta`. These native units
+MUST count as `Other` and emit zero canonical observations, irrespective of
+additional role/tool-shaped fields. Existing session ownership validation and
+metadata attestation MUST remain active, including model/provider metadata in
+`turn_context.payload`. Source ordinals MUST include auxiliary units.
+An auxiliary's direct session ID MAY scope its own validated accounting but MUST
+NOT establish or replace inherited session identity, including when a top-level
+`session_meta` field is present. Existing supported session metadata behavior
+alone MUST establish the inherited namespace.
+
+Analytics MUST intentionally exclude private reasoning, including response-item
+summary/content arrays, and completion `last_agent_message`/`error`. The adapter
+MUST NOT use completion as a message fallback, infer terminal success, or
+manufacture Message, Inference, or execution observations from auxiliaries.
+
+This bounded compatibility evidence is public `openai/codex` commit
+`47379efd5289cba801c5a66273064fbe3bf92f60`, specifically
+`codex-rs/protocol/src/protocol.rs` (EventMsg and TurnContextItem),
+`codex-rs/protocol/src/models.rs` (ResponseItem::Reasoning),
+`codex-rs/protocol/src/items.rs` (distinct typed TurnItems), and
+`codex-rs/rollout/src/policy.rs` (persistence selection).
+Persistence or transience alone MUST NOT authorize ignoring other variants.
+
+#### Scenario: Auxiliary records surround conversation and tools
+
+- **WHEN** accepted auxiliaries occur before or after valid messages and tool requests/results
+- **THEN** all three source identities retain the message/tool semantics, call linkage, source ordinals, deterministic replay, and native `Other` counts without duplicate observations
+
+#### Scenario: Wrong wrappers and unsupported control records fail closed
+
+- **WHEN** an auxiliary tag is bare, under an unknown/wrong/nested wrapper, or has a malformed payload envelope, or an unsupported event such as `exec_command_begin`, `exec_command_end`, or `item_completed` follows accepted auxiliaries
+- **THEN** acquisition rejects the whole source without partial successful observations or progress
+- **AND** aliases `turn_started` and `turn_complete` remain unsupported
+
+#### Scenario: Conversational unknown blocks remain errors
+
+- **WHEN** an unknown conversational content block follows accepted auxiliaries
+- **THEN** acquisition returns `unknown_content_block` without partial success
+
+#### Scenario: Turn context cannot hide a discriminator or nested wrapper
+
+- **WHEN** a `turn_context` payload contains a `type` or `payload` key, including action, message, tool, unknown, null, or malformed values
+- **THEN** acquisition fails with a typed source-schema error without fallback observations or partial successful acquisition
+
+#### Scenario: Auxiliary identity does not become inherited identity
+
+- **WHEN** an auxiliary reports session `b` and a top-level `session_meta` field before an identity-less message
+- **THEN** the auxiliary accounts to `b` but the message retains prior supported metadata session `a`, or fails `replay_unverifiable` if no prior namespace exists
 
 ### Requirement: Unknown input fails closed without leakage
 

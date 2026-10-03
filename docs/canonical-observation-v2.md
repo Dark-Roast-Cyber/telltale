@@ -71,6 +71,64 @@ external contract and Event4 remains inactive.
 Acquisition directly maps source-native facts to Canonical Observation v2. It is
 not a conversion bridge to or from either normalized-record compatibility type.
 
+### Codex message roles and auxiliary records
+
+Supported Codex message records preserve exact explicit `system`, `developer`,
+`user`, and `assistant` roles as the existing canonical MessageRole variants;
+the existing `model` alias remains assistant. In particular, public
+`response_item` messages with system/developer roles are instruction messages,
+not user/assistant fallbacks or excluded reasoning. Their ordered supported
+text parts remain canonical message content. Plain instruction messages count
+as native `Other`, not user/assistant messages, even when an existing message
+discriminator alias suggests user/assistant. Tool-bearing records retain their
+existing tool accounting. Shared user/assistant-context
+analytics do not match instruction content or add role-specific risk; Event 3.0
+is unchanged and its activity histogram retains `Other`. Unknown roles and
+unknown conversational content blocks still reject the whole source.
+
+Existing canonical bounds can reject otherwise supported public Codex shapes:
+developer `response_item` messages with `input_text` accept a 4096-byte string
+but reject 4097 bytes with `CanonicalValidation/unbounded_value`, without
+truncation or partial source output. This characterization does not identify
+the field behind an operational `unbounded_value` failure. Native `TurnItem`
+action envelopes such as `event_msg:item_completed` remain unsupported; role
+support alone does not qualify full acquisition.
+
+At the public pin below, `core/src/context/developer_instructions.rs` constructs
+developer instructions, `core/src/session/mod.rs` persists conversation items
+as response items, and `rollout/src/policy.rs` permits message persistence.
+`core/tests/suite/client.rs` explicitly writes a system-role response-item
+rollout fixture for resumed history. This proves a public serialized system
+shape, not that current production generates system messages on every turn;
+upstream excludes system messages from API history.
+
+All three Codex identities accept a closed auxiliary set with zero canonical
+observations and native accounting kind `Other`: object `payload` under outer
+`turn_context` whose payload contains neither a `type` nor a `payload` key
+(including null or malformed values); exact `response_item` with object
+`payload.type: reasoning`; and
+exact `event_msg` with object payload tagged `task_started`, `task_complete`,
+`token_count`, `agent_reasoning`, `agent_reasoning_raw_content`,
+`agent_reasoning_section_break`, `reasoning_content_delta`, or
+`reasoning_raw_content_delta`. Bare tags, wrong/nested wrappers, malformed
+payload envelopes, and other action/control variants remain unsupported.
+Auxiliary role/tool-shaped fields cannot create messages, tools, or tool counts.
+Session validation and metadata attestation remain active, including model/provider
+metadata in `turn_context.payload`.
+An auxiliary's direct session ID can scope its own accounting but cannot establish
+or replace the inherited session namespace, even with a top-level `session_meta`
+field. Only supported session metadata records establish that namespace.
+
+Analytics intentionally exclude reasoning (including its own summary/content
+arrays) and completion `last_agent_message`/`error`. Completion is neither a
+message fallback nor evidence of terminal success. Conversational messages and
+tool requests/results remain authoritative; unknown discriminators and unknown
+conversational content blocks still reject the whole acquisition.
+The bounded upstream evidence is pinned to public `openai/codex`
+[`47379efd5289cba801c5a66273064fbe3bf92f60`](https://github.com/openai/codex/tree/47379efd5289cba801c5a66273064fbe3bf92f60),
+in `codex-rs/protocol/src/{protocol,models,items}.rs` and
+`codex-rs/rollout/src/policy.rs`; persistence policy is not a blanket ignore rule.
+
 ### Shared canonical source runtime
 
 `telltale-core::canonical_runtime` owns the single source-semantic composition:

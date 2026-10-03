@@ -59,6 +59,7 @@ pub(crate) struct CodexNativeRecord {
     pub(crate) timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
     pub(crate) session_metadata: bool,
+    pub(crate) auxiliary: bool,
     pub(crate) role: Option<String>,
     pub(crate) message_content: Option<Value>,
     pub(crate) blocks: Option<Vec<CodexContentBlock>>,
@@ -97,6 +98,12 @@ pub(crate) fn extract_codex_native_records_with_limits(
         let record_value = codex_record_value(&value);
         let envelope = codex_envelope(&value);
         let semantic_value = codex_semantic_value(&value, envelope);
+        let auxiliary =
+            is_codex_auxiliary(&value).map_err(|detail| SourceReadError::SchemaDrift {
+                client: source.client,
+                source_id: source.source_id.clone(),
+                detail,
+            })?;
         let ownership = session_identity(
             codex_envelopes(&value, semantic_value)
                 .into_iter()
@@ -108,18 +115,29 @@ pub(crate) fn extract_codex_native_records_with_limits(
         );
         let session_id = ownership.as_ref().ok().cloned().flatten();
         let discriminator = codex_discriminator(record_value).map(ToOwned::to_owned);
-        let session_metadata = discriminator.as_deref() == Some("session_meta")
-            || (discriminator
-                .as_deref()
-                .is_none_or(|kind| !is_known_codex_discriminator(kind))
-                && value.get("session_meta").is_some());
+        let session_metadata = !auxiliary
+            && (discriminator.as_deref() == Some("session_meta")
+                || (discriminator
+                    .as_deref()
+                    .is_none_or(|kind| !is_known_codex_discriminator(kind))
+                    && value.get("session_meta").is_some()));
         let effective_session_id = session_id.clone().or(inherited_session_id.clone());
-        let blocks = content_blocks(semantic_value)
+        let blocks = (!auxiliary)
+            .then(|| content_blocks(semantic_value))
+            .flatten()
             .map(|blocks| blocks.iter().map(codex_content_block).collect());
-        let tool = codex_tool_fields(semantic_value);
-        let role = codex_role(&value, semantic_value);
-        let is_tool_call =
-            codex_accounting_kind(discriminator.as_deref(), role.as_deref(), &blocks, &tool)
+        let tool = if auxiliary {
+            CodexToolFields::default()
+        } else {
+            codex_tool_fields(semantic_value)
+        };
+        let role = if auxiliary {
+            None
+        } else {
+            codex_role(&value, semantic_value)
+        };
+        let is_tool_call = !auxiliary
+            && codex_accounting_kind(discriminator.as_deref(), role.as_deref(), &blocks, &tool)
                 == RecordKind::ToolCall;
         let native = CodexNativeRecord {
             attestation: ownership.and_then(|_| codex_attestation(&value, semantic_value)),
@@ -129,8 +147,13 @@ pub(crate) fn extract_codex_native_records_with_limits(
             timestamp: nested_string_field(&value, "timestamp"),
             discriminator,
             session_metadata,
+            auxiliary,
             role: role.clone(),
-            message_content: codex_message_content(semantic_value),
+            message_content: if auxiliary {
+                None
+            } else {
+                codex_message_content(semantic_value)
+            },
             contribution_strings: if is_tool_call {
                 collect_string_values(record_value)
             } else {
@@ -169,7 +192,7 @@ fn codex_envelopes<'a>(value: &'a Value, semantic: &'a Value) -> Vec<&'a Value> 
     }
     if matches!(
         value.get("type").and_then(Value::as_str),
-        Some("session_meta" | "response_item" | "event_msg")
+        Some("session_meta" | "response_item" | "event_msg" | "turn_context")
     ) && let Some(payload) = value.get("payload").filter(|v| v.is_object())
     {
         envelopes.push(payload);
@@ -190,6 +213,9 @@ pub(crate) fn codex_record_value(value: &Value) -> &Value {
 
 impl CodexNativeRecord {
     pub(crate) fn accounting_kind(&self) -> RecordKind {
+        if self.auxiliary {
+            return RecordKind::Other;
+        }
         if self.session_metadata {
             return RecordKind::SessionMeta;
         }
@@ -252,6 +278,7 @@ fn codex_accounting_kind(
         return RecordKind::ToolCall;
     }
     match (discriminator, role) {
+        (_, Some("system" | "developer")) => RecordKind::Other,
         (Some("user_message" | "user"), _) | (Some("text" | "message"), Some("user")) => {
             RecordKind::UserMessage
         }
@@ -338,6 +365,39 @@ fn codex_semantic_value(value: &Value, envelope: CodexEnvelope) -> &Value {
             .unwrap_or(value),
         CodexEnvelope::Bare => value,
     }
+}
+
+// Own the exact outer shape here; the permissive conversational discriminator
+// lookup must never grant auxiliary support to bare, unknown, or nested wrappers.
+fn is_codex_auxiliary(value: &Value) -> Result<bool, &'static str> {
+    let Some(payload) = value.get("payload").filter(|payload| payload.is_object()) else {
+        return Ok(false);
+    };
+    Ok(match value.get("type").and_then(Value::as_str) {
+        Some("turn_context") => {
+            if payload.get("type").is_some() || payload.get("payload").is_some() {
+                return Err(
+                    "Codex turn context payload must not contain discriminator or wrapper keys",
+                );
+            }
+            true
+        }
+        Some("response_item") => payload.get("type").and_then(Value::as_str) == Some("reasoning"),
+        Some("event_msg") => matches!(
+            payload.get("type").and_then(Value::as_str),
+            Some(
+                "task_started"
+                    | "task_complete"
+                    | "token_count"
+                    | "agent_reasoning"
+                    | "agent_reasoning_raw_content"
+                    | "agent_reasoning_section_break"
+                    | "reasoning_content_delta"
+                    | "reasoning_raw_content_delta"
+            )
+        ),
+        _ => false,
+    })
 }
 
 fn codex_role(value: &Value, semantic_value: &Value) -> Option<String> {

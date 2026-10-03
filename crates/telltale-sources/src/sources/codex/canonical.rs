@@ -96,6 +96,9 @@ fn project_record(
     options: &CodexCanonicalOptions,
     observations: &mut Vec<CanonicalObservationV2>,
 ) -> Result<(), CodexCanonicalError> {
+    if record.auxiliary {
+        return Ok(());
+    }
     if record.discriminator.as_deref().is_some_and(|kind| {
         !is_known_codex_discriminator(kind) && !is_known_canonical_discriminator(kind)
     }) {
@@ -246,11 +249,13 @@ fn canonical_role(record: &CodexNativeRecord) -> Result<MessageRole, CodexCanoni
         })
     });
     match role {
+        Some("system") => Ok(MessageRole::System),
+        Some("developer") => Ok(MessageRole::Developer),
         Some("user") => Ok(MessageRole::User),
         Some("assistant" | "model") => Ok(MessageRole::Assistant),
         Some(_) => Err(mapping(
             "unsupported_role",
-            "Codex record role is not a user or assistant role",
+            "Codex record role is not a supported message role",
         )),
         None => Err(mapping(
             "missing_role",
@@ -856,7 +861,7 @@ mod tests {
         let (_directory, source) = temp_source(
             "codex.sessions",
             SourceKind::Jsonl,
-            r#"{"type":"message","role":"system","content":"Synthetic role marker."}"#,
+            r#"{"type":"message","role":"future_role","content":"Synthetic role marker."}"#,
         );
         let error = project_codex_native_records(
             &super::super::native::extract_codex_native_records(&source).unwrap(),

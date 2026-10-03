@@ -29,6 +29,124 @@ fn plan(target: &str) -> RuleV1CompatibilityPlan {
     .unwrap()
 }
 
+#[test]
+fn codex_instruction_roles_are_isolated_in_shared_runtime_event3() {
+    let directory = tempdir().unwrap();
+    for (source_id, kind) in [
+        ("codex.sessions", SourceKind::Jsonl),
+        ("codex.archived_sessions", SourceKind::ArchivedJsonl),
+        ("codex.headless_sessions", SourceKind::HeadlessJsonl),
+    ] {
+        let source = Source {
+            client: ClientId::Codex,
+            source_id: source_id.into(),
+            kind,
+            path: directory.path().join("synthetic.jsonl"),
+        };
+        for (target, control_role) in [("user_context", "user"), ("assistant_context", "assistant")]
+        {
+            let rules = plan(target);
+            let prior = BaselineSnapshotStore::default();
+            let run = || {
+                process_source(
+                    &source,
+                    clock(),
+                    None,
+                    SourceContext {
+                        mcp_servers: &[],
+                        rules: &rules,
+                        pre_policy_rules: None,
+                        process: None,
+                        prior: &prior,
+                        baseline_deviation: Default::default(),
+                    },
+                )
+                .unwrap()
+            };
+            let instructions = r#"{"type":"session_meta","payload":{"session_id":"s"}}
+{"type":"response_item","payload":{"type":"message","role":"system","content":[{"type":"output_text","text":"needle"}]}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"needle"}]}}
+{"type":"response_item","payload":{"type":"message","role":"system","content":"needle"}}
+{"type":"response_item","payload":{"type":"message","role":"developer","content":"needle"}}"#;
+            std::fs::write(&source.path, instructions).unwrap();
+            let isolated = run();
+            assert!(
+                !isolated
+                    .events
+                    .iter()
+                    .any(|event| event.event_type == "detection")
+            );
+            assert!(isolated.events.iter().all(|event| event.risk_score == 0
+                && event.risk_contributions.is_empty()
+                && event.rule_ids.is_empty()));
+            let activity = isolated
+                .events
+                .iter()
+                .find(|event| event.event_type == "activity")
+                .expect("instruction-only activity");
+            let counts = activity
+                .evidence
+                .iter()
+                .find(|e| e.field == "record_counts")
+                .unwrap();
+            let counts: serde_json::Value = serde_json::from_str(&counts.redacted_value).unwrap();
+            assert_eq!(counts["other"], 4);
+            assert!(counts.get("user_message").is_none());
+            assert!(counts.get("assistant_message").is_none());
+            assert_eq!(activity.schema_version, "3.0");
+
+            let control = format!(
+                "{{\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"{control_role}\",\"content\":\"needle\"}}}}"
+            );
+            let metadata = instructions.lines().next().unwrap();
+            std::fs::write(&source.path, format!("{metadata}\n{control}\n")).unwrap();
+            let reference = run();
+            std::fs::write(&source.path, format!("{instructions}\n{control}\n")).unwrap();
+            let mixed = run();
+            let detections = |result: &SourceResult| {
+                result
+                    .events
+                    .iter()
+                    .filter(|event| event.event_type == "detection")
+                    .map(|event| {
+                        (
+                            event.risk_score,
+                            event.rule_ids.clone(),
+                            event.risk_contributions.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert!(
+                !detections(&reference).is_empty(),
+                "positive role-specific control"
+            );
+            assert_eq!(detections(&mixed), detections(&reference));
+            let risks = |result: &SourceResult| {
+                result
+                    .events
+                    .iter()
+                    .map(|event| {
+                        (
+                            event.event_type.clone(),
+                            event.risk_score,
+                            event.rule_ids.clone(),
+                            event.risk_contributions.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(risks(&mixed), risks(&reference));
+            assert!(
+                mixed
+                    .events
+                    .iter()
+                    .all(|event| event.schema_version == "3.0")
+            );
+        }
+    }
+}
+
 fn message(
     id: &str,
     session: Option<&str>,
