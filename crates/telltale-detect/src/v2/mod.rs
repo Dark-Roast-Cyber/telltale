@@ -32,7 +32,8 @@ pub use matcher::{
 };
 pub use session::{
     CanonicalActivity, CanonicalSessionEvaluation, CanonicalSourceEvaluation, CanonicalSourceInput,
-    EvaluationCompletion, ProcessingError, evaluate_source,
+    EvaluationCompletion, EvaluationWorkBudget, ProcessingError, evaluate_source,
+    evaluate_source_with_work_budget,
 };
 pub type Operator = MatcherOperator;
 pub use observation_match::{

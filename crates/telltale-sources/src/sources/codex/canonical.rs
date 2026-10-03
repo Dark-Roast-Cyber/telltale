@@ -85,17 +85,17 @@ pub(crate) fn project_codex_native_records(
     records: &[CodexNativeRecord],
     options: &CodexCanonicalOptions,
 ) -> Result<Vec<CanonicalObservationV2>, CodexCanonicalError> {
-    let mut observations = Vec::new();
+    let mut observations = crate::acquisition::CanonicalCollector::default();
     for record in records {
         project_record(record, options, &mut observations)?;
     }
-    Ok(observations)
+    Ok(observations.finish())
 }
 
 fn project_record(
     record: &CodexNativeRecord,
     options: &CodexCanonicalOptions,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CodexCanonicalError> {
     if record.auxiliary {
         return Ok(());
@@ -273,9 +273,8 @@ fn build_message_body(
     let mut body = MessageObservation::new(role);
     if blocks.is_empty() {
         if let Some(content) = &record.message_content {
-            body = body.with_content(value_to_json(
-                content,
-                CanonicalFieldCategory::MessageContent,
+            body = body.with_content(JsonValue::try_from_source_message_content(content).map_err(
+                |error| error.with_bound_category(CanonicalFieldCategory::MessageContent),
             )?);
         }
     } else {
@@ -297,7 +296,11 @@ fn content_part(block: &CodexContentBlock) -> Result<ContentPart, CodexCanonical
             })?;
             Ok(ContentPart::new(
                 ContentPartKind::Text,
-                JsonValue::string(text),
+                JsonValue::try_from_source_message_text(text).map_err(|error| {
+                    error.with_bound_category(
+                        telltale_schema::observation::CanonicalFieldCategory::MessageContentParts,
+                    )
+                })?,
             ))
         }
         CodexContentBlock::ToolUse {
@@ -407,7 +410,7 @@ fn emit_message_body(
     options: &CodexCanonicalOptions,
     body: MessageObservation,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CodexCanonicalError> {
     let has_content = body.content().is_some();
     let has_content_parts = !body.content_parts().is_empty();
@@ -429,7 +432,7 @@ fn emit_message_body(
     {
         builder = builder.fact_metadata(path, normal_reported()?);
     }
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     *child_ordinal += 1;
     Ok(())
 }
@@ -440,7 +443,7 @@ fn emit_tool(
     fields: CodexToolFields,
     stage: ObservationStage,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CodexCanonicalError> {
     if fields.is_error_present && fields.is_error.is_none() {
         return Err(mapping(
@@ -544,7 +547,7 @@ fn emit_tool(
             .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
     }
 
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     *child_ordinal += 1;
     Ok(())
 }

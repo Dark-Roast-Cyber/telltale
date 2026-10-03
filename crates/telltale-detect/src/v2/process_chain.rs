@@ -23,7 +23,7 @@ use super::{
 };
 use crate::process_chain_session::{
     ProcessChainOccurrenceId, ProcessChainSessionCandidate, ProcessChainSessionConfig,
-    evaluate_process_chain_session,
+    try_evaluate_process_chain_session,
 };
 
 const ELIGIBLE_TOOL_STAGES: [ObservationStage; 4] = [
@@ -62,8 +62,19 @@ fn evaluate_tool_process_chain_matches(
     budget: &mut super::session::RetentionBudget,
 ) -> Result<Vec<ProcessChainWorkingMatch>, DetectionError> {
     let mut matches = Vec::new();
+    budget
+        .charge(observation.retained_byte_len().saturating_mul(4))
+        .map_err(|_| DetectionError::InvalidBounds)?;
+    for command in command_candidates(observation) {
+        budget
+            .charge(command.len().saturating_mul(64))
+            .map_err(|_| DetectionError::InvalidBounds)?;
+    }
     for process_input in command_derived_process_matcher_inputs(observation) {
-        for detection in rules.evaluate_with_context(&process_input, context) {
+        for detection in rules
+            .try_evaluate_with_context(&process_input, context, &mut |bytes| budget.charge(bytes))
+            .map_err(|_| DetectionError::InvalidBounds)?
+        {
             matches.push(ProcessChainWorkingMatch {
                 result: normalize_match(&detection, observation)?,
                 child: process_input.child.normalized_name(),
@@ -193,6 +204,18 @@ pub(crate) fn evaluate_tool_process_chain_session_with_budget(
     let candidates = matches
         .iter()
         .map(|matched| {
+            budget
+                .charge(
+                    matched
+                        .result
+                        .detector()
+                        .id()
+                        .len()
+                        .saturating_add(matched.result.category().len())
+                        .saturating_add(matched.child.len())
+                        .saturating_add(matched.result.dedupe_key().map_or(0, str::len)),
+                )
+                .map_err(|_| DetectionError::InvalidBounds)?;
             let dedupe_key = matched
                 .result
                 .dedupe_key()
@@ -218,7 +241,10 @@ pub(crate) fn evaluate_tool_process_chain_session_with_budget(
             })
         })
         .collect::<Result<Vec<_>, DetectionError>>()?;
-    let semantics = evaluate_process_chain_session(&candidates, rules, config);
+    let semantics = try_evaluate_process_chain_session(&candidates, rules, config, &mut |bytes| {
+        budget.charge(bytes)
+    })
+    .map_err(|_| DetectionError::InvalidBounds)?;
 
     let retained_matches = semantics
         .suppression

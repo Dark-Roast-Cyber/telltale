@@ -7,9 +7,9 @@ use telltale_detect::baseline::{BaselineDeviationConfig, BaselineSnapshotStore};
 use telltale_detect::process_chain::ProcessChainConfig;
 use telltale_detect::v2::activity::{BaselineReplacement, evaluate_activity};
 use telltale_detect::v2::{
-    CanonicalSourceInput, EvaluationCompletion, Event3CompatibilityContext, Event3SessionMetadata,
-    PolicyMatchAccounting, PolicyMatchAccountingError, ProcessingError, RuleV1CompatibilityPlan,
-    evaluate_source, project_event3,
+    CanonicalSourceInput, EvaluationCompletion, EvaluationWorkBudget, Event3CompatibilityContext,
+    Event3SessionMetadata, PolicyMatchAccounting, PolicyMatchAccountingError, ProcessingError,
+    RuleV1CompatibilityPlan, evaluate_source_with_work_budget, project_event3,
 };
 use telltale_rules::process_chain::CompiledProcessChainRules;
 use telltale_schema::event::path_hash;
@@ -149,7 +149,8 @@ fn finish_batch(
         progress: batch.progress,
         acquisition: None,
     };
-    let evaluation = evaluate_source(
+    let work = EvaluationWorkBudget::default();
+    let evaluation = evaluate_source_with_work_budget(
         CanonicalSourceInput {
             client: source.client,
             source_id: &source.source_id,
@@ -158,6 +159,7 @@ fn finish_batch(
         },
         context.rules,
         context.process,
+        &work,
     )
     .map_err(|_| fail(FailureStage::Evaluation))?;
     let sessions = batch
@@ -195,9 +197,10 @@ fn finish_batch(
     )
     .map_err(|_| fail(FailureStage::Activity))?;
     // Diagnostic-only comparison over the same acquisition. No second source read,
-    // no legacy record conversion, and no effect on authoritative output/progress.
-    let policy_accounting = context.pre_policy_rules.map(|rules| {
-        let before = evaluate_source(
+    // no legacy record conversion. Work exhaustion still discards the source;
+    // other comparison failures remain diagnostic-only.
+    let before = context.pre_policy_rules.map(|rules| {
+        evaluate_source_with_work_budget(
             CanonicalSourceInput {
                 client: source.client,
                 source_id: &source.source_id,
@@ -206,8 +209,14 @@ fn finish_batch(
             },
             rules,
             None,
+            &work,
         )
-        .map_err(|_| PolicyMatchAccountingError)?;
+    });
+    if work.is_exhausted() {
+        return Err(fail(FailureStage::Evaluation));
+    }
+    let policy_accounting = before.as_ref().map(|before| {
+        let before = before.as_ref().map_err(|_| PolicyMatchAccountingError)?;
         let mut total = PolicyMatchAccounting {
             pre_policy_detection_candidate_count: 0,
             fully_filtered_detection_candidate_count: 0,

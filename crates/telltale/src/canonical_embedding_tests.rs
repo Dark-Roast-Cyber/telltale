@@ -9,6 +9,43 @@ fn clock() -> ObservedAt {
     ObservedAt::new("2026-09-19T00:00:00Z").unwrap()
 }
 
+#[test]
+fn long_message_embedding_suffix_privacy_and_retention_failure_are_read_only() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join(".claude/projects/synthetic");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("long.jsonl");
+    let text = format!(
+        "api_key=SYNTHETIC-EMBED-SECRET {}needle",
+        "ordinary ".repeat(1_000)
+    );
+    let record = serde_json::json!({"type":"user", "sessionId":"synthetic-session", "message":{"role":"user", "content":text}});
+    std::fs::write(&path, format!("{record}\n")).unwrap();
+    let before = tree_snapshot(root.path());
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    let events = pipeline.scan_root(root.path()).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|(_, event)| event.event_type == "detection")
+    );
+    let json =
+        serde_json::to_string(&events.iter().map(|(_, event)| event).collect::<Vec<_>>()).unwrap();
+    assert!(!json.contains("SYNTHETIC-EMBED-SECRET"));
+    assert_eq!(before, tree_snapshot(root.path()));
+    let large = serde_json::json!({"type":"user", "sessionId":"synthetic-session", "message":{"role":"user", "content":"x".repeat(65_528)}}).to_string();
+    std::fs::write(&path, format!("{}\n", vec![large; 129].join("\n"))).unwrap();
+    let before = tree_snapshot(root.path());
+    let events = pipeline.scan_root(root.path()).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1.event_type, "scanner_error");
+    assert_eq!(before, tree_snapshot(root.path()));
+}
+
 fn tree_snapshot(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
     fn visit(
         root: &Path,
@@ -430,7 +467,7 @@ fn canonical_embedding_bound_context_survives_without_event3_changes() {
     let path = dir.path().join("synthetic-private-bound.jsonl");
     let marker = "SYNTHETIC-PRIVATE-BOUND-";
     let prefix = serde_json::json!({"type":"user", "session_id":marker, "content":"ok"});
-    let rejected = serde_json::json!({"type":"user", "session_id":marker, "content":format!("{marker}{}", "x".repeat(4097))});
+    let rejected = serde_json::json!({"type":"user", "session_id":marker, "content":format!("{marker}{}", "x".repeat(65_537))});
     std::fs::write(&path, format!("{prefix}\n{rejected}\n")).unwrap();
     let pipeline = Pipeline::builder().build().unwrap();
     for (source_id, kind) in [

@@ -84,7 +84,7 @@ pub(crate) fn project_opencode_native_records(
         .map(ToOwned::to_owned)
         .collect::<BTreeSet<_>>();
 
-    let mut observations = Vec::new();
+    let mut observations = crate::acquisition::CanonicalCollector::default();
     for record in records {
         match record {
             OpenCodeSqliteNativeRecord::Message(record)
@@ -106,13 +106,13 @@ pub(crate) fn project_opencode_native_records(
             }
         }
     }
-    Ok(observations)
+    Ok(observations.finish())
 }
 
 fn project_message(
     record: &OpenCodeMessageNativeRecord,
     observed_at: &ObservedAt,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), OpenCodeCanonicalError> {
     let message_type = record.message_type.as_deref();
     if matches!(message_type, Some("tool" | "tool_call" | "tool_result")) {
@@ -165,7 +165,9 @@ fn project_message(
 
     let role = canonical_role(&record.context)?;
     let mut body = MessageObservation::new(role);
-    body = body.with_content(value_to_json(record.content.as_ref().expect("checked"))?);
+    body = body.with_content(JsonValue::try_from_source_message_content(
+        record.content.as_ref().expect("checked"),
+    )?);
     let mut builder = common_builder(
         record.source_sequence,
         record.source_id.as_deref(),
@@ -177,21 +179,22 @@ fn project_message(
     )?;
     builder = builder.fact_metadata("message.role", normal_reported()?);
     builder = builder.fact_metadata("message.content", normal_reported()?);
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     Ok(())
 }
 
 fn project_text_part(
     record: &OpenCodeTextPartNativeRecord,
     observed_at: &ObservedAt,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), OpenCodeCanonicalError> {
     let text = record
         .text
         .as_deref()
         .ok_or_else(|| mapping("invalid_text_part", "OpenCode text part has no text value"))?;
     let role = canonical_role(&record.context)?;
-    let body = MessageObservation::new(role).with_content(JsonValue::string(text));
+    let body =
+        MessageObservation::new(role).with_content(JsonValue::try_from_source_message_text(text)?);
     let mut builder = common_builder(
         record.source_rowid as u64,
         record.source_id.as_deref(),
@@ -203,14 +206,14 @@ fn project_text_part(
     )?;
     builder = builder.fact_metadata("message.role", normal_reported()?);
     builder = builder.fact_metadata("message.content", normal_reported()?);
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     Ok(())
 }
 
 fn project_tool_part(
     record: &OpenCodeToolPartNativeRecord,
     observed_at: &ObservedAt,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), OpenCodeCanonicalError> {
     if record.tool_state_invalid {
         return Err(mapping(
@@ -253,7 +256,7 @@ fn project_tool(
     fallback_error_present: bool,
     message_stage: Option<ObservationStage>,
     observed_at: &ObservedAt,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), OpenCodeCanonicalError> {
     let empty_state;
     let state = match state {
@@ -384,7 +387,7 @@ fn emit_tool_observation(
     explicit_failure: bool,
     stage: ObservationStage,
     observed_at: &ObservedAt,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), OpenCodeCanonicalError> {
     let mut body = ToolObservation::new();
     let mut metadata = Vec::new();
@@ -495,7 +498,7 @@ fn emit_tool_observation(
             ),
         );
     }
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     Ok(())
 }
 

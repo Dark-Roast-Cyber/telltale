@@ -13,6 +13,8 @@ pub const LOCAL_MAX_STRING_BYTES: usize = 4_096;
 pub const LOCAL_MAX_ARRAY_ITEMS: usize = 64;
 pub const LOCAL_MAX_OBJECT_MEMBERS: usize = 32;
 pub const LOCAL_MAX_SEARCHABLE_BYTES: usize = 1_024;
+pub const MESSAGE_MAX_TEXT_BYTES: usize = 65_536;
+pub const SEMANTIC_MAX_TOTAL_BYTES: usize = 65_536;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonValue {
@@ -27,12 +29,69 @@ pub enum JsonValue {
 }
 
 impl JsonValue {
+    /// Encoded semantic value size, borrowing strings/containers without cloning.
+    /// Unlike ordinary bound validation, finite floats use canonical JSON spelling.
+    pub fn encoded_byte_len(&self) -> Result<usize, ObservationError> {
+        match self {
+            Self::Integer(number) => Ok(encoded_number_len(number)),
+            Self::Unsigned(number) => Ok(encoded_number_len(number)),
+            Self::Number(number) => serde_json::Number::from_f64(*number)
+                .map(|number| encoded_number_len(&number))
+                .ok_or_else(|| ObservationError::new(ValidationCode::NonFiniteNumber)),
+            Self::String(text) => Ok(escaped_string_bytes(text)),
+            Self::Array(values) => {
+                values
+                    .iter()
+                    .enumerate()
+                    .try_fold(2usize, |total, (index, value)| {
+                        total
+                            .checked_add(value.encoded_byte_len()? + usize::from(index != 0))
+                            .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))
+                    })
+            }
+            Self::Object(values) => {
+                values
+                    .iter()
+                    .enumerate()
+                    .try_fold(2usize, |total, (index, (key, value))| {
+                        total
+                            .checked_add(
+                                escaped_string_bytes(key)
+                                    + 1
+                                    + value.encoded_byte_len()?
+                                    + usize::from(index != 0),
+                            )
+                            .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))
+                    })
+            }
+            _ => bounded_json_bytes(self, 1),
+        }
+    }
+
+    /// Convert direct message content; nested values retain ordinary JSON bounds.
+    pub fn try_from_source_message_content(
+        value: &serde_json::Value,
+    ) -> Result<Self, ObservationError> {
+        if let serde_json::Value::String(text) = value {
+            Self::try_from_source_message_text(text)
+        } else {
+            Self::try_from_source_value(value)
+        }
+    }
+
     pub fn try_from_source_value(value: &serde_json::Value) -> Result<Self, ObservationError> {
         let converted = Self::convert_source_value(value, 1)?;
         if bounded_json_bytes(&converted, 1)? > LOCAL_MAX_VALUE_BYTES {
             return Err(ObservationError::bound(BoundDimension::EncodedBytes));
         }
         Ok(converted)
+    }
+
+    pub fn try_from_source_message_text(text: &str) -> Result<Self, ObservationError> {
+        bounded_message_text_bytes(text)?;
+        let text = nfc(text);
+        bounded_message_text_bytes(&text)?;
+        Ok(Self::String(text))
     }
 
     fn convert_source_value(
@@ -482,7 +541,14 @@ pub(crate) fn bounded_json_bytes(
     }
 }
 
-fn escaped_string_bytes(value: &str) -> usize {
+pub(crate) fn bounded_message_text_bytes(text: &str) -> Result<usize, ObservationError> {
+    if text.len() > MESSAGE_MAX_TEXT_BYTES {
+        return Err(ObservationError::bound(BoundDimension::StringBytes));
+    }
+    Ok(escaped_string_bytes(text))
+}
+
+pub(crate) fn escaped_string_bytes(value: &str) -> usize {
     2 + value
         .chars()
         .map(|character| match character {
@@ -492,4 +558,18 @@ fn escaped_string_bytes(value: &str) -> usize {
             character => character.len_utf8(),
         })
         .sum::<usize>()
+}
+
+fn encoded_number_len(number: &impl std::fmt::Display) -> usize {
+    use std::fmt::Write;
+    struct Count(usize);
+    impl std::fmt::Write for Count {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0 += text.len();
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    write!(&mut count, "{number}").expect("counting cannot fail");
+    count.0
 }

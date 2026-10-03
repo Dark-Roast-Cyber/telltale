@@ -780,7 +780,21 @@ impl CompiledProcessChainRules {
         observation: &ProcessObservation,
         context: &ProcessChainContext,
     ) -> Vec<ProcessChainDetection> {
+        self.try_evaluate_with_context(observation, context, &mut |_| {
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .expect("infallible process charge")
+    }
+
+    pub fn try_evaluate_with_context<E>(
+        &self,
+        observation: &ProcessObservation,
+        context: &ProcessChainContext,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<ProcessChainDetection>, E> {
+        charge(observation.parent.name.len())?;
         let parent = observation.parent.normalized_name();
+        charge(observation.child.name.len())?;
         let child = observation.child.normalized_name();
         let child_command_line = observation.child.command_line_text();
         let child_path = observation.child.path_text();
@@ -788,40 +802,54 @@ impl CompiledProcessChainRules {
         let mut candidates: Vec<(ProcessChainDetection, bool)> = Vec::new();
 
         for rule in &self.chain_rules {
+            charge(parent.len().saturating_add(child.len()))?;
             if rule.definition.parent != parent || rule.definition.child != child {
                 continue;
             }
-            if !conditions_hold(
+            if !try_conditions_hold(
                 &rule.command_line_any,
                 &rule.command_line_none,
                 child_command_line,
-            ) {
+                charge,
+            )? {
                 continue;
             }
-            if !conditions_hold(&rule.path_any, &rule.path_none, child_path) {
+            if !try_conditions_hold(&rule.path_any, &rule.path_none, child_path, charge)? {
                 continue;
             }
             let command_line_gated = !rule.command_line_any.is_empty();
+            charge(1)?;
             candidates.push((self.chain_detection(rule, observation), command_line_gated));
         }
 
         for rule in &self.standalone_rules {
+            charge(
+                observation
+                    .child
+                    .name
+                    .len()
+                    .saturating_add(observation.child.path_text().len())
+                    .saturating_add(observation.child.command_line_text().len())
+                    .saturating_add(observation.parent.command_line_text().len()),
+            )?;
             let Some(subject) = standalone_subject(rule.target, observation) else {
                 continue;
             };
-            if !rule.patterns.iter().any(|regex| regex.is_match(&subject)) {
+            if !try_regex_any(&rule.patterns, &subject, charge)? {
                 continue;
             }
-            if rule.exclude.iter().any(|regex| regex.is_match(&subject)) {
+            if try_regex_any(&rule.exclude, &subject, charge)? {
                 continue;
             }
             let command_line_gated = rule.target == StandaloneTarget::CommandLine;
+            charge(1)?;
             candidates.push((
                 self.standalone_detection(rule, observation),
                 command_line_gated,
             ));
         }
 
+        charge(candidates.len())?;
         let mut detections = deduplicate(candidates.iter().map(|(detection, _)| detection.clone()));
         let gated: BTreeSet<&str> = candidates
             .iter()
@@ -830,6 +858,7 @@ impl CompiledProcessChainRules {
             .collect();
 
         for detection in &mut detections {
+            charge(1)?;
             let gated = gated.contains(detection.rule_id.as_str());
             apply_context(detection, observation, context, gated);
             if observation.parent_inferred && !detection.secondary_rule_ids.is_empty() {
@@ -841,7 +870,7 @@ impl CompiledProcessChainRules {
         }
 
         detections.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
-        detections
+        Ok(detections)
     }
 
     fn chain_detection(
@@ -936,19 +965,39 @@ fn standalone_subject(
     (!value.is_empty()).then_some(value)
 }
 
-fn conditions_hold(any: &[Regex], none: &[Regex], subject: &str) -> bool {
+fn try_regex_any<E>(
+    patterns: &[Regex],
+    subject: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<bool, E> {
+    for regex in patterns {
+        charge(subject.len())?;
+        if regex.is_match(subject) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn try_conditions_hold<E>(
+    any: &[Regex],
+    none: &[Regex],
+    subject: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<bool, E> {
+    charge(1)?;
     if !any.is_empty() {
         // An `any` condition needs text to evaluate; a source that cannot supply
         // a command line simply does not match the gated variant, and the
         // ungated variant of the same pair still fires.
-        if subject.is_empty() || !any.iter().any(|regex| regex.is_match(subject)) {
-            return false;
+        if subject.is_empty() || !try_regex_any(any, subject, charge)? {
+            return Ok(false);
         }
     }
-    if !subject.is_empty() && none.iter().any(|regex| regex.is_match(subject)) {
-        return false;
+    if !subject.is_empty() && try_regex_any(none, subject, charge)? {
+        return Ok(false);
     }
-    true
+    Ok(true)
 }
 
 fn risk_entity_value(entity: &str, observation: &ProcessObservation) -> Option<String> {

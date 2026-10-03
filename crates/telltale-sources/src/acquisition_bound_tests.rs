@@ -9,6 +9,126 @@ fn options() -> AcquisitionOptions {
 }
 
 #[test]
+fn long_message_text_is_narrowly_acquired_by_each_json_and_process_adapter() {
+    use telltale_schema::{
+        clients::{ClientId, SourceKind},
+        source::Source,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    for (client, source_id, kind) in [
+        (ClientId::Claude, "claude.projects", SourceKind::Jsonl),
+        (ClientId::Codex, "codex.sessions", SourceKind::Jsonl),
+        (ClientId::OpenClaw, "openclaw.agents", SourceKind::Jsonl),
+        (ClientId::Qwen, "qwen.projects", SourceKind::Jsonl),
+        (
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+        ),
+    ] {
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind,
+            path: directory.path().join("synthetic-long.log"),
+        };
+        for (bytes, accepted) in [(9_000, true), (65_537, false)] {
+            let text = format!("{}suffix", "x".repeat(bytes - 6));
+            let input = if client == ClientId::Copilot {
+                format!(
+                    "Workspace initialized: synthetic (checkpoints: 0)\nAccumulated output items (1): {}\n",
+                    json!([{"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":text}]}])
+                )
+            } else {
+                format!(
+                    "{}\n",
+                    json!({"type":"user", "sessionId":"synthetic", "session_id":"synthetic", "content":text})
+                )
+            };
+            std::fs::write(&source.path, input).unwrap();
+            let result = acquire_source(&source, options());
+            if accepted {
+                let batch = result.unwrap();
+                let message = batch
+                    .observations
+                    .iter()
+                    .find_map(|observation| match observation.body() {
+                        ObservationBody::Message(message) => Some(message),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(
+                    message.content() == Some(&JsonValue::string(&text))
+                        || message
+                            .content_parts()
+                            .iter()
+                            .any(|part| part.value() == &JsonValue::string(&text))
+                );
+            } else {
+                assert_eq!(result.err().unwrap().code(), "unbounded_value");
+            }
+        }
+    }
+}
+
+#[test]
+fn canonical_collector_checks_source_wide_retention_before_each_push() {
+    use telltale_schema::observation::*;
+    let observation = CanonicalObservationV2::builder(
+        ObservationBody::Message(
+            MessageObservation::new(MessageRole::User)
+                .with_content(JsonValue::string("x".repeat(65_528))),
+        ),
+        ObservationStage::MessageObserved,
+        options().observed_at,
+        SourceProvenance::new(
+            IngestionMode::Import,
+            "synthetic",
+            "retention",
+            Fidelity::FullNative,
+        )
+        .unwrap()
+        .with_native_id("one")
+        .unwrap(),
+    )
+    .fact_metadata("message.role", FactMetadata::reported().unwrap())
+    .fact_metadata("message.content", FactMetadata::reported().unwrap())
+    .build()
+    .unwrap();
+    assert_eq!(observation.retained_byte_len(), 65_536);
+    let mut collector = CanonicalCollector::default();
+    for _ in 0..128 {
+        collector.push(observation.clone()).unwrap();
+    }
+    assert_eq!(collector.retained_bytes, MAX_CANONICAL_RETAINED_BYTES);
+    assert_eq!(
+        collector.push(observation).unwrap_err().code(),
+        "unbounded_value"
+    );
+    assert_eq!(collector.observations.len(), 128);
+}
+
+#[test]
+fn long_message_source_batch_retention_failure_is_atomic() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("synthetic-retention.jsonl");
+    let record =
+        json!({"type":"user", "session_id":"synthetic", "content":"x".repeat(65_528)}).to_string();
+    std::fs::write(&path, format!("{}\n", vec![record; 129].join("\n"))).unwrap();
+    let source = Source {
+        client: ClientId::Codex,
+        source_id: "codex.sessions".into(),
+        kind: SourceKind::Jsonl,
+        path,
+    };
+    let error = acquire_source(&source, options())
+        .err()
+        .expect("no batch/accounting/progress may escape");
+    assert_eq!(error.code(), "unbounded_value");
+    assert!(!format!("{error:?} {error}").contains("synthetic"));
+}
+
+#[test]
 fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
     let nested = |count| (0..count).fold(Value::Null, |value, _| json!([value]));
     let object = |count| {
@@ -110,7 +230,7 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
         }
         for (record, category, dimension) in [
             (
-                json!({"type":"assistant", "session_id":"synthetic", "content":vec![json!({"type":"text", "text":"x".repeat(4096)});4]}),
+                json!({"type":"assistant", "session_id":"synthetic", "content":vec![json!({"type":"text", "text":"x".repeat(4096)});16]}),
                 CanonicalFieldCategory::MessageContentParts,
                 BoundDimension::EncodedBytes,
             ),
@@ -162,9 +282,11 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
             message.content_parts()[0].value() == &JsonValue::string(&decomposed),
             "NFC projection changed"
         );
-        let error = acquire(json!({"type":"user", "session_id":"synthetic", "content":decomposed}))
-            .err()
-            .expect("original scalar byte check");
+        let error = acquire(
+            json!({"type":"user", "session_id":"synthetic", "content":"e\u{301}".repeat(21_846)}),
+        )
+        .err()
+        .expect("original scalar byte check");
         assert_eq!(
             error.bound_context(),
             Some(CanonicalBoundContext {

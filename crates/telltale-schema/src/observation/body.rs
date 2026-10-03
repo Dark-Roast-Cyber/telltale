@@ -225,6 +225,30 @@ pub struct ContentPart {
 }
 
 impl ContentPart {
+    /// Only a direct string in a Text part receives the message-text allowance.
+    pub fn try_from_source_value(
+        kind: ContentPartKind,
+        value: &serde_json::Value,
+    ) -> Result<Self, ObservationError> {
+        let value = if kind == ContentPartKind::Text {
+            JsonValue::try_from_source_message_content(value)?
+        } else {
+            JsonValue::try_from_source_value(value)?
+        };
+        Ok(Self::new(kind, value))
+    }
+
+    pub(crate) fn bounded_json_bytes(&self) -> Result<usize, ObservationError> {
+        let bytes = match (self.kind, &self.value) {
+            (ContentPartKind::Text, JsonValue::String(text)) => {
+                super::value::bounded_message_text_bytes(text)?
+            }
+            _ => super::value::bounded_json_bytes(&self.value, 3)?,
+        };
+        // The semantic array contains {"kind":...,"value":...} wrappers.
+        Ok(18 + super::value::escaped_string_bytes(self.kind.as_str()) + bytes)
+    }
+
     pub fn new(kind: ContentPartKind, value: JsonValue) -> Self {
         Self { kind, value }
     }

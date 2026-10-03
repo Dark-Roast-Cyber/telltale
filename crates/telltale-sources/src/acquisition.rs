@@ -61,6 +61,39 @@ pub struct AcquisitionBatch {
     pub accounting: SourceAccounting,
 }
 
+/// One source projection owns this collector; capacity is checked before each
+/// canonical observation is retained, not after an adapter returns its batch.
+#[derive(Default)]
+pub(crate) struct CanonicalCollector {
+    observations: Vec<CanonicalObservationV2>,
+    retained_bytes: usize,
+}
+
+impl CanonicalCollector {
+    pub(crate) fn push(
+        &mut self,
+        observation: CanonicalObservationV2,
+    ) -> Result<(), telltale_schema::observation::ObservationError> {
+        use telltale_schema::observation::{
+            MAX_CANONICAL_RETAINED_BYTES, ObservationError, ValidationCode,
+        };
+        let bytes = self
+            .retained_bytes
+            .checked_add(observation.retained_byte_len())
+            .filter(|bytes| *bytes <= MAX_CANONICAL_RETAINED_BYTES)
+            .ok_or_else(|| {
+                ObservationError::from_validation_code(ValidationCode::UnboundedValue)
+            })?;
+        self.observations.push(observation);
+        self.retained_bytes = bytes;
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Vec<CanonicalObservationV2> {
+        self.observations
+    }
+}
+
 #[cfg(test)]
 #[path = "acquisition_accounting_tests.rs"]
 mod accounting_tests;
@@ -943,7 +976,7 @@ mod tests {
     fn codex_bound_diagnostic_rejects_late_source_atomically() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("synthetic-bound.jsonl");
-        let oversized = "x".repeat(4097);
+        let oversized = "x".repeat(65_537);
         let input = format!(
             "{}\n{}\n",
             serde_json::json!({"type":"user", "session_id":"synthetic", "content":"ok"}),
@@ -1248,6 +1281,29 @@ mod tests {
         }
         let source = source(path);
         (directory, connection, source)
+    }
+
+    #[test]
+    #[cfg(feature = "opencode-sqlite")]
+    fn long_message_sqlite_acquisition_keeps_full_suffix_and_rejects_atomically() {
+        use telltale_schema::observation::{JsonValue, ObservationBody};
+        let (_directory, connection, source) = database();
+        for (bytes, accepted) in [(9_000, true), (65_537, false)] {
+            let text = format!("{}suffix", "x".repeat(bytes - 6));
+            connection
+                .execute(
+                    "update part set data = ?1 where id = 'part-third'",
+                    [serde_json::json!({"type":"text", "text":text}).to_string()],
+                )
+                .unwrap();
+            let result = super::acquire_source(&source, options());
+            if accepted {
+                let batch = result.unwrap();
+                assert!(batch.observations.iter().any(|observation| matches!(observation.body(), ObservationBody::Message(message) if message.content() == Some(&JsonValue::string(&text)))));
+            } else {
+                assert_eq!(acquisition_error(result).code(), "unbounded_value");
+            }
+        }
     }
 
     #[test]

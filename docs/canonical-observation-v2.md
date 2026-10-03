@@ -86,10 +86,10 @@ analytics do not match instruction content or add role-specific risk; Event 3.0
 is unchanged and its activity histogram retains `Other`. Unknown roles and
 unknown conversational content blocks still reject the whole source.
 
-Existing canonical bounds can reject otherwise supported public Codex shapes:
-developer `response_item` messages with `input_text` accept a 4096-byte string
-but reject 4097 bytes with `unbounded_value`, without
-truncation or partial source output. In current development after RC1, Codex
+Canonical bounds can reject otherwise supported public Codex shapes without
+truncation or partial source output. Direct message strings and Text parts use
+the narrow long-message policy below; structured values retain ordinary bounds.
+In current development after RC1, Codex
 canonical bound failures carry a content-free `CanonicalBoundContext` through
 `AcquisitionError::CanonicalBoundValidation` and runtime `SourceFailure.acquisition`.
 Schema validation owns the bound dimension; the adapter attributes conversion
@@ -103,8 +103,8 @@ sizes, or underlying error strings are retained in this context. Display and
 `code()` remain unchanged; Debug may expose only these closed enums and the code.
 
 This context describes the first existing validation failure, not all violations.
-Limits, validation order, UTF-8 byte accounting, escaped JSON encoded-size
-accounting, and NFC behavior are unchanged: source JSON strings/keys are checked
+For the existing acquisition converters, validation order, UTF-8 byte accounting,
+escaped JSON encoded-size accounting, and NFC behavior are unchanged: source JSON strings/keys are checked
 before normalization, while assembled canonical text is checked after its existing
 normalization. Ordered content-part wrappers can independently exceed depth,
 cardinality, or encoded-size limits. Native accounting still precedes canonical
@@ -113,6 +113,71 @@ reread, or parallel validator. Failed acquisition returns no successful prefix,
 accounting, or progress. Event3 scanner errors remain the generic
 `canonical_acquisition_failed` projection without this context. Other adapters
 retain their existing code-only acquisition errors.
+
+### Bounded long-message matching (#79, development after RC1)
+
+Canonical acquisition and evaluation permit up to
+65,536 raw UTF-8 bytes only for direct string `message.content` and a direct
+string value of a `ContentPartKind::Text` part. The representation remains
+`JsonValue`, `MessageObservation`, and ordered `ContentPart` values. Arrays,
+objects, nested strings even inside Text parts, tool values/names, inference
+metadata, facets, identifiers, and local originals receive no wider allowance.
+Ordinary JSON bounds remain 4,096 string bytes, 16,384 encoded bytes per value,
+depth 6, 64 array items, 32 object members, and 64 key bytes. Part values are
+validated at depth 3 to account for their semantic array/object wrappers.
+The content-parts field also retains a 16,384-byte encoded budget for its
+non-direct-Text-string entries; only direct Text strings receive wider capacity.
+
+Schema also caps the sum of encoded semantic body-field and facet **values** at
+65,536 bytes per observation. This includes JSON quotes, escapes, arrays,
+objects, and content-part kind/value wrappers; it excludes semantic path/facet
+labels, fact metadata, identity/provenance envelopes, and local evidence (which
+retain their independent bounds). A raw string at the text maximum can therefore
+fail aggregate validation. Recursive part validation precedes the structured
+partition's encoded limit; observation aggregate validation follows all field
+and facet validation. Aggregate size uses canonical JSON number spelling, while
+ordinary/local finite-float validation retains its legacy `to_string` sizing.
+The aggregate is checked incrementally in existing
+body-field order followed by sorted facets; the field/facet that crosses it
+receives content-free `EncodedBytes` context. Builders, assignment commitments,
+assignment preflight, and assignment replay share this schema validation.
+Semantic comparison and protected assignment commitments retain the full text,
+including suffixes beyond the old limit.
+
+The six native source adapters use narrow message-content and direct Text-string
+conversion. Like ordinary source conversion, they check original string bytes before
+NFC; builders check their existing canonicalized NFC values. Equivalent bounded
+normalized inputs therefore agree, but an oversized decomposed source string
+can reject even when a directly assembled normalized value fits. Conversion
+checks value bounds, not the later observation-wide aggregate.
+
+One shared collector checks an 8 MiB canonical semantic/local retention budget
+before each next observation is retained, across all records and sessions in a
+source projection. Evaluation ingress applies the same budget using a cached,
+nonallocating size. Whole-file native reader intermediate memory is not capped
+by this canonical-retention policy. Inference acquisition keeps its own limits.
+
+One source-scoped 256 MiB deterministic byte-visit budget spans selectors,
+matching (including no matches, repeated predicates and reached exclusions),
+process matching, evidence re-resolution, hashing, sanitization and projection.
+Operations charge before execution, with a minimum one-byte visit and conservative
+reservations for composite scanners. Exhaustion is explicit source-atomic failure,
+not a benign no-match, and cannot emit partial findings, accounting or progress.
+Standalone native matcher evaluation and selector resolution return a `Result`;
+metadata envelopes are independently governed and do not imply infallible
+selection. See the [development API migration](migrations/0.7.0.md#development-after-rc1-bounded-message-evaluation-apis-79).
+Standalone detector
+evaluation translates exhaustion into `DetectorError`.
+
+Native `message.text` and role-specific compatibility selectors share one view:
+direct scalar content wins even when empty; otherwise ordered direct Text strings
+join with newlines. Joined text has Derived provenance and retains contributing
+sensitivity. Reasoning, tools, images, other parts and nested strings are excluded.
+Patterns, exclusions and anchors operate over that complete view without changing
+occurrence or session scoring. Raw evidence no longer has the compatibility
+4,096-byte rejection: hashes cover the complete matched input, while sanitization
+remains bounded (512-byte excerpts). Event 3.0 and compatibility limits of 4,096
+items, 4,096-byte retained strings and 4 MiB are unchanged.
 
 Native `TurnItem`
 action envelopes such as `event_msg:item_completed` remain unsupported; role

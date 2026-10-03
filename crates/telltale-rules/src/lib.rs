@@ -204,15 +204,38 @@ pub struct RuleV1ContentMatcher {
 
 impl RuleV1ContentMatcher {
     pub fn matching_fields<'a>(&self, fields: &'a [(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
-        fields
-            .iter()
-            .copied()
-            .filter(|(name, value)| {
-                self.matchers
-                    .iter()
-                    .any(|matcher| matcher.matches(name, value))
-            })
-            .collect()
+        self.try_matching_fields(fields, &mut |_| Ok::<_, std::convert::Infallible>(()))
+            .expect("infallible charge")
+    }
+
+    /// Charge each reached scan before execution, preserving Rule v1 short-circuiting.
+    pub fn try_matching_fields<'a, E>(
+        &self,
+        fields: &'a [(&'a str, &'a str)],
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Vec<(&'a str, &'a str)>, E> {
+        let mut matches = Vec::new();
+        for &(name, value) in fields {
+            for matcher in &self.matchers {
+                charge(name.len())?;
+                if matcher.target != name {
+                    continue;
+                }
+                charge(value.len())?;
+                if !matcher.regex.is_match(value) {
+                    continue;
+                }
+                if let Some(exclusion) = &matcher.exclusion_regex {
+                    charge(value.len())?;
+                    if exclusion.is_match(value) {
+                        continue;
+                    }
+                }
+                matches.push((name, value));
+                break;
+            }
+        }
+        Ok(matches)
     }
 }
 
@@ -1158,6 +1181,27 @@ modifiers:
             .unwrap()
             .compatibility_export();
         let matcher = export.rules()[0].compile_content_matcher().unwrap();
+        let mut visits = Vec::new();
+        let fields = [
+            ("command", "needle"),
+            ("command", "none"),
+            ("arguments", "needle"),
+        ];
+        assert_eq!(
+            matcher
+                .try_matching_fields(&fields, &mut |bytes| {
+                    visits.push(bytes);
+                    Ok::<_, ()>(())
+                })
+                .unwrap(),
+            vec![("command", "needle")]
+        );
+        // Exclusion is reached only after its main pattern matches.
+        assert_eq!(visits, [7, 6, 6, 7, 4, 9]);
+        assert_eq!(
+            matcher.try_matching_fields(&fields, &mut |_| Err("exhausted")),
+            Err("exhausted")
+        );
         assert!(
             matcher
                 .matching_fields(&[("command", "needle quoted")])

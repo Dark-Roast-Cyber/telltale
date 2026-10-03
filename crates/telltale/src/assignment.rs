@@ -2460,6 +2460,66 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn long_message_assignment_reopen_hashes_the_full_suffix_without_raw_persistence() {
+        use telltale_schema::observation::{JsonValue, MessageObservation, MessageRole};
+        let temp = tempfile::tempdir().unwrap();
+        let root = private_root(&temp);
+        let builder = |suffix| {
+            // Use the same reviewed coordinate-less test adapter without a tool
+            // body or any invented source coordinate.
+            CanonicalObservationV2::builder(
+                ObservationBody::Message(MessageObservation::new(MessageRole::User).with_content(
+                    JsonValue::string(format!(
+                        "SYNTHETIC-PRIVATE-LONG-{}-{suffix}",
+                        "ordinary ".repeat(1_000)
+                    )),
+                )),
+                ObservationStage::MessageObserved,
+                ObservedAt::new(OBSERVED_AT).unwrap(),
+                SourceProvenance::new(
+                    IngestionMode::SessionStore,
+                    "synthetic",
+                    "coordinate-less",
+                    Fidelity::FullNative,
+                )
+                .unwrap(),
+            )
+            .fact_metadata("message.role", FactMetadata::reported().unwrap())
+            .fact_metadata("message.content", FactMetadata::reported().unwrap())
+        };
+        let id = {
+            let mut store = ProtectedAssignmentStore::initialize(&root).unwrap();
+            store
+                .claim_or_replay(builder("A"), &association(b"long-record"))
+                .unwrap()
+                .observation_id()
+                .to_owned()
+        };
+        let mut store = ProtectedAssignmentStore::open(&root).unwrap();
+        assert_eq!(
+            store
+                .claim_or_replay(builder("A"), &association(b"long-record"))
+                .unwrap()
+                .observation_id(),
+            id
+        );
+        assert_eq!(
+            store
+                .claim_or_replay(builder("B"), &association(b"long-record"))
+                .unwrap_err()
+                .code(),
+            "replay_collision"
+        );
+        let database = std::fs::read(root.join(DATABASE_NAME)).unwrap();
+        assert!(
+            !database
+                .windows(b"SYNTHETIC-PRIVATE-LONG".len())
+                .any(|bytes| bytes == b"SYNTHETIC-PRIVATE-LONG")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn distinct_stable_associations_can_represent_semantic_duplicates() {
         let temp = tempfile::tempdir().unwrap();
         let mut store = ProtectedAssignmentStore::initialize(private_root(&temp)).unwrap();

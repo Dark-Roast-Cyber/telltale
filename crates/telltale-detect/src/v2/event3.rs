@@ -11,7 +11,7 @@ use telltale_rules::process_chain::{
 use telltale_schema::event::{
     DetectionEventInput, Event, Evidence, ProcessChainEventInput, ProcessContext, TimelineAnchor,
     canonicalize_timeline_anchors, detection_event, evidence_hash, is_canonical_sha256_hex,
-    process_chain_event, redact_sensitive_text,
+    process_chain_event,
 };
 use telltale_schema::observation::{
     CanonicalObservationV2, CorrelationId, CorrelationOrigin, ObservationBody,
@@ -96,25 +96,52 @@ impl ProcessProjection {
         occurrence: usize,
         budget: &mut super::session::RetentionBudget,
     ) -> Result<Self, DetectionError> {
+        budget
+            .charge(
+                input
+                    .parent
+                    .name
+                    .len()
+                    .saturating_add(input.child.name.len())
+                    .saturating_add(
+                        input
+                            .grandparent
+                            .as_ref()
+                            .map_or(0, |parent| parent.name.len()),
+                    ),
+            )
+            .map_err(|_| DetectionError::InvalidBounds)?;
+        let mut redact = |text: &str| {
+            telltale_schema::event::PrivacySanitizer::try_sanitize(
+                telltale_schema::event::SanitizationContext::Evidence,
+                text,
+                &mut |bytes| budget.charge(bytes),
+            )
+            .map_err(|_| DetectionError::InvalidBounds)
+        };
         let source_process_name = input.parent.normalized_name();
-        let source_process_path = input.parent.path.as_deref().map(redact_sensitive_text);
+        let source_process_path = input.parent.path.as_deref().map(&mut redact).transpose()?;
         let source_process_command_line = input
             .parent
             .command_line
             .as_deref()
-            .map(redact_sensitive_text);
+            .map(&mut redact)
+            .transpose()?;
         let target_process_name = input.child.normalized_name();
-        let target_process_path = input.child.path.as_deref().map(redact_sensitive_text);
+        let target_process_path = input.child.path.as_deref().map(&mut redact).transpose()?;
         let target_process_command_line = input
             .child
             .command_line
             .as_deref()
-            .map(redact_sensitive_text);
+            .map(&mut redact)
+            .transpose()?;
         let parent_process_name = input.grandparent.as_ref().map(|p| p.normalized_name());
         let parent_process_path = input
             .grandparent
             .as_ref()
-            .and_then(|p| p.path.as_deref().map(redact_sensitive_text));
+            .and_then(|p| p.path.as_deref())
+            .map(&mut redact)
+            .transpose()?;
         let event_time = observation.occurred_at().map(|t| t.as_str());
         let tool_name = match observation.body() {
             ObservationBody::Tool(tool) => tool.name(),
@@ -443,13 +470,26 @@ fn process_context_bytes(process: &ProcessContext) -> Result<usize, DetectionErr
     add_text_list_bytes(bytes, &process.falsepositives)
 }
 
-fn evidence(field: &str, value: &str, rule_id: &str) -> Evidence {
-    Evidence {
+fn evidence(
+    field: &str,
+    value: &str,
+    rule_id: &str,
+    budget: &mut super::session::RetentionBudget,
+) -> Result<Evidence, ProcessingError> {
+    let redacted_value = telltale_schema::event::PrivacySanitizer::try_sanitize(
+        telltale_schema::event::SanitizationContext::Evidence,
+        value,
+        &mut |bytes| budget.charge(bytes),
+    )?;
+    budget.charge(value.len())?;
+    let hash = evidence_hash(value);
+    budget.charge(field.len().saturating_add(rule_id.len()))?;
+    Ok(Evidence {
         field: field.to_owned(),
-        redacted_value: redact_sensitive_text(value),
-        hash: Some(evidence_hash(value)),
+        redacted_value,
+        hash: Some(hash),
         rule_id: Some(rule_id.to_owned()),
-    }
+    })
 }
 
 /// All-or-nothing projection. Optional metadata is caller-attested compatibility
@@ -478,7 +518,7 @@ pub fn project_event3(
     }
     let mut metadata_index = BTreeMap::new();
     let mut metadata_values = BTreeSet::new();
-    let mut budget = super::session::RetentionBudget::new();
+    let mut budget = super::session::RetentionBudget::with_work(evaluation.work_bytes.clone());
     for metadata in context.sessions {
         super::session::RetentionBudget::validate_text(metadata.session_id.value())?;
         for value in [metadata.agent, metadata.model, metadata.provider]
@@ -537,6 +577,17 @@ pub fn project_event3(
             }
             tags.sort();
             tags.dedup();
+            let mut evidence_items = Vec::new();
+            for projection in session.rules.projection() {
+                budget.charge(projection.evidence.redacted_value.len())?;
+                evidence_items.push(projection.evidence.clone());
+                evidence_items.push(evidence(
+                    "canonical_observation_id",
+                    &projection.observation_id,
+                    projection.evidence.rule_id.as_deref().unwrap_or_default(),
+                    &mut budget,
+                )?);
+            }
             let mut event = detection_event(DetectionEventInput {
                 client: evaluation.client,
                 agent: agent.clone(),
@@ -552,20 +603,7 @@ pub fn project_event3(
                 analytic_intents: metadata.analytic_intents().to_vec(),
                 atlas_tags: metadata.atlas_tags().to_vec(),
                 tags,
-                evidence: session
-                    .rules
-                    .projection()
-                    .flat_map(|p| {
-                        [
-                            p.evidence.clone(),
-                            evidence(
-                                "canonical_observation_id",
-                                &p.observation_id,
-                                p.evidence.rule_id.as_deref().unwrap_or_default(),
-                            ),
-                        ]
-                    })
-                    .collect(),
+                evidence: evidence_items,
                 risk_contributions: session.rules.compatibility_contributions().to_vec(),
                 event_time: session.event_time.clone(),
             })
@@ -663,8 +701,9 @@ pub fn project_event3(
                             "correlation_sequence",
                             &projection.process.secondary_rule_ids.join(" -> "),
                             rule_id,
-                        ),
-                        evidence("correlated_event_ids", &ids.join(","), rule_id),
+                            &mut budget,
+                        )?,
+                        evidence("correlated_event_ids", &ids.join(","), rule_id, &mut budget)?,
                     ]
                 } else {
                     vec![evidence(
@@ -675,7 +714,8 @@ pub fn project_event3(
                             projection.process.target_process_name
                         ),
                         rule_id,
-                    )]
+                        &mut budget,
+                    )?]
                 };
                 if let Some(repeat_count) = projection.repeat_count {
                     items.push(Evidence {
@@ -688,10 +728,20 @@ pub fn project_event3(
                 for variant in &projection.variants {
                     let value =
                         serde_json::to_string(variant).map_err(|_| ProcessingError::Projection)?;
-                    items.push(evidence("process_context_variant", &value, rule_id));
+                    items.push(evidence(
+                        "process_context_variant",
+                        &value,
+                        rule_id,
+                        &mut budget,
+                    )?);
                 }
                 for step in &projection.supporting_steps {
-                    items.push(evidence("correlation_process_step", step, rule_id));
+                    items.push(evidence(
+                        "correlation_process_step",
+                        step,
+                        rule_id,
+                        &mut budget,
+                    )?);
                 }
                 // Event3 permits timeline_anchors only on detection events. Process
                 // occurrence linkage must use its existing evidence surface instead.
@@ -705,9 +755,15 @@ pub fn project_event3(
                     "canonical_occurrences",
                     &occurrence_indexes,
                     rule_id,
-                ));
+                    &mut budget,
+                )?);
                 for id in result.observation_ids() {
-                    items.push(evidence("canonical_observation_id", id, rule_id));
+                    items.push(evidence(
+                        "canonical_observation_id",
+                        id,
+                        rule_id,
+                        &mut budget,
+                    )?);
                 }
                 let risk_contributions = if score == 0 {
                     Vec::new()
@@ -717,7 +773,11 @@ pub fn project_event3(
                             rule_id,
                             RiskContributionType::DeterministicRule,
                             score,
-                            redact_sensitive_text(&projection.reason),
+                            telltale_schema::event::PrivacySanitizer::try_sanitize(
+                                telltale_schema::event::SanitizationContext::Evidence,
+                                &projection.reason,
+                                &mut |bytes| budget.charge(bytes),
+                            )?,
                         )
                         .map_err(|_| ProcessingError::Projection)?,
                     ]

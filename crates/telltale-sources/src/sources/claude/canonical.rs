@@ -81,17 +81,17 @@ pub(crate) fn project_claude_native_records(
     records: &[ClaudeNativeRecord],
     options: &ClaudeCanonicalOptions,
 ) -> Result<Vec<CanonicalObservationV2>, ClaudeCanonicalError> {
-    let mut observations = Vec::new();
+    let mut observations = crate::acquisition::CanonicalCollector::default();
     for record in records {
         project_record(record, options, &mut observations)?;
     }
-    Ok(observations)
+    Ok(observations.finish())
 }
 
 fn project_record(
     record: &ClaudeNativeRecord,
     options: &ClaudeCanonicalOptions,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
     if record
         .discriminator
@@ -220,7 +220,7 @@ fn build_message_body(
     let mut body = MessageObservation::new(role);
     if blocks.is_empty() {
         if let Some(content) = &record.message_content {
-            body = body.with_content(value_to_json(content)?);
+            body = body.with_content(JsonValue::try_from_source_message_content(content)?);
         }
     } else {
         for block in blocks {
@@ -241,7 +241,7 @@ fn content_part(block: &ClaudeContentBlock) -> Result<ContentPart, ClaudeCanonic
             })?;
             Ok(ContentPart::new(
                 ContentPartKind::Text,
-                JsonValue::string(text),
+                JsonValue::try_from_source_message_text(text)?,
             ))
         }
         ClaudeContentBlock::ToolUse {
@@ -308,7 +308,7 @@ fn emit_message(
     role: MessageRole,
     blocks: Option<&[ClaudeContentBlock]>,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
     let empty = [];
     let body = build_message_body(record, role, blocks.unwrap_or(&empty))?;
@@ -320,7 +320,7 @@ fn emit_message_body(
     options: &ClaudeCanonicalOptions,
     body: MessageObservation,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
     let has_content = body.content().is_some();
     let has_content_parts = !body.content_parts().is_empty();
@@ -342,7 +342,7 @@ fn emit_message_body(
     {
         builder = builder.fact_metadata(path, normal_reported()?);
     }
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     *child_ordinal += 1;
     Ok(())
 }
@@ -352,7 +352,7 @@ fn emit_tool(
     options: &ClaudeCanonicalOptions,
     block: &ClaudeContentBlock,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), ClaudeCanonicalError> {
     let (body, paths, facet) = tool_body(block)?;
     let mut builder = common_builder(
@@ -391,7 +391,7 @@ fn emit_tool(
             .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
             .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
     }
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     *child_ordinal += 1;
     Ok(())
 }

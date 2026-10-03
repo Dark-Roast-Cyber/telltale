@@ -147,78 +147,130 @@ pub struct PrivacySanitizer;
 
 impl PrivacySanitizer {
     pub fn sanitize(context: SanitizationContext, text: &str) -> String {
+        Self::try_sanitize(
+            context,
+            text,
+            &mut |_| Ok::<_, std::convert::Infallible>(()),
+        )
+        .expect("infallible privacy charge")
+    }
+
+    /// Budget-aware evidence sanitization. Composite scanners reserve conservative
+    /// byte visits before entering their bounded decode/assignment passes; simple
+    /// replacement passes charge their current input independently.
+    pub fn try_sanitize<E>(
+        context: SanitizationContext,
+        text: &str,
+        charge: &mut impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<String, E> {
+        charge(text.len().min(MAX_INPUT_BYTES))?;
         let bounded = bounded_input(text);
+        charge(bounded.text.len())?;
         let mut redacted = if bounded.was_truncated {
             neutralize_truncated_tail(&bounded.text)
         } else {
             bounded.text
         };
-        redacted = redact_encoded_url_candidates(&redacted);
-        redacted = redact_urls(&redacted);
+        charge(redacted.len())?;
+        let encoded_reservation = if redacted.contains('%') {
+            redacted
+                .len()
+                .saturating_mul(redacted.len().max(1))
+                .saturating_mul(4)
+        } else {
+            redacted.len().saturating_mul(4)
+        };
+        charge(encoded_reservation)?;
+        redacted = redact_encoded_url_candidates(&redacted, charge)?;
+        redacted = redact_urls_at_depth(&redacted, 0, charge)?;
+        charge(redacted.len())?;
         redacted = PRIVATE_KEY_BLOCK_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
-        redacted = redact_assignments(&redacted, true);
+        redacted = redact_assignments(&redacted, true, charge)?;
+        charge(redacted.len())?;
         redacted = redacted.replace(
             "https://darkroastcyber.io/mcp-lab",
             "https://darkroastcyber.io/[redacted]",
         );
+        charge(redacted.len())?;
         redacted = redacted.replace("darkroastcyber.io", "[controlled-domain]");
+        charge(redacted.len().saturating_mul(4))?;
         redacted = redact_sensitive_labels(&redacted);
+        charge(redacted.len())?;
         redacted = PACKAGE_MANAGER_RE
             .replace_all(&redacted, "[package-manager-command]")
             .into_owned();
+        charge(redacted.len())?;
         redacted = STARTUP_TARGET_RE
             .replace_all(&redacted, "[startup-target]")
             .into_owned();
+        charge(redacted.len())?;
         redacted = ENCODED_DECODER_RE
             .replace_all(&redacted, "[encoded-decoder]")
             .into_owned();
+        charge(redacted.len().saturating_mul(16))?;
         redacted = redact_paths(&redacted, path_marker(context));
         if context == SanitizationContext::Diagnostic {
+            charge(redacted.len())?;
             redacted = redacted.replace(SENSITIVE_PATH, DIAGNOSTIC_PATH);
         }
+        charge(redacted.len())?;
         redacted = PRIVATE_KEY_PHRASE_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = CREDENTIAL_GH_TOKEN_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = CREDENTIAL_SK_KEY_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = CREDENTIAL_AKIA_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = CREDENTIAL_XOX_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = CREDENTIAL_JWT_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = CREDENTIAL_BEARER_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = HIGH_CONFIDENCE_GH_TOKEN_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = HIGH_CONFIDENCE_SK_KEY_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = HIGH_CONFIDENCE_AKIA_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = HIGH_CONFIDENCE_XOX_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = HIGH_CONFIDENCE_JWT_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len())?;
         redacted = HIGH_CONFIDENCE_PRIVATE_KEY_RE
             .replace_all(&redacted, REDACTED_SECRET)
             .into_owned();
+        charge(redacted.len().saturating_mul(4))?;
         redacted = redact_encoded_blobs_outside_urls(&redacted);
 
+        charge(redacted.len())?;
         let normalized = if context == SanitizationContext::CommandResult {
             redacted
         } else {
@@ -228,7 +280,12 @@ impl PrivacySanitizer {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        truncate_utf8_bytes(&normalized, max_output_bytes(context), TRUNCATED_SUFFIX)
+        charge(normalized.len())?;
+        Ok(truncate_utf8_bytes(
+            &normalized,
+            max_output_bytes(context),
+            TRUNCATED_SUFFIX,
+        ))
     }
 }
 
@@ -596,7 +653,25 @@ fn contains_url_userinfo(text: &str) -> bool {
     })
 }
 
-fn redact_assignments(text: &str, allow_flags: bool) -> String {
+fn redact_assignments<E>(
+    text: &str,
+    allow_flags: bool,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    charge(text.len())?;
+    let reservation = if text.contains(['\\', '"', '\'']) {
+        text.len()
+            .saturating_mul(text.len().max(1))
+            .saturating_mul(4)
+    } else {
+        text.split(|character: char| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-'))
+        })
+        .fold(text.len().saturating_mul(16), |total, word| {
+            total.saturating_add(word.len().saturating_mul(word.len()).saturating_mul(4))
+        })
+    };
+    charge(reservation)?;
     let mut redacted = String::with_capacity(text.len());
     let mut offset = 0;
     for url in URL_RE.find_iter(text) {
@@ -612,7 +687,7 @@ fn redact_assignments(text: &str, allow_flags: bool) -> String {
         &text[offset..],
         allow_flags,
     ));
-    redacted
+    Ok(redacted)
 }
 
 fn redact_sensitive_labels(text: &str) -> String {
@@ -1164,11 +1239,13 @@ fn find_escaped_quote(text: &str, start: usize, quote: u8) -> Option<usize> {
 const MAX_PERCENT_DECODE_DEPTH: usize = 2;
 const MAX_NESTED_URL_DEPTH: usize = 2;
 
-fn redact_urls(text: &str) -> String {
-    redact_urls_at_depth(text, 0)
-}
-
-fn redact_encoded_url_candidates(text: &str) -> String {
+fn redact_encoded_url_candidates<E>(
+    text: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    if !text.contains('%') {
+        return Ok(text.to_owned());
+    }
     let literal_urls = URL_RE
         .find_iter(text)
         .map(|capture| (capture.start(), capture.end()))
@@ -1182,14 +1259,14 @@ fn redact_encoded_url_candidates(text: &str) -> String {
     {
         redacted.push_str(&text[source_offset..start]);
         let (url, trailing) = split_url_trailing_punctuation(&decoded);
-        redacted.push_str(&sanitize_url_at_depth(url, 0));
+        redacted.push_str(&sanitize_url_at_depth(url, 0, charge)?);
         redacted.push_str(trailing);
         source_offset = end;
         scan_offset = end;
     }
 
     redacted.push_str(&text[source_offset..]);
-    redacted
+    Ok(redacted)
 }
 
 fn find_encoded_url_candidate(
@@ -1197,6 +1274,11 @@ fn find_encoded_url_candidate(
     offset: usize,
     literal_urls: &[(usize, usize)],
 ) -> Option<(usize, usize, String)> {
+    // Shared by top-level candidates and URL component inspection. Without
+    // percent escapes, no candidate can decode into a different URL scheme.
+    if !text[offset..].contains('%') {
+        return None;
+    }
     for (relative_start, _) in text[offset..].char_indices() {
         let start = offset + relative_start;
         if literal_urls
@@ -1261,7 +1343,19 @@ fn decode_url_candidate_until_scheme(candidate: &str) -> Option<String> {
 /// Decode a URL component for inspection without decoding through an encoded
 /// nested URL's first recognized scheme. Text outside an encoded candidate
 /// keeps the component-local bounded decoding used by the ordinary URL path.
-fn decode_url_component_for_inspection(value: &str) -> String {
+fn decode_url_component_for_inspection<E>(
+    value: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    charge(value.len())?;
+    charge(if value.contains('%') {
+        value
+            .len()
+            .saturating_mul(value.len().max(1))
+            .saturating_mul(4)
+    } else {
+        value.len().saturating_mul(4)
+    })?;
     let literal_urls = URL_RE
         .find_iter(value)
         .map(|capture| (capture.start(), capture.end()))
@@ -1280,22 +1374,36 @@ fn decode_url_component_for_inspection(value: &str) -> String {
     }
 
     decoded.push_str(&percent_decode_bounded(&value[source_offset..]));
-    decoded
+    Ok(decoded)
 }
 
-fn redact_urls_at_depth(text: &str, depth: usize) -> String {
-    URL_RE
-        .replace_all(text, |captures: &regex::Captures<'_>| {
-            let url = captures.get(0).map_or("", |capture| capture.as_str());
-            let (url, trailing) = split_url_trailing_punctuation(url);
-            format!("{}{}", sanitize_url_at_depth(url, depth), trailing)
-        })
-        .into_owned()
+fn redact_urls_at_depth<E>(
+    text: &str,
+    depth: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    charge(text.len())?;
+    let mut redacted = String::with_capacity(text.len());
+    let mut offset = 0;
+    for capture in URL_RE.find_iter(text) {
+        redacted.push_str(&text[offset..capture.start()]);
+        let (url, trailing) = split_url_trailing_punctuation(capture.as_str());
+        redacted.push_str(&sanitize_url_at_depth(url, depth, charge)?);
+        redacted.push_str(trailing);
+        offset = capture.end();
+    }
+    redacted.push_str(&text[offset..]);
+    Ok(redacted)
 }
 
-fn sanitize_url_at_depth(url: &str, depth: usize) -> String {
+fn sanitize_url_at_depth<E>(
+    url: &str,
+    depth: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    charge(url.len().saturating_mul(64))?;
     let Some((prefix, rest)) = url_prefix_and_authority(url) else {
-        return url.to_string();
+        return Ok(url.to_string());
     };
     let file_url = prefix.eq_ignore_ascii_case("file://");
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
@@ -1311,7 +1419,7 @@ fn sanitize_url_at_depth(url: &str, depth: usize) -> String {
     if decoded_authority_has_structural_delimiter(&decoded_authority)
         || !(valid_url_authority(&decoded_authority) || file_url && authority.is_empty())
     {
-        return REDACTED_URL.to_string();
+        return Ok(REDACTED_URL.to_string());
     }
     let authority = if contains_credential_material(&decoded_authority) {
         REDACTED_SECRET
@@ -1325,22 +1433,22 @@ fn sanitize_url_at_depth(url: &str, depth: usize) -> String {
     let (path, query) = before_fragment
         .split_once('?')
         .map_or((before_fragment, None), |(path, query)| (path, Some(query)));
-    let sensitive_path = is_sensitive_url_path(path, file_url);
-    let mut sanitized_suffix = redact_url_path(path, depth, sensitive_path);
+    let sensitive_path = is_sensitive_url_path(path, file_url, charge)?;
+    let mut sanitized_suffix = redact_url_path(path, depth, sensitive_path, charge)?;
     if let Some(query) = query {
         sanitized_suffix.push('?');
-        sanitized_suffix.push_str(&redact_query_values(query, depth));
+        sanitized_suffix.push_str(&redact_query_values(query, depth, charge)?);
     }
     if let Some(fragment) = fragment {
         sanitized_suffix.push('#');
-        sanitized_suffix.push_str(&redact_url_component(fragment, depth));
+        sanitized_suffix.push_str(&redact_url_component(fragment, depth, charge)?);
     }
     let authority = if file_url && sensitive_path {
         ""
     } else {
         authority
     };
-    format!("{prefix}{authority}{sanitized_suffix}")
+    Ok(format!("{prefix}{authority}{sanitized_suffix}"))
 }
 
 fn decoded_authority_has_structural_delimiter(authority: &str) -> bool {
@@ -1413,7 +1521,12 @@ fn valid_url_authority(authority: &str) -> bool {
     }
 }
 
-fn redact_query_values(query: &str, depth: usize) -> String {
+fn redact_query_values<E>(
+    query: &str,
+    depth: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    charge(query.len().saturating_mul(8))?;
     query
         .split_inclusive(['&', ';'])
         .map(|segment| {
@@ -1426,16 +1539,16 @@ fn redact_query_values(query: &str, depth: usize) -> String {
                 |body| (body, "&"),
             );
             let Some((name, value)) = body.split_once('=') else {
-                return segment.to_string();
+                return Ok(segment.to_string());
             };
             if sensitive_query_name(name) {
-                format!("{name}={REDACTED_SECRET}{separator}")
+                Ok(format!("{name}={REDACTED_SECRET}{separator}"))
             } else {
                 // A safe query key does not make its value safe: values can
                 // contain assignments or host paths copied from diagnostics,
                 // including URL-encoded forms.
-                let value = redact_url_component(value, depth);
-                format!("{name}={value}{separator}")
+                let value = redact_url_component(value, depth, charge)?;
+                Ok(format!("{name}={value}{separator}"))
             }
         })
         .collect()
@@ -1483,52 +1596,66 @@ fn sensitive_query_name(name: &str) -> bool {
     .any(|suffix| normalized.ends_with(suffix))
 }
 
-fn redact_url_component(value: &str, depth: usize) -> String {
-    let decoded = decode_url_component_for_inspection(value);
+fn redact_url_component<E>(
+    value: &str,
+    depth: usize,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    let decoded = decode_url_component_for_inspection(value, charge)?;
+    charge(decoded.len().saturating_mul(16))?;
     if contains_credential_material(&decoded) {
-        return REDACTED_SECRET.to_string();
+        return Ok(REDACTED_SECRET.to_string());
     }
     if depth >= MAX_NESTED_URL_DEPTH && URL_RE.is_match(&decoded) {
-        return "[nested-url]".to_string();
+        return Ok("[nested-url]".to_string());
     }
-    let inspected = redact_urls_at_depth(&decoded, depth + 1);
-    let inspected = redact_assignments(&inspected, true);
+    let inspected = redact_urls_at_depth(&decoded, depth + 1, charge)?;
+    let inspected = redact_assignments(&inspected, true, charge)?;
+    charge(inspected.len().saturating_mul(16))?;
     let inspected = redact_paths_outside_urls(&inspected, SENSITIVE_PATH);
-    if inspected == decoded {
+    Ok(if inspected == decoded {
         value.to_string()
     } else if inspected.contains(['&', ';', '?', '#']) {
         // A decoded component must not introduce a new outer URL boundary.
         REDACTED_SECRET.to_string()
     } else {
         inspected
-    }
+    })
 }
 
-fn redact_url_path(value: &str, depth: usize, sensitive_path: bool) -> String {
+fn redact_url_path<E>(
+    value: &str,
+    depth: usize,
+    sensitive_path: bool,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
+    charge(value.len())?;
     if sensitive_path {
-        return if value.starts_with('/') {
+        return Ok(if value.starts_with('/') {
             format!("/{SENSITIVE_PATH}")
         } else {
             SENSITIVE_PATH.to_string()
-        };
+        });
     }
-    let decoded = decode_url_component_for_inspection(value);
+    let decoded = decode_url_component_for_inspection(value, charge)?;
+    charge(decoded.len().saturating_mul(16))?;
     if contains_credential_material(&decoded) {
-        return path_component_replacement(value, REDACTED_SECRET);
+        return Ok(path_component_replacement(value, REDACTED_SECRET));
     }
     if depth >= MAX_NESTED_URL_DEPTH && URL_RE.is_match(&decoded) {
-        return path_component_replacement(value, "[nested-url]");
+        return Ok(path_component_replacement(value, "[nested-url]"));
     }
-    let inspected = redact_urls_at_depth(&decoded, depth + 1);
-    let inspected = redact_assignments(&inspected, true);
-    if inspected == decoded {
+    let inspected = redact_urls_at_depth(&decoded, depth + 1, charge)?;
+    let inspected = redact_assignments(&inspected, true, charge)?;
+    charge(inspected.len())?;
+    Ok(if inspected == decoded {
         value.to_string()
     } else if inspected.contains(['?', '#']) {
         // Keep path-local decoding from creating a query or fragment.
         path_component_replacement(value, REDACTED_SECRET)
     } else {
         inspected
-    }
+    })
 }
 
 fn path_component_replacement(value: &str, replacement: &str) -> String {
@@ -1539,22 +1666,28 @@ fn path_component_replacement(value: &str, replacement: &str) -> String {
     }
 }
 
-fn is_sensitive_url_path(value: &str, file_url: bool) -> bool {
+fn is_sensitive_url_path<E>(
+    value: &str,
+    file_url: bool,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<bool, E> {
+    charge(value.len().saturating_mul(4))?;
     if value.is_empty() {
-        return false;
+        return Ok(false);
     }
     if file_url {
-        return true;
+        return Ok(true);
     }
 
-    let decoded = decode_url_component_for_inspection(value);
+    let decoded = decode_url_component_for_inspection(value, charge)?;
+    charge(decoded.len().saturating_mul(8))?;
     if CREDENTIAL_PATH_RE.is_match(&decoded) || DOT_ENV_PATH_RE.is_match(&decoded) {
-        return true;
+        return Ok(true);
     }
 
     let normalized = decoded.replace('\\', "/").to_ascii_lowercase();
     let normalized = normalized.as_str();
-    normalized.starts_with("/home/")
+    Ok(normalized.starts_with("/home/")
         || normalized.starts_with("/root/")
         || normalized.starts_with("/users/")
         || normalized.starts_with("/private/")
@@ -1570,7 +1703,7 @@ fn is_sensitive_url_path(value: &str, file_url: bool) -> bool {
         })
         || (normalized.starts_with("//") && normalized.contains("/users/"))
         || normalized.contains("/.ssh/")
-        || normalized.contains("/.aws/")
+        || normalized.contains("/.aws/"))
 }
 
 fn percent_decode_bounded(value: &str) -> String {
@@ -3260,5 +3393,37 @@ safe=value"#,
         assert!(redacted.starts_with("safe-prefix ordinary-safe-word"));
         assert!(redacted.contains("ordinary-safe-word"));
         assert!(redacted.len() <= 512);
+    }
+
+    #[test]
+    fn nested_url_assignment_work_is_reserved_before_assignment_scan() {
+        let text = format!("https://example.invalid/{}", "abc.".repeat(750));
+        let mut visits = Vec::new();
+        PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, &text, &mut |bytes| {
+            visits.push(bytes);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        // The URL owner must reserve its reached nested assignment scan, not
+        // rely on a later outer assignment reservation after inspection.
+        assert!(visits.iter().any(|bytes| *bytes > 1_000_000));
+        let path = format!("/{}", "abc.".repeat(750));
+        assert_eq!(
+            super::redact_url_path(&path, 0, false, &mut |bytes| {
+                if bytes > 1_000_000 {
+                    Err("nested assignment budget")
+                } else {
+                    Ok(())
+                }
+            }),
+            Err("nested assignment budget")
+        );
+        let punctuation = ":".repeat(4_000);
+        assert!(super::find_encoded_url_candidate(&punctuation, 0, &[]).is_none());
+        assert_eq!(
+            super::decode_url_component_for_inspection(&punctuation, &mut |_| Ok::<_, ()>(()))
+                .unwrap(),
+            punctuation
+        );
     }
 }

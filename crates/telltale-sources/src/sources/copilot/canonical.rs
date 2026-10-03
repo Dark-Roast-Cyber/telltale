@@ -82,7 +82,7 @@ pub(crate) fn project_copilot_native_events(
     events: Vec<CopilotNativeEvent>,
     options: &CopilotCanonicalOptions,
 ) -> Result<Vec<CanonicalObservationV2>, CopilotCanonicalError> {
-    let mut observations = Vec::new();
+    let mut observations = crate::acquisition::CanonicalCollector::default();
     for event in events {
         match event {
             CopilotNativeEvent::WorkspaceInitialized { .. }
@@ -131,7 +131,7 @@ pub(crate) fn project_copilot_native_events(
             }
         }
     }
-    Ok(observations)
+    Ok(observations.finish())
 }
 
 fn project_item(
@@ -140,7 +140,7 @@ fn project_item(
     timestamp: Option<&str>,
     item: Box<CopilotOutputItem>,
     options: &CopilotCanonicalOptions,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CopilotCanonicalError> {
     match item.item_type.as_deref() {
         None | Some("") | Some("reasoning") => Ok(()),
@@ -163,7 +163,7 @@ fn project_function_call(
     timestamp: Option<&str>,
     item: &CopilotOutputItem,
     options: &CopilotCanonicalOptions,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CopilotCanonicalError> {
     let has_name = item.name.as_deref().is_some_and(|value| !value.is_empty());
     let has_arguments = item
@@ -210,7 +210,7 @@ fn project_function_call(
         builder = builder.fact_metadata(path, normal(provenance)?);
     }
     add_argument_facets(&mut builder, item.arguments.as_deref())?;
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
 
     if item
         .message
@@ -230,7 +230,7 @@ fn project_function_call(
             options,
         )?;
         builder = builder.fact_metadata("tool.result", normal_reported()?);
-        observations.push(builder.build()?);
+        observations.push(builder.build()?)?;
     }
     Ok(())
 }
@@ -241,7 +241,7 @@ fn project_message(
     timestamp: Option<&str>,
     item: &CopilotOutputItem,
     options: &CopilotCanonicalOptions,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CopilotCanonicalError> {
     if item.role.as_deref() != Some("assistant") {
         return Err(mapping(
@@ -277,7 +277,7 @@ fn project_message(
         })?;
         body = body.with_content_part(ContentPart::new(
             ContentPartKind::Text,
-            JsonValue::string(text),
+            JsonValue::try_from_source_message_text(text)?,
         ));
     }
     let mut builder = common_builder(
@@ -293,7 +293,7 @@ fn project_message(
     builder = builder
         .fact_metadata("message.role", normal_reported()?)
         .fact_metadata("message.content_parts", normal_reported()?);
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     Ok(())
 }
 

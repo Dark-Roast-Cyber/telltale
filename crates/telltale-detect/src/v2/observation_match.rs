@@ -181,6 +181,38 @@ impl CompiledObservationMatchDetector {
     }
 
     pub fn evaluate(&self, observation: &CanonicalObservationV2) -> DetectorResult {
+        self.try_evaluate(observation, &mut super::session::RetentionBudget::new())
+            .unwrap_or_else(|_| {
+                DetectorResult::detector_error(
+                    self.detector.clone(),
+                    self.metadata.clone(),
+                    super::Diagnostic::new(
+                        super::DiagnosticKind::RuntimeDetectorError,
+                        "evaluation_byte_budget",
+                    )
+                    .expect("closed diagnostic"),
+                )
+                .expect("validated detector metadata")
+            })
+    }
+
+    pub(crate) fn try_evaluate(
+        &self,
+        observation: &CanonicalObservationV2,
+        budget: &mut super::session::RetentionBudget,
+    ) -> Result<DetectorResult, super::session::ProcessingError> {
+        budget.charge(1)?;
+        budget.charge(
+            self.metadata
+                .clone_bytes()
+                .saturating_add(self.detector.id().len()),
+        )?;
+        budget.charge(
+            observation
+                .observation_id()
+                .len()
+                .saturating_add(observation.session_id().map_or(0, |id| id.value().len())),
+        )?;
         let capability_context = observation.capability_context().cloned();
         let metadata = self.metadata.clone();
         if !self.families.contains(&observation.kind())
@@ -196,9 +228,9 @@ impl CompiledObservationMatchDetector {
                 Vec::new(),
             )
             .expect("validated detector metadata remains valid");
-            return result
+            return Ok(result
                 .with_match_surface(self.match_surface.as_str())
-                .expect("validated match surface remains valid");
+                .expect("validated match surface remains valid"));
         }
         if let Some(reason) = preflight_required_capabilities(
             &self.required_capabilities,
@@ -214,15 +246,15 @@ impl CompiledObservationMatchDetector {
                 Vec::new(),
             )
             .expect("validated detector metadata remains valid");
-            return result
+            return Ok(result
                 .with_match_surface(self.match_surface.as_str())
-                .expect("validated match surface remains valid");
+                .expect("validated match surface remains valid"));
         }
 
         let (state, paths) = if let Some((matcher, targets)) = &self.rule_v1_content {
-            super::rule_v1::evaluate_content_matcher(matcher, targets, observation)
+            super::rule_v1::evaluate_content_matcher(matcher, targets, observation, budget)?
         } else {
-            let evaluation: MatcherEvaluation = self.matcher.evaluate(observation);
+            let evaluation: MatcherEvaluation = self.matcher.try_evaluate(observation, budget)?;
             (
                 evaluation.state().clone(),
                 evaluation.matched_selector_paths().to_vec(),
@@ -245,9 +277,9 @@ impl CompiledObservationMatchDetector {
             paths,
         )
         .expect("validated detector metadata remains valid");
-        result
+        Ok(result
             .with_match_surface(self.match_surface.as_str())
-            .expect("validated match surface remains valid")
+            .expect("validated match surface remains valid"))
     }
 
     pub fn evaluate_to_signal(

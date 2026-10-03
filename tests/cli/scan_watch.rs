@@ -2,6 +2,188 @@ use super::*;
 
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let directory = root.join("codex/sessions");
+    fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("synthetic.jsonl");
+    let rules = temp.path().join("rules.yaml");
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    fs::write(&rules, "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.long\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 3\n    detection:\n      selection: {user_context: 'needle|first\\nsecond'}\n      exclude: {user_context: EXCLUDE}\n      condition: selection\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n").unwrap();
+    let text = format!(
+        "api_key=SYNTHETIC-CLI-LONG-SECRET {}needle",
+        "ordinary ".repeat(1_000)
+    );
+    let punctuation = format!(
+        "https://example.invalid/{}?token=SYNTHETIC-CLI-PUNCT-SECRET&needle=1",
+        ":".repeat(4_000)
+    );
+    let records = [
+        serde_json::json!({"type":"session_meta", "payload":{"session_id":"synthetic-session"}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":text}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":punctuation}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"first"}, {"type":"tool_result", "content":"needle", "tool_use_id":"synthetic-tool"}, {"type":"input_text", "text":"second"}]}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"developer", "content":[{"type":"input_text", "text":"needle"}]}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"system", "content":"needle"}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"assistant", "content":"needle"}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":format!("needle {}EXCLUDE", "ordinary ".repeat(1_000))}}),
+    ];
+    let input = format!(
+        "{}\n",
+        records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    fs::write(&source, &input).unwrap();
+    let scan = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--no-default-rules",
+                "--emit-activity",
+                "--client",
+                "codex",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--rules")
+            .arg(&rules)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let summary = scan();
+    assert_eq!(summary["detection_count"], 1);
+    assert_eq!(fs::read_to_string(&source).unwrap(), input);
+    let persisted = fs::read_to_string(&log).unwrap();
+    assert!(!persisted.contains("SYNTHETIC-CLI-LONG-SECRET"));
+    assert!(!persisted.contains("SYNTHETIC-CLI-PUNCT-SECRET"));
+    let events = persisted
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let detection = events
+        .iter()
+        .find(|event| event["event_type"] == "detection")
+        .unwrap();
+    assert_eq!(detection["risk_score"], 3);
+    assert_eq!(detection["timeline_anchors"].as_array().unwrap().len(), 3);
+    let hashes = detection["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["field"] == "user_context")
+        .map(|e| e["hash"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(hashes.contains(&evidence_hash(&text).as_str()));
+    assert!(hashes.contains(&evidence_hash(&punctuation).as_str()));
+    assert!(hashes.contains(&evidence_hash("first\nsecond").as_str()));
+    assert_eq!(scan()["detection_count"], 1);
+    let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    let record = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"x".repeat(65_528)}).to_string();
+    fs::write(&source, format!("{}\n", vec![record; 129].join("\n"))).unwrap();
+    let failed = scan();
+    // CLI summary counts scanner errors in its detection stream.
+    assert_eq!(failed["detection_count"], 1);
+    assert_eq!(failed["activity_count"], 0);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key], "partial source committed {key}");
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    let late = &persisted[offset..];
+    assert!(
+        late.lines().any(
+            |line| serde_json::from_str::<Value>(line).unwrap()["event_type"] == "scanner_error"
+        )
+    );
+    assert!(!late.contains("SYNTHETIC-CLI-LONG-SECRET"));
+    // Individually valid messages and a retained batch below 8 MiB still fail
+    // atomically when repeated no-match scans exhaust source-wide work.
+    let document = fs::read_to_string(&rules).unwrap();
+    let header = document.split("rules:\n").next().unwrap();
+    let repeated = (0..40).map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
+    fs::write(&rules, format!("{header}rules:\n{repeated}modifiers: []\n")).unwrap();
+    let record = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"x".repeat(60_000)}).to_string();
+    fs::write(&source, format!("{}\n", vec![record; 128].join("\n"))).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    assert_eq!(scan()["activity_count"], 0);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key]);
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    let late = persisted[offset..]
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        late.iter()
+            .any(|event| event["event_type"] == "scanner_error")
+    );
+    assert!(
+        !late
+            .iter()
+            .any(|event| event["event_type"] == "detection" || event["event_type"] == "activity")
+    );
+    fs::write(&rules, document).unwrap();
+    let record =
+        serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":punctuation})
+            .to_string();
+    fs::write(&source, format!("{}\n", vec![record; 1_024].join("\n"))).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    let failed = scan();
+    assert_eq!(failed["activity_count"], 0);
+    assert_eq!(failed["source_processing"]["parse_error_source_count"], 1);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key]);
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    assert!(!persisted.contains("SYNTHETIC-CLI-PUNCT-SECRET"));
+    let late = persisted[offset..]
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    // The previous source-wide work failure has the same scanner diagnostic;
+    // existing error deduplication can suppress its second persisted copy.
+    assert!(
+        !late
+            .iter()
+            .any(|event| event["event_type"] == "detection" || event["event_type"] == "activity")
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn idle_durable_watch_case(
     first_status: u16,

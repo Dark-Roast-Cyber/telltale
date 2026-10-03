@@ -27,7 +27,7 @@ fn codex_developer_input_text_canonical_string_bound_is_source_atomic() {
             kind,
             path: directory.path().join("synthetic.jsonl"),
         };
-        for bytes in [4096, 4097] {
+        for bytes in [65_497, 65_537] {
             let text = format!("{marker}{}", "x".repeat(bytes - marker.len()));
             assert_eq!(text.len(), bytes);
             let instruction = serde_json::json!({"type":"response_item","payload":{
@@ -36,7 +36,7 @@ fn codex_developer_input_text_canonical_string_bound_is_source_atomic() {
             }});
             std::fs::write(&source.path, format!("{prefix}{instruction}\n")).unwrap();
             let result = acquire_source(&source, options());
-            if bytes == 4096 {
+            if bytes == 65_497 {
                 let batch = result.unwrap();
                 assert_eq!(batch.observations.len(), 2);
                 let ObservationBody::Message(message) = batch.observations[1].body() else {

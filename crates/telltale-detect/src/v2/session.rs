@@ -3,6 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use telltale_rules::process_chain::CompiledProcessChainRules;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::{
@@ -27,20 +31,65 @@ pub const MAX_PROJECTION_ITEMS: usize = 4096;
 pub const MAX_COMPATIBILITY_STRING_BYTES: usize =
     telltale_schema::observation::LOCAL_MAX_STRING_BYTES;
 pub const MAX_COMPATIBILITY_RETAINED_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_EVALUATION_BYTE_VISITS: usize = 256 * 1024 * 1024;
+
+/// A source-scoped work counter shared by authoritative evaluation, optional
+/// policy comparison, and projection. Reusing it never refunds charged work.
+#[derive(Default)]
+pub struct EvaluationWorkBudget(Arc<AtomicUsize>);
+
+impl EvaluationWorkBudget {
+    /// Distinguishes work exhaustion from independent compatibility retention
+    /// failures which also use ProcessingError::Bounds.
+    pub fn is_exhausted(&self) -> bool {
+        self.0.load(Ordering::Relaxed) > MAX_EVALUATION_BYTE_VISITS
+    }
+}
 
 /// Source-wide accounting for compatibility material and the bounded work used
 /// to retain it. Callers consume capacity before allocating retained values.
 pub(crate) struct RetentionBudget {
     items: usize,
     bytes: usize,
+    pub(crate) work_bytes: Arc<AtomicUsize>,
 }
 
 impl RetentionBudget {
     pub(crate) fn new() -> Self {
-        Self { items: 0, bytes: 0 }
+        Self {
+            items: 0,
+            bytes: 0,
+            work_bytes: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub(crate) fn with_work(work_bytes: Arc<AtomicUsize>) -> Self {
+        Self {
+            items: 0,
+            bytes: 0,
+            work_bytes,
+        }
+    }
+
+    pub(crate) fn charge(&mut self, bytes: usize) -> Result<(), ProcessingError> {
+        if self
+            .work_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                total
+                    .checked_add(bytes.max(1))
+                    .filter(|bytes| *bytes <= MAX_EVALUATION_BYTE_VISITS)
+            })
+            .is_err()
+        {
+            self.work_bytes
+                .store(MAX_EVALUATION_BYTE_VISITS + 1, Ordering::Relaxed);
+            return Err(ProcessingError::Bounds);
+        }
+        Ok(())
     }
 
     pub(crate) fn consume(&mut self, items: usize, bytes: usize) -> Result<(), ProcessingError> {
+        self.charge(bytes)?;
         let next_items = self
             .items
             .checked_add(items)
@@ -156,6 +205,7 @@ impl CanonicalSessionEvaluation {
 }
 
 pub struct CanonicalSourceEvaluation {
+    pub(crate) work_bytes: Arc<AtomicUsize>,
     pub(crate) client: ClientId,
     pub(crate) source_id: String,
     source_instance: Option<CorrelationId>,
@@ -185,6 +235,15 @@ pub fn evaluate_source(
     rules: &RuleV1CompatibilityPlan,
     process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
 ) -> Result<CanonicalSourceEvaluation, ProcessingError> {
+    evaluate_source_with_work_budget(input, rules, process, &EvaluationWorkBudget::default())
+}
+
+pub fn evaluate_source_with_work_budget(
+    input: CanonicalSourceInput<'_>,
+    rules: &RuleV1CompatibilityPlan,
+    process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
+    work: &EvaluationWorkBudget,
+) -> Result<CanonicalSourceEvaluation, ProcessingError> {
     if input.observations.len() > MAX_SOURCE_OBSERVATIONS {
         return Err(ProcessingError::Bounds);
     }
@@ -204,7 +263,12 @@ pub fn evaluate_source(
         RetentionBudget::validate_text(instance.value())?;
     }
     let mut seen = BTreeSet::new();
+    let mut retained_bytes = 0usize;
     for observation in input.observations {
+        retained_bytes = retained_bytes
+            .checked_add(observation.retained_byte_len())
+            .filter(|bytes| *bytes <= telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES)
+            .ok_or(ProcessingError::Bounds)?;
         if observation.source().adapter_id() != input.source_id
             || observation.source().adapter_type() != adapter_type
         {
@@ -218,7 +282,7 @@ pub fn evaluate_source(
         }
     }
     let mut sessions = Vec::new();
-    let mut budget = RetentionBudget::new();
+    let mut budget = RetentionBudget::with_work(work.0.clone());
     budget.retain_text(input.source_id)?;
     if let Some(instance) = input.source_instance {
         budget.retain_text(instance.value())?;
@@ -329,6 +393,7 @@ pub fn evaluate_source(
     }
     // These clones are safe because their byte capacity was consumed above.
     Ok(CanonicalSourceEvaluation {
+        work_bytes: budget.work_bytes.clone(),
         client: input.client,
         source_id: input.source_id.to_owned(),
         source_instance: input.source_instance.cloned(),
