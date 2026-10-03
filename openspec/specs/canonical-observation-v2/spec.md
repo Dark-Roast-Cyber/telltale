@@ -310,12 +310,28 @@ constructors, and `CorrelationId::source_reported`. These helpers MUST fail
 closed on unsupported/non-finite values and MUST NOT introduce JSONL,
 filesystem, provider, lifecycle, adapter registry, or export abstractions.
 
+Canonical JSON bound errors MAY carry a closed typed bound dimension and optional
+closed canonical field category, without raw content, keys, paths, IDs, indices,
+measured sizes, or underlying error strings. Schema SHALL attach the dimension
+at the existing failure site and attribute assembled body fields/facets; adapters
+MAY attribute existing conversion failures to the canonical field they construct.
+Limits, first-failure order, normalization, and code/Display SHALL NOT change.
+Non-bound errors SHALL NOT acquire bound context.
+
 #### Scenario: Source JSON conversion is bounded and safe
 
 - **WHEN** either reference adapter converts a finite JSON value through the
   shared helper
 - **THEN** the equivalent bounded `JsonValue` is produced, while unsupported
   numeric values return a code-only observation error
+
+#### Scenario: Builder validation attributes assembled canonical bounds
+
+- **WHEN** an assembled canonical semantic field or facet exceeds an existing
+  JSON bound
+- **THEN** the first existing failure returns `unbounded_value` with a closed
+  field category and bound dimension, without retaining the dynamic field/facet
+  name or source content
 
 ### Requirement: Protected assignment is a separate durable identity authority
 

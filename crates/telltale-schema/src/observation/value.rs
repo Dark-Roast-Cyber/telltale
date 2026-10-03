@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use unicode_normalization::UnicodeNormalization;
 
-use super::{ObservationError, Sensitivity, ValidationCode};
+use super::{BoundDimension, ObservationError, Sensitivity, ValidationCode};
 
 pub const LOCAL_MAX_ENTRIES: usize = 16;
 pub const LOCAL_MAX_KEY_BYTES: usize = 64;
@@ -30,7 +30,7 @@ impl JsonValue {
     pub fn try_from_source_value(value: &serde_json::Value) -> Result<Self, ObservationError> {
         let converted = Self::convert_source_value(value, 1)?;
         if bounded_json_bytes(&converted, 1)? > LOCAL_MAX_VALUE_BYTES {
-            return Err(ObservationError::new(ValidationCode::UnboundedValue));
+            return Err(ObservationError::bound(BoundDimension::EncodedBytes));
         }
         Ok(converted)
     }
@@ -40,7 +40,7 @@ impl JsonValue {
         depth: usize,
     ) -> Result<Self, ObservationError> {
         if depth > LOCAL_MAX_DEPTH {
-            return Err(ObservationError::new(ValidationCode::UnboundedValue));
+            return Err(ObservationError::bound(BoundDimension::Depth));
         }
         match value {
             serde_json::Value::Null => Ok(Self::Null),
@@ -59,13 +59,13 @@ impl JsonValue {
             }
             serde_json::Value::String(value) => {
                 if value.len() > LOCAL_MAX_STRING_BYTES {
-                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                    return Err(ObservationError::bound(BoundDimension::StringBytes));
                 }
                 Ok(Self::string(value))
             }
             serde_json::Value::Array(values) => {
                 if values.len() > LOCAL_MAX_ARRAY_ITEMS {
-                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                    return Err(ObservationError::bound(BoundDimension::ArrayItems));
                 }
                 values
                     .iter()
@@ -75,10 +75,10 @@ impl JsonValue {
             }
             serde_json::Value::Object(values) => {
                 if values.len() > LOCAL_MAX_OBJECT_MEMBERS {
-                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                    return Err(ObservationError::bound(BoundDimension::ObjectMembers));
                 }
                 if values.keys().any(|key| key.len() > LOCAL_MAX_KEY_BYTES) {
-                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                    return Err(ObservationError::bound(BoundDimension::KeyBytes));
                 }
                 values
                     .iter()
@@ -433,7 +433,7 @@ pub(crate) fn bounded_json_bytes(
     depth: usize,
 ) -> Result<usize, ObservationError> {
     if depth > LOCAL_MAX_DEPTH {
-        return Err(ObservationError::new(ValidationCode::UnboundedValue));
+        return Err(ObservationError::bound(BoundDimension::Depth));
     }
     match value {
         JsonValue::Null => Ok(4),
@@ -445,37 +445,37 @@ pub(crate) fn bounded_json_bytes(
         JsonValue::Number(_) => Err(ObservationError::new(ValidationCode::NonFiniteNumber)),
         JsonValue::String(string) => {
             if string.len() > LOCAL_MAX_STRING_BYTES {
-                return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                return Err(ObservationError::bound(BoundDimension::StringBytes));
             }
             Ok(escaped_string_bytes(string))
         }
         JsonValue::Array(items) => {
             if items.len() > LOCAL_MAX_ARRAY_ITEMS {
-                return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                return Err(ObservationError::bound(BoundDimension::ArrayItems));
             }
             let mut total = 2usize;
             for (index, item) in items.iter().enumerate() {
                 total = total
                     .checked_add(bounded_json_bytes(item, depth + 1)? + usize::from(index != 0))
-                    .ok_or_else(|| ObservationError::new(ValidationCode::UnboundedValue))?;
+                    .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
             }
             Ok(total)
         }
         JsonValue::Object(members) => {
             if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
-                return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                return Err(ObservationError::bound(BoundDimension::ObjectMembers));
             }
             let mut total = 2usize;
             for (index, (key, item)) in members.iter().enumerate() {
                 if key.len() > LOCAL_MAX_KEY_BYTES {
-                    return Err(ObservationError::new(ValidationCode::UnboundedValue));
+                    return Err(ObservationError::bound(BoundDimension::KeyBytes));
                 }
                 let item_bytes = bounded_json_bytes(item, depth + 1)?;
                 total = total
                     .checked_add(
                         escaped_string_bytes(key) + 1 + item_bytes + usize::from(index != 0),
                     )
-                    .ok_or_else(|| ObservationError::new(ValidationCode::UnboundedValue))?;
+                    .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
             }
             Ok(total)
         }

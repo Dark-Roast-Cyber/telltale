@@ -29,6 +29,22 @@ per-action detection events, and map source failures to `scanner_error` events.
 Removed parser registration and source-backed flat-record projection are not
 compatibility paths.
 
+### Canonical bound diagnostics (current development after RC1)
+
+Codex canonical bound failures retain a typed, content-free field category and
+bound dimension in `SourceFailure.acquisition`. Hosts can use
+`AcquisitionError::bound_context()`; absence means no contextual bound diagnostic,
+not successful acquisition. `CanonicalValidation { code }` remains supported,
+but the new `CanonicalBoundValidation { context }` variant requires updating
+exhaustive Rust matches: this is not fully source compatible. `code()` and Display
+still return `unbounded_value`. Debug contains only closed diagnostic enums/code,
+never source content or locations. Native accounting errors keep their own codes
+and no bound context. Event3 adaptation remains generic
+`canonical_acquisition_failed`, source-atomic, and content-free. See the
+[canonical contract](canonical-observation-v2.md) for categories, dimensions,
+unchanged limits/check order/NFC behavior, and current Codex-only acquisition scope.
+This requires git-pin host validation and is not RC1/stable qualification.
+
 ### OpenCode acquisition feature (current development after RC1)
 
 The default `telltale-core` normal dependency graph has no `rusqlite`.

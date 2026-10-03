@@ -2,11 +2,11 @@ use std::fmt;
 
 use serde_json::Value;
 use telltale_schema::observation::{
-    CanonicalObservationV2, CapabilityAvailability, CapabilityContext, CapabilityId, ContentPart,
-    ContentPartKind, CorrelationId, CorrelationIds, FactMetadata, FactProvenance, Fidelity,
-    IngestionMode, JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
-    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
-    SourceTimestamp, ToolObservation, ToolStatus,
+    CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability, CapabilityContext,
+    CapabilityId, ContentPart, ContentPartKind, CorrelationId, CorrelationIds, FactMetadata,
+    FactProvenance, Fidelity, IngestionMode, JsonValue, MessageObservation, MessageRole,
+    ObservationBody, ObservationBuilder, ObservationError, ObservationStage, ObservedAt,
+    SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
 
 use super::native::{
@@ -53,6 +53,7 @@ impl fmt::Debug for CodexCanonicalError {
             Self::Observation(error) => formatter
                 .debug_struct("CodexCanonicalError::Observation")
                 .field("code", &error.code())
+                .field("bound_context", &error.bound_context())
                 .finish(),
         }
     }
@@ -272,7 +273,10 @@ fn build_message_body(
     let mut body = MessageObservation::new(role);
     if blocks.is_empty() {
         if let Some(content) = &record.message_content {
-            body = body.with_content(value_to_json(content)?);
+            body = body.with_content(value_to_json(
+                content,
+                CanonicalFieldCategory::MessageContent,
+            )?);
         }
     } else {
         for block in blocks {
@@ -310,7 +314,10 @@ fn content_part(block: &CodexContentBlock) -> Result<ContentPart, CodexCanonical
                 fields.push(("name".to_owned(), JsonValue::string(name)));
             }
             if *input_present && let Some(input) = input {
-                fields.push(("input".to_owned(), value_to_json(input)?));
+                fields.push((
+                    "input".to_owned(),
+                    value_to_json(input, CanonicalFieldCategory::MessageContentParts)?,
+                ));
             }
             Ok(ContentPart::new(
                 ContentPartKind::ToolUse,
@@ -335,7 +342,10 @@ fn content_part(block: &CodexContentBlock) -> Result<ContentPart, CodexCanonical
                 fields.push(("tool_use_id".to_owned(), JsonValue::string(call_id)));
             }
             if *result_present && let Some(result) = result {
-                fields.push(("content".to_owned(), value_to_json(result)?));
+                fields.push((
+                    "content".to_owned(),
+                    value_to_json(result, CanonicalFieldCategory::MessageContentParts)?,
+                ));
             }
             if let Some(is_error) = is_error {
                 fields.push(("is_error".to_owned(), JsonValue::Bool(*is_error)));
@@ -465,14 +475,17 @@ fn emit_tool(
         paths.push(("tool.name", FactProvenance::Reported));
     }
     if let Some(arguments) = &fields.arguments {
-        body = body.with_arguments(value_to_json(arguments)?);
+        body = body.with_arguments(value_to_json(
+            arguments,
+            CanonicalFieldCategory::ToolArguments,
+        )?);
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
-        body = body.with_result(value_to_json(result)?);
+        body = body.with_result(value_to_json(result, CanonicalFieldCategory::ToolResult)?);
         paths.push(("tool.result", FactProvenance::Reported));
     } else if let Some(error) = &fields.error {
-        body = body.with_result(value_to_json(error)?);
+        body = body.with_result(value_to_json(error, CanonicalFieldCategory::ToolResult)?);
         paths.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = fields.is_error {
@@ -639,8 +652,12 @@ fn argument_string(value: &Value, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn value_to_json(value: &Value) -> Result<JsonValue, CodexCanonicalError> {
-    Ok(JsonValue::try_from_source_value(value)?)
+fn value_to_json(
+    value: &Value,
+    category: CanonicalFieldCategory,
+) -> Result<JsonValue, CodexCanonicalError> {
+    Ok(JsonValue::try_from_source_value(value)
+        .map_err(|error| error.with_bound_category(category))?)
 }
 
 fn mapping(code: &'static str, detail: &'static str) -> CodexCanonicalError {
@@ -707,6 +724,44 @@ mod tests {
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("canonical observations")
+    }
+
+    #[test]
+    fn bound_error_debug_and_display_are_content_free() {
+        use telltale_schema::observation::{
+            BoundDimension, CanonicalBoundContext, CanonicalFieldCategory,
+        };
+        let marker = "SYNTHETIC-PRIVATE-CANONICAL-";
+        let value = format!("{marker}{}", "x".repeat(4097));
+        let input = serde_json::json!({"type":"tool_call", "session_id":marker, "name":marker, "arguments":{marker:value}});
+        let (_directory, source) =
+            temp_source("codex.sessions", SourceKind::Jsonl, &input.to_string());
+        let error = project_codex_native_records(
+            &super::super::native::extract_codex_native_records(&source).unwrap(),
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap_err();
+        let super::CodexCanonicalError::Observation(observation) = &error else {
+            panic!("expected canonical validation")
+        };
+        assert_eq!(
+            observation.bound_context(),
+            Some(CanonicalBoundContext {
+                category: CanonicalFieldCategory::ToolArguments,
+                dimension: BoundDimension::StringBytes
+            })
+        );
+        assert_eq!(
+            observation.to_string(),
+            "canonical observation rejected (unbounded_value)"
+        );
+        for rendered in [
+            format!("{error:?}"),
+            error.to_string(),
+            format!("{observation:?}"),
+        ] {
+            assert!(!rendered.contains(marker), "controlled content leaked");
+        }
     }
 
     #[test]

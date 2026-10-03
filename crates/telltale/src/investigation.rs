@@ -586,6 +586,7 @@ fn source_failure_reason(error: AcquisitionError) -> SourceUnavailableReason {
         AcquisitionError::InvalidAttestation
         | AcquisitionError::InvalidContribution
         | AcquisitionError::CanonicalMapping { .. }
+        | AcquisitionError::CanonicalBoundValidation { .. }
         | AcquisitionError::CanonicalValidation { .. } => SourceUnavailableReason::MalformedSource,
         // These are rejected before acquisition; keep failure private if reached.
         AcquisitionError::UnsupportedSourceIdentity
