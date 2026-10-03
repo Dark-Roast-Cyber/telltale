@@ -179,9 +179,82 @@ occurrence or session scoring. Raw evidence no longer has the compatibility
 remains bounded (512-byte excerpts). Event 3.0 and compatibility limits of 4,096
 items, 4,096-byte retained strings and 4 MiB are unchanged.
 
-Native `TurnItem`
-action envelopes such as `event_msg:item_completed` remain unsupported; role
-support alone does not qualify full acquisition.
+### Bounded Codex completed items (#80, development after RC1)
+
+All three Codex identities accept exact `event_msg.payload.type: item_completed`
+with an object `item` tagged exactly `AgentMessage`, `UserMessage`, `Reasoning`,
+or `CommandExecution`. Agent content accepts ordered exact `Text` strings; user
+content accepts only exact lowercase `text` UserInput strings. Unknown/nontext
+content, wrong/nested wrappers, unknown items and nonterminal command status
+reject the whole source, without successful observations, accounting or progress.
+Reasoning validates coordinates, counts as native `Other`, and retains no raw
+reasoning or canonical/analytic facts.
+
+Completed items require nonempty source `thread_id`, `turn_id` and `item.id`.
+Their native identity is the JSON tuple `[thread_id, turn_id, item.id]`, scoped
+by adapter identity, family and stage; physical position remains provenance.
+Legacy record identities are unchanged. Public `SessionMeta.id` supplies the
+owning thread, while `SessionMeta.session_id` is a distinct root correlation.
+The latter is retained only on typed canonical facts as reported
+`session.root_id`. Owner aliases at outer/payload/item levels must agree with
+the completed thread and established metadata owner. Stray nested metadata
+cannot establish an inherited owner. No filename fallback is used.
+
+Native `ordinal` is supported only for a strict self-contained rollout. If any
+nonblank JSONL record contains the key, every nonblank record (including metadata,
+auxiliaries and suppressed mirrors) must report a valid u64 ordinal, starting at
+zero and advancing consecutively with checked arithmetic. The first record must
+be exact public `session_meta` with object payload, exact `history_mode: paginated`
+and a truthful nonempty owning `id`. Missing, null, malformed, negative, fractional,
+overflowing, duplicated, descending or gapped ordinals reject the whole source.
+Validated native ordinals supply source sequence; blank lines are not records.
+Typed owner/turn/item identity and emitted child ordinals remain independent.
+With no ordinal key, legacy positional sequences and identities are unchanged.
+Non-null `history_base` or `subagent_history_start_ordinal`, even zero, remain
+unsupported. Referenced history, inherited prefixes and nonzero-start slices
+cannot be projected safely by this bounded mode; this is not general paginated
+history support or a lossless public-producer claim. Acquisition progress and
+cursor behavior are unchanged.
+
+Assistant raw-response mirrors are suppressed only for the same nonempty native
+response ID, owning thread and explicit payload
+`internal_chat_message_metadata_passthrough.turn_id`, with equal ordered text
+facts. This is the public ResponseItem::Message field at the pinned producer;
+outer rollout `metadata` is separate harness metadata. Neither outer nor payload
+`metadata.turn_id`, outer passthrough-like fields, nor stray direct turn coordinates
+can establish mirror authority. Non-null passthrough metadata must be an object;
+a non-null turn ID must be a nonempty bounded string without control characters.
+Missing/null optional metadata or turn IDs preserve absence. Contradictory explicit
+outer/payload turn coordinates reject the source rather than override the public
+coordinate. Conflicting proven mirrors also reject the source. Distinct IDs,
+missing coordinates, mixed tool content and unrelated turns remain distinct.
+In explicit `history_mode: paginated`, completed text-only user items are
+authoritative over text-only raw user response messages for the same owner and
+explicit public passthrough turn coordinate, regardless of differing user IDs or
+text. This narrow
+representation policy is not shared user identity or content-hash deduplication;
+it intentionally chooses the completed input over raw contextual text.
+Without provable pairing, both facts remain, with possible ambiguous duplicate
+analytics. Native accounting still counts every physical native unit, including
+mirrors; it is not a deduplicated canonical count.
+
+Terminal commands map to `ToolResultReturned` and native `ToolResult`, never
+invocation contributions or execution stages. `item.id` supplies `call_id`,
+not the distinct raw response ID. Structured argv remains `tool.arguments`;
+no argv joining, tool-name invention or command-text facet is performed.
+Optional exit/output fields retain presence, null, empty and returned values
+in `tool.result`. The source status remains `tool.source_status`, with
+completed/failed/declined mapped to reported Succeeded/Failed/Denied. These are
+producer observations, not proof of execution, user refusal, intended effects
+or zero effects. `tool.output_fidelity` distinguishes `not_captured`, the exact
+known persistence marker (`truncated`), `diagnostic_or_capture` for failed/declined
+output, and otherwise `capture_completeness_unknown`. Absence is not success.
+`cwd` is only reported `resource.path` metadata. No Process/File/Network facts
+are manufactured, and ToolExecution remains Unsupported. Structured argv,
+results and facets retain ordinary 4,096-string/16,384-encoded-byte bounds;
+oversize rejects rather than truncates. Message text uses the existing #79 bounds.
+
+No public source API enum or Event 3.0 schema changes are introduced.
 
 At the public pin below, `core/src/context/developer_instructions.rs` constructs
 developer instructions, `core/src/session/mod.rs` persists conversation items
@@ -195,7 +268,9 @@ All three Codex identities accept a closed auxiliary set with zero canonical
 observations and native accounting kind `Other`: object `payload` under outer
 `turn_context` whose payload contains neither a `type` nor a `payload` key
 (including null or malformed values); exact `response_item` with object
-`payload.type: reasoning`; and
+`payload.type: reasoning`; exact outer `world_state` with object payload,
+required boolean `full` and object `state`, and neither a payload `type` nor
+`payload` key (including null); and
 exact `event_msg` with object payload tagged `task_started`, `task_complete`,
 `token_count`, `agent_reasoning`, `agent_reasoning_raw_content`,
 `agent_reasoning_section_break`, `reasoning_content_delta`, or
@@ -208,6 +283,18 @@ An auxiliary's direct session ID can scope its own accounting but cannot establi
 or replace the inherited session namespace, even with a top-level `session_meta`
 field. Only supported session metadata records establish that namespace.
 
+World-state full snapshots and patches are opaque comparison metadata, not
+conversation or execution evidence. Arbitrary `state` keys are never traversed
+for ownership, attestation, discriminators, messages or tools, and no state is
+retained in native records. Only direct outer/payload fields participate in the
+existing envelope ownership and attestation validation; nested message/state or
+top-level `session_meta` lookalikes cannot attest or establish inherited identity.
+World-state records contribute zero canonical observations and invocation
+contributions, count as native `Other`, and participate in strict ordinal
+validation like every other record. No world-state baseline or patch replay is
+implemented. Malformed/missing full/state and bare/wrong/nested wrappers reject
+atomically rather than being generically ignored.
+
 Analytics intentionally exclude reasoning (including its own summary/content
 arrays) and completion `last_agent_message`/`error`. Completion is neither a
 message fallback nor evidence of terminal success. Conversational messages and
@@ -217,6 +304,9 @@ The bounded upstream evidence is pinned to public `openai/codex`
 [`47379efd5289cba801c5a66273064fbe3bf92f60`](https://github.com/openai/codex/tree/47379efd5289cba801c5a66273064fbe3bf92f60),
 in `codex-rs/protocol/src/{protocol,models,items}.rs` and
 `codex-rs/rollout/src/policy.rs`; persistence policy is not a blanket ignore rule.
+World-state shape and separate persistence are pinned in
+`protocol/src/protocol.rs:3272-3287`, `history/src/rollout_payload.rs:30-58`, and
+`core/src/session/mod.rs:3592-3619,4625-4673` under the same `codex-rs` revision.
 
 ### Shared canonical source runtime
 

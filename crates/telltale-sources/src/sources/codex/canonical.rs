@@ -97,7 +97,7 @@ fn project_record(
     options: &CodexCanonicalOptions,
     observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), CodexCanonicalError> {
-    if record.auxiliary {
+    if record.auxiliary || record.mirrored {
         return Ok(());
     }
     if record.discriminator.as_deref().is_some_and(|kind| {
@@ -463,6 +463,7 @@ fn emit_tool(
     if stage == ObservationStage::ToolResultReturned
         && !has_result
         && !generic
+        && !fields.completed_command
         && fields.is_error.is_none()
     {
         return Err(mapping(
@@ -495,7 +496,20 @@ fn emit_tool(
         body = body.with_is_error(is_error);
         paths.push(("tool.is_error", FactProvenance::Reported));
     }
-    if source_error {
+    if fields.completed_command {
+        body = body.with_reported_status(match fields.status.as_deref() {
+            Some("completed") => ToolStatus::Succeeded,
+            Some("failed") => ToolStatus::Failed,
+            Some("declined") => ToolStatus::Denied,
+            _ => {
+                return Err(mapping(
+                    "invalid_command_status",
+                    "completed command requires terminal status",
+                ));
+            }
+        });
+        paths.push(("tool.reported_status", FactProvenance::Reported));
+    } else if source_error {
         body = body.with_reported_status(ToolStatus::Failed);
         paths.push(("tool.reported_status", FactProvenance::Reported));
     } else if generic && (!has_explicit_body || !has_result && fields.is_error.is_none()) {
@@ -523,6 +537,29 @@ fn emit_tool(
     )?;
     for (path, provenance) in paths {
         builder = builder.fact_metadata(path, normal(provenance)?);
+    }
+
+    if fields.completed_command {
+        builder = builder
+            .facet(
+                "tool.source_status",
+                SemanticFacet::new(JsonValue::string(
+                    fields.status.as_deref().expect("validated status"),
+                )),
+            )?
+            .fact_metadata("tool.source_status", normal_reported()?)
+            .facet(
+                "tool.output_fidelity",
+                SemanticFacet::new(JsonValue::string(
+                    fields.output_fidelity.expect("native output fidelity"),
+                )),
+            )?
+            .fact_metadata("tool.output_fidelity", normal(FactProvenance::Parsed)?);
+        if let Some(cwd) = &fields.cwd {
+            builder = builder
+                .facet("resource.path", SemanticFacet::new(JsonValue::string(cwd)))?
+                .fact_metadata("resource.path", normal_reported()?);
+        }
     }
 
     let argument_view = fields.arguments.as_ref().and_then(parsed_argument_view);
@@ -576,7 +613,19 @@ fn common_builder(
         Fidelity::PartialStructured,
     )?
     .with_source_sequence(record.source_sequence);
-    if let Some(session_id) = &record.effective_session_id {
+    if let Some(coords) = &record.completed {
+        source_provenance = source_provenance.with_native_id(
+            serde_json::to_string(&[
+                record
+                    .effective_session_id
+                    .as_deref()
+                    .expect("completed owner"),
+                &coords.turn_id,
+                &coords.item_id,
+            ])
+            .expect("string coordinates"),
+        )?;
+    } else if let Some(session_id) = &record.effective_session_id {
         source_provenance =
             source_provenance.with_identity_source_sequence(session_id, record.source_sequence)?;
     }
@@ -591,8 +640,22 @@ fn common_builder(
     if let Some(session_id) = &record.effective_session_id {
         builder = builder.session_id(CorrelationId::source_reported(session_id)?);
     }
-    if let Some(correlation) = correlation {
-        builder = builder.correlation(correlation);
+    let mut correlation = correlation.unwrap_or_default();
+    if let Some(coords) = &record.completed {
+        correlation = correlation.with_turn_id(CorrelationId::source_reported(&coords.turn_id)?);
+        if !record.tool.completed_command {
+            correlation =
+                correlation.with_response_id(CorrelationId::source_reported(&coords.item_id)?);
+        }
+    }
+    builder = builder.correlation(correlation);
+    if let Some(root_id) = &record.root_session_id {
+        builder = builder
+            .facet(
+                "session.root_id",
+                SemanticFacet::new(JsonValue::string(root_id)),
+            )?
+            .fact_metadata("session.root_id", normal_reported()?);
     }
     if let Some(timestamp) = &record.timestamp
         && let Ok(timestamp) = SourceTimestamp::new(timestamp)

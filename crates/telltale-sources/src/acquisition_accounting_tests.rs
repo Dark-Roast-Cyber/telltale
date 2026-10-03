@@ -442,6 +442,12 @@ fn codex_auxiliary_rejects_wrong_wrappers_and_late_unknowns_atomically() {
             .expect("whole acquisition must fail");
         if value["type"] == "response_item" && value["payload"]["type"] == 123 {
             assert_eq!(error.code(), "unsupported_record");
+        } else if value["payload"]["type"] == "item_completed" {
+            assert_eq!(
+                error.code(),
+                "source_read",
+                "completed coordinates are missing"
+            );
         } else {
             assert_eq!(error.code(), "unknown_discriminator", "{value}");
         }
