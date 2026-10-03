@@ -59,6 +59,17 @@ outside this manifest, reinforcing that it is not per-scan or per-event proof.
 
 ## Privacy Surface Matrix
 
+Current-development in-memory embedding occurrences after RC1 expose only a
+validated observation ID, the associated in-memory Event session ID, optional
+timeline index, source-reported timestamp when present, rule IDs, categories,
+and evidence field names, with an index associating each occurrence to its
+finding. They do not expose raw prompts, tool output, paths, credentials,
+process command lines, raw-value evidence hashes, or redacted excerpts. A
+session ID that is already present on the associated Event is copied, not newly
+collected. Identity is coordinate-derived, not a content hash. This is not an
+Event3 wire surface and does not change CLI JSONL; the containing
+`SourceScan.source` remains the host-supplied source.
+
 The matrix records every Event 3.0 and diagnostic text surface. "Controlled" means a generated enum, fixed schema value, or validated rule/configuration identifier rather than session content. It remains readable because preserving these values is necessary for filtering and compatibility; arbitrary values in the same field class are sanitized or made opaque at the terminal owner.
 
 | Surface | Provenance | Context | Earlier handling | Terminal handling and owner |
@@ -87,6 +98,18 @@ The matrix records every Event 3.0 and diagnostic text surface. "Controlled" mea
 | `operational_alert.evidence[alert_type]`, `[threshold]`, `[actual_value]` | Local alert config, counters, and sink error text | Evidence | Serialized as constructed | `terminal_evidence` sanitizes all three; fixed alert labels/counters remain useful while embedded delivery errors cannot leak. |
 | MCP inventory/config errors, scanner progress/fatal errors, historical timeline/export labels | Source/import error text and imported historical JSON | Diagnostic; Summary; Path | Per-call rendering/redaction | `PrivacySanitizer` at the final rendered diagnostic. Historical JSONL/Elastic export recursively sanitizes string values and unsafe object keys while preserving arrays, objects, and unknown extension structure; unknown historical strings default to Summary, not metadata. Rules test, preview, coverage, and server save path output use the same session, metadata, path, and diagnostic policies. |
 | Sink failure alerts and stderr/log delivery/rotation errors | HTTP/error display text and host paths | Evidence or Diagnostic | Could retain transport error text until the sink/console path | Operational-alert evidence crosses `Event` serialization; final console rendering uses the Diagnostic sanitizer. JSONL, HEC, and Elastic receive only canonical Event bytes. |
+
+### Contextual investigation (current development after RC1)
+
+Opt-in contextual investigation defaults user/assistant text and tool arguments
+off; enabled excerpts cross `redact_sensitive_text` before public storage.
+Outputs expose only terminal metadata and mandatory-redacted text, never tool
+results, raw paths/path hashes, canonical objects, observation IDs, or evidence.
+Telltale does not write this context to Event3 or JSONL; hosts own any persistence.
+`investigate` stays content-free and scan/watch does not call the contextual API.
+This is not RC1-qualified or stable qualification. Sanitization is bounded, not
+perfect secret classification; see the
+[full embedding contract](embedding.md#contextual-investigation-current-development-after-rc1).
 
 ## Evidence Classes
 

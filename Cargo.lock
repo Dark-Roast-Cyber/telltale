@@ -3239,6 +3239,7 @@ dependencies = [
  "hmac",
  "libc",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "telltale-detect",

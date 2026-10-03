@@ -1,10 +1,13 @@
 use std::fs;
 
+#[cfg(feature = "opencode-sqlite")]
 use rusqlite::Connection;
 use telltale_schema::clients::{ClientId, SourceKind};
+#[cfg(feature = "opencode-sqlite")]
+use telltale_schema::observation::ToolStatus;
 use telltale_schema::observation::{
     CanonicalObservationV2, CapabilityAvailability, CapabilityId, ContentPartKind, JsonValue,
-    MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt, ToolStatus,
+    MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
 };
 use telltale_schema::source::Source;
 use tempfile::{TempDir, tempdir};
@@ -105,6 +108,7 @@ fn project_copilot(contents: &str) -> (TempDir, Result<Vec<CanonicalObservationV
     (directory, result)
 }
 
+#[cfg(feature = "opencode-sqlite")]
 fn opencode_fixture(
     messages: &[(&str, &str, serde_json::Value)],
     parts: &[(&str, &str, i64, serde_json::Value)],
@@ -153,6 +157,7 @@ fn opencode_fixture(
     )
 }
 
+#[cfg(feature = "opencode-sqlite")]
 fn project_opencode(
     messages: &[(&str, &str, serde_json::Value)],
     parts: &[(&str, &str, i64, serde_json::Value)],
@@ -169,6 +174,7 @@ fn project_opencode(
     (directory, result)
 }
 
+#[cfg(feature = "opencode-sqlite")]
 fn project_opencode_native(
     messages: &[(&str, &str, serde_json::Value)],
     parts: &[(&str, &str, i64, serde_json::Value)],
@@ -568,6 +574,7 @@ fn parsed_facets_and_capability_gaps_do_not_claim_activity_or_execution() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn opencode_sqlite_messages_join_shared_message_semantics() {
     let (_directory, opencode) = project_opencode(
         &[
@@ -617,6 +624,7 @@ fn opencode_sqlite_messages_join_shared_message_semantics() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn opencode_sqlite_tool_overlap_preserves_call_linkage_values_and_facets() {
     let (_directory, opencode) = project_opencode_native(
         &[(
@@ -692,6 +700,7 @@ fn opencode_sqlite_tool_overlap_preserves_call_linkage_values_and_facets() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn opencode_sqlite_missing_call_id_is_absent_and_not_derived() {
     let (_directory, opencode) = project_opencode_native(
         &[(
@@ -719,6 +728,7 @@ fn opencode_sqlite_missing_call_id_is_absent_and_not_derived() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn opencode_sqlite_direct_lifecycle_is_supported_without_inferred_success() {
     let (_directory, opencode) = project_opencode_native(
         &[(

@@ -19,8 +19,11 @@ pub enum SourceReadError {
     Bounded(BoundedReadError),
     Io(std::io::Error),
     Json(serde_json::Error),
-    Sqlite(rusqlite::Error),
-    Locked(String),
+    // Keep the error shape identical when SQLite acquisition is compiled out.
+    #[cfg_attr(not(feature = "opencode-sqlite"), allow(dead_code))]
+    Sqlite,
+    #[cfg_attr(not(feature = "opencode-sqlite"), allow(dead_code))]
+    Locked,
     SchemaDrift {
         client: ClientId,
         source_id: String,
@@ -34,8 +37,8 @@ impl fmt::Display for SourceReadError {
             Self::Bounded(error) => formatter.write_str(error.code()),
             Self::Io(error) => write!(formatter, "io error: {error}"),
             Self::Json(error) => write!(formatter, "json parse error: {error}"),
-            Self::Sqlite(error) => write!(formatter, "sqlite error: {error}"),
-            Self::Locked(message) => write!(formatter, "locked: {message}"),
+            Self::Sqlite => formatter.write_str("sqlite error"),
+            Self::Locked => formatter.write_str("sqlite locked"),
             Self::SchemaDrift {
                 client,
                 source_id,
@@ -93,19 +96,21 @@ impl From<serde_json::Error> for SourceReadError {
     }
 }
 
+#[cfg(feature = "opencode-sqlite")]
 impl From<rusqlite::Error> for SourceReadError {
     fn from(error: rusqlite::Error) -> Self {
         Self::from_sqlite(error)
     }
 }
 
+#[cfg(feature = "opencode-sqlite")]
 impl SourceReadError {
     pub(crate) fn from_sqlite(error: rusqlite::Error) -> Self {
         match error.sqlite_error_code() {
             Some(rusqlite::ErrorCode::DatabaseBusy) | Some(rusqlite::ErrorCode::DatabaseLocked) => {
-                Self::Locked(error.to_string())
+                Self::Locked
             }
-            _ => Self::Sqlite(error),
+            _ => Self::Sqlite,
         }
     }
 }

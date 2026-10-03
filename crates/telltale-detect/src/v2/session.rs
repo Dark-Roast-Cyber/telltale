@@ -360,15 +360,25 @@ pub(crate) fn group_sessions(
     }
     let mut groups = groups.into_values().collect::<Vec<_>>();
     for group in &mut groups {
-        group.sort_by_key(|o| {
-            (
-                o.occurred_at().is_none(),
-                o.occurred_at()
-                    .and_then(|t| OffsetDateTime::parse(t.as_str(), &Rfc3339).ok()),
-                o.sequence().or(o.source().source_sequence()),
-                o.identity_basis().child_ordinal(),
-            )
-        });
+        order_canonical_session_observations(group);
     }
     groups
+}
+
+/// Internal shared ordering for an already source/session-scoped slice. Does
+/// not establish scope or historical equality. Remaining ties are stable.
+#[doc(hidden)]
+pub fn order_canonical_session_observations<T: std::borrow::Borrow<CanonicalObservationV2>>(
+    observations: &mut [T],
+) {
+    observations.sort_by_key(|value| {
+        let o = value.borrow();
+        (
+            o.occurred_at().is_none(),
+            o.occurred_at()
+                .and_then(|t| OffsetDateTime::parse(t.as_str(), &Rfc3339).ok()),
+            o.sequence().or(o.source().source_sequence()),
+            o.identity_basis().child_ordinal(),
+        )
+    });
 }

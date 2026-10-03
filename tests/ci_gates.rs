@@ -132,6 +132,9 @@ fn linux_aggregate_runs_full_tests_once_and_retains_independent_checks() {
         vec![
             "test --locked --quiet",
             "test --locked -p telltale-equivalence --quiet",
+            "test --locked -p telltale-core --lib --quiet",
+            "test --locked -p telltale-sources --lib --quiet",
+            "test --locked -p telltale-sources --features opencode-sqlite --lib --quiet",
         ]
     );
     assert_eq!(calls.iter().filter(|s| s.starts_with("run ")).count(), 2);

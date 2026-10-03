@@ -38,7 +38,24 @@ pub struct Event3SessionMetadata<'a> {
 /// The caller must still durably persist required output before committing progress.
 pub struct ProjectedSource {
     pub events: Vec<Event>,
+    /// Embedding projection input. Not a supported detector or host API.
+    #[doc(hidden)]
+    pub occurrences: Vec<ProjectedOccurrence>,
     pub completion: EvaluationCompletion,
+}
+
+/// Projection input for the core embedding facade, not a detector or host API.
+#[doc(hidden)]
+pub struct ProjectedOccurrence {
+    pub observation_id: String,
+    pub finding_index: usize,
+    pub session_id: String,
+    pub timeline_index: Option<usize>,
+    pub occurred_at: Option<String>,
+    pub rule_ids: Vec<String>,
+    pub categories: Vec<String>,
+    /// Selector-derived field names; empty for process/correlation findings.
+    pub evidence_fields: Vec<String>,
 }
 
 pub(crate) type ProcessResultKey = (String, Vec<String>, Option<String>);
@@ -61,7 +78,7 @@ pub(crate) struct ProcessProjection {
     reason: String,
     event_time: Option<String>,
     tool_name: Option<String>,
-    occurrences: Vec<usize>,
+    occurrences: Vec<(String, usize)>,
     supporting: Vec<ProcessResultKey>,
     variants: Vec<ProcessContext>,
     supporting_steps: Vec<String>,
@@ -70,7 +87,7 @@ pub(crate) struct ProcessProjection {
 
 impl ProcessProjection {
     pub(crate) fn item_count(&self) -> usize {
-        1 + self.variants.len() + self.supporting_steps.len()
+        1 + self.variants.len() + self.supporting_steps.len() + self.occurrences.len()
     }
     pub(crate) fn atomic(
         input: &ProcessObservation,
@@ -129,7 +146,12 @@ impl ProcessProjection {
         bytes = add_text_list_bytes(bytes, &detection.investigation_fields)?;
         bytes = add_text_list_bytes(bytes, &detection.falsepositives)?;
         budget
-            .consume(1, bytes)
+            .consume(
+                2,
+                bytes
+                    .checked_add(observation.observation_id().len())
+                    .ok_or(DetectionError::InvalidBounds)?,
+            )
             .map_err(|_| DetectionError::InvalidBounds)?;
         Ok(Self {
             process: ProcessContext {
@@ -162,7 +184,7 @@ impl ProcessProjection {
             reason: detection.detection_reason.clone(),
             event_time: event_time.map(str::to_owned),
             tool_name: tool_name.map(str::to_owned),
-            occurrences: vec![occurrence],
+            occurrences: vec![(observation.observation_id().to_owned(), occurrence)],
             supporting: Vec::new(),
             variants: Vec::new(),
             supporting_steps: Vec::new(),
@@ -178,7 +200,6 @@ impl ProcessProjection {
     ) -> Result<Self, DetectionError> {
         let first = matched.first().ok_or(DetectionError::RuntimeEvaluation)?.1;
         let last = matched.last().ok_or(DetectionError::RuntimeEvaluation)?.1;
-        let mut supporting_steps = Vec::with_capacity(matched.len());
         let mut bytes = retained_text_bytes([
             first.process.source_process_name.as_str(),
             last.process.target_process_name.as_str(),
@@ -190,7 +211,16 @@ impl ProcessProjection {
             rule.reason.as_str(),
         ])?;
         bytes = add_text_list_bytes(bytes, &rule.falsepositives)?;
+        let mut association_count = 0usize;
         for (key, projection) in matched {
+            association_count = association_count
+                .checked_add(projection.occurrences.len())
+                .ok_or(DetectionError::InvalidBounds)?;
+            bytes = bytes
+                .checked_add(retained_text_bytes(
+                    projection.occurrences.iter().map(|(id, _)| id.as_str()),
+                )?)
+                .ok_or(DetectionError::InvalidBounds)?;
             bytes = bytes
                 .checked_add(retained_text_bytes(
                     std::iter::once(key.0.as_str())
@@ -206,7 +236,8 @@ impl ProcessProjection {
                 .1
                 .iter()
                 .map(String::len)
-                .sum::<usize>()
+                .try_fold(0usize, |count, next| count.checked_add(next))
+                .ok_or(DetectionError::InvalidBounds)?
                 .checked_add(key.1.len().saturating_sub(1))
                 .and_then(|value| value.checked_add(6))
                 .and_then(|value| value.checked_add(projection.process.source_process_name.len()))
@@ -224,9 +255,20 @@ impl ProcessProjection {
                 .checked_add("per-entity correlation risk cap reached".len())
                 .ok_or(DetectionError::InvalidBounds)?;
         }
+        bytes = bytes
+            .checked_add(retained_text_bytes(last.event_time.as_deref())?)
+            .ok_or(DetectionError::InvalidBounds)?;
         budget
-            .consume(1 + matched.len(), bytes)
+            .consume(
+                matched
+                    .len()
+                    .checked_add(1)
+                    .and_then(|items| items.checked_add(association_count))
+                    .ok_or(DetectionError::InvalidBounds)?,
+                bytes,
+            )
             .map_err(|_| DetectionError::InvalidBounds)?;
+        let mut supporting_steps = Vec::with_capacity(matched.len());
         for (key, projection) in matched {
             supporting_steps.push(format!(
                 "{}: {} -> {}",
@@ -271,7 +313,7 @@ impl ProcessProjection {
             tool_name: None,
             occurrences: matched
                 .iter()
-                .flat_map(|(_, p)| p.occurrences.iter().copied())
+                .flat_map(|(_, p)| p.occurrences.iter().cloned())
                 .collect(),
             supporting: matched.iter().map(|(key, _)| key.clone()).collect(),
             variants: Vec::new(),
@@ -286,9 +328,26 @@ impl ProcessProjection {
         budget: &mut super::session::RetentionBudget,
     ) -> Result<(), DetectionError> {
         let bytes = process_context_bytes(&variant.process)?;
+        let associations = variant
+            .occurrences
+            .iter()
+            .filter(|association| !self.occurrences.contains(association));
+        let association_bytes =
+            retained_text_bytes(associations.clone().map(|(id, _)| id.as_str()))?;
         budget
-            .consume(1, bytes)
+            .consume(
+                associations
+                    .clone()
+                    .count()
+                    .checked_add(1)
+                    .ok_or(DetectionError::InvalidBounds)?,
+                bytes
+                    .checked_add(association_bytes)
+                    .ok_or(DetectionError::InvalidBounds)?,
+            )
             .map_err(|_| DetectionError::InvalidBounds)?;
+        let associations = associations.cloned().collect::<Vec<_>>();
+        self.occurrences.extend(associations);
         self.variants.push(variant.process.clone());
         Ok(())
     }
@@ -317,8 +376,22 @@ impl ProcessProjection {
                 .checked_add(process_context_bytes(variant)?)
                 .ok_or(DetectionError::InvalidBounds)?;
         }
+        bytes = bytes
+            .checked_add(retained_text_bytes(
+                self.occurrences.iter().map(|(id, _)| id.as_str()),
+            )?)
+            .ok_or(DetectionError::InvalidBounds)?;
+        for key in &self.supporting {
+            bytes = bytes
+                .checked_add(retained_text_bytes(
+                    std::iter::once(key.0.as_str())
+                        .chain(key.1.iter().map(String::as_str))
+                        .chain(key.2.as_deref()),
+                )?)
+                .ok_or(DetectionError::InvalidBounds)?;
+        }
         budget
-            .consume(0, bytes)
+            .consume(self.occurrences.len(), bytes)
             .map_err(|_| DetectionError::InvalidBounds)
     }
 }
@@ -328,9 +401,8 @@ fn retained_text_bytes<'a>(
 ) -> Result<usize, DetectionError> {
     let mut bytes = 0usize;
     for value in values {
-        if value.len() > super::session::MAX_COMPATIBILITY_STRING_BYTES {
-            return Err(DetectionError::InvalidBounds);
-        }
+        super::session::RetentionBudget::validate_text(value)
+            .map_err(|_| DetectionError::InvalidBounds)?;
         bytes = bytes
             .checked_add(value.len())
             .ok_or(DetectionError::InvalidBounds)?;
@@ -438,6 +510,7 @@ pub fn project_event3(
     }
     validate_projection_budget(evaluation, context, &metadata_index, &mut budget)?;
     let mut events = Vec::new();
+    let mut occurrences = Vec::new();
     for session in &evaluation.sessions {
         let metadata_context = session.session_id.as_ref().and_then(|id| {
             metadata_index
@@ -449,6 +522,7 @@ pub fn project_event3(
         let provider = metadata_context.and_then(|m| m.provider).map(str::to_owned);
         let session_id = session.session_id.as_ref().map(|s| s.value());
         let mut ordinary_detection = None;
+        let mut session_occurrences = Vec::new();
         if !session.rules.effective_rule_ids().is_empty() {
             let session_id = session_id.ok_or(ProcessingError::Projection)?;
             let metadata = session.rules.compatibility_metadata();
@@ -496,185 +570,242 @@ pub fn project_event3(
                 event_time: session.event_time.clone(),
             })
             .map_err(|_| ProcessingError::Projection)?;
-            let mut anchors = BTreeMap::<usize, (BTreeSet<String>, BTreeSet<String>)>::new();
+            let mut anchors = BTreeMap::new();
             for projection in session.rules.projection() {
-                let anchor = anchors.entry(projection.occurrence).or_default();
-                if let Some(rule_id) = &projection.evidence.rule_id {
-                    anchor.0.insert(rule_id.clone());
+                let (anchor, retained) =
+                    anchors.entry(projection.occurrence).or_insert_with(|| {
+                        (
+                            TimelineAnchor {
+                                entry_index: projection.occurrence,
+                                rule_ids: Vec::new(),
+                                categories: metadata.categories().to_vec(),
+                                evidence_fields: Vec::new(),
+                            },
+                            projection,
+                        )
+                    });
+                if retained.observation_id != projection.observation_id
+                    || retained.occurred_at != projection.occurred_at
+                {
+                    return Err(ProcessingError::Projection);
                 }
-                anchor.1.insert(projection.evidence.field.clone());
+                if let Some(rule_id) = &projection.evidence.rule_id {
+                    anchor.rule_ids.push(rule_id.clone());
+                }
+                anchor
+                    .evidence_fields
+                    .push(projection.evidence.field.clone());
             }
-            for (rule_ids, _) in anchors.values_mut() {
-                rule_ids.extend(session.rules.triggered_modifier_ids().iter().cloned());
+            for (mut anchor, retained) in anchors.into_values() {
+                anchor
+                    .rule_ids
+                    .extend(session.rules.triggered_modifier_ids().iter().cloned());
+                anchor.rule_ids.sort();
+                anchor.rule_ids.dedup();
+                anchor.evidence_fields.sort();
+                anchor.evidence_fields.dedup();
+                session_occurrences.push(ProjectedOccurrence {
+                    observation_id: retained.observation_id.clone(),
+                    finding_index: 0,
+                    session_id: event.session_id.clone(),
+                    timeline_index: Some(anchor.entry_index),
+                    occurred_at: retained.occurred_at.clone(),
+                    rule_ids: anchor.rule_ids.clone(),
+                    categories: anchor.categories.clone(),
+                    evidence_fields: anchor.evidence_fields.clone(),
+                });
+                event.timeline_anchors.push(anchor);
             }
-            event.timeline_anchors = canonicalize_timeline_anchors(
-                anchors
-                    .into_iter()
-                    .map(
-                        |(entry_index, (rule_ids, evidence_fields))| TimelineAnchor {
-                            entry_index,
-                            rule_ids: rule_ids.into_iter().collect(),
-                            categories: metadata.categories().to_vec(),
-                            evidence_fields: evidence_fields.into_iter().collect(),
-                        },
-                    )
-                    .collect(),
-            );
+            event.timeline_anchors = canonicalize_timeline_anchors(event.timeline_anchors);
             ordinary_detection = Some(event);
         }
-        let Some(processes) = &session.processes else {
-            events.extend(ordinary_detection);
-            continue;
-        };
-        let mut projected_ids = BTreeMap::new();
-        for result in processes.results() {
-            let session_id = session_id.ok_or(ProcessingError::Projection)?;
-            let key = process_result_key(result);
-            let projection = processes
-                .projection
-                .get(&key)
-                .ok_or(ProcessingError::Projection)?;
-            let rule_id = result.detector().id();
-            let correlation = !projection.supporting.is_empty();
-            let mut tags = vec!["process_chain".to_owned(), result.category().to_owned()];
-            if correlation {
-                tags.push("correlation".to_owned());
-            }
-            if projection.process.source_process_inferred {
-                tags.push("inferred_parent".to_owned());
-            }
-            if !correlation && !projection.process.secondary_rule_ids.is_empty() {
-                tags.push("deduplicated".to_owned());
-            }
-            tags.extend(result.tags().iter().cloned());
-            let score = u64::from(result.risk_points().unwrap_or(0));
-            if score == 0 && !correlation {
-                tags.push("informational".to_owned());
-            }
-            tags.sort();
-            tags.dedup();
-            let mut items = if correlation {
-                let ids = projection
-                    .supporting
-                    .iter()
-                    .map(|key| {
-                        projected_ids
-                            .get(key)
-                            .cloned()
-                            .ok_or(ProcessingError::Projection)
-                    })
-                    .collect::<Result<Vec<String>, _>>()?;
-                vec![
-                    evidence(
-                        "correlation_sequence",
-                        &projection.process.secondary_rule_ids.join(" -> "),
-                        rule_id,
-                    ),
-                    evidence("correlated_event_ids", &ids.join(","), rule_id),
-                ]
-            } else {
-                vec![evidence(
-                    "process_chain",
-                    &format!(
-                        "{} -> {}",
-                        projection.process.source_process_name,
-                        projection.process.target_process_name
-                    ),
-                    rule_id,
-                )]
-            };
-            if let Some(repeat_count) = projection.repeat_count {
-                items.push(Evidence {
-                    field: "repeat_count".to_owned(),
-                    redacted_value: repeat_count.to_string(),
-                    hash: None,
-                    rule_id: Some(rule_id.to_owned()),
-                });
-            }
-            for variant in &projection.variants {
-                let value =
-                    serde_json::to_string(variant).map_err(|_| ProcessingError::Projection)?;
-                items.push(evidence("process_context_variant", &value, rule_id));
-            }
-            for step in &projection.supporting_steps {
-                items.push(evidence("correlation_process_step", step, rule_id));
-            }
-            // Event3 permits timeline_anchors only on detection events. Process
-            // occurrence linkage must use its existing evidence surface instead.
-            let occurrences = projection
-                .occurrences
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            items.push(evidence("canonical_occurrences", &occurrences, rule_id));
-            for id in result.observation_ids() {
-                items.push(evidence("canonical_observation_id", id, rule_id));
-            }
-            let risk_contributions = if score == 0 {
-                Vec::new()
-            } else {
-                vec![
-                    RiskContribution::new(
-                        rule_id,
-                        RiskContributionType::DeterministicRule,
-                        score,
-                        redact_sensitive_text(&projection.reason),
-                    )
-                    .map_err(|_| ProcessingError::Projection)?,
-                ]
-            };
-            let mut process = projection.process.clone();
-            if correlation {
-                process.dedup_key = result
-                    .dedupe_key()
-                    .ok_or(ProcessingError::Projection)?
-                    .to_owned();
-            }
-            let event = process_chain_event(ProcessChainEventInput {
-                client: evaluation.client,
-                agent: agent.clone(),
-                model: model.clone(),
-                provider: provider.clone(),
-                session_id: session_id.to_owned(),
-                source_path_hash: context.source_path_hash.to_owned(),
-                tool_name: projection.tool_name.clone(),
-                rule_ids: if correlation {
-                    vec![rule_id.to_owned()]
+        if let Some(processes) = &session.processes {
+            let mut projected_ids = BTreeMap::new();
+            for result in processes.results() {
+                let session_id = session_id.ok_or(ProcessingError::Projection)?;
+                let key = process_result_key(result);
+                let projection = processes
+                    .projection
+                    .get(&key)
+                    .ok_or(ProcessingError::Projection)?;
+                let rule_id = result.detector().id();
+                let correlation = !projection.supporting.is_empty();
+                let mut tags = vec!["process_chain".to_owned(), result.category().to_owned()];
+                if correlation {
+                    tags.push("correlation".to_owned());
+                }
+                if projection.process.source_process_inferred {
+                    tags.push("inferred_parent".to_owned());
+                }
+                if !correlation && !projection.process.secondary_rule_ids.is_empty() {
+                    tags.push("deduplicated".to_owned());
+                }
+                tags.extend(result.tags().iter().cloned());
+                let score = u64::from(result.risk_points().unwrap_or(0));
+                if score == 0 && !correlation {
+                    tags.push("informational".to_owned());
+                }
+                tags.sort();
+                tags.dedup();
+                let mut items = if correlation {
+                    let ids = projection
+                        .supporting
+                        .iter()
+                        .map(|key| {
+                            projected_ids
+                                .get(key)
+                                .cloned()
+                                .ok_or(ProcessingError::Projection)
+                        })
+                        .collect::<Result<Vec<String>, _>>()?;
+                    vec![
+                        evidence(
+                            "correlation_sequence",
+                            &projection.process.secondary_rule_ids.join(" -> "),
+                            rule_id,
+                        ),
+                        evidence("correlated_event_ids", &ids.join(","), rule_id),
+                    ]
                 } else {
-                    std::iter::once(rule_id.to_owned())
-                        .chain(process.secondary_rule_ids.iter().cloned())
-                        .collect()
-                },
-                categories: vec![result.category().to_owned()],
-                detection_classes: vec![projection.detection_class.clone()],
-                signal_types: vec![projection.signal_type.clone()],
-                analytic_intents: vec![projection.analytic_intent.clone()],
-                tags,
-                evidence: items,
-                risk_contributions,
-                event_time: projection.event_time.clone(),
-                confidence: result
-                    .confidence()
-                    .ok_or(ProcessingError::Projection)?
-                    .as_str()
-                    .to_owned(),
-                detection_reason: projection.reason.clone(),
-                mitre_attack_techniques: result
-                    .techniques()
+                    vec![evidence(
+                        "process_chain",
+                        &format!(
+                            "{} -> {}",
+                            projection.process.source_process_name,
+                            projection.process.target_process_name
+                        ),
+                        rule_id,
+                    )]
+                };
+                if let Some(repeat_count) = projection.repeat_count {
+                    items.push(Evidence {
+                        field: "repeat_count".to_owned(),
+                        redacted_value: repeat_count.to_string(),
+                        hash: None,
+                        rule_id: Some(rule_id.to_owned()),
+                    });
+                }
+                for variant in &projection.variants {
+                    let value =
+                        serde_json::to_string(variant).map_err(|_| ProcessingError::Projection)?;
+                    items.push(evidence("process_context_variant", &value, rule_id));
+                }
+                for step in &projection.supporting_steps {
+                    items.push(evidence("correlation_process_step", step, rule_id));
+                }
+                // Event3 permits timeline_anchors only on detection events. Process
+                // occurrence linkage must use its existing evidence surface instead.
+                let occurrence_indexes = projection
+                    .occurrences
                     .iter()
-                    .map(|t| t.strip_prefix("attack:").unwrap_or(t).to_owned())
-                    .collect(),
-                risk_entity_type: "session".to_owned(),
-                risk_entity_value: Some(session_id.to_owned()),
-                process,
-            })
-            .map_err(|_| ProcessingError::Projection)?;
-            projected_ids.insert(key, event.event_id.clone());
-            events.push(event);
+                    .map(|(_, index)| index.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                items.push(evidence(
+                    "canonical_occurrences",
+                    &occurrence_indexes,
+                    rule_id,
+                ));
+                for id in result.observation_ids() {
+                    items.push(evidence("canonical_observation_id", id, rule_id));
+                }
+                let risk_contributions = if score == 0 {
+                    Vec::new()
+                } else {
+                    vec![
+                        RiskContribution::new(
+                            rule_id,
+                            RiskContributionType::DeterministicRule,
+                            score,
+                            redact_sensitive_text(&projection.reason),
+                        )
+                        .map_err(|_| ProcessingError::Projection)?,
+                    ]
+                };
+                let mut process = projection.process.clone();
+                if correlation {
+                    process.dedup_key = result
+                        .dedupe_key()
+                        .ok_or(ProcessingError::Projection)?
+                        .to_owned();
+                }
+                let event = process_chain_event(ProcessChainEventInput {
+                    client: evaluation.client,
+                    agent: agent.clone(),
+                    model: model.clone(),
+                    provider: provider.clone(),
+                    session_id: session_id.to_owned(),
+                    source_path_hash: context.source_path_hash.to_owned(),
+                    tool_name: projection.tool_name.clone(),
+                    rule_ids: if correlation {
+                        vec![rule_id.to_owned()]
+                    } else {
+                        std::iter::once(rule_id.to_owned())
+                            .chain(process.secondary_rule_ids.iter().cloned())
+                            .collect()
+                    },
+                    categories: vec![result.category().to_owned()],
+                    detection_classes: vec![projection.detection_class.clone()],
+                    signal_types: vec![projection.signal_type.clone()],
+                    analytic_intents: vec![projection.analytic_intent.clone()],
+                    tags,
+                    evidence: items,
+                    risk_contributions,
+                    event_time: projection.event_time.clone(),
+                    confidence: result
+                        .confidence()
+                        .ok_or(ProcessingError::Projection)?
+                        .as_str()
+                        .to_owned(),
+                    detection_reason: projection.reason.clone(),
+                    mitre_attack_techniques: result
+                        .techniques()
+                        .iter()
+                        .map(|t| t.strip_prefix("attack:").unwrap_or(t).to_owned())
+                        .collect(),
+                    risk_entity_type: "session".to_owned(),
+                    risk_entity_value: Some(session_id.to_owned()),
+                    process,
+                })
+                .map_err(|_| ProcessingError::Projection)?;
+                let observation_ids = result.observation_ids();
+                let mut seen = BTreeSet::new();
+                for id in observation_ids {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    occurrences.push(ProjectedOccurrence {
+                        observation_id: id.clone(),
+                        finding_index: events.len(),
+                        session_id: event.session_id.clone(),
+                        timeline_index: proven_occurrence_index(&projection.occurrences, id),
+                        occurred_at: if observation_ids.len() == 1 {
+                            projection.event_time.clone()
+                        } else {
+                            None
+                        },
+                        rule_ids: event.rule_ids.clone(),
+                        categories: event.categories.clone(),
+                        evidence_fields: Vec::new(),
+                    });
+                }
+                projected_ids.insert(key, event.event_id.clone());
+                events.push(event);
+            }
         }
+        for occurrence in &mut session_occurrences {
+            occurrence.finding_index = events.len();
+        }
+        occurrences.extend(session_occurrences);
         events.extend(ordinary_detection);
     }
+    occurrences.sort_by(|a, b| {
+        a.finding_index
+            .cmp(&b.finding_index)
+            .then_with(|| a.timeline_index.is_none().cmp(&b.timeline_index.is_none()))
+            .then_with(|| a.timeline_index.cmp(&b.timeline_index))
+            .then_with(|| a.observation_id.cmp(&b.observation_id))
+    });
     // Constructor success alone does not establish terminal exportability.
     for event in &events {
         let bytes = serde_json::to_vec(event).map_err(|_| ProcessingError::Projection)?;
@@ -683,6 +814,7 @@ pub fn project_event3(
     }
     Ok(ProjectedSource {
         events,
+        occurrences,
         completion: evaluation.completion(),
     })
 }
@@ -695,6 +827,33 @@ fn correlation_key(id: &CorrelationId) -> (u8, &str) {
     (origin, id.value())
 }
 
+fn proven_occurrence_index(associations: &[(String, usize)], id: &str) -> Option<usize> {
+    let mut indexes = associations
+        .iter()
+        .filter(|(retained_id, _)| retained_id == id)
+        .map(|(_, index)| *index);
+    let index = indexes.next()?;
+    indexes.all(|other| other == index).then_some(index)
+}
+
+/// Charge objects/vectors and every retained text item before copying any of
+/// the anchor or occurrence material. Uses the same source-wide hard limits.
+fn charge_projection_values<'a>(
+    budget: &mut super::session::RetentionBudget,
+    mut items: usize,
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<(), ProcessingError> {
+    let mut bytes = 0usize;
+    for value in values {
+        super::session::RetentionBudget::validate_text(value)?;
+        items = items.checked_add(1).ok_or(ProcessingError::Bounds)?;
+        bytes = bytes
+            .checked_add(value.len())
+            .ok_or(ProcessingError::Bounds)?;
+    }
+    budget.consume(items, bytes)
+}
+
 fn validate_projection_budget(
     evaluation: &CanonicalSourceEvaluation,
     context: &Event3CompatibilityContext<'_>,
@@ -702,13 +861,25 @@ fn validate_projection_budget(
     budget: &mut super::session::RetentionBudget,
 ) -> Result<(), ProcessingError> {
     for session in &evaluation.sessions {
+        // Constructors retain source IDs; terminal serialization can expand
+        // them. Reserve the larger representation without weakening retention
+        // accounting for long source IDs that serialize to a shorter hash.
+        let source_session_id = session.session_id.as_ref().map(|id| id.value());
+        let terminal_session_id =
+            source_session_id.map(telltale_schema::event::terminal_session_id);
+        let retained_session_id = source_session_id.map(|source| {
+            terminal_session_id
+                .as_deref()
+                .filter(|terminal| terminal.len() > source.len())
+                .unwrap_or(source)
+        });
         let metadata = session.session_id.as_ref().and_then(|id| {
             metadata_index
                 .get(&(correlation_key(id).0, id.value().to_owned()))
                 .copied()
         });
         let shared = std::iter::once(context.source_path_hash)
-            .chain(session.session_id.as_ref().map(|id| id.value()))
+            .chain(retained_session_id)
             .chain(session.event_time.as_deref())
             .chain(session.tool_name.as_deref())
             .chain(metadata.and_then(|value| value.agent))
@@ -717,12 +888,6 @@ fn validate_projection_budget(
         let shared_bytes = projection_text_bytes(shared)?;
         if !session.rules.effective_rule_ids().is_empty() {
             let projection_count = session.rules.projection().count();
-            let occurrence_count = session
-                .rules
-                .projection()
-                .map(|projection| projection.occurrence)
-                .collect::<BTreeSet<_>>()
-                .len();
             let mut bytes = shared_bytes;
             bytes = add_projection_strings(bytes, session.rules.effective_rule_ids())?;
             let metadata = session.rules.compatibility_metadata();
@@ -755,7 +920,74 @@ fn validate_projection_budget(
                     ])?)
                     .ok_or(ProcessingError::Bounds)?;
             }
-            budget.consume(1 + projection_count * 2 + occurrence_count, bytes)?;
+            budget.consume(
+                projection_count
+                    .checked_mul(2)
+                    .and_then(|count| count.checked_add(1))
+                    .ok_or(ProcessingError::Bounds)?,
+                bytes,
+            )?;
+            let mut anchors = BTreeMap::new();
+            for projection in session.rules.projection() {
+                anchors
+                    .entry(projection.occurrence)
+                    .or_insert_with(Vec::new)
+                    .push(projection);
+            }
+            for projections in anchors.into_values() {
+                let retained = projections[0];
+                let rules = projections
+                    .iter()
+                    .filter_map(|projection| projection.evidence.rule_id.as_deref())
+                    .chain(
+                        session
+                            .rules
+                            .triggered_modifier_ids()
+                            .iter()
+                            .map(String::as_str),
+                    )
+                    .collect::<BTreeSet<_>>();
+                let fields = projections
+                    .iter()
+                    .map(|projection| projection.evidence.field.as_str())
+                    .collect::<BTreeSet<_>>();
+                let anchor_values = || {
+                    rules
+                        .iter()
+                        .copied()
+                        .chain(metadata.categories().iter().map(String::as_str))
+                        .chain(fields.iter().copied())
+                };
+                // Temporary anchor vectors retain duplicates until canonicalized.
+                charge_projection_values(
+                    budget,
+                    4,
+                    projections
+                        .iter()
+                        .filter_map(|projection| projection.evidence.rule_id.as_deref())
+                        .chain(
+                            projections
+                                .iter()
+                                .map(|projection| projection.evidence.field.as_str()),
+                        )
+                        .chain(
+                            session
+                                .rules
+                                .triggered_modifier_ids()
+                                .iter()
+                                .map(String::as_str),
+                        )
+                        .chain(metadata.categories().iter().map(String::as_str)),
+                )?;
+                charge_projection_values(
+                    budget,
+                    4,
+                    std::iter::once(retained.observation_id.as_str())
+                        .chain(retained_session_id)
+                        .chain(retained.occurred_at.as_deref())
+                        .chain(anchor_values()),
+                )?;
+            }
         }
         let Some(processes) = &session.processes else {
             continue;
@@ -795,14 +1027,49 @@ fn validate_projection_budget(
             } else {
                 2
             };
-            let item_count = 1
-                + base_evidence
-                + usize::from(projection.repeat_count.is_some())
-                + projection.variants.len()
-                + projection.supporting_steps.len()
-                + 1
-                + result.observation_ids().len();
+            let item_count = [
+                1usize,
+                base_evidence,
+                usize::from(projection.repeat_count.is_some()),
+                projection.variants.len(),
+                projection.supporting_steps.len(),
+                1,
+                result.observation_ids().len(),
+            ]
+            .into_iter()
+            .try_fold(0usize, |count, next| {
+                count.checked_add(next).ok_or(ProcessingError::Bounds)
+            })?;
             budget.consume(item_count, bytes)?;
+            let mut seen = BTreeSet::new();
+            for id in result
+                .observation_ids()
+                .iter()
+                .filter(|id| seen.insert(*id))
+            {
+                let secondary = if projection.supporting.is_empty() {
+                    projection.process.secondary_rule_ids.as_slice()
+                } else {
+                    &[]
+                };
+                charge_projection_values(
+                    budget,
+                    4,
+                    [
+                        id.as_str(),
+                        retained_session_id.ok_or(ProcessingError::Projection)?,
+                        result.detector().id(),
+                        result.category(),
+                    ]
+                    .into_iter()
+                    .chain(
+                        (result.observation_ids().len() == 1)
+                            .then_some(projection.event_time.as_deref())
+                            .flatten(),
+                    )
+                    .chain(secondary.iter().map(String::as_str)),
+                )?;
+            }
         }
     }
     Ok(())
@@ -811,18 +1078,204 @@ fn validate_projection_budget(
 fn projection_text_bytes<'a>(
     values: impl IntoIterator<Item = &'a str>,
 ) -> Result<usize, ProcessingError> {
-    let mut bytes = 0usize;
-    for value in values {
-        super::session::RetentionBudget::validate_text(value)?;
-        bytes = bytes
-            .checked_add(value.len())
-            .ok_or(ProcessingError::Bounds)?;
-    }
-    Ok(bytes)
+    retained_text_bytes(values).map_err(|_| ProcessingError::Bounds)
 }
 
 fn add_projection_strings(bytes: usize, values: &[String]) -> Result<usize, ProcessingError> {
-    bytes
-        .checked_add(projection_text_bytes(values.iter().map(String::as_str))?)
-        .ok_or(ProcessingError::Bounds)
+    add_text_list_bytes(bytes, values).map_err(|_| ProcessingError::Bounds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::session::{
+        CanonicalSourceInput, MAX_PROJECTION_ITEMS, RetentionBudget, evaluate_source,
+    };
+    use super::*;
+    use telltale_schema::observation::*;
+
+    #[test]
+    fn unsafe_short_session_terminal_expansion_is_preflight_charged() {
+        use super::super::session::MAX_COMPATIBILITY_RETAINED_BYTES;
+        let plan = super::super::compile_rule_v1(
+            &telltale_rules::load_rule_set_from_documents(&["version: 1\ndescription: synthetic\ndefaults: { enabled: true, case_insensitive: false }\nrules:\n  - { id: synthetic.session, category: synthetic, severity: low, score: 1, targets: [user_context], regex: needle, tags: [], explanation: synthetic }\nmodifiers: []\n"], None).unwrap().compatibility_export()
+        ).unwrap();
+        let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
+        let evaluate = |session: &str| {
+            let observation = CanonicalObservationV2::builder(
+                ObservationBody::Message(
+                    MessageObservation::new(MessageRole::User)
+                        .with_content(JsonValue::string("needle")),
+                ),
+                ObservationStage::MessageObserved,
+                ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+                SourceProvenance::new(
+                    IngestionMode::SessionStore,
+                    "claude_code",
+                    "claude.projects",
+                    Fidelity::FullNative,
+                )
+                .unwrap()
+                .with_native_id("synthetic-session-budget")
+                .unwrap(),
+            )
+            .session_id(CorrelationId::source_reported(session).unwrap())
+            .capability_context(
+                CapabilityContext::new()
+                    .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported),
+            )
+            .fact_metadata(
+                "message.role",
+                FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+            )
+            .fact_metadata(
+                "message.content",
+                FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+            )
+            .build()
+            .unwrap();
+            evaluate_source(
+                CanonicalSourceInput {
+                    client: telltale_schema::clients::ClientId::Claude,
+                    source_id: "claude.projects",
+                    source_instance: Some(&instance),
+                    observations: &[observation],
+                },
+                &plan,
+                None,
+            )
+            .unwrap()
+        };
+        let context = Event3CompatibilityContext {
+            source_path_hash: &"a".repeat(64),
+            sessions: &[],
+        };
+        let safe = evaluate("abc");
+        let unsafe_session = evaluate("a b");
+        let projected = project_event3(&unsafe_session, &context).unwrap();
+        // Constructors retain source IDs; terminal serialization applies the
+        // existing identity policy, which can expand a short unsafe ID.
+        assert_eq!(projected.events[0].session_id, "a b");
+        let terminal = telltale_schema::event::terminal_session_id("a b");
+        assert!(terminal.len() > "a b".len());
+        let record = telltale_schema::event::Event3Record::from_json(
+            &serde_json::to_vec(&projected.events[0]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.common().session_id, terminal);
+
+        // Find the exact safe projection byte boundary without exposing budget
+        // internals. The equally short unsafe source ID must not fit there.
+        let fits = |evaluation: &CanonicalSourceEvaluation, capacity: usize| {
+            let mut budget = RetentionBudget::new();
+            budget
+                .consume(0, MAX_COMPATIBILITY_RETAINED_BYTES - capacity)
+                .unwrap();
+            validate_projection_budget(evaluation, &context, &BTreeMap::new(), &mut budget)
+        };
+        let (mut low, mut high) = (0, MAX_COMPATIBILITY_RETAINED_BYTES);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if fits(&safe, middle).is_ok() {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        assert!(fits(&safe, low).is_ok());
+        assert_eq!(fits(&unsafe_session, low), Err(ProcessingError::Bounds));
+    }
+
+    #[test]
+    fn process_occurrence_projection_has_its_own_preflight_charge() {
+        let observation = CanonicalObservationV2::builder(
+            ObservationBody::Tool(
+                ToolObservation::new()
+                    .with_name("shell")
+                    .unwrap()
+                    .with_arguments(JsonValue::string("cmd.exe /c hostname")),
+            ),
+            ObservationStage::ToolRequested,
+            ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+            SourceProvenance::new(
+                IngestionMode::SessionStore,
+                "claude_code",
+                "claude.projects",
+                Fidelity::FullNative,
+            )
+            .unwrap()
+            .with_native_id("synthetic-budget")
+            .unwrap(),
+        )
+        .session_id(CorrelationId::source_reported("synthetic").unwrap())
+        .occurred_at(SourceTimestamp::new("2026-09-18T00:00:00Z").unwrap())
+        .fact_metadata(
+            "tool.name",
+            FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+        )
+        .fact_metadata(
+            "tool.arguments",
+            FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+        )
+        .build()
+        .unwrap();
+        let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
+        let rules = telltale_rules::process_chain::load_default_process_chain_rules().unwrap();
+        let plan = super::super::compile_rule_v1(
+            &telltale_rules::load_default_rule_set()
+                .unwrap()
+                .compatibility_export(),
+        )
+        .unwrap();
+        let config = crate::process_chain::ProcessChainConfig::default();
+        let evaluation = evaluate_source(
+            CanonicalSourceInput {
+                client: telltale_schema::clients::ClientId::Claude,
+                source_id: "claude.projects",
+                source_instance: Some(&instance),
+                observations: &[observation],
+            },
+            &plan,
+            Some((&rules, &config)),
+        )
+        .unwrap();
+        let context = Event3CompatibilityContext {
+            source_path_hash: &"a".repeat(64),
+            sessions: &[],
+        };
+        let mut exact = RetentionBudget::new();
+        validate_projection_budget(&evaluation, &context, &BTreeMap::new(), &mut exact).unwrap();
+        assert!(
+            !project_event3(&evaluation, &context)
+                .unwrap()
+                .occurrences
+                .is_empty()
+        );
+        // The independently retained public occurrence (object and its three
+        // vectors) must fit as well as the event/evidence material.
+        let mut remaining = 0;
+        while exact.consume(1, 0).is_ok() {
+            remaining += 1;
+        }
+        let without_occurrence = MAX_PROJECTION_ITEMS - remaining - 4;
+        let mut limited = RetentionBudget::new();
+        limited
+            .consume(MAX_PROJECTION_ITEMS - without_occurrence, 0)
+            .unwrap();
+        assert_eq!(
+            validate_projection_budget(&evaluation, &context, &BTreeMap::new(), &mut limited),
+            Err(ProcessingError::Bounds)
+        );
+    }
+
+    #[test]
+    fn occurrence_index_requires_exact_nonconflicting_association() {
+        let associations = vec![("z".into(), 0), ("a".into(), 1), ("z".into(), 0)];
+        assert_eq!(proven_occurrence_index(&associations, "a"), Some(1));
+        assert_eq!(proven_occurrence_index(&associations, "z"), Some(0));
+        assert_eq!(proven_occurrence_index(&associations, "missing"), None);
+        assert_eq!(
+            proven_occurrence_index(&[("a".into(), 0), ("a".into(), 1)], "a"),
+            None
+        );
+    }
 }

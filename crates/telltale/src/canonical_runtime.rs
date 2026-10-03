@@ -21,6 +21,7 @@ use telltale_sources::acquisition::{
 
 pub struct SourceResult {
     pub events: Vec<Event>,
+    pub occurrences: Vec<telltale_detect::v2::event3::ProjectedOccurrence>,
     pub progress: AcquisitionProgress,
     pub completion: EvaluationCompletion,
     pub accounting: SourceAccounting,
@@ -252,6 +253,7 @@ fn finish_batch(
     projected.events.extend(mcp);
     Ok(SourceResult {
         events: projected.events,
+        occurrences: projected.occurrences,
         completion: projected.completion,
         progress: batch.progress,
         accounting: batch.accounting,

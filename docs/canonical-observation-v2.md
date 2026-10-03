@@ -330,6 +330,8 @@ textual form is:
 ```text
 obs:v2:sha256:<64 lowercase hexadecimal digits>
 ```
+Current-development embedding occurrence identity reuses `observation_id` and
+does not add a content preimage.
 
 Coordinate selection is deterministic and ordered: `source.native_id`, then an
 identity-eligible scoped source sequence, then an identity-eligible scoped

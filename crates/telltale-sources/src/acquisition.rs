@@ -29,9 +29,11 @@ use crate::sources::openclaw::canonical::{
     OpenClawCanonicalError, OpenClawCanonicalOptions, project_openclaw_native_records,
 };
 use crate::sources::openclaw::native::extract_openclaw_native_records_with_limits;
+#[cfg(feature = "opencode-sqlite")]
 use crate::sources::opencode::canonical::{
     OpenCodeCanonicalError, project_opencode_native_records,
 };
+#[cfg(feature = "opencode-sqlite")]
 use crate::sources::opencode::native::extract_sqlite_native_source;
 use crate::sources::qwen::canonical::{
     QwenCanonicalError, QwenCanonicalOptions, project_qwen_native_records,
@@ -69,7 +71,22 @@ pub enum AcquisitionProgress {
     OpenCodeSqlite { part_max_time_updated: Option<i64> },
 }
 
-pub use crate::sources::opencode::native::OpenCodeSqliteReadOptions;
+pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct OpenCodeSqliteReadOptions {
+    pub part_min_time_updated: Option<i64>,
+    pub part_limit: i64,
+}
+
+impl Default for OpenCodeSqliteReadOptions {
+    fn default() -> Self {
+        Self {
+            part_min_time_updated: None,
+            part_limit: SQLITE_PART_LIMIT,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AcquisitionOptions {
@@ -382,34 +399,43 @@ pub fn acquire_opencode_sqlite(
         return Err(AcquisitionError::SourceKindMismatch);
     }
 
-    let extraction =
-        extract_sqlite_native_source(source, read).map_err(|_| AcquisitionError::SourceRead)?;
-    let progress = AcquisitionProgress::OpenCodeSqlite {
-        part_max_time_updated: extraction.sqlite_part_max_time_updated,
-    };
-    let mut accounting = AccountingBuilder::default();
-    for record in &extraction.records {
-        let facts = record.accounting();
-        account_unit(
-            &mut accounting,
-            facts.session_id,
-            facts.attestation,
-            &[facts.kind],
-            facts.tool_name,
-            facts.timestamp,
-            &facts.contribution_strings,
-        )?;
+    #[cfg(not(feature = "opencode-sqlite"))]
+    {
+        let _ = (options, read);
+        Err(AcquisitionError::SourceRead)
     }
-    let observations = project_opencode_native_records(&extraction.records, &options.observed_at)
-        .map_err(map_canonical_error)?;
+    #[cfg(feature = "opencode-sqlite")]
+    {
+        let extraction =
+            extract_sqlite_native_source(source, read).map_err(|_| AcquisitionError::SourceRead)?;
+        let progress = AcquisitionProgress::OpenCodeSqlite {
+            part_max_time_updated: extraction.sqlite_part_max_time_updated,
+        };
+        let mut accounting = AccountingBuilder::default();
+        for record in &extraction.records {
+            let facts = record.accounting();
+            account_unit(
+                &mut accounting,
+                facts.session_id,
+                facts.attestation,
+                &[facts.kind],
+                facts.tool_name,
+                facts.timestamp,
+                &facts.contribution_strings,
+            )?;
+        }
+        let observations =
+            project_opencode_native_records(&extraction.records, &options.observed_at)
+                .map_err(map_canonical_error)?;
 
-    Ok(AcquisitionBatch {
-        observations,
-        progress,
-        // A coherent selected-part snapshot is still not whole-database
-        // replacement coverage, even without a lower bound.
-        accounting: accounting.finish(AccountingCoverage::PartialSource),
-    })
+        Ok(AcquisitionBatch {
+            observations,
+            progress,
+            // A coherent selected-part snapshot is still not whole-database
+            // replacement coverage, even without a lower bound.
+            accounting: accounting.finish(AccountingCoverage::PartialSource),
+        })
+    }
 }
 
 fn account_unit(
@@ -435,6 +461,7 @@ fn account_unit(
     Ok(())
 }
 
+#[cfg(feature = "opencode-sqlite")]
 fn map_canonical_error(error: OpenCodeCanonicalError) -> AcquisitionError {
     match error {
         OpenCodeCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
@@ -737,6 +764,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn empty_opencode_progress_is_not_no_progress() {
         let (_directory, connection, source) = database();
         connection.execute("delete from part", []).unwrap();
@@ -1234,7 +1262,29 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "opencode-sqlite"))]
     #[test]
+    fn disabled_opencode_acquisition_does_not_touch_present_database() {
+        let (directory, connection, source) = database();
+        drop(connection);
+        let bytes = std::fs::read(&source.path).unwrap();
+        let modified = std::fs::metadata(&source.path).unwrap().modified().unwrap();
+        for result in [
+            super::acquire_source(&source, options()),
+            acquire_opencode_sqlite(&source, options(), OpenCodeSqliteReadOptions::default()),
+        ] {
+            assert_eq!(acquisition_error(result), AcquisitionError::SourceRead);
+        }
+        assert_eq!(std::fs::read(&source.path).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(&source.path).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn malformed_serialized_message_data_fails_atomically_but_metadata_only_succeeds() {
         let (_directory, connection, source) = database();
         connection.execute("delete from part", []).unwrap();
@@ -1275,6 +1325,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn incremental_parts_must_fit_the_effective_limit_or_fail_atomically() {
         let (_directory, connection, source) = database();
         connection.execute("delete from part", []).unwrap();
@@ -1334,6 +1385,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn dense_distinct_incremental_timestamps_fail_instead_of_truncating() {
         let (_directory, connection, source) = database();
         connection.execute("delete from part", []).unwrap();
@@ -1357,6 +1409,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn default_acquisition_preserves_canonical_semantics_and_observed_time() {
         let (_directory, connection, source) = database();
         drop(connection);
@@ -1387,6 +1440,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn bounded_read_options_return_selected_progress() {
         let (_directory, connection, source) = database();
         drop(connection);
@@ -1413,6 +1467,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn repeated_equivalent_acquisition_is_identity_stable() {
         let (_directory, connection, source) = database();
         drop(connection);
@@ -1435,6 +1490,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn acquisition_errors_do_not_expose_source_details() {
         let private_directory = tempdir().unwrap();
         let private_path = private_directory

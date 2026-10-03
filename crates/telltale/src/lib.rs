@@ -5,6 +5,9 @@
 //! Events come back as values; the host decides where they go. Nothing here
 //! writes JSONL, talks to a SIEM, or exits the process — those runtime
 //! concerns belong to the `telltale` CLI or the host application.
+//! Current development after RC1 also offers [`Pipeline::scan_root_with_occurrences`]
+//! and [`Pipeline::scan_sources_with_occurrences`] for precise observation linkage
+//! alongside the same session-scoped events, without another detection pass.
 //!
 //! ```no_run
 //! use telltale_core::Pipeline;
@@ -24,6 +27,7 @@ pub mod assignment;
 /// Unstable cross-crate migration seam, not a supported embedding API.
 #[doc(hidden)]
 pub mod canonical_runtime;
+pub mod inventory;
 pub mod investigation;
 pub mod local_event_feed;
 pub mod provenance;
@@ -56,6 +60,79 @@ use std::path::Path;
 
 type BoxError = Box<dyn std::error::Error>;
 type SourceOutcome = Result<canonical_runtime::SourceResult, canonical_runtime::SourceFailure>;
+
+/// One source's session-scoped events and their precise detection occurrences.
+pub struct SourceScan {
+    pub source: Source,
+    pub events: Vec<Event>,
+    pub occurrences: Vec<DetectionOccurrence>,
+}
+
+/// A canonical observation associated with a finding, without content or paths.
+pub struct DetectionOccurrence {
+    pub identity: OccurrenceId,
+    /// Index into the containing [`SourceScan::events`], not an Event3 identity.
+    pub finding_index: usize,
+    pub session_id: String,
+    /// Ordered session observation index, matching detection timeline anchors.
+    pub timeline_index: Option<usize>,
+    /// Source-reported time only; absence is never filled with a scan clock.
+    pub occurred_at: Option<String>,
+    pub rule_ids: Vec<String>,
+    pub categories: Vec<String>,
+    /// Selector-derived names; empty for process/correlation findings.
+    pub evidence_fields: Vec<String>,
+}
+
+/// Validated, opaque Canonical Observation v2 identity, not a content hash.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct OccurrenceId(String);
+
+impl OccurrenceId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl SourceScan {
+    fn from_result(source: Source, result: SourceOutcome) -> Self {
+        let result = result.and_then(|result| {
+            let occurrences = result
+                .occurrences
+                .into_iter()
+                .map(|occurrence| {
+                    if !telltale_schema::observation::valid_observation_id(
+                        &occurrence.observation_id,
+                    ) {
+                        return Err(canonical_runtime::SourceFailure {
+                            stage: canonical_runtime::FailureStage::Projection,
+                            progress: result.progress,
+                            acquisition: None,
+                        });
+                    }
+                    Ok(DetectionOccurrence {
+                        identity: OccurrenceId(occurrence.observation_id),
+                        finding_index: occurrence.finding_index,
+                        session_id: occurrence.session_id,
+                        timeline_index: occurrence.timeline_index,
+                        occurred_at: occurrence.occurred_at,
+                        rule_ids: occurrence.rule_ids,
+                        categories: occurrence.categories,
+                        evidence_fields: occurrence.evidence_fields,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((result.events, occurrences))
+        });
+        let (events, occurrences) =
+            result.unwrap_or_else(|error| (vec![error.event(&source)], Vec::new()));
+        Self {
+            source,
+            events,
+            occurrences,
+        }
+    }
+}
 
 /// A compiled detection pipeline: bundled (and optional custom) rules, ready
 /// to evaluate discovered session stores or caller-supplied records.
@@ -97,19 +174,40 @@ impl Pipeline {
     /// processing failures surface as `scanner_error` events. No discovery,
     /// baseline, cursor, or output persistence is performed.
     pub fn scan_sources(&self, sources: &[Source]) -> Result<Vec<(Source, Event)>, BoxError> {
+        Ok(self
+            .scan_sources_with_occurrences(sources)?
+            .into_iter()
+            .flat_map(|scan| {
+                scan.events
+                    .into_iter()
+                    .map(move |event| (scan.source.clone(), event))
+            })
+            .collect())
+    }
+
+    /// Discover stores and return the same events with precise occurrence linkage.
+    /// This current-development addition is not part of published RC1 artifacts.
+    pub fn scan_root_with_occurrences(&self, root: &Path) -> Result<Vec<SourceScan>, BoxError> {
+        let sources = telltale_sources::discovery::discover_sources(root)?;
+        self.scan_sources_with_occurrences(&sources)
+    }
+
+    /// Scan supplied sources once, returning session events and observation identities.
+    /// Occurrences are ordered by finding index, timeline index (unknown last), then
+    /// identity. Source failures return only `scanner_error` with no occurrences;
+    /// clock and compilation failures return `Err`. No state or output is persisted.
+    /// This current-development addition is not part of published RC1 artifacts.
+    pub fn scan_sources_with_occurrences(
+        &self,
+        sources: &[Source],
+    ) -> Result<Vec<SourceScan>, BoxError> {
         let now = time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)?;
         let observed_at = telltale_schema::observation::ObservedAt::new(now)?;
         Ok(self
             .scan_canonical_sources(sources, observed_at)?
             .into_iter()
-            .flat_map(|(source, result)| {
-                result
-                    .map(|result| result.events)
-                    .unwrap_or_else(|error| vec![error.event(&source)])
-                    .into_iter()
-                    .map(move |event| (source.clone(), event))
-            })
+            .map(|(source, result)| SourceScan::from_result(source, result))
             .collect())
     }
 

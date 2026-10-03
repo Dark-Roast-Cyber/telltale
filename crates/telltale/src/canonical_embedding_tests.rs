@@ -34,6 +34,156 @@ fn tree_snapshot(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, 
 }
 
 #[test]
+fn canonical_embedding_public_occurrences_share_the_session_projection() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join(".claude/projects/synthetic");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("occurrences.jsonl");
+    std::fs::write(&path, concat!(
+        "{\"type\":\"user\",\"sessionId\":\"occurrence-session\",\"timestamp\":\"2026-09-17T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"needle\"}}\n",
+        "{\"type\":\"user\",\"sessionId\":\"occurrence-session\",\"message\":{\"role\":\"user\",\"content\":\"needle\"}}\n"
+    )).unwrap();
+    let before = tree_snapshot(root.path());
+    let source = Source {
+        client: ClientId::Claude,
+        source_id: "claude.projects".into(),
+        kind: SourceKind::Jsonl,
+        path: path.clone(),
+    };
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    let first = pipeline
+        .scan_sources_with_occurrences(std::slice::from_ref(&source))
+        .unwrap();
+    let second = pipeline
+        .scan_sources_with_occurrences(std::slice::from_ref(&source))
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    let scan = &first[0];
+    assert_eq!(scan.source, source);
+    assert_eq!(
+        scan.events
+            .iter()
+            .map(|e| e.event_type.as_str())
+            .collect::<Vec<_>>(),
+        ["detection", "activity"]
+    );
+    assert_eq!(scan.occurrences.len(), 2);
+    assert_ne!(scan.occurrences[0].identity, scan.occurrences[1].identity);
+    let detection = &scan.events[0];
+    let identity_evidence = detection
+        .evidence
+        .iter()
+        .filter(|item| item.field == "canonical_observation_id")
+        .collect::<Vec<_>>();
+    for (index, occurrence) in scan.occurrences.iter().enumerate() {
+        let id = occurrence.identity.as_str();
+        assert!(telltale_schema::observation::valid_observation_id(id));
+        for excluded in [
+            "needle",
+            "occurrence-session",
+            "occurrences.jsonl",
+            path.to_str().unwrap(),
+        ] {
+            assert!(!id.contains(excluded));
+        }
+        // Event3 keeps its existing redacted snippet and hash linkage contract.
+        assert_eq!(
+            identity_evidence[index].hash.as_deref(),
+            Some(telltale_schema::event::evidence_hash(id).as_str())
+        );
+        assert_eq!(
+            identity_evidence[index].redacted_value,
+            telltale_schema::event::redact_sensitive_text(id)
+        );
+        assert_eq!(occurrence.identity, second[0].occurrences[index].identity);
+        assert_ne!(id, detection.event_id);
+        assert_ne!(id, second[0].events[0].event_id);
+        assert_eq!(occurrence.finding_index, 0);
+        assert_eq!(occurrence.session_id, detection.session_id);
+        assert_eq!(occurrence.timeline_index, Some(index));
+        let anchor = &detection.timeline_anchors[index];
+        assert_eq!(occurrence.timeline_index, Some(anchor.entry_index));
+        assert_eq!(occurrence.rule_ids, anchor.rule_ids);
+        assert_eq!(occurrence.categories, anchor.categories);
+        assert_eq!(occurrence.evidence_fields, anchor.evidence_fields);
+    }
+    assert_eq!(
+        scan.occurrences[0].occurred_at.as_deref(),
+        Some("2026-09-17T00:00:00Z")
+    );
+    assert_eq!(scan.occurrences[1].occurred_at, None);
+    assert_ne!(detection.event_id, second[0].events[0].event_id);
+    let richer_root = pipeline.scan_root_with_occurrences(root.path()).unwrap();
+    assert_eq!(
+        richer_root[0].occurrences[0].identity,
+        scan.occurrences[0].identity
+    );
+    for flattened in [
+        pipeline
+            .scan_sources(std::slice::from_ref(&source))
+            .unwrap(),
+        pipeline.scan_root(root.path()).unwrap(),
+    ] {
+        assert_eq!(flattened.len(), scan.events.len());
+        for ((returned_source, event), expected) in flattened.iter().zip(&scan.events) {
+            assert_eq!(returned_source, &source);
+            assert_eq!(event.event_type, expected.event_type);
+            assert_eq!(event.session_id, expected.session_id);
+            assert_eq!(event.rule_ids, expected.rule_ids);
+            assert_eq!(event.timeline_anchors, expected.timeline_anchors);
+            assert_eq!(
+                serde_json::to_value(&event.evidence).unwrap(),
+                serde_json::to_value(&expected.evidence).unwrap()
+            );
+        }
+    }
+    assert!(
+        pipeline
+            .scan_sources_with_occurrences(&[])
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(tree_snapshot(root.path()), before);
+    std::fs::write(&path, "not-json\n").unwrap();
+    let failed = pipeline.scan_sources_with_occurrences(&[source]).unwrap();
+    assert_eq!(failed[0].events.len(), 1);
+    assert_eq!(failed[0].events[0].event_type, "scanner_error");
+    assert!(failed[0].occurrences.is_empty());
+}
+
+#[test]
+fn canonical_embedding_invalid_occurrence_identity_fails_source_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("synthetic.jsonl");
+    std::fs::write(&path, "{\"type\":\"user\",\"sessionId\":\"synthetic\",\"message\":{\"role\":\"user\",\"content\":\"needle\"}}\n").unwrap();
+    let source = Source {
+        client: ClientId::Claude,
+        source_id: "claude.projects".into(),
+        kind: SourceKind::Jsonl,
+        path,
+    };
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    let (_, mut result) = pipeline
+        .scan_canonical_sources(std::slice::from_ref(&source), clock())
+        .unwrap()
+        .pop()
+        .unwrap();
+    result.as_mut().unwrap().occurrences[0].observation_id = "unchecked synthetic identity".into();
+    let scan = SourceScan::from_result(source, result);
+    assert_eq!(scan.events.len(), 1);
+    assert_eq!(scan.events[0].event_type, "scanner_error");
+    assert!(scan.occurrences.is_empty());
+}
+
+#[test]
 fn canonical_embedding_scan_sources_selects_exact_source_without_writes() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join(".claude/projects/synthetic");
@@ -225,6 +375,7 @@ fn canonical_embedding_is_stateless_and_deterministic() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn canonical_embedding_opencode_remains_partial_without_persisting_progress() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("synthetic.db");
@@ -288,6 +439,76 @@ fn canonical_embedding_rejects_retired_identity_without_successful_output() {
     assert_eq!(
         error.acquisition,
         Some(telltale_sources::acquisition::AcquisitionError::UnsupportedSourceIdentity)
+    );
+}
+
+#[cfg(not(feature = "opencode-sqlite"))]
+#[test]
+fn disabled_opencode_mixed_scan_retains_jsonl_success_and_safe_source_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let jsonl = dir.path().join("synthetic.jsonl");
+    std::fs::write(&jsonl, "{\"type\":\"user\",\"sessionId\":\"synthetic\",\"message\":{\"role\":\"user\",\"content\":\"needle\"}}\n").unwrap();
+    let database = dir.path().join("private-database-marker.db");
+    let conn = rusqlite::Connection::open(&database).unwrap();
+    conn.execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT); INSERT INTO message VALUES ('m','s','{\"role\":\"assistant\",\"content\":\"private-payload-marker\"}');").unwrap();
+    drop(conn);
+    let sources = [
+        Source {
+            client: ClientId::Claude,
+            source_id: "claude.projects".into(),
+            kind: SourceKind::Jsonl,
+            path: jsonl,
+        },
+        Source {
+            client: ClientId::OpenCode,
+            source_id: "opencode.sqlite".into(),
+            kind: SourceKind::Sqlite,
+            path: database.clone(),
+        },
+    ];
+    let before = tree_snapshot(dir.path());
+    let modified = std::fs::metadata(&database).unwrap().modified().unwrap();
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    let canonical = pipeline.scan_canonical_sources(&sources, clock()).unwrap();
+    assert!(
+        canonical[0]
+            .1
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.event_type == "detection")
+    );
+    let failure = canonical[1].1.as_ref().err().unwrap();
+    assert_eq!(
+        failure.acquisition,
+        Some(telltale_sources::acquisition::AcquisitionError::SourceRead)
+    );
+    let public = pipeline.scan_sources(&sources).unwrap();
+    assert!(
+        public
+            .iter()
+            .any(|(source, event)| source == &sources[0] && event.event_type == "detection")
+    );
+    let errors = public
+        .iter()
+        .filter(|(source, _)| source == &sources[1])
+        .collect::<Vec<_>>();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].1.event_type, "scanner_error");
+    assert!(
+        !serde_json::to_string(&errors[0].1)
+            .unwrap()
+            .contains("private-")
+    );
+    assert_eq!(tree_snapshot(dir.path()), before);
+    assert_eq!(
+        std::fs::metadata(&database).unwrap().modified().unwrap(),
+        modified
     );
 }
 

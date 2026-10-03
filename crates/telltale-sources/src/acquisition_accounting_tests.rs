@@ -100,6 +100,7 @@ fn native_count_is_not_observation_count() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn sqlite_accounts_suppressed_parents_selected_parts_and_unscoped_rows() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("synthetic.db");
@@ -237,6 +238,7 @@ fn exhaustive_file_coverage_is_not_returned_after_a_malformed_tail() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn sqlite_overlap_and_mutable_rereads_never_attest_source_replacement() {
     let directory = tempdir().unwrap();
     let source = Source {
@@ -569,6 +571,7 @@ fn selected_message_metadata_is_not_lost_or_resolved_by_precedence() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn sqlite_row_and_data_metadata_conflict_is_not_selected_by_precedence() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("synthetic.db");
@@ -643,6 +646,7 @@ fn conflicting_jsonl_ownership_is_atomic_and_private() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn sqlite_ownership_checks_row_data_and_join_without_changing_legacy() {
     let directory = tempdir().unwrap();
     let source = Source {
@@ -755,34 +759,37 @@ fn discarded_native_sibling_retains_semantic_contributions() {
 #[test]
 fn unscoped_native_contributions_and_private_failures() {
     let directory = tempdir().unwrap();
-    let source = Source {
-        client: ClientId::OpenCode,
-        source_id: "opencode.sqlite".into(),
-        kind: SourceKind::Sqlite,
-        path: directory.path().join("synthetic.db"),
-    };
-    let conn = rusqlite::Connection::open(&source.path).unwrap();
-    conn.execute_batch(r#"CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+    #[cfg(feature = "opencode-sqlite")]
+    {
+        let source = Source {
+            client: ClientId::OpenCode,
+            source_id: "opencode.sqlite".into(),
+            kind: SourceKind::Sqlite,
+            path: directory.path().join("synthetic.db"),
+        };
+        let conn = rusqlite::Connection::open(&source.path).unwrap();
+        conn.execute_batch(r#"CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
         INSERT INTO part VALUES ('p',NULL,NULL,10,'{"type":"tool","tool":"shell","callID":"call-a","state":{"status":"running","input":{"command":"https://unscoped.example.test/"}}}');"#).unwrap();
-    let batch = acquire_source(&source, options()).unwrap();
-    assert!(batch.accounting.sessions.is_empty());
-    assert_eq!(
-        batch
-            .accounting
-            .unscoped
-            .contributions
-            .tool_calls
-            .get("shell"),
-        Some(&1)
-    );
-    assert!(
-        batch
-            .accounting
-            .unscoped
-            .contributions
-            .network_hosts
-            .contains_key("unscoped.example.test")
-    );
+        let batch = acquire_source(&source, options()).unwrap();
+        assert!(batch.accounting.sessions.is_empty());
+        assert_eq!(
+            batch
+                .accounting
+                .unscoped
+                .contributions
+                .tool_calls
+                .get("shell"),
+            Some(&1)
+        );
+        assert!(
+            batch
+                .accounting
+                .unscoped
+                .contributions
+                .network_hosts
+                .contains_key("unscoped.example.test")
+        );
+    }
 
     let source = Source {
         client: ClientId::Claude,
@@ -895,6 +902,7 @@ fn multi_record_contribution_budget_is_acquisition_wide() {
 }
 
 #[test]
+#[cfg(feature = "opencode-sqlite")]
 fn sqlite_private_transport_alias_is_not_json_ownership() {
     let directory = tempdir().unwrap();
     let source = Source {

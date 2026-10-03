@@ -13,6 +13,10 @@ keywords = ["security", "agents", "sessions", "parsing", "discovery"]
 categories = ["filesystem", "parsing", "os"]
 include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/src/**", "/tests/fixtures/**"]
 
+[features]
+default = []
+opencode-sqlite = ["dep:rusqlite"]
+
 [dependencies]
 telltale-schema.workspace = true
 serde.workspace = true
@@ -21,9 +25,10 @@ serde_yaml.workspace = true
 sha2.workspace = true
 time.workspace = true
 walkdir = "2.5"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 
 [dev-dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
 tempfile = "3.14"
 
 [target.'cfg(windows)'.dependencies]

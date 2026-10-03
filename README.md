@@ -89,6 +89,9 @@ and Event 3.0 remains the compatibility projection. The record-level
 `detect_records` and `evaluate_session` APIs intentionally remain
 `NormalizedRecord` compatibility surfaces. Event4 and Telemetry/Output v2
 remain inactive.
+Beside `Pipeline::scan_root` / `scan_sources`, current development after RC1
+offers occurrence-aware embedding scans with precise observation associations
+from the same projection; these methods are not in published RC1 artifacts.
 
 ## Quick start
 

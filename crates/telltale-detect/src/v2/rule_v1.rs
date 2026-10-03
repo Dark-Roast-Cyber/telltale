@@ -141,6 +141,7 @@ pub struct RuleV1DetectorSessionEvaluation {
 pub(crate) struct RuleV1MatchEvidence {
     pub(crate) observation_id: String,
     pub(crate) occurrence: usize,
+    pub(crate) occurred_at: Option<String>,
     pub(crate) evidence: Evidence,
 }
 
@@ -148,6 +149,7 @@ impl PartialEq for RuleV1MatchEvidence {
     fn eq(&self, other: &Self) -> bool {
         self.observation_id == other.observation_id
             && self.occurrence == other.occurrence
+            && self.occurred_at == other.occurred_at
             && self.evidence.field == other.evidence.field
             && self.evidence.redacted_value == other.evidence.redacted_value
             && self.evidence.hash == other.evidence.hash
@@ -420,6 +422,11 @@ fn aggregate_detector_session(
                     .map_err(|_| RuleV1SessionError::Bounds)?;
                 let field = path.strip_prefix("compat.v1.").unwrap_or(path);
                 let redacted_value = redact_sensitive_text(value);
+                let occurred_at = observation.occurred_at().map(|time| time.as_str());
+                if let Some(time) = occurred_at {
+                    super::session::RetentionBudget::validate_text(time)
+                        .map_err(|_| RuleV1SessionError::Bounds)?;
+                }
                 let retained_bytes = observation
                     .observation_id()
                     .len()
@@ -427,6 +434,7 @@ fn aggregate_detector_session(
                     .and_then(|bytes| bytes.checked_add(redacted_value.len()))
                     .and_then(|bytes| bytes.checked_add(64))
                     .and_then(|bytes| bytes.checked_add(detector.detector().id().len()))
+                    .and_then(|bytes| bytes.checked_add(occurred_at.map_or(0, str::len)))
                     .ok_or(RuleV1SessionError::Bounds)?;
                 budget
                     .consume(1, retained_bytes)
@@ -434,6 +442,7 @@ fn aggregate_detector_session(
                 aggregate.projection.push(RuleV1MatchEvidence {
                     observation_id: observation.observation_id().to_owned(),
                     occurrence,
+                    occurred_at: occurred_at.map(str::to_owned),
                     evidence: Evidence {
                         field: field.to_owned(),
                         redacted_value,

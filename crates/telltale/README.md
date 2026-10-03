@@ -6,6 +6,35 @@ native acquisition, and detection while returning events to the host application
 not write JSONL, connect to a SIEM, or exit the process. The source directory
 remains `crates/telltale` for repository compatibility.
 
+## OpenCode acquisition (current development after RC1)
+
+The default core normal dependency graph has no `rusqlite`. Git-pinned hosts
+scanning OpenCode must explicitly enable `opencode-sqlite`, which forwards the
+default-off sources capability and uses bundled SQLite:
+
+```toml
+telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["opencode-sqlite"] }
+```
+
+Without it, OpenCode fails closed with a per-source `scanner_error`, retaining
+JSONL successes in mixed scans. The CLI enables acquisition explicitly.
+`protected-assignment` is separate; it does not enable OpenCode acquisition.
+OpenCode investigation stays deferred either way, before discovery, I/O, or
+process spawn. These development changes require host validation after updating
+the Git pin; they are not RC1 or stable qualification.
+
+## Inventory (current development after RC1)
+
+`inventory` exposes existing install snapshot/signal types, collection and Event
+projection, and `discover_mcp_inventory(root)` for privacy-projected static MCP
+config events. Prefer `collect_install_inventory_with_context` with explicit
+host-owned roots; `InstallInventoryContext::current()` and
+`collect_install_inventory` read the process environment. Snapshots omit raw
+paths; the context and MCP `Source.path` remain local caller data. No MCP
+connection or rules compilation is needed. This facade does not activate
+inventory in scan/watch or `Pipeline` scan methods. It is an after-RC1 addition,
+not RC1/stable-qualified; validate host upgrades separately.
+
 ## LocalEventFeed
 
 `LocalEventFeed` is an opt-in, synchronous, read-only consumer for the local
@@ -86,7 +115,8 @@ export acquisition API, and no SQLite/WAL/SHM fallback. The native OpenCode CLI
 initializes, checkpoints, and migrates its store even for export, violating the
 no-mutation boundary. [Issue #42](https://github.com/Dark-Roast-Cyber/telltale/issues/42)
 remains incomplete pending a genuinely read-only OpenCode capability. Production
-scan/watch OpenCode acquisition is unchanged.
+scan/watch OpenCode acquisition remains enabled in the CLI; embedding hosts must
+enable `opencode-sqlite` explicitly.
 
 Defaults cap discovery at 16,384 visited entries and depth 32, known sources at
 1,024, direct input at 8 MiB, input/observation counts at 8,192, and JSON
@@ -94,6 +124,16 @@ depth at 64. Limits can only be lowered. Incomplete
 discovery fails closed; read/parse/limit/provider failures expose no raw errors.
 Direct reads validate a regular opened file and bound bytes including growth;
 they are not filesystem snapshots or hard wall-clock bounds on OS file I/O.
+
+### Context windows (current development after RC1)
+
+`SessionInvestigator::investigate_context(&request)` is a separate opt-in,
+bounded present-day window; `investigate` remains content-free. User/assistant
+text and tool arguments default off; enabled text is mandatory-redacted and
+tool results are excluded. Scan/watch does not call it; OpenCode stays deferred.
+This after-RC1 development API is not Event3, RC1-qualified, or stable-qualified.
+See the [full embedding contract](../../docs/embedding.md#contextual-investigation-current-development-after-rc1)
+for exact anchors, exclusions, radius/byte limits, and current-index caveats.
 
 ### Availability reasons and operator actions
 
@@ -171,6 +211,11 @@ the entire trusted store boundary by a same-UID attacker is out of scope.
 Returned native events use the Event 3.0 contract, deterministic `response`
 metadata, and optional top-level `timeline_anchors`; the embedding host owns
 transport and any historical-event handling.
+Current development after RC1 adds `Pipeline::scan_root_with_occurrences` and
+`scan_sources_with_occurrences`: `SourceScan` returns the same events with
+content-free `DetectionOccurrence` associations and validated `OccurrenceId`
+observation identities from the same projection pass. These methods are not in
+published RC1 artifacts; see [embedding](../../docs/embedding.md#detection-occurrences-current-development-after-rc1).
 
 ```rust
 use telltale_core::Pipeline;

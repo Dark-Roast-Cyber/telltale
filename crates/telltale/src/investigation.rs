@@ -4,10 +4,15 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use telltale_detect::timeline::{ExportedSessionTimeline, build_content_free_canonical_timeline};
+use telltale_schema::event::redact_sensitive_text;
 use telltale_schema::event::{
     Event3Activity, Event3Family, Event3Record, path_hash, terminal_session_id,
 };
 use telltale_schema::observation::ObservedAt;
+use telltale_schema::observation::{
+    CanonicalObservationV2, ContentPartKind, JsonValue, MessageRole, ObservationBody,
+    ObservationStage,
+};
 use telltale_schema::source::Source;
 use telltale_sources::acquisition::{
     AcquisitionError, AcquisitionOptions, BoundedReadError, DirectReadLimits,
@@ -164,6 +169,156 @@ impl SessionInvestigator {
     }
 
     pub fn investigate(&self, event: &Event3Record) -> InvestigationResult {
+        self.resolve(event, &mut Vec::new())
+    }
+
+    /// Opt-in, redacted present-day context; never an immutable transcript.
+    pub fn investigate_context(
+        &self,
+        request: &ContextInvestigationRequest<'_>,
+    ) -> ContextInvestigationResult {
+        if request.before > 32 || request.after > 32 {
+            return ContextInvestigationResult::NotLocallyResolvable(
+                NotLocallyResolvableReason::InvalidLimits,
+            );
+        }
+        let mut observations = Vec::new();
+        let found = match self.resolve(request.event, &mut observations) {
+            InvestigationResult::Found(found) => found,
+            InvestigationResult::SourceUnavailable(reason) => {
+                return ContextInvestigationResult::SourceUnavailable(reason);
+            }
+            InvestigationResult::SessionUnavailable(reason) => {
+                return ContextInvestigationResult::SessionUnavailable(reason);
+            }
+            InvestigationResult::NotLocallyResolvable(reason) => {
+                return ContextInvestigationResult::NotLocallyResolvable(reason);
+            }
+        };
+        let anchor_index = match &request.anchor {
+            ContextAnchor::TimelineIndex(index) => {
+                if *index >= observations.len() {
+                    return ContextInvestigationResult::AnchorUnavailable(
+                        AnchorUnavailableReason::TimelineIndexAbsent,
+                    );
+                }
+                *index
+            }
+            ContextAnchor::Occurrence(id) => {
+                let mut matches = observations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, observation)| observation.observation_id() == id.as_str());
+                let Some((index, _)) = matches.next() else {
+                    return ContextInvestigationResult::AnchorUnavailable(
+                        AnchorUnavailableReason::OccurrenceAbsent,
+                    );
+                };
+                if matches.next().is_some() {
+                    return ContextInvestigationResult::AnchorUnavailable(
+                        AnchorUnavailableReason::AmbiguousOccurrence,
+                    );
+                }
+                index
+            }
+        };
+        let start = anchor_index.saturating_sub(request.before);
+        let end = (anchor_index + request.after + 1).min(observations.len());
+        let mut entries = Vec::new();
+        for (index, observation) in observations.iter().enumerate().take(end).skip(start) {
+            let text = match observation.body() {
+                ObservationBody::Message(message) => {
+                    let enabled = match message.role() {
+                        Some(MessageRole::User) => request.content.user_text,
+                        Some(MessageRole::Assistant) => request.content.assistant_text,
+                        _ => continue,
+                    };
+                    enabled.then(|| {
+                        message
+                            .content()
+                            .and_then(json_string)
+                            .into_iter()
+                            .chain(
+                                message
+                                    .content_parts()
+                                    .iter()
+                                    .filter(|part| part.kind() == ContentPartKind::Text)
+                                    .filter_map(|part| json_string(part.value())),
+                            )
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                }
+                ObservationBody::Tool(tool)
+                    if observation.stage() != ObservationStage::ToolResultReturned =>
+                {
+                    if request.content.tool_arguments {
+                        tool.searchable_arguments()
+                            .map(ToOwned::to_owned)
+                            .or_else(|| {
+                                tool.arguments()
+                                    .and_then(|arguments| {
+                                        telltale_schema::observation::canonical_identity_json(
+                                            arguments,
+                                        )
+                                        .ok()
+                                    })
+                                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                            })
+                    } else {
+                        None
+                    }
+                }
+                ObservationBody::Session(_) => None,
+                _ => continue,
+            };
+            let text = text
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| redact_sensitive_text(&text))
+                .filter(|text| !text.trim().is_empty());
+            let metadata = &found.timeline.entries[index];
+            entries.push(ContextEntry {
+                index,
+                kind: metadata.event_type,
+                timestamp: metadata.timestamp.clone(),
+                tool_name: metadata.tool_name.clone(),
+                call_id: metadata.call_id.clone(),
+                linked_entry_index: metadata.linked_entry_index,
+                text,
+            });
+        }
+        let mut bytes: usize = entries
+            .iter()
+            .filter_map(|entry| entry.text.as_ref())
+            .map(String::len)
+            .sum();
+        let text_budget_exhausted = bytes > 16384;
+        let mut drop_order = (0..entries.len())
+            .filter(|&i| entries[i].index != anchor_index)
+            .collect::<Vec<_>>();
+        drop_order.sort_by_key(|&i| {
+            std::cmp::Reverse((entries[i].index.abs_diff(anchor_index), entries[i].index))
+        });
+        for index in drop_order {
+            if bytes <= 16384 {
+                break;
+            }
+            if let Some(text) = entries[index].text.take() {
+                bytes -= text.len();
+            }
+        }
+        ContextInvestigationResult::Found(OccurrenceContext {
+            anchor_index,
+            entries,
+            text_budget_exhausted,
+        })
+    }
+
+    fn resolve(
+        &self,
+        event: &Event3Record,
+        resolved_observations: &mut Vec<CanonicalObservationV2>,
+    ) -> InvestigationResult {
         let direct = DirectReadLimits {
             bytes: self.config.limits.source_bytes,
             records: self.config.limits.records,
@@ -297,11 +452,12 @@ impl SessionInvestigator {
                 SessionUnavailableReason::ExactSessionAbsent,
             );
         };
-        let observations = batch
+        let mut observations = batch
             .observations
             .into_iter()
             .filter(|v| v.session_id().is_some_and(|id| id.value() == *session))
             .collect::<Vec<_>>();
+        telltale_detect::v2::session::order_canonical_session_observations(&mut observations);
         let Some(timeline) = build_content_free_canonical_timeline(&observations, client.as_str())
         else {
             return InvestigationResult::SessionUnavailable(SessionUnavailableReason::NoTimeline);
@@ -321,8 +477,96 @@ impl SessionInvestigator {
         } else {
             Vec::new()
         };
+        *resolved_observations = observations;
         InvestigationResult::Found(InvestigatedSession { timeline, anchors })
     }
+}
+
+fn json_string(value: &JsonValue) -> Option<&str> {
+    if let JsonValue::String(text) = value {
+        Some(text)
+    } else {
+        None
+    }
+}
+
+// No Debug implementation: Event3 and the anchor are caller-owned inputs, not
+// terminal public context metadata.
+pub struct ContextInvestigationRequest<'a> {
+    pub event: &'a Event3Record,
+    pub anchor: ContextAnchor,
+    pub before: usize,
+    pub after: usize,
+    pub content: ContextContent,
+}
+
+#[derive(Clone)]
+pub enum ContextAnchor {
+    Occurrence(super::OccurrenceId),
+    TimelineIndex(usize),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContextContent {
+    pub user_text: bool,
+    pub assistant_text: bool,
+    pub tool_arguments: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextInvestigationResult {
+    Found(OccurrenceContext),
+    SourceUnavailable(SourceUnavailableReason),
+    SessionUnavailable(SessionUnavailableReason),
+    NotLocallyResolvable(NotLocallyResolvableReason),
+    AnchorUnavailable(AnchorUnavailableReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorUnavailableReason {
+    OccurrenceAbsent,
+    TimelineIndexAbsent,
+    AmbiguousOccurrence,
+}
+
+impl ContextInvestigationResult {
+    pub fn reason_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Found(_) => None,
+            Self::SourceUnavailable(reason) => {
+                InvestigationResult::SourceUnavailable(*reason).reason_code()
+            }
+            Self::SessionUnavailable(reason) => {
+                InvestigationResult::SessionUnavailable(*reason).reason_code()
+            }
+            Self::NotLocallyResolvable(reason) => {
+                InvestigationResult::NotLocallyResolvable(*reason).reason_code()
+            }
+            Self::AnchorUnavailable(reason) => Some(match reason {
+                AnchorUnavailableReason::OccurrenceAbsent => "occurrence_absent",
+                AnchorUnavailableReason::TimelineIndexAbsent => "timeline_index_absent",
+                AnchorUnavailableReason::AmbiguousOccurrence => "ambiguous_occurrence",
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OccurrenceContext {
+    pub anchor_index: usize,
+    pub entries: Vec<ContextEntry>,
+    pub text_budget_exhausted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ContextEntry {
+    pub index: usize,
+    pub kind: &'static str,
+    pub timestamp: Option<String>,
+    pub tool_name: Option<String>,
+    pub call_id: Option<String>,
+    pub linked_entry_index: Option<usize>,
+    pub text: Option<String>,
 }
 
 fn source_failure_reason(error: AcquisitionError) -> SourceUnavailableReason {

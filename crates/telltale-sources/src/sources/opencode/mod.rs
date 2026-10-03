@@ -3,11 +3,13 @@
 use crate::clients::{ClientSourceDef, PathRoot, SourcePattern};
 use telltale_schema::clients::SourceKind;
 
+#[cfg(feature = "opencode-sqlite")]
 pub(crate) mod canonical;
 mod install;
+#[cfg(feature = "opencode-sqlite")]
 pub(crate) mod native;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "opencode-sqlite"))]
 mod tests;
 
 pub(crate) use install::INSTALL;

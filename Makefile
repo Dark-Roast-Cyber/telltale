@@ -32,6 +32,7 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect 
 session-investigation-check:
 	cargo test --locked -p telltale-core investigation --lib
 	cargo test --locked -p telltale-sources acquisition --lib
+	cargo test --locked -p telltale-sources --features opencode-sqlite acquisition --lib
 	git diff --check
 
 ## Show this help
@@ -81,6 +82,9 @@ uninstall:
 test:
 	cargo test $(CARGO_LOCKED)
 	cargo test $(CARGO_LOCKED) -p telltale-equivalence
+	cargo test $(CARGO_LOCKED) -p telltale-core --lib
+	cargo test $(CARGO_LOCKED) -p telltale-sources --lib
+	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib
 
 ## Format check
 fmt:
@@ -91,10 +95,13 @@ clippy:
 	cargo clippy $(CARGO_LOCKED) --all-targets -- -D warnings
 	cargo clippy $(CARGO_LOCKED) -p telltale-equivalence --all-targets -- -D warnings
 
-## Fast local feedback: format, strict Clippy, and default-member library tests
+## Fast local feedback: format, strict Clippy, CLI and embedding library tests
 check-fast: fmt clippy
-	@echo "Running default-member library tests (integration/package/release gates are excluded)."
+	@echo "Running CLI and embedding library tests (integration/package/release gates are excluded)."
 	cargo test $(CARGO_LOCKED) --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
 
 ## Full verification
 check: fmt clippy test
@@ -104,6 +111,9 @@ check: fmt clippy test
 ci-linux-test: ci-version-consistency-check
 	cargo test $(CARGO_LOCKED) --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-equivalence --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
+	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
 	@scripts/event3-contract-check --checks-only
 	@scripts/producer-provenance-check --checks-only
 	@scripts/local-event-feed-check --checks-only

@@ -372,22 +372,33 @@ fn event3_aggregates_one_deterministic_anchor_per_occurrence() {
         0,
     )];
     let evaluation = evaluate(&observations, &anchor_plan).unwrap();
-    let first = super::event3::project_event3(&evaluation, &context())
-        .unwrap()
-        .events;
-    let second = super::event3::project_event3(&evaluation, &context())
-        .unwrap()
-        .events;
+    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let first = &projected.events;
     let first_anchor = &first[0].timeline_anchors[0];
-    let second_anchor = &second[0].timeline_anchors[0];
     assert_eq!(first[0].timeline_anchors.len(), 1);
-    assert_eq!(first_anchor, second_anchor);
     assert_eq!(first_anchor.entry_index, 0);
     assert_eq!(
         first_anchor.rule_ids,
         ["chain.synthetic_both", "synthetic.alpha", "synthetic.beta"]
     );
     assert_eq!(first_anchor.evidence_fields, ["arguments", "tool_name"]);
+    assert_eq!(projected.occurrences.len(), 1);
+    let occurrence = &projected.occurrences[0];
+    assert_eq!(occurrence.finding_index, 0);
+    assert_eq!(occurrence.timeline_index, Some(first_anchor.entry_index));
+    assert_eq!(occurrence.rule_ids, first_anchor.rule_ids);
+    assert_eq!(occurrence.categories, first_anchor.categories);
+    assert_eq!(occurrence.evidence_fields, first_anchor.evidence_fields);
+    assert_eq!(occurrence.session_id, first[0].session_id);
+    for retained in evaluation.sessions()[0].rules.projection() {
+        assert_eq!(occurrence.observation_id, retained.observation_id);
+        assert_eq!(occurrence.occurred_at, retained.occurred_at);
+    }
+    assert_eq!(occurrence.observation_id, observations[0].observation_id());
+    assert_eq!(
+        occurrence.occurred_at.as_deref(),
+        Some("2026-09-17T00:00:00Z")
+    );
 }
 
 #[test]
@@ -468,7 +479,7 @@ fn command(id: &str, text: &str, time: Option<&str>, sequence: u64) -> Canonical
 }
 
 #[test]
-fn process_event3_preserves_repeats_correlations_and_derived_context() {
+fn projected_occurrences_preserve_process_repeats_correlations_and_derived_context() {
     let observations = [
         command(
             "hostname",
@@ -489,6 +500,7 @@ fn process_event3_preserves_repeats_correlations_and_derived_context() {
             2,
         ),
     ];
+    assert!(observations[0].observation_id() > observations[2].observation_id());
     let instance = CorrelationId::source_reported("instance").unwrap();
     let process_rules = telltale_rules::process_chain::load_default_process_chain_rules().unwrap();
     let config = crate::process_chain::ProcessChainConfig::default();
@@ -503,9 +515,54 @@ fn process_event3_preserves_repeats_correlations_and_derived_context() {
         Some((&process_rules, &config)),
     )
     .unwrap();
-    let events = super::event3::project_event3(&evaluation, &context())
-        .unwrap()
-        .events;
+    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let events = &projected.events;
+    for (finding_index, event) in events.iter().enumerate() {
+        let occurrences = projected
+            .occurrences
+            .iter()
+            .filter(|occurrence| occurrence.finding_index == finding_index)
+            .collect::<Vec<_>>();
+        let result = evaluation.sessions()[0]
+            .processes
+            .as_ref()
+            .unwrap()
+            .results()
+            .iter()
+            .find(|result| result.detector().id() == event.rule_ids[0])
+            .unwrap();
+        assert_eq!(
+            occurrences.len(),
+            result
+                .observation_ids()
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        );
+        for occurrence in occurrences {
+            let index = observations
+                .iter()
+                .position(|observation| observation.observation_id() == occurrence.observation_id)
+                .unwrap();
+            assert_eq!(occurrence.timeline_index, Some(index));
+            assert_eq!(occurrence.rule_ids, event.rule_ids);
+            assert_eq!(occurrence.categories, event.categories);
+            assert_eq!(occurrence.session_id, event.session_id);
+            assert!(occurrence.evidence_fields.is_empty());
+            if result.observation_ids().len() == 1 {
+                let observation = observations
+                    .iter()
+                    .find(|observation| observation.observation_id() == occurrence.observation_id)
+                    .unwrap();
+                assert_eq!(
+                    occurrence.occurred_at.as_deref(),
+                    observation.occurred_at().map(|time| time.as_str())
+                );
+            } else {
+                assert_eq!(occurrence.occurred_at, None);
+            }
+        }
+    }
     assert!(
         observations
             .iter()
@@ -567,7 +624,7 @@ fn process_event3_preserves_repeats_correlations_and_derived_context() {
         Some(observations[2].observation_id())
     );
     assert!(!process.rule_name.is_empty());
-    for event in &events {
+    for event in events {
         serde_json::to_string(event).unwrap();
     }
 }
@@ -951,6 +1008,35 @@ fn event3_projection_budget_failure_is_atomic() {
         })
         .collect::<Vec<_>>();
     let evaluation = evaluate(&observations, &plan(0)).unwrap();
+    assert!(matches!(
+        super::event3::project_event3(&evaluation, &context()),
+        Err(ProcessingError::Bounds)
+    ));
+}
+
+#[test]
+fn event3_occurrence_modifier_copies_are_preflight_charged() {
+    let mut document = "version: 1\ndescription: synthetic\ndefaults: { case_insensitive: false, enabled: true }\nrules:\n  - id: synthetic.atomic\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers:\n".to_owned();
+    for index in 0..30 {
+        document.push_str(&format!("  - id: chain.synthetic_{index}\n    score: 0\n    when_all_rule_ids: [synthetic.atomic]\n    explanation: synthetic\n"));
+    }
+    let plan = compile_rule_v1(
+        &telltale_rules::load_rule_set_from_documents(&[&document], None)
+            .unwrap()
+            .compatibility_export(),
+    )
+    .unwrap();
+    let observations = (0..100)
+        .map(|index| {
+            message(
+                &format!("synthetic-{index}"),
+                Some("session"),
+                "needle",
+                CapabilityAvailability::Supported,
+            )
+        })
+        .collect::<Vec<_>>();
+    let evaluation = evaluate(&observations, &plan).unwrap();
     assert!(matches!(
         super::event3::project_event3(&evaluation, &context()),
         Err(ProcessingError::Bounds)

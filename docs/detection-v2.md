@@ -216,7 +216,7 @@ manufactured from Tool evidence.
 ### Projection and retained context
 
 `telltale_detect::v2::event3::project_event3(&evaluation, &context)` returns
-`ProjectedSource { events, completion }` or a bounded `ProcessingError`. The
+`ProjectedSource { events, occurrences, completion }` or a bounded `ProcessingError`. The
 context contains an artifact hash and optional caller-attested, source-reported
 agent/model/provider metadata keyed by the exact canonical session identity.
 The artifact hash must already be canonical lowercase SHA-256. Absent metadata
@@ -233,7 +233,7 @@ transcript cache, legacy record, or reevaluation snapshot:
 | Canonical session identity and origin | Grouping and truthful Event3 session attribution |
 | Latest reported occurrence time and first ordered tool name | Existing session-event time/tool fields, without content guessing |
 | Rule IDs, dimensions/tags, modifier IDs, checked contributions and score | Existing Event3 detection/risk contract |
-| Matching observation ID, ordered occurrence index, selector-derived field, redacted snippet and evidence hash | Evidence linkage and precise detection timeline anchors without rerunning a matcher |
+| Matching observation ID, ordered occurrence index, source-reported time when present, selector-derived field, redacted snippet and evidence hash | Evidence linkage and precise detection timeline anchors without rerunning a matcher |
 | Process matcher context, secondary rule IDs, inferred-parent flag, rule title/reason, investigation fields, false positives, suppression window, severity and adjustment | Existing process-chain Event3 detail, which generic DetectorResult does not carry |
 | Retained private process variants and ordered correlation step references | Preserve child variants sharing one outward atomic identity; scalar process context is the first variant, additional variants are bounded evidence |
 | Repeat counts, suppressed count, correlation supporting result keys and effective capped score | Preserve kernel decisions and link to the actually projected supporting Event3 IDs |
@@ -259,6 +259,11 @@ existing evidence fields instead of expanding the schema. Terminal privacy can
 sanitize observation-ID snippets; their evidence hashes retain linkage. Event IDs
 and materialization timestamps remain constructor-generated, not replay-stable
 identities; evaluation results and event ordering are deterministic.
+Current-development embedding occurrences after RC1 are produced in this same
+`project_event3` pass from retained match context. Their identity reuses
+`observation_id`; core exposes no match content or detect projection DTO as its
+embedding API. Process/correlation occurrences carry no selector evidence fields
+and omit per-step times for multi-observation findings.
 
 ### Completion and scanner transaction gates
 

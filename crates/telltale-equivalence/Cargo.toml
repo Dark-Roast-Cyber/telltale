@@ -12,6 +12,6 @@ telltale-detect.workspace = true
 telltale-inference.workspace = true
 telltale-rules.workspace = true
 telltale-schema.workspace = true
-telltale-sources.workspace = true
+telltale-sources = { workspace = true, features = ["opencode-sqlite"] }
 tempfile = "3.14"
 rusqlite = { version = "0.40", features = ["bundled"] }

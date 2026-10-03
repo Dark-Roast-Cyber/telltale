@@ -15,6 +15,7 @@ include = ["/Cargo.toml", "/README.md", "/LICENSE", "build.rs", "/examples/**", 
 
 [features]
 default = []
+opencode-sqlite = ["telltale-sources/opencode-sqlite"]
 protected-assignment = ["dep:fs4", "dep:getrandom", "dep:hmac", "dep:rusqlite", "dep:libc"]
 
 [dependencies]
@@ -23,6 +24,7 @@ getrandom = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
 rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 sha2.workspace = true
+serde.workspace = true
 telltale-schema.workspace = true
 telltale-rules.workspace = true
 telltale-sources.workspace = true

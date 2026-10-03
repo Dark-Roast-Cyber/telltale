@@ -1,11 +1,10 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
+pub(crate) use crate::acquisition::{OpenCodeSqliteReadOptions, SQLITE_PART_LIMIT};
 use crate::source_read::{SourceReadError, collect_string_values};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
-
-pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
 
 #[cfg(test)]
 thread_local! {
@@ -31,21 +30,6 @@ pub(super) fn on_next_incremental_page(
         *slot.borrow_mut() = Some(Box::new(callback));
     });
     IncrementalPageCallbackGuard
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct OpenCodeSqliteReadOptions {
-    pub part_min_time_updated: Option<i64>,
-    pub part_limit: i64,
-}
-
-impl Default for OpenCodeSqliteReadOptions {
-    fn default() -> Self {
-        Self {
-            part_min_time_updated: None,
-            part_limit: SQLITE_PART_LIMIT,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

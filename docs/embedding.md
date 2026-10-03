@@ -29,6 +29,140 @@ per-action detection events, and map source failures to `scanner_error` events.
 Removed parser registration and source-backed flat-record projection are not
 compatibility paths.
 
+### OpenCode acquisition feature (current development after RC1)
+
+The default `telltale-core` normal dependency graph has no `rusqlite`.
+Git-pinned hosts that scan OpenCode must explicitly enable `opencode-sqlite`:
+
+```toml
+telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["opencode-sqlite"] }
+```
+
+This forwards the default-off `telltale-sources/opencode-sqlite` feature, using
+bundled SQLite. Without it, OpenCode acquisition fails closed with a per-source
+`scanner_error`; mixed scans retain successful JSONL results. The CLI explicitly
+enables acquisition. `protected-assignment` is independent and does not enable
+OpenCode acquisition. OpenCode investigation remains deferred with either feature
+setting, before discovery, source I/O, or process spawn. Updating a host's Git pin
+requires separate validation; this is not RC1 or stable qualification.
+
+### Inventory facade (current development after RC1)
+
+`telltale_core::inventory` exposes existing install snapshots, signal types,
+`collect_install_inventory_with_context`, and `snapshot_to_event`, plus
+`discover_mcp_inventory(root)` returning `Vec<(Source, Event)>`. Prefer an explicit
+host-owned `InstallInventoryContext`: `current()` and `collect_install_inventory`
+read the process environment. Snapshots retain presence/path hashes, not paths;
+the context and returned MCP `Source.path` are local caller data, not telemetry.
+MCP events use the existing privacy projection from supported static configs.
+No MCP connection or rule compilation is needed. This facade adds no scan/watch
+activation; `Pipeline` scan methods do not emit inventory. These after-RC1 APIs
+are not RC1-qualified or stable-qualified; hosts must validate a new Git pin.
+
+### Detection occurrences (current development after RC1)
+
+`Pipeline::scan_sources_with_occurrences(&sources)` and
+`Pipeline::scan_root_with_occurrences(root)` return `Vec<SourceScan>`. Each
+result holds its `Source`, the same session-scoped `events`, and precise
+`DetectionOccurrence` values produced in the same evaluation/projection pass.
+These methods and types are current-development additions after RC1, not part
+of the published RC1 artifacts or their qualification. The existing
+`scan_sources` and `scan_root` methods flatten these events; they do not perform
+another detection pass.
+
+An occurrence is a canonical observation supporting a finding, not a per-rule
+match or another Event3 event. `finding_index` points into that result's `events`
+vector. Session detections have one occurrence per `timeline_anchors` entry,
+with the same timeline index, rule IDs (including triggered modifiers),
+categories, and selector-derived evidence field names. Activity and MCP events
+have no detection occurrences. Session-level response metadata stays on the
+associated Event.
+
+`OccurrenceId::as_str()` exposes the validated Canonical Observation v2
+`observation_id`, in the form `obs:v2:sha256:<64 lowercase hex>`. It is opaque,
+not a content hash, Event3 `event_id`, rule/observation pair, or suppression key.
+Its coordinate tuple is adapter type, adapter ID, coordinate kind/value,
+family, stage, and child ordinal. Content, paths, timestamps, session titles,
+acceptance clocks, and Event3 materialization clocks are excluded. Re-scanning
+the same stable coordinates preserves identity even when event IDs change;
+identical text at different coordinates has different identities. One
+observation associated with multiple findings keeps one identity and multiple
+finding associations. This is not authentication or an immutable-history claim.
+Unchecked strings cannot construct an `OccurrenceId`; invalid projected IDs
+fail that source closed with `scanner_error` and no successful events or
+occurrences.
+Event3's existing `canonical_observation_id` evidence may redact the ID snippet;
+its evidence hash links to the full occurrence ID without changing Event3.
+
+`occurred_at` is source-reported time when retained, otherwise `None`; neither
+the session's latest time nor `observed_at` fills a missing timestamp. Sources
+without stable coordinates fail acquisition with `replay_unverifiable`; these
+stateless scans do not use the assignment store or mint ephemeral identities.
+Discovery, clock, and rule compilation failures remain `Err`. No writes,
+cursors, or baseline persistence are added.
+
+Process-chain/correlation projection emits one occurrence per supporting
+observation ID within a finding. Timeline indexes are retained only when the
+exact observation ID has a retained ID/index association from evaluation; vector
+length or position is not proof. Missing or conflicting associations yield `None`.
+Only single-observation findings retain a source timestamp;
+multi-observation correlations have no per-step timestamps. Rule IDs and
+categories come from the process event; evidence field names are empty because
+there is no Rule v1 selector. The facade still has no process-chain configuration
+API.
+
+Occurrences expose no raw prompts, tool output, paths, credentials, process
+command lines, redacted excerpts, or raw-value evidence hashes. `session_id`
+matches the associated in-memory Event, so hosts associate findings without
+parsing Event3 JSON. `finding_index` is the unambiguous link inside that result.
+Terminal Event3 serialization remains the wire privacy boundary and is unchanged.
+`canonical_runtime` remains an unsupported implementation seam, not the embedding API.
+
+### Contextual investigation (current development after RC1)
+
+`investigation::SessionInvestigator::investigate_context` is an opt-in, read-only
+present-day window around `ContextAnchor::Occurrence(OccurrenceId)` or
+`ContextAnchor::TimelineIndex(usize)`. Pass `&ContextInvestigationRequest` with
+the consumed `Event3Record`, anchor, `before`, `after`, and `ContextContent`.
+The existing `investigate` method remains content-free. CLI scan/watch and
+`Pipeline` scanning do not call contextual investigation.
+
+All three content switches (`user_text`, `assistant_text`, `tool_arguments`)
+default to false. The projection retains only user/assistant messages,
+non-result tool observations, and structural session entries. Tool results,
+system/developer/tool messages, other observation families, raw canonical
+objects, paths/path hashes, observation IDs, and evidence are excluded. Text
+uses string message content and text parts, or adapter-searchable arguments
+with bounded JSON arguments as a fallback; it never includes tool results.
+Every retained excerpt crosses `redact_sensitive_text` before entering public
+output. Timestamps/tool labels/opaque call IDs/link indexes reuse the
+content-free timeline's terminal projection and linker; a link can point to an
+omitted result outside the returned entries.
+
+Each radius is at most 32 and is validated before I/O. The inclusive window
+does not raise existing discovery/acquisition limits. Stored redacted text is
+at most 16,384 bytes total (the existing Evidence sanitizer bounds each snippet
+to 512 bytes). On exhaustion, farthest neighbors lose text first, with higher
+indexes first on equal distance; structure and anchor text remain.
+`Found(OccurrenceContext)` contains only `anchor_index`, `entries`, and
+`text_budget_exhausted`; entries contain only index/kind, terminal metadata,
+linkage, and optional redacted text. An excluded anchor, including a tool
+result, still yields `Found`, possibly with no entries.
+
+Resolution uses the same exact source/session boundary as `investigate`.
+Occurrence anchors match the exact canonical `observation_id` within that
+resolved session: zero/multiple matches return `occurrence_absent`/
+`ambiguous_occurrence`, with no index or semantic-fingerprint fallback.
+`OccurrenceId` identifies a coordinate-derived canonical source fact, not a
+semantic fingerprint or authenticated history; paths/content are not identity
+inputs. A timeline index is merely today's order, not proof that a historical
+entry is unchanged. Out-of-range indexes return `timeline_index_absent` with
+no partial context. Existing unavailable reasons are reused. OpenCode remains
+deferred before discovery, source I/O, or process spawning.
+
+This development API is not Event3, is not in the RC1-qualified artifacts, and
+does not qualify stable 0.7.0.
+
 `detect_records` and `evaluate_session` remain deliberate Rule v1 record-level
 compatibility APIs accepting `NormalizedRecord`. They cannot supply native
 acquisition/accounting facts and are not converted into canonical observations.
@@ -196,6 +330,31 @@ compatibility methods) and the types needed to call it are the supported Rust
 embedding facade. The core re-exports of `Source`, `Event`, `NormalizedRecord`, and rule
 result/error types serve that facade; their presence does not promise that
 every public module of the originating crate is a stable embedding API.
+The current-development occurrence methods, contextual investigation,
+`opencode-sqlite` feature, and `inventory` module extend this facade after RC1.
+They are not covered by published RC1 qualification, and they are not a stable
+0.7.0 promise without the required release qualification. Reviewing and testing
+a Git pin validates that integration, not the stable release.
+
+### Scope and non-goals
+
+These boundaries remain intentional:
+
+- OpenCode investigation stays deferred. There is still no read-only provider,
+  and feature-off OpenCode acquisition is a per-source `scanner_error`, not a
+  separate "capability not compiled" code.
+- `OccurrenceId` is the exact canonical source coordinate. It is not a
+  cross-session replay or semantic fingerprint. Identical coordinates in one
+  resolved session fail closed as ambiguous.
+- Default `telltale-core` does not compile `rusqlite`. The CLI outbox and the
+  separate `protected-assignment` feature still use it when that code is built.
+- These embedding additions do not change existing CLI inventory activation.
+  `Pipeline` scans emit neither install/MCP inventory nor investigation context;
+  CLI scan/watch does not emit investigation context. There is still no embedding
+  facade for baseline state, cursors, process-chain configuration, or event
+  allowlists.
+- This repository stays vendor-neutral. Do not add downstream product types,
+  names, or behavior to the embedding API.
 
 Other intentional adoption contracts have separate owners:
 
@@ -210,6 +369,10 @@ Other intentional adoption contracts have separate owners:
   [producer provenance](telemetry-output.md#producer--detector-provenance-manifest).
 - Rule v1 **documents** remain supported content compatibility independent of
   the stability of the `telltale-rules` Rust implementation API.
+
+Accepted follow-up: a genuinely read-only OpenCode investigation provider remains
+[Issue #42](https://github.com/Dark-Roast-Cyber/telltale/issues/42), not a capability
+of this surface.
 
 The other public APIs in `telltale-schema`, `telltale-sources`,
 `telltale-detect`, and `telltale-rules` are usable foundations but do not receive

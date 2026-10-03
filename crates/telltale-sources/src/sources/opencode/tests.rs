@@ -12,6 +12,22 @@ use super::native::{
     extract_sqlite_native_source, on_next_incremental_page,
 };
 
+#[test]
+fn sqlite_errors_keep_locked_distinction_without_raw_diagnostics() {
+    for (code, locked) in [
+        (rusqlite::ffi::SQLITE_BUSY, true),
+        (rusqlite::ffi::SQLITE_LOCKED, true),
+        (rusqlite::ffi::SQLITE_ERROR, false),
+    ] {
+        let error = SourceReadError::from_sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(code),
+            Some("private-path-marker private-SQL-marker".into()),
+        ));
+        assert_eq!(matches!(error, SourceReadError::Locked), locked);
+        assert!(!format!("{error} {error:?}").contains("private-"));
+    }
+}
+
 fn source(path: std::path::PathBuf) -> Source {
     Source {
         client: ClientId::OpenCode,
@@ -28,7 +44,7 @@ fn sqlite_identity_does_not_accept_json_bytes() {
     fs::write(&path, b"{\"role\":\"assistant\",\"content\":\"synthetic\"}").expect("fixture");
     let error = extract_sqlite_native_source(&source(path), OpenCodeSqliteReadOptions::default())
         .expect_err("json bytes are not sqlite");
-    assert!(matches!(error, SourceReadError::Sqlite(_)));
+    assert!(matches!(error, SourceReadError::Sqlite));
     assert!(!error.to_string().contains("synthetic"));
 }
 
@@ -73,7 +89,7 @@ fn readonly_acquisition_reads_wal_and_preserves_five_second_busy_timeout() {
     let err =
         extract_sqlite_native_source(&source(locked_path), OpenCodeSqliteReadOptions::default())
             .expect_err("locked read must fail");
-    assert!(matches!(err, SourceReadError::Locked(_)));
+    assert!(matches!(err, SourceReadError::Locked));
     assert!(started.elapsed() >= std::time::Duration::from_millis(4_800));
     exclusive.execute_batch("rollback").unwrap();
 }
@@ -238,7 +254,7 @@ fn sqlite_busy_error_maps_to_locked() {
         .expect_err("busy");
     assert!(matches!(
         SourceReadError::from_sqlite(error),
-        SourceReadError::Locked(_)
+        SourceReadError::Locked
     ));
 }
 
