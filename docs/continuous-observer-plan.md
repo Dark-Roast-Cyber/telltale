@@ -6,6 +6,25 @@ OpenSpec deltas, and the acceptance gates below. This document is the public
 planning reference; local execution packages must remain consistent with it.
 It does not authorize deployment, service changes, or removal of existing APIs.
 
+### Accepted bounded production JSONL tranche (not shipped)
+
+Separately accepted in [Issue #81](https://github.com/Dark-Roast-Cyber/telltale/issues/81)
+is a narrow hard-cap contract
+for the shared production JSONL reader only: 8 MiB per physical record, 128 MiB
+total acquired source bytes, and 100,000 nonblank units across the six JSONL
+identities (Claude projects, the three Codex JSONL variants, OpenClaw agents,
+and Qwen projects). All boundaries are inclusive: 8 MiB is 8,388,608 bytes and
+128 MiB is 134,217,728 bytes. Physical record bytes include LF/CRLF terminators;
+aggregate bytes include all whitespace, blank records, and terminators. Nonblank
+units retain Unicode `str.trim()` semantics. These are fixed internal limits,
+not configuration knobs, enforced on actual reads before UTF-8/JSON decoding.
+Over-limit acquisition must fail atomically through the existing source-read
+category; it is not shipped behavior, selection/truncation, or a heap/RSS
+promise. Copilot and OpenCode are outside this tranche. This accepted implementation
+does not establish shipped behavior until release and does not activate
+the broader proposed resource policy, SQLite bounds, deadlines, observer/service
+work, or other runtime changes below.
+
 ## Outcome
 
 Telltale should be a dependable, resource-bounded security observer that can run

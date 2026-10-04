@@ -3,6 +3,111 @@ use super::*;
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
+fn production_jsonl_cli_limit_failure_retains_baseline_and_recovers() {
+    use std::io::Write;
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let directory = root.join("codex/sessions");
+    fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("synthetic.jsonl");
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let first =
+        "{\"type\":\"user\",\"session_id\":\"synthetic\",\"content\":\"synthetic first\"}\n";
+    let second =
+        "{\"type\":\"user\",\"session_id\":\"synthetic\",\"content\":\"synthetic recovered\"}\n";
+    fs::write(&source, first).unwrap();
+    let scan = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--emit-activity",
+                "--client",
+                "codex",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(scan()["source_processing"]["parse_success_source_count"], 1);
+    let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    let mut file = fs::File::create(&source).unwrap();
+    file.write_all(first.as_bytes()).unwrap();
+    file.write_all(second.as_bytes()).unwrap();
+    file.write_all(&vec![b' '; 8 * 1024 * 1024 + 1]).unwrap();
+    let failed = scan();
+    assert_eq!(failed["source_processing"]["parse_error_source_count"], 1);
+    assert_eq!(failed["source_processing"]["parsed_record_count"], 0);
+    assert_eq!(failed["activity_count"], 0);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key], "failed admission advanced {key}");
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    let late = persisted[offset..]
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        failed["source_processing"]["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["acquisition_code"] == "source_read")
+    );
+    assert!(
+        late.iter()
+            .any(|event| event["event_type"] == "scanner_error")
+    );
+    assert!(
+        !late
+            .iter()
+            .any(|event| event["event_type"] == "detection" || event["event_type"] == "activity")
+    );
+    fs::write(&source, format!("{first}{second}")).unwrap();
+    let recovered = scan();
+    assert_eq!(
+        recovered["source_processing"]["parse_success_source_count"],
+        1
+    );
+    assert_eq!(recovered["source_processing"]["parsed_record_count"], 2);
+    assert_eq!(
+        recovered["source_processing"]["parse_error_source_count"],
+        0
+    );
+    let recovered_state: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    assert_ne!(
+        before["baseline_source_contributions"],
+        recovered_state["baseline_source_contributions"]
+    );
+    assert_eq!(scan()["source_processing"]["parse_error_source_count"], 0);
+    let repeated_state: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    assert_eq!(
+        recovered_state["baseline_snapshots"],
+        repeated_state["baseline_snapshots"]
+    );
+}
+
+#[test]
 fn canonical_efficacy_fixtures_cli_characterization_and_event_privacy() {
     let schema: Value =
         serde_json::from_str(include_str!("../../schemas/event.schema.json")).unwrap();

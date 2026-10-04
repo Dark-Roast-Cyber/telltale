@@ -74,7 +74,19 @@ reject `opencode.sqlite` before I/O: native export performs store initialization
 checkpointing, and migrations, so its read-only capability remains deferred. It
 MUST NOT invoke native OpenCode, interpret SQLite/WAL/SHM for investigation,
 enable retired JSON identities, or produce source-backed normalized records.
-Production read controls and runtime behavior remain unchanged.
+Investigation read controls remain separate from production admission limits.
+Production JSONL acquisition MUST admit at most 8 MiB per physical record,
+128 MiB of total acquired source bytes, and 100,000 nonblank native units,
+with each boundary inclusive. Physical and aggregate bytes MUST include LF/CRLF
+terminators, whitespace, and blank records. Blankness MUST retain Unicode
+`str.trim()` semantics. One shared bounded record accumulator MUST enforce
+actual-read byte limits before UTF-8 and JSON decoding, including source growth;
+it MUST NOT retain a whole raw source string. Over-limit sources MUST fail
+atomically as the existing privacy-safe `SourceRead` / `source_read`, without
+successful observations, accounting, or checkpointable progress. These fixed
+internal admission limits MUST NOT introduce knobs, truncation, an RSS guarantee,
+or investigation no-follow/nonregular policy into production reads. Copilot and
+OpenCode behavior MUST remain unchanged.
 
 No parallel cross-source canonical projection router, compatibility alias, or
 wrapper MAY remain. Roadmap steps 4 and 5 are complete.
