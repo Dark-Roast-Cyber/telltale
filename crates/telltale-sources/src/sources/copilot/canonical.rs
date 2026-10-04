@@ -744,14 +744,8 @@ mod tests {
                 .any(|event| matches!(event, CopilotNativeEvent::SessionCompleted))
         );
         assert!(events.iter().all(|event| match event {
-            CopilotNativeEvent::WorkspaceInitialized {
-                control_prefix: content,
-                ..
-            } => {
-                !content.contains("forged-session")
-                    && !content.contains("encrypted_content")
-                    && !content.contains("sensitive")
-            }
+            CopilotNativeEvent::WorkspaceInitialized { source_session_id } =>
+                source_session_id.as_deref() == Some("real-session"),
             _ => true,
         }));
 
@@ -811,19 +805,10 @@ mod tests {
         .unwrap();
 
         let events = extract_copilot_native_events(&source(path.clone())).unwrap();
-        let CopilotNativeEvent::WorkspaceInitialized {
-            control_prefix: content,
-            ..
-        } = &events[0]
-        else {
+        let CopilotNativeEvent::WorkspaceInitialized { source_session_id } = &events[0] else {
             panic!("expected workspace event")
         };
-        assert_eq!(
-            content,
-            "Workspace initialized: combined-session (checkpoints: 0)"
-        );
-        assert!(!content.contains("encrypted_content"));
-        assert!(!content.contains("fixture-encrypted-reasoning"));
+        assert_eq!(source_session_id.as_deref(), Some("combined-session"));
 
         let observations = project(path);
         assert_eq!(observations.len(), 1);
@@ -831,6 +816,8 @@ mod tests {
             observations[0].session_id().unwrap().value(),
             "combined-session"
         );
+        assert_eq!(observations[0].sequence(), Some(1));
+        assert_eq!(observations[0].stage(), ObservationStage::ToolRequested);
     }
 
     #[test]

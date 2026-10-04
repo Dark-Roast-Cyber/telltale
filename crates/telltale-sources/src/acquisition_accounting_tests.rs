@@ -1540,6 +1540,62 @@ fn sqlite_private_transport_alias_is_not_json_ownership() {
 }
 
 #[test]
+fn copilot_metadata_aliases_preserve_attestation_ambiguity_and_failure() {
+    let directory = tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Copilot,
+        source_id: "copilot.process_log".into(),
+        kind: SourceKind::CopilotProcessLog,
+        path: directory.path().join("synthetic.log"),
+    };
+    for (field, alias) in [("model", "modelID"), ("provider", "providerID")] {
+        for kind in ["function_call", "message"] {
+            for (labels, expected) in [
+                (
+                    serde_json::json!({alias: "native"}),
+                    AttestedValue::Known("native".into()),
+                ),
+                (
+                    serde_json::json!({field: "native", alias: "native"}),
+                    AttestedValue::Known("native".into()),
+                ),
+                (
+                    serde_json::json!({field: "native", alias: "different"}),
+                    AttestedValue::Ambiguous,
+                ),
+            ] {
+                let mut item = serde_json::json!({"type":kind,"name":"view","role":"assistant","content":[{"type":"output_text","text":"synthetic"}]});
+                item.as_object_mut()
+                    .unwrap()
+                    .extend(labels.as_object().unwrap().clone());
+                std::fs::write(&source.path, format!("Workspace initialized: s (checkpoints: 0)\nAccumulated output items (1): {}\n", serde_json::json!([item]))).unwrap();
+                let batch = acquire_source(&source, options()).unwrap();
+                let metadata = &batch.accounting.sessions[0].metadata;
+                let actual = if field == "model" {
+                    &metadata.model
+                } else {
+                    &metadata.provider
+                };
+                assert_eq!(actual, &expected);
+            }
+            let mut item = serde_json::json!({"type":kind,"name":"view","role":"assistant","content":[{"type":"output_text","text":"synthetic"}]});
+            item[alias] = serde_json::json!({"private-marker":42});
+            std::fs::write(
+                &source.path,
+                format!(
+                    "Workspace initialized: s (checkpoints: 0)\nAccumulated output items (1): {}\n",
+                    serde_json::json!([item])
+                ),
+            )
+            .unwrap();
+            let error = acquire_source(&source, options()).err().unwrap();
+            assert_eq!(error, AcquisitionError::InvalidAttestation);
+            assert!(!format!("{error} {error:?}").contains("private-marker"));
+        }
+    }
+}
+
+#[test]
 fn copilot_ignored_items_cannot_attest_or_conflict_with_recognized_metadata() {
     let directory = tempdir().unwrap();
     let source = Source {

@@ -12,10 +12,6 @@ use telltale_schema::source::Source;
 pub(crate) enum CopilotNativeEvent {
     WorkspaceInitialized {
         source_session_id: Option<String>,
-        /// Trusted control prefix only. Structured payload suffixes are not retained.
-        // Read by native extraction tests; unused in production mapping.
-        #[cfg_attr(not(test), allow(dead_code))]
-        control_prefix: String,
     },
     AccumulatedOutputItem {
         canonical_session_id: Option<String>,
@@ -32,19 +28,10 @@ pub(crate) enum CopilotNativeEvent {
 pub(crate) struct CopilotOutputItem {
     pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) item_type: Option<String>,
-    // Read by native extraction tests; unused in production mapping.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) id: Option<String>,
     pub(crate) call_id: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) arguments: Option<String>,
     pub(crate) message: Option<String>,
-    // Read by native extraction tests; unused in production mapping.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) model: Option<String>,
-    // Read by native extraction tests; unused in production mapping.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) provider: Option<String>,
     pub(crate) role: Option<String>,
     pub(crate) content_present: bool,
     pub(crate) content: Option<Vec<CopilotContentBlock>>,
@@ -93,16 +80,11 @@ pub(crate) fn extract_copilot_native_events(
         let control = copilot_trusted_control(line, accumulated);
 
         if accumulated.is_none()
-            && let Some(TrustedControl::WorkspaceInitialized {
-                message, content, ..
-            }) = control
+            && let Some(TrustedControl::WorkspaceInitialized { message }) = control
         {
             let source_session_id = copilot_workspace_session_id(message);
             canonical_active_session_id = source_session_id.clone();
-            events.push(CopilotNativeEvent::WorkspaceInitialized {
-                source_session_id,
-                control_prefix: content.to_owned(),
-            });
+            events.push(CopilotNativeEvent::WorkspaceInitialized { source_session_id });
             continue;
         }
 
@@ -120,16 +102,10 @@ pub(crate) fn extract_copilot_native_events(
             continue;
         };
 
-        if let Some(TrustedControl::WorkspaceInitialized {
-            message, content, ..
-        }) = control
-        {
+        if let Some(TrustedControl::WorkspaceInitialized { message }) = control {
             let source_session_id = copilot_workspace_session_id(message);
             canonical_active_session_id = source_session_id.clone();
-            events.push(CopilotNativeEvent::WorkspaceInitialized {
-                source_session_id,
-                control_prefix: content.to_owned(),
-            });
+            events.push(CopilotNativeEvent::WorkspaceInitialized { source_session_id });
         }
 
         let parsed = serde_json::from_str::<Value>(json_str);
@@ -218,13 +194,10 @@ impl CopilotOutputItem {
             return Ok(Self {
                 attestation: Ok(SessionMetadata::default()),
                 item_type,
-                id: None,
                 call_id: None,
                 name: None,
                 arguments: None,
                 message: None,
-                model: None,
-                provider: None,
                 role: None,
                 content_present: false,
                 content: None,
@@ -242,7 +215,6 @@ impl CopilotOutputItem {
         Ok(Self {
             attestation: copilot_metadata(value),
             item_type,
-            id: item_string(value, "id"),
             call_id: item_string(value, "call_id"),
             name: item_string(value, "name"),
             arguments: item_string(value, "arguments"),
@@ -250,8 +222,6 @@ impl CopilotOutputItem {
                 .get("message")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
-            model: item_string(value, "modelID").or_else(|| item_string(value, "model")),
-            provider: item_string(value, "providerID").or_else(|| item_string(value, "provider")),
             role: item_string(value, "role"),
             content_present: content.is_some(),
             content: content
@@ -388,13 +358,14 @@ mod tests {
 
         let reasoning = items[0].1;
         assert_eq!(reasoning.item_type.as_deref(), Some("reasoning"));
-        assert!(reasoning.id.is_none());
         assert!(reasoning.call_id.is_none());
         assert!(reasoning.name.is_none());
         assert!(reasoning.arguments.is_none());
         assert!(reasoning.message.is_none());
-        assert!(reasoning.model.is_none());
-        assert!(reasoning.provider.is_none());
+        assert_eq!(
+            reasoning.attestation.as_ref().unwrap(),
+            &crate::acquisition::SessionMetadata::default()
+        );
         assert!(reasoning.role.is_none());
         assert!(!reasoning.content_present);
         assert!(reasoning.content.is_none());
@@ -438,13 +409,14 @@ mod tests {
         );
 
         for item in [items[0].1, items[1].1] {
-            assert!(item.id.is_none());
             assert!(item.call_id.is_none());
             assert!(item.name.is_none());
             assert!(item.arguments.is_none());
             assert!(item.message.is_none());
-            assert!(item.model.is_none());
-            assert!(item.provider.is_none());
+            assert_eq!(
+                item.attestation.as_ref().unwrap(),
+                &crate::acquisition::SessionMetadata::default()
+            );
             assert!(item.role.is_none());
             assert!(!item.content_present);
             assert!(item.content.is_none());
@@ -471,7 +443,7 @@ impl CopilotContentBlock {
 
 #[derive(Clone, Copy)]
 enum TrustedControl<'a> {
-    WorkspaceInitialized { message: &'a str, content: &'a str },
+    WorkspaceInitialized { message: &'a str },
     SessionCompleted,
 }
 
@@ -486,7 +458,7 @@ fn copilot_trusted_control<'a>(
     let content = prefix[..control_end].trim_end();
     let message = copilot_log_message(content)?;
     if message.starts_with("Workspace initialized:") && !message.contains(['[', ']', '{', '}']) {
-        return Some(TrustedControl::WorkspaceInitialized { message, content });
+        return Some(TrustedControl::WorkspaceInitialized { message });
     }
     if message == "Session completed." {
         return Some(TrustedControl::SessionCompleted);
