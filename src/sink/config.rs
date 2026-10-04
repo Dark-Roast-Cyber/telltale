@@ -1411,7 +1411,7 @@ sinks:
         unsafe { std::env::remove_var("TELLTALE_TEST_DURABLE_TOKEN") };
 
         assert!(sinks.has_persistent_replay());
-        assert!(sinks.durable_sink_ids().contains(&"remote-a".to_string()));
+        assert!(sinks.durable_sink_ids.contains(&"remote-a".to_string()));
         assert!(outbox_path.is_file());
         assert_eq!(
             sinks.delivery_posture(),

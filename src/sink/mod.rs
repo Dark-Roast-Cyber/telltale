@@ -295,11 +295,6 @@ impl SinkSet {
         durable_health_json_from_path(outbox_path, &sink_ids)
     }
 
-    #[cfg(test)]
-    pub(crate) fn durable_sink_ids(&self) -> &[String] {
-        &self.durable_sink_ids
-    }
-
     fn validate_persistent_replay_paths(&self) -> Result<(), Box<dyn std::error::Error>> {
         let Some(outbox_path) = self.durable_outbox_path.as_ref() else {
             return Ok(());
