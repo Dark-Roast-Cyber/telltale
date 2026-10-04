@@ -226,12 +226,12 @@ EOF
 cat > "$CORE_CONSUMER_DIR/src/main.rs" <<'EOF'
 use telltale_core::{
     ClientId, DiscoveryError, Event, Event3Record, LocalEventFeed, LocalEventFeedConfig,
-    MatchResult, NormalizedRecord, RecordKind, RiskAccountingError, RiskContribution,
-    RiskContributionType, Source, SourceKind, StartupMode,
+    MatchResult, NormalizedRecord, PipelineError, RecordKind, RiskAccountingError,
+    RiskContribution, RiskContributionType, Source, SourceKind, StartupMode,
 };
 
-fn is_discovery_error(error: &(dyn std::error::Error + 'static)) -> bool {
-    error.downcast_ref::<DiscoveryError>().is_some()
+fn is_discovery_error(error: &PipelineError) -> bool {
+    matches!(error, PipelineError::Discovery(DiscoveryError::InvalidRoot { .. }))
 }
 
 fn main() {
@@ -243,7 +243,7 @@ fn main() {
     let _: Option<RiskAccountingError> = None;
     let _: Option<RiskContribution> = None;
     let _: Option<RiskContributionType> = None;
-    let _: fn(&(dyn std::error::Error + 'static)) -> bool = is_discovery_error;
+    let _: fn(&PipelineError) -> bool = is_discovery_error;
     let _: Option<ClientId> = None;
     let _: Option<SourceKind> = None;
     let _: Option<RecordKind> = None;
@@ -267,7 +267,7 @@ fn main() {
     ));
     let _ = std::fs::remove_dir_all(&missing);
     let error = pipeline.scan_root(&missing).expect_err("missing root");
-    assert!(is_discovery_error(error.as_ref()));
+    assert!(is_discovery_error(&error));
     let feed_path = missing.join("events.jsonl");
     let mut feed = LocalEventFeed::new(LocalEventFeedConfig::new(
         &feed_path,

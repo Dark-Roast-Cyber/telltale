@@ -29,6 +29,57 @@ per-action detection events, and map source failures to `scanner_error` events.
 Removed parser registration and source-backed flat-record projection are not
 compatibility paths.
 
+### Typed pipeline errors (current development after RC1)
+
+`PipelineBuilder::build` and all four `Pipeline` scan methods now return
+`PipelineError` rather than `Box<dyn Error>`. This is a source-breaking Rust
+interface change in the untagged, unpublished `0.7.0-rc.2` development line,
+not a change to published RC1 artifacts or stable qualification. Update a Git
+pin deliberately and validate the host integration separately.
+
+| Operation | Returned categories |
+| --- | --- |
+| `build` | `MissingRuleDocuments`, `RuleConfiguration` |
+| `scan_root`, `scan_root_with_occurrences` | `Discovery`, `Clock`, `Observation`, `RuleCompilation` |
+| `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation`, `RuleCompilation` |
+
+`Observation` means batch observation-time validation, not per-source canonical
+validation. Clock/time validation and canonical compilation run even for an
+empty source batch. Root scans complete checked discovery first. Source-processing
+failures still become source-local `scanner_error` events, with no successful
+partial source projection or occurrences; they are not returned `PipelineError`s.
+Event 3.0, state formats, rule validation order, and CLI diagnostics/exit semantics
+are unchanged.
+
+The enum is `#[non_exhaustive]`; hosts match meaningful categories with a fallback:
+
+```rust,no_run
+use telltale_core::{Pipeline, PipelineError};
+
+let pipeline = Pipeline::builder().build()?;
+match pipeline.scan_root(std::path::Path::new("/synthetic/session-root")) {
+    Ok(events) => { /* host owns event handling */ }
+    Err(PipelineError::Discovery(cause)) => {
+        // Choose another root or report the checked discovery failure.
+        eprintln!("{cause}");
+    }
+    Err(error) => return Err(error),
+}
+# Ok::<(), PipelineError>(())
+```
+
+`Display` retains the prior diagnostics. `std::error::Error::source()` preserves
+the original payload for every category except `MissingRuleDocuments`.
+`DiscoveryError`, `RuleV1CompileError`, and `ObservationError` are available from
+the core crate root. `From` conversions preserve these typed errors and
+`time::error::Format`. `RuleConfiguration` retains the existing boxed loader
+diagnostic: its concrete source type is not a supported subtype taxonomy, and
+hosts should not parse strings or downcast it to classify failures.
+
+Host entrypoints may still use `Box<dyn Error>` and propagate these errors with
+`?`. Explicit boxed-result forwarding and old downcast-based matching require
+migration; see the [migration guide](migrations/0.7.0.md#typed-pipeline-errors-current-development-after-rc1).
+
 ### Canonical bound diagnostics (current development after RC1)
 
 Codex canonical bound failures retain a typed, content-free field category and
@@ -255,9 +306,9 @@ for the caller's replay-association requirements and operational limits.
 ## Quick start
 
 ```rust
-use telltale_core::Pipeline;
+use telltale_core::{Pipeline, PipelineError};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), PipelineError> {
     // Bundled default rules; add .rules_document(yaml) for custom packs.
     let pipeline = Pipeline::builder().build()?;
 
@@ -270,8 +321,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 A compile-tested version lives at `crates/telltale/examples/embed_scan.rs`
-(`cargo run -p telltale-core --example embed_scan` scans the repository's synthetic
-fixtures).
+(`cargo run -p telltale-core --example embed_scan -- <session-root>`; use a
+synthetic fixture root for validation). Its host entrypoint deliberately keeps
+boxed errors for argument handling and demonstrates matching scan categories.
 
 > **Crates.io name warning:** The crates.io package named `telltale` is an
 > unrelated session-types crate, not this project. Do not use it for Telltale

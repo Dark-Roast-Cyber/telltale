@@ -6,6 +6,27 @@ native acquisition, and detection while returning events to the host application
 not write JSONL, connect to a SIEM, or exit the process. The source directory
 remains `crates/telltale` for repository compatibility.
 
+## Typed pipeline errors (current development after RC1)
+
+`PipelineBuilder::build` and the four `Pipeline` scan methods return the
+non-exhaustive `PipelineError` enum. Builders distinguish missing documents from
+rejected rule/policy configuration. Scans distinguish checked discovery (root
+methods only), batch clock formatting, observation-time validation, and canonical
+rule compilation. Source-processing failures still produce `scanner_error`
+events; they do not become returned errors.
+
+Display diagnostics are unchanged and `Error::source()` preserves payloads.
+The `RuleConfiguration` boxed source is diagnostic only, not a supported subtype
+taxonomy. Existing typed causes are re-exported from the core root. Match the
+enum with a fallback arm; host functions returning boxed errors may still use `?`.
+
+This is a source-breaking Rust interface change in the untagged, unpublished
+`0.7.0-rc.2` development line after RC1. It changes neither Event3/state formats
+nor CLI diagnostics/exit semantics and is not RC1/stable qualification. Validate
+host upgrades after updating the Git pin. See the
+[embedding contract](../../docs/embedding.md#typed-pipeline-errors-current-development-after-rc1)
+and [migration guide](../../docs/migrations/0.7.0.md#typed-pipeline-errors-current-development-after-rc1).
+
 ## OpenCode acquisition (current development after RC1)
 
 The default core normal dependency graph has no `rusqlite`. Git-pinned hosts

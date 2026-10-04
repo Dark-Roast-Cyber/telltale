@@ -165,6 +165,13 @@ exclude its own exact tag only if it resolves to HEAD; `release-tag-review`
 separately rejects any existing prospective tag. Offline checks cannot discover
 remote tags that have not been fetched.
 
+Current development after RC1 changes the supported embedding builder and scan
+return types to `PipelineError`. This is a source-breaking Rust interface change,
+not an Event3 or persisted-state format change. See the
+[0.7.0 migration guide](migrations/0.7.0.md#typed-pipeline-errors-current-development-after-rc1)
+before updating a Git pin; the unpublished development metadata does not qualify
+a candidate or authorize publication.
+
 The same implementation runs in CI, `release-tag-review` (and therefore
 `release-preflight`), and the release workflow before builds/publication.
 Metadata-only `--publication-order` and `--check-publication-order` validate the
