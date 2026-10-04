@@ -27,6 +27,10 @@ format.
   `3.0` and Rule v1 stays version 1; neither follows the package version. Stable
   `v0.7.0` will require separate qualification and a reviewed stable-version
   promotion.
+- Current workspace metadata is `0.7.0-rc.2`, an untagged, unpublished,
+  unqualified development version only. RC1 evidence above applies only to its
+  immutable published candidate and cannot qualify current main; any next
+  reviewed candidate requires its own qualification.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -227,7 +231,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.7.0-rc.1` registry dependencies while that remains the workspace package
+`=0.7.0-rc.2` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.

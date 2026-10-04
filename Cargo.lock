@@ -3189,7 +3189,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-cli"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "base64",
  "clap",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-console"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "clap",
  "eframe",
@@ -3232,7 +3232,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-core"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "fs4",
  "getrandom 0.3.4",
@@ -3252,7 +3252,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-detect"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "regex",
  "rusqlite",
@@ -3270,7 +3270,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-equivalence"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "rusqlite",
  "serde_json",
@@ -3284,7 +3284,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-inference"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3293,7 +3293,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-rules"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "regex",
  "serde",
@@ -3305,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-schema"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "hmac",
  "jsonschema",
@@ -3320,7 +3320,7 @@ dependencies = [
 
 [[package]]
 name = "telltale-sources"
-version = "0.7.0-rc.1"
+version = "0.7.0-rc.2"
 dependencies = [
  "libc",
  "rusqlite",

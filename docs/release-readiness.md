@@ -106,6 +106,12 @@ the accepted candidate artifacts. The resulting `v0.5.0` tag and stable GitHub
 Release are now published and immutable. Subsequent development version alignment
 does not replace those artifacts or the separately pinned controlled-development lab.
 
+The current workspace metadata `0.7.0-rc.2` is an untagged, unpublished, and
+unqualified development version only. The RC1 evidence below applies solely to
+the immutable published RC1 artifact; it cannot qualify current main. Any next
+reviewed candidate requires its own qualification. No tag, release, artifact, or
+publication is authorized by this metadata correction.
+
 ## 0.7 RC1 current-host qualification
 
 [Issue #66](https://github.com/Dark-Roast-Cyber/telltale/issues/66#issuecomment-5860306266)
@@ -328,7 +334,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.7.0-rc.1` registry packages while that remains the workspace version, before
+`=0.7.0-rc.2` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not
