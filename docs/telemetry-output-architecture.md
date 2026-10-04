@@ -213,8 +213,8 @@ Future destination projections, when implemented, follow these boundaries:
 The vendor-neutral collector boundary is future work. Telltale remains
 standalone/offline, and a managed adopter owns collector/server, tenancy,
 authentication, deployment, encrypted persistence, fleet, cloud, and receipt
-concerns around—rather than inside—the canonical payload. Emusary is not a
-Telltale core dependency.
+concerns around—rather than inside—the canonical payload. A downstream consumer
+is not a Telltale core dependency.
 
 ## Durability, multi-sink delivery, and failure semantics
 

@@ -29,9 +29,9 @@ work, or other runtime changes below.
 
 Telltale should be a dependable, resource-bounded security observer that can run
 continuously without scheduling repeated full-content scans. It must also remain
-useful as a one-shot scanner and a component controlled by another application,
-including Emusary. All modes use the same authoritative acquisition, detection,
-privacy, and durable-output contracts.
+useful as a one-shot scanner and a component controlled by another application.
+All modes use the same authoritative acquisition, detection, privacy, and
+durable-output contracts.
 
 Continuous operation means event-driven work with explicit recovery, not blind
 trust in filesystem notifications. A running process is not proof of coverage.
@@ -71,11 +71,12 @@ daemon, self-backgrounding implementation, persistent control server, or generic
 plugin framework. Core embedding remains available; embedded hosts own I/O and
 must satisfy documented serialization/state-ownership obligations.
 
-An external controller such as Emusary can invoke one-shot scans, supervise
+An external controller can invoke one-shot scans, supervise
 foreground watch, use the supported embedding API, or explicitly manage the
 canonical Telltale service through lifecycle commands. It must choose an owner
-rather than unknowingly run both. No Emusary-specific type or dependency belongs
-in the detection core, and no existing integration is implied by this plan.
+rather than unknowingly run both. No downstream-consumer-specific type or
+dependency belongs in the detection core, and no existing integration is
+implied by this plan.
 
 ### Proposed command contract
 
@@ -347,7 +348,8 @@ supported-platform boundaries.
 - Extend canonical installer generation/validation and explicit timer migration;
   test partial enable/start failures, ambiguity, unsupported managers, reboot
   prerequisites, rollback, and preservation of unrelated services.
-- Test external supervision and one-shot use without Emusary-specific core code;
+- Test external supervision and one-shot use without
+  downstream-consumer-specific core code;
   verify managed/external instances cannot silently share writer ownership.
 
 ### D. Incrementality and durable capacity
@@ -396,5 +398,5 @@ Relevant formal contracts:
 [OpenCode acquisition](../openspec/specs/opencode-sqlite-canonical-observation-v2-adapter/spec.md),
 [coverage and state](../openspec/specs/canonical-accounting-coverage/spec.md),
 and [durable delivery](../openspec/specs/durable-delivery/spec.md).
-Follow the [Telltale/Emusary boundary](development-principles.md) and keep detailed
+Follow the [downstream consumer boundary](development-principles.md) and keep detailed
 implementation task state in Issues/local OpenSpec packages, not in this page.
