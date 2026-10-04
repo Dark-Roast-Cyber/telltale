@@ -86,9 +86,6 @@ pub(crate) struct ProcessProjection {
 }
 
 impl ProcessProjection {
-    pub(crate) fn item_count(&self) -> usize {
-        1 + self.variants.len() + self.supporting_steps.len() + self.occurrences.len()
-    }
     pub(crate) fn atomic(
         input: &ProcessObservation,
         detection: &ProcessChainDetection,

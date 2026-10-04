@@ -14,9 +14,8 @@ use crate::file_lock::RotationNamespace;
 use crate::sink::http::RetryConfig;
 
 /// Delivery reliability is a policy, not a property of the transport or its
-/// location. `Durable` is reserved for the persistent downstream dispatcher;
-/// the current sinks use `BestEffort` and retain their existing behavior.
-#[allow(dead_code)]
+/// location. `Durable` uses the persistent downstream dispatcher;
+/// `BestEffort` delivers without persistent replay.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum DeliveryPolicy {
     BestEffort,
@@ -25,7 +24,6 @@ pub(crate) enum DeliveryPolicy {
 
 /// The persistence responsibility associated with a sink. A canonical event
 /// log is a first-write record; downstream delivery state is a separate role.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PersistenceRole {
     None,
@@ -35,7 +33,6 @@ pub(crate) enum PersistenceRole {
 
 /// Stable classification for delivery failures. Callers can make retry or
 /// operator-action decisions without interpreting a human diagnostic.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum DeliveryErrorClass {
     TransportNoResponse,
@@ -69,7 +66,6 @@ impl DeliveryErrorClass {
     /// Retryability is derived from the structured class/status, never from
     /// the diagnostic text. The current HTTP transport retries 429 and 5xx;
     /// 408 is included for the durable scheduler's one-attempt contract.
-    #[allow(dead_code)]
     pub(crate) fn is_retryable(self) -> bool {
         match self {
             Self::TransportNoResponse | Self::Timeout | Self::SinkApplicationRetryable => true,
@@ -299,14 +295,9 @@ impl SinkSet {
         durable_health_json_from_path(outbox_path, &sink_ids)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn durable_sink_ids(&self) -> &[String] {
         &self.durable_sink_ids
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn durable_capacity_limits(&self) -> outbox::CapacityLimits {
-        self.durable_capacity_limits
     }
 
     fn validate_persistent_replay_paths(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -341,7 +332,6 @@ impl SinkSet {
             .collect()
     }
 
-    #[allow(dead_code)]
     fn add_with_roles(
         &mut self,
         transport: &'static str,
@@ -378,7 +368,7 @@ impl SinkSet {
         });
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn add_canonical_first_write(
         &mut self,
         transport: &'static str,

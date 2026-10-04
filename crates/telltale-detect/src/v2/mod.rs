@@ -14,7 +14,6 @@ pub mod event3;
 mod matcher;
 mod observation_match;
 pub mod policy_accounting;
-#[allow(dead_code)]
 pub(crate) mod process_chain;
 #[cfg(test)]
 mod process_chain_contract_tests;

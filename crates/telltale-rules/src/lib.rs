@@ -34,7 +34,6 @@ const SUPPORTED_RULE_TARGETS: &[&str] = &[
     "user_context",
 ];
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuleSet {
     pub version: u32,
@@ -50,7 +49,6 @@ pub struct RuleDefaults {
     pub enabled: bool,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleDefinition {
@@ -92,7 +90,6 @@ pub struct RuleDefinition {
     pub enabled: bool,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DetectionDefinition {
@@ -103,7 +100,6 @@ pub struct DetectionDefinition {
     pub condition: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModifierDefinition {
     pub id: String,

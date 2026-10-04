@@ -121,33 +121,23 @@ fn normalize_atomic_results<'a>(
 }
 
 /// Private session result retained by the caller-defined evaluator. Repeat
-/// accounting stays here rather than broadening the common
+/// counts belong to the Event3 projection rather than the common
 /// DetectorResult/Signal/Finding types.
 #[derive(Clone)]
 pub(crate) struct ProcessChainSessionEvaluation {
     results: Vec<DetectorResult>,
-    repeat_counts: BTreeMap<(String, String), u64>,
     suppressed_count: usize,
     pub(crate) projection:
         BTreeMap<super::event3::ProcessResultKey, super::event3::ProcessProjection>,
 }
 
 impl ProcessChainSessionEvaluation {
-    pub(crate) fn projection_item_count(&self) -> usize {
-        self.projection.values().map(|p| p.item_count()).sum()
-    }
     pub(crate) fn results(&self) -> &[DetectorResult] {
         &self.results
     }
 
     pub(crate) fn suppressed_count(&self) -> usize {
         self.suppressed_count
-    }
-
-    pub(crate) fn repeat_count(&self, rule_id: &str, observation_id: &str) -> Option<u64> {
-        self.repeat_counts
-            .get(&(rule_id.to_owned(), observation_id.to_owned()))
-            .copied()
     }
 }
 
@@ -271,21 +261,13 @@ pub(crate) fn evaluate_tool_process_chain_session_with_budget(
             }
         }
     }
-    let mut repeat_counts = BTreeMap::new();
     for (index, count) in semantics.suppression.repeat_counts {
         let Some(matched) = matches.get(index) else {
             continue;
         };
-        let Some(observation_id) = matched.result.observation_ids().first() else {
+        if matched.result.observation_ids().is_empty() {
             continue;
-        };
-        repeat_counts.insert(
-            (
-                matched.result.detector().id().to_owned(),
-                observation_id.clone(),
-            ),
-            count,
-        );
+        }
         if let Some(context) =
             projection.get_mut(&super::event3::process_result_key(&matched.result))
         {
@@ -340,7 +322,6 @@ pub(crate) fn evaluate_tool_process_chain_session_with_budget(
 
     Ok(ProcessChainSessionEvaluation {
         results,
-        repeat_counts,
         suppressed_count: semantics.suppression.suppressed_count,
         projection,
     })
@@ -1319,8 +1300,20 @@ correlations: []
         .unwrap();
         assert_eq!(evaluation.results().len(), 1);
         assert_eq!(evaluation.suppressed_count(), 1);
+        let retained = evaluation
+            .results()
+            .iter()
+            .find(|result| {
+                result.detector().id() == "procchain.discovery.cmd_hostname"
+                    && result.observation_ids() == [first.observation_id()]
+            })
+            .expect("retained first occurrence");
         assert_eq!(
-            evaluation.repeat_count("procchain.discovery.cmd_hostname", first.observation_id()),
+            evaluation
+                .projection
+                .get(&super::super::event3::process_result_key(retained))
+                .expect("retained occurrence projection")
+                .repeat_count,
             Some(2)
         );
     }
@@ -1356,8 +1349,20 @@ correlations: []
         .unwrap();
 
         assert_eq!(evaluation.suppressed_count(), 1);
+        let retained = evaluation
+            .results()
+            .iter()
+            .find(|result| {
+                result.detector().id() == "procchain.discovery.cmd_hostname"
+                    && result.observation_ids() == [anchor.observation_id()]
+            })
+            .expect("retained anchor occurrence");
         assert_eq!(
-            evaluation.repeat_count("procchain.discovery.cmd_hostname", anchor.observation_id()),
+            evaluation
+                .projection
+                .get(&super::super::event3::process_result_key(retained))
+                .expect("retained occurrence projection")
+                .repeat_count,
             Some(2)
         );
         assert!(!evaluation.results().iter().any(|result| {

@@ -261,11 +261,7 @@ fn run_scan_for_platform(
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let allowlist = load_allowlist(config.execution.allowlist_path)?;
-    let mut state = if config.execution.dry_run {
-        ScanState::load_snapshot(config.execution.state_path)?
-    } else {
-        ScanState::load_unlocked(config.execution.state_path)?
-    };
+    let mut state = ScanState::load_snapshot(config.execution.state_path)?;
     let state_probe = match save_policy {
         StateSavePolicy::Always => None,
         StateSavePolicy::OnChange => Some(StateChangeProbe::capture(&state)),

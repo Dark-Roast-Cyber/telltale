@@ -6,10 +6,12 @@ use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::file_lock::{SidecarLock, open_append, safe_path_info, sync_parent};
+#[cfg(test)]
+use crate::file_lock::{SidecarLock, sync_parent};
+use crate::file_lock::{open_append, safe_path_info};
 pub use telltale_schema::event::*;
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn append_jsonl_events(
     path: &Path,
     events: &[Event],
