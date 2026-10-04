@@ -6,9 +6,19 @@ versions; use the published candidate installer path only after an RC Release
 exists. This procedure does not make a build a release or authorize deployment
 to a live host.
 
-The current official stable release is `v0.6.0`. Use this procedure only for an
-exact unreleased development candidate in a lab or on an explicitly approved
-canary target; it does not replace the normal release process.
+## Current deployment guidance
+
+Use the [installation guide](install.md) for published releases and
+[release readiness](release-readiness.md) for qualification requirements and
+results. Use this procedure only for an exact unreleased development candidate
+in a lab or on an explicitly approved canary target; it does not replace the
+normal release process.
+
+The compatibility record and pinned backup/rollback references below belong to
+the historical Issue #37 lab against `v0.5.0`. They do not establish rollback
+compatibility with the current stable release. A new canary needs its own
+approved baseline, backup inventory, and validated upgrade/rollback evidence;
+do not reuse the historical rollback commands for a different baseline.
 
 ## Identity
 
@@ -23,13 +33,9 @@ SHA-256 of the exact candidate archive and extracted binary
 
 The embedded short Git hash from `telltale --version`, package verification,
 producer manifest, and rules fingerprint are corroborating evidence. They do
-not replace the full SHA and checksums. The published candidate source on
-stable `main` reported package `0.6.0`; the official `v0.6.0` GitHub Release is
-published. The `v0.7.0-rc.1` prerelease is published (Release ID `397543935`
-from `e2386cb53454a8384449ea0729f0e3b71072006c`) and five-platform native
-qualification passed in run `36305581215` using verifier tooling
-`c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`. Clean-host qualification remains a
-separate pre-stable gate. For a given package line,
+not replace the full SHA and checksums. Published release identities and
+qualification results are maintained in [release readiness](release-readiness.md)
+and the [version history](versioning.md#current-series). For a given package line,
 version output alone cannot distinguish an untagged build from an official
 release artifact.
 The historical Issue #37 artifact from
@@ -41,7 +47,7 @@ Use `telltale-dev-<40-character-sha>-<target>.tar.gz` for the archive name.
 Never give a development archive an official `telltale-v<version>-*` release
 name, attach it to an existing GitHub Release, or call it stable.
 
-## Compatibility record
+## Historical Issue #37 compatibility record
 
 This matrix compares official tag `v0.5.0` at
 `2d37bd52bd004ddad4956f2fa4f6f3c791e7ee9e` with development `main` after
@@ -204,8 +210,9 @@ find "$backup" -type f ! -name backup.manifest -print0 | sort -z | \
 sha256sum -c "$backup/backup.manifest"
 ```
 
-Confirm the retained binary checksum against the published v0.5.0 archive
-record. A backup failure stops the canary.
+For the historical Issue #37 baseline, confirm the retained binary checksum
+against the published v0.5.0 archive record. A different baseline requires its
+own verified archive record. A backup failure stops the canary.
 
 ## Install and canary
 
@@ -250,8 +257,10 @@ An HTTP success proves request acceptance, not indexing. If indexing cannot be
 checked without exposing sensitive data, record it as unverified. Confirm that
 the unselected remote path is disabled before claiming no duplicate ingestion.
 
-## Rollback
+## Historical Issue #37 rollback recipe
 
+This recipe restores the historical `v0.5.0` baseline. It is not a current-release
+rollback instruction or evidence that later state/configuration is downgrade-safe.
 Rollback after a completed install is configuration-aware:
 
 1. Disable and stop the timer; stop the service.
@@ -316,10 +325,10 @@ pre-replacement ordering are covered by the installer regression suite.
 
 ## Release recommendation
 
-A successful development canary means only that the selected commit is ready
-for release preparation. Production should remain on official `v0.5.0` until a
-newer stable release passes its own version, Windows, package, CI, CodeQL, and
-publication gates. Issue #23 closed after the rc.3 static-CRT clean-Windows
-qualification and functional acceptance passed. That Windows artifact evidence
-does not authorize this Linux lab procedure, a deployment, or a newer stable
-release.
+A successful development canary is evidence for release preparation, not
+production authorization. Production should use an official stable release
+that has passed its own applicable qualification and publication gates. A
+different candidate needs separate qualification; historical lab or platform
+evidence does not authorize deployment. Follow [release readiness](release-readiness.md)
+for the current gates and results, and obtain explicit operator authorization
+before any live deployment.

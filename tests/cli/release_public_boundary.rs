@@ -3204,7 +3204,25 @@ fn controlled_deployment_docs_require_exact_identity_and_one_remote_route() {
     assert!(procedure.contains("UF-primary"));
     assert!(procedure.contains("HEC-primary"));
     assert!(procedure.contains("same canonical events twice"));
-    assert!(procedure.contains("Production should remain on official `v0.5.0`"));
+    let current_guidance =
+        text_between(&procedure, "## Current deployment guidance", "## Identity");
+    assert!(current_guidance.contains("do not establish rollback"));
+    assert!(procedure.contains("## Historical Issue #37 compatibility record"));
+    assert!(procedure.contains("## Historical Issue #37 rollback recipe"));
+    let (_, recommendation) = procedure
+        .split_once("## Release recommendation")
+        .expect("release recommendation");
+    let recommendation = recommendation
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(recommendation.contains("not production authorization"));
+    assert!(recommendation.contains("official stable release"));
+    assert!(recommendation.contains("qualification and publication gates"));
+    assert!(!recommendation.contains("v0.5.0"));
+
+    let install = fs::read_to_string("docs/install.md").expect("read install guide");
+    assert!(install.contains("not proof of rollback from the current stable release"));
 
     let outputs =
         fs::read_to_string("config/examples/telltale-outputs.yaml").expect("read output example");

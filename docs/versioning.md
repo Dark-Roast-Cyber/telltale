@@ -98,16 +98,15 @@ allowance for `0.y.z` versions:
 
 | Change | Version | Examples |
 | --- | --- | --- |
-| Compatible fix | Patch (`0.3.x`; `0.5.x` after the 0.5.0 release) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
+| Compatible fix | Patch within the applicable supported minor line | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
 | Additive maturity work | Next planned minor line | New compatible capability or API that does not invalidate existing consumers |
-| Breaking change | Next planned minor (`0.5.0` for the approved migration) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
+| Breaking change | Next planned minor line | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
 | Stable compatibility commitment | Major (`1.0.0`) | Public interfaces are sufficiently settled for documented compatibility guarantees |
 
-The `0.3.x` line is the compatibility path for post-`0.3.0` fixes. The
-unpublished `0.4.0` API-hardening work is incorporated into the explicitly
-approved 0.5.0 milestone and will not create a separate release line. The 0.5.0
-scope, compatibility impact, migration requirements, acceptance criteria, and
-release review are maintained in the internal execution plan.
+Historically, the unpublished `0.4.0` API-hardening work was incorporated into
+`0.5.0` rather than released separately. See [Current Series](#current-series)
+for release history and the [0.4.0 migration guide](migrations/0.4.0.md) for that
+historical API work. These completed milestones do not select the next version.
 
 ## Versioned Surfaces
 

@@ -8,8 +8,10 @@ fixture-safe scan before pointing the scanner at real agent session stores. See
 the [Source Validation Matrix](source-validation-matrix.md) for the canonical
 source-support claims and their evidence.
 
-For an exact, non-production development canary and tested rollback from the
-current official `v0.6.0` release, use [Controlled development deployment](controlled-deployment.md).
+For exact non-production canary identity and output-routing requirements, see
+[Controlled development deployment](controlled-deployment.md). Its tested
+compatibility record and pinned rollback recipe are historical Issue #37
+evidence against `v0.5.0`, not proof of rollback from the current stable release.
 For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md).
 
 ## Prerequisites

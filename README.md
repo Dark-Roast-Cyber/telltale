@@ -272,7 +272,9 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 
 ## Project layout
 
-- `src/` — scanner, source acquisition, detection, scoring, and event emission code
+- `src/` — CLI, scan/watch orchestration, state, and telemetry delivery
+- `crates/` — reusable schema, rules, source acquisition, detection/scoring, and embedding packages; experimental inference normalization and equivalence tests
+- `apps/telltale-console/` — optional read-only local Event3 viewer
 - `tests/` — CLI coverage plus synthetic fixtures
 - `schemas/` — JSON schema for emitted events
 - `config/rules/tool-call-regex.yaml` — bundled detection rules
