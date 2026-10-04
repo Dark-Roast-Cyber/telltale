@@ -14,3 +14,10 @@ readme = "README.md"
 telltale-schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+telltale-detect.workspace = true
+telltale-rules.workspace = true
+telltale-sources = { workspace = true, features = ["opencode-sqlite"] }
+tempfile = "3.14"
+rusqlite = { version = "0.40", features = ["bundled"] }

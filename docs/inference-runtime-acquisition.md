@@ -371,8 +371,11 @@ Linux synthetic normalizer/mapping acceptance above.
 
 ## Equivalence harness
 
-The non-publishable, non-default workspace member `telltale-equivalence` owns the test-only
-`inference_session_equivalence` harness. It uses local synthetic JSON/streams and
+The non-publishable `telltale-inference` crate owns the ordinary integration test
+`tests/inference_session_equivalence.rs`, covered by default workspace tests and
+Clippy. The three existing hidden Detection v2 wrappers are retained to access
+Rule v1 session aggregation and independent atomic/process-session kernels without
+source registration or a new public API. The test uses local synthetic JSON/streams and
 temporary native stores, not live inference or production integration. It compares
 message role/text, tool name/object arguments,
 explicit call IDs, string results, captured error state, and definition name/change.

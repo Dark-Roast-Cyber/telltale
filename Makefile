@@ -81,7 +81,6 @@ uninstall:
 ## Run tests
 test:
 	cargo test $(CARGO_LOCKED)
-	cargo test $(CARGO_LOCKED) -p telltale-equivalence
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib
@@ -93,7 +92,6 @@ fmt:
 ## Lint
 clippy:
 	cargo clippy $(CARGO_LOCKED) --all-targets -- -D warnings
-	cargo clippy $(CARGO_LOCKED) -p telltale-equivalence --all-targets -- -D warnings
 
 ## Fast local feedback: format, strict Clippy, CLI and embedding library tests
 check-fast: fmt clippy
@@ -110,7 +108,6 @@ check: fmt clippy test
 ## Verify the Linux CI test and contract slice used by local CI and GitHub CI
 ci-linux-test: ci-version-consistency-check
 	cargo test $(CARGO_LOCKED) --quiet
-	cargo test $(CARGO_LOCKED) -p telltale-equivalence --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet

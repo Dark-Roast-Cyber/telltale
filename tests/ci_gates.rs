@@ -131,7 +131,6 @@ fn linux_aggregate_runs_full_tests_once_and_retains_independent_checks() {
             .collect::<Vec<_>>(),
         vec![
             "test --locked --quiet",
-            "test --locked -p telltale-equivalence --quiet",
             "test --locked -p telltale-core --lib --quiet",
             "test --locked -p telltale-sources --lib --quiet",
             "test --locked -p telltale-sources --features opencode-sqlite --lib --quiet",
