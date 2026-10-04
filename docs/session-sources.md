@@ -136,8 +136,23 @@ Recognition and safe response:
    closed. There is no supported arbitrary-backlog recovery command. Do not
    delete state, shrink overlap, or use backfill/dry-run as a recovery workaround.
 
-The cap bounds selected part count, not total memory, source bytes, message count
-or SQLite query work. A snapshot captures currently visible rows, not deleted
+SQLite extraction additionally admits at most 100,000 delivered rows shared by
+all messages and selected part pages, 134,217,728 aggregate projected row-envelope
+bytes, and 8,388,608 bytes per TEXT/BLOB cell or UTF-8 column name (inclusive).
+Every column occurrence charges its name plus SQLite-exposed UTF-8 TEXT bytes,
+BLOB bytes, zero for NULL or eight for numeric cells, including unknown fields,
+overwritten aliases, suppressed metadata and repeated joined context. Zero-row
+schemas check names but charge no aggregate bytes. Oversized sources fail
+atomically with safe source-read diagnostics and unchanged source baseline/cursor.
+These fixed internal limits have no public configuration.
+
+Admission precedes owned row construction and retains one complete native batch
+for suppression/evaluation. It does not bound SQLite preparation, filtering,
+UTF-8 conversion or engine allocation, decoded DOM/native heap, RSS, CPU or
+end-to-end memory; unselected payloads are outside its scope. The pre-existing
+nonunique message-ID join can duplicate keyset coordinates: same-page duplicates
+reject, while page-boundary duplicates can be skipped. This is not exhaustive
+join recovery. A snapshot captures currently visible rows, not deleted
 rows or overwritten intermediate revisions; backdated writes outside overlap
 are not guaranteed. Accounting remains partial, not whole-database coverage.
 

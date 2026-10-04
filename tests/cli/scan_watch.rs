@@ -3248,6 +3248,100 @@ fn scan_once_can_emit_activity_events() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn scan_once_sqlite_admission_failure_does_not_block_valid_source() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("synthetic-home");
+    let opencode = root.join("opencode");
+    let codex = root.join("codex/sessions/2026/05");
+    fs::create_dir_all(&opencode).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let marker = "SYNTHETIC-ADMISSION-PRIVATE-MARKER";
+    let conn = Connection::open(opencode.join("opencode.db")).unwrap();
+    conn.execute_batch("create table message(id text,session_id text,data text,unknown blob); insert into message values('m','s','{}',zeroblob(8388609));").unwrap();
+    fs::write(codex.join("valid.jsonl"), format!("{}\n{}\n",
+        serde_json::json!({"type":"session_meta","session_id":"synthetic-valid-session","timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"synthetic","model":"o3"}}),
+        serde_json::json!({"type":"event_msg","timestamp":"2026-05-17T10:00:01Z","payload":{"type":"user_message","message":format!("Inspect synthetic files api_key={marker}")}}))).unwrap();
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("HOME", &root)
+        .env("XDG_CONFIG_HOME", root.join(".config"))
+        .env("XDG_DATA_HOME", root.join(".local/share"))
+        .env("XDG_STATE_HOME", root.join(".local/state"))
+        .env("XDG_CACHE_HOME", root.join(".cache"))
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--emit-activity",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(&root)
+        .args(["--log-path"])
+        .arg(&log)
+        .args(["--state-path"])
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
+    assert!(
+        summary["source_processing"]["parsed_record_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let saved: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    assert!(
+        saved["sqlite_ingestion_cursors"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        saved["baseline_source_contributions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|entry| entry["source_id"] == "codex.sessions")
+    );
+    let persisted = fs::read_to_string(&log).unwrap();
+    let events: Vec<Value> = persisted
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error" && event["client"] == "opencode")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "activity" && event["client"] == "codex")
+    );
+    for text in [
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        persisted,
+        fs::read_to_string(state).unwrap(),
+    ] {
+        assert!(!text.contains(marker));
+        assert!(!text.contains("admission_unknown"));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
     let temp = tempdir().expect("tempdir");
     let secret = "SYNTHETIC-RECOVERY-SECRET";
@@ -3410,6 +3504,52 @@ rules:
     fs::copy(&state_path, &backup_state).unwrap();
     fs::copy(&log_path, &backup_log).unwrap();
     let baseline_log = fs::read(&backup_log).unwrap();
+
+    // A projected unknown column is admission scope even though mapping ignores it.
+    let admission_writer = Connection::open(&db_path).unwrap();
+    admission_writer.execute_batch("alter table part add column admission_unknown blob; update part set admission_unknown=zeroblob(8388609);").unwrap();
+    let oversized = scan();
+    assert!(
+        oversized.status.success(),
+        "source failure remains a scanner event"
+    );
+    let summary: Value = serde_json::from_slice(&oversized.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
+    assert_eq!(summary["activity_count"], 0);
+    let after_admission: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    for key in [
+        "sqlite_ingestion_cursors",
+        "baseline_source_contributions",
+        "baseline_snapshots",
+    ] {
+        assert_eq!(
+            after_admission[key], state[key],
+            "admission failure replaced {key}"
+        );
+    }
+    let admission_log = fs::read(&log_path).unwrap();
+    let errors: Vec<Value> = std::str::from_utf8(&admission_log[baseline_log.len()..])
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error")
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|event| event["event_type"] == "activity" || event["event_type"] == "detection")
+    );
+    // Repair and restart through a new process; keep the existing test's schema.
+    admission_writer
+        .execute_batch("alter table part drop column admission_unknown")
+        .unwrap();
+    drop(admission_writer);
+    assert!(scan().status.success());
+    let state: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
 
     let mut writer = Connection::open(&db_path).unwrap();
     let tx = writer.transaction().unwrap();

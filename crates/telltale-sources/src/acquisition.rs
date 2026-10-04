@@ -1433,6 +1433,55 @@ mod tests {
 
     #[test]
     #[cfg(feature = "opencode-sqlite")]
+    fn sqlite_admission_failure_is_source_read_without_partial_acquisition() {
+        let (_directory, connection, source) = database();
+        let before = super::acquire_source(&source, options()).unwrap();
+        connection.execute_batch("alter table message add column unknown blob; alter table part add column unknown blob;").unwrap();
+        let under = super::acquire_source(&source, options()).unwrap();
+        assert_eq!(
+            format!("{:?}", under.observations),
+            format!("{:?}", before.observations)
+        );
+        assert_eq!(under.accounting, before.accounting);
+        assert_eq!(under.progress, before.progress);
+        connection.execute_batch("insert into part values('unselected','message-acquisition','session-acquisition',4,4,'{\"type\":\"metadata\"}',zeroblob(8388609));").unwrap();
+        let unselected = super::acquire_source(&source, options()).unwrap();
+        assert_eq!(
+            format!("{:?}", unselected.observations),
+            format!("{:?}", before.observations)
+        );
+        assert_eq!(unselected.accounting, before.accounting);
+        assert_eq!(unselected.progress, before.progress);
+        connection
+            .execute("delete from part where id='unselected'", [])
+            .unwrap();
+        for table in ["message", "part"] {
+            connection
+                .execute_batch(&format!("update {table} set unknown=zeroblob(8388609)"))
+                .unwrap();
+            let error = acquisition_error(super::acquire_source(&source, options()));
+            assert_eq!(error, AcquisitionError::SourceRead);
+            assert!(!format!("{error:?} {error}").contains("unknown"));
+            connection
+                .execute_batch(&format!("update {table} set unknown=null"))
+                .unwrap();
+            let repaired = super::acquire_source(&source, options()).unwrap();
+            assert_eq!(
+                format!("{:?}", repaired.observations),
+                format!("{:?}", before.observations)
+            );
+            assert_eq!(repaired.accounting, before.accounting);
+            assert_eq!(repaired.progress, before.progress);
+        }
+        connection.execute_batch("insert into message values('metadata-only','another-session',4,4,'{}',zeroblob(8388609));").unwrap();
+        assert_eq!(
+            acquisition_error(super::acquire_source(&source, options())),
+            AcquisitionError::SourceRead
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "opencode-sqlite")]
     fn incremental_parts_must_fit_the_effective_limit_or_fail_atomically() {
         let (_directory, connection, source) = database();
         connection.execute("delete from part", []).unwrap();
