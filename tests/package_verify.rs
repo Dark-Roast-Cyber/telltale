@@ -16,13 +16,57 @@ VERSION=@@VERSION@@
 case "$1" in
 metadata)
     no_deps=0
+    manifest=
+    assignment=0
     for argument in "$@"; do
         test "$argument" = "--no-deps" && no_deps=1
+        test "$argument" = "protected-assignment" && assignment=1
+    done
+    while test "$#" -gt 0; do
+        if test "$1" = "--manifest-path"; then
+            shift
+            manifest=$1
+        fi
+        shift
     done
     if test "$no_deps" -eq 1; then
         cat "$FAKE_WORKSPACE_METADATA"
     else
-        printf '%s\n' '{"packages":[{"id":"consumer","name":"telltale-detect-light-consumer"}],"resolve":{"nodes":[{"id":"consumer","deps":[]}]}}'
+        python3 - "$manifest" "$assignment" <<'PY'
+import json
+import os
+import sys
+
+manifest, enabled = sys.argv[1], sys.argv[2] == "1"
+case = os.environ.get("FAKE_PACKAGE_VERIFY_CASE", "success")
+if manifest.endswith("/detect-light-consumer/Cargo.toml"):
+    packages = [{"id": "consumer", "name": "telltale-detect-light-consumer"}]
+    nodes = [{"id": "consumer", "deps": [], "features": []}]
+else:
+    assignment = manifest.endswith("/core-assignment-consumer/Cargo.toml")
+    assert assignment == enabled, "assignment consumer must explicitly enable its feature"
+    packages = [
+        {"id": "consumer", "name": "telltale-core-assignment-consumer" if assignment else "telltale-core-consumer"},
+        {"id": "core", "name": "telltale-core"},
+        {"id": "sources", "name": "telltale-sources"},
+    ]
+    def dependency(package):
+        return {"pkg": package, "dep_kinds": [{"kind": None, "target": None}]}
+    core_dependencies = [dependency("sources")]
+    if assignment or case == "normal-sqlite":
+        packages.append({"id": "sqlite", "name": "rusqlite"})
+        core_dependencies.append(dependency("sqlite"))
+    nodes = [
+        {"id": "consumer", "deps": [dependency("core")], "features": ["protected-assignment"] if enabled else []},
+        {"id": "core", "deps": core_dependencies,
+         "features": ["protected-assignment"] if assignment and case != "assignment-missing-feature" else []},
+        {"id": "sources", "deps": [],
+         "features": ["opencode-sqlite"] if assignment and case == "assignment-acquisition" else []},
+    ]
+    if any(package["id"] == "sqlite" for package in packages):
+        nodes.append({"id": "sqlite", "deps": [], "features": []})
+print(json.dumps({"packages": packages, "resolve": {"root": "consumer", "nodes": nodes}}))
+PY
     fi
     ;;
 package)
@@ -65,6 +109,22 @@ package)
 test|check)
     ;;
 run)
+    for argument in "$@"; do
+        case "$argument" in
+            */core-assignment-consumer/Cargo.toml)
+                expected_root="${CARGO_TARGET_DIR%/target/core-assignment-consumer}/protected-assignment-store"
+                test "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT" = "$expected_root"
+                test ! -e "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT"
+                mkdir "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT"
+                printf '%s\n' "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT" > "$FAKE_ASSIGNMENT_STORE_RECORD"
+                : > "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT/protected-state"
+                if test "${FAKE_PACKAGE_VERIFY_CASE:-success}" = assignment-failure; then
+                    echo "synthetic assignment consumer failure" >&2
+                    exit 1
+                fi
+                ;;
+        esac
+    done
     printf '%s\n' '@@VERSION@@'
     ;;
 install)
@@ -128,6 +188,41 @@ esac
 "##;
 
 #[test]
+#[cfg(target_os = "linux")]
+fn package_verifier_enforces_independent_core_feature_graphs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = run_package_verifier(root, "success");
+    assert!(output.status.success(), "{}", output_text(&output));
+    for expected in [
+        "core normal feature graph verified",
+        "core assignment feature graph verified",
+    ] {
+        assert!(
+            output_text(&output).contains(expected),
+            "{}",
+            output_text(&output)
+        );
+    }
+    for (case, expected) in [
+        ("normal-sqlite", "core consumer SQLite graph mismatch"),
+        ("assignment-missing-feature", "AssertionError"),
+        ("assignment-acquisition", "assignment enabled acquisition"),
+        (
+            "assignment-failure",
+            "synthetic assignment consumer failure",
+        ),
+    ] {
+        let output = run_package_verifier(root, case);
+        assert_eq!(output.status.code(), Some(1), "{}", output_text(&output));
+        assert!(
+            output_text(&output).contains(expected),
+            "{case}: {}",
+            output_text(&output)
+        );
+    }
+}
+
+#[test]
 fn package_verifier_enforces_the_canonical_executable_set() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
@@ -175,13 +270,23 @@ fn run_package_verifier(root: &Path, case: &str) -> Output {
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))
         .expect("make fake cargo executable");
 
-    Command::new(root.join("scripts/package-verify"))
+    let assignment_record = fixture.path().join("assignment-root.txt");
+    let output = Command::new(root.join("scripts/package-verify"))
         .current_dir(root)
         .env("CARGO", &cargo)
         .env("FAKE_WORKSPACE_METADATA", metadata_path)
         .env("FAKE_PACKAGE_VERIFY_CASE", case)
+        .env("FAKE_ASSIGNMENT_STORE_RECORD", &assignment_record)
         .output()
-        .expect("run package verifier")
+        .expect("run package verifier");
+    if assignment_record.exists() {
+        let store_root = fs::read_to_string(assignment_record).expect("recorded assignment root");
+        assert!(
+            !Path::new(store_root.trim()).exists(),
+            "protected state survived verifier cleanup"
+        );
+    }
+    output
 }
 
 fn output_text(output: &Output) -> String {

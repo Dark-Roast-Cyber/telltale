@@ -285,9 +285,17 @@ impl Pipeline {
         &self,
         sources: &[Source],
     ) -> Result<Vec<SourceScan>, PipelineError> {
-        let now = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)?;
-        let observed_at = telltale_schema::observation::ObservedAt::new(now)?;
+        self.scan_sources_with_time(sources, || {
+            time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)
+        })
+    }
+
+    fn scan_sources_with_time(
+        &self,
+        sources: &[Source],
+        now: impl FnOnce() -> Result<String, time::error::Format>,
+    ) -> Result<Vec<SourceScan>, PipelineError> {
+        let observed_at = telltale_schema::observation::ObservedAt::new(now()?)?;
         Ok(self
             .scan_canonical_sources(sources, observed_at)?
             .into_iter()
@@ -438,6 +446,67 @@ mod tests {
             source_id: "embedded.synthetic".to_string(),
             path: std::path::PathBuf::from("embedded://synthetic"),
         }
+    }
+
+    #[test]
+    fn batch_time_failures_precede_compilation_and_source_io() {
+        let invalid_rules = r#"
+version: 1
+description: synthetic batch error precedence
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: synthetic.invalid
+    category: synthetic
+    severity: unknown
+    score: 1
+    targets: [command]
+    regex: needle
+    tags: []
+    explanation: synthetic
+modifiers: []
+"#;
+        let invalid = Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(invalid_rules)
+            .build()
+            .expect("legacy rules accept severity");
+        let valid = Pipeline::builder().build().unwrap();
+        let sources = [synthetic_source()];
+        for batch in [&[][..], &sources[..]] {
+            for pipeline in [&valid, &invalid] {
+                let error = pipeline
+                    .scan_sources_with_time(batch, || {
+                        time::Date::from_calendar_date(2026, time::Month::October, 4)
+                            .unwrap()
+                            .format(&time::format_description::parse("[offset_hour]").unwrap())
+                    })
+                    .err()
+                    .expect("clock failure");
+                assert!(matches!(error, PipelineError::Clock(_)));
+                let error = pipeline
+                    .scan_sources_with_time(batch, || Ok("invalid-observed-at".into()))
+                    .err()
+                    .expect("observation failure");
+                assert!(matches!(error, PipelineError::Observation(_)));
+            }
+            let error = invalid
+                .scan_sources_with_time(batch, || Ok("2026-10-04T00:00:00Z".into()))
+                .err()
+                .expect("compilation failure");
+            assert!(matches!(
+                error,
+                PipelineError::RuleCompilation(RuleV1CompileError::InvalidSeverity)
+            ));
+        }
+        let scans = valid
+            .scan_sources_with_time(&sources, || Ok("2026-10-04T00:00:00Z".into()))
+            .unwrap();
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].events.len(), 1);
+        assert_eq!(scans[0].events[0].event_type, "scanner_error");
+        assert!(scans[0].occurrences.is_empty());
     }
 
     #[test]

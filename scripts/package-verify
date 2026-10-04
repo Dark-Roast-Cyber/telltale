@@ -20,6 +20,7 @@ PACKAGE_DIR="$TARGET_DIR/package"
 DETECT_CONSUMER_DIR="$WORK_DIR/detect-consumer"
 DETECT_LIGHT_CONSUMER_DIR="$WORK_DIR/detect-light-consumer"
 CORE_CONSUMER_DIR="$WORK_DIR/core-consumer"
+CORE_ASSIGNMENT_CONSUMER_DIR="$WORK_DIR/core-assignment-consumer"
 SCHEMA_CONSUMER_DIR="$WORK_DIR/schema-consumer"
 RULES_CONSUMER_DIR="$WORK_DIR/rules-consumer"
 SOURCES_CONSUMER_DIR="$WORK_DIR/sources-consumer"
@@ -219,8 +220,12 @@ name = "telltale-core-consumer"
 version = "0.0.0"
 edition = "2024"
 
+[features]
+protected-assignment = ["telltale-core/protected-assignment", "dep:telltale-schema"]
+
 [dependencies]
 telltale-core = "=$VERSION"
+telltale-schema = { version = "=$VERSION", optional = true }
 EOF
 
 cat > "$CORE_CONSUMER_DIR/src/main.rs" <<'EOF'
@@ -275,9 +280,89 @@ fn main() {
     ))
     .expect("local event feed");
     assert!(feed.poll().expect("local event feed poll").records.is_empty());
+    #[cfg(feature = "protected-assignment")]
+    verify_protected_assignment();
     println!("{}", pipeline.rule_count());
 }
+
+#[cfg(feature = "protected-assignment")]
+fn verify_protected_assignment() {
+    use telltale_core::assignment::{
+        AssignmentAdapterDomain, ProtectedAssignmentStore, ReplayAssociation,
+    };
+    use telltale_schema::observation::{
+        CanonicalObservationV2, FactMetadata, Fidelity, IngestionMode, ObservationBody,
+        ObservationStage, ObservedAt, SourceProvenance, ToolObservation,
+    };
+
+    // Exercise the registered Codex domain with a caller-owned synthetic fact,
+    // not Codex acquisition. This locator is immutably attached to that one fact
+    // in this test contract; no path, ordinal or semantic matching is used.
+    let association = ReplayAssociation::new(
+        AssignmentAdapterDomain::registered("codex", "codex.sessions").expect("registered domain"),
+        "package-consumer-fact:v1",
+        b"synthetic-immutable-fact-a",
+    ).expect("association");
+    let builder = |name: &str| {
+        CanonicalObservationV2::builder(
+            ObservationBody::Tool(ToolObservation::new().with_name(name).unwrap()),
+            ObservationStage::ToolProposed,
+            ObservedAt::new("2026-10-04T00:00:00Z").unwrap(),
+            SourceProvenance::new(
+                IngestionMode::SessionStore, "codex", "codex.sessions", Fidelity::FullNative,
+            ).unwrap(),
+        ).fact_metadata("tool.name", FactMetadata::reported().unwrap())
+    };
+    let root = std::path::PathBuf::from(
+        std::env::var_os("TELLTALE_PACKAGE_ASSIGNMENT_ROOT").expect("verifier-owned absent store path"),
+    );
+    let mut store = ProtectedAssignmentStore::initialize(&root).expect("initialize");
+    let first = store.claim_or_replay(builder("synthetic-tool-a"), &association).expect("claim");
+    assert!(first.session_id().is_none());
+    let id = first.observation_id().to_owned();
+    let suffix = id.strip_prefix("obs:v2:sha256:").expect("identity prefix");
+    assert_eq!(suffix.len(), 64);
+    assert!(suffix.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    let replay = store.claim_or_replay(builder("synthetic-tool-a"), &association).expect("replay");
+    assert_eq!(id, replay.observation_id());
+    drop(store);
+    let mut store = ProtectedAssignmentStore::open(&root).expect("reopen");
+    let replay = store.claim_or_replay(builder("synthetic-tool-a"), &association).expect("durable replay");
+    assert_eq!(id, replay.observation_id());
+    let error = store.claim_or_replay(builder("synthetic-secret-mutation"), &association)
+        .expect_err("semantic collision");
+    assert_eq!(error.code(), "replay_collision");
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    for diagnostic in [&display, &debug] {
+        assert!(diagnostic.len() <= 128);
+        for private in ["synthetic-secret-mutation", "synthetic-immutable-fact-a", &id, root.to_str().unwrap()] {
+            assert!(!diagnostic.contains(private));
+        }
+    }
+    let replay = store.claim_or_replay(builder("synthetic-tool-a"), &association).expect("collision preserves assignment");
+    assert_eq!(id, replay.observation_id());
+    drop(store);
+}
 EOF
+
+if test "$(uname -s)" = Linux; then
+    mkdir -p "$CORE_ASSIGNMENT_CONSUMER_DIR/src"
+    cp "$CORE_CONSUMER_DIR/src/main.rs" "$CORE_ASSIGNMENT_CONSUMER_DIR/src/main.rs"
+    cat > "$CORE_ASSIGNMENT_CONSUMER_DIR/Cargo.toml" <<EOF
+[package]
+name = "telltale-core-assignment-consumer"
+version = "0.0.0"
+edition = "2024"
+
+[features]
+protected-assignment = ["telltale-core/protected-assignment"]
+
+[dependencies]
+telltale-core = "=$VERSION"
+telltale-schema = "=$VERSION"
+EOF
+fi
 
 cat > "$SCHEMA_CONSUMER_DIR/Cargo.toml" <<EOF
 [package]
@@ -485,6 +570,61 @@ for package in telltale-schema telltale-rules telltale-sources telltale-detect; 
 done
 echo "== registry-style core-only consumer =="
 CARGO_TARGET_DIR="$TARGET_DIR/core-consumer" "$@" >/dev/null
+
+if test "$(uname -s)" = Linux; then
+    set -- "$CARGO_BIN" run --features protected-assignment --manifest-path "$CORE_ASSIGNMENT_CONSUMER_DIR/Cargo.toml"
+    for package in telltale-core telltale-schema telltale-rules telltale-sources telltale-detect; do
+        set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+    done
+    echo "== registry-style protected-assignment core consumer (Linux) =="
+    TELLTALE_PACKAGE_ASSIGNMENT_ROOT="$WORK_DIR/protected-assignment-store" \
+        CARGO_TARGET_DIR="$TARGET_DIR/core-assignment-consumer" "$@" >/dev/null
+fi
+
+for variant in normal assignment; do
+    case "$variant" in
+        normal) consumer_dir="$CORE_CONSUMER_DIR" ;;
+        assignment)
+            test "$(uname -s)" = Linux || continue
+            consumer_dir="$CORE_ASSIGNMENT_CONSUMER_DIR"
+            ;;
+    esac
+    set -- "$CARGO_BIN" metadata --format-version 1 --manifest-path "$consumer_dir/Cargo.toml"
+    if test "$variant" = assignment; then
+        set -- "$@" --features protected-assignment
+    fi
+    for package in telltale-core telltale-schema telltale-rules telltale-sources telltale-detect; do
+        set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
+    done
+    "$@" > "$WORK_DIR/core-$variant-metadata.json"
+    python3 - "$WORK_DIR/core-$variant-metadata.json" "$variant" <<'PY'
+import json
+import sys
+
+metadata = json.load(open(sys.argv[1], encoding="utf-8"))
+assignment = sys.argv[2] == "assignment"
+names = {package["id"]: package["name"] for package in metadata["packages"]}
+nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+root = metadata["resolve"]["root"]
+reachable = {root}
+pending = [root]
+while pending:
+    for dependency in nodes[pending.pop()]["deps"]:
+        if any(kind["kind"] in (None, "normal") for kind in dependency["dep_kinds"]):
+            package_id = dependency["pkg"]
+            if package_id not in reachable:
+                reachable.add(package_id)
+                pending.append(package_id)
+present = {names[package_id] for package_id in reachable}
+assert ("rusqlite" in present) == assignment, "core consumer SQLite graph mismatch"
+for package_id in reachable:
+    if names[package_id] == "telltale-core":
+        assert ("protected-assignment" in nodes[package_id]["features"]) == assignment
+    if names[package_id] == "telltale-sources":
+        assert "opencode-sqlite" not in nodes[package_id]["features"], "assignment enabled acquisition"
+print(f"core {sys.argv[2]} feature graph verified")
+PY
+done
 
 set -- "$CARGO_BIN" check --manifest-path "$CLI_CONSUMER_DIR/Cargo.toml"
 set -- "$@" --config "patch.crates-io.telltale-cli.path=\"$(package_path telltale-cli)\""
