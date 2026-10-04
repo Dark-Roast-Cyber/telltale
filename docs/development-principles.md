@@ -5,24 +5,17 @@ Scope: Telltale core, adapters, rule content, policy, enforcement, gateway work,
 
 ## Direction, Not Sequencing
 
-These principles define architectural direction and constraints. They do not
-define implementation sequencing: `ROADMAP.md`, accepted GitHub Issues, and
-milestone planning determine what is built now.
-
-A capability described here as future work must not be implemented merely
-because it is described in this document. Implementation requires separately
-accepted, bounded work. Where this document and current behavior differ, the
-difference is intended architecture, not a claim about what exists today.
+These principles define direction and constraints, not implementation authority
+or sequencing. `ROADMAP.md`, accepted GitHub Issues, and milestone planning
+determine what is built now. Future capabilities require separately accepted,
+bounded work; differences from current behavior describe intent, not existence.
 
 The accepted semantic-foundation contracts are documented in [Semantic
 foundation](semantic-foundation.md) and its related [Event4](event4.md),
 [Canonical Observation v2](canonical-observation-v2.md), [Detection v2](detection-v2.md),
 and [telemetry/output architecture](telemetry-output-architecture.md) pages.
-Those pages distinguish the activated Canonical Observation v2 and Detection
-v2 production contracts from future or non-production Event4 and telemetry
-architecture. Describing future architecture does not authorize production
-activation or additional work. These principles remain the direction for
-evaluating future work.
+Those pages distinguish active Canonical Observation v2/Detection v2 production
+contracts from future or non-production Event4 and telemetry architecture.
 
 ## Product Direction
 
@@ -36,17 +29,8 @@ The project should remain simple, clean, modular, composable, useful offline, an
 
 ## Core Architecture
 
-Prefer this conceptual flow:
-
 ```text
-Observation
-    -> Normalization
-    -> Detection
-    -> Signals
-    -> Policy
-    -> Decision
-    -> Action
-    -> Audit / Telemetry
+Observation -> Normalization -> Detection -> Signals -> Policy -> Decision -> Action -> Audit/Telemetry
 ```
 
 Keep the responsibilities distinct.
@@ -55,17 +39,9 @@ Keep the responsibilities distinct.
 
 An observation is a fact about what an agent, model, harness, or agent-requested tool did or attempted to do.
 
-Examples include:
-
-- user or assistant messages
-- model requests and responses
-- tool calls and tool results
-- shell or process execution requested by an agent
-- file access performed through an agent tool
-- network destinations exposed through an agent or gateway
-- execution mode such as auto-approve or dangerous mode
-- whether the agent is running inside an approved container or sandbox
-- source, session, timing, identity, provenance, and capability metadata
+Examples: messages and model traffic; tool calls/results; agent-requested
+processes, file access, and destinations; approval/execution modes and sandbox
+state; source, session, timing, identity, provenance, and capabilities.
 
 Telltale may use optional OS-context components to enrich agent activity, but the core should not attempt to collect arbitrary endpoint activity unrelated to an agent.
 
@@ -85,17 +61,11 @@ Canonical observations should preserve structured tool arguments and results, ca
 
 ### Intent Versus Side Effects
 
-A model-generated tool call, a harness execution request, an authorization or
-approval decision, an execution attempt, an execution completion, and a tool
-result are distinct facts. A model asking for an action is not the same event
-as the harness performing it, and neither is the same as the result coming
-back.
+A model tool call, harness execution request, authorization/approval decision,
+execution attempt, completion, and result are distinct facts.
 
-Canonical observations must preserve these distinctions wherever the source
-exposes them, including sufficient call/correlation identity, ordering, and
-stage or outcome fields to tell them apart after normalization. Collapsing
-them loses exactly the evidence needed to explain what was requested, what
-was permitted, what ran, and what it produced.
+Preserve source-exposed call/correlation identity, ordering, stage, and outcome
+so normalization retains what was requested, permitted, executed, and produced.
 
 Observing a proposed tool call, especially through an inference gateway, does
 not by itself imply the ability to prevent host-side execution. The gateway
@@ -110,12 +80,8 @@ claiming prevention.
 
 Detection rules are signatures or analytics. They describe recognized behavior and produce signals.
 
-A detection should answer questions such as:
-
-- What behavior was observed?
-- Which rule or analytic matched?
-- What evidence caused the match?
-- How confident or severe is the signal?
+A detection identifies the behavior, matching rule/analytic, evidence, and
+confidence/severity.
 
 Detection logic should generally not hard-code an enforcement action.
 
@@ -129,38 +95,15 @@ The same signal may result in different responses under different policies or en
 
 Policy decides what response is appropriate.
 
-Policy may evaluate:
-
-- canonical observations and facts directly
-- detection signals
-- execution context
-- workspace or environment context
-- source and action capabilities
-- managed and local configuration
-
-Policy does not require a detection to fire first.
-
-Examples of direct policy conditions include:
-
-- agent is running in auto-approve mode
-- dangerous mode is enabled
-- execution is outside an approved container
-- a shell command is about to run in a protected workspace
-- a particular class of tool requires confirmation
-
-Do not create fake detections merely to represent configuration or environmental state when policy can evaluate that state directly.
+Policy may evaluate canonical facts, signals, execution/workspace/environment
+context, capabilities, and managed/local configuration. It need not wait for a
+detection: approval modes, sandbox state, protected-workspace commands, and tool
+confirmation requirements are direct policy conditions, not fake detections.
 
 ### Decisions
 
-Policy should produce provider-neutral decision intents such as:
-
-- allow
-- observe
-- warn
-- require approval
-- reprompt
-- block
-- remediate
+Policy should produce provider-neutral intents: allow, observe, warn, require
+approval, reprompt, block, or remediate.
 
 Do not encode product-specific actions such as `AskEmusary`. Prefer semantic actions such as `RequireApproval` and let an adapter or provider implement them.
 
@@ -168,14 +111,8 @@ Do not encode product-specific actions such as `AskEmusary`. Prefer semantic act
 
 Action adapters implement decisions where the current deployment can support them.
 
-Examples include:
-
-- harness-native blocking
-- gateway blocking
-- harness reprompting
-- user approval prompts
-- externally hosted approval services
-- warning or remediation
+Examples: harness/gateway blocking, harness reprompting, local or externally
+hosted approval, warnings, and remediation.
 
 Enforcement must be capability-driven. Different harnesses and deployment modes will expose different capabilities.
 
@@ -187,11 +124,7 @@ observe + emit an explicit enforcement-degraded event
 
 Never claim that enforcement occurred when it did not.
 
-Telemetry should preserve at least:
-
-- requested action
-- effective action
-- degradation reason when they differ
+Telemetry preserves requested action, effective action, and any degradation reason.
 
 ## Deployment Modes
 
@@ -215,15 +148,9 @@ The gateway is another observation and action adapter, not a separate detection 
 
 Gateway observations should normalize into the same canonical model and use the same detection, policy, decision, and telemetry semantics as local sources.
 
-Longer term, the gateway or harness may pause selected actions and route them to a human approval provider. The approval provider may be:
-
-- Emusary
-- a separately hosted approval service
-- a service co-hosted with the gateway
-- a local desktop UI
-- a harness-native approval mechanism
-
-The core decision remains `require approval`; the deployment chooses how approval is obtained.
+Longer term, a gateway or harness may pause selected actions for human approval
+through Emusary, a separate/co-hosted service, desktop UI, or harness mechanism.
+The core intent remains `require approval`; the deployment chooses the provider.
 
 ## Agent Focus and OS Context
 
@@ -247,16 +174,8 @@ A source that cannot supply a field must not silently pretend that it can. An ad
 
 Rules are content, not application-specific configuration.
 
-Use one common detection model and engine for:
-
-- bundled Telltale rules
-- community rules
-- local custom rules
-- organization rules
-- third-party commercial rules
-- raw HTTP-hosted rule packages
-- future authenticated rule feeds
-- Emusary-managed rule content
+Use one detection model/engine for bundled, community, local, organization,
+commercial, HTTP-hosted, future authenticated, and Emusary-managed rules.
 
 Commercial or proprietary rule content should be able to use licensing terms independent of the Telltale engine license. The engine loads and evaluates content without requiring all rule packages to use the Telltale license.
 
@@ -264,14 +183,8 @@ Commercial or proprietary rule content should be able to use licensing terms ind
 
 Keep rule acquisition separate from rule evaluation.
 
-Conceptually:
-
 ```text
-RuleSource
-    -> RulePackage
-    -> Validation
-    -> Compilation
-    -> Active Rule Set
+RuleSource -> RulePackage -> Validation -> Compilation -> Active Rule Set
 ```
 
 Do not create separate rule engines for local, HTTP, commercial, or Emusary-delivered content.
@@ -293,15 +206,8 @@ needed for this. Do not build a package manager or expand the current
 tiered-resolution behavior to get there; the tier order documented in
 `docs/install.md` remains the current implementation.
 
-A rule package should eventually have a small manifest that can identify items such as:
-
-- package ID
-- package version
-- rule schema compatibility
-- publisher
-- license
-- contained rules
-- integrity information
+A future small manifest should identify package ID/version, rule-schema
+compatibility, publisher, license, contents, and integrity information.
 
 Do not build a complex package manager prematurely.
 
@@ -323,11 +229,7 @@ Do not replace a working ruleset with an unusable one merely because a newer dow
 
 Telltale may eventually translate or adapt detection logic authored for Sigma, Sysmon, EDRs, or other ecosystems when the semantics can be represented using agent-visible observations.
 
-Translation must report whether a rule is:
-
-- fully representable
-- partially representable
-- unsupported
+Translation must report full, partial, or unsupported representability.
 
 Never silently discard unsupported conditions and claim full equivalence.
 
@@ -335,12 +237,8 @@ Never silently discard unsupported conditions and claim full equivalence.
 
 Configuration should be layered, explainable, and introspectable.
 
-For every meaningful effective value, it should eventually be possible to explain:
-
-- the effective value
-- where it came from
-- what it overrode
-- whether it is locally managed or externally managed
+For each meaningful effective value, operators should eventually be able to
+explain its origin, what it overrode, and whether it is locally or externally managed.
 
 Expose meaningful operator choices without turning every internal tuning value into a public configuration option.
 
@@ -364,30 +262,13 @@ Telltale must remain fully useful without Emusary.
 
 Emusary should be an excellent management and collection implementation for Telltale, not a dependency baked into the core.
 
-Telltale should own open, vendor-neutral semantics for:
+Telltale should own vendor-neutral observations, rule language/IR, detection, policy,
+decisions/responses, capabilities, adapter contracts, privacy/redaction, events,
+and standalone configuration.
 
-- canonical agent observations
-- rule language or rule intermediate representation
-- detection semantics
-- policy semantics
-- decision and response semantics
-- capabilities
-- source, harness, gateway, and action adapter contracts
-- privacy and redaction behavior
-- event schemas
-- local standalone configuration
-
-Emusary may own managed capabilities such as:
-
-- fleet identity and tenancy
-- authentication and authorization
-- deployment and update orchestration
-- organization-wide rule and policy lifecycle
-- config distribution
-- central approval workflows
-- central storage and search
-- endpoint inventory
-- remote evidence collection
+Emusary may own fleet identity/tenancy, authentication/authorization,
+deployment/updates, organization rule/policy lifecycle, config distribution,
+central approvals/storage/search, endpoint inventory, and remote evidence collection.
 
 Avoid spreading Emusary-specific types throughout Telltale core. Prefer generic management, control-plane, approval, sink, and configuration contracts.
 
@@ -395,23 +276,10 @@ Avoid spreading Emusary-specific types throughout Telltale core. Prefer generic 
 
 Keep telemetry delivery separate from management/control functions.
 
-Data plane examples:
-
-- detections
-- observations selected for export
-- decisions
-- audit events
-- health and delivery state when appropriate
-
-Control plane examples:
-
-- rules
-- policy
-- configuration
-- capabilities
-- management commands
-- approval coordination
-- version and compatibility state
+- Data plane: detections, export-selected observations, decisions, audit, and
+  appropriate health/delivery state.
+- Control plane: rules, policy, configuration, capabilities, management commands,
+  approval coordination, and version/compatibility state.
 
 Canonical Telltale event semantics belong to Telltale. Transport-specific envelopes and tenancy metadata belong at adapter or integration boundaries.
 
@@ -442,17 +310,9 @@ Do not require every downstream integration to rediscover Telltale's privacy rul
 
 A significant Telltale decision should eventually be reproducible and explainable from recorded state.
 
-Preserve or make available information such as:
-
-- canonical evidence and provenance
-- rule ID and rule/package version
-- rule or content hash where appropriate
-- policy version
-- configuration provenance
-- runtime capabilities
-- requested action
-- effective action
-- degradation reason
+Preserve canonical evidence/provenance, rule identity/version/hash, policy
+version, configuration provenance, runtime capabilities, requested/effective
+actions, and degradation reasons.
 
 ## Extensibility
 
@@ -478,12 +338,8 @@ Create a new crate when it establishes a useful ownership, dependency, test, or 
 
 ## Equivalence Across Adapters
 
-Equivalent canonical observations should produce equivalent detection semantics regardless of whether they originated from:
-
-- a session log
-- a live harness adapter
-- an inference gateway
-- another supported observation adapter
+Equivalent canonical observations should produce equivalent detection semantics
+across session logs, live harnesses, gateways, and other supported adapters.
 
 Build contract and fixture tests that exercise the same synthetic behavior through multiple adapters and verify canonical and analytic equivalence where the source capabilities permit it.
 
@@ -495,13 +351,8 @@ Do not sacrifice long-term architecture to preserve accidental internal compatib
 
 Prefer correcting foundational abstractions now rather than carrying them indefinitely.
 
-Be more cautious with intentional external contracts such as:
-
-- released stable rule IDs
-- documented event semantics
-- privacy guarantees
-- security guarantees
-- data-loss and delivery guarantees
+Protect intentional external contracts: stable rule IDs, documented events,
+privacy/security guarantees, and data-loss/delivery guarantees.
 
 Internal crate layout, private traits, module organization, and experimental implementation details may be refactored aggressively when doing so improves the architecture.
 
@@ -519,19 +370,5 @@ remain explicit because they cannot always be reconstructed after flattening.
 
 ## Development Heuristics
 
-When evaluating a proposed change, prefer the design that answers yes to more of these questions:
-
-- Does the core remain agent-focused?
-- Does source-specific data normalize before analytics?
-- Are detection, policy, decision, and action responsibilities still separate?
-- Can the same semantics work in scanner, harness, and gateway deployments?
-- Does the design preserve standalone use without Emusary?
-- Is a product-specific behavior implemented as an adapter rather than embedded in the core?
-- Can unsupported capabilities fail or degrade explicitly?
-- Are remote rules/config activated transactionally with last-known-good behavior?
-- Can operators explain the effective config and why a decision was made?
-- Does the design stay simple enough for an open-source contributor to understand?
-- Is optional functionality actually optional?
-- Are we fixing an architectural problem now instead of protecting accidental pre-1.0 compatibility?
-
-If a change violates these principles, the implementation should either be revised or explicitly document why an exception is justified.
+Evaluate changes against the boundaries above, keeping the design understandable
+to an open-source contributor. Revise violations or explicitly justify exceptions.

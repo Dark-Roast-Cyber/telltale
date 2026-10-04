@@ -89,40 +89,10 @@ bounded command shape is understood.
 
 ## New Source Checklist
 
-When adding a source, include these repository-native artifacts in the same
-change or keep the source marked experimental until they exist:
-
-1. For a new client, a canonical `ClientId` variant and its
-   `ClientId::as_str()` arm; reuse them for another source from an existing
-   client. Add stable, case-sensitive source IDs in either case.
-2. For a new client, a new `sources/<agent>/mod.rs` declaration in
-   `sources/mod.rs`; for another identity, an update to the existing client
-   module. Include path roots, patterns, fixture paths, recursion, and
-   project-local metadata.
-3. Source-owned native extraction and canonical mapping for a new modeled
-   client, or an update to the existing client modules for another modeled
-   identity. Do not add a flattened record projection.
-4. For a new client, an import and `ClientDef` entry in
-   `sources/registry.rs`, preserving public client/install order.
-5. For a new client, a per-client `AgentInstallDef`/`INSTALL` definition,
-   including empty signal lists when appropriate, plus the matching
-   `INSTALL_DEFS` entry.
-6. One exact identity in the public acquisition router. `SourceKind` does not
-   select extraction.
-7. Neutral shared reader use only; do not add a parser field to public
-   `ClientSourceDef` or a public parser extension API.
-8. Synthetic fixtures under the registered fixture-relative path, mirrored
-   under a crate `tests/fixtures` boundary when packaged tests reference them.
-9. Registry/integrity, positive/benign, drift/unknown/failure/no-fallback,
-   source/event ordering, portable discovery/path tests, and updated hard-coded
-   registry and client-count snapshots.
-10. Support/capability documentation, focused/full/package validation, and
-    Linux, Windows, and macOS CI coverage.
-
-Use portable `Path`/`PathBuf` joins and platform-aware root helpers. Do not rely
-on exact separators, Unix permissions, symlinks, `/tmp`, or verbatim Windows
-path prefixes. Do not introduce traits, plugin ABI, dynamic/runtime
-registration, or external parser configuration.
+Follow [Adding an Agent Source](adding-agent-source.md) for registry wiring,
+exact-identity acquisition, portable fixtures, tests, and package/platform
+validation. Keep the source experimental until those artifacts and the coverage
+gates above exist in the same change.
 
 ## Use-Case Coverage Summary
 
