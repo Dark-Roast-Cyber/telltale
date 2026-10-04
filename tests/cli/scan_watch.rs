@@ -658,6 +658,11 @@ fn idle_durable_watch_case(
         command.arg("--dry-run");
     }
     let mut child = WatchChildGuard::new(command.spawn().unwrap());
+    if dry_run {
+        // Registration follows signal-handler installation. Keep the source idle:
+        // a triggered scan would invalidate the no-summary/no-write assertions.
+        wait_for_watch_ready(child.child_mut(), &sessions);
+    }
     let started = Instant::now();
     let mut attempts = BTreeMap::<String, usize>::new();
     let mut request_timeline = Vec::new();
@@ -806,7 +811,13 @@ fn idle_durable_watch_case(
         thread::sleep(Duration::from_millis(25));
     }
     let output = child.disarm().wait_with_output().unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "idle watch shutdown failed: status={:?}; stdout={:?}; stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         output.stdout.is_empty(),
         "idle wakeups must not emit scan summaries"
