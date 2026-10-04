@@ -38,6 +38,24 @@ fn runtime_failures_become_private_scanner_errors_without_staging_eligibility() 
         let serialized = serde_json::to_string(&result.events).unwrap();
         assert!(serialized.contains(code));
         assert!(!serialized.contains("PRIVATE"));
+        let summary = super::super::source_processing_accounting(&[result])
+            .unwrap()
+            .json();
+        assert_eq!(summary["selected_source_coverage"], "partial");
+        assert_eq!(summary["failures"][0]["stage"], format!("{stage:?}"));
+        assert_eq!(summary["failures"][0]["source_count"], 1);
+        assert_eq!(
+            summary["failures"][0]["acquisition_code"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            summary["failures"][0]["bound_category"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            summary["failures"][0]["bound_dimension"],
+            serde_json::Value::Null
+        );
     }
 }
 

@@ -724,6 +724,7 @@ impl StateChangeProbe {
     }
 }
 
+#[derive(Default)]
 struct SourceProcessingAccounting {
     selected_source_count: usize,
     parse_success_source_count: usize,
@@ -731,6 +732,19 @@ struct SourceProcessingAccounting {
     parse_error_source_count: usize,
     parsed_record_count: u64,
     record_kind_counts: BTreeMap<String, u64>,
+    evaluation_complete_source_count: usize,
+    visibility_limited_source_count: usize,
+    accounting_complete_source_count: usize,
+    accounting_partial_source_count: usize,
+    failures: BTreeMap<SourceFailureCategory, usize>,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct SourceFailureCategory {
+    stage: String,
+    acquisition_code: Option<&'static str>,
+    bound_category: Option<String>,
+    bound_dimension: Option<String>,
 }
 
 fn source_processing_accounting(
@@ -753,11 +767,41 @@ fn source_processing_accounting(
         .into_iter()
         .map(|kind| (kind.to_string(), 0))
         .collect(),
+        ..Default::default()
     };
 
     for result in results {
+        use telltale_detect::v2::EvaluationCompletion;
+        use telltale_sources::acquisition::AccountingCoverage;
+        match result.completion {
+            Some(EvaluationCompletion::Complete) => {
+                accounting.evaluation_complete_source_count += 1
+            }
+            Some(EvaluationCompletion::VisibilityLimited) => {
+                accounting.visibility_limited_source_count += 1
+            }
+            None => {}
+        }
+        if let Some(failure) = &result.failure {
+            let context = failure.acquisition.and_then(|error| error.bound_context());
+            let key = SourceFailureCategory {
+                stage: format!("{:?}", failure.stage),
+                acquisition_code: failure.acquisition.map(|error| error.code()),
+                bound_category: context.map(|context| format!("{:?}", context.category)),
+                bound_dimension: context.map(|context| format!("{:?}", context.dimension)),
+            };
+            *accounting.failures.entry(key).or_default() += 1;
+        }
         match &result.accounting {
             Some(source) => {
+                match source.coverage {
+                    AccountingCoverage::CompleteSource => {
+                        accounting.accounting_complete_source_count += 1
+                    }
+                    AccountingCoverage::PartialSource => {
+                        accounting.accounting_partial_source_count += 1
+                    }
+                }
                 accounting.parse_success_source_count += 1;
                 let prior_record_count = accounting.parsed_record_count;
                 for counts in source
@@ -1218,7 +1262,33 @@ fn compute_policy_match_accounting(
 }
 
 impl SourceProcessingAccounting {
+    fn selected_source_coverage(&self) -> &'static str {
+        if self.selected_source_count == 0 {
+            "no_sources"
+        } else if self.parse_error_source_count > 0
+            || self.visibility_limited_source_count > 0
+            || self.accounting_partial_source_count > 0
+        {
+            "partial"
+        } else {
+            "complete"
+        }
+    }
+
     fn json(&self) -> serde_json::Value {
+        let failures: Vec<_> = self
+            .failures
+            .iter()
+            .map(|(category, count)| {
+                serde_json::json!({
+                    "stage": category.stage,
+                    "acquisition_code": category.acquisition_code,
+                    "bound_category": category.bound_category,
+                    "bound_dimension": category.bound_dimension,
+                    "source_count": count,
+                })
+            })
+            .collect();
         serde_json::json!({
             "selected_source_count": self.selected_source_count,
             "parse_success_source_count": self.parse_success_source_count,
@@ -1226,6 +1296,12 @@ impl SourceProcessingAccounting {
             "parse_error_source_count": self.parse_error_source_count,
             "parsed_record_count": self.parsed_record_count,
             "record_kind_counts": self.record_kind_counts,
+            "evaluation_complete_source_count": self.evaluation_complete_source_count,
+            "visibility_limited_source_count": self.visibility_limited_source_count,
+            "accounting_complete_source_count": self.accounting_complete_source_count,
+            "accounting_partial_source_count": self.accounting_partial_source_count,
+            "selected_source_coverage": self.selected_source_coverage(),
+            "failures": failures,
         })
     }
 }
@@ -1282,6 +1358,13 @@ fn diagnostic_warnings(
         warnings.push(diagnostic_warning(
             "source_parse_error_observed",
             "observed_failure",
+            "source_processing",
+        ));
+    }
+    if source_processing.selected_source_coverage() == "partial" {
+        warnings.push(diagnostic_warning(
+            "source_coverage_partial",
+            "coverage_limitation",
             "source_processing",
         ));
     }
@@ -1841,6 +1924,7 @@ mod tests {
             },
             progress: AcquisitionProgress::None,
             completion: None,
+            failure: None,
             accounting,
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,
@@ -1904,6 +1988,7 @@ mod tests {
             )),
             vec![
                 "source_parse_error_observed",
+                "source_coverage_partial",
                 "no_effective_detection_candidates"
             ]
         );
@@ -1946,6 +2031,7 @@ mod tests {
             parse_error_source_count: 0,
             parsed_record_count: 0,
             record_kind_counts: BTreeMap::new(),
+            ..Default::default()
         };
         assert_eq!(
             warning_codes(&diagnostic_warnings(&discovery, &no_sources, &flow, 18)),
@@ -1959,6 +2045,7 @@ mod tests {
             parse_error_source_count: 0,
             parsed_record_count: 0,
             record_kind_counts: BTreeMap::new(),
+            ..Default::default()
         };
         assert_eq!(
             warning_codes(&diagnostic_warnings(&discovery, &empty_sources, &flow, 18)),
@@ -1972,6 +2059,7 @@ mod tests {
             parse_error_source_count: 0,
             parsed_record_count: 1,
             record_kind_counts: BTreeMap::from([("user_message".to_string(), 1)]),
+            ..Default::default()
         };
         assert_eq!(
             warning_codes(&diagnostic_warnings(
@@ -2010,6 +2098,7 @@ mod tests {
                     parse_error_source_count: 0,
                     parsed_record_count: 1,
                     record_kind_counts: BTreeMap::from([("tool_call".to_string(), 1)]),
+                    ..Default::default()
                 },
                 &repeated_positive,
                 18,

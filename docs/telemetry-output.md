@@ -225,6 +225,23 @@ otherwise ambiguous zero-detection result without exposing session content:
 - `source_processing` reports selected sources, successful parses, empty and
   failed parses, the number of normalized records, and fixed counts for user,
   assistant, tool-call, tool-result, session-metadata, and other records.
+  Development builds after RC1 additionally report
+  `evaluation_complete_source_count`, `visibility_limited_source_count`,
+  `accounting_complete_source_count`, and `accounting_partial_source_count`.
+  Evaluation completion and whole-source accounting coverage are independent:
+  successful acquisition may have limited evaluation visibility, and OpenCode
+  accounting remains partial even when evaluation completes normally.
+  `selected_source_coverage` is `no_sources`, `partial` (any selected source
+  rejected, visibility-limited, or partial-accounting), or `complete` otherwise.
+  This describes only selected acquired inputs under the active rules, not
+  exhaustive discovery, immutable files, every source capability, or absence
+  of threats. Empty successful inputs do not prove useful detection coverage.
+  `failures` groups rejected sources by typed processing stage, acquisition
+  code, and optional canonical bound category/dimension, with `source_count`.
+  These aggregates contain no paths, identities, content, measured sizes, or
+  raw error text; later-stage failures without acquisition details have null
+  acquisition and bound fields. Existing parse counters retain their meaning:
+  `parse_error_source_count` includes any source-processing rejection.
 - `detection_flow` reports effective detection candidates before state
   deduplication, matched rule-ID references, allowlist-marked candidates,
   state-deduplicated candidates, and emitted detections. Effective candidates
@@ -268,6 +285,13 @@ otherwise ambiguous zero-detection result without exposing session content:
   Event 3.0 fields, sink payloads, persisted state, or exit-status changes.
   Discovery and project-load diagnostics never include roots, paths, source IDs,
   loader errors, or operating-system error text.
+  Post-RC1 development builds also emit `source_coverage_partial` with
+  `classification=coverage_limitation` and `basis=source_processing` when the
+  selected-source coverage is partial. Exit zero still means the scan command
+  completed, not complete detection coverage: inspect this warning, processing
+  counts, failure groups, and discovery degradation before accepting a canary.
+  This diagnostic hardening does not qualify RC1 or close the live-source or
+  platform gates in [release readiness, Issue #66](release-readiness.md#07-rc1-current-host-qualification).
 
 The existing top-level `log_path` field remains raw for compatibility and is a
 local diagnostic caveat. Newly added path fields use hashes. These diagnostic
