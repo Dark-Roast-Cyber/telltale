@@ -1810,9 +1810,22 @@ mod tests {
     #[test]
     fn static_inventory_failed_reads_conservatively_exhaust_the_byte_budget() {
         let temp = tempdir().unwrap();
+        let directory_reason = telltale_sources::install_inventory::read_inventory_config_bytes(
+            temp.path(),
+            1024 * 1024,
+        )
+        .expect_err("a directory must fail at the source read boundary");
+        assert!(matches!(
+            directory_reason,
+            "non_regular_source" | "source_permission_denied"
+        ));
+        if cfg!(windows) {
+            // Windows rejects directory opens before regular-file metadata validation.
+            assert_eq!(directory_reason, "source_permission_denied");
+        }
         for (path, reason) in [
             (temp.path().join("missing.json"), "source_missing"),
-            (temp.path().to_path_buf(), "non_regular_source"),
+            (temp.path().to_path_buf(), directory_reason),
         ] {
             let configs = (0..8)
                 .map(|_| {
@@ -1826,6 +1839,11 @@ mod tests {
             let observations =
                 super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
             assert_eq!(observations.len(), 5);
+            assert!(
+                observations
+                    .iter()
+                    .all(|item| item.state() == super::McpInventoryState::Error)
+            );
             assert!(
                 observations[..4]
                     .iter()
