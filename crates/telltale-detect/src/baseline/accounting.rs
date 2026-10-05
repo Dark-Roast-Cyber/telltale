@@ -56,6 +56,15 @@ pub(crate) fn summary(
     }))
 }
 
+fn blank_to_none(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn add<K: Ord>(
     counts: &mut BTreeMap<K, u64>,
     key: K,

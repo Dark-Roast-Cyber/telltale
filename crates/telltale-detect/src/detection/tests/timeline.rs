@@ -1,14 +1,12 @@
 use super::*;
 
 #[test]
-fn detection_analysis_builds_timeline_anchors_from_canonical_records() {
+fn direct_record_detection_returns_finalized_timeline_anchors() {
     let source = Source {
         client: ClientId::Codex,
         kind: SourceKind::Jsonl,
         source_id: "codex.jsonl".to_string(),
-        path: PathBuf::from(crate::test_fixture_path(
-            "session_stores/codex/sessions/2026/04/uc001-positive.jsonl",
-        )),
+        path: PathBuf::from("/synthetic/codex/session.jsonl"),
     };
     let records = vec![
         test_record(
@@ -26,29 +24,30 @@ fn detection_analysis_builds_timeline_anchors_from_canonical_records() {
     ];
     let rule_set = load_default_rule_set().expect("rule set");
 
-    let analysis = detect_records_with_timeline(&source, &rule_set, &records)
-        .expect("detection")
-        .expect("matching");
+    let events = detect_parsed_source_records(&source, &rule_set, &records);
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
 
-    assert_eq!(analysis.event.session_id, "timeline-session");
+    assert_eq!(event.session_id, "timeline-session");
+    assert_eq!(
+        event.event_time.as_deref(),
+        Some("2026-05-10T00:00:00.000Z")
+    );
+    assert_eq!(event.agent.as_deref(), Some("codex"));
+    assert_eq!(event.model.as_deref(), Some("fixture-model"));
+    assert_eq!(event.provider.as_deref(), Some("fixture-provider"));
     assert!(
-        analysis
-            .event
+        event
             .rule_ids
             .contains(&"mcp.tool_metadata.prompt_injection".to_string())
     );
-    assert_eq!(analysis.timeline_anchors.len(), 1);
-    assert_eq!(analysis.timeline_anchors[0].entry_index, 1);
+    assert_eq!(event.timeline_anchors.len(), 1);
+    assert_eq!(event.timeline_anchors[0].entry_index, 1);
     assert!(
-        analysis.timeline_anchors[0]
+        event.timeline_anchors[0]
             .evidence_fields
             .contains(&"assistant_context".to_string())
     );
-
-    let event = analysis.into_event();
-    let anchors = &event.timeline_anchors;
-    assert_eq!(anchors.len(), 1);
-    assert_eq!(anchors[0].entry_index, 1);
 }
 
 fn test_record(

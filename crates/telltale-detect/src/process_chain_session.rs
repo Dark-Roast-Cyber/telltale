@@ -89,30 +89,45 @@ struct SuppressionKey {
 /// Apply repeat suppression between atomic occurrences, retain every private
 /// matcher variant associated with each retained occurrence, then evaluate
 /// correlations over only those retained variants.
+#[cfg(test)]
 pub(crate) fn evaluate_process_chain_session(
     candidates: &[ProcessChainSessionCandidate],
     rules: &CompiledProcessChainRules,
     config: &ProcessChainSessionConfig,
 ) -> ProcessChainSessionSemantics {
-    let suppression = suppress_repeats(candidates, config.suppression_window);
+    try_evaluate_process_chain_session(candidates, rules, config, &mut |_| {
+        Ok::<_, std::convert::Infallible>(())
+    })
+    .expect("infallible session charge")
+}
+
+pub(crate) fn try_evaluate_process_chain_session<E>(
+    candidates: &[ProcessChainSessionCandidate],
+    rules: &CompiledProcessChainRules,
+    config: &ProcessChainSessionConfig,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<ProcessChainSessionSemantics, E> {
+    let suppression = suppress_repeats(candidates, config.suppression_window, charge)?;
     let correlations = correlate_retained(
         candidates,
         &suppression.retained,
         rules,
         config.max_correlations_per_rule_entity,
         config.max_correlation_risk_per_entity,
-    );
-    ProcessChainSessionSemantics {
+        charge,
+    )?;
+    Ok(ProcessChainSessionSemantics {
         suppression,
         correlations,
-    }
+    })
 }
 
 /// Apply repeat suppression between atomic occurrences.
-fn suppress_repeats(
+fn suppress_repeats<E>(
     candidates: &[ProcessChainSessionCandidate],
     window: Duration,
-) -> RepeatSuppression {
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<RepeatSuppression, E> {
     let mut anchors: BTreeMap<SuppressionKey, (usize, OffsetDateTime, u64)> = BTreeMap::new();
     let mut retained_occurrences = BTreeMap::new();
     let mut retained = Vec::with_capacity(candidates.len());
@@ -120,6 +135,13 @@ fn suppress_repeats(
     let mut suppressed_count = 0;
 
     for (index, candidate) in candidates.iter().enumerate() {
+        charge(
+            candidate
+                .rule_id
+                .len()
+                .saturating_add(candidate.entity.as_ref().map_or(0, String::len))
+                .saturating_add(candidate.dedupe_key.len()),
+        )?;
         if let Some(&is_retained) = retained_occurrences.get(&candidate.occurrence_id) {
             if is_retained {
                 retained.push(index);
@@ -158,25 +180,27 @@ fn suppress_repeats(
         }
     }
 
-    RepeatSuppression {
+    Ok(RepeatSuppression {
         retained,
         repeat_counts,
         suppressed_count,
-    }
+    })
 }
 
 /// Walk the compiled correlation rules over a caller-selected retained set.
 /// The rule slice order is authoritative for both output order and risk-cap
 /// accounting.  Entity grouping is ordered to avoid map-iteration nondeterminism.
-fn correlate_retained(
+fn correlate_retained<E>(
     candidates: &[ProcessChainSessionCandidate],
     retained: &[usize],
     rules: &CompiledProcessChainRules,
     max_correlations_per_rule_entity: usize,
     max_correlation_risk_per_entity: u64,
-) -> Vec<CorrelationDecision> {
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<Vec<CorrelationDecision>, E> {
     let mut by_entity: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for &index in retained {
+        charge(1)?;
         let Some(candidate) = candidates.get(index) else {
             continue;
         };
@@ -191,6 +215,7 @@ fn correlate_retained(
 
     let mut decisions = Vec::new();
     for indexes in by_entity.values_mut() {
+        charge(indexes.len().saturating_mul(indexes.len()))?;
         // `sort_by` is stable: equal occurred_at values retain caller order.
         indexes.sort_by(|left, right| {
             candidates[*left]
@@ -202,9 +227,15 @@ fn correlate_retained(
     for indexes in by_entity.values() {
         let mut entity_risk = 0_u64;
         for (rule_index, rule) in rules.correlations().iter().enumerate() {
-            let sequences =
-                find_sequences(rule, indexes, candidates, max_correlations_per_rule_entity);
+            let sequences = find_sequences(
+                rule,
+                indexes,
+                candidates,
+                max_correlations_per_rule_entity,
+                charge,
+            )?;
             for candidate_indexes in sequences {
+                charge(candidate_indexes.len())?;
                 let risk_capped =
                     entity_risk.saturating_add(rule.score) > max_correlation_risk_per_entity;
                 let effective_score = if risk_capped { 0 } else { rule.score };
@@ -220,19 +251,21 @@ fn correlate_retained(
             }
         }
     }
-    decisions
+    Ok(decisions)
 }
 
-fn find_sequences(
+fn find_sequences<E>(
     rule: &telltale_rules::process_chain::CompiledCorrelationRule,
     indexes: &[usize],
     candidates: &[ProcessChainSessionCandidate],
     limit: usize,
-) -> Vec<Vec<usize>> {
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<Vec<Vec<usize>>, E> {
     let mut sequences = Vec::new();
     let window = Duration::seconds(rule.window_seconds as i64);
 
     for start in 0..indexes.len() {
+        charge(1)?;
         if sequences.len() >= limit {
             break;
         }
@@ -240,57 +273,40 @@ fn find_sequences(
         let Some(anchor) = candidates[anchor_index].occurred_at else {
             continue;
         };
-        if let Some(matched) = ordered_sequence(
-            &indexes[start..],
-            anchor,
-            window,
-            rule.steps.len(),
-            |index| candidates[index].occurred_at,
-            |step, index| {
-                let candidate = &candidates[index];
-                rule.steps[step].matches(&candidate.category, &candidate.rule_id, &candidate.child)
-            },
-        ) {
+        let mut step = 0;
+        let mut matched = Vec::new();
+        for &candidate_index in &indexes[start..] {
+            charge(1)?;
+            let candidate = &candidates[candidate_index];
+            let Some(timestamp) = candidate.occurred_at else {
+                continue;
+            };
+            if timestamp - anchor > window {
+                break;
+            }
+            let Some(current) = rule.steps.get(step) else {
+                break;
+            };
+            charge(
+                candidate
+                    .category
+                    .len()
+                    .saturating_add(candidate.rule_id.len())
+                    .saturating_add(candidate.child.len()),
+            )?;
+            if current.matches(&candidate.category, &candidate.rule_id, &candidate.child) {
+                matched.push(candidate_index);
+                step += 1;
+                if step == rule.steps.len() {
+                    break;
+                }
+            }
+        }
+        if step == rule.steps.len() {
             sequences.push(matched);
         }
     }
-    sequences
-}
-
-/// Shared bounded sequence kernel. Callers own predicates, session grouping,
-/// completion consumption and presentation, not a second timing evaluator.
-pub(crate) fn ordered_sequence(
-    indexes: &[usize],
-    anchor: OffsetDateTime,
-    window: Duration,
-    steps: usize,
-    timestamp: impl Fn(usize) -> Option<OffsetDateTime>,
-    matches: impl Fn(usize, usize) -> bool,
-) -> Option<Vec<usize>> {
-    if steps == 0 {
-        return None;
-    }
-    let mut matched = Vec::new();
-    let mut previous = anchor;
-    for &index in indexes {
-        let Some(time) = timestamp(index) else {
-            continue;
-        };
-        if time < previous {
-            continue;
-        }
-        if time - anchor > window {
-            break;
-        }
-        if matches(matched.len(), index) {
-            previous = time;
-            matched.push(index);
-            if matched.len() == steps {
-                return Some(matched);
-            }
-        }
-    }
-    None
+    Ok(sequences)
 }
 
 /// A completion-anchored sequence for streaming action correlations. Work is
@@ -559,7 +575,10 @@ correlations:
                 Some("2026-01-01T00:30:00Z"),
             ),
         ];
-        let result = suppress_repeats(&candidates, Duration::hours(1));
+        let result = suppress_repeats(&candidates, Duration::hours(1), &mut |_| {
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap();
         assert_eq!(result.retained, [0, 2, 3]);
         assert_eq!(result.repeat_counts[&0], 2);
         assert_eq!(result.suppressed_count, 1);
@@ -587,7 +606,10 @@ correlations:
                 Some("2026-01-01T00:00:00Z"),
             ),
         ];
-        let result = suppress_repeats(&candidates, Duration::hours(1));
+        let result = suppress_repeats(&candidates, Duration::hours(1), &mut |_| {
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap();
         assert_eq!(result.retained, [0, 1]);
         assert!(result.repeat_counts.is_empty());
     }

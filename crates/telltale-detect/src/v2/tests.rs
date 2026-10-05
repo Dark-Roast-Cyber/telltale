@@ -17,6 +17,183 @@ use super::*;
 
 const OBSERVED_AT: &str = "2026-09-03T12:00:00Z";
 
+#[test]
+fn standalone_selector_reports_oversized_fingerprint_epoch_without_panicking() {
+    use telltale_schema::observation::{KeyedFingerprint, LocalReference, Sensitivity};
+    let epoch = "e".repeat(super::session::MAX_EVALUATION_BYTE_VISITS + 1);
+    let fingerprint = KeyedFingerprint::from_digest(
+        "message.content",
+        &epoch,
+        format!("hmac-sha256:v1:{}", "a".repeat(64)),
+    )
+    .unwrap();
+    drop(epoch);
+    let observation = CanonicalObservationV2::builder(
+        ObservationBody::Message(
+            MessageObservation::new(MessageRole::User).with_content(JsonValue::string("synthetic")),
+        ),
+        ObservationStage::MessageObserved,
+        ObservedAt::new(OBSERVED_AT).unwrap(),
+        source("large-epoch")
+            .with_producer_identity_key_ref(
+                LocalReference::new("producerkey:v2:synthetic", "identity_key").unwrap(),
+            )
+            .unwrap(),
+    )
+    .fact_metadata("message.role", FactMetadata::reported().unwrap())
+    .fact_metadata(
+        "message.content",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Secret)
+            .unwrap()
+            .with_keyed_fingerprint(fingerprint)
+            .unwrap(),
+    )
+    .build()
+    .unwrap();
+    assert!(observation.retained_byte_len() < 100);
+    let result = std::panic::catch_unwind(|| {
+        SelectorRegistry::new().resolve(SelectorId::GovernedFacet("message.text"), &observation)
+    });
+    assert!(result.is_ok(), "work exhaustion must not panic");
+    assert!(matches!(result.unwrap(), Err(ProcessingError::Bounds)));
+}
+
+#[test]
+fn long_message_ordered_text_view_excludes_structured_parts() {
+    use telltale_schema::observation::{ContentPart, ContentPartKind, Sensitivity};
+    let body = MessageObservation::new(MessageRole::User)
+        .with_content_part(ContentPart::new(
+            ContentPartKind::Text,
+            JsonValue::string("first"),
+        ))
+        .with_content_part(ContentPart::new(
+            ContentPartKind::ToolResult,
+            JsonValue::string("excluded"),
+        ))
+        .with_content_part(ContentPart::new(
+            ContentPartKind::Text,
+            JsonValue::Array(vec![JsonValue::string("excluded")]),
+        ))
+        .with_content_part(ContentPart::new(
+            ContentPartKind::Text,
+            JsonValue::string("second"),
+        ));
+    let observation = CanonicalObservationV2::builder(
+        ObservationBody::Message(body),
+        ObservationStage::MessageObserved,
+        ObservedAt::new(OBSERVED_AT).unwrap(),
+        source("parts"),
+    )
+    .capability_context(capabilities(CapabilityAvailability::Supported))
+    .fact_metadata("message.role", FactMetadata::reported().unwrap())
+    .fact_metadata(
+        "message.content_parts",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Sensitive).unwrap(),
+    )
+    .build()
+    .unwrap();
+    for selector in [
+        SelectorId::parse("message.text").unwrap(),
+        SelectorId::CompatUserContext,
+    ] {
+        let resolved = SelectorRegistry::new()
+            .resolve(selector, &observation)
+            .unwrap();
+        assert_eq!(resolved.value(), Some(&JsonValue::string("first\nsecond")));
+        assert_eq!(
+            resolved.metadata().unwrap().provenance(),
+            FactProvenance::Derived
+        );
+        assert_eq!(
+            resolved.metadata().unwrap().sensitivity(),
+            Sensitivity::Sensitive
+        );
+    }
+}
+
+#[test]
+fn long_message_scalar_precedence_roles_anchors_and_empty_operations() {
+    use telltale_schema::observation::{ContentPart, ContentPartKind};
+    for role in [
+        MessageRole::User,
+        MessageRole::Assistant,
+        MessageRole::System,
+        MessageRole::Developer,
+    ] {
+        let make = |scalar| {
+            let mut body = MessageObservation::new(role)
+                .with_content_part(ContentPart::new(
+                    ContentPartKind::Text,
+                    JsonValue::string("first"),
+                ))
+                .with_content_part(ContentPart::new(
+                    ContentPartKind::Text,
+                    JsonValue::string("second"),
+                ));
+            if scalar {
+                body = body.with_content(JsonValue::string(""));
+            }
+            let mut builder = CanonicalObservationV2::builder(
+                ObservationBody::Message(body),
+                ObservationStage::MessageObserved,
+                ObservedAt::new(OBSERVED_AT).unwrap(),
+                source("parts-role"),
+            )
+            .capability_context(capabilities(CapabilityAvailability::Supported))
+            .fact_metadata("message.role", FactMetadata::reported().unwrap())
+            .fact_metadata("message.content_parts", FactMetadata::reported().unwrap());
+            if scalar {
+                builder =
+                    builder.fact_metadata("message.content", FactMetadata::reported().unwrap());
+            }
+            builder.build().unwrap()
+        };
+        let observation = make(false);
+        let matcher = MatcherSpec::predicate(
+            "message.text",
+            MatcherOperator::Regex,
+            Some(JsonValue::string("\\Afirst\\nsecond\\z")),
+        )
+        .compile()
+        .unwrap();
+        assert_eq!(
+            matcher.evaluate(&observation).unwrap().state(),
+            &MatchState::Match
+        );
+        assert_eq!(
+            matcher.evaluate(&make(true)).unwrap().state(),
+            &MatchState::NoMatch
+        );
+        for (selector, expected) in [
+            (SelectorId::CompatUserContext, role == MessageRole::User),
+            (
+                SelectorId::CompatAssistantContext,
+                role == MessageRole::Assistant,
+            ),
+        ] {
+            assert_eq!(
+                SelectorRegistry::new()
+                    .resolve(selector, &observation)
+                    .unwrap()
+                    .is_present(),
+                expected
+            );
+        }
+        let mut budget = RetentionBudget::new();
+        budget
+            .charge(super::session::MAX_EVALUATION_BYTE_VISITS)
+            .unwrap();
+        assert!(matches!(
+            SelectorRegistry::new().try_resolve(
+                SelectorId::GovernedFacet("message.text"),
+                &make(true),
+                &mut budget
+            ),
+            Err(ProcessingError::Bounds)
+        ));
+    }
+}
+
 fn capabilities(tool_call: CapabilityAvailability) -> CapabilityContext {
     CapabilityContext::new()
         .with_override(CapabilityId::ToolCall, tool_call)
@@ -173,6 +350,7 @@ fn matcher_state(matcher: MatcherSpec, observation: &CanonicalObservationV2) -> 
         .compile()
         .expect("matcher")
         .evaluate(observation)
+        .expect("matcher evaluation")
         .state()
         .clone()
 }
@@ -214,7 +392,7 @@ fn assert_selector_value(
     expected: JsonValue,
     provenance: FactProvenance,
 ) {
-    let resolution = registry.resolve(selector, observation);
+    let resolution = registry.resolve(selector, observation).unwrap();
     assert_eq!(resolution.presence(), SelectorPresence::Present);
     assert_eq!(resolution.value(), Some(&expected));
     assert_eq!(
@@ -428,8 +606,8 @@ fn selector_tool_text_and_compatibility_fallbacks_are_equivalent() {
                 ("tool.result.text", SelectorId::CompatToolResult),
             ] {
                 let native = SelectorId::parse(native).expect("selector");
-                let native_resolution = registry.resolve(native, &observation);
-                let compat_resolution = registry.resolve(compat, &observation);
+                let native_resolution = registry.resolve(native, &observation).unwrap();
+                let compat_resolution = registry.resolve(compat, &observation).unwrap();
                 assert_eq!(native_resolution.selector(), native);
                 assert_eq!(compat_resolution.selector(), compat);
                 assert_eq!(
@@ -476,7 +654,7 @@ fn selector_tool_text_and_compatibility_fallbacks_are_equivalent() {
         "compat.v1.tool_result",
     ] {
         let selector = SelectorId::parse(name).expect("selector");
-        let resolution = registry.resolve(selector, &observation);
+        let resolution = registry.resolve(selector, &observation).unwrap();
         assert_eq!(resolution.selector(), selector);
         assert_eq!(resolution.presence(), SelectorPresence::Absent);
         assert_eq!(resolution.value(), None);
@@ -492,10 +670,12 @@ fn generic_namespace_facets_do_not_extend_typed_selector_backing() {
         "example.invalid",
         FactProvenance::Parsed,
     );
-    let resolution = SelectorRegistry::new().resolve(
-        SelectorId::parse("network.domain").expect("typed selector"),
-        &observation,
-    );
+    let resolution = SelectorRegistry::new()
+        .resolve(
+            SelectorId::parse("network.domain").expect("typed selector"),
+            &observation,
+        )
+        .unwrap();
     assert_eq!(resolution.presence(), SelectorPresence::Absent);
 }
 
@@ -504,7 +684,7 @@ fn tool_stage_is_absent_outside_tool_family() {
     let registry = SelectorRegistry::new();
     let selector = SelectorId::parse("tool.stage").expect("selector");
     let tool_observation = tool("synthetic", "tool-stage");
-    let tool_resolution = registry.resolve(selector, &tool_observation);
+    let tool_resolution = registry.resolve(selector, &tool_observation).unwrap();
     assert_eq!(tool_resolution.presence(), SelectorPresence::Present);
     assert_eq!(
         tool_resolution.value(),
@@ -530,7 +710,7 @@ fn tool_stage_is_absent_outside_tool_family() {
         &[("runtime.state_marker", FactProvenance::Reported)],
     );
     for observation in [message_observation, runtime_observation] {
-        let resolution = registry.resolve(selector, &observation);
+        let resolution = registry.resolve(selector, &observation).unwrap();
         assert_eq!(resolution.presence(), SelectorPresence::Absent);
         assert!(resolution.value().is_none());
         assert_eq!(
@@ -821,10 +1001,12 @@ fn identity_and_materialization_never_include_matched_values() {
     assert!(no_match.signal().expect("materialization").is_none());
     assert!(no_match.finding().expect("materialization").is_none());
 
-    let resolution = SelectorRegistry::new().resolve(
-        SelectorId::MessageContent,
-        &message(MessageRole::User, "synthetic-private-marker", "debug"),
-    );
+    let resolution = SelectorRegistry::new()
+        .resolve(
+            SelectorId::MessageContent,
+            &message(MessageRole::User, "synthetic-private-marker", "debug"),
+        )
+        .unwrap();
     assert!(!format!("{resolution:?}").contains("synthetic-private-marker"));
     let compiled = MatcherSpec::contains(
         "message.content",
@@ -1619,7 +1801,7 @@ fn compatibility_views_preserve_roles_and_truthful_absence() {
         (SelectorId::CompatUrl, url, false),
         (SelectorId::CompatUserContext, user, true),
     ] {
-        let resolution = registry.resolve(selector, &observation);
+        let resolution = registry.resolve(selector, &observation).unwrap();
         assert_eq!(resolution.is_present(), expected, "{}", selector.as_str());
         assert_eq!(resolution.selector(), selector);
     }
@@ -1629,6 +1811,7 @@ fn compatibility_views_preserve_roles_and_truthful_absence() {
                 SelectorId::CompatCommand,
                 &tool_with_object_arguments("name-only")
             )
+            .unwrap()
             .is_present(),
         "tool name and unrelated arguments must not become command evidence"
     );
@@ -1642,6 +1825,7 @@ fn compatibility_views_preserve_roles_and_truthful_absence() {
     assert_eq!(
         url_matcher
             .evaluate(&tool("synthetic arguments", "url-capability"))
+            .unwrap()
             .state(),
         &MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility)
     );
@@ -1874,10 +2058,12 @@ fn typed_body_selectors_preserve_body_metadata() {
 #[test]
 fn derived_argument_keys_have_derived_provenance() {
     let observation = tool_with_object_arguments("derived-argument-keys");
-    let resolution = SelectorRegistry::new().resolve(
-        SelectorId::parse("tool.arguments.keys").expect("selector"),
-        &observation,
-    );
+    let resolution = SelectorRegistry::new()
+        .resolve(
+            SelectorId::parse("tool.arguments.keys").expect("selector"),
+            &observation,
+        )
+        .unwrap();
     assert_eq!(resolution.presence(), SelectorPresence::Present);
     assert_eq!(
         resolution.value(),
@@ -2397,7 +2583,7 @@ fn capability_precedence_is_independent_of_boolean_branch_order() {
             .with_override(CapabilityId::ToolCall, CapabilityAvailability::Unsupported),
     );
     assert_eq!(
-        compiled.evaluate(&observation).state(),
+        compiled.evaluate(&observation).unwrap().state(),
         &MatchState::NotEvaluated(NonEvaluationReason::RequiredCapabilityUnsupported)
     );
 
@@ -2407,7 +2593,7 @@ fn capability_precedence_is_independent_of_boolean_branch_order() {
             .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
     );
     assert_eq!(
-        compiled.evaluate(&observation).state(),
+        compiled.evaluate(&observation).unwrap().state(),
         &MatchState::NotEvaluated(NonEvaluationReason::RequiredCapabilityUnknown)
     );
 }

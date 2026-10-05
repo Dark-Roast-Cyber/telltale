@@ -315,7 +315,8 @@ closed canonical field category, without raw content, keys, paths, IDs, indices,
 measured sizes, or underlying error strings. Schema SHALL attach the dimension
 at the existing failure site and attribute assembled body fields/facets; adapters
 MAY attribute existing conversion failures to the canonical field they construct.
-Limits, first-failure order, normalization, and code/Display SHALL NOT change.
+Except for the explicitly scoped long-message schema amendment below, limits,
+first-failure order, normalization, and code/Display SHALL NOT change.
 Non-bound errors SHALL NOT acquire bound context.
 
 #### Scenario: Source JSON conversion is bounded and safe
@@ -332,6 +333,109 @@ Non-bound errors SHALL NOT acquire bound context.
 - **THEN** the first existing failure returns `unbounded_value` with a closed
   field category and bound dimension, without retaining the dynamic field/facet
   name or source content
+
+### Requirement: Bounded long-message acquisition and evaluation
+
+Schema SHALL preserve `JsonValue`, `MessageObservation`, and `ContentPart` and
+allow at most 65,536 raw UTF-8 bytes only for direct string `message.content`
+and direct string values of Text content parts. It SHALL NOT recursively expand
+string bounds in structured content, Text objects/arrays, tools, names, inference
+metadata, facets, identifiers, or local originals. Ordinary values SHALL retain
+4,096 string bytes, 16,384 encoded bytes per value, and existing depth,
+cardinality, and key limits. Part values SHALL include their array/object
+wrappers in depth accounting.
+The content-parts field SHALL retain the ordinary 16,384-byte encoded budget for
+entries other than direct Text strings, including their wrappers and separators.
+
+Schema SHALL additionally bound the sum of encoded semantic body-field and facet
+values to 65,536 bytes per observation, including quotes, escaping and content-part
+wrappers but excluding path/facet labels, metadata, identity/provenance envelopes,
+and independently bounded local evidence. Aggregate validation SHALL follow
+existing body-field order then sorted facets and attribute `EncodedBytes` to the
+field/facet crossing the limit. Builder construction, protected assignment
+commitment/preflight, and assignment replay SHALL share this policy. Comparison
+and protected commitments SHALL include complete accepted text, never a prefix.
+
+Recursive validation of all content parts SHALL precede partitioned ordinary
+encoded limits, and all field/facet validation SHALL precede observation aggregate
+validation. Aggregate numeric size SHALL match canonical identity JSON spelling;
+ordinary/local finite-float bound sizing SHALL retain its legacy spelling.
+
+Schema MAY expose only narrow source conversion helpers for direct message content
+and typed content parts. Source conversion SHALL check original bytes before NFC;
+builder validation SHALL retain its post-canonicalization NFC check order. Source
+conversion success SHALL NOT promise observation aggregate acceptance.
+
+Native adapters SHALL activate only narrow message string conversion. Acquisition
+SHALL reject a source before retaining the next observation when its canonical
+semantic/local retention exceeds 8 MiB; evaluation ingress SHALL enforce the same
+budget with nonallocating sizing. Inference-specific limits SHALL remain unchanged.
+This bound does not govern whole-file native-reader intermediate memory.
+
+Evaluation and projection SHALL share one source-wide 256 MiB charged byte-visit
+budget. Reached clones, joins, comparisons, scans, exclusions, evidence resolution,
+hashing and sanitization SHALL charge before execution, including no matches,
+repeated predicates and empty operations. Composite operations MAY conservatively
+reserve visits. Exhaustion SHALL fail explicitly and atomically without partial
+findings, accounting or installed progress; budgets SHALL NOT reset per detector.
+
+Native message text and role-specific compatibility selection SHALL share a view:
+direct scalar content takes precedence even when empty; otherwise only ordered
+direct Text strings join with newlines, retaining sensitivity with Derived joined
+provenance. Other parts and nested strings SHALL be excluded. Full-view matching,
+anchors and exclusions SHALL preserve occurrence/session scoring. Evidence hashes
+SHALL cover the complete matched input and excerpts SHALL retain existing bounded
+sanitization. Event 3.0 and compatibility limits (4,096 items, 4,096-byte strings,
+4 MiB retained output) SHALL NOT be weakened.
+
+#### Scenario: Source retention and repeated no-match work exhaust atomically
+
+- **WHEN** individually valid observations exceed source retention or reached
+  repeated no-match predicates exceed charged work across sessions/detectors
+- **THEN** acquisition/evaluation returns an explicit bound failure without partial
+  findings, accounting or installed source progress
+
+#### Scenario: Joined text shares matching and evidence semantics
+
+- **WHEN** direct Text parts contain a match across their newline boundary and
+  a later suffix contains an exclusion or sensitive content
+- **THEN** native and eligible role-specific selectors evaluate the same complete
+  view, exclusions apply to its full suffix, and emitted evidence remains bounded
+  and sanitized with a hash of the complete input
+
+#### Scenario: Exact raw text limit is distinct from aggregate acceptance
+
+- **WHEN** source conversion receives a direct string of exactly 65,536 UTF-8
+  bytes, or one byte more
+- **THEN** the exact string passes conversion and the excess returns
+  `unbounded_value` with `StringBytes`; the exact string can still fail builder
+  aggregate validation because encoded values include quotes and other fields
+
+#### Scenario: Escaping and multiple values consume one observation budget
+
+- **WHEN** individually valid message strings, ordered Text parts, or ordinary
+  facets together exceed 65,536 encoded value bytes
+- **THEN** builder and assignment preparation reject with `EncodedBytes` and
+  retain no raw value or measured size in the error
+
+#### Scenario: Structured text does not receive recursive allowance
+
+- **WHEN** a Text part contains an object/array with a string exceeding 4,096
+  bytes, or a non-Text part or local original contains that string
+- **THEN** conversion and builder/local validation retain the ordinary bound
+
+#### Scenario: NFC check order remains explicit
+
+- **WHEN** original decomposed source text exceeds the raw bound but its NFC
+  representation fits
+- **THEN** source conversion rejects before normalization while a directly
+  assembled builder may accept its normalized value within the aggregate bound
+
+#### Scenario: Complete suffix affects comparison and protected replay
+
+- **WHEN** accepted message text differs only in a suffix beyond 4,096 bytes
+- **THEN** same-coordinate semantic comparison reports mutation and protected
+  assignment replay rejects the changed complete commitment with `replay_collision`
 
 ### Requirement: Protected assignment is a separate durable identity authority
 

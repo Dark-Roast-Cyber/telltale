@@ -2,6 +2,559 @@ use super::*;
 
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[test]
+fn production_jsonl_cli_limit_failure_retains_baseline_and_recovers() {
+    use std::io::Write;
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let directory = root.join("codex/sessions");
+    fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("synthetic.jsonl");
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let first =
+        "{\"type\":\"user\",\"session_id\":\"synthetic\",\"content\":\"synthetic first\"}\n";
+    let second =
+        "{\"type\":\"user\",\"session_id\":\"synthetic\",\"content\":\"synthetic recovered\"}\n";
+    fs::write(&source, first).unwrap();
+    let scan = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--emit-activity",
+                "--client",
+                "codex",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(scan()["source_processing"]["parse_success_source_count"], 1);
+    let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    let mut file = fs::File::create(&source).unwrap();
+    file.write_all(first.as_bytes()).unwrap();
+    file.write_all(second.as_bytes()).unwrap();
+    file.write_all(&vec![b' '; 8 * 1024 * 1024 + 1]).unwrap();
+    let failed = scan();
+    assert_eq!(failed["source_processing"]["parse_error_source_count"], 1);
+    assert_eq!(failed["source_processing"]["parsed_record_count"], 0);
+    assert_eq!(failed["activity_count"], 0);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key], "failed admission advanced {key}");
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    let late = persisted[offset..]
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        failed["source_processing"]["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["acquisition_code"] == "source_read")
+    );
+    assert!(
+        late.iter()
+            .any(|event| event["event_type"] == "scanner_error")
+    );
+    assert!(
+        !late
+            .iter()
+            .any(|event| event["event_type"] == "detection" || event["event_type"] == "activity")
+    );
+    fs::write(&source, format!("{first}{second}")).unwrap();
+    let recovered = scan();
+    assert_eq!(
+        recovered["source_processing"]["parse_success_source_count"],
+        1
+    );
+    assert_eq!(recovered["source_processing"]["parsed_record_count"], 2);
+    assert_eq!(
+        recovered["source_processing"]["parse_error_source_count"],
+        0
+    );
+    let recovered_state: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    assert_ne!(
+        before["baseline_source_contributions"],
+        recovered_state["baseline_source_contributions"]
+    );
+    assert_eq!(scan()["source_processing"]["parse_error_source_count"], 0);
+    let repeated_state: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    assert_eq!(
+        recovered_state["baseline_snapshots"],
+        repeated_state["baseline_snapshots"]
+    );
+}
+
+#[test]
+fn canonical_efficacy_fixtures_cli_characterization_and_event_privacy() {
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).unwrap();
+    let validator = validator_for(&schema).unwrap();
+    let manifest: Value =
+        serde_yaml::from_str(include_str!("../evaluation/manifest.yaml")).unwrap();
+    for case in manifest["cases"].as_array().unwrap().iter().filter(|case| {
+        case["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "canonical_efficacy")
+    }) {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("stores");
+        let directory = root.join("codex/sessions");
+        fs::create_dir_all(&directory).unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(case["input"]["fixture"].as_str().unwrap());
+        let input = fs::read_to_string(fixture).unwrap();
+        let source = directory.join("synthetic.jsonl");
+        fs::write(&source, &input).unwrap();
+        let log = temp.path().join("events.jsonl");
+        let state = temp.path().join("state.json");
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--emit-activity",
+                "--client",
+                "codex",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            case["id"],
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let expected = case["expected_detection"]["expected_score"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(
+            summary["detection_count"],
+            u64::from(expected > 0),
+            "{}",
+            case["id"]
+        );
+        let persisted = fs::read_to_string(&log).unwrap();
+        let events = persisted
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(!events.is_empty());
+        for event in &events {
+            assert!(validator.is_valid(event), "{}: {event}", case["id"]);
+        }
+        let detections = events
+            .iter()
+            .filter(|event| event["event_type"] == "detection")
+            .collect::<Vec<_>>();
+        assert_eq!(detections.len(), usize::from(expected > 0));
+        if let Some(detection) = detections.first() {
+            assert_eq!(detection["risk_score"], expected);
+            let rules = case["expected_detection"]["rule_expectations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|rule| rule["expectation"] == "expected_match")
+                .map(|rule| rule["rule_id"].clone())
+                .collect::<Vec<_>>();
+            assert_eq!(detection["rule_ids"], serde_json::json!(rules));
+            assert_eq!(
+                detection["timeline_anchors"].as_array().unwrap().len(),
+                1,
+                "mirrors must not double analytic evidence"
+            );
+        }
+        for bytes in [
+            output.stdout,
+            output.stderr,
+            persisted.into_bytes(),
+            fs::read(&state).unwrap(),
+        ] {
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains("SYNTHETIC-EFFICACY-PRIVATE"),
+                "{}",
+                case["id"]
+            );
+        }
+        assert_eq!(fs::read_to_string(source).unwrap(), input);
+    }
+}
+
+#[test]
+fn scan_dry_run_reports_selected_source_coverage_without_private_details() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("PRIVATE-COVERAGE-PATH");
+    let directory = root.join("codex/sessions");
+    fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("PRIVATE-COVERAGE-ID.jsonl");
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let rules = temp.path().join("rules.yaml");
+    fs::write(&rules, "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.coverage\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    detection:\n      selection: {user_context: NEVER-MATCH}\n      condition: selection\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n").unwrap();
+    let scan = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--dry-run",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--no-default-rules",
+                "--install-inventory-disabled",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--rules")
+            .arg(&rules)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "source rejection is not globally fatal: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!log.exists());
+        assert!(!state.exists());
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let diagnostics = serde_json::json!({"source_processing": summary["source_processing"], "diagnostic_warnings": summary["diagnostic_warnings"]}).to_string();
+        for marker in [
+            "PRIVATE-COVERAGE-PATH",
+            "PRIVATE-COVERAGE-ID",
+            "PRIVATE-COVERAGE-CONTENT",
+            "PRIVATE-COVERAGE-SESSION",
+        ] {
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains(marker),
+                "stdout exposed privacy sentinel {marker}"
+            );
+            assert!(
+                !String::from_utf8_lossy(&output.stderr).contains(marker),
+                "stderr exposed privacy sentinel {marker}"
+            );
+            assert!(!diagnostics.contains(marker));
+        }
+        summary
+    };
+    fs::write(&source, "{\"type\":\"user\",\"session_id\":\"PRIVATE-COVERAGE-SESSION\",\"content\":\"PRIVATE-COVERAGE-CONTENT\"}\n").unwrap();
+    let complete = scan();
+    assert_eq!(
+        complete["source_processing"]["evaluation_complete_source_count"],
+        1
+    );
+    assert_eq!(
+        complete["source_processing"]["selected_source_coverage"],
+        "complete"
+    );
+    fs::write(
+        &rules,
+        fs::read_to_string(&rules)
+            .unwrap()
+            .replace("user_context", "url"),
+    )
+    .unwrap();
+    let limited = scan();
+    assert_eq!(
+        limited["source_processing"]["visibility_limited_source_count"],
+        1
+    );
+    assert_eq!(
+        limited["source_processing"]["parse_success_source_count"],
+        1
+    );
+    assert_eq!(
+        limited["source_processing"]["accounting_complete_source_count"],
+        1
+    );
+    assert_eq!(
+        limited["source_processing"]["selected_source_coverage"],
+        "partial"
+    );
+    assert!(
+        limited["diagnostic_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["code"] == "source_coverage_partial")
+    );
+    fs::write(
+        directory.join("parse.jsonl"),
+        "PRIVATE-COVERAGE-CONTENT invalid json\n",
+    )
+    .unwrap();
+    fs::write(directory.join("bound.jsonl"), format!("{}\n{}\n", serde_json::json!({"type":"user","session_id":"PRIVATE-COVERAGE-SESSION","content":"ok"}), serde_json::json!({"type":"user","session_id":"PRIVATE-COVERAGE-SESSION","content":"PRIVATE-COVERAGE-CONTENT".repeat(4000)}))).unwrap();
+    let mixed = scan();
+    let processing = &mixed["source_processing"];
+    assert_eq!(processing["selected_source_count"], 3);
+    assert_eq!(processing["parse_success_source_count"], 1);
+    assert_eq!(processing["parse_error_source_count"], 2);
+    assert_eq!(
+        processing["parsed_record_count"], 1,
+        "rejected source is atomic"
+    );
+    assert_eq!(processing["selected_source_coverage"], "partial");
+    let failures = processing["failures"].as_array().unwrap();
+    assert!(failures.iter().any(|f| f["stage"] == "Acquisition"
+        && f["acquisition_code"] == "source_read"
+        && f["source_count"] == 1));
+    assert!(
+        failures
+            .iter()
+            .any(|f| f["acquisition_code"] == "unbounded_value"
+                && f["bound_category"] == "MessageContent"
+                && f["bound_dimension"] == "StringBytes"
+                && f["source_count"] == 1)
+    );
+    fs::remove_file(&source).unwrap();
+    let rejected = scan();
+    assert_eq!(
+        rejected["source_processing"]["parse_success_source_count"],
+        0
+    );
+    assert_eq!(
+        rejected["source_processing"]["selected_source_coverage"],
+        "partial"
+    );
+    assert_eq!(rejected["source_processing"]["parsed_record_count"], 0);
+
+    #[cfg(target_os = "linux")]
+    {
+        fs::remove_dir_all(&directory).unwrap();
+        let opencode = root.join("opencode");
+        fs::create_dir_all(&opencode).unwrap();
+        let database = opencode.join("opencode.db");
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute_batch("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT); CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);")
+            .unwrap();
+        drop(connection);
+        let partial_accounting = scan();
+        let processing = &partial_accounting["source_processing"];
+        assert_eq!(processing["evaluation_complete_source_count"], 1);
+        assert_eq!(processing["visibility_limited_source_count"], 0);
+        assert_eq!(processing["accounting_partial_source_count"], 1);
+        assert_eq!(processing["selected_source_coverage"], "partial");
+        assert_eq!(processing["parse_error_source_count"], 0);
+    }
+}
+
+#[test]
+fn long_message_cli_suffix_parts_exclusions_roles_privacy_and_atomic_persistence() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let directory = root.join("codex/sessions");
+    fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("synthetic.jsonl");
+    let rules = temp.path().join("rules.yaml");
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    fs::write(&rules, "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.long\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 3\n    detection:\n      selection: {user_context: 'needle|first\\nsecond'}\n      exclude: {user_context: EXCLUDE}\n      condition: selection\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n").unwrap();
+    let text = format!(
+        "api_key=SYNTHETIC-CLI-LONG-SECRET {}needle",
+        "ordinary ".repeat(1_000)
+    );
+    let punctuation = format!(
+        "https://example.invalid/{}?token=SYNTHETIC-CLI-PUNCT-SECRET&needle=1",
+        ":".repeat(4_000)
+    );
+    let records = [
+        serde_json::json!({"type":"session_meta", "payload":{"session_id":"synthetic-session"}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":text}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":punctuation}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"first"}, {"type":"tool_result", "content":"needle", "tool_use_id":"synthetic-tool"}, {"type":"input_text", "text":"second"}]}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"developer", "content":[{"type":"input_text", "text":"needle"}]}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"system", "content":"needle"}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"assistant", "content":"needle"}}),
+        serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":format!("needle {}EXCLUDE", "ordinary ".repeat(1_000))}}),
+    ];
+    let input = format!(
+        "{}\n",
+        records
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    fs::write(&source, &input).unwrap();
+    let scan = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--no-default-rules",
+                "--emit-activity",
+                "--client",
+                "codex",
+                "--root",
+            ])
+            .arg(&root)
+            .arg("--rules")
+            .arg(&rules)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let summary = scan();
+    assert_eq!(summary["detection_count"], 1);
+    assert_eq!(fs::read_to_string(&source).unwrap(), input);
+    let persisted = fs::read_to_string(&log).unwrap();
+    assert!(!persisted.contains("SYNTHETIC-CLI-LONG-SECRET"));
+    assert!(!persisted.contains("SYNTHETIC-CLI-PUNCT-SECRET"));
+    let events = persisted
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let detection = events
+        .iter()
+        .find(|event| event["event_type"] == "detection")
+        .unwrap();
+    assert_eq!(detection["risk_score"], 3);
+    assert_eq!(detection["timeline_anchors"].as_array().unwrap().len(), 3);
+    let hashes = detection["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["field"] == "user_context")
+        .map(|e| e["hash"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(hashes.contains(&evidence_hash(&text).as_str()));
+    assert!(hashes.contains(&evidence_hash(&punctuation).as_str()));
+    assert!(hashes.contains(&evidence_hash("first\nsecond").as_str()));
+    assert_eq!(scan()["detection_count"], 1);
+    let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    let record = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"x".repeat(65_528)}).to_string();
+    fs::write(&source, format!("{}\n", vec![record; 129].join("\n"))).unwrap();
+    let failed = scan();
+    // CLI summary counts scanner errors in its detection stream.
+    assert_eq!(failed["detection_count"], 1);
+    assert_eq!(failed["activity_count"], 0);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key], "partial source committed {key}");
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    let late = &persisted[offset..];
+    assert!(
+        late.lines().any(
+            |line| serde_json::from_str::<Value>(line).unwrap()["event_type"] == "scanner_error"
+        )
+    );
+    assert!(!late.contains("SYNTHETIC-CLI-LONG-SECRET"));
+    // Individually valid messages and a retained batch below 8 MiB still fail
+    // atomically when repeated no-match scans exhaust source-wide work.
+    let document = fs::read_to_string(&rules).unwrap();
+    let header = document.split("rules:\n").next().unwrap();
+    let repeated = (0..40).map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
+    fs::write(&rules, format!("{header}rules:\n{repeated}modifiers: []\n")).unwrap();
+    let record = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"x".repeat(60_000)}).to_string();
+    fs::write(&source, format!("{}\n", vec![record; 128].join("\n"))).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    assert_eq!(scan()["activity_count"], 0);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key]);
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    let late = persisted[offset..]
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        late.iter()
+            .any(|event| event["event_type"] == "scanner_error")
+    );
+    assert!(
+        !late
+            .iter()
+            .any(|event| event["event_type"] == "detection" || event["event_type"] == "activity")
+    );
+    fs::write(&rules, document).unwrap();
+    let record =
+        serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":punctuation})
+            .to_string();
+    fs::write(&source, format!("{}\n", vec![record; 1_024].join("\n"))).unwrap();
+    let offset = fs::metadata(&log).unwrap().len() as usize;
+    let failed = scan();
+    assert_eq!(failed["activity_count"], 0);
+    assert_eq!(failed["source_processing"]["parse_error_source_count"], 1);
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for key in [
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+    ] {
+        assert_eq!(before[key], after[key]);
+    }
+    let persisted = fs::read_to_string(&log).unwrap();
+    assert!(!persisted.contains("SYNTHETIC-CLI-PUNCT-SECRET"));
+    let late = persisted[offset..]
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    // The previous source-wide work failure has the same scanner diagnostic;
+    // existing error deduplication can suppress its second persisted copy.
+    assert!(
+        !late
+            .iter()
+            .any(|event| event["event_type"] == "detection" || event["event_type"] == "activity")
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn idle_durable_watch_case(
     first_status: u16,
@@ -105,6 +658,11 @@ fn idle_durable_watch_case(
         command.arg("--dry-run");
     }
     let mut child = WatchChildGuard::new(command.spawn().unwrap());
+    if dry_run {
+        // Registration follows signal-handler installation. Keep the source idle:
+        // a triggered scan would invalidate the no-summary/no-write assertions.
+        wait_for_watch_ready(child.child_mut(), &sessions);
+    }
     let started = Instant::now();
     let mut attempts = BTreeMap::<String, usize>::new();
     let mut request_timeline = Vec::new();
@@ -253,7 +811,13 @@ fn idle_durable_watch_case(
         thread::sleep(Duration::from_millis(25));
     }
     let output = child.disarm().wait_with_output().unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "idle watch shutdown failed: status={:?}; stdout={:?}; stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         output.stdout.is_empty(),
         "idle wakeups must not emit scan summaries"
@@ -607,7 +1171,28 @@ fn scan_once_reports_fixture_source_and_detection_accounting() {
             "loaded_project_count": 0,
         })
     );
-    assert_eq!(summary["diagnostic_warnings"], serde_json::json!([]));
+    assert_eq!(
+        summary["diagnostic_warnings"],
+        serde_json::json!([{
+            "code": "source_coverage_partial",
+            "classification": "coverage_limitation",
+            "basis": "source_processing"
+        }])
+    );
+    assert_eq!(
+        summary["source_processing"]["selected_source_coverage"],
+        "partial"
+    );
+    assert_eq!(
+        summary["source_processing"]["accounting_partial_source_count"],
+        1
+    );
+    assert!(
+        summary["source_processing"]["visibility_limited_source_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     assert_eq!(
         summary["source_processing"]["parse_success_source_count"],
         57
@@ -2662,8 +3247,106 @@ fn scan_once_can_emit_activity_events() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn scan_once_sqlite_admission_failure_does_not_block_valid_source() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("synthetic-home");
+    let opencode = root.join("opencode");
+    let codex = root.join("codex/sessions/2026/05");
+    fs::create_dir_all(&opencode).unwrap();
+    fs::create_dir_all(&codex).unwrap();
+    let marker = "SYNTHETIC-ADMISSION-PRIVATE-MARKER";
+    let conn = Connection::open(opencode.join("opencode.db")).unwrap();
+    conn.execute_batch("create table message(id text,session_id text,data text,unknown blob); insert into message values('m','s','{}',zeroblob(8388609));").unwrap();
+    fs::write(codex.join("valid.jsonl"), format!("{}\n{}\n",
+        serde_json::json!({"type":"session_meta","session_id":"synthetic-valid-session","timestamp":"2026-05-17T10:00:00Z","payload":{"source":"cli","model_provider":"openai","agent_nickname":"synthetic","model":"o3"}}),
+        serde_json::json!({"type":"event_msg","timestamp":"2026-05-17T10:00:01Z","payload":{"type":"user_message","message":format!("Inspect synthetic files api_key={marker}")}}))).unwrap();
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("HOME", &root)
+        .env("XDG_CONFIG_HOME", root.join(".config"))
+        .env("XDG_DATA_HOME", root.join(".local/share"))
+        .env("XDG_STATE_HOME", root.join(".local/state"))
+        .env("XDG_CACHE_HOME", root.join(".cache"))
+        .current_dir(temp.path())
+        .args([
+            "scan",
+            "--once",
+            "--allow-fixtures",
+            "--emit-activity",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(&root)
+        .args(["--log-path"])
+        .arg(&log)
+        .args(["--state-path"])
+        .arg(&state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
+    assert!(
+        summary["source_processing"]["parsed_record_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let saved: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    assert!(
+        saved["sqlite_ingestion_cursors"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        saved["baseline_source_contributions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|entry| entry["source_id"] == "codex.sessions")
+    );
+    let persisted = fs::read_to_string(&log).unwrap();
+    let events: Vec<Value> = persisted
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error" && event["client"] == "opencode")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event_type"] == "activity" && event["client"] == "codex")
+    );
+    for text in [
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        persisted,
+        fs::read_to_string(state).unwrap(),
+    ] {
+        assert!(!text.contains(marker));
+        assert!(!text.contains("admission_unknown"));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn scan_once_persists_opencode_cursor_and_replays_recovery_after_failures() {
     let temp = tempdir().expect("tempdir");
+    let secret = "SYNTHETIC-RECOVERY-SECRET";
+    let schema: Value =
+        serde_json::from_str(include_str!("../../schemas/event.schema.json")).unwrap();
+    let validator = validator_for(&schema).unwrap();
     let rules_path = temp.path().join("recovery-rule.yaml");
     fs::write(
         &rules_path,
@@ -2731,7 +3414,7 @@ rules:
             "session-a",
             1_775_000_001_000_i64,
             1_775_000_001_000_i64,
-            serde_json::json!({"type": "text", "text": "benign assistant response"}).to_string(),
+            serde_json::json!({"type": "text", "text": format!("benign assistant response api_key={secret}")}).to_string(),
         ),
     )
     .expect("insert part");
@@ -2740,7 +3423,14 @@ rules:
     let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("telltale-state.json");
     let scan = || {
-        Command::new(env!("CARGO_BIN_EXE_telltale"))
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .env_clear()
+            .env("HOME", &root)
+            .env("XDG_CONFIG_HOME", root.join(".config"))
+            .env("XDG_DATA_HOME", root.join(".local/share"))
+            .env("XDG_STATE_HOME", root.join(".local/state"))
+            .env("XDG_CACHE_HOME", root.join(".cache"))
+            .current_dir(temp.path())
             .args([
                 "scan",
                 "--once",
@@ -2759,7 +3449,23 @@ rules:
             .args(["--state-path"])
             .arg(&state_path)
             .output()
-            .expect("run telltale")
+            .expect("run telltale");
+        for bytes in [&output.stdout, &output.stderr] {
+            assert!(!String::from_utf8_lossy(bytes).contains(secret));
+        }
+        if state_path.is_file() {
+            assert!(!fs::read_to_string(&state_path).unwrap().contains(secret));
+        }
+        if log_path.is_file() {
+            let persisted = fs::read_to_string(&log_path).unwrap();
+            assert!(!persisted.contains(secret));
+            for line in persisted.lines() {
+                let event: Value = serde_json::from_str(line).unwrap();
+                assert_eq!(event["schema_version"], "3.0");
+                assert!(validator.is_valid(&event), "invalid Event3: {event}");
+            }
+        }
+        output
     };
     let output = scan();
 
@@ -2780,6 +3486,69 @@ rules:
     let cursor = cursors.values().next().expect("cursor");
     assert_eq!(cursor["table"], "part");
     assert_eq!(cursor["last_time_updated"], 1_775_000_001_000_i64);
+    // SQLite acquisition is explicitly partial-source coverage, so it must not
+    // install complete-source baseline contributions, even on successful scans.
+    assert!(
+        state["baseline_source_contributions"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    // Quiesced coordinated backup; all subprocesses have exited. This is a
+    // same-development-revision restore, not binary downgrade qualification.
+    let backup = temp.path().join("backup");
+    fs::create_dir(&backup).unwrap();
+    let backup_state = backup.join("state.json");
+    let backup_log = backup.join("events.jsonl");
+    fs::copy(&state_path, &backup_state).unwrap();
+    fs::copy(&log_path, &backup_log).unwrap();
+    let baseline_log = fs::read(&backup_log).unwrap();
+
+    // A projected unknown column is admission scope even though mapping ignores it.
+    let admission_writer = Connection::open(&db_path).unwrap();
+    admission_writer.execute_batch("alter table part add column admission_unknown blob; update part set admission_unknown=zeroblob(8388609);").unwrap();
+    let oversized = scan();
+    assert!(
+        oversized.status.success(),
+        "source failure remains a scanner event"
+    );
+    let summary: Value = serde_json::from_slice(&oversized.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
+    assert_eq!(summary["activity_count"], 0);
+    let after_admission: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    for key in [
+        "sqlite_ingestion_cursors",
+        "baseline_source_contributions",
+        "baseline_snapshots",
+    ] {
+        assert_eq!(
+            after_admission[key], state[key],
+            "admission failure replaced {key}"
+        );
+    }
+    let admission_log = fs::read(&log_path).unwrap();
+    let errors: Vec<Value> = std::str::from_utf8(&admission_log[baseline_log.len()..])
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error")
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|event| event["event_type"] == "activity" || event["event_type"] == "detection")
+    );
+    // Repair and restart through a new process; keep the existing test's schema.
+    admission_writer
+        .execute_batch("alter table part drop column admission_unknown")
+        .unwrap();
+    drop(admission_writer);
+    assert!(scan().status.success());
+    let state: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
 
     let mut writer = Connection::open(&db_path).unwrap();
     let tx = writer.transaction().unwrap();
@@ -2789,9 +3558,15 @@ rules:
     tx.commit().unwrap();
     writer
         .execute(
+            "update part set data=?1 where id='extra-0'",
+            [serde_json::json!({"type": "text", "text": format!("synthetic-page-two-security-marker api_key={secret}")}).to_string()],
+        )
+        .unwrap();
+    writer
+        .execute(
             "update part set data=?1 where id='extra-4999'",
             [
-                serde_json::json!({"type": "text", "text": "synthetic-page-two-security-marker"})
+                serde_json::json!({"type": "text", "text": format!("synthetic-page-two-security-marker api_key={secret}")})
                     .to_string(),
             ],
         )
@@ -2810,9 +3585,33 @@ rules:
     let summary: Value = serde_json::from_slice(&malformed.stdout).unwrap();
     assert_eq!(summary["source_processing"]["parse_error_source_count"], 1);
     let after_error: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
-    assert_eq!(
-        after_error["sqlite_ingestion_cursors"],
-        state["sqlite_ingestion_cursors"]
+    for key in [
+        "sqlite_ingestion_cursors",
+        "baseline_source_contributions",
+        "baseline_snapshots",
+    ] {
+        assert_eq!(
+            after_error[key], state[key],
+            "partial source committed {key}"
+        );
+    }
+    assert_eq!(summary["activity_count"], 0);
+    let failed_log = fs::read(&log_path).unwrap();
+    assert!(failed_log.starts_with(&baseline_log));
+    let late_events = std::str::from_utf8(&failed_log[baseline_log.len()..])
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        late_events
+            .iter()
+            .any(|event| event["event_type"] == "scanner_error")
+    );
+    assert!(
+        !late_events.iter().any(|event| {
+            event["event_type"] == "detection" || event["event_type"] == "activity"
+        })
     );
     writer
         .execute(
@@ -2821,13 +3620,29 @@ rules:
         )
         .unwrap();
     let before_output_failure = fs::read(&state_path).unwrap();
-    // A directory at the canonical JSONL path fails the actual required write.
-    fs::remove_file(&log_path).unwrap();
-    fs::create_dir(&log_path).unwrap();
+    // Valid paths pass preflight. JSONL takes this advisory lock only when
+    // emitting nonempty output, after acquisition and atomic state preparation.
+    let log_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(log_path.with_file_name("telltale-events.jsonl.lock"))
+        .expect("existing JSONL sidecar");
+    fs4::FileExt::lock(&log_lock).expect("hold exclusive JSONL lock before scan");
     let failed = scan();
     assert!(!failed.status.success());
+    assert!(
+        failed.stdout.is_empty(),
+        "failed emission must not return a summary"
+    );
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("resource busy; retry later"),
+        "expected sink lock contention, stderr: {}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
     assert_eq!(fs::read(&state_path).unwrap(), before_output_failure);
-    fs::remove_dir(&log_path).unwrap();
+    assert_eq!(fs::read(&log_path).unwrap(), failed_log);
+    fs4::FileExt::unlock(&log_lock).unwrap();
+    drop(log_lock);
     let restarted = scan();
     assert!(
         restarted.status.success(),
@@ -2842,17 +3657,37 @@ rules:
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert!(
-        events.iter().any(|event| {
+    let detections = events
+        .iter()
+        .filter(|event| {
             event["event_type"] == "detection"
                 && event["client"] == "opencode"
                 && event["session_id"] == "session-a"
                 && event["rule_ids"].as_array().is_some_and(|ids| {
                     ids.contains(&Value::String("synthetic.recovery.page_two".to_owned()))
                 })
-        }),
-        "page-two security detection must reach persisted JSONL"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        detections.len(),
+        1,
+        "recovery detection must persist exactly once"
     );
+    assert_eq!(
+        detections[0]["timeline_anchors"].as_array().unwrap().len(),
+        2,
+        "both early and late matching parts must survive recovery"
+    );
+    let recovered_activities = events
+        .iter()
+        .filter(|event| event["event_type"] == "activity")
+        .count();
+    assert_eq!(
+        recovered_activities, 2,
+        "baseline and recovery activity must persist"
+    );
+    let recovered_log = fs::read(&log_path).unwrap();
+    assert!(recovered_log.starts_with(&failed_log));
     let recovered: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
     assert_eq!(
         recovered["sqlite_ingestion_cursors"]
@@ -2862,6 +3697,94 @@ rules:
             .next()
             .unwrap()["last_time_updated"],
         1_775_000_002_000_i64
+    );
+    let repeated = scan();
+    assert!(repeated.status.success());
+    let summary: Value = serde_json::from_slice(&repeated.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    assert_eq!(
+        fs::read(&log_path).unwrap(),
+        recovered_log,
+        "restart duplicated events"
+    );
+
+    // Preserve the post-recovery set before restoring both baseline artifacts.
+    // The source remains ahead of the restored cursor and is replayed by the
+    // exact same binary, without deleting state or using backfill.
+    let quarantine = temp.path().join("post-recovery");
+    fs::create_dir(&quarantine).unwrap();
+    fs::copy(&state_path, quarantine.join("state.json")).unwrap();
+    fs::copy(&log_path, quarantine.join("events.jsonl")).unwrap();
+    fs::copy(&backup_state, &state_path).unwrap();
+    fs::copy(&backup_log, &log_path).unwrap();
+    assert_eq!(
+        fs::read(&state_path).unwrap(),
+        fs::read(&backup_state).unwrap()
+    );
+    assert_eq!(fs::read(&log_path).unwrap(), baseline_log);
+    let restored = scan();
+    assert!(restored.status.success());
+    let summary: Value = serde_json::from_slice(&restored.stdout).unwrap();
+    assert_eq!(summary["source_processing"]["parsed_record_count"], 5002);
+    assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+    let restored_state: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    let restored_cursors = restored_state["sqlite_ingestion_cursors"]
+        .as_object()
+        .unwrap();
+    let recovered_cursors = recovered["sqlite_ingestion_cursors"].as_object().unwrap();
+    assert_eq!(restored_cursors.len(), recovered_cursors.len());
+    for (coordinate, cursor) in recovered_cursors {
+        // Observation time is deliberately refreshed by the replay subprocess.
+        for key in [
+            "client",
+            "source_id",
+            "source_instance_id",
+            "table",
+            "last_time_updated",
+        ] {
+            assert_eq!(restored_cursors[coordinate][key], cursor[key]);
+        }
+    }
+    assert_eq!(
+        restored_state["baseline_source_contributions"],
+        recovered["baseline_source_contributions"]
+    );
+    let restored_log = fs::read(&log_path).unwrap();
+    assert!(restored_log.starts_with(&baseline_log));
+    let replayed_events = std::str::from_utf8(&restored_log[baseline_log.len()..])
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let replayed_detections = replayed_events
+        .iter()
+        .filter(|event| event["event_type"] == "detection")
+        .collect::<Vec<_>>();
+    assert_eq!(replayed_detections.len(), 1);
+    assert_eq!(
+        replayed_events
+            .iter()
+            .filter(|event| event["event_type"] == "activity")
+            .count(),
+        1
+    );
+    for key in [
+        "rule_ids",
+        "session_id",
+        "risk_score",
+        "evidence",
+        "timeline_anchors",
+    ] {
+        assert_eq!(
+            replayed_detections[0][key], detections[0][key],
+            "restore lost detection {key}"
+        );
+    }
+    assert!(scan().status.success());
+    assert_eq!(
+        fs::read(&log_path).unwrap(),
+        restored_log,
+        "restored restart duplicated events"
     );
 }
 
@@ -3546,6 +4469,11 @@ fn scan_once_continues_after_malformed_source() {
             {
                 "code": "source_parse_error_observed",
                 "classification": "observed_failure",
+                "basis": "source_processing"
+            },
+            {
+                "code": "source_coverage_partial",
+                "classification": "coverage_limitation",
                 "basis": "source_processing"
             },
             {

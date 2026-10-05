@@ -61,6 +61,39 @@ pub struct AcquisitionBatch {
     pub accounting: SourceAccounting,
 }
 
+/// One source projection owns this collector; capacity is checked before each
+/// canonical observation is retained, not after an adapter returns its batch.
+#[derive(Default)]
+pub(crate) struct CanonicalCollector {
+    observations: Vec<CanonicalObservationV2>,
+    retained_bytes: usize,
+}
+
+impl CanonicalCollector {
+    pub(crate) fn push(
+        &mut self,
+        observation: CanonicalObservationV2,
+    ) -> Result<(), telltale_schema::observation::ObservationError> {
+        use telltale_schema::observation::{
+            MAX_CANONICAL_RETAINED_BYTES, ObservationError, ValidationCode,
+        };
+        let bytes = self
+            .retained_bytes
+            .checked_add(observation.retained_byte_len())
+            .filter(|bytes| *bytes <= MAX_CANONICAL_RETAINED_BYTES)
+            .ok_or_else(|| {
+                ObservationError::from_validation_code(ValidationCode::UnboundedValue)
+            })?;
+        self.observations.push(observation);
+        self.retained_bytes = bytes;
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Vec<CanonicalObservationV2> {
+        self.observations
+    }
+}
+
 #[cfg(test)]
 #[path = "acquisition_accounting_tests.rs"]
 mod accounting_tests;
@@ -943,7 +976,7 @@ mod tests {
     fn codex_bound_diagnostic_rejects_late_source_atomically() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("synthetic-bound.jsonl");
-        let oversized = "x".repeat(4097);
+        let oversized = "x".repeat(65_537);
         let input = format!(
             "{}\n{}\n",
             serde_json::json!({"type":"user", "session_id":"synthetic", "content":"ok"}),
@@ -1251,6 +1284,29 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "opencode-sqlite")]
+    fn long_message_sqlite_acquisition_keeps_full_suffix_and_rejects_atomically() {
+        use telltale_schema::observation::{JsonValue, ObservationBody};
+        let (_directory, connection, source) = database();
+        for (bytes, accepted) in [(9_000, true), (65_537, false)] {
+            let text = format!("{}suffix", "x".repeat(bytes - 6));
+            connection
+                .execute(
+                    "update part set data = ?1 where id = 'part-third'",
+                    [serde_json::json!({"type":"text", "text":text}).to_string()],
+                )
+                .unwrap();
+            let result = super::acquire_source(&source, options());
+            if accepted {
+                let batch = result.unwrap();
+                assert!(batch.observations.iter().any(|observation| matches!(observation.body(), ObservationBody::Message(message) if message.content() == Some(&JsonValue::string(&text)))));
+            } else {
+                assert_eq!(acquisition_error(result).code(), "unbounded_value");
+            }
+        }
+    }
+
+    #[test]
     fn validates_exact_identity_and_kind_before_source_io() {
         let directory = tempdir().unwrap();
         let missing = directory.path().join("must-not-be-created.db");
@@ -1372,6 +1428,55 @@ mod tests {
         assert_eq!(
             acquisition_error(super::acquire_source(&source, options())),
             AcquisitionError::SourceRead,
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "opencode-sqlite")]
+    fn sqlite_admission_failure_is_source_read_without_partial_acquisition() {
+        let (_directory, connection, source) = database();
+        let before = super::acquire_source(&source, options()).unwrap();
+        connection.execute_batch("alter table message add column unknown blob; alter table part add column unknown blob;").unwrap();
+        let under = super::acquire_source(&source, options()).unwrap();
+        assert_eq!(
+            format!("{:?}", under.observations),
+            format!("{:?}", before.observations)
+        );
+        assert_eq!(under.accounting, before.accounting);
+        assert_eq!(under.progress, before.progress);
+        connection.execute_batch("insert into part values('unselected','message-acquisition','session-acquisition',4,4,'{\"type\":\"metadata\"}',zeroblob(8388609));").unwrap();
+        let unselected = super::acquire_source(&source, options()).unwrap();
+        assert_eq!(
+            format!("{:?}", unselected.observations),
+            format!("{:?}", before.observations)
+        );
+        assert_eq!(unselected.accounting, before.accounting);
+        assert_eq!(unselected.progress, before.progress);
+        connection
+            .execute("delete from part where id='unselected'", [])
+            .unwrap();
+        for table in ["message", "part"] {
+            connection
+                .execute_batch(&format!("update {table} set unknown=zeroblob(8388609)"))
+                .unwrap();
+            let error = acquisition_error(super::acquire_source(&source, options()));
+            assert_eq!(error, AcquisitionError::SourceRead);
+            assert!(!format!("{error:?} {error}").contains("unknown"));
+            connection
+                .execute_batch(&format!("update {table} set unknown=null"))
+                .unwrap();
+            let repaired = super::acquire_source(&source, options()).unwrap();
+            assert_eq!(
+                format!("{:?}", repaired.observations),
+                format!("{:?}", before.observations)
+            );
+            assert_eq!(repaired.accounting, before.accounting);
+            assert_eq!(repaired.progress, before.progress);
+        }
+        connection.execute_batch("insert into message values('metadata-only','another-session',4,4,'{}',zeroblob(8388609));").unwrap();
+        assert_eq!(
+            acquisition_error(super::acquire_source(&source, options())),
+            AcquisitionError::SourceRead
         );
     }
 

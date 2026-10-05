@@ -138,8 +138,8 @@ Future managed adoption targets Event4, CanonicalPayload, and a vendor-neutral
 collector boundary. Tenant, device, authentication, routing, receipt, and
 collector metadata stay outside Event4 and CanonicalPayload. A managed adopter
 may own collection, storage, tenancy, and cloud concerns around those payloads.
-Emusary is not a Telltale core dependency; Telltale remains useful without a
-managed adopter and does not depend on one.
+A downstream consumer is not a Telltale core dependency; Telltale remains useful
+without one.
 
 ## Documentation map
 

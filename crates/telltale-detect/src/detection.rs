@@ -45,15 +45,6 @@ fn group_records_by_session(parsed: Vec<NormalizedRecord>) -> Vec<(String, Vec<N
         .collect()
 }
 
-fn detect_records(
-    source: &Source,
-    rule_set: &telltale_rules::CompiledRuleSet,
-    parsed: &[NormalizedRecord],
-) -> Result<Option<Event>, telltale_schema::scoring::RiskAccountingError> {
-    detect_records_with_timeline(source, rule_set, parsed)
-        .map(|analysis| analysis.map(DetectionAnalysis::into_event))
-}
-
 pub fn evaluate_session_matches(
     rule_set: &CompiledRuleSet,
     parsed: &[NormalizedRecord],
@@ -82,31 +73,11 @@ fn legacy_evaluation_fields(parsed: &[NormalizedRecord]) -> Vec<(&str, &str)> {
         .collect()
 }
 
-struct DetectionAnalysis {
-    event: Event,
-    timeline_anchors: Vec<TimelineRuleAnchor>,
-}
-
-impl DetectionAnalysis {
-    fn into_event(mut self) -> Event {
-        attach_timeline_anchors(&mut self.event, &self.timeline_anchors);
-        self.event
-    }
-}
-
-fn attach_timeline_anchors(event: &mut Event, timeline_anchors: &[TimelineRuleAnchor]) {
-    if timeline_anchors.is_empty() {
-        return;
-    }
-    event.timeline_anchors =
-        telltale_schema::event::canonicalize_timeline_anchors(timeline_anchors.to_vec());
-}
-
-fn detect_records_with_timeline(
+fn detect_records(
     source: &Source,
     rule_set: &telltale_rules::CompiledRuleSet,
     parsed: &[NormalizedRecord],
-) -> Result<Option<DetectionAnalysis>, telltale_schema::scoring::RiskAccountingError> {
+) -> Result<Option<Event>, telltale_schema::scoring::RiskAccountingError> {
     let Some(matches) = evaluate_session_matches(rule_set, parsed)? else {
         return Ok(None);
     };
@@ -114,7 +85,7 @@ fn detect_records_with_timeline(
     let rule_ids = matches.rule_ids;
     let tags = tags_for_matches(&rule_ids, matches.tags);
 
-    let event = telltale_schema::event::detection_event(DetectionEventInput {
+    let mut event = telltale_schema::event::detection_event(DetectionEventInput {
         client: source.client,
         agent: first_field(parsed, |record| record.agent.clone())
             .or_else(|| Some(source.client.as_str().to_string())),
@@ -139,10 +110,9 @@ fn detect_records_with_timeline(
     })?;
     let timeline_anchors = detection_timeline_anchors(source, parsed, &event);
 
-    Ok(Some(DetectionAnalysis {
-        event,
-        timeline_anchors,
-    }))
+    event.timeline_anchors =
+        telltale_schema::event::canonicalize_timeline_anchors(timeline_anchors);
+    Ok(Some(event))
 }
 
 fn detection_timeline_anchors(
@@ -275,10 +245,9 @@ where
     records.iter().find_map(extract)
 }
 
-#[cfg(all(test, feature = "source-io"))]
-#[allow(clippy::useless_conversion)]
+#[cfg(test)]
 mod tests {
-    use super::detect_records_with_timeline;
+    use super::detect_parsed_source_records;
     use std::path::PathBuf;
     use telltale_rules::load_default_rule_set;
     use telltale_schema::clients::{ClientId, SourceKind};

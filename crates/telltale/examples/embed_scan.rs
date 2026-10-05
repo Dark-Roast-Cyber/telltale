@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use telltale_core::Pipeline;
+use telltale_core::{Pipeline, PipelineError};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pipeline = Pipeline::builder().build()?;
@@ -16,7 +16,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .ok_or("usage: embed_scan <session-root>")?;
 
-    for (source, event) in pipeline.scan_root(&root)? {
+    let events = match pipeline.scan_root(&root) {
+        Ok(events) => events,
+        Err(error) => {
+            match &error {
+                PipelineError::Discovery(_) => eprintln!("could not discover session stores"),
+                PipelineError::Compilation(_) => {
+                    eprintln!("rules cannot evaluate canonical sources")
+                }
+                // PipelineError is non-exhaustive; retain a fallback for future categories.
+                _ => {}
+            }
+            return Err(error.into());
+        }
+    };
+    for (source, event) in events {
         println!(
             "{} [{}] {} rules={:?} score={}",
             source.source_id, event.severity, event.event_type, event.rule_ids, event.risk_score

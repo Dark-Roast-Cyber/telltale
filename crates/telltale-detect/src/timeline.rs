@@ -188,6 +188,7 @@ pub fn build_content_free_canonical_timeline(
 
 impl SessionTimeline {
     /// Returns a bounded context window around an entry index, inclusive.
+    /// Bounds are clamped to the retained entries, even for an absent anchor.
     pub fn context_window(
         &self,
         anchor_index: usize,
@@ -199,7 +200,10 @@ impl SessionTimeline {
         }
 
         let start = anchor_index.saturating_sub(before);
-        let end = (anchor_index + after + 1).min(self.entries.len());
+        let end = anchor_index
+            .saturating_add(after)
+            .saturating_add(1)
+            .min(self.entries.len());
         &self.entries[start.min(self.entries.len())..end]
     }
 
@@ -626,6 +630,38 @@ mod tests {
 
         assert_eq!(timeline.entries[0].linked_entry_index, None);
         assert_eq!(timeline.entries[1].linked_entry_index, None);
+    }
+
+    #[test]
+    fn context_window_handles_extreme_bounds() {
+        let records = vec![
+            user_message("2026-05-09T00:00:00Z"),
+            tool_call("2026-05-09T00:00:01Z", Some("call-1")),
+            tool_result("2026-05-09T00:00:02Z", Some("call-1")),
+        ];
+        let mut timeline = build_session_timeline(&records).expect("timeline");
+        assert_eq!(timeline.context_window(1, 0, 0)[0].index, 1);
+        assert_eq!(timeline.context_window(0, usize::MAX, usize::MAX).len(), 3);
+        assert_eq!(timeline.context_window(2, usize::MAX, usize::MAX).len(), 3);
+        assert!(timeline.context_window(3, 0, 0).is_empty());
+        let trailing = timeline.context_window(4, 2, 0);
+        assert_eq!(trailing.len(), 1);
+        assert_eq!(trailing[0].index, 2);
+        assert_eq!(timeline.context_window(3, 3, 0).len(), 3);
+        assert!(timeline.context_window(usize::MAX, 0, 0).is_empty());
+        assert_eq!(
+            timeline
+                .context_window(usize::MAX, usize::MAX, usize::MAX)
+                .len(),
+            3
+        );
+        timeline.entries.clear();
+        assert!(timeline.context_window(0, 0, 0).is_empty());
+        assert!(
+            timeline
+                .context_window(usize::MAX, usize::MAX, usize::MAX)
+                .is_empty()
+        );
     }
 
     #[test]

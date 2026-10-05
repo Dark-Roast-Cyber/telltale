@@ -62,8 +62,9 @@ structured payload text in workspace events, and MUST NOT retain
 
 - **WHEN** a legitimate workspace control shares a line with an accumulated
   payload containing reasoning or `encrypted_content`
-- **THEN** the workspace event retains only the trusted control prefix and no
-  structured payload or sensitive suffix
+- **THEN** the workspace event retains only the session identity extracted from
+  the trusted control prefix, not the prefix text, structured payload, or
+  sensitive suffix
 
 ### Requirement: Canonical session state and ordinals
 

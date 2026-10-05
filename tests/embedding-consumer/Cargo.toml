@@ -15,7 +15,7 @@ protected-assignment = ["telltale-core/protected-assignment"]
 sqlx-sqlite = ["dep:sqlx"]
 
 [dependencies]
-telltale-core = { path = "../../crates/telltale", version = "=0.7.0-rc.1", default-features = false }
+telltale-core = { path = "../../crates/telltale", version = "=0.7.0-rc.2", default-features = false }
 sqlx = { version = "=0.8.6", default-features = false, features = ["sqlite", "runtime-tokio", "macros"], optional = true }
 
 [dev-dependencies]

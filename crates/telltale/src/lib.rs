@@ -10,13 +10,13 @@
 //! alongside the same session-scoped events, without another detection pass.
 //!
 //! ```no_run
-//! use telltale_core::Pipeline;
+//! use telltale_core::{Pipeline, PipelineError};
 //!
 //! let pipeline = Pipeline::builder().build()?;
 //! for (source, event) in pipeline.scan_root(std::path::Path::new("/home/user"))? {
 //!     println!("{}: {} {:?}", source.source_id, event.event_type, event.rule_ids);
 //! }
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # Ok::<(), PipelineError>(())
 //! ```
 
 use telltale_detect::detection::evaluate_session_matches;
@@ -41,10 +41,12 @@ pub use provenance::{
     ProducerProvenanceOptions, assemble_producer_provenance_manifest,
     resolve_install_inventory_interval_seconds,
 };
+pub use telltale_detect::v2::RuleV1CompileError;
 pub use telltale_rules::MatchResult;
 pub use telltale_schema::clients::{ClientId, SourceKind};
 pub use telltale_schema::event::Event;
 pub use telltale_schema::event::Event3Record;
+pub use telltale_schema::observation::ObservationError;
 pub use telltale_schema::provenance::{
     Event3ContractIdentity, ProducerFeatureSwitches, ProducerOperationalAlertThresholds,
     ProducerProvenanceError, ProducerProvenanceManifestV1, ProducerRiskThresholds,
@@ -62,46 +64,6 @@ pub use telltale_sources::paths::PathProfile;
 use std::path::Path;
 
 type BoxError = Box<dyn std::error::Error>;
-/// Operational pipeline failures retain their original error for inspection,
-/// but their Display/Debug never renders paths, configuration, or source text.
-#[non_exhaustive]
-pub enum PipelineError {
-    Discovery(DiscoveryError),
-    Clock(BoxError),
-    Compilation(BoxError),
-    InvalidConfiguration,
-    InvalidOptions,
-}
-impl std::fmt::Display for PipelineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Discovery(_) => "pipeline_discovery_failed",
-            Self::Clock(_) => "pipeline_clock_failed",
-            Self::Compilation(_) => "pipeline_compilation_failed",
-            Self::InvalidConfiguration => "pipeline_no_rule_documents",
-            Self::InvalidOptions => "pipeline_invalid_options",
-        })
-    }
-}
-impl std::fmt::Debug for PipelineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
-    }
-}
-impl std::error::Error for PipelineError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Discovery(error) => Some(error),
-            Self::Clock(error) | Self::Compilation(error) => Some(error.as_ref()),
-            Self::InvalidConfiguration | Self::InvalidOptions => None,
-        }
-    }
-}
-impl From<DiscoveryError> for PipelineError {
-    fn from(error: DiscoveryError) -> Self {
-        Self::Discovery(error)
-    }
-}
 
 pub use telltale_detect::v2::{
     ActionContextEntry, ActionContribution, ActionCoordinate, ActionEvidence, ActionFinding,
@@ -110,7 +72,91 @@ pub use telltale_detect::v2::{
 };
 mod rule_catalog;
 pub use rule_catalog::{RuleCatalogEntry, RuleCatalogKind, bundled_rule_catalog};
+
 type SourceOutcome = Result<canonical_runtime::SourceResult, canonical_runtime::SourceFailure>;
+
+fn current_rfc3339() -> Result<String, time::error::Format> {
+    time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)
+}
+
+/// Returned failures of pipeline construction and batch scanning.
+///
+/// Display and Debug render closed codes and never include paths, configuration,
+/// or source text. `Error::source()` retains the original cause for inspection.
+/// Source-processing failures instead become per-source `scanner_error` events.
+/// This typed contract is current development after RC1, not a claim about the
+/// published RC1 artifacts or stable release qualification.
+#[non_exhaustive]
+pub enum PipelineError {
+    /// Checked discovery could not complete; no partial listing is scanned.
+    Discovery(DiscoveryError),
+    /// The batch UTC clock could not be formatted as an observation time.
+    Clock(BoxError),
+    /// The batch observation time failed canonical validation, not a source failure.
+    Observation(ObservationError),
+    /// Rule documents, policy, or canonical compilation were rejected.
+    /// The boxed source is diagnostic only; its concrete type is not a supported
+    /// error taxonomy.
+    Compilation(BoxError),
+    /// No rule documents were supplied after disabling bundled defaults.
+    InvalidConfiguration,
+    /// Detailed-scan options failed their closed bounds.
+    InvalidOptions,
+}
+
+impl std::fmt::Display for PipelineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Discovery(_) => "pipeline_discovery_failed",
+            Self::Clock(_) => "pipeline_clock_failed",
+            Self::Observation(_) => "pipeline_observation_failed",
+            Self::Compilation(_) => "pipeline_compilation_failed",
+            Self::InvalidConfiguration => "pipeline_no_rule_documents",
+            Self::InvalidOptions => "pipeline_invalid_options",
+        })
+    }
+}
+
+impl std::fmt::Debug for PipelineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl std::error::Error for PipelineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Discovery(error) => Some(error),
+            Self::Clock(error) | Self::Compilation(error) => Some(error.as_ref()),
+            Self::Observation(error) => Some(error),
+            Self::InvalidConfiguration | Self::InvalidOptions => None,
+        }
+    }
+}
+
+impl From<DiscoveryError> for PipelineError {
+    fn from(source: DiscoveryError) -> Self {
+        Self::Discovery(source)
+    }
+}
+
+impl From<ObservationError> for PipelineError {
+    fn from(source: ObservationError) -> Self {
+        Self::Observation(source)
+    }
+}
+
+impl From<time::error::Format> for PipelineError {
+    fn from(source: time::error::Format) -> Self {
+        Self::Clock(Box::new(source))
+    }
+}
+
+impl From<RuleV1CompileError> for PipelineError {
+    fn from(source: RuleV1CompileError) -> Self {
+        Self::Compilation(Box::new(source))
+    }
+}
 
 /// One source's session-scoped events and their precise detection occurrences.
 #[non_exhaustive]
@@ -275,7 +321,8 @@ impl Pipeline {
 
     /// Discover session stores under `root` and run canonical detection and activity.
     /// Source processing failures surface as `scanner_error` events; discovery
-    /// and rule compilation failures return `Err`. No baseline or cursor is persisted.
+    /// and batch clock/observation-time or rule compilation failures return
+    /// [`PipelineError`]. No baseline or cursor is persisted.
     pub fn scan_root(&self, root: &Path) -> Result<Vec<(Source, Event)>, PipelineError> {
         let sources = telltale_sources::discovery::discover_sources(root)?;
         self.scan_sources(&sources)
@@ -285,7 +332,8 @@ impl Pipeline {
     /// Uses one UTC observation time per call and the same session-scoped Event 3
     /// projection (including timeline anchors) as [`Self::scan_root`]. Source
     /// processing failures surface as `scanner_error` events. No discovery,
-    /// baseline, cursor, or output persistence is performed.
+    /// baseline, cursor, or output persistence is performed. Batch clock,
+    /// observation-time validation, and rule compilation failures return [`PipelineError`].
     pub fn scan_sources(&self, sources: &[Source]) -> Result<Vec<(Source, Event)>, PipelineError> {
         Ok(self
             .scan_sources_with_occurrences(sources)?
@@ -299,6 +347,7 @@ impl Pipeline {
     }
 
     /// Discover stores and return the same events with precise occurrence linkage.
+    /// Returned failures match [`Self::scan_root`], including checked discovery.
     /// This current-development addition is not part of published RC1 artifacts.
     pub fn scan_root_with_occurrences(
         &self,
@@ -311,13 +360,14 @@ impl Pipeline {
     /// Scan supplied sources once, returning session events and observation identities.
     /// Occurrences are ordered by finding index, timeline index (unknown last), then
     /// identity. Source failures return only `scanner_error` with no occurrences;
-    /// clock and compilation failures return `Err`. No state or output is persisted.
+    /// batch clock, observation-time validation, and compilation failures return
+    /// [`PipelineError`]. No state or output is persisted.
     /// This current-development addition is not part of published RC1 artifacts.
     pub fn scan_sources_with_occurrences(
         &self,
         sources: &[Source],
     ) -> Result<Vec<SourceScan>, PipelineError> {
-        self.scan_sources_inner(sources, None)
+        self.scan_sources_timed(sources, None, current_rfc3339)
     }
 
     /// Add action-scoped findings, replay comparison aids and opt-in context to
@@ -327,7 +377,7 @@ impl Pipeline {
         sources: &[Source],
         options: &DetailedEvaluationOptions,
     ) -> Result<Vec<SourceScan>, PipelineError> {
-        self.scan_sources_inner(sources, Some(options))
+        self.scan_sources_timed(sources, Some(options), current_rfc3339)
     }
 
     pub fn scan_root_detailed(
@@ -339,21 +389,27 @@ impl Pipeline {
         self.scan_sources_detailed(&sources, options)
     }
 
-    fn scan_sources_inner(
+    #[cfg(test)]
+    fn scan_sources_with_time(
+        &self,
+        sources: &[Source],
+        now: impl FnOnce() -> Result<String, time::error::Format>,
+    ) -> Result<Vec<SourceScan>, PipelineError> {
+        self.scan_sources_timed(sources, None, now)
+    }
+
+    fn scan_sources_timed(
         &self,
         sources: &[Source],
         detailed: Option<&DetailedEvaluationOptions>,
+        now: impl FnOnce() -> Result<String, time::error::Format>,
     ) -> Result<Vec<SourceScan>, PipelineError> {
         if let Some(options) = detailed {
             options
                 .validate()
                 .map_err(|_| PipelineError::InvalidOptions)?;
         }
-        let now = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .map_err(|e| PipelineError::Clock(Box::new(e)))?;
-        let observed_at = telltale_schema::observation::ObservedAt::new(now)
-            .map_err(|e| PipelineError::Clock(Box::new(e)))?;
+        let observed_at = telltale_schema::observation::ObservedAt::new(now()?)?;
         Ok(self
             .scan_canonical_sources_with_options(sources, observed_at, detailed)?
             .into_iter()
@@ -464,6 +520,9 @@ impl PipelineBuilder {
         self
     }
 
+    /// Compile bundled and supplied Rule v1 documents with the optional policy.
+    /// Missing documents or rejected rules/policy return [`PipelineError`].
+    /// Canonical compilation is checked later by the source scan methods.
     pub fn build(self) -> Result<Pipeline, PipelineError> {
         let mut documents: Vec<&str> = Vec::new();
         if !self.custom_only {
@@ -496,6 +555,7 @@ mod investigation_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
     use telltale_schema::clients::{ClientId, SourceKind};
     use telltale_schema::record::RecordKind;
 
@@ -525,6 +585,70 @@ mod tests {
             source_id: "embedded.synthetic".to_string(),
             path: std::path::PathBuf::from("embedded://synthetic"),
         }
+    }
+
+    #[test]
+    fn batch_time_failures_precede_compilation_and_source_io() {
+        let invalid_rules = r#"
+version: 1
+description: synthetic batch error precedence
+defaults:
+  case_insensitive: false
+  enabled: true
+rules:
+  - id: synthetic.invalid
+    category: synthetic
+    severity: unknown
+    score: 1
+    targets: [command]
+    regex: needle
+    tags: []
+    explanation: synthetic
+modifiers: []
+"#;
+        let invalid = Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(invalid_rules)
+            .build()
+            .expect("legacy rules accept severity");
+        let valid = Pipeline::builder().build().unwrap();
+        let sources = [synthetic_source()];
+        for batch in [&[][..], &sources[..]] {
+            for pipeline in [&valid, &invalid] {
+                let error = pipeline
+                    .scan_sources_with_time(batch, || {
+                        time::Date::from_calendar_date(2026, time::Month::October, 4)
+                            .unwrap()
+                            .format(&time::format_description::parse("[offset_hour]").unwrap())
+                    })
+                    .err()
+                    .expect("clock failure");
+                assert!(matches!(error, PipelineError::Clock(_)));
+                let error = pipeline
+                    .scan_sources_with_time(batch, || Ok("invalid-observed-at".into()))
+                    .err()
+                    .expect("observation failure");
+                assert!(matches!(error, PipelineError::Observation(_)));
+            }
+            let error = invalid
+                .scan_sources_with_time(batch, || Ok("2026-10-04T00:00:00Z".into()))
+                .err()
+                .expect("compilation failure");
+            assert!(matches!(error, PipelineError::Compilation(_)));
+            assert!(matches!(
+                error
+                    .source()
+                    .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
+                Some(RuleV1CompileError::InvalidSeverity)
+            ));
+        }
+        let scans = valid
+            .scan_sources_with_time(&sources, || Ok("2026-10-04T00:00:00Z".into()))
+            .unwrap();
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].events.len(), 1);
+        assert_eq!(scans[0].events[0].event_type, "scanner_error");
+        assert!(scans[0].occurrences.is_empty());
     }
 
     #[test]

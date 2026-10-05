@@ -2,6 +2,184 @@ use super::*;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
+fn sanitizer_budget_rules() -> telltale_rules::RuleV1CompatibilityExport {
+    telltale_rules::load_rule_set_from_documents(&["version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.sanitizer\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [command]\n    regex: MATCH\n    tags: []\n    explanation: synthetic\nmodifiers: []\n"], None).unwrap().compatibility_export()
+}
+
+#[test]
+fn action_evidence_sanitizer_reservation_uses_shared_budget() {
+    let export = sanitizer_budget_rules();
+    let compiled = super::actions::compile(&export).unwrap();
+    let observation = tool(
+        "encoded-evidence",
+        &format!("echo MATCH {}", "%".repeat(4000)),
+        None,
+    );
+    let mut budget = super::session::RetentionBudget::new();
+    budget
+        .charge(super::session::MAX_EVALUATION_BYTE_VISITS - 1024 * 1024)
+        .unwrap();
+    assert!(matches!(
+        super::actions::evaluate(
+            &export,
+            &compiled,
+            &[&observation],
+            &DetailedEvaluationOptions::default(),
+            &mut budget
+        ),
+        Err(ProcessingError::Bounds)
+    ));
+}
+
+#[test]
+fn action_context_sanitizer_reservation_fails_source_atomically() {
+    let export = sanitizer_budget_rules();
+    let plan = compile_rule_v1(&export).unwrap();
+    let observations = [
+        tool("encoded-context", &"%".repeat(4000), None),
+        tool("match", "echo MATCH", None),
+    ];
+    let mut options = DetailedEvaluationOptions::default();
+    options.context.before = 1;
+    options.context.tool_arguments = true;
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let input = || CanonicalSourceInput {
+        client: ClientId::Claude,
+        source_id: "claude.projects",
+        source_instance: Some(&instance),
+        observations: &observations,
+    };
+    let used = super::session::MAX_EVALUATION_BYTE_VISITS - 1024 * 1024;
+    let ordinary = EvaluationWorkBudget::with_used_bytes(used);
+    super::session::evaluate_source_with_work_budget(input(), &plan, None, &ordinary).unwrap();
+    assert!(!ordinary.is_exhausted());
+    let work = EvaluationWorkBudget::with_used_bytes(used);
+    assert!(matches!(
+        super::session::evaluate_source_with_options_and_work_budget(
+            input(),
+            &plan,
+            None,
+            &options,
+            &work
+        ),
+        Err(ProcessingError::Bounds)
+    ));
+    assert!(work.is_exhausted());
+}
+
+#[test]
+fn action_nonmatches_exhaust_the_shared_work_budget() {
+    let export = telltale_rules::load_default_rule_set()
+        .unwrap()
+        .compatibility_export();
+    let compiled = super::actions::compile(&export).unwrap();
+    let observation = tool("nonmatch", &"x".repeat(4096), None);
+    let mut budget = super::session::RetentionBudget::new();
+    budget
+        .charge(super::session::MAX_EVALUATION_BYTE_VISITS - 1024)
+        .unwrap();
+    assert!(matches!(
+        super::actions::evaluate(
+            &export,
+            &compiled,
+            &[&observation],
+            &DetailedEvaluationOptions::default(),
+            &mut budget
+        ),
+        Err(ProcessingError::Bounds)
+    ));
+}
+
+#[test]
+fn each_reached_nonmatching_action_matcher_charges_work() {
+    let document = |count| {
+        let mut yaml = String::from(
+            "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n",
+        );
+        for index in 0..count {
+            yaml.push_str(&format!("  - id: synthetic.nonmatch{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [command]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n"));
+        }
+        yaml.push_str("modifiers: []\n");
+        telltale_rules::load_rule_set_from_documents(&[&yaml], None)
+            .unwrap()
+            .compatibility_export()
+    };
+    let observation = tool("nonmatch", &"x".repeat(4096), None);
+    let one = document(1);
+    let mut measured = super::session::RetentionBudget::new();
+    assert!(
+        super::actions::evaluate(
+            &one,
+            &super::actions::compile(&one).unwrap(),
+            &[&observation],
+            &DetailedEvaluationOptions::default(),
+            &mut measured
+        )
+        .unwrap()
+        .0
+        .is_empty()
+    );
+    let used = measured
+        .work_bytes
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let two = document(2);
+    let mut budget = super::session::RetentionBudget::new();
+    budget
+        .charge(super::session::MAX_EVALUATION_BYTE_VISITS - used)
+        .unwrap();
+    assert!(matches!(
+        super::actions::evaluate(
+            &two,
+            &super::actions::compile(&two).unwrap(),
+            &[&observation],
+            &DetailedEvaluationOptions::default(),
+            &mut budget
+        ),
+        Err(ProcessingError::Bounds)
+    ));
+}
+
+#[test]
+fn detailed_source_work_failure_returns_no_partial_evaluation() {
+    let rules = telltale_rules::load_default_rule_set().unwrap();
+    let plan = compile_rule_v1(&rules.compatibility_export()).unwrap();
+    let observations = [
+        tool("match", "cat .env", None),
+        tool("nonmatch", &"x".repeat(4096), None),
+    ];
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let measured = EvaluationWorkBudget::default();
+    let input = || CanonicalSourceInput {
+        client: ClientId::Claude,
+        source_id: "claude.projects",
+        source_instance: Some(&instance),
+        observations: &observations,
+    };
+    let complete = super::session::evaluate_source_with_options_and_work_budget(
+        input(),
+        &plan,
+        None,
+        &DetailedEvaluationOptions::default(),
+        &measured,
+    )
+    .unwrap();
+    assert!(!complete.sessions()[0].action_findings().is_empty());
+    let work = EvaluationWorkBudget::with_used_bytes(
+        super::session::MAX_EVALUATION_BYTE_VISITS - measured.used_bytes() + 1,
+    );
+    assert!(matches!(
+        super::session::evaluate_source_with_options_and_work_budget(
+            input(),
+            &plan,
+            None,
+            &DetailedEvaluationOptions::default(),
+            &work
+        ),
+        Err(ProcessingError::Bounds)
+    ));
+    assert!(work.is_exhausted());
+}
+
 #[test]
 fn second_review_link_requires_literal_execution_and_respects_comments() {
     for command in [

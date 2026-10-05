@@ -37,7 +37,7 @@ observations across source IDs.
 
 ### Requirement: Canonical session identity is source-reported
 
-For each registered Codex source, the v2 projection MUST use
+For legacy records in each registered Codex source, the v2 projection MUST use
 `effective_session_id` as the namespace for that record's zero-based JSONL
 ordinal. The effective value MUST come only from a source-reported
 `session_id`, `sessionID`, or `sessionId` on the record, or from a prior
@@ -122,7 +122,8 @@ or explicit error state is returned. Generic `type:tool` running state MUST map
 to a conservative request; completed/error or explicit output/error MUST map to
 `ToolResultReturned`. The adapter MUST NOT emit ToolProposed,
 ToolExecutionStarted, ToolExecutionCompleted, inferred success, or a
-source-success status. A state-only generic record MAY use parsed canonical
+source-success status except the bounded completed-command observation below.
+A state-only generic record MAY use parsed canonical
 `Unknown` status solely to satisfy the Tool body's minimum without claiming
 execution or success.
 
@@ -152,7 +153,8 @@ absence and MUST NOT be hashed, fabricated, or treated as a mapping error.
 
 Every populated canonical body field and facet MUST have exactly one matching
 `FactMetadata` entry. The adapter MAY add only clear `command.text` and
-`resource.path` Tool facets, with parsed provenance, and MUST never emit File,
+`resource.path` Tool facets, with parsed provenance, except the closed completed-item
+facets and reported cwd specified below, and MUST never emit File,
 Process, Network, Session, or Inference observations from those facets or from
 Codex metadata. `payload.source` is metadata only and MUST NOT imply execution.
 
@@ -177,7 +179,7 @@ Model/provider/agent metadata MUST NOT emit Inference observations.
 
 ### Requirement: Deterministic replay identity
 
-Codex v2 IDs MUST use the coordinate-only tuple and MUST remain unchanged for
+Legacy Codex v2 IDs MUST use the coordinate-only tuple and MUST remain unchanged for
 semantic content, adapter-version provenance, or privacy-key epoch changes under
 the same effective session and ordinal. Semantic comparison MUST use the
 separate local comparison state; different comparison epochs are incomparable,
@@ -208,7 +210,9 @@ the keys' value types, including null); outer `response_item` with an object pay
 `type` is `reasoning`; and outer `event_msg` with an object payload whose direct
 `type` is one of `task_started`, `task_complete`, `token_count`, `agent_reasoning`,
 `agent_reasoning_raw_content`, `agent_reasoning_section_break`,
-`reasoning_content_delta`, or `reasoning_raw_content_delta`. These native units
+`reasoning_content_delta`, or `reasoning_raw_content_delta`; and exact outer
+`world_state` with object payload, required boolean `full` and object `state`,
+containing neither a payload `type` nor a `payload` key even when null. These native units
 MUST count as `Other` and emit zero canonical observations, irrespective of
 additional role/tool-shaped fields. Existing session ownership validation and
 metadata attestation MUST remain active, including model/provider metadata in
@@ -231,6 +235,39 @@ This bounded compatibility evidence is public `openai/codex` commit
 `codex-rs/rollout/src/policy.rs` (persistence selection).
 Persistence or transience alone MUST NOT authorize ignoring other variants.
 
+World-state arbitrary state keys SHALL be opaque and excluded, never traversed
+for ownership, attestation, discriminator, message or tool interpretation, and
+never retained in native records. Only direct outer/payload fields SHALL enter
+existing envelope ownership/attestation validation. Nested state/message and
+top-level session_meta lookalikes SHALL NOT supply ownership or attestation.
+Classification of exact world_state SHALL precede permissive conversational
+discriminator matching; payload discriminator/wrapper keys SHALL reject rather
+than manufacture completed items. Full snapshots and patches SHALL produce zero
+canonical observations and contributions, count as native Other, and SHALL NOT
+establish/replace inherited identity. Their ordinals SHALL validate exactly like
+all other records. Missing/null/wrong full or state types and bare/wrong/nested
+wrappers SHALL reject atomically. No world-state context model, patch replay or
+generic metadata ignore mechanism SHALL be added.
+
+Pinned world-state evidence is public commit
+`47379efd5289cba801c5a66273064fbe3bf92f60`,
+`codex-rs/protocol/src/protocol.rs:3272-3287`,
+`codex-rs/history/src/rollout_payload.rs:30-58`, and
+`codex-rs/core/src/session/mod.rs:3592-3619,4625-4673`, where full/patch comparison
+state persists separately after conversation items.
+
+#### Scenario: World-state metadata is opaque auxiliary evidence
+
+- **WHEN** any of the three exact identities acquires a full or patch world_state with empty or tool/message/discriminator-looking state between public metadata and completed user input
+- **THEN** state remains unretained and excluded from all analytics, the native unit counts as Other with zero contributions, owner/replay and consecutive ordinals remain truthful, and no privacy marker reaches native retained fields or exported events
+- **AND** malformed world-state envelopes, late unknown records, ordinal gaps/duplicates or referenced prefixes reject the whole source without successful observations, accounting or progress
+
+#### Scenario: World-state state cannot provide or inherit ownership
+
+- **WHEN** world_state reports a validated direct envelope owner or contains only nested state identifiers and top-level session_meta poison
+- **THEN** only direct outer/payload ownership can scope that unit's accounting, and no auxiliary establishes/replaces inherited identity for later messages
+- **AND** conflicting or invalid direct envelope ownership rejects even when state contains plausible identifiers
+
 #### Scenario: Auxiliary records surround conversation and tools
 
 - **WHEN** accepted auxiliaries occur before or after valid messages and tool requests/results
@@ -238,7 +275,7 @@ Persistence or transience alone MUST NOT authorize ignoring other variants.
 
 #### Scenario: Wrong wrappers and unsupported control records fail closed
 
-- **WHEN** an auxiliary tag is bare, under an unknown/wrong/nested wrapper, or has a malformed payload envelope, or an unsupported event such as `exec_command_begin`, `exec_command_end`, or `item_completed` follows accepted auxiliaries
+- **WHEN** an auxiliary tag is bare, under an unknown/wrong/nested wrapper, or has a malformed payload envelope, or an unsupported event such as `exec_command_begin`, `exec_command_end`, or an `item_completed` outside the bounded shape below follows accepted auxiliaries
 - **THEN** acquisition rejects the whole source without partial successful observations or progress
 - **AND** aliases `turn_started` and `turn_complete` remain unsupported
 
@@ -256,6 +293,121 @@ Persistence or transience alone MUST NOT authorize ignoring other variants.
 
 - **WHEN** an auxiliary reports session `b` and a top-level `session_meta` field before an identity-less message
 - **THEN** the auxiliary accounts to `b` but the message retains prior supported metadata session `a`, or fails `replay_unverifiable` if no prior namespace exists
+
+### Requirement: Bounded typed completed items have one native owner
+
+All three Codex identities SHALL accept only exact outer `event_msg`, direct
+object payload `type: item_completed`, and object `item` tagged exactly
+`AgentMessage`, `UserMessage`, `Reasoning`, or `CommandExecution`. Agent content
+SHALL preserve ordered exact `Text` string parts. User content SHALL support
+only exact lowercase `text` UserInput string parts; unknown/nontext parts SHALL
+reject the whole source. Reasoning SHALL validate coordinates, count as native
+Other, and retain no reasoning text, canonical facts or analytics. Interpretation
+SHALL remain in the existing native owner rather than a parallel parser.
+
+Nonempty source `thread_id`, `turn_id` and `item.id` SHALL be required. Public
+SessionMeta.id SHALL establish the owning thread, independently of root
+SessionMeta.session_id. Owner aliases at outer/payload/item SHALL agree with
+the completed owner and established metadata owner; root differing from child
+SHALL NOT conflict. Stray metadata SHALL NOT establish inherited ownership.
+Typed native identity SHALL encode `[thread_id, turn_id, item.id]` with existing
+adapter/family/stage scoping; position SHALL remain source provenance, not typed
+identity. Turn and message response IDs SHALL remain source-reported correlations.
+Root correlation MAY be retained only as reported `session.root_id` on typed
+facts. Legacy identities SHALL remain unchanged; no filename fallback is allowed.
+Native `ordinal` SHALL be supported only in strict self-contained mode. Presence
+of the key on any nonblank JSONL record SHALL require a valid u64 ordinal on every
+nonblank record, including metadata, auxiliaries and suppressed mirrors. The
+sequence SHALL start at zero and advance strictly consecutively using checked
+arithmetic. The first record SHALL be exact public session_meta with object
+payload, exact history_mode paginated and a truthful nonempty owning id. The
+entire source SHALL reject mixed absent/null/malformed, negative, fractional,
+overflowing, duplicate, descending or gapped coordinates, invalid first metadata,
+and nonzero-start slices before returning any observations, accounting or progress.
+Validated reported ordinal SHALL supply source_sequence, never positional fallback
+in this mode. Blank lines SHALL NOT consume ordinals. Typed owner/turn/item identity
+and emitted child ordinal SHALL remain independent. With no ordinal key, legacy
+identities and sequences SHALL remain exactly unchanged. Non-null history_base or
+subagent_history_start_ordinal, even zero, SHALL remain unsupported. Referenced
+history and inherited prefixes SHALL NOT be supported or guessed. No acquisition
+progress, cursor or public API changes SHALL be introduced.
+
+#### Scenario: Typed coordinates preserve replay without retaining reasoning
+
+- **WHEN** any exact Codex identity acquires completed text messages and reasoning for a child thread distinct from the root
+- **THEN** ordered roles and long-message semantics remain supported, typed replay identity uses owner/turn/item rather than physical position, and reasoning emits no facts
+- **AND** missing/empty/conflicting coordinates, wrong wrappers, unknown late variants, invalid native ordinal mode or inherited-prefix metadata reject atomically without observations, accounting or progress
+
+#### Scenario: Self-contained public ordinal rollout preserves native coordinates
+
+- **WHEN** any of the three identities acquires a zero-start contiguous paginated public rollout including metadata, auxiliary, mirrored message, completed user and terminal command units with optional blank lines
+- **THEN** every native unit accounts once, canonical source_sequence uses the validated reported ordinal, typed replay identity remains owner/turn/item scoped, and child ordinals remain independent
+- **AND** a late gap, duplicate, descent, missing or malformed ordinal rejects the entire source with no successful observations, accounting or progress, while no-ordinal legacy sequences and IDs remain unchanged
+
+### Requirement: Mirror authority is narrowly coordinate-proven
+
+The native owner SHALL suppress an assistant raw-response mirror only for a
+nonempty shared native response ID, same owning thread, explicit truthful payload
+`internal_chat_message_metadata_passthrough.turn_id` and equivalent ordered
+text-only message facts. This SHALL be the sole raw-message mirror turn authority,
+matching the pinned public ResponseItem::Message field. Outer rollout metadata
+SHALL remain separate harness metadata. Outer/payload `metadata.turn_id`, outer
+passthrough-like fields and stray direct turn coordinates SHALL NOT establish
+mirror authority or be accepted as aliases. Non-null passthrough metadata SHALL
+be an object; a non-null turn ID SHALL be a nonempty bounded string without
+control characters. Missing/null optional metadata or turn IDs SHALL preserve
+absence. Contradictory explicit outer/payload turn coordinates SHALL reject the
+whole source atomically rather than override the public coordinate.
+Conflicting proven mirrors SHALL reject atomically. Missing coordinates, distinct
+IDs, tool-bearing facts and distinct turns SHALL NOT content-deduplicate.
+Only in explicit paginated history mode, completed text-only user messages SHALL
+be authoritative over text-only raw user response messages with the same owner
+and explicit truthful public passthrough turn coordinate. User item IDs SHALL NOT
+be treated as shared.
+This representation policy MAY discard raw contextual text; it SHALL NOT claim
+universal losslessness. Ambiguous pairing SHALL preserve distinct facts and
+document possible duplicate analytics, or reject, never silently erase them.
+Native unit accounting SHALL count all physical native units including mirrors.
+Request, result and completion facts SHALL never be deduplicated together.
+
+#### Scenario: Proven mirrors and ambiguous repetition differ
+
+- **WHEN** raw and typed assistant messages share owner/turn/nonempty native ID and text facts, and paginated user representations share owner/explicit public passthrough turn coordinate but have different IDs
+- **THEN** only the proven assistant mirror and turn-paired raw user representation are suppressed from canonical analytics
+- **AND** identical content with distinct IDs, other turns, absent metadata, missing assistant IDs, and legacy-mode user representations remain distinct
+
+#### Scenario: Harness metadata cannot authorize raw mirror suppression
+
+- **WHEN** an otherwise matching raw message has only unrelated metadata.turn_id or an outer passthrough-like field rather than the exact payload public passthrough turn coordinate
+- **THEN** both raw and typed facts remain distinct for assistant and paginated user messages across all three identities
+- **AND** malformed, empty, oversized or contradictory present public raw turn coordinates reject the whole source without successful observations, accounting or progress
+
+### Requirement: Completed commands are conservative terminal results
+
+Completed CommandExecution SHALL require structured string argv and terminal
+status completed, failed or declined; in_progress and unknown status SHALL reject
+atomically. It SHALL map to ToolResultReturned with native ToolResult accounting,
+not ToolCall, execution stages or invocation contributions. item.id SHALL supply
+call_id independently of raw response.id. argv SHALL remain structured
+tool.arguments, never space-joined, with no invented tool name or command-text
+facet. Optional exit_code and aggregated_output SHALL preserve absent/null/empty
+and returned values in tool.result. Exact source status SHALL remain reported
+tool.source_status; completed/failed/declined SHALL map to reported
+Succeeded/Failed/Denied without asserting actual execution, intended effects,
+user refusal or zero effects. tool.output_fidelity SHALL report not_captured,
+truncated for the exact known persistence marker, diagnostic_or_capture for
+failed/declined output, or capture_completeness_unknown otherwise. cwd MAY only
+be reported resource.path metadata. ToolExecution SHALL remain Unsupported, and
+no Process/File/Network observations SHALL be manufactured. Existing structured
+limits SHALL remain unchanged; oversize SHALL reject without truncation. Timeline
+SHALL label completions as results rather than requests, with call linkage only
+when unambiguous.
+
+#### Scenario: Diagnostic completion does not fabricate execution
+
+- **WHEN** a declined or failed command returns a diagnostic, missing output, explicit exit value or persistence-truncated capture
+- **THEN** its result preserves argv, source status, result presence and conservative fidelity with source call linkage
+- **AND** native invocation contribution stays zero, distinct raw requests/results remain, Event 3.0 privacy is preserved and timeline completion is a result
 
 ### Requirement: Unknown input fails closed without leakage
 

@@ -30,10 +30,11 @@ pub use value::{
     JsonValue, LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_DEPTH, LOCAL_MAX_ENTRIES, LOCAL_MAX_KEY_BYTES,
     LOCAL_MAX_OBJECT_MEMBERS, LOCAL_MAX_SEARCHABLE_BYTES, LOCAL_MAX_STRING_BYTES,
     LOCAL_MAX_TOTAL_BYTES, LOCAL_MAX_VALUE_BYTES, LocalEvidence, LocalReference, LocalValue,
-    SemanticFacet,
+    MESSAGE_MAX_TEXT_BYTES, SEMANTIC_MAX_TOTAL_BYTES, SemanticFacet,
 };
 
 pub const OTHER_REGISTRY_VERSION: &str = "other-v1";
+pub const MAX_CANONICAL_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObservationId(String);
@@ -1097,6 +1098,7 @@ impl std::error::Error for ObservationError {}
 
 #[derive(Clone)]
 pub struct CanonicalObservationV2 {
+    retained_bytes: usize,
     observation_id: ObservationId,
     body: ObservationBody,
     stage: ObservationStage,
@@ -1285,7 +1287,7 @@ impl ObservationBuilder {
         self,
         store: Option<&dyn AssignmentStore>,
     ) -> Result<CanonicalObservationV2, ObservationError> {
-        self.validate_shape()?;
+        let semantic_bytes = self.validate_shape()?;
         let family = self.body.kind();
         let coordinate = self.source.selected_coordinate();
         let fingerprint_policy = match &self.identity_basis {
@@ -1437,7 +1439,10 @@ impl ObservationBuilder {
                 return Err(ObservationError::new(ValidationCode::ReplayUnverifiable));
             }
         };
+        let retained_bytes =
+            CanonicalObservationV2::retained_size(semantic_bytes, self.local.as_ref())?;
         Ok(CanonicalObservationV2 {
+            retained_bytes,
             observation_id: ObservationId::new(observation_id)?,
             body: self.body,
             stage: self.stage,
@@ -1457,12 +1462,12 @@ impl ObservationBuilder {
         })
     }
 
-    fn validate_shape(&self) -> Result<(), ObservationError> {
+    fn validate_shape(&self) -> Result<usize, ObservationError> {
         let family = self.body.kind();
         if !self.stage.is_compatible(family) {
             return Err(ObservationError::new(ValidationCode::InvalidStage));
         }
-        validate_semantic_json_bounds(&self.body, &self.facets)?;
+        let semantic_bytes = validate_semantic_json_bounds(&self.body, &self.facets)?;
         self.body.validate_minimum(self.stage)?;
         if matches!(
             family,
@@ -1495,7 +1500,7 @@ impl ObservationBuilder {
             validate_correlation_id(id)?;
         }
         validate_correlation_ids(&self.correlation)?;
-        Ok(())
+        Ok(semantic_bytes)
     }
 
     fn canonicalize_json(&mut self) -> Result<(), ObservationError> {
@@ -1511,6 +1516,50 @@ impl ObservationBuilder {
 }
 
 impl CanonicalObservationV2 {
+    /// Nonallocating canonical semantic/local size, cached at construction.
+    pub fn retained_byte_len(&self) -> usize {
+        self.retained_bytes
+    }
+
+    fn retained_size(
+        semantic_bytes: usize,
+        local: Option<&LocalEvidence>,
+    ) -> Result<usize, ObservationError> {
+        let mut total = semantic_bytes;
+        if let Some(local) = local {
+            if let Some(reference) = local.raw_ref() {
+                total = total
+                    .checked_add(reference.handle().len() + reference.retention_class().len())
+                    .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
+            }
+            for (key, value) in local.structured_values() {
+                total = total
+                    .checked_add(
+                        value.value().encoded_byte_len()?
+                            + key.len()
+                            + value.searchable().map_or(0, str::len),
+                    )
+                    .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
+                if let Some(reference) = value.raw_ref() {
+                    total = total
+                        .checked_add(reference.handle().len() + reference.retention_class().len())
+                        .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
+                }
+                if let Some(fingerprint) = value.keyed_fingerprint() {
+                    total = total
+                        .checked_add(
+                            fingerprint.location().len()
+                                + fingerprint.key_epoch_ref().len()
+                                + fingerprint.algorithm().len()
+                                + fingerprint.digest().len(),
+                        )
+                        .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
+                }
+            }
+        }
+        Ok(total)
+    }
+
     pub fn new(
         body: ObservationBody,
         stage: ObservationStage,
@@ -1697,24 +1746,76 @@ fn validate_metadata_coverage(
 fn validate_semantic_json_bounds(
     body: &ObservationBody,
     facets: &BTreeMap<String, SemanticFacet>,
-) -> Result<(), ObservationError> {
+) -> Result<usize, ObservationError> {
+    let mut total = 0usize;
+    let mut sizes = Vec::new();
     for (path, value) in body.semantic_fields() {
-        validate_bounded_json(&value).map_err(|error| {
+        let bytes = (|| match (body, path.as_str(), &value) {
+            (ObservationBody::Message(_), "message.content", JsonValue::String(text)) => {
+                value::bounded_message_text_bytes(text)
+            }
+            (ObservationBody::Message(message), "message.content_parts", _) => {
+                if message.content_parts().len() > LOCAL_MAX_ARRAY_ITEMS {
+                    return Err(ObservationError::bound(BoundDimension::ArrayItems));
+                }
+                let mut bytes = 2;
+                let mut structured_bytes = 2;
+                for (index, part) in message.content_parts().iter().enumerate() {
+                    let part_bytes = part.bounded_json_bytes()? + usize::from(index != 0);
+                    if !matches!(
+                        (part.kind(), part.value()),
+                        (ContentPartKind::Text, JsonValue::String(_))
+                    ) {
+                        structured_bytes += part_bytes;
+                    }
+                    bytes += part_bytes;
+                }
+                if structured_bytes > LOCAL_MAX_VALUE_BYTES {
+                    return Err(ObservationError::bound(BoundDimension::EncodedBytes));
+                }
+                Ok(bytes)
+            }
+            _ => bounded_semantic_value_bytes(&value),
+        })()
+        .map_err(|error| {
             error.with_bound_category(CanonicalFieldCategory::semantic_field(&path))
         })?;
+        let _ = bytes;
+        sizes.push((
+            CanonicalFieldCategory::semantic_field(&path),
+            value.encoded_byte_len()?,
+        ));
     }
     for (name, facet) in facets {
-        validate_bounded_json(facet.value())
+        let bytes = bounded_semantic_value_bytes(facet.value())
             .map_err(|error| error.with_bound_category(CanonicalFieldCategory::facet(name)))?;
+        let _ = bytes;
+        sizes.push((
+            CanonicalFieldCategory::facet(name),
+            facet.value().encoded_byte_len()?,
+        ));
     }
-    Ok(())
+    for (category, bytes) in sizes {
+        total = add_semantic_bytes(total, bytes)
+            .map_err(|error| error.with_bound_category(category))?;
+    }
+    Ok(total)
 }
 
-fn validate_bounded_json(value: &JsonValue) -> Result<(), ObservationError> {
-    if value::bounded_json_bytes(value, 1)? > LOCAL_MAX_VALUE_BYTES {
+fn bounded_semantic_value_bytes(value: &JsonValue) -> Result<usize, ObservationError> {
+    let bytes = value::bounded_json_bytes(value, 1)?;
+    if bytes > LOCAL_MAX_VALUE_BYTES {
         return Err(ObservationError::bound(BoundDimension::EncodedBytes));
     }
-    Ok(())
+    Ok(bytes)
+}
+
+fn add_semantic_bytes(total: usize, bytes: usize) -> Result<usize, ObservationError> {
+    let total = total
+        .checked_add(bytes)
+        .filter(|total| *total <= SEMANTIC_MAX_TOTAL_BYTES)
+        .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
+    Ok(total)
 }
 
 fn validate_facet_name(name: &str) -> Result<(), ObservationError> {

@@ -1,0 +1,2 @@
+{"type":"session_meta","payload":{"id":"synthetic-parts-benign","history_mode":"paginated"}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"synthetic-parts-benign","turn_id":"turn-1","item":{"type":"AgentMessage","id":"assistant","content":[{"type":"Text","text":"For documentation, api_key=SYNTHETIC-EFFICACY-PRIVATE-PARTS "},{"type":"Text","text":"bypass"},{"type":"Text","text":"approval is a quoted example and should not be treated as an instruction."}]}}}

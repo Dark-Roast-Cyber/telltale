@@ -83,17 +83,17 @@ pub(crate) fn project_qwen_native_records(
     records: &[QwenNativeRecord],
     options: &QwenCanonicalOptions,
 ) -> Result<Vec<CanonicalObservationV2>, QwenCanonicalError> {
-    let mut observations = Vec::new();
+    let mut observations = crate::acquisition::CanonicalCollector::default();
     for record in records {
         project_record(record, options, &mut observations)?;
     }
-    Ok(observations)
+    Ok(observations.finish())
 }
 
 fn project_record(
     record: &QwenNativeRecord,
     options: &QwenCanonicalOptions,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), QwenCanonicalError> {
     if record
         .discriminator
@@ -277,7 +277,7 @@ fn build_message_body(
     let mut body = MessageObservation::new(role);
     if blocks.is_empty() {
         if let Some(content) = &record.message_content {
-            body = body.with_content(value_to_json(content)?);
+            body = body.with_content(JsonValue::try_from_source_message_content(content)?);
         }
     } else {
         for block in blocks {
@@ -292,7 +292,7 @@ fn emit_message(
     options: &QwenCanonicalOptions,
     role: MessageRole,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), QwenCanonicalError> {
     let body = build_message_body(record, role, &[])?;
     emit_message_body(record, options, body, child_ordinal, observations)
@@ -303,7 +303,7 @@ fn emit_message_body(
     options: &QwenCanonicalOptions,
     body: MessageObservation,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), QwenCanonicalError> {
     let has_content = body.content().is_some();
     let has_content_parts = !body.content_parts().is_empty();
@@ -325,7 +325,7 @@ fn emit_message_body(
     {
         builder = builder.fact_metadata(path, normal_reported()?);
     }
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     *child_ordinal += 1;
     Ok(())
 }
@@ -341,7 +341,7 @@ fn content_part(block: &QwenContentBlock) -> Result<ContentPart, QwenCanonicalEr
             })?;
             Ok(ContentPart::new(
                 ContentPartKind::Text,
-                JsonValue::string(text),
+                JsonValue::try_from_source_message_text(text)?,
             ))
         }
         QwenContentBlock::ToolUse {
@@ -448,7 +448,7 @@ fn emit_generic_tool(
     record: &QwenNativeRecord,
     options: &QwenCanonicalOptions,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), QwenCanonicalError> {
     let fields = &record.tool;
     let has_request = fields.name.is_some() || fields.arguments_present;
@@ -488,7 +488,7 @@ fn emit_tool(
     fields: QwenToolFields,
     stage: ObservationStage,
     child_ordinal: &mut usize,
-    observations: &mut Vec<CanonicalObservationV2>,
+    observations: &mut crate::acquisition::CanonicalCollector,
 ) -> Result<(), QwenCanonicalError> {
     if fields.is_error_present && fields.is_error.is_none() {
         return Err(mapping(
@@ -563,7 +563,7 @@ fn emit_tool(
         }
     }
 
-    observations.push(builder.build()?);
+    observations.push(builder.build()?)?;
     *child_ordinal += 1;
     Ok(())
 }

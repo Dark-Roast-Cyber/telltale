@@ -9,7 +9,9 @@ use std::sync::LazyLock;
 use telltale_rules::{
     RuleV1CompatibilityExport, RuleV1CompatibilityModifier, RuleV1ContentMatcher,
 };
-use telltale_schema::event::{redact_sensitive_text, terminal_identifier, terminal_session_id};
+use telltale_schema::event::{
+    PrivacySanitizer, SanitizationContext, terminal_identifier, terminal_session_id,
+};
 use telltale_schema::observation::*;
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -93,17 +95,20 @@ pub struct CanonicalActionFinding {
     risk_points: Option<u8>,
 }
 impl CanonicalActionFinding {
-    fn from_finding(finding: &super::Finding) -> Self {
-        Self {
+    fn from_finding(
+        finding: &super::Finding,
+        budget: &mut RetentionBudget,
+    ) -> Result<Self, ProcessingError> {
+        Ok(Self {
             finding_id: finding.finding_id().into(),
             signal_ids: finding.signal_ids().to_vec(),
             observation_ids: finding.observation_ids().to_vec(),
-            detector_id: terminal_identifier("rule", finding.detectors()[0].id()),
+            detector_id: safe_identifier("rule", finding.detectors()[0].id(), budget)?,
             finding_kind: finding.finding_kind().as_str().into(),
-            category: terminal_identifier("category", finding.category()),
+            category: safe_identifier("category", finding.category(), budget)?,
             severity: finding.severity().as_str().into(),
             risk_points: finding.risk_points(),
-        }
+        })
     }
     pub fn finding_id(&self) -> &str {
         &self.finding_id
@@ -484,11 +489,15 @@ fn string(value: &JsonValue) -> Option<&str> {
     }
 }
 
-fn view(observation: &CanonicalObservationV2) -> ActionView {
+fn view(
+    observation: &CanonicalObservationV2,
+    budget: &mut RetentionBudget,
+) -> Result<ActionView, ProcessingError> {
     let mut out = ActionView::default();
     if observation.source().ingestion_mode() == IngestionMode::Import {
-        return out;
+        return Ok(out);
     }
+    budget.charge(observation.retained_byte_len())?;
     match observation.body() {
         ObservationBody::Message(message) => {
             if observation
@@ -496,12 +505,12 @@ fn view(observation: &CanonicalObservationV2) -> ActionView {
                 .map(|c| c.resolve(CapabilityId::UserContext))
                 != Some(CapabilityAvailability::Supported)
             {
-                return out;
+                return Ok(out);
             }
             let field = match message.role() {
                 Some(MessageRole::User) => "user_context",
                 Some(MessageRole::Assistant) => "assistant_context",
-                _ => return out,
+                _ => return Ok(out),
             };
             if let Some(text) = message.content().and_then(string) {
                 out.put(field, text.to_owned());
@@ -522,13 +531,13 @@ fn view(observation: &CanonicalObservationV2) -> ActionView {
                 .map(|c| c.resolve(CapabilityId::ToolCall))
                 != Some(CapabilityAvailability::Supported)
             {
-                return out;
+                return Ok(out);
             }
             if observation.stage() == ObservationStage::ToolResultReturned {
                 if let Some(text) = tool.result().and_then(string).or(tool.searchable_result()) {
                     out.put("tool_result", text.to_owned());
                 }
-                return out;
+                return Ok(out);
             }
             if !matches!(
                 observation.stage(),
@@ -537,7 +546,7 @@ fn view(observation: &CanonicalObservationV2) -> ActionView {
                     | ObservationStage::ToolExecutionStarted
                     | ObservationStage::ToolExecutionCompleted
             ) {
-                return out;
+                return Ok(out);
             }
             if let Some(name) = tool.name() {
                 out.put("tool_name", name.to_owned());
@@ -553,6 +562,7 @@ fn view(observation: &CanonicalObservationV2) -> ActionView {
                 Some(JsonValue::Object(input)) => structured_input(input, &mut out, &mut command),
                 Some(JsonValue::String(text)) => {
                     // Some native envelopes carry an encoded object as a string.
+                    budget.charge(text.len())?;
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(text)
                         && value.is_object()
                         && let Ok(JsonValue::Object(input)) =
@@ -564,10 +574,11 @@ fn view(observation: &CanonicalObservationV2) -> ActionView {
                     }
                 }
                 _ => {
-                    let resolution = super::SelectorRegistry::new().resolve(
+                    let resolution = super::SelectorRegistry::new().try_resolve(
                         super::SelectorId::parse("command.text").unwrap(),
                         observation,
-                    );
+                        budget,
+                    )?;
                     if let Some(JsonValue::String(text)) = resolution.value() {
                         command.push_str(text);
                     } else if let Some(text) = tool.searchable_arguments() {
@@ -575,23 +586,31 @@ fn view(observation: &CanonicalObservationV2) -> ActionView {
                     }
                 }
             }
+            budget.charge(command.len())?;
             if tool
                 .name()
                 .is_some_and(|name| matches!(name, "exec" | "multi_tool_use.parallel"))
-                && let Some((commands, written, paths)) = script_actions(&command)
+                && let Some((commands, written, paths)) = script_actions(&command, budget)?
             {
                 command = commands;
                 out.put("authored_content", written);
                 out.put("file_path", paths);
             }
+            budget.charge(command.len())?;
             let (command, authored) = strip_heredocs(&command);
             out.put("authored_content", authored);
+            budget.charge(command.len())?;
             out.stages = if shell_comment(&command) {
                 Vec::new()
             } else {
+                budget.charge(command.len())?;
                 split_statements(&command)
             };
-            out.commands = out.stages.iter().map(|s| tokenize(s)).collect();
+            for stage in &out.stages {
+                budget.charge(stage.len())?;
+                out.commands.push(tokenize(stage));
+            }
+            charge_commands(&out.commands, budget)?;
             out.reads_paths |= out.commands.iter().any(|tokens| {
                 matches!(
                     command_word(tokens),
@@ -620,33 +639,43 @@ fn view(observation: &CanonicalObservationV2) -> ActionView {
         }
         _ => {}
     }
-    out
+    Ok(out)
 }
 
 /// Read only literal arguments of the supported script-tool API. Arbitrary
 /// JavaScript is not executed, flattened, or treated as shell input.
-fn script_actions(script: &str) -> Option<(String, String, String)> {
+fn script_actions(
+    script: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<(String, String, String)>, ProcessingError> {
+    budget.charge(script.len())?;
     if !script.contains("tools.") {
-        return None;
+        return Ok(None);
     }
     let mut commands = Vec::new();
     let mut written = Vec::new();
     let mut paths = Vec::new();
+    budget.charge(script.len())?;
     for (offset, _) in script.match_indices("tools.exec_command(") {
         let rest = &script[offset + "tools.exec_command(".len()..];
-        let object = rest.split_once('}')?.0;
+        budget.charge(rest.len())?;
+        let Some((object, _)) = rest.split_once('}') else {
+            return Ok(None);
+        };
+        budget.charge(object.len())?;
         if let Some((_, value)) = object
             .split_once("cmd:")
             .or_else(|| object.split_once("\"cmd\":"))
-            && let Some(value) = script_literal(value.trim_start())
+            && let Some(value) = script_literal(value, budget)?
         {
             commands.push(value);
         }
     }
+    budget.charge(script.len())?;
     for (offset, _) in script.match_indices("tools.apply_patch(") {
-        if let Some(patch) =
-            script_literal(script[offset + "tools.apply_patch(".len()..].trim_start())
+        if let Some(patch) = script_literal(&script[offset + "tools.apply_patch(".len()..], budget)?
         {
+            budget.charge(patch.len())?;
             written.extend(
                 patch
                     .lines()
@@ -654,6 +683,7 @@ fn script_actions(script: &str) -> Option<(String, String, String)> {
                     .filter_map(|line| line.strip_prefix('+'))
                     .map(str::to_owned),
             );
+            budget.charge(patch.len())?;
             paths.extend(
                 patch
                     .lines()
@@ -666,18 +696,31 @@ fn script_actions(script: &str) -> Option<(String, String, String)> {
             );
         }
     }
-    Some((commands.join("\n"), written.join("\n"), paths.join("\n")))
+    Ok(Some((
+        commands.join("\n"),
+        written.join("\n"),
+        paths.join("\n"),
+    )))
 }
-fn script_literal(text: &str) -> Option<String> {
-    let mut chars = text.chars();
-    let quote = chars.next().filter(|c| matches!(c, '\'' | '"' | '`'))?;
+fn script_literal(
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<Option<String>, ProcessingError> {
+    budget.charge(text.len())?;
+    let mut chars = text.trim_start().chars();
+    let Some(quote) = chars.next().filter(|c| matches!(c, '\'' | '"' | '`')) else {
+        return Ok(None);
+    };
     let mut value = String::new();
     while let Some(c) = chars.next() {
         if c == quote {
-            return Some(value);
+            return Ok(Some(value));
         }
         if c == '\\' {
-            value.push(match chars.next()? {
+            let Some(next) = chars.next() else {
+                return Ok(None);
+            };
+            value.push(match next {
                 'n' => '\n',
                 'r' => '\r',
                 't' => '\t',
@@ -687,7 +730,7 @@ fn script_literal(text: &str) -> Option<String> {
             value.push(c);
         }
     }
-    None
+    Ok(None)
 }
 
 fn structured_input(
@@ -792,15 +835,35 @@ fn strip_heredocs(command: &str) -> (String, String) {
     (output.trim_end().to_owned(), authored)
 }
 
-fn regex(pattern: &'static str, text: &str) -> bool {
+fn regex(
+    pattern: &'static str,
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    budget.charge(text.len())?;
     // Closed, versioned native interpretation predicates, compiled once.
     static PATTERNS: LazyLock<std::sync::Mutex<BTreeMap<&'static str, Regex>>> =
         LazyLock::new(|| std::sync::Mutex::new(BTreeMap::new()));
     let mut patterns = PATTERNS.lock().expect("native predicate cache");
-    patterns
+    Ok(patterns
         .entry(pattern)
         .or_insert_with(|| Regex::new(pattern).expect("native predicate"))
-        .is_match(text)
+        .is_match(text))
+}
+fn charge_commands(
+    commands: &[Vec<String>],
+    budget: &mut RetentionBudget,
+) -> Result<(), ProcessingError> {
+    for tokens in commands {
+        charge_tokens(tokens, budget)?;
+    }
+    Ok(())
+}
+fn charge_tokens(tokens: &[String], budget: &mut RetentionBudget) -> Result<(), ProcessingError> {
+    for token in tokens {
+        budget.charge(token.len())?;
+    }
+    Ok(())
 }
 fn command_word(tokens: &[String]) -> &str {
     let first = tokens.first().map(String::as_str).unwrap_or("");
@@ -836,17 +899,36 @@ fn shell_comment(command: &str) -> bool {
     }
     false
 }
-fn is_download(tokens: &[String]) -> bool {
-    matches!(
+fn is_download(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+    budget.charge(tokens.first().map_or(0, String::len))?;
+    if !matches!(
         command_word(tokens).to_ascii_lowercase().as_str(),
         "curl" | "wget" | "aria2c" | "invoke-webrequest" | "iwr" | "fetch"
-    ) && tokens
-        .iter()
-        .any(|s| s.starts_with("http://") || s.starts_with("https://") || s.starts_with("ftp://"))
-        && !is_upload(tokens)
+    ) {
+        return Ok(false);
+    }
+    for token in tokens {
+        budget.charge(token.len())?;
+        if token.starts_with("http://")
+            || token.starts_with("https://")
+            || token.starts_with("ftp://")
+        {
+            return Ok(!is_upload(tokens, budget)?);
+        }
+    }
+    Ok(false)
 }
-fn is_upload(tokens: &[String]) -> bool {
-    match command_word(tokens).to_ascii_lowercase().as_str() {
+fn is_upload(tokens: &[String], budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+    budget.charge(tokens.first().map_or(0, String::len))?;
+    let client = command_word(tokens).to_ascii_lowercase();
+    if !matches!(
+        client.as_str(),
+        "curl" | "wget" | "aws" | "gsutil" | "rclone" | "az"
+    ) {
+        return Ok(false);
+    }
+    charge_tokens(tokens, budget)?;
+    Ok(match client.as_str() {
         "curl" => {
             !tokens.iter().any(|s| s == "-G" || s == "--get")
                 && tokens.iter().any(|s| {
@@ -888,7 +970,7 @@ fn is_upload(tokens: &[String]) -> bool {
             .windows(3)
             .any(|w| w[0] == "storage" && w[1] == "blob" && w[2] == "upload"),
         _ => false,
-    }
+    })
 }
 fn remote(value: &str) -> bool {
     value.starts_with("s3://")
@@ -896,48 +978,171 @@ fn remote(value: &str) -> bool {
         || (value.contains(':') && !value.contains(":/"))
 }
 
-fn native_fields<'a>(id: &str, view: &'a ActionView) -> Vec<(&'a str, &'a str)> {
+fn native_fields<'a>(
+    id: &str,
+    view: &'a ActionView,
+    budget: &mut RetentionBudget,
+) -> Result<Vec<(&'a str, &'a str)>, ProcessingError> {
+    let mut selected = Vec::new();
     if matches!(
         id,
         "network.download" | "exfil.outbound_upload" | "exfil.encoded_http"
     ) {
-        return view
-            .stages
-            .iter()
-            .zip(&view.commands)
-            .filter(|(stage, tokens)| match id {
-                "network.download" => is_download(tokens),
-                "exfil.outbound_upload" => is_upload(tokens),
+        for (stage, tokens) in view.stages.iter().zip(&view.commands) {
+            let matches = match id {
+                "network.download" => is_download(tokens, budget)?,
+                "exfil.outbound_upload" => is_upload(tokens, budget)?,
                 _ => {
+                    budget.charge(tokens.first().map_or(0, String::len))?;
                     matches!(
                         command_word(tokens),
                         "curl" | "wget" | "fetch" | "Invoke-WebRequest"
-                    ) && (regex(r"[?=&][A-Za-z0-9+/]{20,}[+=][A-Za-z0-9+/=]*", stage)
-                        || (stage.contains("$(") && stage.contains("base64"))
-                        || regex(r"https?://[A-Za-z0-9-]*[0-9][A-Za-z0-9-]{15,}\.", stage))
+                    ) && (regex(r"[?=&][A-Za-z0-9+/]{20,}[+=][A-Za-z0-9+/=]*", stage, budget)?
+                        || (contains(stage, "$(", budget)? && contains(stage, "base64", budget)?)
+                        || regex(
+                            r"https?://[A-Za-z0-9-]*[0-9][A-Za-z0-9-]{15,}\.",
+                            stage,
+                            budget,
+                        )?)
                 }
-            })
-            .map(|(stage, _)| ("command", stage.as_str()))
-            .collect();
+            };
+            if matches {
+                selected.push(("command", stage.as_str()));
+            }
+        }
+        return Ok(selected);
     }
     let fields = view.fields();
     let action = |name: &str| matches!(name, "command" | "file_path" | "url" | "arguments");
-    fields.into_iter().filter(|(field, text)| match id {
-        "network.download" => *field == "command" && view.commands.iter().any(|t| is_download(t)),
-        "execution.shell" => *field == "command" && view.commands.iter().any(|t| matches!(command_word(t), "bash" | "sh" | "zsh" | "fish" | "pwsh" | "powershell" | "cmd.exe") || t.windows(2).any(|w| matches!(w[0].as_str(), "python" | "node" | "perl" | "ruby") && matches!(w[1].as_str(), "-c" | "-e"))),
-        "secret.env.read" => *field == "file_path" && view.reads_paths && !view.text("command").contains("<<") && text.split_whitespace().any(|token| regex(r"(?i)(^|[/\\])\.(env|bash_secrets|zsh_secrets)(\.[a-z0-9_-]+)?$", token) && !regex(r"(?i)\.(example|sample|template|dist)$", token)),
-        "secret.private_key.read" => (*field == "file_path" && view.reads_paths && regex(r"(?i)(^|[/\\\s])id_(rsa|ed25519|ecdsa|dsa)($|\s)|(^|[/\\\s])[^\s]*key[^\s]*\.(pem|p12)($|\s)|\*\.(pem|p12)", text))
-            || (*field == "tool_result" && regex(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----(?:\s|\\n)+[A-Za-z0-9+/]{16,}", text)),
-        "install.package_manager" => *field == "command" && view.commands.iter().any(|t| matches!(command_word(t), "npm" | "pnpm" | "yarn" | "bun" | "pip" | "pipx" | "uv" | "cargo" | "go" | "brew" | "apt" | "apt-get" | "dnf" | "yum") && t.iter().skip(1).any(|s| matches!(s.as_str(), "install" | "add" | "i" | "get" | "run" | "create" | "x"))),
-        "exfil.outbound_upload" => *field == "command" && view.commands.iter().any(|t| is_upload(t)),
-        "exfil.encoded_http" => *field == "command" && view.commands.iter().any(|t| matches!(command_word(t), "curl" | "wget" | "fetch" | "Invoke-WebRequest")) && (regex(r"[?=&][A-Za-z0-9+/]{20,}[+=][A-Za-z0-9+/=]*", text) || text.contains("base64") || regex(r"https?://[A-Za-z0-9-]*[0-9][A-Za-z0-9-]{15,}\.", text)),
-        "credential.api_key.pattern" => regex(r"(^|[^A-Za-z0-9_])(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,})", text),
-        "mcp.server_enumeration" => *field == "command" && regex(r"(?i)\bmcp(?:-scan)?\b", text) && regex(r"(?i)\b(enumerate|probe|scan)\b|tools/list.*tools/list", text),
-        "approval.bypass.context" => regex(r"(?i)\b(run|execute|call|hide|bypass|do not tell)\b.{0,100}\b(without (asking|approval|confirmation|telling)|approval|user)\b|--dangerously-skip-permissions|--no-approval", text),
-        "tool.injection.shape" => regex(r#"<tool_call>|</tool_call>|"tool_calls"\s*:|recipient_name\s*:|arguments\s*:\s*\{"#, text),
-        "credential.cloud_harvest" | "persistence.shell_profile" | "execution.encoded_payload" | "exfil.dns_encoding" | "supply_chain.publish" => action(field),
-        _ => true,
-    }).collect()
+    for (field, text) in fields {
+        let matches = match id {
+            "execution.shell" => {
+                field == "command" && {
+                    charge_commands(&view.commands, budget)?;
+                    view.commands.iter().any(|t| {
+                        matches!(
+                            command_word(t),
+                            "bash" | "sh" | "zsh" | "fish" | "pwsh" | "powershell" | "cmd.exe"
+                        ) || t.windows(2).any(|w| {
+                            matches!(w[0].as_str(), "python" | "node" | "perl" | "ruby")
+                                && matches!(w[1].as_str(), "-c" | "-e")
+                        })
+                    })
+                }
+            }
+            "secret.env.read" => {
+                field == "file_path"
+                    && view.reads_paths
+                    && !contains(view.text("command"), "<<", budget)?
+                    && {
+                        budget.charge(text.len())?;
+                        let mut found = false;
+                        for token in text.split_whitespace() {
+                            if regex(
+                                r"(?i)(^|[/\\])\.(env|bash_secrets|zsh_secrets)(\.[a-z0-9_-]+)?$",
+                                token,
+                                budget,
+                            )? && !regex(
+                                r"(?i)\.(example|sample|template|dist)$",
+                                token,
+                                budget,
+                            )? {
+                                found = true;
+                                break;
+                            }
+                        }
+                        found
+                    }
+            }
+            "secret.private_key.read" => {
+                (field == "file_path"
+                    && view.reads_paths
+                    && regex(
+                        r"(?i)(^|[/\\\s])id_(rsa|ed25519|ecdsa|dsa)($|\s)|(^|[/\\\s])[^\s]*key[^\s]*\.(pem|p12)($|\s)|\*\.(pem|p12)",
+                        text,
+                        budget,
+                    )?)
+                    || (field == "tool_result"
+                        && regex(
+                            r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----(?:\s|\\n)+[A-Za-z0-9+/]{16,}",
+                            text,
+                            budget,
+                        )?)
+            }
+            "install.package_manager" => {
+                field == "command" && {
+                    charge_commands(&view.commands, budget)?;
+                    view.commands.iter().any(|t| {
+                        matches!(
+                            command_word(t),
+                            "npm"
+                                | "pnpm"
+                                | "yarn"
+                                | "bun"
+                                | "pip"
+                                | "pipx"
+                                | "uv"
+                                | "cargo"
+                                | "go"
+                                | "brew"
+                                | "apt"
+                                | "apt-get"
+                                | "dnf"
+                                | "yum"
+                        ) && t.iter().skip(1).any(|s| {
+                            matches!(
+                                s.as_str(),
+                                "install" | "add" | "i" | "get" | "run" | "create" | "x"
+                            )
+                        })
+                    })
+                }
+            }
+            "credential.api_key.pattern" => regex(
+                r"(^|[^A-Za-z0-9_])(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,})",
+                text,
+                budget,
+            )?,
+            "mcp.server_enumeration" => {
+                field == "command"
+                    && regex(r"(?i)\bmcp(?:-scan)?\b", text, budget)?
+                    && regex(
+                        r"(?i)\b(enumerate|probe|scan)\b|tools/list.*tools/list",
+                        text,
+                        budget,
+                    )?
+            }
+            "approval.bypass.context" => regex(
+                r"(?i)\b(run|execute|call|hide|bypass|do not tell)\b.{0,100}\b(without (asking|approval|confirmation|telling)|approval|user)\b|--dangerously-skip-permissions|--no-approval",
+                text,
+                budget,
+            )?,
+            "tool.injection.shape" => regex(
+                r#"<tool_call>|</tool_call>|"tool_calls"\s*:|recipient_name\s*:|arguments\s*:\s*\{"#,
+                text,
+                budget,
+            )?,
+            "credential.cloud_harvest"
+            | "persistence.shell_profile"
+            | "execution.encoded_payload"
+            | "exfil.dns_encoding"
+            | "supply_chain.publish" => action(field),
+            _ => true,
+        };
+        if matches {
+            selected.push((field, text));
+        }
+    }
+    Ok(selected)
+}
+
+fn contains(
+    text: &str,
+    needle: &str,
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    budget.charge(text.len())?;
+    Ok(text.contains(needle))
 }
 
 fn linked_modifier(modifier: &RuleV1CompatibilityModifier) -> bool {
@@ -1029,7 +1234,7 @@ pub(crate) fn evaluate(
     let mut views = Vec::new();
     let mut work_bytes = 0usize;
     for observation in observations {
-        let extracted = view(observation);
+        let extracted = view(observation, budget)?;
         work_bytes = work_bytes
             .checked_add(extracted.fields.values().map(String::len).sum::<usize>())
             .ok_or(ProcessingError::Bounds)?;
@@ -1041,8 +1246,8 @@ pub(crate) fn evaluate(
     let identities = observations
         .iter()
         .zip(&views)
-        .map(|(o, v)| replay(o, v))
-        .collect::<Vec<_>>();
+        .map(|(o, v)| replay(o, v, budget))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut counts = BTreeMap::new();
     for identity in identities.iter().flatten() {
         *counts.entry(identity.clone()).or_insert(0usize) += 1;
@@ -1062,7 +1267,7 @@ pub(crate) fn evaluate(
         let mut correlation_support = BTreeMap::new();
         for (rule, compiled) in export.rules().iter().zip(compiled) {
             let fields = if compiled.native {
-                native_fields(&rule.id, view)
+                native_fields(&rule.id, view, budget)?
             } else {
                 view.fields()
             };
@@ -1085,28 +1290,37 @@ pub(crate) fn evaluate(
                         )
                     })
                     .collect::<Vec<_>>();
-                compiled
+                let mut matched = Vec::new();
+                for (name, value) in compiled
                     .matcher
-                    .matching_fields(&mapped)
-                    .iter()
-                    .filter_map(|(name, value)| {
-                        fields
-                            .iter()
-                            .find(|(k, v)| {
-                                *v == *value
-                                    && (*k == *name
-                                        || (*name == "tool_result"
-                                            && matches!(*k, "authored_content" | "user_context")))
-                            })
-                            .copied()
-                    })
-                    .collect()
+                    .try_matching_fields(&mapped, &mut |bytes| budget.charge(bytes))?
+                {
+                    for &(field, text) in &fields {
+                        budget.charge(field.len() + name.len())?;
+                        if field == name
+                            || (name == "tool_result"
+                                && matches!(field, "authored_content" | "user_context"))
+                        {
+                            budget.charge(text.len() + value.len())?;
+                            if text == value {
+                                matched.push((field, text));
+                                break;
+                            }
+                        }
+                    }
+                }
+                matched
             };
-            let candidate = matched.iter().find(|(_, value)| {
-                !compiled.native
+            let mut candidate = None;
+            for matched_field in &matched {
+                if !compiled.native
                     || rule.id != "credential.api_key.pattern"
-                    || credential_value(value)
-            });
+                    || credential_value(matched_field.1, budget)?
+                {
+                    candidate = Some(matched_field);
+                    break;
+                }
+            }
             let Some((field, value)) = candidate else {
                 continue;
             };
@@ -1115,7 +1329,7 @@ pub(crate) fn evaluate(
             evidence.push(ActionEvidence {
                 field: (*field).to_owned(),
                 rule_id: rule.id.clone(),
-                redacted_value: redact_sensitive_text(value),
+                redacted_value: redact(value, budget)?,
             });
             if rule.score > 0 {
                 contributions.push(
@@ -1123,11 +1337,14 @@ pub(crate) fn evaluate(
                         &rule.id,
                         RiskContributionType::DeterministicRule,
                         rule.score,
-                        redact_sensitive_text(&rule.explanation),
+                        redact(&rule.explanation, budget)?,
                     )
                     .map_err(|_| ProcessingError::Evaluation)?,
                 );
             }
+        }
+        if let Some(time) = observation.occurred_at() {
+            budget.charge(time.as_str().len())?;
         }
         let time = observation
             .occurred_at()
@@ -1182,7 +1399,7 @@ pub(crate) fn evaluate(
                                 &modifier.id,
                                 RiskContributionType::ChainModifier,
                                 modifier.score,
-                                redact_sensitive_text(&modifier.explanation),
+                                redact(&modifier.explanation, budget)?,
                             )
                             .map_err(|_| ProcessingError::Evaluation)?,
                         );
@@ -1206,29 +1423,35 @@ pub(crate) fn evaluate(
                 time - *start <= time::Duration::seconds(ACTION_CHAIN_WINDOW_SECONDS as i64)
             });
             if ids.contains("network.download") {
-                for (artifact, command_index) in downloaded_artifacts(&view.commands) {
+                for (artifact, command_index) in downloaded_artifacts(&view.commands, budget)? {
                     if artifact != "-" {
                         pending.push((artifact, time, index, command_index));
                     }
                 }
             }
             if let Some(modifier) = export.modifiers().iter().find(|m| linked_modifier(m)) {
-                let linked = pending.iter().position(
-                    |(artifact, start, observation_index, command_index)| {
-                        *start <= time
-                            && executes(
-                                &view.commands,
-                                artifact,
-                                if *observation_index == index {
-                                    command_index + 1
-                                } else {
-                                    0
-                                },
-                            )
-                    },
-                );
-                let pipe =
-                    ids.contains("network.download") && piped_execution(view.text("command"));
+                let mut linked = None;
+                for (position, (artifact, start, observation_index, command_index)) in
+                    pending.iter().enumerate()
+                {
+                    if *start <= time
+                        && executes(
+                            &view.commands,
+                            artifact,
+                            if *observation_index == index {
+                                command_index + 1
+                            } else {
+                                0
+                            },
+                            budget,
+                        )?
+                    {
+                        linked = Some(position);
+                        break;
+                    }
+                }
+                let pipe = ids.contains("network.download")
+                    && piped_execution(view.text("command"), budget)?;
                 if linked.is_some() || pipe {
                     let mut support = vec![index];
                     if let Some(i) = linked {
@@ -1246,7 +1469,7 @@ pub(crate) fn evaluate(
                                 &modifier.id,
                                 RiskContributionType::ChainModifier,
                                 score,
-                                redact_sensitive_text(&modifier.explanation),
+                                redact(&modifier.explanation, budget)?,
                             )
                             .map_err(|_| ProcessingError::Evaluation)?,
                         );
@@ -1254,7 +1477,7 @@ pub(crate) fn evaluate(
                     evidence.push(ActionEvidence {
                         field: "command".into(),
                         rule_id: modifier.id.clone(),
-                        redacted_value: redact_sensitive_text(view.text("command")),
+                        redacted_value: redact(view.text("command"), budget)?,
                     });
                 }
             }
@@ -1275,7 +1498,7 @@ pub(crate) fn evaluate(
                         &modifier.id,
                         RiskContributionType::ChainModifier,
                         modifier.score,
-                        redact_sensitive_text(&modifier.explanation),
+                        redact(&modifier.explanation, budget)?,
                     )
                     .map_err(|_| ProcessingError::Evaluation)?,
                 );
@@ -1292,16 +1515,18 @@ pub(crate) fn evaluate(
         if ids.is_empty() {
             continue;
         }
-        let context = context(observations, index, &options.context);
+        let context = context(observations, index, &options.context, budget)?;
         let tool_name = match observation.body() {
-            ObservationBody::Tool(tool) => {
-                tool.name().map(|name| terminal_identifier("tool", name))
-            }
+            ObservationBody::Tool(tool) => tool
+                .name()
+                .map(|name| safe_identifier("tool", name, budget))
+                .transpose()?,
             _ => None,
         };
         let session_id = observation
             .session_id()
-            .map(|s| terminal_session_id(s.value()));
+            .map(|s| safe_session_id(s.value(), budget))
+            .transpose()?;
         let bytes = evidence
             .iter()
             .map(|e| e.redacted_value.len() + e.field.len() + e.rule_id.len())
@@ -1415,15 +1640,15 @@ pub(crate) fn evaluate(
         let coordinate = ActionCoordinate(observation.observation_id().to_owned());
         let canonical_findings = native
             .iter()
-            .map(CanonicalActionFinding::from_finding)
-            .collect::<Vec<_>>();
+            .map(|finding| CanonicalActionFinding::from_finding(finding, budget))
+            .collect::<Result<Vec<_>, _>>()?;
         let projected_contributions = native
             .iter()
             .filter(|f| f.risk_points().is_some_and(|score| score > 0))
             .map(|f| {
                 let id = f.detectors()[0].id();
-                ActionContribution {
-                    id: terminal_identifier("rule", id),
+                Ok(ActionContribution {
+                    id: safe_identifier("rule", id, budget)?,
                     points: u64::from(f.risk_points().unwrap_or(0)),
                     contribution_type: if f.finding_kind() == super::FindingKind::Correlation {
                         RiskContributionType::ChainModifier
@@ -1433,10 +1658,12 @@ pub(crate) fn evaluate(
                     rationale: contributions
                         .iter()
                         .find(|c| c.id() == id)
-                        .map_or_else(String::new, |c| redact_sensitive_text(c.rationale())),
-                }
+                        .map(|c| redact(c.rationale(), budget))
+                        .transpose()?
+                        .unwrap_or_default(),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, ProcessingError>>()?;
         budget.consume(
             canonical_findings.len(),
             serde_json::to_vec(&canonical_findings)
@@ -1472,12 +1699,12 @@ pub(crate) fn evaluate(
                 .map(|id| ReplayIdentity(id.clone())),
             rule_ids: native
                 .iter()
-                .map(|f| terminal_identifier("rule", f.detectors()[0].id()))
-                .collect(),
+                .map(|f| safe_identifier("rule", f.detectors()[0].id(), budget))
+                .collect::<Result<Vec<_>, _>>()?,
             categories: native
                 .iter()
-                .map(|f| terminal_identifier("category", f.category()))
-                .collect::<BTreeSet<_>>()
+                .map(|f| safe_identifier("category", f.category(), budget))
+                .collect::<Result<BTreeSet<_>, _>>()?
                 .into_iter()
                 .collect(),
             promotion_score: score,
@@ -1485,11 +1712,11 @@ pub(crate) fn evaluate(
             evidence: evidence
                 .into_iter()
                 .map(|mut e| {
-                    e.rule_id = terminal_identifier("rule", &e.rule_id);
-                    e.field = terminal_identifier("field", &e.field);
-                    e
+                    e.rule_id = safe_identifier("rule", &e.rule_id, budget)?;
+                    e.field = safe_identifier("field", &e.field, budget)?;
+                    Ok(e)
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, ProcessingError>>()?,
             context,
         });
     }
@@ -1517,12 +1744,13 @@ pub(crate) fn process_findings(
             return Err(ProcessingError::Evaluation);
         };
         let score = u64::from(result.risk_points().unwrap_or(0));
-        let rule_id = terminal_identifier("rule", result.detector().id());
-        let context = context(observations, index, &options.context);
+        let rule_id = safe_identifier("rule", result.detector().id(), budget)?;
+        let context = context(observations, index, &options.context, budget)?;
         let tool_name = match observation.body() {
-            ObservationBody::Tool(tool) => {
-                tool.name().map(|name| terminal_identifier("tool", name))
-            }
+            ObservationBody::Tool(tool) => tool
+                .name()
+                .map(|name| safe_identifier("tool", name, budget))
+                .transpose()?,
             _ => None,
         };
         let contributions = if score == 0 {
@@ -1540,7 +1768,7 @@ pub(crate) fn process_findings(
             }]
         };
         let action = ActionFinding {
-            canonical_findings: vec![CanonicalActionFinding::from_finding(&finding)],
+            canonical_findings: vec![CanonicalActionFinding::from_finding(&finding, budget)?],
             coordinate: ActionCoordinate(observation.observation_id().to_owned()),
             finding_kind: match result.finding_kind() {
                 super::FindingKind::Correlation => ActionFindingKind::Correlation,
@@ -1555,12 +1783,13 @@ pub(crate) fn process_findings(
             tool_name,
             session_id: observation
                 .session_id()
-                .map(|s| terminal_session_id(s.value())),
+                .map(|s| safe_session_id(s.value(), budget))
+                .transpose()?,
             timeline_index: index,
             occurred_at: observation.occurred_at().map(|t| t.as_str().into()),
             replay_identity: None,
             rule_ids: vec![rule_id],
-            categories: vec![terminal_identifier("category", result.category())],
+            categories: vec![safe_identifier("category", result.category(), budget)?],
             promotion_score: score,
             contributions,
             evidence: Vec::new(),
@@ -1575,34 +1804,69 @@ pub(crate) fn process_findings(
     Ok(output)
 }
 
-fn credential_value(text: &str) -> bool {
+fn credential_value(text: &str, budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+    budget.charge(text.len())?;
     // Exclusions apply to each candidate, not an entire field containing a real
     // token next to a documentation example.
     static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}").unwrap()
     });
-    TOKEN.find_iter(text).any(|m| {
+    for m in TOKEN.find_iter(text) {
         let token = m.as_str();
+        budget.charge(token.len())?;
         let lower = token.to_ascii_lowercase();
-        ![
+        let mut excluded = false;
+        for value in [
             "example",
             "1234567890abcdef",
             "your_",
             "placeholder",
             "redacted",
-        ]
-        .iter()
-        .any(|v| lower.contains(v))
-            && (m.start() == 0 || !text.as_bytes()[m.start() - 1].is_ascii_alphanumeric())
+        ] {
+            if contains(&lower, value, budget)? {
+                excluded = true;
+                break;
+            }
+        }
+        if !excluded && (m.start() == 0 || !text.as_bytes()[m.start() - 1].is_ascii_alphanumeric())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn redact(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {
+    PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, text, &mut |bytes| {
+        budget.charge(bytes)
     })
 }
 
-fn downloaded_artifacts(commands: &[Vec<String>]) -> Vec<(String, usize)> {
-    commands
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| is_download(t))
-        .filter_map(|(index, t)| {
+fn safe_identifier(
+    kind: &str,
+    text: &str,
+    budget: &mut RetentionBudget,
+) -> Result<String, ProcessingError> {
+    budget.charge(text.len())?;
+    Ok(terminal_identifier(kind, text))
+}
+
+fn safe_session_id(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {
+    budget.charge(text.len())?;
+    Ok(terminal_session_id(text))
+}
+
+fn downloaded_artifacts(
+    commands: &[Vec<String>],
+    budget: &mut RetentionBudget,
+) -> Result<Vec<(String, usize)>, ProcessingError> {
+    let mut artifacts = Vec::new();
+    for (index, t) in commands.iter().enumerate() {
+        if !is_download(t, budget)? {
+            continue;
+        }
+        charge_tokens(t, budget)?;
+        let artifact = (|| {
             let client = command_word(t).to_ascii_lowercase();
             let bindings = t
                 .iter()
@@ -1691,8 +1955,12 @@ fn downloaded_artifacts(commands: &[Vec<String>]) -> Vec<(String, usize)> {
             artifact
                 .filter(|s| !s.contains(['$', '`', '*', '%', '(', ')']) && !s.is_empty())
                 .map(|s| (s.trim_start_matches("./").to_owned(), index))
-        })
-        .collect()
+        })();
+        if let Some(artifact) = artifact {
+            artifacts.push(artifact);
+        }
+    }
+    Ok(artifacts)
 }
 fn remote_basename(tokens: &[String]) -> Option<String> {
     let mut urls = tokens.iter().filter(|s| {
@@ -1712,10 +1980,24 @@ fn remote_basename(tokens: &[String]) -> Option<String> {
     let basename = path.rsplit('/').next()?;
     (!basename.is_empty()).then(|| basename.to_owned())
 }
-fn executes(commands: &[Vec<String>], artifact: &str, start: usize) -> bool {
-    commands.iter().skip(start).any(|t| {
+fn executes(
+    commands: &[Vec<String>],
+    artifact: &str,
+    start: usize,
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    for t in commands.iter().skip(start) {
         let first = t.first().map(String::as_str).unwrap_or("");
-        ((first.contains('/') || first.contains('\\'))
+        budget.charge(first.len() + artifact.len())?;
+        if matches!(
+            first,
+            "bash" | "sh" | "zsh" | "python" | "python3" | "node" | "perl" | "ruby"
+        ) {
+            budget.charge(t.get(1).map_or(0, String::len))?;
+        } else if matches!(first.to_ascii_lowercase().as_str(), "powershell" | "pwsh") {
+            charge_tokens(t, budget)?;
+        }
+        let matches = ((first.contains('/') || first.contains('\\'))
             && first.trim_start_matches("./") == artifact)
             || (matches!(
                 first,
@@ -1726,10 +2008,15 @@ fn executes(commands: &[Vec<String>], artifact: &str, start: usize) -> bool {
             || (matches!(first.to_ascii_lowercase().as_str(), "powershell" | "pwsh")
                 && t.windows(2).any(|w| {
                     w[0].eq_ignore_ascii_case("-File") && w[1].trim_start_matches("./") == artifact
-                }))
-    })
+                }));
+        if matches {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
-fn piped_execution(command: &str) -> bool {
+fn piped_execution(command: &str, budget: &mut RetentionBudget) -> Result<bool, ProcessingError> {
+    budget.charge(command.len())?;
     let mut quote = None;
     let mut pipes = Vec::new();
     let mut escaped = false;
@@ -1758,25 +2045,38 @@ fn piped_execution(command: &str) -> bool {
         }
     }
     if quote.is_some() || pipes.len() != 1 {
-        return false;
+        return Ok(false);
     }
     let index = pipes[0];
+    budget.charge(command.len())?;
     let left = split_statements(&command[..index]);
     let right = split_statements(&command[index + 1..]);
-    left.last().zip(right.first()).is_some_and(|(left, right)| {
+    if let Some((left, right)) = left.last().zip(right.first()) {
+        budget.charge(left.len())?;
         let tokens = tokenize(left);
-        is_download(&tokens) && download_stdout(&tokens) && consumes_stdin_code(&tokenize(right))
-    })
+        if is_download(&tokens, budget)? && download_stdout(&tokens, budget)? {
+            budget.charge(right.len())?;
+            let tokens = tokenize(right);
+            charge_tokens(&tokens, budget)?;
+            return Ok(consumes_stdin_code(&tokens));
+        }
+    }
+    Ok(false)
 }
-fn download_stdout(tokens: &[String]) -> bool {
-    let artifacts = downloaded_artifacts(&[tokens.to_vec()]);
+fn download_stdout(
+    tokens: &[String],
+    budget: &mut RetentionBudget,
+) -> Result<bool, ProcessingError> {
+    charge_tokens(tokens, budget)?;
+    let artifacts = downloaded_artifacts(&[tokens.to_vec()], budget)?;
     if artifacts.iter().any(|(path, _)| path == "-") {
-        return true;
+        return Ok(true);
     }
     if command_word(tokens) != "curl" {
-        return false;
+        return Ok(false);
     }
-    artifacts.is_empty()
+    charge_tokens(tokens, budget)?;
+    Ok(artifacts.is_empty()
         && !tokens.iter().any(|token| {
             token.contains('>')
                 || token.starts_with("--output")
@@ -1785,7 +2085,7 @@ fn download_stdout(tokens: &[String]) -> bool {
                 || (token.starts_with('-')
                     && !token.starts_with("--")
                     && token[1..].contains(['o', 'O', 'I']))
-        })
+        }))
 }
 fn consumes_stdin_code(tokens: &[String]) -> bool {
     let Some(program) = tokens.first() else {
@@ -1808,78 +2108,108 @@ fn consumes_stdin_code(tokens: &[String]) -> bool {
     }
 }
 
-fn replay(observation: &CanonicalObservationV2, view: &ActionView) -> Option<String> {
-    let time = observation.occurred_at()?;
+fn replay(
+    observation: &CanonicalObservationV2,
+    view: &ActionView,
+    budget: &mut RetentionBudget,
+) -> Result<Option<String>, ProcessingError> {
+    let Some(time) = observation.occurred_at() else {
+        return Ok(None);
+    };
     if view.fields.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut hash = Sha256::new();
     hash.update(b"telltale:action-replay:v1\0");
-    frame(&mut hash, observation.source().adapter_type().as_bytes());
-    frame(&mut hash, observation.kind().as_str().as_bytes());
-    frame(&mut hash, observation.stage().as_str().as_bytes());
-    frame(&mut hash, time.as_str().as_bytes());
     let call = observation
         .correlation()
         .call_id()
         .filter(|id| id.origin() == CorrelationOrigin::SourceReported)
         .map(|id| id.value())
         .unwrap_or("");
-    frame(&mut hash, call.as_bytes());
-    for (field, value) in &view.fields {
-        frame(&mut hash, field.as_bytes());
+    for value in [
+        observation.source().adapter_type(),
+        observation.kind().as_str(),
+        observation.stage().as_str(),
+        time.as_str(),
+        call,
+    ] {
+        budget.charge(value.len())?;
         frame(&mut hash, value.as_bytes());
     }
-    Some(format!("replay:v1:sha256:{:x}", hash.finalize()))
+    for (field, value) in &view.fields {
+        budget.charge(field.len())?;
+        frame(&mut hash, field.as_bytes());
+        budget.charge(value.len())?;
+        frame(&mut hash, value.as_bytes());
+    }
+    Ok(Some(format!("replay:v1:sha256:{:x}", hash.finalize())))
 }
 
 pub(crate) fn context(
     observations: &[&CanonicalObservationV2],
     anchor: usize,
     options: &ContextOptions,
-) -> Vec<ActionContextEntry> {
+    budget: &mut RetentionBudget,
+) -> Result<Vec<ActionContextEntry>, ProcessingError> {
     let start = anchor.saturating_sub(options.before);
     let end = (anchor + options.after + 1).min(observations.len());
-    observations
-        .iter()
-        .enumerate()
-        .take(end)
-        .skip(start)
-        .filter_map(|(index, o)| {
-            if index == anchor
-                || o.session_id() != observations[anchor].session_id()
-                || o.session_id().is_none()
-            {
-                return None;
-            }
-            let (kind, text, tool_name) = project_context(o, options)?;
-            Some(ActionContextEntry {
-                offset: index as i32 - anchor as i32,
-                kind: kind.to_owned(),
-                occurred_at: o.occurred_at().map(|t| t.as_str().to_owned()),
-                tool_name,
-                redacted_text: text,
-            })
-        })
-        .collect()
+    let mut entries = Vec::new();
+    for (index, o) in observations.iter().enumerate().take(end).skip(start) {
+        budget.charge(
+            o.session_id().map_or(0, |s| s.value().len())
+                + observations[anchor]
+                    .session_id()
+                    .map_or(0, |s| s.value().len()),
+        )?;
+        if index == anchor
+            || o.session_id() != observations[anchor].session_id()
+            || o.session_id().is_none()
+        {
+            continue;
+        }
+        let Some((kind, text, tool_name)) =
+            try_project_context(o, options, &mut |bytes| budget.charge(bytes))?
+        else {
+            continue;
+        };
+        entries.push(ActionContextEntry {
+            offset: index as i32 - anchor as i32,
+            kind: kind.to_owned(),
+            occurred_at: o.occurred_at().map(|t| t.as_str().to_owned()),
+            tool_name,
+            redacted_text: text,
+        });
+    }
+    Ok(entries)
 }
 
 /// Pure privacy projector usable by local investigation without opening a path.
 pub fn project_context(
     o: &CanonicalObservationV2,
     options: &ContextOptions,
-) -> Option<(&'static str, String, Option<String>)> {
+) -> Option<ContextProjection> {
+    try_project_context(o, options, &mut |_| Ok(())).expect("infallible context projection")
+}
+
+type ContextProjection = (&'static str, String, Option<String>);
+
+fn try_project_context(
+    o: &CanonicalObservationV2,
+    options: &ContextOptions,
+    charge: &mut impl FnMut(usize) -> Result<(), ProcessingError>,
+) -> Result<Option<ContextProjection>, ProcessingError> {
     if o.source().ingestion_mode() == IngestionMode::Import {
-        return None;
+        return Ok(None);
     }
     let (kind, text, tool) = match o.body() {
         ObservationBody::Message(message) => {
             let kind = match message.role() {
                 Some(MessageRole::User) if options.user_text => "user_message",
                 Some(MessageRole::Assistant) if options.assistant_text => "assistant_message",
-                _ => return None,
+                _ => return Ok(None),
             };
-            let text = message
+            let parts = message
                 .content()
                 .and_then(string)
                 .into_iter()
@@ -1890,8 +2220,11 @@ pub fn project_context(
                         .filter(|p| p.kind() == ContentPartKind::Text)
                         .filter_map(|p| string(p.value())),
                 )
-                .collect::<Vec<_>>()
-                .join("\n");
+                .collect::<Vec<_>>();
+            for text in &parts {
+                charge(text.len())?;
+            }
+            let text = parts.join("\n");
             (kind, text, None)
         }
         ObservationBody::Tool(tool)
@@ -1904,21 +2237,30 @@ pub fn project_context(
                         | ObservationStage::ToolExecutionCompleted
                 ) =>
         {
-            let text = tool
+            charge(o.retained_byte_len())?;
+            let Some(text) = tool
                 .arguments()
                 .and_then(|v| canonical_identity_json(v).ok())
                 .and_then(|v| String::from_utf8(v).ok())
-                .or_else(|| tool.searchable_arguments().map(str::to_owned))?;
+                .or_else(|| tool.searchable_arguments().map(str::to_owned))
+            else {
+                return Ok(None);
+            };
+            if let Some(name) = tool.name() {
+                charge(name.len())?;
+            }
             (
                 "tool_call",
                 text,
                 tool.name().map(|s| terminal_identifier("tool", s)),
             )
         }
-        _ => return None,
+        _ => return Ok(None),
     };
+    charge(text.len())?;
     if text.trim().is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some((kind, redact_sensitive_text(&text), tool))
+    let text = PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, &text, charge)?;
+    Ok(Some((kind, text, tool)))
 }

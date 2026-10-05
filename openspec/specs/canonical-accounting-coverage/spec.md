@@ -42,11 +42,16 @@ Default accounting MUST be partial, never an implicit empty complete snapshot.
 Successful exhaustive acquisitions of `claude.projects`, `codex.sessions`,
 `codex.archived_sessions`, `codex.headless_sessions`, `openclaw.agents`,
 `qwen.projects`, and `copilot.process_log` MUST return CompleteSource.
-These contracts MUST read one full selected file without record limits or lower
+These contracts MUST read one full selected file without selection or lower
 bounds and account every B3A-countable unit, including metadata-only and unscoped
 units. JSONL blank lines and Copilot ordinary log lines/completion controls are
 not countable native units; Copilot workspace initialization and every accumulated
 output item are. Canonical observation suppression MUST NOT remove accounting.
+
+Production JSONL admission MUST enforce the inclusive 8 MiB physical-record,
+128 MiB acquired-source-byte, and 100,000 nonblank-unit limits defined by
+source-support-denominator. Exceeding admission MUST fail the whole acquisition,
+not return a truncated CompleteSource or successful PartialSource batch.
 
 Every current `opencode.sqlite` acquisition MUST return PartialSource, including
 default, live, dry-run, backfill, empty, and oversized-limit reads. No retired or
@@ -61,7 +66,7 @@ additional identity MAY enter the supported denominator.
 
 #### Scenario: File fails after valid units
 
-- **WHEN** a malformed tail, read failure, invalid attestation, capacity overflow,
+- **WHEN** an admission-limit overflow, malformed tail, read failure, invalid attestation, capacity overflow,
   mapping failure, or validation failure occurs
 - **THEN** no successful accounting or partial successful batch is returned
 

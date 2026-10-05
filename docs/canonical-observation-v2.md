@@ -86,10 +86,10 @@ analytics do not match instruction content or add role-specific risk; Event 3.0
 is unchanged and its activity histogram retains `Other`. Unknown roles and
 unknown conversational content blocks still reject the whole source.
 
-Existing canonical bounds can reject otherwise supported public Codex shapes:
-developer `response_item` messages with `input_text` accept a 4096-byte string
-but reject 4097 bytes with `unbounded_value`, without
-truncation or partial source output. In current development after RC1, Codex
+Canonical bounds can reject otherwise supported public Codex shapes without
+truncation or partial source output. Direct message strings and Text parts use
+the narrow long-message policy below; structured values retain ordinary bounds.
+In current development after RC1, Codex
 canonical bound failures carry a content-free `CanonicalBoundContext` through
 `AcquisitionError::CanonicalBoundValidation` and runtime `SourceFailure.acquisition`.
 Schema validation owns the bound dimension; the adapter attributes conversion
@@ -103,8 +103,8 @@ sizes, or underlying error strings are retained in this context. Display and
 `code()` remain unchanged; Debug may expose only these closed enums and the code.
 
 This context describes the first existing validation failure, not all violations.
-Limits, validation order, UTF-8 byte accounting, escaped JSON encoded-size
-accounting, and NFC behavior are unchanged: source JSON strings/keys are checked
+For the existing acquisition converters, validation order, UTF-8 byte accounting,
+escaped JSON encoded-size accounting, and NFC behavior are unchanged: source JSON strings/keys are checked
 before normalization, while assembled canonical text is checked after its existing
 normalization. Ordered content-part wrappers can independently exceed depth,
 cardinality, or encoded-size limits. Native accounting still precedes canonical
@@ -114,9 +114,147 @@ accounting, or progress. Event3 scanner errors remain the generic
 `canonical_acquisition_failed` projection without this context. Other adapters
 retain their existing code-only acquisition errors.
 
-Native `TurnItem`
-action envelopes such as `event_msg:item_completed` remain unsupported; role
-support alone does not qualify full acquisition.
+### Bounded long-message matching (#79, development after RC1)
+
+Canonical acquisition and evaluation permit up to
+65,536 raw UTF-8 bytes only for direct string `message.content` and a direct
+string value of a `ContentPartKind::Text` part. The representation remains
+`JsonValue`, `MessageObservation`, and ordered `ContentPart` values. Arrays,
+objects, nested strings even inside Text parts, tool values/names, inference
+metadata, facets, identifiers, and local originals receive no wider allowance.
+Ordinary JSON bounds remain 4,096 string bytes, 16,384 encoded bytes per value,
+depth 6, 64 array items, 32 object members, and 64 key bytes. Part values are
+validated at depth 3 to account for their semantic array/object wrappers.
+The content-parts field also retains a 16,384-byte encoded budget for its
+non-direct-Text-string entries; only direct Text strings receive wider capacity.
+
+Schema also caps the sum of encoded semantic body-field and facet **values** at
+65,536 bytes per observation. This includes JSON quotes, escapes, arrays,
+objects, and content-part kind/value wrappers; it excludes semantic path/facet
+labels, fact metadata, identity/provenance envelopes, and local evidence (which
+retain their independent bounds). A raw string at the text maximum can therefore
+fail aggregate validation. Recursive part validation precedes the structured
+partition's encoded limit; observation aggregate validation follows all field
+and facet validation. Aggregate size uses canonical JSON number spelling, while
+ordinary/local finite-float validation retains its legacy `to_string` sizing.
+The aggregate is checked incrementally in existing
+body-field order followed by sorted facets; the field/facet that crosses it
+receives content-free `EncodedBytes` context. Builders, assignment commitments,
+assignment preflight, and assignment replay share this schema validation.
+Semantic comparison and protected assignment commitments retain the full text,
+including suffixes beyond the old limit.
+
+The six native source adapters use narrow message-content and direct Text-string
+conversion. Like ordinary source conversion, they check original string bytes before
+NFC; builders check their existing canonicalized NFC values. Equivalent bounded
+normalized inputs therefore agree, but an oversized decomposed source string
+can reject even when a directly assembled normalized value fits. Conversion
+checks value bounds, not the later observation-wide aggregate.
+
+One shared collector checks an 8 MiB canonical semantic/local retention budget
+before each next observation is retained, across all records and sessions in a
+source projection. Evaluation ingress applies the same budget using a cached,
+nonallocating size. Whole-file native reader intermediate memory is not capped
+by this canonical-retention policy. Inference acquisition keeps its own limits.
+
+One source-scoped 256 MiB deterministic byte-visit budget spans selectors,
+matching (including no matches, repeated predicates and reached exclusions),
+process matching, evidence re-resolution, hashing, sanitization and projection.
+Operations charge before execution, with a minimum one-byte visit and conservative
+reservations for composite scanners. Exhaustion is explicit source-atomic failure,
+not a benign no-match, and cannot emit partial findings, accounting or progress.
+Standalone native matcher evaluation and selector resolution return a `Result`;
+metadata envelopes are independently governed and do not imply infallible
+selection. See the [development API migration](migrations/0.7.0.md#development-after-rc1-bounded-message-evaluation-apis-79).
+Standalone detector
+evaluation translates exhaustion into `DetectorError`.
+
+Native `message.text` and role-specific compatibility selectors share one view:
+direct scalar content wins even when empty; otherwise ordered direct Text strings
+join with newlines. Joined text has Derived provenance and retains contributing
+sensitivity. Reasoning, tools, images, other parts and nested strings are excluded.
+Patterns, exclusions and anchors operate over that complete view without changing
+occurrence or session scoring. Raw evidence no longer has the compatibility
+4,096-byte rejection: hashes cover the complete matched input, while sanitization
+remains bounded (512-byte excerpts). Event 3.0 and compatibility limits of 4,096
+items, 4,096-byte retained strings and 4 MiB are unchanged.
+
+### Bounded Codex completed items (#80, development after RC1)
+
+All three Codex identities accept exact `event_msg.payload.type: item_completed`
+with an object `item` tagged exactly `AgentMessage`, `UserMessage`, `Reasoning`,
+or `CommandExecution`. Agent content accepts ordered exact `Text` strings; user
+content accepts only exact lowercase `text` UserInput strings. Unknown/nontext
+content, wrong/nested wrappers, unknown items and nonterminal command status
+reject the whole source, without successful observations, accounting or progress.
+Reasoning validates coordinates, counts as native `Other`, and retains no raw
+reasoning or canonical/analytic facts.
+
+Completed items require nonempty source `thread_id`, `turn_id` and `item.id`.
+Their native identity is the JSON tuple `[thread_id, turn_id, item.id]`, scoped
+by adapter identity, family and stage; physical position remains provenance.
+Legacy record identities are unchanged. Public `SessionMeta.id` supplies the
+owning thread, while `SessionMeta.session_id` is a distinct root correlation.
+The latter is retained only on typed canonical facts as reported
+`session.root_id`. Owner aliases at outer/payload/item levels must agree with
+the completed thread and established metadata owner. Stray nested metadata
+cannot establish an inherited owner. No filename fallback is used.
+
+Native `ordinal` is supported only for a strict self-contained rollout. If any
+nonblank JSONL record contains the key, every nonblank record (including metadata,
+auxiliaries and suppressed mirrors) must report a valid u64 ordinal, starting at
+zero and advancing consecutively with checked arithmetic. The first record must
+be exact public `session_meta` with object payload, exact `history_mode: paginated`
+and a truthful nonempty owning `id`. Missing, null, malformed, negative, fractional,
+overflowing, duplicated, descending or gapped ordinals reject the whole source.
+Validated native ordinals supply source sequence; blank lines are not records.
+Typed owner/turn/item identity and emitted child ordinals remain independent.
+With no ordinal key, legacy positional sequences and identities are unchanged.
+Non-null `history_base` or `subagent_history_start_ordinal`, even zero, remain
+unsupported. Referenced history, inherited prefixes and nonzero-start slices
+cannot be projected safely by this bounded mode; this is not general paginated
+history support or a lossless public-producer claim. Acquisition progress and
+cursor behavior are unchanged.
+
+Assistant raw-response mirrors are suppressed only for the same nonempty native
+response ID, owning thread and explicit payload
+`internal_chat_message_metadata_passthrough.turn_id`, with equal ordered text
+facts. This is the public ResponseItem::Message field at the pinned producer;
+outer rollout `metadata` is separate harness metadata. Neither outer nor payload
+`metadata.turn_id`, outer passthrough-like fields, nor stray direct turn coordinates
+can establish mirror authority. Non-null passthrough metadata must be an object;
+a non-null turn ID must be a nonempty bounded string without control characters.
+Missing/null optional metadata or turn IDs preserve absence. Contradictory explicit
+outer/payload turn coordinates reject the source rather than override the public
+coordinate. Conflicting proven mirrors also reject the source. Distinct IDs,
+missing coordinates, mixed tool content and unrelated turns remain distinct.
+In explicit `history_mode: paginated`, completed text-only user items are
+authoritative over text-only raw user response messages for the same owner and
+explicit public passthrough turn coordinate, regardless of differing user IDs or
+text. This narrow
+representation policy is not shared user identity or content-hash deduplication;
+it intentionally chooses the completed input over raw contextual text.
+Without provable pairing, both facts remain, with possible ambiguous duplicate
+analytics. Native accounting still counts every physical native unit, including
+mirrors; it is not a deduplicated canonical count.
+
+Terminal commands map to `ToolResultReturned` and native `ToolResult`, never
+invocation contributions or execution stages. `item.id` supplies `call_id`,
+not the distinct raw response ID. Structured argv remains `tool.arguments`;
+no argv joining, tool-name invention or command-text facet is performed.
+Optional exit/output fields retain presence, null, empty and returned values
+in `tool.result`. The source status remains `tool.source_status`, with
+completed/failed/declined mapped to reported Succeeded/Failed/Denied. These are
+producer observations, not proof of execution, user refusal, intended effects
+or zero effects. `tool.output_fidelity` distinguishes `not_captured`, the exact
+known persistence marker (`truncated`), `diagnostic_or_capture` for failed/declined
+output, and otherwise `capture_completeness_unknown`. Absence is not success.
+`cwd` is only reported `resource.path` metadata. No Process/File/Network facts
+are manufactured, and ToolExecution remains Unsupported. Structured argv,
+results and facets retain ordinary 4,096-string/16,384-encoded-byte bounds;
+oversize rejects rather than truncates. Message text uses the existing #79 bounds.
+
+No public source API enum or Event 3.0 schema changes are introduced.
 
 At the public pin below, `core/src/context/developer_instructions.rs` constructs
 developer instructions, `core/src/session/mod.rs` persists conversation items
@@ -130,7 +268,9 @@ All three Codex identities accept a closed auxiliary set with zero canonical
 observations and native accounting kind `Other`: object `payload` under outer
 `turn_context` whose payload contains neither a `type` nor a `payload` key
 (including null or malformed values); exact `response_item` with object
-`payload.type: reasoning`; and
+`payload.type: reasoning`; exact outer `world_state` with object payload,
+required boolean `full` and object `state`, and neither a payload `type` nor
+`payload` key (including null); and
 exact `event_msg` with object payload tagged `task_started`, `task_complete`,
 `token_count`, `agent_reasoning`, `agent_reasoning_raw_content`,
 `agent_reasoning_section_break`, `reasoning_content_delta`, or
@@ -143,6 +283,18 @@ An auxiliary's direct session ID can scope its own accounting but cannot establi
 or replace the inherited session namespace, even with a top-level `session_meta`
 field. Only supported session metadata records establish that namespace.
 
+World-state full snapshots and patches are opaque comparison metadata, not
+conversation or execution evidence. Arbitrary `state` keys are never traversed
+for ownership, attestation, discriminators, messages or tools, and no state is
+retained in native records. Only direct outer/payload fields participate in the
+existing envelope ownership and attestation validation; nested message/state or
+top-level `session_meta` lookalikes cannot attest or establish inherited identity.
+World-state records contribute zero canonical observations and invocation
+contributions, count as native `Other`, and participate in strict ordinal
+validation like every other record. No world-state baseline or patch replay is
+implemented. Malformed/missing full/state and bare/wrong/nested wrappers reject
+atomically rather than being generically ignored.
+
 Analytics intentionally exclude reasoning (including its own summary/content
 arrays) and completion `last_agent_message`/`error`. Completion is neither a
 message fallback nor evidence of terminal success. Conversational messages and
@@ -152,6 +304,9 @@ The bounded upstream evidence is pinned to public `openai/codex`
 [`47379efd5289cba801c5a66273064fbe3bf92f60`](https://github.com/openai/codex/tree/47379efd5289cba801c5a66273064fbe3bf92f60),
 in `codex-rs/protocol/src/{protocol,models,items}.rs` and
 `codex-rs/rollout/src/policy.rs`; persistence policy is not a blanket ignore rule.
+World-state shape and separate persistence are pinned in
+`protocol/src/protocol.rs:3272-3287`, `history/src/rollout_payload.rs:30-58`, and
+`core/src/session/mod.rs:3592-3619,4625-4673` under the same `codex-rs` revision.
 
 ### Shared canonical source runtime
 

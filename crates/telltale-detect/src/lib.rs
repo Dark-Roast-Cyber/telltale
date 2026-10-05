@@ -19,15 +19,3 @@ pub mod timeline;
 /// Detection v2 APIs used by the canonical source runtime. Evaluation remains
 /// I/O-free and accepts caller-provided typed observations.
 pub mod v2;
-
-#[cfg(all(test, feature = "source-io"))]
-pub(crate) fn test_fixture_path(relative: &str) -> std::path::PathBuf {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.join("../../tests/fixtures");
-    let root = if workspace_root.is_dir() {
-        workspace_root
-    } else {
-        manifest_dir.join("tests/fixtures")
-    };
-    root.join(relative)
-}

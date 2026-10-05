@@ -10,7 +10,6 @@ pub enum RecordKind {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct NormalizedRecord {
     pub session_id: String,
     pub client: String,

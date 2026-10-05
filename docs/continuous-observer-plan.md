@@ -6,13 +6,32 @@ OpenSpec deltas, and the acceptance gates below. This document is the public
 planning reference; local execution packages must remain consistent with it.
 It does not authorize deployment, service changes, or removal of existing APIs.
 
+### Accepted bounded production JSONL tranche (not shipped)
+
+Separately accepted in [Issue #81](https://github.com/Dark-Roast-Cyber/telltale/issues/81)
+is a narrow hard-cap contract
+for the shared production JSONL reader only: 8 MiB per physical record, 128 MiB
+total acquired source bytes, and 100,000 nonblank units across the six JSONL
+identities (Claude projects, the three Codex JSONL variants, OpenClaw agents,
+and Qwen projects). All boundaries are inclusive: 8 MiB is 8,388,608 bytes and
+128 MiB is 134,217,728 bytes. Physical record bytes include LF/CRLF terminators;
+aggregate bytes include all whitespace, blank records, and terminators. Nonblank
+units retain Unicode `str.trim()` semantics. These are fixed internal limits,
+not configuration knobs, enforced on actual reads before UTF-8/JSON decoding.
+Over-limit acquisition must fail atomically through the existing source-read
+category; it is not shipped behavior, selection/truncation, or a heap/RSS
+promise. Copilot and OpenCode are outside this tranche. This accepted implementation
+does not establish shipped behavior until release and does not activate
+the broader proposed resource policy, SQLite bounds, deadlines, observer/service
+work, or other runtime changes below.
+
 ## Outcome
 
 Telltale should be a dependable, resource-bounded security observer that can run
 continuously without scheduling repeated full-content scans. It must also remain
-useful as a one-shot scanner and a component controlled by another application,
-including Emusary. All modes use the same authoritative acquisition, detection,
-privacy, and durable-output contracts.
+useful as a one-shot scanner and a component controlled by another application.
+All modes use the same authoritative acquisition, detection, privacy, and
+durable-output contracts.
 
 Continuous operation means event-driven work with explicit recovery, not blind
 trust in filesystem notifications. A running process is not proof of coverage.
@@ -52,11 +71,12 @@ daemon, self-backgrounding implementation, persistent control server, or generic
 plugin framework. Core embedding remains available; embedded hosts own I/O and
 must satisfy documented serialization/state-ownership obligations.
 
-An external controller such as Emusary can invoke one-shot scans, supervise
+An external controller can invoke one-shot scans, supervise
 foreground watch, use the supported embedding API, or explicitly manage the
 canonical Telltale service through lifecycle commands. It must choose an owner
-rather than unknowingly run both. No Emusary-specific type or dependency belongs
-in the detection core, and no existing integration is implied by this plan.
+rather than unknowingly run both. No downstream-consumer-specific type or
+dependency belongs in the detection core, and no existing integration is
+implied by this plan.
 
 ### Proposed command contract
 
@@ -328,7 +348,8 @@ supported-platform boundaries.
 - Extend canonical installer generation/validation and explicit timer migration;
   test partial enable/start failures, ambiguity, unsupported managers, reboot
   prerequisites, rollback, and preservation of unrelated services.
-- Test external supervision and one-shot use without Emusary-specific core code;
+- Test external supervision and one-shot use without
+  downstream-consumer-specific core code;
   verify managed/external instances cannot silently share writer ownership.
 
 ### D. Incrementality and durable capacity
@@ -377,5 +398,5 @@ Relevant formal contracts:
 [OpenCode acquisition](../openspec/specs/opencode-sqlite-canonical-observation-v2-adapter/spec.md),
 [coverage and state](../openspec/specs/canonical-accounting-coverage/spec.md),
 and [durable delivery](../openspec/specs/durable-delivery/spec.md).
-Follow the [Telltale/Emusary boundary](development-principles.md) and keep detailed
+Follow the [downstream consumer boundary](development-principles.md) and keep detailed
 implementation task state in Issues/local OpenSpec packages, not in this page.

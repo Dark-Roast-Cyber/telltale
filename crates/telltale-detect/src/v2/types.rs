@@ -726,6 +726,24 @@ impl fmt::Debug for FindingMetadata {
 }
 
 impl FindingMetadata {
+    pub(crate) fn clone_bytes(&self) -> usize {
+        self.category.len()
+            + self.tags.iter().map(String::len).sum::<usize>()
+            + self.techniques.iter().map(String::len).sum::<usize>()
+            + self
+                .evidence_refs
+                .iter()
+                .map(|reference| {
+                    reference.reference.len()
+                        + reference.field.as_ref().map_or(0, String::len)
+                        + reference.observation_id.as_ref().map_or(0, String::len)
+                })
+                .sum::<usize>()
+            + self.dedupe_key.as_ref().map_or(0, String::len)
+            + self.session_id.as_ref().map_or(0, String::len)
+            + self.semantic_identity.as_ref().map_or(0, String::len)
+    }
+
     pub fn new(
         finding_kind: FindingKind,
         category: impl AsRef<str>,

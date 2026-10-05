@@ -47,7 +47,9 @@ L remains 5,000. CLI scans with an actual incremental lower bound MUST use
 L=25,000; bootstrap, dry-run and backfill retain newest-5,000 sampling.
 Independent canonical and projection budgets MUST remain enforced. The adapter
 MUST NOT read the event table or broaden the selected part set. Page and aggregate
-limits bound selected part rows, not whole-cycle CPU, bytes or message count.
+limits bound selected part rows, not whole-cycle CPU or memory. The separate
+SQLite row-admission requirement specifies projected envelope and delivered row
+caps across messages and parts; it does not establish end-to-end bounds.
 Recovery covers only the finite selected snapshot, not arbitrary backlogs,
 deleted or overwritten history, or backdated updates outside overlap.
 
@@ -95,6 +97,42 @@ deleted or overwritten history, or backdated updates outside overlap.
 - **THEN** all message context and part pages reflect the pinned snapshot
 - **AND** subsequent polls reread updates inside the existing ten-minute overlap;
   restart or failed required output persistence retries from committed progress
+
+### Requirement: Projected SQLite row admission is source atomic
+
+Each extraction MUST use fresh counters shared by all messages and selected part
+pages. Inclusive fixed caps MUST be 8,388,608 bytes per projected TEXT/BLOB cell
+or UTF-8 column name, 134,217,728 aggregate row-envelope bytes, and 100,000
+delivered rows. Each column occurrence MUST charge its UTF-8 name and cell:
+SQLite-exposed borrowed TEXT bytes, actual BLOB bytes, NULL zero, INTEGER/REAL
+eight. Unknown fields, overwritten aliases, metadata, suppressed messages and
+repeated joined context MUST count independently.
+
+Names MUST be checked borrowed by index before cloning, even for zero-row
+schemas; zero rows MUST charge zero aggregate bytes. Whole-row prospective
+checked totals MUST pass before owned JSON, keys, decoding or native construction.
+Incremental excess lookahead MUST reject before owning its payload, retaining
+exact-L exhaustion. Schema inspection, messages and all pages MUST remain in
+one read-only transaction. Admitted rows MUST stream into native records without
+retained raw row batches; one complete native batch MUST feed suppression and
+evaluation. Queries, selected parts, ordering and sampling MUST remain unchanged.
+
+Rejection MUST use privacy-safe fixed SourceRead detail and return no
+observations, accounting or progress. It MUST NOT replace the source baseline or
+cursor; other sources MAY succeed. Successful coverage MUST remain PartialSource.
+Independent canonical/accounting/projection and durable output gates MUST remain.
+Admission MUST NOT be described as bounding SQLite preparation/filtering/UTF-8
+conversion, decoded DOM/native heap, RSS, CPU or end-to-end memory. Delivered-row
+counting MUST NOT claim exhaustive recovery of nonunique message joins.
+
+#### Scenario: Inclusive boundary and fresh extraction
+- **WHEN** a projected cell, key, aggregate or delivered row count equals its cap
+- **THEN** admission succeeds and a fresh extraction starts with zero counters
+- **AND** exceeding any cap by one rejects the whole source without owned rejected rows
+
+#### Scenario: Late failure and snapshot consistency
+- **WHEN** a later message, part page or lookahead exceeds a cap while a WAL writer changes the store
+- **THEN** the pinned snapshot governs all charges and no successful prefix or source state replacement is returned
 
 ### Requirement: Native identity and source session are truthful
 

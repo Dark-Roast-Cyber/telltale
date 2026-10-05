@@ -44,3 +44,6 @@ pub(crate) const SOURCES: &[ClientSourceDef] = &[
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod completed_tests;

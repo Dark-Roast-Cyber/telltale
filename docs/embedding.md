@@ -29,6 +29,104 @@ per-action detection events, and map source failures to `scanner_error` events.
 Removed parser registration and source-backed flat-record projection are not
 compatibility paths.
 
+### Typed pipeline errors (current development after RC1)
+
+`PipelineBuilder::build` and the `Pipeline` scan methods return `PipelineError`
+rather than `Box<dyn Error>`. This is a source-breaking Rust interface change
+in the untagged, unpublished `0.7.0-rc.2` development line, not a change to
+published RC1 artifacts or stable qualification. Update a Git pin deliberately
+and validate the host integration separately.
+
+| Operation | Returned categories |
+| --- | --- |
+| `build` | `InvalidConfiguration`, `Compilation` |
+| `scan_root`, `scan_root_with_occurrences` | `Discovery`, `Clock`, `Observation`, `Compilation` |
+| `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation`, `Compilation` |
+| detailed scans and `semantic_provenance` | the matching scan categories, plus `InvalidOptions` |
+
+`Observation` means batch observation-time validation, not per-source canonical
+validation. Clock/time validation and canonical compilation run even for an
+empty source batch. Root scans complete checked discovery first. Source-processing
+failures still become source-local `scanner_error` events, with no successful
+partial source projection or occurrences; they are not returned `PipelineError`s.
+Event 3.0, state formats, rule validation order, and CLI diagnostics/exit semantics
+are unchanged.
+
+The enum is `#[non_exhaustive]`; hosts match meaningful categories with a fallback:
+
+```rust,no_run
+use telltale_core::{Pipeline, PipelineError};
+
+let pipeline = Pipeline::builder().build()?;
+match pipeline.scan_root(std::path::Path::new("/synthetic/session-root")) {
+    Ok(events) => { /* host owns event handling */ }
+    Err(PipelineError::Discovery(cause)) => {
+        // Choose another root or report the checked discovery failure.
+        eprintln!("{cause}");
+    }
+    Err(error) => return Err(error),
+}
+# Ok::<(), PipelineError>(())
+```
+
+Display and Debug render closed codes and do not include paths, configuration,
+or source text. `std::error::Error::source()` preserves the original payload
+except for `InvalidConfiguration` and `InvalidOptions`. `DiscoveryError`,
+`RuleV1CompileError`, and `ObservationError` are available from the core crate
+root. `Compilation` boxes loader and canonical-compile failures; its concrete
+source type is not a supported subtype taxonomy, and hosts should not parse
+strings to classify failures.
+
+Host entrypoints may still use `Box<dyn Error>` and propagate these errors with
+`?`. Explicit boxed-result forwarding and old downcast-based matching require
+migration; see the [migration guide](migrations/0.7.0.md#typed-pipeline-errors-current-development-after-rc1).
+
+### Canonical bound diagnostics (current development after RC1)
+
+Codex canonical bound failures retain a typed, content-free field category and
+bound dimension in `SourceFailure.acquisition`. Hosts can use
+`AcquisitionError::bound_context()`; absence means no contextual bound diagnostic,
+not successful acquisition. `CanonicalValidation { code }` remains supported,
+but the new `CanonicalBoundValidation { context }` variant requires updating
+exhaustive Rust matches: this is not fully source compatible. `code()` and Display
+still return `unbounded_value`. Debug contains only closed diagnostic enums/code,
+never source content or locations. Native accounting errors keep their own codes
+and no bound context. Event3 adaptation remains generic
+`canonical_acquisition_failed`, source-atomic, and content-free. See the
+[canonical contract](canonical-observation-v2.md) for categories, dimensions,
+unchanged limits/check order/NFC behavior, and current Codex-only acquisition scope.
+This requires git-pin host validation and is not RC1/stable qualification.
+
+### OpenCode acquisition feature (current development after RC1)
+
+The default `telltale-core` normal dependency graph has no `rusqlite`.
+Git-pinned hosts that scan OpenCode must explicitly enable `opencode-sqlite`:
+
+```toml
+telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["opencode-sqlite"] }
+```
+
+This forwards the default-off `telltale-sources/opencode-sqlite` feature, using
+bundled SQLite. Without it, OpenCode acquisition fails closed with a per-source
+`scanner_error`; mixed scans retain successful JSONL results. The CLI explicitly
+enables acquisition. `protected-assignment` is independent and does not enable
+OpenCode acquisition. OpenCode investigation remains deferred with either feature
+setting, before discovery, source I/O, or process spawn. Updating a host's Git pin
+requires separate validation; this is not RC1 or stable qualification.
+
+### Inventory facade (current development after RC1)
+
+`telltale_core::inventory` exposes existing install snapshots, signal types,
+`collect_install_inventory_with_context`, and `snapshot_to_event`, plus
+`discover_mcp_inventory(root)` returning `Vec<(Source, Event)>`. Prefer an explicit
+host-owned `InstallInventoryContext`: `current()` and `collect_install_inventory`
+read the process environment. Snapshots retain presence/path hashes, not paths;
+the context and returned MCP `Source.path` are local caller data, not telemetry.
+MCP events use the existing privacy projection from supported static configs.
+No MCP connection or rule compilation is needed. This facade adds no scan/watch
+activation; `Pipeline` scan methods do not emit inventory. These after-RC1 APIs
+are not RC1-qualified or stable-qualified; hosts must validate a new Git pin.
+
 ### Detection occurrences (current development after RC1)
 
 `Pipeline::scan_sources_with_occurrences(&sources)` and
@@ -215,9 +313,9 @@ for the caller's replay-association requirements and operational limits.
 ## Quick start
 
 ```rust
-use telltale_core::Pipeline;
+use telltale_core::{Pipeline, PipelineError};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), PipelineError> {
     // Bundled default rules; add .rules_document(yaml) for custom packs.
     let pipeline = Pipeline::builder().build()?;
 
@@ -230,8 +328,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 A compile-tested version lives at `crates/telltale/examples/embed_scan.rs`
-(`cargo run -p telltale-core --example embed_scan` scans the repository's synthetic
-fixtures).
+(`cargo run -p telltale-core --example embed_scan -- <session-root>`; use a
+synthetic fixture root for validation). Its host entrypoint deliberately keeps
+boxed errors for argument handling and demonstrates matching scan categories.
 
 > **Crates.io name warning:** The crates.io package named `telltale` is an
 > unrelated session-types crate, not this project. Do not use it for Telltale
@@ -320,9 +419,10 @@ directly constructible by callers.
   custom-only content, and an empty custom-only build fails with `PipelineError::InvalidConfiguration`.
 - A policy document applies rule enable/disable policy without filesystem access.
 - `PipelineError` is a typed, non-exhaustive enum covering `Discovery(DiscoveryError)`,
-  `Clock`, `Compilation`, `InvalidConfiguration`, and `InvalidOptions`. Its Display
-  and Debug implementations render closed diagnostic codes (`pipeline_discovery_failed`,
-  `pipeline_clock_failed`, `pipeline_compilation_failed`, `pipeline_no_rule_documents`,
+  `Clock`, `Observation`, `Compilation`, `InvalidConfiguration`, and `InvalidOptions`.
+  Its Display and Debug implementations render closed diagnostic codes
+  (`pipeline_discovery_failed`, `pipeline_clock_failed`, `pipeline_observation_failed`,
+  `pipeline_compilation_failed`, `pipeline_no_rule_documents`,
   `pipeline_invalid_options`) rather than leaking paths or source text; underlying
   errors are retrievable through `std::error::Error::source`. Source-processing
   failures during a scan surface as per-source `scanner_error` events rather than

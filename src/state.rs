@@ -73,24 +73,16 @@ pub struct BaselineSourceContribution {
 }
 
 impl ScanState {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let _lock = StateLock::acquire(path)?;
-        Self::load_unlocked(path)
+        Self::load_snapshot(path)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn save(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let _lock = StateLock::acquire(path)?;
         self.save_unlocked(path)
-    }
-
-    pub(crate) fn load_unlocked(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        if is_missing(path)? {
-            Ok(Self::default())
-        } else {
-            parse_native_state(&read_snapshot(path)?)
-        }
     }
 
     pub(crate) fn load_snapshot(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -101,7 +93,7 @@ impl ScanState {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn save_unlocked(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let prepared = self.prepare_atomic_save(path)?;
         prepared.install_replace(path)
@@ -187,7 +179,6 @@ impl ScanState {
         native_state_bytes(self)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn validate_native_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         parse_native_state(bytes)
     }
@@ -196,7 +187,7 @@ impl ScanState {
         parse_legacy_state(bytes)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn validate_native_migration_bytes(
         bytes: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error>> {

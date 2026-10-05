@@ -140,11 +140,71 @@ pub(crate) fn read_jsonl_values_with_limits(
         }
         return Ok(values);
     }
-    let raw = fs::read_to_string(&source.path)?;
-    raw.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<Value>(line).map_err(SourceReadError::from))
-        .collect()
+    read_production_jsonl(fs::File::open(&source.path)?)
+}
+
+const PRODUCTION_RECORD_BYTES: usize = 8 * 1024 * 1024;
+const PRODUCTION_SOURCE_BYTES: usize = 128 * 1024 * 1024;
+const PRODUCTION_NATIVE_UNITS: usize = 100_000;
+
+fn production_limit_error() -> SourceReadError {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "production JSONL admission limit exceeded",
+    )
+    .into()
+}
+
+// Bound physical bytes before UTF-8/JSON decoding. Limits apply to actual reads,
+// including blank records and terminators, not a potentially stale file length.
+// Parsed values remain retained; this is not an allocator or process RSS budget.
+fn read_production_jsonl(mut reader: impl Read) -> Result<Vec<Value>, SourceReadError> {
+    let mut chunk = [0u8; 8192];
+    let mut record = Vec::new();
+    let mut total = 0usize;
+    let mut values = Vec::new();
+    loop {
+        let read = match reader.read(&mut chunk) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if read == 0 {
+            if !record.is_empty() {
+                decode_production_record(&record, &mut values)?;
+            }
+            return Ok(values);
+        }
+        total = total
+            .checked_add(read)
+            .filter(|bytes| *bytes <= PRODUCTION_SOURCE_BYTES)
+            .ok_or_else(production_limit_error)?;
+        for part in chunk[..read].split_inclusive(|byte| *byte == b'\n') {
+            record
+                .len()
+                .checked_add(part.len())
+                .filter(|bytes| *bytes <= PRODUCTION_RECORD_BYTES)
+                .ok_or_else(production_limit_error)?;
+            record.extend_from_slice(part);
+            if part.last() == Some(&b'\n') {
+                decode_production_record(&record, &mut values)?;
+                record.clear();
+            }
+        }
+    }
+}
+
+fn decode_production_record(record: &[u8], values: &mut Vec<Value>) -> Result<(), SourceReadError> {
+    let line = std::str::from_utf8(record)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid JSONL UTF-8"))?;
+    if !line.trim().is_empty() {
+        values
+            .len()
+            .checked_add(1)
+            .filter(|units| *units <= PRODUCTION_NATIVE_UNITS)
+            .ok_or_else(production_limit_error)?;
+        values.push(serde_json::from_str(line)?);
+    }
+    Ok(())
 }
 
 // Validate the opened object, not a pathname precheck. Nonblocking open avoids
@@ -271,6 +331,10 @@ fn collect_string_values_into(value: &Value, output: &mut Vec<String>) {
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
+
+#[cfg(test)]
+#[path = "production_jsonl_tests.rs"]
+mod production_jsonl_tests;
 
 #[cfg(test)]
 mod bounded_tests {

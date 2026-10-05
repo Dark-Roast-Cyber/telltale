@@ -1,11 +1,95 @@
 use super::*;
-use telltale_detect::v2::compile_rule_v1;
+use telltale_detect::v2::{compile_rule_v1, evaluate_source};
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::CorrelationOrigin;
 use tempfile::tempdir;
 
 fn clock() -> ObservedAt {
     ObservedAt::new("2026-09-19T00:00:00Z").unwrap()
+}
+
+#[test]
+fn pre_policy_compatibility_retention_failure_remains_diagnostic_only() {
+    let dir = tempdir().unwrap();
+    let source = source(dir.path().join("synthetic-policy.jsonl"));
+    let observations = (0..4_097)
+        .map(|index| {
+            message_with_content(&format!("id{index}"), Some("synthetic-session"), "needle")
+        })
+        .collect();
+    let before = plan("user_context");
+    let effective = plan("assistant_context");
+    let result = finish_batch(
+        &source,
+        &CorrelationId::source_reported("instance").unwrap(),
+        AcquisitionBatch {
+            observations,
+            progress: AcquisitionProgress::None,
+            accounting: SourceAccounting::default(),
+        },
+        SourceContext {
+            mcp_servers: &[],
+            rules: &effective,
+            pre_policy_rules: Some(&before),
+            process: None,
+            prior: &BaselineSnapshotStore::default(),
+            baseline_deviation: Default::default(),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        result.policy_accounting,
+        Some(Err(PolicyMatchAccountingError))
+    ));
+}
+
+#[test]
+fn pre_policy_true_shared_work_exhaustion_discards_authoritative_success() {
+    let rules = (0..17).map(|index| format!("  - id: synthetic.work{index}\n    category: synthetic\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: needle\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
+    let document = format!(
+        "version: 1\ndescription: synthetic\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n{rules}modifiers: []\n"
+    );
+    let before = compile_rule_v1(
+        &telltale_rules::load_rule_set_from_documents(&[&document], None)
+            .unwrap()
+            .compatibility_export(),
+    )
+    .unwrap();
+    let effective = plan("user_context");
+    let observations = (0..128)
+        .map(|index| {
+            message_with_content(
+                &format!("id{index}"),
+                Some("synthetic-session"),
+                &"x".repeat(60_000),
+            )
+        })
+        .collect();
+    let source = source("synthetic".into());
+    let result = finish_batch(
+        &source,
+        &CorrelationId::source_reported("instance").unwrap(),
+        AcquisitionBatch {
+            observations,
+            progress: AcquisitionProgress::None,
+            accounting: SourceAccounting::default(),
+        },
+        SourceContext {
+            mcp_servers: &[],
+            rules: &effective,
+            pre_policy_rules: Some(&before),
+            process: None,
+            prior: &BaselineSnapshotStore::default(),
+            baseline_deviation: Default::default(),
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(SourceFailure {
+            stage: FailureStage::Evaluation,
+            ..
+        })
+    ));
 }
 
 fn source(path: std::path::PathBuf) -> Source {

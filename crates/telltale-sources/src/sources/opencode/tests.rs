@@ -38,6 +38,87 @@ fn source(path: std::path::PathBuf) -> Source {
 }
 
 #[test]
+fn sqlite_admission_actual_cell_boundary_unknown_text_and_blob() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("cell.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "create table message (unknown); insert into message values (zeroblob(8388608));",
+    )
+    .unwrap();
+    let read = || {
+        extract_sqlite_native_source(&source(path.clone()), OpenCodeSqliteReadOptions::default())
+    };
+    assert_eq!(read().unwrap().records.len(), 1);
+    conn.execute_batch("update message set unknown=zeroblob(8388609)")
+        .unwrap();
+    assert!(read().is_err());
+    conn.execute_batch("update message set unknown=cast(zeroblob(8388608) as text)")
+        .unwrap();
+    assert_eq!(read().unwrap().records.len(), 1);
+    conn.execute_batch("update message set unknown=cast(zeroblob(8388609) as text)")
+        .unwrap();
+    let error = read().unwrap_err();
+    assert!(!format!("{error} {error:?}").contains("cell.db"));
+}
+
+#[test]
+fn sqlite_admission_actual_key_boundary_even_empty_schema() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("keys.db");
+    let conn = Connection::open(&path).unwrap();
+    let read = || {
+        extract_sqlite_native_source(&source(path.clone()), OpenCodeSqliteReadOptions::default())
+    };
+    for size in [8_388_608, 8_388_609] {
+        conn.execute_batch(&format!(
+            "drop table if exists message; create table message (\"{}\" blob)",
+            "k".repeat(size)
+        ))
+        .unwrap();
+        assert_eq!(read().is_ok(), size == 8_388_608);
+        conn.execute("insert into message values (null)", [])
+            .unwrap();
+        assert_eq!(read().is_ok(), size == 8_388_608);
+    }
+}
+
+#[test]
+fn sqlite_admission_actual_aggregate_boundary_unknown_blobs() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("aggregate.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("create table message (x blob);")
+        .unwrap();
+    for _ in 0..16 {
+        conn.execute("insert into message values (zeroblob(8388607))", [])
+            .unwrap();
+    }
+    let read = || {
+        extract_sqlite_native_source(&source(path.clone()), OpenCodeSqliteReadOptions::default())
+    };
+    assert_eq!(read().unwrap().records.len(), 16);
+    conn.execute("insert into message values (null)", [])
+        .unwrap();
+    assert!(read().is_err(), "one extra key byte exceeds aggregate cap");
+}
+
+#[test]
+fn sqlite_admission_actual_row_boundary_metadata_only() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("rows.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("create table message (x); with recursive n(i) as (values(1) union all select i+1 from n where i<100000) insert into message select null from n;").unwrap();
+    let read = || {
+        extract_sqlite_native_source(&source(path.clone()), OpenCodeSqliteReadOptions::default())
+    };
+    assert_eq!(read().unwrap().records.len(), 100_000);
+    conn.execute("insert into message values (null)", [])
+        .unwrap();
+    assert!(read().is_err());
+}
+
+#[test]
 fn sqlite_identity_does_not_accept_json_bytes() {
     let temp = tempdir().expect("tempdir");
     let path = temp.path().join("not-a-database.db");

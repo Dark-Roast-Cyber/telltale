@@ -22,7 +22,6 @@ use telltale_sources::clients::supported_clients;
 
 mod coverage;
 mod export;
-#[allow(dead_code)]
 pub mod historical;
 mod migrate;
 mod rules_server;

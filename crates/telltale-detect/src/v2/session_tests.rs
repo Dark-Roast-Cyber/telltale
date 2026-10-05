@@ -225,6 +225,161 @@ fn context() -> super::event3::Event3CompatibilityContext<'static> {
 }
 
 #[test]
+fn long_message_suffix_matches_with_full_hash_and_safe_bounded_evidence() {
+    let text = format!(
+        "{}needle api_key=SYNTHETIC-LONG-SECRET",
+        "ordinary ".repeat(1_000)
+    );
+    let observations = [message(
+        "suffix",
+        Some("session"),
+        &text,
+        CapabilityAvailability::Supported,
+    )];
+    let evaluation = evaluate(&observations, &plan(0)).unwrap();
+    assert_eq!(
+        evaluation.sessions()[0].detectors()[0].evaluated_match_count(),
+        1
+    );
+    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let json = serde_json::to_string(&projected.events).unwrap();
+    assert!(!json.contains("SYNTHETIC-LONG-SECRET"));
+    let evidence = projected.events[0]
+        .evidence
+        .iter()
+        .find(|e| e.field == "user_context")
+        .unwrap();
+    assert_eq!(
+        evidence.hash.as_deref(),
+        Some(telltale_schema::event::evidence_hash(&text).as_str())
+    );
+    assert!(evidence.redacted_value.len() <= 512);
+}
+
+#[test]
+fn repeated_punctuation_urls_exhaust_source_work_without_private_output() {
+    let text = format!(
+        "https://example.invalid/{}?token=SYNTHETIC-PUNCT-SECRET&needle=1",
+        ":".repeat(4_000)
+    );
+    let observations = (0..1_024)
+        .map(|index| {
+            message(
+                &format!("url{index}"),
+                Some("session"),
+                &text,
+                CapabilityAvailability::Supported,
+            )
+        })
+        .collect::<Vec<_>>();
+    let evaluation = evaluate(&observations[..1], &plan(0)).unwrap();
+    let projected = super::event3::project_event3(&evaluation, &context()).unwrap();
+    let event = serde_json::to_string(&projected.events).unwrap();
+    assert!(!event.contains("SYNTHETIC-PUNCT-SECRET"));
+    assert!(event.contains(&telltale_schema::event::evidence_hash(&text)));
+    let work = EvaluationWorkBudget::default();
+    let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
+    assert!(matches!(
+        evaluate_source_with_work_budget(
+            CanonicalSourceInput {
+                client: ClientId::Claude,
+                source_id: "claude.projects",
+                source_instance: Some(&instance),
+                observations: &observations
+            },
+            &plan(0),
+            None,
+            &work
+        ),
+        Err(ProcessingError::Bounds)
+    ));
+    assert!(work.is_exhausted(), "not a compatibility retention failure");
+}
+
+#[test]
+fn canonical_ingress_retention_cap_is_source_wide_and_exact() {
+    let text = "x".repeat(65_528);
+    let mut observations = (0..128)
+        .map(|index| {
+            message(
+                &format!("n{index}"),
+                Some("session"),
+                &text,
+                CapabilityAvailability::Supported,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(evaluate(&observations, &plan(0)).is_ok());
+    observations.push(message(
+        "excess",
+        Some("other-session"),
+        "x",
+        CapabilityAvailability::Supported,
+    ));
+    assert!(matches!(
+        evaluate(&observations, &plan(0)),
+        Err(ProcessingError::Bounds)
+    ));
+}
+
+#[test]
+fn evaluation_work_is_charged_for_no_matches_and_never_reset_between_detectors() {
+    let observations = (0..128)
+        .map(|index| {
+            message(
+                &format!("n{index}"),
+                Some(if index % 2 == 0 { "one" } else { "two" }),
+                &"x".repeat(60_000),
+                CapabilityAvailability::Supported,
+            )
+        })
+        .collect::<Vec<_>>();
+    let base = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n";
+    let rules = (0..40).map(|index| format!("  - id: synthetic.no{index}\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [user_context]\n    regex: NEVER-MATCH\n    tags: []\n    explanation: synthetic\n")).collect::<String>();
+    let document = format!("{base}{rules}modifiers: []\n");
+    let rules = compile_rule_v1(
+        &telltale_rules::load_rule_set_from_documents(&[&document], None)
+            .unwrap()
+            .compatibility_export(),
+    )
+    .unwrap();
+    assert!(matches!(
+        evaluate(&observations, &rules),
+        Err(ProcessingError::Bounds)
+    ));
+    let half_document = document
+        .split("  - id: synthetic.no10\n")
+        .next()
+        .unwrap()
+        .to_owned()
+        + "modifiers: []\n";
+    let half_rules = compile_rule_v1(
+        &telltale_rules::load_rule_set_from_documents(&[&half_document], None)
+            .unwrap()
+            .compatibility_export(),
+    )
+    .unwrap();
+    let instance =
+        CorrelationId::new("synthetic-host", CorrelationOrigin::TelltaleOriginated).unwrap();
+    let input = || CanonicalSourceInput {
+        client: ClientId::Claude,
+        source_id: "claude.projects",
+        source_instance: Some(&instance),
+        observations: &observations,
+    };
+    let work = EvaluationWorkBudget::default();
+    evaluate_source_with_work_budget(input(), &half_rules, None, &work).unwrap();
+    assert!(matches!(
+        evaluate_source_with_work_budget(input(), &half_rules, None, &work),
+        Err(ProcessingError::Bounds)
+    ));
+    let mut budget = RetentionBudget::new();
+    budget.charge(MAX_EVALUATION_BYTE_VISITS).unwrap();
+    assert_eq!(budget.charge(0), Err(ProcessingError::Bounds));
+    assert_eq!(budget.charge(0), Err(ProcessingError::Bounds));
+}
+
+#[test]
 fn event3_uses_checked_contributions_and_actual_canonical_anchors() {
     use super::event3::project_event3;
     let observations = [

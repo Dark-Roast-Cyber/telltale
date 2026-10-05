@@ -23,7 +23,7 @@ Telltale is an open-source, agent-focused Agent Detection and Response (ADR) eng
 
 Telltale should turn observations about AI agents, model interactions, harness behavior, and agent-requested tool activity into normalized facts; evaluate detection content against those facts; apply configurable policy; produce auditable decisions; and enforce those decisions wherever the deployment has the capability to do so.
 
-Telltale is not a general-purpose EDR, endpoint telemetry collector, or Emusary-specific component.
+Telltale is not a general-purpose EDR or endpoint telemetry collector.
 
 The project should remain simple, clean, modular, composable, useful offline, and useful as a standalone open-source project.
 
@@ -105,7 +105,7 @@ confirmation requirements are direct policy conditions, not fake detections.
 Policy should produce provider-neutral intents: allow, observe, warn, require
 approval, reprompt, block, or remediate.
 
-Do not encode product-specific actions such as `AskEmusary`. Prefer semantic actions such as `RequireApproval` and let an adapter or provider implement them.
+Use semantic actions such as `RequireApproval`; let an adapter or provider implement them.
 
 ### Actions
 
@@ -149,8 +149,8 @@ The gateway is another observation and action adapter, not a separate detection 
 Gateway observations should normalize into the same canonical model and use the same detection, policy, decision, and telemetry semantics as local sources.
 
 Longer term, a gateway or harness may pause selected actions for human approval
-through Emusary, a separate/co-hosted service, desktop UI, or harness mechanism.
-The core intent remains `require approval`; the deployment chooses the provider.
+through a separate or co-hosted service, desktop UI, or harness mechanism. The
+core intent remains `require approval`; the deployment chooses the provider.
 
 ## Agent Focus and OS Context
 
@@ -175,7 +175,8 @@ A source that cannot supply a field must not silently pretend that it can. An ad
 Rules are content, not application-specific configuration.
 
 Use one detection model/engine for bundled, community, local, organization,
-commercial, HTTP-hosted, future authenticated, and Emusary-managed rules.
+commercial, HTTP-hosted, future authenticated, and downstream-consumer-managed
+rules.
 
 Commercial or proprietary rule content should be able to use licensing terms independent of the Telltale engine license. The engine loads and evaluates content without requiring all rule packages to use the Telltale license.
 
@@ -187,7 +188,8 @@ Keep rule acquisition separate from rule evaluation.
 RuleSource -> RulePackage -> Validation -> Compilation -> Active Rule Set
 ```
 
-Do not create separate rule engines for local, HTTP, commercial, or Emusary-delivered content.
+Do not create separate rule engines for local, HTTP, commercial, or
+downstream-consumer-delivered content.
 
 ### Stable Rule Identity Across Sources
 
@@ -256,21 +258,25 @@ Preserve enough provenance to support this maturity path:
 
 Do not prematurely implement strict organizational locking, but do not discard provenance that will be needed later.
 
-## Telltale and Emusary Boundary
+## Downstream consumer boundary
 
-Telltale must remain fully useful without Emusary.
+Telltale must remain fully useful as a standalone system, without a downstream
+consumer.
 
-Emusary should be an excellent management and collection implementation for Telltale, not a dependency baked into the core.
+An external management and collection system can complement Telltale, but is not
+a dependency baked into the core.
 
-Telltale should own vendor-neutral observations, rule language/IR, detection, policy,
-decisions/responses, capabilities, adapter contracts, privacy/redaction, events,
-and standalone configuration.
+Telltale should own vendor-neutral observations, rule language/IR, detection,
+policy, decisions/responses, capabilities, adapter contracts, privacy/redaction,
+events, and standalone configuration.
 
-Emusary may own fleet identity/tenancy, authentication/authorization,
-deployment/updates, organization rule/policy lifecycle, config distribution,
-central approvals/storage/search, endpoint inventory, and remote evidence collection.
+A downstream consumer may own fleet identity/tenancy,
+authentication/authorization, deployment/updates, organization rule/policy
+lifecycle, config distribution, central approvals/storage/search, endpoint
+inventory, and remote evidence collection.
 
-Avoid spreading Emusary-specific types throughout Telltale core. Prefer generic management, control-plane, approval, sink, and configuration contracts.
+Keep Telltale contracts generic for management, control-plane, approval, sink,
+and configuration responsibilities.
 
 ## Data Plane and Control Plane
 
@@ -318,7 +324,9 @@ actions, and degradation reasons.
 
 Use a stable semantic core with replaceable edges.
 
-The detection and policy core should not need to know the details of OpenCode, Claude Code, Codex, Windows, Linux, Splunk, Elastic, Emusary, or a particular model provider.
+The detection and policy core should not need to know the details of OpenCode,
+Claude Code, Codex, Windows, Linux, Splunk, Elastic, or a particular model
+provider.
 
 For the near term, compiled-in Rust source adapters are acceptable. Do not introduce a dynamic plugin ABI merely to make the project appear extensible.
 

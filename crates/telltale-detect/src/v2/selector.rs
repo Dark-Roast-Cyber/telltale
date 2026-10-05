@@ -330,6 +330,52 @@ impl SelectorRegistry {
         &self,
         selector: SelectorId,
         observation: &CanonicalObservationV2,
+    ) -> Result<SelectorResolution, super::session::ProcessingError> {
+        self.try_resolve(
+            selector,
+            observation,
+            &mut super::session::RetentionBudget::new(),
+        )
+    }
+
+    pub(crate) fn try_resolve(
+        &self,
+        selector: SelectorId,
+        observation: &CanonicalObservationV2,
+        budget: &mut super::session::RetentionBudget,
+    ) -> Result<SelectorResolution, super::session::ProcessingError> {
+        budget.charge(1)?;
+        for (path, metadata) in observation.fact_metadata() {
+            budget.charge(path.len())?;
+            for fingerprint in metadata.keyed_fingerprints() {
+                budget.charge(
+                    fingerprint
+                        .location()
+                        .len()
+                        .saturating_add(fingerprint.key_epoch_ref().len())
+                        .saturating_add(fingerprint.algorithm().len())
+                        .saturating_add(fingerprint.digest().len()),
+                )?;
+            }
+        }
+        if matches!(
+            selector,
+            SelectorId::GovernedFacet("message.text")
+                | SelectorId::CompatAssistantContext
+                | SelectorId::CompatUserContext
+        ) {
+            return message_text(selector, observation, budget);
+        }
+        // Resolution can copy a structured value, canonicalize its strings, and
+        // clone field metadata. Reserve a conservative whole-observation visit.
+        budget.charge(observation.retained_byte_len().saturating_mul(2))?;
+        Ok(self.resolve_value(selector, observation))
+    }
+
+    fn resolve_value(
+        &self,
+        selector: SelectorId,
+        observation: &CanonicalObservationV2,
     ) -> SelectorResolution {
         let required_capability = selector.required_capability();
         if SelectorId::parse(selector.as_str()).ok() != Some(selector) {
@@ -414,19 +460,6 @@ impl SelectorRegistry {
                         )
                     },
                 ),
-                _ => absent(selector, required_capability),
-            },
-            SelectorId::GovernedFacet("message.text") => match observation.body() {
-                ObservationBody::Message(body) => match body.content() {
-                    Some(JsonValue::String(value)) => field(
-                        selector,
-                        observation,
-                        "message.content",
-                        JsonValue::string(value),
-                        required_capability,
-                    ),
-                    _ => absent(selector, required_capability),
-                },
                 _ => absent(selector, required_capability),
             },
             SelectorId::ToolName => match observation.body() {
@@ -578,12 +611,6 @@ impl SelectorRegistry {
         required_capability: Option<CapabilityId>,
     ) -> SelectorResolution {
         match selector {
-            SelectorId::CompatAssistantContext => {
-                message_context(selector, observation, true, required_capability)
-            }
-            SelectorId::CompatUserContext => {
-                message_context(selector, observation, false, required_capability)
-            }
             SelectorId::CompatArguments => {
                 tool_text(selector, observation, true, required_capability)
             }
@@ -642,13 +669,6 @@ fn typed_body_value(
     observation: &CanonicalObservationV2,
 ) -> Option<(&'static str, JsonValue)> {
     match selector {
-        SelectorId::GovernedFacet("message.text") => match observation.body() {
-            ObservationBody::Message(body) => body.content().and_then(|value| match value {
-                JsonValue::String(value) => Some(("message.content", JsonValue::string(value))),
-                _ => None,
-            }),
-            _ => None,
-        },
         SelectorId::GovernedFacet("tool.arguments.text") => match observation.body() {
             ObservationBody::Tool(body) => body
                 .searchable_arguments()
@@ -1077,32 +1097,77 @@ fn tool_argument_keys(
     }
 }
 
-fn message_context(
+fn message_text(
     selector: SelectorId,
     observation: &CanonicalObservationV2,
-    assistant: bool,
-    required_capability: Option<CapabilityId>,
-) -> SelectorResolution {
-    match observation.body() {
-        ObservationBody::Message(body) => {
-            let role_matches = body.role().is_some_and(|role| {
-                (assistant && role == telltale_schema::observation::MessageRole::Assistant)
-                    || (!assistant && role == telltale_schema::observation::MessageRole::User)
-            });
-            if !role_matches {
-                return absent(selector, required_capability);
-            }
-            match body.content() {
-                Some(JsonValue::String(value)) => field(
-                    selector,
-                    observation,
-                    "message.content",
-                    JsonValue::string(value),
-                    required_capability,
-                ),
-                _ => absent(selector, required_capability),
-            }
-        }
-        _ => absent(selector, required_capability),
+    budget: &mut super::session::RetentionBudget,
+) -> Result<SelectorResolution, super::session::ProcessingError> {
+    use telltale_schema::observation::{ContentPartKind, MessageRole};
+    let required_capability = selector.required_capability();
+    let ObservationBody::Message(body) = observation.body() else {
+        return Ok(absent(selector, required_capability));
+    };
+    if (selector == SelectorId::CompatAssistantContext
+        && body.role() != Some(MessageRole::Assistant))
+        || (selector == SelectorId::CompatUserContext && body.role() != Some(MessageRole::User))
+    {
+        return Ok(absent(selector, required_capability));
     }
+    if let Some(JsonValue::String(text)) = body.content() {
+        budget.charge(text.len())?;
+        return Ok(field(
+            selector,
+            observation,
+            "message.content",
+            JsonValue::String(text.clone()),
+            required_capability,
+        ));
+    }
+    let mut len = 0usize;
+    let mut count = 0;
+    for part in body.content_parts() {
+        budget.charge(1)?;
+        if let (ContentPartKind::Text, JsonValue::String(text)) = (part.kind(), part.value()) {
+            len += text.len() + usize::from(count != 0);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return Ok(absent(selector, required_capability));
+    }
+    budget.charge(len)?;
+    let mut text = String::with_capacity(len);
+    let mut first = true;
+    for part in body.content_parts() {
+        budget.charge(1)?;
+        if let (ContentPartKind::Text, JsonValue::String(value)) = (part.kind(), part.value()) {
+            if !first {
+                text.push('\n');
+            }
+            text.push_str(value);
+            first = false;
+        }
+    }
+    let metadata = observation
+        .fact_metadata()
+        .get("message.content_parts")
+        .map(|metadata| {
+            let mut derived = FactMetadata::new(FactProvenance::Derived, metadata.sensitivity())
+                .expect("validated sensitivity");
+            if let Some(fidelity) = metadata.fidelity_override() {
+                derived = derived.with_fidelity_override(fidelity);
+            }
+            derived
+        });
+    Ok(SelectorResolution {
+        selector,
+        presence: if metadata.is_some() {
+            SelectorPresence::Present
+        } else {
+            SelectorPresence::MetadataMissing
+        },
+        value: Some(JsonValue::String(text)),
+        metadata,
+        required_capability,
+    })
 }

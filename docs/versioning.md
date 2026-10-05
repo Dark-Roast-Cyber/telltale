@@ -26,12 +26,11 @@ format.
   rc.3 verifier result is not 0.7 evidence. `v0.6.0` remains the latest stable. Event3 schema version stays
   `3.0` and Rule v1 stays version 1; neither follows the package version. Stable
   `v0.7.0` will require separate qualification and a reviewed stable-version
-  promotion. Subsequent source modifications on `main` invalidate the Issue #87
-  exact-source CI/CodeQL/local-Git/consumer/preflight release qualification that
-  qualified the published `v0.7.0-rc.1` artifact (`e2386cb53454a8384449ea0729f0e3b71072006c`).
-  Release qualification is distinct from development progress; unpublished changed
-  source does not require a new RC solely due to unpublished changes, but changed
-  source cannot claim earlier exact-source qualification evidence.
+  promotion.
+- Current workspace metadata is `0.7.0-rc.2`, an untagged, unpublished,
+  unqualified development version only. RC1 evidence above applies only to its
+  immutable published candidate and cannot qualify current main; any next
+  reviewed candidate requires its own qualification.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -168,6 +167,13 @@ exclude its own exact tag only if it resolves to HEAD; `release-tag-review`
 separately rejects any existing prospective tag. Offline checks cannot discover
 remote tags that have not been fetched.
 
+Current development after RC1 changes the supported embedding builder and scan
+return types to `PipelineError`. This is a source-breaking Rust interface change,
+not an Event3 or persisted-state format change. See the
+[0.7.0 migration guide](migrations/0.7.0.md#typed-pipeline-errors-current-development-after-rc1)
+before updating a Git pin; the unpublished development metadata does not qualify
+a candidate or authorize publication.
+
 The same implementation runs in CI, `release-tag-review` (and therefore
 `release-preflight`), and the release workflow before builds/publication.
 Metadata-only `--publication-order` and `--check-publication-order` validate the
@@ -234,7 +240,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.7.0-rc.1` registry dependencies while that remains the workspace package
+`=0.7.0-rc.2` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.

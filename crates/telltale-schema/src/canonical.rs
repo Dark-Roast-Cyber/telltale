@@ -9,8 +9,6 @@
 //! `NormalizedRecord` remains a direct-record compatibility surface, and
 //! [`NormalizedRecordV1::from_legacy`] is its explicit, loss-aware adapter.
 
-#![allow(dead_code)] // Retained record-level compatibility surface.
-
 use serde_json::Value;
 use std::collections::BTreeMap;
 

@@ -2,9 +2,8 @@
 //! Source semantics live in telltale_core::canonical_runtime;
 //! this adapter retains scanner policy and compatibility error events only.
 
-use telltale_core::canonical_runtime::{SourceContext, SourceResult};
+use telltale_core::canonical_runtime::{SourceContext, SourceFailure, SourceResult};
 use telltale_detect::baseline::BaselineDeviationConfig;
-#[cfg(test)]
 use telltale_detect::v2::EvaluationCompletion;
 use telltale_detect::v2::RuleV1CompatibilityPlan;
 use telltale_detect::v2::activity::BaselineReplacement;
@@ -26,8 +25,8 @@ pub(super) struct CanonicalProcessingResult {
     pub events: Vec<Event>,
     pub status: SourceProcessingStatus,
     pub progress: AcquisitionProgress,
-    #[cfg(test)]
     pub completion: Option<EvaluationCompletion>,
+    pub failure: Option<SourceFailure>,
     pub accounting: Option<SourceAccounting>,
     pub baseline_replacement: BaselineReplacement,
     pub policy_accounting: Option<
@@ -116,8 +115,8 @@ fn adapt_result(
             events: result.events,
             status: SourceProcessingStatus::from_canonical(Ok(result.completion)),
             progress: result.progress,
-            #[cfg(test)]
             completion: Some(result.completion),
+            failure: None,
             accounting: Some(result.accounting),
             baseline_replacement: result.baseline_replacement,
             policy_accounting: result.policy_accounting,
@@ -126,8 +125,8 @@ fn adapt_result(
             events: vec![error.event(source)],
             status: SourceProcessingStatus::Failed,
             progress: error.progress,
-            #[cfg(test)]
             completion: None,
+            failure: Some(error),
             accounting: None,
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,

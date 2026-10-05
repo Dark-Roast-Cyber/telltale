@@ -9,7 +9,7 @@ use std::fmt;
 
 use serde::Serialize;
 use telltale_rules::{RuleV1CompatibilityExport, RuleV1CompatibilityRule, RuleV1ContentMatcher};
-use telltale_schema::event::{Evidence, evidence_hash, redact_sensitive_text};
+use telltale_schema::event::{Evidence, PrivacySanitizer, SanitizationContext, evidence_hash};
 use telltale_schema::observation::{CapabilityId, JsonValue, ObservationFamily, ObservationStage};
 use telltale_schema::scoring::{RiskAccountingError, RiskContribution};
 
@@ -431,7 +431,9 @@ fn aggregate_detector_session(
         ..RuleV1DetectorSessionEvaluation::default()
     };
     for (occurrence, observation) in observations.iter().enumerate() {
-        let result = detector.evaluate(observation);
+        let result = detector
+            .try_evaluate(observation, budget)
+            .map_err(|_| RuleV1SessionError::Bounds)?;
         if result.evaluation_status() == EvaluationStatus::EvaluatedMatch {
             for path in result.matched_selector_paths() {
                 if aggregate.projection.len() >= super::session::MAX_PROJECTION_ITEMS {
@@ -439,14 +441,25 @@ fn aggregate_detector_session(
                 }
                 let selector =
                     super::SelectorId::parse(path).map_err(|_| RuleV1SessionError::Bounds)?;
-                let resolution = super::SelectorRegistry::new().resolve(selector, observation);
+                let resolution = super::SelectorRegistry::new()
+                    .try_resolve(selector, observation, budget)
+                    .map_err(|_| RuleV1SessionError::Bounds)?;
                 let Some(JsonValue::String(value)) = resolution.value() else {
                     continue;
                 };
-                super::session::RetentionBudget::validate_text(value)
-                    .map_err(|_| RuleV1SessionError::Bounds)?;
                 let field = path.strip_prefix("compat.v1.").unwrap_or(path);
-                let redacted_value = redact_sensitive_text(value);
+                let redacted_value = PrivacySanitizer::try_sanitize(
+                    SanitizationContext::Evidence,
+                    value,
+                    &mut |bytes| budget.charge(bytes),
+                )
+                .map_err(|_| RuleV1SessionError::Bounds)?;
+                super::session::RetentionBudget::validate_text(&redacted_value)
+                    .map_err(|_| RuleV1SessionError::Bounds)?;
+                budget
+                    .charge(value.len())
+                    .map_err(|_| RuleV1SessionError::Bounds)?;
+                let hash = evidence_hash(value);
                 let occurred_at = observation.occurred_at().map(|time| time.as_str());
                 if let Some(time) = occurred_at {
                     super::session::RetentionBudget::validate_text(time)
@@ -471,7 +484,7 @@ fn aggregate_detector_session(
                     evidence: Evidence {
                         field: field.to_owned(),
                         redacted_value,
-                        hash: Some(evidence_hash(value)),
+                        hash: Some(hash),
                         rule_id: Some(detector.detector().id().to_owned()),
                     },
                 });
@@ -656,14 +669,15 @@ pub(super) fn evaluate_content_matcher(
     matcher: &RuleV1ContentMatcher,
     targets: &[String],
     observation: &telltale_schema::observation::CanonicalObservationV2,
-) -> (MatchState, Vec<String>) {
+    budget: &mut super::session::RetentionBudget,
+) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
     let registry = super::SelectorRegistry::new();
     let mut resolutions = Vec::new();
     let mut unknown = Vec::new();
     for target in targets {
         let selector = super::SelectorId::parse(&format!("compat.v1.{target}"))
             .expect("validated Rule v1 target");
-        resolutions.push(registry.resolve(selector, observation));
+        resolutions.push(registry.try_resolve(selector, observation, budget)?);
     }
     let mut fields = Vec::new();
     for (target, resolution) in targets.iter().zip(&resolutions) {
@@ -680,18 +694,18 @@ pub(super) fn evaluate_content_matcher(
         }
     }
     let mut paths = matcher
-        .matching_fields(&fields)
+        .try_matching_fields(&fields, &mut |bytes| budget.charge(bytes))?
         .iter()
         .map(|(name, _)| format!("compat.v1.{name}"))
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
     if !paths.is_empty() {
-        (MatchState::Match, paths)
+        Ok((MatchState::Match, paths))
     } else if let Some(reason) = unknown.into_iter().min() {
-        (MatchState::NotEvaluated(reason), Vec::new())
+        Ok((MatchState::NotEvaluated(reason), Vec::new()))
     } else {
-        (MatchState::NoMatch, Vec::new())
+        Ok((MatchState::NoMatch, Vec::new()))
     }
 }
 

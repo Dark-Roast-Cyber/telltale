@@ -112,6 +112,12 @@ the accepted candidate artifacts. The resulting `v0.5.0` tag and stable GitHub
 Release are now published and immutable. Subsequent development version alignment
 does not replace those artifacts or the separately pinned controlled-development lab.
 
+The current workspace metadata `0.7.0-rc.2` is an untagged, unpublished, and
+unqualified development version only. The RC1 evidence below applies solely to
+the immutable published RC1 artifact; it cannot qualify current main. Any next
+reviewed candidate requires its own qualification. No tag, release, artifact, or
+publication is authorized by this metadata correction.
+
 ## 0.7 RC1 current-host qualification
 
 [Issue #66](https://github.com/Dark-Roast-Cyber/telltale/issues/66#issuecomment-5860306266)
@@ -265,6 +271,24 @@ valid detections, and clean finite-cycle exit. It requires Linux procfs/inotify,
 so it is evidence for that bounded runtime path rather than a macOS or Windows
 live-watch claim.
 
+### Development evidence before a candidate
+
+For bounded prerelease development, keep evidence tied to the reviewed source
+and distinguish tests from host or integration qualification. Timeline and
+direct-record regressions cover overflow handling and finalized-event behavior.
+Private clock injection tests establish failure precedence within one batch,
+not failures of the actual host clock. Normalized-core public tests using protected stores and
+synthetic lifecycle, claim/replay/reopen, and collision cases exercise the store
+contract, not native source activation or integrated downstream consumer support.
+Check that default feature isolation remains intact.
+
+For final source freeze, retain source SHA, toolchain, environment, exact command,
+exit status, and logs privately; public evidence should be sanitized summaries.
+Windows availability is not a blocker for Linux development, but Windows remains
+a release qualification gate. Do not claim checks passed until full CI has
+completed. These development checks do not authorize tagging or publication;
+final source provenance and preflight must be bound to the exact reviewed source.
+
 When only public documentation or release guidance changed, run the focused
 boundary check before the full release preflight:
 
@@ -334,7 +358,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.7.0-rc.1` registry packages while that remains the workspace version, before
+`=0.7.0-rc.2` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not

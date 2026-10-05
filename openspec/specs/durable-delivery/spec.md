@@ -661,12 +661,12 @@ into unlimited alert queuing.
 
 The change MUST keep `telltale-core::Pipeline` I/O-free, keep collector
 metadata outside Event 3.0, and avoid in-process plugins, DLL/shared-library
-ABIs, adopter-specific implementations, and Emusary branding. A future
+ABIs, adopter-specific implementations, and adopter branding. A future
 collector's received time MUST remain distinct from Event `ingested_at`, and
 Event `session_id` MUST NOT be treated as a Windows session identity.
 
-This capability MUST NOT add `emusary_local`, named pipes, adopter-specific
-protocol/concepts, collector framing or ACK behavior, collector
+This capability MUST NOT add named pipes, adopter-specific protocol identities
+or concepts, collector framing or ACK behavior, collector
 configuration/identity/security, protocol versioning, or protocol-only error
 classes. Those future generic local-collector concerns are deferred to a
 separately versioned effort. JSONL-only is not the final managed-adoption

@@ -233,15 +233,6 @@ fn is_canonical_host_hash(host: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn blank_to_none(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 /// Version stamp for persisted baseline snapshot stores.
 pub const BASELINE_STATE_VERSION: u16 = 3;
 

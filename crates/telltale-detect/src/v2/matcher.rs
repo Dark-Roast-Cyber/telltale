@@ -194,6 +194,7 @@ struct CompiledPredicate {
     selector: SelectorId,
     operator: MatcherOperator,
     value: Option<JsonValue>,
+    expected_bytes: usize,
     require_provenance: Option<FactProvenance>,
     require_capability: Option<CapabilityId>,
     pattern: Option<Regex>,
@@ -245,22 +246,34 @@ impl CompiledMatcher {
         self.required_capabilities.iter().copied()
     }
 
-    pub fn evaluate(&self, observation: &CanonicalObservationV2) -> MatcherEvaluation {
+    pub fn evaluate(
+        &self,
+        observation: &CanonicalObservationV2,
+    ) -> Result<MatcherEvaluation, super::session::ProcessingError> {
+        self.try_evaluate(observation, &mut super::session::RetentionBudget::new())
+    }
+
+    pub(crate) fn try_evaluate(
+        &self,
+        observation: &CanonicalObservationV2,
+        budget: &mut super::session::RetentionBudget,
+    ) -> Result<MatcherEvaluation, super::session::ProcessingError> {
+        budget.charge(1)?;
         if let Some(reason) = preflight_capabilities(
             &self.required_capabilities,
             observation.capability_context(),
         ) {
-            return MatcherEvaluation {
+            return Ok(MatcherEvaluation {
                 state: MatchState::NotEvaluated(reason),
                 matched_selector_paths: Vec::new(),
-            };
+            });
         }
         let registry = SelectorRegistry::new();
-        let (state, paths) = evaluate_node(&self.node, observation, &registry);
-        MatcherEvaluation {
+        let (state, paths) = evaluate_node(&self.node, observation, &registry, budget)?;
+        Ok(MatcherEvaluation {
             state,
             matched_selector_paths: normalize_paths(paths),
-        }
+        })
     }
 }
 
@@ -323,6 +336,10 @@ fn compile_node(
                 required_capabilities.insert(capability);
             }
             Ok(CompiledMatcherNode::Predicate(CompiledPredicate {
+                expected_bytes: value
+                    .as_ref()
+                    .map(|value| value.encoded_byte_len().unwrap_or(1))
+                    .unwrap_or(0),
                 selector,
                 operator,
                 value,
@@ -426,16 +443,18 @@ fn evaluate_node(
     node: &CompiledMatcherNode,
     observation: &CanonicalObservationV2,
     registry: &SelectorRegistry,
-) -> (MatchState, Vec<String>) {
-    match node {
+    budget: &mut super::session::RetentionBudget,
+) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
+    budget.charge(1)?;
+    Ok(match node {
         CompiledMatcherNode::Predicate(predicate) => {
-            evaluate_predicate(predicate, observation, registry)
+            evaluate_predicate(predicate, observation, registry, budget)?
         }
         CompiledMatcherNode::All(branches) => {
             let evaluations = branches
                 .iter()
-                .map(|branch| evaluate_node(branch, observation, registry))
-                .collect::<Vec<_>>();
+                .map(|branch| evaluate_node(branch, observation, registry, budget))
+                .collect::<Result<Vec<_>, _>>()?;
             let mut paths = Vec::new();
             let mut unknown = Vec::new();
             let mut has_no_match = false;
@@ -457,8 +476,8 @@ fn evaluate_node(
         CompiledMatcherNode::Any(branches) => {
             let evaluations = branches
                 .iter()
-                .map(|branch| evaluate_node(branch, observation, registry))
-                .collect::<Vec<_>>();
+                .map(|branch| evaluate_node(branch, observation, registry, budget))
+                .collect::<Result<Vec<_>, _>>()?;
             let mut paths = Vec::new();
             let mut unknown = Vec::new();
             let mut has_match = false;
@@ -481,38 +500,49 @@ fn evaluate_node(
             }
         }
         CompiledMatcherNode::Not(branch) => {
-            let (state, paths) = evaluate_node(branch, observation, registry);
+            let (state, paths) = evaluate_node(branch, observation, registry, budget)?;
             match state {
                 MatchState::Match => (MatchState::NoMatch, Vec::new()),
                 MatchState::NoMatch => (MatchState::Match, paths),
                 MatchState::NotEvaluated(reason) => (MatchState::NotEvaluated(reason), Vec::new()),
             }
         }
-    }
+    })
 }
 
 fn evaluate_predicate(
     predicate: &CompiledPredicate,
     observation: &CanonicalObservationV2,
     registry: &SelectorRegistry,
-) -> (MatchState, Vec<String>) {
+    budget: &mut super::session::RetentionBudget,
+) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
+    let resolved = registry.try_resolve(predicate.selector, observation, budget)?;
+    evaluate_resolved_predicate(predicate, observation, resolved, budget)
+}
+
+fn evaluate_resolved_predicate(
+    predicate: &CompiledPredicate,
+    observation: &CanonicalObservationV2,
+    resolved: super::selector::SelectorResolution,
+    budget: &mut super::session::RetentionBudget,
+) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
+    budget.charge(1)?;
     if let Some(capability) = predicate.require_capability
         && let Some(reason) = preflight_capability(capability, observation.capability_context())
     {
-        return (MatchState::NotEvaluated(reason), Vec::new());
+        return Ok((MatchState::NotEvaluated(reason), Vec::new()));
     }
-    let resolved = registry.resolve(predicate.selector, observation);
     if resolved.presence() == SelectorPresence::UnavailableVisibility {
-        return (
+        return Ok((
             MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility),
             Vec::new(),
-        );
+        ));
     }
     if resolved.presence() == SelectorPresence::MetadataMissing {
-        return (
+        return Ok((
             MatchState::NotEvaluated(NonEvaluationReason::IneligibleInput),
             Vec::new(),
-        );
+        ));
     }
     if let Some(required) = predicate.require_provenance
         && resolved.presence() != SelectorPresence::Absent
@@ -523,15 +553,15 @@ fn evaluate_predicate(
         match resolved.metadata() {
             Some(metadata) if metadata.provenance() == required => {}
             _ => {
-                return (
+                return Ok((
                     MatchState::NotEvaluated(NonEvaluationReason::IneligibleInput),
                     Vec::new(),
-                );
+                ));
             }
         }
     }
     if !resolved.is_present() {
-        return match predicate.operator {
+        return Ok(match predicate.operator {
             MatcherOperator::NotExists => (
                 MatchState::Match,
                 vec![predicate.selector.as_str().to_owned()],
@@ -541,37 +571,85 @@ fn evaluate_predicate(
                 Vec::new(),
             ),
             _ => (MatchState::NoMatch, Vec::new()),
-        };
+        });
     }
     if predicate.operator == MatcherOperator::NotExists {
-        return (MatchState::NoMatch, Vec::new());
+        return Ok((MatchState::NoMatch, Vec::new()));
     }
     if predicate.operator == MatcherOperator::Exists {
-        return (
+        return Ok((
             MatchState::Match,
             vec![predicate.selector.as_str().to_owned()],
-        );
+        ));
     }
     let Some(actual) = resolved.value() else {
-        return (
+        return Ok((
             MatchState::NotEvaluated(NonEvaluationReason::IneligibleInput),
             Vec::new(),
-        );
+        ));
     };
     let Some(expected) = predicate.value.as_ref() else {
-        return (
+        return Ok((
             MatchState::NotEvaluated(NonEvaluationReason::TypeMismatch),
             Vec::new(),
-        );
+        ));
     };
-    match apply_operator(predicate, actual, expected) {
+    let result = if matches!(
+        predicate.operator,
+        MatcherOperator::In | MatcherOperator::NotIn
+    ) {
+        charged_membership(actual, expected, budget)?.map(|matched| {
+            if predicate.operator == MatcherOperator::NotIn {
+                !matched
+            } else {
+                matched
+            }
+        })
+    } else {
+        budget.charge(observation.retained_byte_len())?;
+        let bytes = actual.encoded_byte_len().unwrap_or(1);
+        budget.charge(bytes.saturating_add(predicate.expected_bytes))?;
+        apply_operator(predicate, actual, expected)
+    };
+    Ok(match result {
         Ok(true) => (
             MatchState::Match,
             vec![predicate.selector.as_str().to_owned()],
         ),
         Ok(false) => (MatchState::NoMatch, Vec::new()),
         Err(reason) => (MatchState::NotEvaluated(reason), Vec::new()),
+    })
+}
+
+fn charged_membership(
+    actual: &JsonValue,
+    expected: &JsonValue,
+    budget: &mut super::session::RetentionBudget,
+) -> Result<Result<bool, NonEvaluationReason>, super::session::ProcessingError> {
+    let values = match expected {
+        JsonValue::String(_) => std::slice::from_ref(expected),
+        JsonValue::Array(values) => values.as_slice(),
+        _ => return Ok(Err(NonEvaluationReason::TypeMismatch)),
+    };
+    for value in values {
+        budget.charge(1)?;
+        if !matches!(value, JsonValue::String(_)) {
+            return Ok(Err(NonEvaluationReason::TypeMismatch));
+        }
     }
+    let JsonValue::String(actual) = actual else {
+        return Ok(Err(NonEvaluationReason::TypeMismatch));
+    };
+    for value in values {
+        let JsonValue::String(expected) = value else {
+            unreachable!()
+        };
+        budget.charge(actual.len().saturating_add(expected.len()))?;
+        if actual == expected {
+            return Ok(Ok(true));
+        }
+    }
+    Ok(Ok(false))
 }
 
 fn apply_operator(
@@ -601,12 +679,7 @@ fn apply_operator(
                 .is_some_and(|pattern| pattern.is_match(value)))
         }
         MatcherOperator::In | MatcherOperator::NotIn => {
-            let result = membership(actual, expected)?;
-            Ok(if predicate.operator == MatcherOperator::NotIn {
-                !result
-            } else {
-                result
-            })
+            unreachable!("membership is charged per reached comparison")
         }
         MatcherOperator::Gt | MatcherOperator::Gte | MatcherOperator::Lt | MatcherOperator::Lte => {
             let ordering = numeric_order(actual, expected)?;
@@ -653,24 +726,6 @@ fn string_pair<'a>(
 ) -> Result<(&'a str, &'a str), NonEvaluationReason> {
     match (actual, expected) {
         (JsonValue::String(actual), JsonValue::String(expected)) => Ok((actual, expected)),
-        _ => Err(NonEvaluationReason::TypeMismatch),
-    }
-}
-
-fn membership(actual: &JsonValue, expected: &JsonValue) -> Result<bool, NonEvaluationReason> {
-    let expected_values = match expected {
-        JsonValue::String(value) => vec![value.as_str()],
-        JsonValue::Array(values) => values
-            .iter()
-            .map(|value| match value {
-                JsonValue::String(value) => Ok(value.as_str()),
-                _ => Err(NonEvaluationReason::TypeMismatch),
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        _ => return Err(NonEvaluationReason::TypeMismatch),
-    };
-    match actual {
-        JsonValue::String(value) => Ok(expected_values.iter().any(|candidate| *candidate == value)),
         _ => Err(NonEvaluationReason::TypeMismatch),
     }
 }

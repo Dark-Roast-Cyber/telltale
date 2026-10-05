@@ -175,6 +175,213 @@ fn report_regenerates_byte_identically_twice_in_process() {
 }
 
 #[test]
+fn canonical_efficacy_native_invariants() {
+    use manifest::Input;
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::observation::{JsonValue, ObservationBody, ObservedAt};
+    use telltale_schema::source::Source;
+    use telltale_sources::acquisition::{AcquisitionOptions, AcquisitionProgress, acquire_source};
+
+    let root = repo_root();
+    let manifest = load_manifest(&root.join(MANIFEST_PATH), &root).unwrap();
+    for case in manifest
+        .cases
+        .iter()
+        .filter(|case| case.tags.iter().any(|tag| tag == "canonical_efficacy"))
+    {
+        let Input::SourceFixture { fixture, .. } = &case.input else {
+            panic!("native fixture")
+        };
+        let native = fs::read_to_string(root.join(fixture))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        for (source_id, kind) in [
+            ("codex.sessions", SourceKind::Jsonl),
+            ("codex.archived_sessions", SourceKind::ArchivedJsonl),
+            ("codex.headless_sessions", SourceKind::HeadlessJsonl),
+        ] {
+            let source = Source {
+                client: ClientId::Codex,
+                source_id: source_id.into(),
+                kind,
+                path: root.join(fixture),
+            };
+            let options =
+                || AcquisitionOptions::new(ObservedAt::new("2026-10-03T12:00:00Z").unwrap());
+            let batch = acquire_source(&source, options()).unwrap();
+            let replay = acquire_source(&source, options()).unwrap();
+            assert_eq!(batch.observations.len(), 1, "{} {source_id}", case.id);
+            assert_eq!(batch.progress, AcquisitionProgress::None);
+            assert_eq!(
+                batch.observations[0].observation_id(),
+                replay.observations[0].observation_id()
+            );
+            assert_eq!(batch.observations[0].source().adapter_id(), source_id);
+            assert_eq!(
+                batch.observations[0].session_id().unwrap().value(),
+                native[0]["payload"]["id"].as_str().unwrap()
+            );
+            assert_eq!(
+                batch.accounting.sessions[0].counts.native_units,
+                native.len() as u64
+            );
+            let item = &native.last().unwrap()["payload"]["item"];
+            match batch.observations[0].body() {
+                ObservationBody::Message(message) => {
+                    let expected = item["content"].as_array().unwrap();
+                    assert_eq!(message.content_parts().len(), expected.len());
+                    for (part, expected) in message.content_parts().iter().zip(expected) {
+                        assert_eq!(
+                            part.value(),
+                            &JsonValue::string(expected["text"].as_str().unwrap())
+                        );
+                    }
+                    if case.tags.iter().any(|tag| tag == "long_text") {
+                        assert!(expected[0]["text"].as_str().unwrap().len() > 4096);
+                    }
+                }
+                ObservationBody::Tool(_) => {
+                    assert_eq!(
+                        batch.accounting.sessions[0].counts.record_counts.tool_call,
+                        0
+                    );
+                    assert_eq!(
+                        batch.accounting.sessions[0]
+                            .counts
+                            .record_counts
+                            .tool_result,
+                        1
+                    );
+                    assert_eq!(
+                        batch.accounting.sessions[0].counts.contributions,
+                        Default::default()
+                    );
+                }
+                _ => panic!("unexpected family"),
+            }
+        }
+    }
+}
+
+#[test]
+fn canonical_efficacy_rejection_and_ambiguous_outcomes_are_not_confusion_cases() {
+    use telltale_schema::clients::{ClientId, SourceKind};
+    use telltale_schema::observation::{
+        JsonValue, ObservationBody, ObservationStage, ObservedAt, ToolStatus,
+    };
+    use telltale_schema::source::Source;
+    use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
+
+    let fixture_root = repo_root().join("tests/evaluation/fixtures/canonical-efficacy");
+    let read = |name: &str| {
+        fs::read_to_string(fixture_root.join(name))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let temp = tempfile::tempdir().unwrap();
+    for (source_id, kind) in [
+        ("codex.sessions", SourceKind::Jsonl),
+        ("codex.archived_sessions", SourceKind::ArchivedJsonl),
+        ("codex.headless_sessions", SourceKind::HeadlessJsonl),
+    ] {
+        let source = Source {
+            client: ClientId::Codex,
+            source_id: source_id.into(),
+            kind,
+            path: temp.path().join("synthetic.jsonl"),
+        };
+        let acquire = |records: &[serde_json::Value]| {
+            fs::write(
+                &source.path,
+                records
+                    .iter()
+                    .map(serde_json::Value::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .unwrap();
+            acquire_source(
+                &source,
+                AcquisitionOptions::new(ObservedAt::new("2026-10-03T12:00:00Z").unwrap()),
+            )
+        };
+        // Without the public turn authority, identical content is not a proven mirror.
+        let mut mirrors = read("mirror-malicious.jsonl");
+        mirrors[1]["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("internal_chat_message_metadata_passthrough");
+        assert_eq!(acquire(&mirrors).unwrap().observations.len(), 2);
+        let good = read("command-success.jsonl");
+        for (field, value) in [
+            ("status", serde_json::json!("in_progress")),
+            (
+                "status",
+                serde_json::json!("SYNTHETIC-EFFICACY-PRIVATE-INVALID"),
+            ),
+            (
+                "command",
+                serde_json::json!("SYNTHETIC-EFFICACY-PRIVATE-INVALID"),
+            ),
+            (
+                "exit_code",
+                serde_json::json!("SYNTHETIC-EFFICACY-PRIVATE-INVALID"),
+            ),
+            (
+                "aggregated_output",
+                serde_json::json!({"secret":"SYNTHETIC-EFFICACY-PRIVATE-INVALID"}),
+            ),
+        ] {
+            let mut bad = good[1].clone();
+            bad["payload"]["item"][field] = value;
+            let error = acquire(&[good[0].clone(), good[1].clone(), bad])
+                .err()
+                .expect("reject whole source after valid prefix");
+            assert!(!format!("{error:?} {error}").contains("SYNTHETIC-EFFICACY-PRIVATE"));
+        }
+        for (status, expected) in [
+            ("completed", ToolStatus::Succeeded),
+            ("failed", ToolStatus::Failed),
+            ("declined", ToolStatus::Denied),
+        ] {
+            for exit in [
+                None,
+                Some(serde_json::Value::Null),
+                Some(serde_json::json!(0)),
+                Some(serde_json::json!(7)),
+            ] {
+                let mut records = good.clone();
+                let item = &mut records[1]["payload"]["item"];
+                item["status"] = serde_json::json!(status);
+                item.as_object_mut().unwrap().remove("aggregated_output");
+                item.as_object_mut().unwrap().remove("exit_code");
+                if let Some(exit) = &exit {
+                    item["exit_code"] = exit.clone();
+                }
+                let batch = acquire(&records).unwrap();
+                assert_eq!(batch.observations.len(), 1);
+                let observation = &batch.observations[0];
+                assert_eq!(observation.stage(), ObservationStage::ToolResultReturned);
+                assert_eq!(
+                    observation.facets()["tool.output_fidelity"].value(),
+                    &JsonValue::string("not_captured")
+                );
+                let ObservationBody::Tool(tool) = observation.body() else {
+                    panic!("tool")
+                };
+                assert_eq!(tool.reported_status(), Some(expected));
+                assert_eq!(tool.name(), None);
+                assert_eq!(tool.result().is_some(), exit.is_some());
+            }
+        }
+    }
+}
+
+#[test]
 fn evaluation_report_path_accepts_a_single_filename() {
     let root = Path::new("repo");
     assert_eq!(

@@ -30,7 +30,4 @@ time.workspace = true
 walkdir = { version = "2.5", optional = true }
 
 [dev-dependencies]
-telltale-inference.workspace = true
-telltale-sources = { workspace = true, features = ["opencode-sqlite"] }
 tempfile = "3.14"
-rusqlite.workspace = true

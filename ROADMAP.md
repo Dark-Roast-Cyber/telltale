@@ -59,65 +59,35 @@ source-backed record/export compatibility are not protected contracts.
 
 ### Completed 0.6.x convergence sequence
 
-The intended convergence order is:
+Completed milestones, in order:
 
-1. **Contract the production support denominator.** Make the target agent set
-   explicit in code, tests, support documentation, and migration gates. Retire or
-   reclassify non-target sources instead of porting them to the new semantic
-   architecture.
-2. **Make Detection v2 capable of replacing Rule v1 execution.** Keep Rule v1 as
-   a supported content format, but move its compiled evaluation, modifier,
-   contribution, and scoring behavior onto the Detection v2 runtime rather than
-   maintaining two authoritative detector engines.
-3. **Move shipped process-chain behavior onto the Detection v2 result path.**
-   Preserve its matching, suppression, correlation, and risk behavior without
-   manufacturing directly observed Process facts from parsed command text.
-4. **Promote Canonical Observation v2 to the production acquisition contract for
-   the target source set — complete.** The public `telltale-sources` acquisition
-   API is the single cross-source COv2 acquisition owner for all eight identities.
-   Source-native extraction feeds source-owned canonical mapping directly, with
-   caller-owned observed time and separate operational progress. The parallel
-   experimental projection router is removed; no legacy conversion bridge is
-   introduced. This acquisition step did not activate runtime callers by itself;
-   that coordinated cutover is step 5.
-5. **Cut scan, watch, and the supported embedding facade over together —
-   complete.** The normal production path is Canonical Observation v2 -> Detection
-   v2, with Event 3.0 retained as the compatibility projection during the
-   migration. Record-level compatibility APIs remain intentionally separate.
-6. **Delete transitional machinery after activation - complete.** Source-backed
-   legacy record projection APIs, parser registrations, compatibility-only
-   source fields, duplicate scoring/grouping logic, shadow/equivalence
-   infrastructure, migration-only fixtures and reports, and stale documentation
-   have been retired. OpenCode retains only the current `opencode.sqlite`
-   native/canonical path and its bounded cursor semantics. Event 3.0 and
-   deliberate caller-provided direct-record compatibility remain separate
-   contracts.
-7. **Finalize the 0.7 event/telemetry boundary — complete.** Event3 remains the
-   sole production output for 0.7; Event4 production activation is deferred.
-   Future Event4 output remains an independent projection from accepted semantic
-   truth. No dual emission, runtime Event4 opt-in, telemetry-profile runtime, or
-   generalized `CanonicalPayload` was introduced to finish the migration;
-   generalized `CanonicalPayload` remains deferred.
+1. Contracted the supported-source denominator; non-target sources were retired
+   or reclassified, not ported to the new semantic architecture.
+2. Kept Rule v1 as supported content on Detection v2, including modifier,
+   contribution, and scoring semantics.
+3. Moved process-chain matching, suppression, correlation, and risk to Detection
+   v2 without fabricating observed Process facts from command text.
+4. Made public `telltale-sources` the single cross-source COv2 acquisition API
+   for all eight identities: source-owned mapping, caller-owned observed time,
+   separate progress, and no legacy bridge.
+5. Cut scan, watch, and the supported embedding facade over together to the normal
+   COv2 -> Detection v2 runtime path with shared source-atomic behavior: canonical
+   activity, baseline replacement, cursor eligibility, and no OpenCode cursor
+   advance on downstream operational failure ([activation, Issue #51](https://github.com/Dark-Roast-Cyber/telltale/issues/51)).
+6. Retired transitional compatibility and shadow machinery; OpenCode now uses only
+   the bounded native/canonical `opencode.sqlite` path ([Issue #54 closeout](https://github.com/Dark-Roast-Cyber/telltale/issues/54#issuecomment-5819387704)).
+7. Kept Event 3.0 the sole output for 0.7; Event4 remains inactive ([Issue #55](https://github.com/Dark-Roast-Cyber/telltale/issues/55),
+   [completion](https://github.com/Dark-Roast-Cyber/telltale/commit/d3bfbd8aafebda2adc6c9433b1e2937069053526),
+   [CI](https://github.com/Dark-Roast-Cyber/telltale/actions/runs/36067578187),
+   [CodeQL](https://github.com/Dark-Roast-Cyber/telltale/actions/runs/36067577883)).
 
-Step 5 activation is implemented under Issue #51. The shared source-atomic
-runtime owns CLI scan/watch and the supported embedding facade, including
-acquisition, Detection v2 evaluation, canonical activity, baseline replacement,
-and cursor eligibility. Tranche B1's processing-success rule remains in force:
-OpenCode cursors do not advance after downstream operational failure. Event 3.0
-remains unchanged in schema, wire contract, constructors, privacy behavior, and
-already persisted bytes; newly emitted canonical evidence, hashes, or severity
-are not required to be identical to legacy output. Event4 remains inactive.
-
-Step 6 convergence completed under Issue #54 with
-`597a86d6ff7c1cf07d15f993969547bb617711f2`
-(`refactor: retire source record compatibility`). Remote CI run
-`35973580992` and CodeQL run `35973576412` passed on that commit across the
-repository's Linux, macOS, Windows, package, test, format, Clippy, security, and
-code-scanning gates.
-
-Step 7 completed under Issue #55 with final completion commit
-`d3bfbd8aafebda2adc6c9433b1e2937069053526`. CI run `36067578187` and CodeQL
-run `36067577883` passed on that commit.
+These remain the active constraints: deliberate caller-supplied direct-record
+compatibility is a separate contract. Event 3.0's schema, wire contract,
+constructors, privacy behavior, and persisted bytes remain unchanged, though newly
+emitted canonical evidence, hashes, or severity need not match legacy output.
+Future Event4 remains an independent projection from accepted semantic truth.
+The current runtime has no dual emission, Event4 opt-in, or telemetry-profile
+runtime. Generalized `CanonicalPayload` remains deferred.
 
 The accepted semantic direction is documented in:
 
