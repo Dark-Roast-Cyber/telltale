@@ -2,6 +2,207 @@ use super::*;
 
 static WATCH_PROCESS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+// Opt-in measurements stay at the process boundary, not in the scanner.
+#[cfg(target_os = "linux")]
+mod workload {
+    use super::*;
+
+    pub(super) struct Measurements {
+        name: &'static str,
+        samples: Vec<Value>,
+        hwm_kib: Option<u64>,
+        rss_kib: Option<u64>,
+        exit_peak_kib: Option<u64>,
+    }
+
+    impl Measurements {
+        pub(super) fn new(name: &'static str) -> Self {
+            Self {
+                name,
+                samples: Vec::new(),
+                hwm_kib: None,
+                rss_kib: None,
+                exit_peak_kib: None,
+            }
+        }
+
+        pub(super) fn enabled() -> bool {
+            std::env::var_os("TELLTALE_WORKLOAD_REPORT_DIR").is_some()
+        }
+
+        pub(super) fn observe(&mut self, pid: u32) {
+            if !Self::enabled() {
+                return;
+            }
+            if let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) {
+                for (key, target) in [("VmHWM:", &mut self.hwm_kib), ("VmRSS:", &mut self.rss_kib)]
+                {
+                    if let Some(value) = status.lines().find_map(|line| {
+                        line.strip_prefix(key)?
+                            .split_whitespace()
+                            .next()?
+                            .parse::<u64>()
+                            .ok()
+                    }) {
+                        *target = Some(target.unwrap_or(0).max(value));
+                    }
+                }
+            }
+        }
+
+        pub(super) fn sample(&mut self, stage: &str, elapsed: Duration, state: &Path, log: &Path) {
+            if !Self::enabled() {
+                return;
+            }
+            self.samples.push(serde_json::json!({
+                "stage": stage, "latency_ms": elapsed.as_secs_f64() * 1000.0,
+                "observed_process_hwm_kib": self.hwm_kib,
+                "sampled_process_rss_max_kib": self.rss_kib,
+                "exit_process_peak_rss_kib": self.exit_peak_kib,
+                "state_bytes": fs::metadata(state).ok().map(|m| m.len()),
+                "active_log_bytes": fs::metadata(log).ok().map(|m| m.len()),
+            }));
+        }
+
+        pub(super) fn source_counts(&mut self, summary: &Value) {
+            if let Some(sample) = self.samples.last_mut() {
+                sample["source_processing"] = summary["source_processing"].clone();
+                sample["emitted_count"] = summary["emitted_count"].clone();
+                sample["source_exclusion_bytes"] = Value::Null;
+                sample["source_byte_visits"] = Value::Null;
+            }
+        }
+
+        pub(super) fn sample_count(&self) -> usize {
+            self.samples.len()
+        }
+
+        pub(super) fn run(&mut self, command: &mut Command) -> std::process::Output {
+            if !Self::enabled() {
+                return command.output().unwrap();
+            }
+            let stdout = tempfile::NamedTempFile::new().unwrap();
+            let stderr = tempfile::NamedTempFile::new().unwrap();
+            command
+                .stdout(stdout.reopen().unwrap())
+                .stderr(stderr.reopen().unwrap());
+            let child = WatchChildGuard::new(command.spawn().unwrap());
+            let deadline = Instant::now() + Duration::from_secs(30);
+            self.hwm_kib = None;
+            self.rss_kib = None;
+            self.exit_peak_kib = None;
+            let status = loop {
+                self.observe(child.id());
+                let mut status = 0;
+                // This guard exclusively owns the child; no other waiter can reap
+                // it. wait4 writes initialized status/rusage only on a positive PID.
+                let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+                let waited = unsafe {
+                    libc::wait4(
+                        child.id() as libc::pid_t,
+                        &mut status,
+                        libc::WNOHANG,
+                        usage.as_mut_ptr(),
+                    )
+                };
+                if waited > 0 {
+                    let usage = unsafe { usage.assume_init() };
+                    self.exit_peak_kib = u64::try_from(usage.ru_maxrss).ok();
+                    use std::os::unix::process::ExitStatusExt;
+                    break std::process::ExitStatus::from_raw(status);
+                }
+                if waited < 0 {
+                    let error = std::io::Error::last_os_error();
+                    assert_eq!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted,
+                        "wait4 failed"
+                    );
+                }
+                assert!(Instant::now() < deadline, "measured CLI timeout");
+                thread::sleep(Duration::from_millis(2));
+            };
+            // wait4 above already reaped this PID; a second std::process wait
+            // would return ECHILD. Disarm only after that successful native wait.
+            #[allow(clippy::zombie_processes)]
+            let _ = child.disarm();
+            std::process::Output {
+                status,
+                stdout: fs::read(stdout.path()).unwrap(),
+                stderr: fs::read(stderr.path()).unwrap(),
+            }
+        }
+
+        pub(super) fn finish(
+            &self,
+            fixtures: &[&[u8]],
+            fixture_scope: &str,
+            options: Value,
+            retention: Value,
+        ) {
+            let Some(directory) = std::env::var_os("TELLTALE_WORKLOAD_REPORT_DIR") else {
+                return;
+            };
+            let digest = |bytes: &[u8]| format!("{:x}", sha2::Sha256::digest(bytes));
+            let output = |program: &str, args: &[&str]| {
+                let result = Command::new(program).args(args).output().unwrap();
+                assert!(
+                    result.status.success(),
+                    "measurement provenance command failed"
+                );
+                result.stdout
+            };
+            let mut fixture = Vec::new();
+            for bytes in fixtures {
+                fixture.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+                fixture.extend_from_slice(bytes);
+            }
+            let mut latencies = self
+                .samples
+                .iter()
+                .map(|v| v["latency_ms"].as_f64().unwrap())
+                .collect::<Vec<_>>();
+            latencies.sort_by(f64::total_cmp);
+            let percentile = |p: usize| {
+                latencies
+                    .get((latencies.len() * p).div_ceil(100).saturating_sub(1))
+                    .copied()
+            };
+            let cpu = fs::read_to_string("/proc/cpuinfo").ok().and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("model name\t: ").map(str::to_owned))
+            });
+            let memory = fs::read_to_string("/proc/meminfo").ok().and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("MemTotal:").map(|v| v.trim().to_owned()))
+            });
+            let report = serde_json::json!({
+                "format_version": 2, "workload": self.name,
+                "source_sha": String::from_utf8(output("git", &["rev-parse", "HEAD"])).unwrap().trim(),
+                "tracked_patch_sha256": digest(&output("git", &["diff", "HEAD", "--binary"])),
+                "untracked_files_present": !output("git", &["ls-files", "--others", "--exclude-standard"]).is_empty(),
+                "cli_binary_sha256": digest(&fs::read(env!("CARGO_BIN_EXE_telltale")).unwrap()),
+                "fixture_fingerprint_sha256": digest(&fixture), "fixture_fingerprint_scope": fixture_scope,
+                "fixture_fingerprint_encoding": "ordered u64 little-endian length then bytes",
+                "toolchain": String::from_utf8(output("rustc", &["-Vv"])).unwrap(),
+                "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+                "features": "root CLI default features; opencode-sqlite dependencies enabled",
+                "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "kernel": String::from_utf8(output("uname", &["-r"])).unwrap().trim(), "cpu": cpu, "memory": memory },
+                "options": options, "samples": self.samples,
+                "latency_ms": { "p50": percentile(50), "p95": percentile(95), "max": latencies.last() },
+                "rss_scope": "Linux scan exit peak uses wait4 ru_maxrss (KiB); watch exit peak unavailable. Watch VmHWM and sampled VmRSS maxima are cumulative over process lifetime through each sample, not per-cycle peaks. VmHWM is observed while alive, a lower bound if exit precedes final read. VmRSS is sampled, not a peak guarantee. null means unavailable.",
+                "retention": retention,
+            });
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                Path::new(&directory).join(format!("{}.json", self.name)),
+                serde_json::to_vec_pretty(&report).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+}
+
 #[test]
 fn production_jsonl_cli_limit_failure_retains_baseline_and_recovers() {
     use std::io::Write;
@@ -12,19 +213,26 @@ fn production_jsonl_cli_limit_failure_retains_baseline_and_recovers() {
     let source = directory.join("synthetic.jsonl");
     let log = temp.path().join("events.jsonl");
     let state = temp.path().join("state.json");
-    let first =
-        "{\"type\":\"user\",\"session_id\":\"synthetic\",\"content\":\"synthetic first\"}\n";
+    let first = "{\"type\":\"user\",\"session_id\":\"synthetic\",\"content\":\"synthetic first api_key=SYNTHETIC-WORKLOAD-SECRET\"}\n";
     let second =
         "{\"type\":\"user\",\"session_id\":\"synthetic\",\"content\":\"synthetic recovered\"}\n";
     fs::write(&source, first).unwrap();
+    #[cfg(target_os = "linux")]
+    let measurements =
+        std::cell::RefCell::new(workload::Measurements::new("source-atomic-restart"));
     let scan = || {
-        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        let started = Instant::now();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", temp.path())
             .args([
                 "scan",
                 "--once",
                 "--allow-fixtures",
                 "--no-local-config",
                 "--emit-activity",
+                "--install-inventory-disabled",
                 "--client",
                 "codex",
                 "--root",
@@ -33,18 +241,71 @@ fn production_jsonl_cli_limit_failure_retains_baseline_and_recovers() {
             .arg("--log-path")
             .arg(&log)
             .arg("--state-path")
-            .arg(&state)
-            .output()
-            .unwrap();
+            .arg(&state);
+        #[cfg(target_os = "linux")]
+        let output = measurements.borrow_mut().run(&mut command);
+        #[cfg(not(target_os = "linux"))]
+        let output = command.output().unwrap();
+        #[cfg(target_os = "linux")]
+        {
+            let mut measurements = measurements.borrow_mut();
+            let stage = match measurements.sample_count() {
+                0 => "cold-state",
+                1..=5 => "warm-restart",
+                6 => "source-saturated",
+                7 => "repaired-restart",
+                _ => "repeated-restart",
+            };
+            measurements.sample(stage, started.elapsed(), &state, &log);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = started;
+        for bytes in [&output.stdout, &output.stderr] {
+            assert!(
+                !String::from_utf8_lossy(bytes).contains("SYNTHETIC-WORKLOAD-SECRET"),
+                "controlled marker leaked in CLI output"
+            );
+        }
+        for path in [&state, &log] {
+            if path.exists() {
+                assert!(
+                    !fs::read_to_string(path)
+                        .unwrap()
+                        .contains("SYNTHETIC-WORKLOAD-SECRET"),
+                    "controlled marker leaked in persisted output"
+                );
+            }
+        }
         assert!(
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+        let summary = serde_json::from_slice::<Value>(&output.stdout).unwrap();
+        #[cfg(target_os = "linux")]
+        measurements.borrow_mut().source_counts(&summary);
+        summary
     };
-    assert_eq!(scan()["source_processing"]["parse_success_source_count"], 1);
+    let cold = scan();
+    assert_eq!(cold["source_processing"]["parse_success_source_count"], 1);
+    assert!(cold["activity_count"].as_u64().unwrap() > 0);
+    assert!(cold["emitted_count"].as_u64().unwrap() > 0);
     let before: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for _ in 0..5 {
+        let warm = scan();
+        assert_eq!(
+            warm["emitted_count"], 0,
+            "warm restart duplicated activity promotion"
+        );
+        let warm_state = serde_json::from_slice::<Value>(&fs::read(&state).unwrap()).unwrap();
+        for key in [
+            "baseline_snapshots",
+            "baseline_source_contributions",
+            "sqlite_ingestion_cursors",
+        ] {
+            assert_eq!(before[key], warm_state[key], "warm restart advanced {key}");
+        }
+    }
     let offset = fs::metadata(&log).unwrap().len() as usize;
     let mut file = fs::File::create(&source).unwrap();
     file.write_all(first.as_bytes()).unwrap();
@@ -90,6 +351,8 @@ fn production_jsonl_cli_limit_failure_retains_baseline_and_recovers() {
         1
     );
     assert_eq!(recovered["source_processing"]["parsed_record_count"], 2);
+    assert!(recovered["activity_count"].as_u64().unwrap() > 0);
+    assert!(recovered["emitted_count"].as_u64().unwrap() > 0);
     assert_eq!(
         recovered["source_processing"]["parse_error_source_count"],
         0
@@ -99,12 +362,21 @@ fn production_jsonl_cli_limit_failure_retains_baseline_and_recovers() {
         before["baseline_source_contributions"],
         recovered_state["baseline_source_contributions"]
     );
-    assert_eq!(scan()["source_processing"]["parse_error_source_count"], 0);
+    let repeated = scan();
+    assert_eq!(repeated["source_processing"]["parse_error_source_count"], 0);
+    assert_eq!(
+        repeated["emitted_count"], 0,
+        "repeated restart duplicated activity promotion"
+    );
     let repeated_state: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
     assert_eq!(
         recovered_state["baseline_snapshots"],
         repeated_state["baseline_snapshots"]
     );
+    #[cfg(target_os = "linux")]
+    measurements.borrow().finish(&[first.as_bytes(), second.as_bytes(), &vec![b' '; 8 * 1024 * 1024 + 1]], "source-sequence-input-bytes; concatenation/repetition order defined by case generator",
+        serde_json::json!({"command": "scan --once --allow-fixtures --no-local-config --emit-activity --install-inventory-disabled --client codex --root <isolated> --log-path <isolated> --state-path <isolated>", "rules": "compiled defaults", "sequence": "cold state, five warm restarts, oversized record, repaired restart, repeated restart", "source_limit_bytes": 8 * 1024 * 1024, "cold_os_cache": false}),
+        serde_json::json!({"outbox": null, "queue": null, "source_atomic_recovery_assertions": "passed"}));
 }
 
 #[test]
@@ -562,6 +834,14 @@ fn idle_durable_watch_case(
     dry_run: bool,
     receiver_delay: Duration,
 ) {
+    let mut measurements =
+        workload::Measurements::new(match (first_status, receiver_delay.is_zero()) {
+            (500, _) => "durable-restart-retry",
+            (503, false) => "durable-slow-receiver",
+            (503, true) => "durable-terminal-budget",
+            (401, _) => "durable-blocked",
+            _ => "durable-idle",
+        });
     let _guard = watch_process_guard();
     let temp = tempdir().unwrap();
     let root = temp.path().join("stores");
@@ -585,6 +865,8 @@ fn idle_durable_watch_case(
     let outputs = config.join("outputs.d/outputs.yaml");
     fs::write(&outputs, format!("version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n", yaml(&outbox), yaml(&log))).unwrap();
     let setup = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .env_clear()
+        .env("HOME", temp.path())
         .args([
             "scan",
             "--once",
@@ -639,6 +921,8 @@ fn idle_durable_watch_case(
     fs::write(&outputs, format!("{}  - name: remote\n    type: splunk_hec\n    endpoint: http://{}\n    token: synthetic-idle-token\n    retry: {{ max_attempts: 2, base_delay_ms: 1500 }}\n", fs::read_to_string(&outputs).unwrap(), listener.local_addr().unwrap())).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
     command
+        .env_clear()
+        .env("HOME", temp.path())
         .args([
             "watch",
             "--allow-fixtures",
@@ -677,6 +961,7 @@ fn idle_durable_watch_case(
     let mut terminal_since = None;
     thread::sleep(receiver_delay);
     loop {
+        measurements.observe(child.id());
         if child.child_mut().try_wait().unwrap().is_some() {
             let output = child.disarm().wait_with_output().unwrap();
             panic!(
@@ -730,6 +1015,10 @@ fn idle_durable_watch_case(
                 }
                 let mut body = vec![0; length];
                 reader.read_exact(&mut body).unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&body).contains("synthetic-idle-token"),
+                    "controlled token leaked into remote payload"
+                );
                 let body: Value = serde_json::from_slice(&body).unwrap();
                 let id = body["event"]["event_id"].as_str().unwrap().to_owned();
                 request_timeline.push((id.clone(), started.elapsed()));
@@ -822,6 +1111,64 @@ fn idle_durable_watch_case(
         output.stdout.is_empty(),
         "idle wakeups must not emit scan summaries"
     );
+    measurements.sample(
+        "restart-to-persisted-terminal-plus-two-idle-intervals",
+        started.elapsed(),
+        &state,
+        &log,
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("synthetic-idle-token"));
+    assert!(
+        !fs::read_to_string(&log)
+            .unwrap()
+            .contains("synthetic-idle-token")
+    );
+    let (event_rows, payload_bytes): (u64, u64) = delivery_state
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let (pending_rows, pending_bytes): (u64, u64) = delivery_state.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(length(events.payload)), 0) FROM deliveries JOIN events USING(event_id) WHERE deliveries.state IN ('pending', 'blocked')", [], |row| Ok((row.get(0)?, row.get(1)?))
+    ).unwrap();
+    let leaked_payloads: u64 = delivery_state.query_row(
+        "SELECT COUNT(*) FROM events WHERE instr(CAST(payload AS TEXT), 'synthetic-idle-token') > 0", [], |row| row.get(0)
+    ).unwrap();
+    assert_eq!(
+        leaked_payloads, 0,
+        "controlled token leaked into outbox payload"
+    );
+    let fixture_recipe = serde_json::json!({
+        "recipe_version": 1,
+        "generator": "tests/cli/scan_watch.rs::idle_durable_watch_case at source_sha plus tracked_patch_sha256",
+        "operation_order": ["empty source", "setup scan", "crash-gap append and fsync", "pending seed", "receiver config", "watch"],
+        "initial_source": {"relative_path": "stores/codex/sessions/idle.jsonl", "bytes": "empty"},
+        "setup": {
+            "command": "scan --once --allow-fixtures --install-inventory-disabled --root <root> --config-dir <config> --state-path <state>",
+            "environment": "cleared; HOME=<temporary-root>", "initial_state": "absent",
+            "output_config": "version 1, durable, canonical JSONL only, outbox <root>/runtime/private/outbox.sqlite",
+            "generated_events": "setup CLI health from empty source; exact generated bytes unavailable"
+        },
+        "pending_seed": {
+            "event_selection": "SELECT event_id FROM events LIMIT 1 after setup",
+            "meta_durable_sink_ids": ["remote"], "sink_id": "remote", "state": "pending",
+            "attempt_count": 0, "updated_at": "<seed-now-unix-ms>",
+            "next_attempt_at_offset_ms": if future_pending { 1800 } else { 0 }
+        },
+        "crash_gap": {
+            "generator": "native_test_event(activity, fixed event ID ending 000001, 2026-01-01T00:00:00Z, informational, codex, idle, no rules)",
+            "operation": "append complete serialized event plus newline to setup journal, sync_all; leave ingest cursor unchanged"
+        },
+        "receiver": {"endpoint": "http://127.0.0.1:<ephemeral-port>", "token": "synthetic credential defined by generator", "first_status": first_status, "response_schedule": "503 remains 503; otherwise first_status on first attempt per event, then 200; body code 0", "delay_ms": receiver_delay.as_millis(), "retry_max_attempts": 2, "retry_base_delay_ms": 1500},
+        "watch": {"iterations": 1, "dry_run": dry_run},
+        "normalization": "temporary absolute paths, setup random event IDs, runtime timestamps and runtime-derived event metadata are generator placeholders; seed time is an offset, receiver port is a placeholder",
+        "complete_generated_fixture_bytes_sha256": null
+    });
+    measurements.finish(&[serde_json::to_vec(&fixture_recipe).unwrap().as_slice()], "normalized-generator-recipe-v1; not generated event/state/database bytes",
+        serde_json::json!({"command": "watch --allow-fixtures --iterations 1 --install-inventory-disabled --root <isolated> --config-dir <isolated> --state-path <isolated>", "rules": "compiled defaults", "first_http_status": first_status, "future_pending": future_pending, "dry_run": dry_run, "receiver_delay_ms": receiver_delay.as_millis(), "retry_max_attempts": 2, "retry_base_delay_ms": 1500, "fixture_recipe": fixture_recipe, "delivery": "at least once; request counts characterize this controlled run only"}),
+        serde_json::json!({"event_rows": event_rows, "retained_payload_bytes": payload_bytes, "pending_or_blocked_delivery_rows": pending_rows, "pending_or_blocked_delivery_payload_bytes": pending_bytes, "outbox_file_bytes": fs::metadata(&outbox).unwrap().len(), "requests": request_timeline.len(), "queue_saturation": null}));
 }
 
 #[cfg(target_os = "linux")]
@@ -5380,6 +5727,8 @@ fn watch_synthetic_multi_cycle_soak() {
     let state_path = temp.path().join("telltale-state.json");
     let mut child = WatchChildGuard::new(
         Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .env_clear()
+            .env("HOME", temp.path())
             .args([
                 "watch",
                 "--allow-fixtures",
@@ -5420,6 +5769,7 @@ fn watch_synthetic_multi_cycle_soak() {
         }
     });
     let pid = child.id();
+    let measurements = std::cell::RefCell::new(workload::Measurements::new("watch-six-cycles"));
     let proc_fd_path = format!("/proc/{pid}/fd");
     let proc_fdinfo_path = format!("/proc/{pid}/fdinfo");
     if !Path::new("/proc").is_dir()
@@ -5496,8 +5846,10 @@ fn watch_synthetic_multi_cycle_soak() {
             Err(mpsc::TryRecvError::Empty) => {}
         }
         fs::write(path, contents).expect("trigger exactly one watch event");
+        let started = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(20);
         let summary = loop {
+            measurements.borrow_mut().observe(pid);
             match summary_rx.recv_timeout(Duration::from_millis(20)) {
                 Ok(line) => break serde_json::from_str::<Value>(&line).expect("summary json"),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -5514,6 +5866,12 @@ fn watch_synthetic_multi_cycle_soak() {
                 panic!("telltale watch did not complete the single triggered scan within timeout")
             }
         };
+        measurements.borrow_mut().sample(
+            "write-to-health-summary",
+            started.elapsed(),
+            &state_path,
+            &log_path,
+        );
         let quiet_deadline = Instant::now() + Duration::from_millis(150);
         while Instant::now() < quiet_deadline {
             let remaining = quiet_deadline.saturating_duration_since(Instant::now());
@@ -5771,6 +6129,10 @@ fn watch_synthetic_multi_cycle_soak() {
         "watch soak measurements: cycles={} state_bytes=[{first_state_bytes},{second_state_bytes},{valid_state_bytes},{no_op_state_bytes}] fd_baseline={fd_baseline} fd_counts={fd_counts:?} rotated_files={rotated_count} scanner_errors_before_pruning={scanner_errors_before_pruning}",
         summaries.len(),
     );
+    let retained_paths = telemetry_paths();
+    measurements.borrow().finish(&[&malformed, valid_later, valid_second, valid_third], "ordered-source-fixture-bytes; empty files and six-cycle write order defined by case generator",
+        serde_json::json!({"command": "watch --allow-fixtures --no-local-config --client codex --iterations 6 --debounce-ms 100 --min-scan-interval-ms 0 --install-inventory-disabled --log-rotate-max-size 1 --log-rotate-keep 2 --root <isolated> --log-path <isolated> --state-path <isolated>", "rules": "compiled defaults", "cadence_ms": null, "cold_os_cache": false}),
+        serde_json::json!({"state_bytes": [first_state_bytes, second_state_bytes, valid_state_bytes, no_op_state_bytes], "fd_counts": fd_counts, "rotated_files": rotated_count, "retained_log_bytes": retained_paths.iter().map(|p| fs::metadata(p).unwrap().len()).sum::<u64>(), "retained_event_count": events.len(), "outbox": null, "queue": null}));
 }
 
 #[cfg(unix)]

@@ -349,6 +349,82 @@ valid detections, and clean finite-cycle exit. It requires Linux procfs/inotify,
 so it is evidence for that bounded runtime path rather than a macOS or Windows
 live-watch claim.
 
+#### Reproducible workload measurements (development, not qualification)
+
+The existing CLI cases can additionally write opt-in, machine-readable Linux
+process measurements. From the checkout root, use a persistent private evidence
+directory outside the checkout and set `TMPDIR` to its `tmp` subdirectory:
+
+```sh
+mkdir -p "$EVIDENCE/tmp" "$EVIDENCE/reports"
+export TMPDIR="$EVIDENCE/tmp"
+export TELLTALE_WORKLOAD_REPORT_DIR="$EVIDENCE/reports"
+cargo test --locked --release --test cli production_jsonl_cli_limit_failure_retains_baseline_and_recovers -- --nocapture
+cargo test --locked --release --test cli watch_synthetic_multi_cycle_soak -- --ignored --nocapture
+cargo test --locked --release --test cli watch_idle_durable_future_pending_and_crash_gap_recover -- --nocapture
+cargo test --locked --release --test cli watch_idle_durable_attempt_budget_with_delayed_receiver -- --nocapture
+```
+
+Save commands, exit statuses, and logs beside the reports. Reports include the
+source SHA, tracked dirty-patch hash, CLI binary hash, scoped fixture fingerprint,
+toolchain, profile, features, rule/options description, and host OS/architecture,
+kernel, CPU model and memory (not hostname or host paths). An untracked-file flag
+means the tracked-patch identity alone is incomplete; retain and hash any relevant
+untracked input separately. Fingerprint encoding is length-prefixed ordered input
+bytes, not a directory hash. Source/watch fingerprints cover the listed source
+fixture bytes; construction/repetition/write order comes from the source-bound
+case generator. Durable fingerprints instead cover a deterministic normalized
+generator recipe stored in the report: empty source and setup health generation,
+pending-row seed, crash-gap append, receiver and watch parameters. Paths, random
+setup IDs, runtime timestamps/metadata and ephemeral receiver ports are explicit
+placeholders; seed timing is a relative offset. This binds reproducible inputs and
+operations to the source/patch, not the actual generated event/state/database
+bytes: complete durable byte identity is explicitly unavailable. Different durable
+case parameters produce different recipe fingerprints. Reports overwrite the same case name on rerun, so
+use a separate evidence directory per reviewed tree/profile/run.
+
+The source case measures cold **state** (not cold OS cache), five warm same-version
+process restarts, an oversized physical record, repair/restart and repeated retry.
+It asserts whole-source failure, unchanged baseline/cursor state, no partial
+activity/detection promotion, successful retry, and synthetic-secret absence in
+CLI output, state and canonical JSONL. Cold/repaired activity promotion followed by
+zero warm promotion characterizes activity deduplication with benign input; positive
+detection/dedup evidence comes from the watch case, not that source case.
+The watch case measures six write-to-health
+latencies including debounce, with unchanged-state/dedup, descriptor and rotation
+assertions. Durable cases use an isolated loopback receiver, a seeded pending row
+and fsynced JSONL crash-gap record; they assert persisted retry/recovery or terminal
+budget outcomes without source writes. The slow receiver delays acceptance by
+5.5 seconds. Remote delivery remains **at least once**, not exactly once.
+
+Latency samples and nearest-rank p50/p95/max are descriptive; scan invocation
+latency includes startup and exit. Watch latency excludes its later quiet-period
+check. The durable single sample includes the two post-terminal idle intervals and
+shutdown, not per-event delivery latency. Linux `/proc/<pid>/status` supplies
+observed `VmHWM` (process RSS high-water) and sampled `VmRSS`; short-lived children
+can exit before the final read, so observed high-water is a lower bound, not an
+exact exit peak. Scan invocations additionally use Linux `wait4` `ru_maxrss` for
+the actual child-process exit peak in KiB; watch exit peaks remain unavailable.
+These are distinct kernel accounting views and can differ; do not replace one
+with the other or treat sampled RSS as an exact bound.
+Watch HWM and sampled RSS maxima are process-lifetime cumulative through each
+observation, not independent per-cycle peaks.
+Scan polling is every 2 ms; watch sampling follows its existing
+poll loop. Measurement overhead is included. Missing measurements are JSON `null`,
+never zero or a pass. State/active-log bytes, source-processing counters, retained
+watch generations/events/bytes, descriptors, and durable retained payload rows/
+bytes are recorded where available. Pending limits do not cap retained terminal
+outbox history; source exclusion bytes and byte visits are unavailable here.
+Byte-visit limits are not RSS bounds.
+
+These finite, synthetic development cases do not establish a memory-leak trend,
+post-warm-up growth bound, latency-within-cadence gate, queue-saturation performance,
+all-source saturation, native Windows/macOS behavior, arbitrary backlog recovery,
+cross-version upgrades, or published-artifact qualification. Queue saturation
+remains covered by focused outbox fault tests, not this process measurement run.
+Those missing workload/platform gates remain explicit release evidence gaps;
+UPGRADE-01 remains deferred as documented above.
+
 ### Development evidence before a candidate
 
 For bounded prerelease development, keep evidence tied to the reviewed source
