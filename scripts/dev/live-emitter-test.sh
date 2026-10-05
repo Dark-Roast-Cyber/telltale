@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Live end-to-end test for Telltale event sinks against local Docker services.
 #
-# Nothing here is hardcoded to a deployment: endpoints, ports, and credentials
-# are discovered at runtime from the running containers (`docker port`,
-# container env), exported as process-local environment variables, and written
-# only into the gitignored local/ directory. Safe to run repeatedly.
+# WARNING: Run only against explicitly authorized disposable test targets.
+# This script starts containers, deletes the configured Elasticsearch index,
+# and modifies Splunk indexes and HEC configuration. It is not safe for shared
+# or production services. Endpoints and credentials are discovered from the
+# selected containers; generated local config and scan output go into the
+# gitignored local/ directory. That does not isolate the remote mutations.
 #
 # Requirements:
 #   - docker CLI access to the containers below

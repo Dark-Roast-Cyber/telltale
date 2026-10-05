@@ -111,6 +111,55 @@ This is not RC1-qualified or stable qualification. Sanitization is bounded, not
 perfect secret classification; see the
 [full embedding contract](embedding.md#contextual-investigation-current-development-after-rc1).
 
+### Detailed action findings and context boundary (current development after RC1)
+
+Detailed scanning adds constructor-sanitized in-memory DTOs (`ActionFinding`),
+not Event 3 serialization changes:
+- `ActionFinding` evidence entries (`ActionEvidence`) are redacted before entering
+  the DTO.
+- Same-pass context extraction is controlled by explicit host switches that all
+  default to false (`user_text: false`, `assistant_text: false`, `tool_arguments: false`).
+  Enabling them is an explicit disclosure decision by the host.
+- Neighbor offsets are bounded to at most 32 before and 32 after the anchor
+  observation (`before <= 32`, `after <= 32`).
+- The anchor observation itself is excluded from its own context (`index == anchor`).
+- Tool results, imported observations, and unknown/excluded bodies are strictly
+  excluded from context output.
+- All extracted context text passes through `redact_sensitive_text` before entering
+  `ActionContextEntry` DTOs, bounding each entry to 512 bytes and capping total
+  extracted context text at 32 KiB across the maximum 64 neighbor observations.
+- Context extraction operates entirely in memory on the acquired canonical observations
+  during the same pass, without reopening SQLite databases.
+
+### Structured inventory safe DTOs (current development after RC1)
+
+Structured inventory (`telltale_core::inventory`) emits safe DTOs that project
+privacy-safe metadata rather than machine contents:
+- Local paths are hashed (`path_hash`) using SHA-256; raw paths and caller context
+  stay host-local and are never emitted in telemetry.
+- URL userinfo and credential parameters are redacted (`[redacted-url]`).
+- Command basenames are sanitized including URL redaction; environment variable
+  values, configuration contents, and secrets are never emitted.
+- Static MCP inspection bounds: 64 configuration candidates, 1 MiB of accepted
+  content per file, a 4 MiB aggregate read budget including one-byte overrun probes,
+  and 256 observations plus one content-free exhaustion observation. Each read
+  reserves at most 1 MiB + 1 byte, capped by the remaining budget; only successful
+  reads refund unused allowance. Every failed read retains its full reservation
+  because consumed bytes are unknown, including failures before content is read.
+  Unsupported identities perform no reads and consume no read budget. Reduced
+  remaining capacity can reject an otherwise valid file (`source_limit_exceeded`);
+  exhausted collection bounds report `mcp_inventory_limit_exceeded`, never partial
+  content or silently widened bounds.
+- Codex TOML handling uses a deliberately bounded single-line subset; unsupported
+  syntax inside MCP sections produces an explicit unsupported observation outcome,
+  while only unrelated multiline strings are skipped.
+- Install discovery recognizes platform executable suffixes (`.exe`, `.cmd`,
+  `.bat`, `.ps1`) through platform-aware matching (`InstallPlatform::Windows`).
+- Caller-supplied exact supported sessions (`collect_install_inventory_with_sources`)
+  mark agent presence as `InstallConfidence::Partial` (historical/installed evidence),
+  without discovering sources or reading contents. Discovery does not silently search
+  arbitrary locations.
+
 ## Evidence Classes
 
 Telltale uses five evidence classes, ordered from safest to most sensitive:

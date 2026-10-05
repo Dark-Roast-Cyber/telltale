@@ -27,6 +27,7 @@ PACKAGE_ORDER = telltale-schema telltale-rules telltale-sources telltale-detect 
 .PHONY: telltale-console-check
 .PHONY: version-consistency-check
 .PHONY: session-investigation-check
+.PHONY: embedding-contract-check embedding-rust188-check
 
 ## Check read-only session investigation using only synthetic source fixtures
 session-investigation-check:
@@ -81,7 +82,6 @@ uninstall:
 ## Run tests
 test:
 	cargo test $(CARGO_LOCKED)
-	cargo test $(CARGO_LOCKED) -p telltale-equivalence
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib
@@ -93,7 +93,6 @@ fmt:
 ## Lint
 clippy:
 	cargo clippy $(CARGO_LOCKED) --all-targets -- -D warnings
-	cargo clippy $(CARGO_LOCKED) -p telltale-equivalence --all-targets -- -D warnings
 
 ## Fast local feedback: format, strict Clippy, CLI and embedding library tests
 check-fast: fmt clippy
@@ -110,7 +109,6 @@ check: fmt clippy test
 ## Verify the Linux CI test and contract slice used by local CI and GitHub CI
 ci-linux-test: ci-version-consistency-check
 	cargo test $(CARGO_LOCKED) --quiet
-	cargo test $(CARGO_LOCKED) -p telltale-equivalence --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-core --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --lib --quiet
 	cargo test $(CARGO_LOCKED) -p telltale-sources --features opencode-sqlite --lib --quiet
@@ -138,6 +136,15 @@ producer-provenance-check:
 ## Verify the bounded, read-only LocalEventFeed consumer
 local-event-feed-check:
 	@scripts/local-event-feed-check
+
+## External supported-facade contracts, independently locked from CLI/package checks
+embedding-contract-check:
+	@scripts/embedding-contract-check
+
+## Explicit installed-toolchain qualification of the external Rust 1.88 subset
+embedding-rust188-check:
+	@rustup run 1.88.0 cargo --version >/dev/null || { echo "Install Rust 1.88.0 before running embedding-rust188-check." >&2; exit 1; }
+	@RUSTUP_TOOLCHAIN=1.88.0 CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target/embedding-rust188-check)" scripts/embedding-contract-check
 
 ## Install the exact security gate tool versions
 security-tools:

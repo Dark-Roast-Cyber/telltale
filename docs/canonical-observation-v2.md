@@ -88,9 +88,33 @@ unknown conversational content blocks still reject the whole source.
 
 Existing canonical bounds can reject otherwise supported public Codex shapes:
 developer `response_item` messages with `input_text` accept a 4096-byte string
-but reject 4097 bytes with `CanonicalValidation/unbounded_value`, without
-truncation or partial source output. This characterization does not identify
-the field behind an operational `unbounded_value` failure. Native `TurnItem`
+but reject 4097 bytes with `unbounded_value`, without
+truncation or partial source output. In current development after RC1, Codex
+canonical bound failures carry a content-free `CanonicalBoundContext` through
+`AcquisitionError::CanonicalBoundValidation` and runtime `SourceFailure.acquisition`.
+Schema validation owns the bound dimension; the adapter attributes conversion
+failures to the canonical field being constructed. Builder validation attributes
+assembled fields and facets too. The closed categories are `MessageContent`,
+`MessageContentParts`, `ToolName`, `ToolArguments`, `ToolResult`, `CommandText`,
+`ResourcePath`, `SemanticField` (other body fields), and `SemanticFacet` (other
+facets). Dimensions are `StringBytes`, `EncodedBytes`, `Depth`, `ArrayItems`,
+`ObjectMembers`, and `KeyBytes`. No keys, values, paths, IDs, indices, measured
+sizes, or underlying error strings are retained in this context. Display and
+`code()` remain unchanged; Debug may expose only these closed enums and the code.
+
+This context describes the first existing validation failure, not all violations.
+Limits, validation order, UTF-8 byte accounting, escaped JSON encoded-size
+accounting, and NFC behavior are unchanged: source JSON strings/keys are checked
+before normalization, while assembled canonical text is checked after its existing
+normalization. Ordered content-part wrappers can independently exceed depth,
+cardinality, or encoded-size limits. Native accounting still precedes canonical
+mapping and its failures are not relabeled. There is no second parser, source
+reread, or parallel validator. Failed acquisition returns no successful prefix,
+accounting, or progress. Event3 scanner errors remain the generic
+`canonical_acquisition_failed` projection without this context. Other adapters
+retain their existing code-only acquisition errors.
+
+Native `TurnItem`
 action envelopes such as `event_msg:item_completed` remain unsupported; role
 support alone does not qualify full acquisition.
 

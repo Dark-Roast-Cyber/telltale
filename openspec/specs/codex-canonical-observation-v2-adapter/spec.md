@@ -331,3 +331,42 @@ Source-read, mapping, and validation failures MUST remain bounded and privacy-sa
 - **THEN** acquisition preserves source session and call linkage, structured values,
   and request/result stages without manufacturing execution evidence or restoring
   a filename-derived canonical session
+
+### Requirement: Codex canonical bound diagnostics are closed and content-free
+
+Existing Codex canonical JSON conversion and builder bound failures SHALL retain
+an optional typed canonical field category and bound dimension through acquisition
+and runtime source failure. Schema SHALL own limits and failure dimensions; source
+mapping SHALL own conversion attribution. Categories SHALL be limited to
+MessageContent, MessageContentParts, ToolName, ToolArguments, ToolResult,
+CommandText, ResourcePath, SemanticField, and SemanticFacet. Dimensions SHALL be
+limited to StringBytes, EncodedBytes, Depth, ArrayItems, ObjectMembers, and KeyBytes.
+Context SHALL NOT retain or render raw keys, values, paths, identifiers, indices,
+measured sizes, or underlying errors. `code()` and Display SHALL preserve
+`unbounded_value`; Debug MAY expose only the closed context and code.
+
+Limits, first-failure check order, UTF-8 and escaped encoded-size accounting, and
+existing NFC behavior SHALL remain unchanged. Attribution SHALL consume existing
+failures, without another parser, reread, or parallel validation. Native accounting
+SHALL precede mapping and SHALL NOT have its failures relabeled. Rejection SHALL
+remain source-atomic with no successful observations, accounting, or progress.
+Event3 scanner error projection SHALL remain generic `canonical_acquisition_failed`.
+The existing public code-only CanonicalValidation variant SHALL remain available;
+the new contextual variant SHALL be documented as a Rust exhaustive-match source
+break, not full source compatibility.
+
+#### Scenario: Scalar and assembled bounds retain safe context
+
+- **GIVEN** a synthetic late scalar message, ordered content part, tool argument,
+  tool result, or assembled field/facet exceeds an existing canonical bound
+- **WHEN** any of the three exact Codex identities is acquired
+- **THEN** the existing first failure reports only its closed canonical category
+  and dimension, without source content or a successful prefix
+- **AND** exact-bound accepted payloads and Event3 failure projection are unchanged
+
+#### Scenario: Earlier native accounting failure is not relabeled
+
+- **GIVEN** a synthetic source has both an invalid native attestation and an
+  oversized canonical value
+- **WHEN** acquisition performs native accounting before canonical mapping
+- **THEN** it returns the native accounting failure with no canonical bound context

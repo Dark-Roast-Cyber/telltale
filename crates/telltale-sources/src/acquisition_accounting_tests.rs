@@ -54,8 +54,11 @@ fn codex_developer_input_text_canonical_string_bound_is_source_atomic() {
                     .expect("late bound failure must reject whole source");
                 assert_eq!(
                     error,
-                    AcquisitionError::CanonicalValidation {
-                        code: "unbounded_value"
+                    AcquisitionError::CanonicalBoundValidation {
+                        context: telltale_schema::observation::CanonicalBoundContext {
+                            category: telltale_schema::observation::CanonicalFieldCategory::MessageContentParts,
+                            dimension: telltale_schema::observation::BoundDimension::StringBytes,
+                        }
                     }
                 );
                 assert!(!format!("{error} {error:?}").contains(marker));

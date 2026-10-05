@@ -115,6 +115,7 @@ fn normalize_atomic_results<'a>(
 #[derive(Clone)]
 pub(crate) struct ProcessChainSessionEvaluation {
     results: Vec<DetectorResult>,
+    detailed_results: Option<Vec<DetectorResult>>,
     repeat_counts: BTreeMap<(String, String), u64>,
     suppressed_count: usize,
     pub(crate) projection:
@@ -127,6 +128,9 @@ impl ProcessChainSessionEvaluation {
     }
     pub(crate) fn results(&self) -> &[DetectorResult] {
         &self.results
+    }
+    pub(crate) fn detailed_results(&self) -> &[DetectorResult] {
+        self.detailed_results.as_deref().unwrap_or(&self.results)
     }
 
     pub(crate) fn suppressed_count(&self) -> usize {
@@ -165,6 +169,17 @@ pub(crate) fn evaluate_tool_process_chain_session_with_budget(
     config: &ProcessChainSessionConfig,
     budget: &mut super::session::RetentionBudget,
 ) -> Result<ProcessChainSessionEvaluation, DetectionError> {
+    evaluate_tool_process_chain_views(rules, observations, context, config, budget, false)
+}
+
+pub(crate) fn evaluate_tool_process_chain_views(
+    rules: &CompiledProcessChainRules,
+    observations: &[&CanonicalObservationV2],
+    context: &ProcessChainContext,
+    config: &ProcessChainSessionConfig,
+    budget: &mut super::session::RetentionBudget,
+    detailed: bool,
+) -> Result<ProcessChainSessionEvaluation, DetectionError> {
     let mut matches = Vec::new();
     for (observation_index, observation) in observations.iter().enumerate() {
         matches.extend(evaluate_tool_process_chain_matches(
@@ -188,6 +203,32 @@ pub(crate) fn evaluate_tool_process_chain_session_with_budget(
         (None, None) => std::cmp::Ordering::Equal,
     });
 
+    let mut output = finish_process_matches(rules, &matches, observations, config, budget)?;
+    if detailed
+        && observations.iter().any(|o| {
+            o.source().ingestion_mode() == telltale_schema::observation::IngestionMode::Import
+        })
+    {
+        let filtered = matches
+            .into_iter()
+            .filter(|m| {
+                observations[m.observation_index].source().ingestion_mode()
+                    != telltale_schema::observation::IngestionMode::Import
+            })
+            .collect::<Vec<_>>();
+        output.detailed_results =
+            Some(finish_process_matches(rules, &filtered, observations, config, budget)?.results);
+    }
+    Ok(output)
+}
+
+fn finish_process_matches(
+    rules: &CompiledProcessChainRules,
+    matches: &[ProcessChainWorkingMatch],
+    observations: &[&CanonicalObservationV2],
+    config: &ProcessChainSessionConfig,
+    budget: &mut super::session::RetentionBudget,
+) -> Result<ProcessChainSessionEvaluation, DetectionError> {
     let mut occurrence_ids = BTreeMap::new();
     let mut next_occurrence_id = 0;
     let candidates = matches
@@ -314,6 +355,7 @@ pub(crate) fn evaluate_tool_process_chain_session_with_budget(
 
     Ok(ProcessChainSessionEvaluation {
         results,
+        detailed_results: None,
         repeat_counts,
         suppressed_count: semantics.suppression.suppressed_count,
         projection,

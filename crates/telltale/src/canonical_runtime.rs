@@ -22,6 +22,8 @@ use telltale_sources::acquisition::{
 pub struct SourceResult {
     pub events: Vec<Event>,
     pub occurrences: Vec<telltale_detect::v2::event3::ProjectedOccurrence>,
+    pub action_findings: Vec<telltale_detect::v2::ActionFinding>,
+    pub semantic_provenance: telltale_detect::v2::SemanticProvenance,
     pub progress: AcquisitionProgress,
     pub completion: EvaluationCompletion,
     pub accounting: SourceAccounting,
@@ -119,6 +121,26 @@ pub fn process_source(
     sqlite: Option<OpenCodeSqliteReadOptions>,
     context: SourceContext<'_>,
 ) -> Result<SourceResult, SourceFailure> {
+    process_source_inner(source, observed_at, sqlite, context, None)
+}
+
+pub fn process_source_detailed(
+    source: &Source,
+    observed_at: ObservedAt,
+    sqlite: Option<OpenCodeSqliteReadOptions>,
+    context: SourceContext<'_>,
+    options: &telltale_detect::v2::DetailedEvaluationOptions,
+) -> Result<SourceResult, SourceFailure> {
+    process_source_inner(source, observed_at, sqlite, context, Some(options))
+}
+
+fn process_source_inner(
+    source: &Source,
+    observed_at: ObservedAt,
+    sqlite: Option<OpenCodeSqliteReadOptions>,
+    context: SourceContext<'_>,
+    detailed: Option<&telltale_detect::v2::DetailedEvaluationOptions>,
+) -> Result<SourceResult, SourceFailure> {
     let (resolved, instance) = verified_source(source).map_err(|_| SourceFailure {
         stage: FailureStage::SourceScope,
         progress: AcquisitionProgress::None,
@@ -134,31 +156,47 @@ pub fn process_source(
         progress: AcquisitionProgress::None,
         acquisition: Some(error),
     })?;
-    finish_batch(source, &instance, batch, context)
+    finish_batch_with_options(source, &instance, batch, context, detailed)
 }
 
 /// Source-atomic composition after acquisition by this module.
+#[cfg(test)]
 fn finish_batch(
     source: &Source,
     instance: &CorrelationId,
     batch: AcquisitionBatch,
     context: SourceContext<'_>,
 ) -> Result<SourceResult, SourceFailure> {
+    finish_batch_with_options(source, instance, batch, context, None)
+}
+
+fn finish_batch_with_options(
+    source: &Source,
+    instance: &CorrelationId,
+    batch: AcquisitionBatch,
+    context: SourceContext<'_>,
+    detailed: Option<&telltale_detect::v2::DetailedEvaluationOptions>,
+) -> Result<SourceResult, SourceFailure> {
     let fail = |stage| SourceFailure {
         stage,
         progress: batch.progress,
         acquisition: None,
     };
-    let evaluation = evaluate_source(
-        CanonicalSourceInput {
-            client: source.client,
-            source_id: &source.source_id,
-            source_instance: Some(instance),
-            observations: &batch.observations,
-        },
-        context.rules,
-        context.process,
-    )
+    let input = CanonicalSourceInput {
+        client: source.client,
+        source_id: &source.source_id,
+        source_instance: Some(instance),
+        observations: &batch.observations,
+    };
+    let evaluation = match detailed {
+        Some(options) => telltale_detect::v2::evaluate_source_with_options(
+            input,
+            context.rules,
+            context.process,
+            options,
+        ),
+        None => evaluate_source(input, context.rules, context.process),
+    }
     .map_err(|_| fail(FailureStage::Evaluation))?;
     let sessions = batch
         .accounting
@@ -252,6 +290,15 @@ fn finish_batch(
     projected.events.extend(activity.events);
     projected.events.extend(mcp);
     Ok(SourceResult {
+        action_findings: evaluation
+            .sessions()
+            .iter()
+            .flat_map(|s| s.action_findings().iter().cloned())
+            .collect(),
+        semantic_provenance: detailed.map_or_else(
+            || context.rules.semantic_provenance(),
+            |options| context.rules.semantic_provenance_with_options(options),
+        ),
         events: projected.events,
         occurrences: projected.occurrences,
         completion: projected.completion,

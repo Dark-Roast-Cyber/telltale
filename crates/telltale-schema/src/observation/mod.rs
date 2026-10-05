@@ -986,16 +986,96 @@ impl ValidationCode {
     }
 }
 
+/// The violated canonical JSON limit, never a measured size or source location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundDimension {
+    StringBytes,
+    EncodedBytes,
+    Depth,
+    ArrayItems,
+    ObjectMembers,
+    KeyBytes,
+}
+
+/// Closed semantic categories; arbitrary source keys and facet names are excluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanonicalFieldCategory {
+    MessageContent,
+    MessageContentParts,
+    ToolName,
+    ToolArguments,
+    ToolResult,
+    CommandText,
+    ResourcePath,
+    SemanticField,
+    SemanticFacet,
+}
+
+impl CanonicalFieldCategory {
+    fn semantic_field(path: &str) -> Self {
+        match path {
+            "message.content" => Self::MessageContent,
+            "message.content_parts" => Self::MessageContentParts,
+            "tool.name" => Self::ToolName,
+            "tool.arguments" => Self::ToolArguments,
+            "tool.result" => Self::ToolResult,
+            _ => Self::SemanticField,
+        }
+    }
+
+    fn facet(name: &str) -> Self {
+        match name {
+            "command.text" => Self::CommandText,
+            "resource.path" => Self::ResourcePath,
+            _ => Self::SemanticFacet,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanonicalBoundContext {
+    pub category: CanonicalFieldCategory,
+    pub dimension: BoundDimension,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObservationError {
     code: ValidationCode,
+    bound_dimension: Option<BoundDimension>,
+    bound_category: Option<CanonicalFieldCategory>,
 }
 impl ObservationError {
     pub(crate) fn new(code: ValidationCode) -> Self {
-        Self { code }
+        Self {
+            code,
+            bound_dimension: None,
+            bound_category: None,
+        }
     }
     pub fn from_validation_code(code: ValidationCode) -> Self {
-        Self { code }
+        Self::new(code)
+    }
+    pub(crate) fn bound(dimension: BoundDimension) -> Self {
+        Self {
+            bound_dimension: Some(dimension),
+            ..Self::new(ValidationCode::UnboundedValue)
+        }
+    }
+    pub fn bound_dimension(&self) -> Option<BoundDimension> {
+        self.bound_dimension
+    }
+    pub fn bound_context(&self) -> Option<CanonicalBoundContext> {
+        Some(CanonicalBoundContext {
+            category: self.bound_category?,
+            dimension: self.bound_dimension?,
+        })
+    }
+    /// Attribute an existing bound failure without changing non-bound errors.
+    pub fn with_bound_category(mut self, category: CanonicalFieldCategory) -> Self {
+        if self.bound_dimension.is_some() {
+            self.bound_category = Some(category);
+        }
+        self
     }
     pub fn code(&self) -> &'static str {
         self.code.as_str()
@@ -1618,18 +1698,21 @@ fn validate_semantic_json_bounds(
     body: &ObservationBody,
     facets: &BTreeMap<String, SemanticFacet>,
 ) -> Result<(), ObservationError> {
-    for (_, value) in body.semantic_fields() {
-        validate_bounded_json(&value)?;
+    for (path, value) in body.semantic_fields() {
+        validate_bounded_json(&value).map_err(|error| {
+            error.with_bound_category(CanonicalFieldCategory::semantic_field(&path))
+        })?;
     }
-    for facet in facets.values() {
-        validate_bounded_json(facet.value())?;
+    for (name, facet) in facets {
+        validate_bounded_json(facet.value())
+            .map_err(|error| error.with_bound_category(CanonicalFieldCategory::facet(name)))?;
     }
     Ok(())
 }
 
 fn validate_bounded_json(value: &JsonValue) -> Result<(), ObservationError> {
     if value::bounded_json_bytes(value, 1)? > LOCAL_MAX_VALUE_BYTES {
-        return Err(ObservationError::new(ValidationCode::UnboundedValue));
+        return Err(ObservationError::bound(BoundDimension::EncodedBytes));
     }
     Ok(())
 }

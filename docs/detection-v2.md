@@ -265,6 +265,113 @@ Current-development embedding occurrences after RC1 are produced in this same
 embedding API. Process/correlation occurrences carry no selector evidence fields
 and omit per-step times for multi-observation findings.
 
+### Detailed action findings (current development)
+
+`evaluate_source_with_options` and core `Pipeline::scan_sources_detailed` /
+`scan_root_detailed` add detailed action findings beside Event3 events and existing
+coordinate-based occurrences. Event3 output is unchanged for equivalent processing
+configuration; opting into process-chain processing can add events. They consume the same acquisition;
+there is no source-to-`NormalizedRecord` bridge, second source read, or Event4
+projection. Tool intent, tool output, conversation, and authored file content
+have distinct interpretation surfaces. Imported Codex turns retain import
+provenance and are inert for action findings and supplementary context.
+
+`ActionFinding` is an immutable, constructor-sanitized detailed output DTO:
+- `coordinate()` returns `&ActionCoordinate`, identifying the host-facing action
+  grouping. It is not a native `Finding` ID.
+- `canonical_findings()` returns `&[CanonicalActionFinding]`, exposing native
+  semantic `Finding` identities emitted from the authoritative
+  `DetectorResult -> Signal -> Finding` pipeline (`finding_id`, `signal_ids`,
+  `observation_ids`, `detector_id`, `finding_kind`, `category`, `severity`,
+  `risk_points`).
+- `promotion_score()` represents the host action contribution sum. This value is
+  not the native `Finding` risk points and is not the Event 3 session score. Keep
+  those values and their analytical purposes distinct.
+- Finding kinds are transparently distinguished through `ActionFindingKind::Atomic`
+  and `ActionFindingKind::Correlation`.
+- Severity and risk points are analytic metadata derived from detector content and
+  rules, not source-reported facts; canonical stage, supporting observation IDs, and
+  `occurred_at` timestamps are source-reported only. Actual operating system execution
+  is never inferred from tool intent.
+- Opt-in process-chain findings exist via `DetailedEvaluationOptions::process_chain = true`,
+  which loads the bundled process pack; it shares matching rather than performing a
+  second source read. The Event3 event schema remains unchanged, and Event 3 equality
+  promises hold only for equivalent configuration.
+
+Category chains and downloaded-artifact correlations enforce strict temporal and
+syntactic bounds:
+- Category-bearing chains are ordered within a 15-minute source-time window
+  (`ACTION_CHAIN_WINDOW_SECONDS = 900`), recognizing distinct actions.
+- Rule-ID-only modifiers are same-action only; generic ordered cross-action modifiers
+  remain unsupported.
+- Bundled downloaded-artifact correlation links supported download and execution
+  forms. Repeated meaningful linked download requires a literal artifact match,
+  temporal ordering, and valid source time; unknown or unsupported shell syntax
+  does not establish a link. Each download can complete once, including later
+  independent downloads.
+- Default action-only download-link promotion score is 50
+  (`DEFAULT_ACTION_DOWNLOAD_LINK_SCORE`), while the frozen Event 3 compatibility
+  modifier remains 35. Custom effective scores are honored, and an explicit
+  `linked_download_score` option may override the action score (0–100).
+- Native profile adjustments apply only to bundled rule predicates; effective custom
+  rules with matching IDs preserve their own matcher content over action fields.
+
+Optional replay comparison identity (`ReplayIdentity`, algorithm version 1) is an
+opaque comparison aid, not coordinate-based, and not `OccurrenceId`, an authentication
+token, a durable cursor, or proof of unchanged history. Its framed semantic action
+preimage includes adapter type, family/stage, source time, source-reported call ID, and
+action view fields; coordinates (`observation_id`), session identifiers, timeline indexes,
+scan clocks, and source paths are excluded. Missing source time yields `None`; ambiguous
+identical semantic candidates retain the whole acquisition and yield `None` (never a
+silent collapse); and process-chain findings replay is always `None`. Validated
+`OccurrenceId` coordinates (`obs:v2:sha256:<digest>`) remain distinct and unchanged.
+Continuations that preserve those inputs can compare equal; changed call IDs or
+timestamps are not promised equal, and truthful continued-session support is not
+universal authentication.
+
+Startup `Pipeline::semantic_provenance(options)` computes the exact detailed-scan
+semantic identity before acquisition so a host can compare startup configuration
+with each detailed result:
+- The preimage frames: domain tag `telltale:action-semantic-provenance:v1\0`,
+  the effective rule fingerprint from `export.fingerprint()`,
+  `ACTION_SEMANTICS_VERSION` (2), `NATIVE_ACTION_PROFILE_VERSION` (2),
+  `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
+  `process_chain` flag (including the bundled process chain YAML when enabled).
+- It does not hash context options, host YAML/path resolution, binary artifact
+  identity, or per-event attestation.
+- Hosts requiring binary identity must bind the exact binary and revision separately.
+- The existing closed `ProducerProvenanceManifestV1` has a different operational
+  scope and is not replaced by this semantic identity.
+
+Same-pass context extraction allows hosts to retrieve surrounding conversation
+and tool call context without reopening SQLite databases or performing secondary reads:
+- Content disclosure switches default to false (`user_text: false`,
+  `assistant_text: false`, `tool_arguments: false`). Enabling them is an explicit
+  disclosure decision by the host.
+- Neighbor offsets are bounded to at most 32 before and 32 after the anchor
+  observation (`before <= 32`, `after <= 32`) in the same session.
+- Only explicitly enabled user/assistant messages and non-result tool observations
+  at proposed, requested, started, or completed stages can contribute.
+- The anchor observation itself is excluded from its own context (`index == anchor`).
+- Tool results, imported observations, and unknown or excluded bodies are excluded.
+- All extracted text is sanitized by the privacy boundary (`redact_sensitive_text`)
+  before entering `ActionContextEntry` DTOs, bounding each entry to 512 bytes and
+  capping total extracted context text at 32 KiB across the maximum 64 neighbor observations.
+
+`bundled_rule_catalog(options)` exposes safe immutable presentation metadata:
+- Returns deterministically ID-ordered `RuleCatalogEntry` records containing
+  `id`, `kind`, `title`, `explanation`, `falsepositives`, `category`, `severity`,
+  `session_score`, `action_score`, `action_ordered`, `action_within_seconds`,
+  and `action_link`.
+- Session scores describe frozen compatibility contributions; action scores
+  describe individual native contributions, not host promotion totals.
+- It exposes supported immutable rule metadata, not detector internals, custom
+  documents, policy overrides, or an executable process AST.
+
+Core DTOs are non-exhaustive. Pipeline configuration/discovery/clock/compile
+errors are typed `PipelineError`, whose safe rendering uses closed diagnostic
+codes separate from its preserved inspectable error source.
+
 ### Completion and scanner transaction gates
 
 Successful evaluation returns `Complete` or `VisibilityLimited`. Missing scope,

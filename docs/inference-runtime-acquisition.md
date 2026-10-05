@@ -369,10 +369,11 @@ macOS/Windows qualification and deployed OpenShell/provider interoperability
 are separate later evidence gates, not blockers or implied coverage of the
 Linux synthetic normalizer/mapping acceptance above.
 
-## Equivalence harness
+## Detection v2 equivalence tests
 
-The non-publishable, non-default workspace member `telltale-equivalence` owns the test-only
-`inference_session_equivalence` harness. It uses local synthetic JSON/streams and
+Detection v2 owns the ordinary unit-test module
+`inference_session_equivalence_tests`.
+It uses local synthetic JSON/streams and
 temporary native stores, not live inference or production integration. It compares
 message role/text, tool name/object arguments,
 explicit call IDs, string results, captured error state, and definition name/change.
@@ -384,7 +385,7 @@ inference's unsupported execution, Copilot's unsupported user context and missin
 error state, and unknown execution visibility in OpenClaw/Qwen/Copilot. An
 OpenCode execution-state fixture is distinct from a returned result. Command-text
 detector hits never establish observed execution. Comparisons classify equivalent
-facts, expected capability differences, or defects; defects fail the harness.
+facts, expected capability differences, or defects; defects fail the tests.
 
 Claude object tool-request arguments now derive the parsed `command.text` facet
 from a string `command`, falling back to a string `cmd`, like other native adapters.

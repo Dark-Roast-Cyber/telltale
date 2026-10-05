@@ -4,14 +4,12 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use telltale_detect::timeline::{ExportedSessionTimeline, build_content_free_canonical_timeline};
-use telltale_schema::event::redact_sensitive_text;
 use telltale_schema::event::{
     Event3Activity, Event3Family, Event3Record, path_hash, terminal_session_id,
 };
 use telltale_schema::observation::ObservedAt;
 use telltale_schema::observation::{
-    CanonicalObservationV2, ContentPartKind, JsonValue, MessageRole, ObservationBody,
-    ObservationStage,
+    CanonicalObservationV2, MessageRole, ObservationBody, ObservationStage,
 };
 use telltale_schema::source::Source;
 use telltale_sources::acquisition::{
@@ -58,6 +56,7 @@ impl InvestigationConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum InvestigationResult {
     Found(InvestigatedSession),
     /// Source context cannot be read, including a deferred provider such as
@@ -68,6 +67,7 @@ pub enum InvestigationResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SourceUnavailableReason {
     ReadOnlyProviderUnavailable,
     Missing,
@@ -79,12 +79,14 @@ pub enum SourceUnavailableReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SessionUnavailableReason {
     ExactSessionAbsent,
     NoTimeline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NotLocallyResolvableReason {
     InvalidLimits,
     EventLimitExceeded,
@@ -147,6 +149,7 @@ impl InvestigationResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InvestigatedSession {
     /// Always content-free, including an empty evidence vector on every entry.
     pub timeline: ExportedSessionTimeline,
@@ -154,6 +157,7 @@ pub struct InvestigatedSession {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InvestigationAnchor {
     pub recorded_entry_index: usize,
     /// Present-day entry at that exact index, not proof of historical equality.
@@ -226,56 +230,23 @@ impl SessionInvestigator {
         let end = (anchor_index + request.after + 1).min(observations.len());
         let mut entries = Vec::new();
         for (index, observation) in observations.iter().enumerate().take(end).skip(start) {
-            let text = match observation.body() {
-                ObservationBody::Message(message) => {
-                    let enabled = match message.role() {
-                        Some(MessageRole::User) => request.content.user_text,
-                        Some(MessageRole::Assistant) => request.content.assistant_text,
-                        _ => continue,
-                    };
-                    enabled.then(|| {
-                        message
-                            .content()
-                            .and_then(json_string)
-                            .into_iter()
-                            .chain(
-                                message
-                                    .content_parts()
-                                    .iter()
-                                    .filter(|part| part.kind() == ContentPartKind::Text)
-                                    .filter_map(|part| json_string(part.value())),
-                            )
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                }
-                ObservationBody::Tool(tool)
-                    if observation.stage() != ObservationStage::ToolResultReturned =>
-                {
-                    if request.content.tool_arguments {
-                        tool.searchable_arguments()
-                            .map(ToOwned::to_owned)
-                            .or_else(|| {
-                                tool.arguments()
-                                    .and_then(|arguments| {
-                                        telltale_schema::observation::canonical_identity_json(
-                                            arguments,
-                                        )
-                                        .ok()
-                                    })
-                                    .and_then(|bytes| String::from_utf8(bytes).ok())
-                            })
-                    } else {
-                        None
-                    }
-                }
-                ObservationBody::Session(_) => None,
+            match observation.body() {
+                ObservationBody::Message(message)
+                    if matches!(
+                        message.role(),
+                        Some(MessageRole::User | MessageRole::Assistant)
+                    ) => {}
+                ObservationBody::Tool(_)
+                    if observation.stage() != ObservationStage::ToolResultReturned => {}
+                ObservationBody::Session(_) => {}
                 _ => continue,
-            };
-            let text = text
-                .filter(|text| !text.trim().is_empty())
-                .map(|text| redact_sensitive_text(&text))
-                .filter(|text| !text.trim().is_empty());
+            }
+            let mut content = telltale_detect::v2::ContextOptions::default();
+            content.user_text = request.content.user_text;
+            content.assistant_text = request.content.assistant_text;
+            content.tool_arguments = request.content.tool_arguments;
+            let text = telltale_detect::v2::actions::project_context(observation, &content)
+                .map(|(_, text, _)| text);
             let metadata = &found.timeline.entries[index];
             entries.push(ContextEntry {
                 index,
@@ -482,14 +453,6 @@ impl SessionInvestigator {
     }
 }
 
-fn json_string(value: &JsonValue) -> Option<&str> {
-    if let JsonValue::String(text) = value {
-        Some(text)
-    } else {
-        None
-    }
-}
-
 // No Debug implementation: Event3 and the anchor are caller-owned inputs, not
 // terminal public context metadata.
 pub struct ContextInvestigationRequest<'a> {
@@ -514,6 +477,7 @@ pub struct ContextContent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ContextInvestigationResult {
     Found(OccurrenceContext),
     SourceUnavailable(SourceUnavailableReason),
@@ -523,6 +487,7 @@ pub enum ContextInvestigationResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AnchorUnavailableReason {
     OccurrenceAbsent,
     TimelineIndexAbsent,
@@ -552,6 +517,7 @@ impl ContextInvestigationResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
 pub struct OccurrenceContext {
     pub anchor_index: usize,
     pub entries: Vec<ContextEntry>,
@@ -559,6 +525,7 @@ pub struct OccurrenceContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
 pub struct ContextEntry {
     pub index: usize,
     pub kind: &'static str,
@@ -586,6 +553,7 @@ fn source_failure_reason(error: AcquisitionError) -> SourceUnavailableReason {
         AcquisitionError::InvalidAttestation
         | AcquisitionError::InvalidContribution
         | AcquisitionError::CanonicalMapping { .. }
+        | AcquisitionError::CanonicalBoundValidation { .. }
         | AcquisitionError::CanonicalValidation { .. } => SourceUnavailableReason::MalformedSource,
         // These are rejected before acquisition; keep failure private if reached.
         AcquisitionError::UnsupportedSourceIdentity

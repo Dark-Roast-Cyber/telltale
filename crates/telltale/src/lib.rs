@@ -53,22 +53,78 @@ pub use telltale_schema::provenance::{
 pub use telltale_schema::record::{NormalizedRecord, RecordKind};
 pub use telltale_schema::scoring::{RiskAccountingError, RiskContribution, RiskContributionType};
 pub use telltale_schema::source::Source;
-pub use telltale_sources::discovery::DiscoveryError;
+pub use telltale_sources::discovery::{
+    DiscoveryError, discover_sources, discover_sources_best_effort,
+    discover_watch_roots_for_clients,
+};
 pub use telltale_sources::paths::PathProfile;
 
 use std::path::Path;
 
 type BoxError = Box<dyn std::error::Error>;
+/// Operational pipeline failures retain their original error for inspection,
+/// but their Display/Debug never renders paths, configuration, or source text.
+#[non_exhaustive]
+pub enum PipelineError {
+    Discovery(DiscoveryError),
+    Clock(BoxError),
+    Compilation(BoxError),
+    InvalidConfiguration,
+    InvalidOptions,
+}
+impl std::fmt::Display for PipelineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Discovery(_) => "pipeline_discovery_failed",
+            Self::Clock(_) => "pipeline_clock_failed",
+            Self::Compilation(_) => "pipeline_compilation_failed",
+            Self::InvalidConfiguration => "pipeline_no_rule_documents",
+            Self::InvalidOptions => "pipeline_invalid_options",
+        })
+    }
+}
+impl std::fmt::Debug for PipelineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+impl std::error::Error for PipelineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Discovery(error) => Some(error),
+            Self::Clock(error) | Self::Compilation(error) => Some(error.as_ref()),
+            Self::InvalidConfiguration | Self::InvalidOptions => None,
+        }
+    }
+}
+impl From<DiscoveryError> for PipelineError {
+    fn from(error: DiscoveryError) -> Self {
+        Self::Discovery(error)
+    }
+}
+
+pub use telltale_detect::v2::{
+    ActionContextEntry, ActionContribution, ActionCoordinate, ActionEvidence, ActionFinding,
+    ActionFindingKind, CanonicalActionFinding, ContextOptions, DEFAULT_ACTION_DOWNLOAD_LINK_SCORE,
+    DetailedEvaluationOptions, EvaluationCompletion, ReplayIdentity, SemanticProvenance,
+};
+mod rule_catalog;
+pub use rule_catalog::{RuleCatalogEntry, RuleCatalogKind, bundled_rule_catalog};
 type SourceOutcome = Result<canonical_runtime::SourceResult, canonical_runtime::SourceFailure>;
 
 /// One source's session-scoped events and their precise detection occurrences.
+#[non_exhaustive]
 pub struct SourceScan {
     pub source: Source,
     pub events: Vec<Event>,
     pub occurrences: Vec<DetectionOccurrence>,
+    pub action_findings: Vec<ActionFinding>,
+    pub semantic_provenance: Option<SemanticProvenance>,
+    pub completion: Option<EvaluationCompletion>,
 }
 
 /// A canonical observation associated with a finding, without content or paths.
+#[non_exhaustive]
 pub struct DetectionOccurrence {
     pub identity: OccurrenceId,
     /// Index into the containing [`SourceScan::events`], not an Event3 identity.
@@ -89,6 +145,11 @@ pub struct DetectionOccurrence {
 pub struct OccurrenceId(String);
 
 impl OccurrenceId {
+    /// Coordinate identity for an action finding; distinct from its optional
+    /// replay identity. This never hashes or reparses evidence.
+    pub fn from_action_finding(finding: &ActionFinding) -> Self {
+        Self(finding.observation_id().to_owned())
+    }
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -122,14 +183,31 @@ impl SourceScan {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok((result.events, occurrences))
+            Ok((
+                result.events,
+                occurrences,
+                result.action_findings,
+                Some(result.semantic_provenance),
+                Some(result.completion),
+            ))
         });
-        let (events, occurrences) =
-            result.unwrap_or_else(|error| (vec![error.event(&source)], Vec::new()));
+        let (events, occurrences, action_findings, semantic_provenance, completion) = result
+            .unwrap_or_else(|error| {
+                (
+                    vec![error.event(&source)],
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                )
+            });
         Self {
             source,
             events,
             occurrences,
+            action_findings,
+            semantic_provenance,
+            completion,
         }
     }
 }
@@ -160,10 +238,45 @@ impl Pipeline {
         self.rule_set.rule_count()
     }
 
+    /// Resolve the exact detailed-scan semantic identity before acquisition.
+    /// Compiles in-memory content and validates switches; performs no source I/O.
+    pub fn semantic_provenance(
+        &self,
+        options: &DetailedEvaluationOptions,
+    ) -> Result<SemanticProvenance, PipelineError> {
+        let (rules, _) = self.compile_semantics(Some(options))?;
+        Ok(rules.semantic_provenance_with_options(options))
+    }
+
+    fn compile_semantics(
+        &self,
+        options: Option<&DetailedEvaluationOptions>,
+    ) -> Result<
+        (
+            telltale_detect::v2::RuleV1CompatibilityPlan,
+            Option<telltale_rules::process_chain::CompiledProcessChainRules>,
+        ),
+        PipelineError,
+    > {
+        if let Some(options) = options {
+            options
+                .validate()
+                .map_err(|_| PipelineError::InvalidOptions)?;
+        }
+        let rules = telltale_detect::v2::compile_rule_v1(&self.rule_set.compatibility_export())
+            .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
+        let process = options
+            .filter(|options| options.process_chain)
+            .map(|_| telltale_rules::process_chain::load_default_process_chain_rules())
+            .transpose()
+            .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
+        Ok((rules, process))
+    }
+
     /// Discover session stores under `root` and run canonical detection and activity.
     /// Source processing failures surface as `scanner_error` events; discovery
     /// and rule compilation failures return `Err`. No baseline or cursor is persisted.
-    pub fn scan_root(&self, root: &Path) -> Result<Vec<(Source, Event)>, BoxError> {
+    pub fn scan_root(&self, root: &Path) -> Result<Vec<(Source, Event)>, PipelineError> {
         let sources = telltale_sources::discovery::discover_sources(root)?;
         self.scan_sources(&sources)
     }
@@ -173,7 +286,7 @@ impl Pipeline {
     /// projection (including timeline anchors) as [`Self::scan_root`]. Source
     /// processing failures surface as `scanner_error` events. No discovery,
     /// baseline, cursor, or output persistence is performed.
-    pub fn scan_sources(&self, sources: &[Source]) -> Result<Vec<(Source, Event)>, BoxError> {
+    pub fn scan_sources(&self, sources: &[Source]) -> Result<Vec<(Source, Event)>, PipelineError> {
         Ok(self
             .scan_sources_with_occurrences(sources)?
             .into_iter()
@@ -187,7 +300,10 @@ impl Pipeline {
 
     /// Discover stores and return the same events with precise occurrence linkage.
     /// This current-development addition is not part of published RC1 artifacts.
-    pub fn scan_root_with_occurrences(&self, root: &Path) -> Result<Vec<SourceScan>, BoxError> {
+    pub fn scan_root_with_occurrences(
+        &self,
+        root: &Path,
+    ) -> Result<Vec<SourceScan>, PipelineError> {
         let sources = telltale_sources::discovery::discover_sources(root)?;
         self.scan_sources_with_occurrences(&sources)
     }
@@ -200,12 +316,46 @@ impl Pipeline {
     pub fn scan_sources_with_occurrences(
         &self,
         sources: &[Source],
-    ) -> Result<Vec<SourceScan>, BoxError> {
+    ) -> Result<Vec<SourceScan>, PipelineError> {
+        self.scan_sources_inner(sources, None)
+    }
+
+    /// Add action-scoped findings, replay comparison aids and opt-in context to
+    /// the same acquired batch. Event3 and existing occurrence meanings are unchanged.
+    pub fn scan_sources_detailed(
+        &self,
+        sources: &[Source],
+        options: &DetailedEvaluationOptions,
+    ) -> Result<Vec<SourceScan>, PipelineError> {
+        self.scan_sources_inner(sources, Some(options))
+    }
+
+    pub fn scan_root_detailed(
+        &self,
+        root: &Path,
+        options: &DetailedEvaluationOptions,
+    ) -> Result<Vec<SourceScan>, PipelineError> {
+        let sources = telltale_sources::discovery::discover_sources(root)?;
+        self.scan_sources_detailed(&sources, options)
+    }
+
+    fn scan_sources_inner(
+        &self,
+        sources: &[Source],
+        detailed: Option<&DetailedEvaluationOptions>,
+    ) -> Result<Vec<SourceScan>, PipelineError> {
+        if let Some(options) = detailed {
+            options
+                .validate()
+                .map_err(|_| PipelineError::InvalidOptions)?;
+        }
         let now = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)?;
-        let observed_at = telltale_schema::observation::ObservedAt::new(now)?;
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| PipelineError::Clock(Box::new(e)))?;
+        let observed_at = telltale_schema::observation::ObservedAt::new(now)
+            .map_err(|e| PipelineError::Clock(Box::new(e)))?;
         Ok(self
-            .scan_canonical_sources(sources, observed_at)?
+            .scan_canonical_sources_with_options(sources, observed_at, detailed)?
             .into_iter()
             .map(|(source, result)| SourceScan::from_result(source, result))
             .collect())
@@ -213,33 +363,52 @@ impl Pipeline {
 
     /// Stateless adapter. One observation time for the entire source batch.
     /// No prior baseline means no deviation history; replacement remains data.
+    #[cfg(test)]
     fn scan_canonical_sources(
         &self,
         sources: &[Source],
         observed_at: telltale_schema::observation::ObservedAt,
-    ) -> Result<Vec<(Source, SourceOutcome)>, BoxError> {
-        let rules = telltale_detect::v2::compile_rule_v1(&self.rule_set.compatibility_export())?;
+    ) -> Result<Vec<(Source, SourceOutcome)>, PipelineError> {
+        self.scan_canonical_sources_with_options(sources, observed_at, None)
+    }
+
+    fn scan_canonical_sources_with_options(
+        &self,
+        sources: &[Source],
+        observed_at: telltale_schema::observation::ObservedAt,
+        detailed: Option<&DetailedEvaluationOptions>,
+    ) -> Result<Vec<(Source, SourceOutcome)>, PipelineError> {
+        let (rules, process_rules) = self.compile_semantics(detailed)?;
         let prior = telltale_detect::baseline::BaselineSnapshotStore::default();
+        let process_config = telltale_detect::process_chain::ProcessChainConfig::default();
         Ok(sources
             .iter()
             .map(|source| {
-                (
-                    source.clone(),
-                    canonical_runtime::process_source(
+                let context = canonical_runtime::SourceContext {
+                    mcp_servers: &[],
+                    rules: &rules,
+                    pre_policy_rules: None,
+                    process: process_rules.as_ref().map(|rules| (rules, &process_config)),
+                    prior: &prior,
+                    baseline_deviation: telltale_detect::baseline::BaselineDeviationConfig::default(
+                    ),
+                };
+                let result = match detailed {
+                    Some(options) => canonical_runtime::process_source_detailed(
                         source,
                         observed_at.clone(),
                         None,
-                        canonical_runtime::SourceContext {
-                            mcp_servers: &[],
-                            rules: &rules,
-                            pre_policy_rules: None,
-                            process: None,
-                            prior: &prior,
-                            baseline_deviation:
-                                telltale_detect::baseline::BaselineDeviationConfig::default(),
-                        },
+                        context,
+                        options,
                     ),
-                )
+                    None => canonical_runtime::process_source(
+                        source,
+                        observed_at.clone(),
+                        None,
+                        context,
+                    ),
+                };
+                (source.clone(), result)
             })
             .collect())
     }
@@ -295,28 +464,28 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Pipeline, BoxError> {
+    pub fn build(self) -> Result<Pipeline, PipelineError> {
         let mut documents: Vec<&str> = Vec::new();
         if !self.custom_only {
             documents.push(telltale_rules::bundled_default_rule_yaml());
         }
         documents.extend(self.extra_rule_documents.iter().map(String::as_str));
         if documents.is_empty() {
-            return Err(
-                "no rule documents provided; remove without_bundled_defaults or add rules_document"
-                    .into(),
-            );
+            return Err(PipelineError::InvalidConfiguration);
         }
         let rule_set = telltale_rules::load_rule_set_from_documents(
             &documents,
             self.policy_document.as_deref(),
-        )?;
+        )
+        .map_err(PipelineError::Compilation)?;
         Ok(Pipeline { rule_set })
     }
 }
 
 #[cfg(test)]
 mod canonical_embedding_tests;
+#[cfg(test)]
+mod detailed_scan_tests;
 
 #[cfg(test)]
 mod test_support;
@@ -415,6 +584,6 @@ mod tests {
 
         let error = pipeline.scan_root(&root).expect_err("missing root");
 
-        assert!(error.downcast_ref::<DiscoveryError>().is_some());
+        assert!(matches!(error, PipelineError::Discovery(_)));
     }
 }

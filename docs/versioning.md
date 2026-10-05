@@ -26,7 +26,12 @@ format.
   rc.3 verifier result is not 0.7 evidence. `v0.6.0` remains the latest stable. Event3 schema version stays
   `3.0` and Rule v1 stays version 1; neither follows the package version. Stable
   `v0.7.0` will require separate qualification and a reviewed stable-version
-  promotion.
+  promotion. Subsequent source modifications on `main` invalidate the Issue #87
+  exact-source CI/CodeQL/local-Git/consumer/preflight release qualification that
+  qualified the published `v0.7.0-rc.1` artifact (`e2386cb53454a8384449ea0729f0e3b71072006c`).
+  Release qualification is distinct from development progress; unpublished changed
+  source does not require a new RC solely due to unpublished changes, but changed
+  source cannot claim earlier exact-source qualification evidence.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -85,7 +90,10 @@ format.
 
 The current support policy is the current stable Rust toolchain used by CI. No
 minimum supported Rust version (MSRV) is promised and no `rust-version` field is
-set until a dedicated MSRV CI lane exists.
+set until a dedicated MSRV CI lane exists. The external supported subset of embedding
+contracts is separately qualified against Rust 1.88 (`make embedding-rust188-check`),
+which exercises only its explicit dependency subset and does not establish a global
+CLI/workspace MSRV promise.
 
 ## SemVer Policy
 
@@ -94,16 +102,15 @@ allowance for `0.y.z` versions:
 
 | Change | Version | Examples |
 | --- | --- | --- |
-| Compatible fix | Patch (`0.3.x`; `0.5.x` after the 0.5.0 release) | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
+| Compatible fix | Patch within the applicable supported minor line | Bug fix, documentation, packaging, test-only change, or compatible detection improvement |
 | Additive maturity work | Next planned minor line | New compatible capability or API that does not invalidate existing consumers |
-| Breaking change | Next planned minor (`0.5.0` for the approved migration) | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
+| Breaking change | Next planned minor line | Removed or changed public API, incompatible CLI/config behavior, or incompatible event/rule contract |
 | Stable compatibility commitment | Major (`1.0.0`) | Public interfaces are sufficiently settled for documented compatibility guarantees |
 
-The `0.3.x` line is the compatibility path for post-`0.3.0` fixes. The
-unpublished `0.4.0` API-hardening work is incorporated into the explicitly
-approved 0.5.0 milestone and will not create a separate release line. The 0.5.0
-scope, compatibility impact, migration requirements, acceptance criteria, and
-release review are maintained in the internal execution plan.
+Historically, the unpublished `0.4.0` API-hardening work was incorporated into
+`0.5.0` rather than released separately. See [Current Series](#current-series)
+for release history and the [0.4.0 migration guide](migrations/0.4.0.md) for that
+historical API work. These completed milestones do not select the next version.
 
 ## Versioned Surfaces
 

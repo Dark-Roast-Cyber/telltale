@@ -88,6 +88,312 @@ const MCP_CONFIGS: &[McpConfigDef] = &[
     },
 ];
 
+/// Local caller configuration; paths are deliberately not serializable telemetry.
+#[derive(Debug, Clone)]
+pub struct McpConfigInput {
+    client: ClientId,
+    source_id: String,
+    path: PathBuf,
+}
+
+impl McpConfigInput {
+    pub fn new(client: ClientId, source_id: impl Into<String>, path: PathBuf) -> Self {
+        Self {
+            client,
+            source_id: source_id.into(),
+            path,
+        }
+    }
+    pub fn client(&self) -> ClientId {
+        self.client
+    }
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Explicit files or the known fixed paths only. Neither mode walks workspaces.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum McpInventoryInput {
+    Configs(Vec<McpConfigInput>),
+    FixedRoot(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum McpInventoryState {
+    Supported,
+    Unsupported,
+    Error,
+}
+
+/// Immutable, construction-sanitized static inventory; never contains a raw path,
+/// argument, environment key/value, declared tool name, or complete URL.
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+#[non_exhaustive]
+pub struct McpInventoryObservation {
+    #[serde(serialize_with = "serialize_inventory_client")]
+    client: ClientId,
+    source_id: String,
+    config_path_hash: String,
+    server_name: Option<String>,
+    transport: Option<String>,
+    command: Option<String>,
+    package: Option<String>,
+    url_host: Option<String>,
+    arg_count: usize,
+    env_key_count: usize,
+    declared_tool_count: usize,
+    state: McpInventoryState,
+    reason: Option<&'static str>,
+}
+
+impl McpInventoryObservation {
+    pub fn client(&self) -> ClientId {
+        self.client
+    }
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+    pub fn config_path_hash(&self) -> &str {
+        &self.config_path_hash
+    }
+    pub fn server_name(&self) -> Option<&str> {
+        self.server_name.as_deref()
+    }
+    pub fn transport(&self) -> Option<&str> {
+        self.transport.as_deref()
+    }
+    pub fn command(&self) -> Option<&str> {
+        self.command.as_deref()
+    }
+    pub fn package(&self) -> Option<&str> {
+        self.package.as_deref()
+    }
+    pub fn url_host(&self) -> Option<&str> {
+        self.url_host.as_deref()
+    }
+    pub fn arg_count(&self) -> usize {
+        self.arg_count
+    }
+    pub fn env_key_count(&self) -> usize {
+        self.env_key_count
+    }
+    pub fn declared_tool_count(&self) -> usize {
+        self.declared_tool_count
+    }
+    pub fn state(&self) -> McpInventoryState {
+        self.state
+    }
+    pub fn reason(&self) -> Option<&'static str> {
+        self.reason
+    }
+}
+
+/// Static local configuration reads only; no commands, network, or workspace walk.
+/// Explicit invalid identities and file failures remain visible as bounded errors.
+/// At most 64 configs and 256 server/error observations are processed, plus one
+/// content-free exhaustion observation. Accepted content is at most 1 MiB per
+/// file; the 4 MiB read budget includes each attempt's one-byte overrun probe.
+/// Failed reads retain their full reserved allowance since consumption is unknown.
+pub fn collect_mcp_inventory(input: &McpInventoryInput) -> Vec<McpInventoryObservation> {
+    let configs: Vec<McpConfigInput> = match input {
+        McpInventoryInput::Configs(configs) => configs.iter().take(65).cloned().collect(),
+        McpInventoryInput::FixedRoot(root) => MCP_CONFIGS
+            .iter()
+            .filter_map(|def| {
+                let path = root.join(def.relative_path);
+                path.symlink_metadata()
+                    .is_ok()
+                    .then(|| McpConfigInput::new(def.client, def.id, path))
+            })
+            .collect(),
+    };
+    let mut observations = Vec::new();
+    let mut remaining_bytes = 4 * 1024 * 1024;
+    for (index, input) in configs.into_iter().enumerate() {
+        let definition = MCP_CONFIGS
+            .iter()
+            .find(|def| def.client == input.client && def.id == input.source_id);
+        let definition = definition.or_else(|| {
+            (input.client == ClientId::Claude && input.source_id == "claude.workspace_mcp_config")
+                .then(|| {
+                    MCP_CONFIGS
+                        .iter()
+                        .find(|def| def.id == "claude.project_mcp_config")
+                        .unwrap()
+                })
+        });
+        let mut base = McpInventoryObservation {
+            client: input.client,
+            source_id: definition
+                .map(|_| input.source_id.clone())
+                .unwrap_or_else(|| "unsupported_mcp_source".into()),
+            config_path_hash: path_hash(&input.path),
+            server_name: None,
+            transport: None,
+            command: None,
+            package: None,
+            url_host: None,
+            arg_count: 0,
+            env_key_count: 0,
+            declared_tool_count: 0,
+            state: McpInventoryState::Error,
+            reason: None,
+        };
+        if index == 64 || observations.len() == 256 || remaining_bytes == 0 {
+            base.reason = Some("mcp_inventory_limit_exceeded");
+            observations.push(base);
+            break;
+        }
+        let Some(definition) = definition else {
+            base.reason = Some("unsupported_mcp_source_identity");
+            observations.push(base);
+            continue;
+        };
+        let config = DiscoveredMcpConfig {
+            client: input.client,
+            id: if input.source_id == "claude.workspace_mcp_config" {
+                "claude.workspace_mcp_config"
+            } else {
+                definition.id
+            },
+            path: input.path,
+            format: definition.format,
+        };
+        let read_allowance = remaining_bytes.min(1024 * 1024 + 1);
+        remaining_bytes -= read_allowance;
+        let parsed = match telltale_sources::install_inventory::read_inventory_config_bytes(
+            &config.path,
+            read_allowance - 1,
+        ) {
+            Ok(bytes) => {
+                remaining_bytes += read_allowance - bytes.len();
+                match std::str::from_utf8(&bytes) {
+                    Ok(raw) => Ok(parse_mcp_config_text(
+                        &config,
+                        raw,
+                        256 - observations.len(),
+                    )),
+                    Err(_) => Err("malformed_source"),
+                }
+            }
+            Err(reason) => Err(reason),
+        };
+        match parsed {
+            Err(reason) => {
+                base.reason = Some(reason);
+                observations.push(base);
+            }
+            Ok(servers) => {
+                for server in servers {
+                    let mut observation = base.clone();
+                    observation.server_name = Some(safe_inventory_text(&server.server_name));
+                    observation.transport = server.transport.as_deref().map(safe_inventory_text);
+                    observation.command = server.command.as_deref().map(|command| {
+                        // A command identity, never the configured command line.
+                        safe_command_identity(command)
+                    });
+                    observation.package = server.package.as_deref().map(safe_package_identity);
+                    observation.url_host = server.url_host.as_deref().map(safe_inventory_text);
+                    observation.arg_count = server.arg_count;
+                    observation.env_key_count = server.env_keys.len();
+                    observation.declared_tool_count = server.declared_tools.len();
+                    observation.state = if server.supported {
+                        McpInventoryState::Supported
+                    } else {
+                        McpInventoryState::Unsupported
+                    };
+                    observation.reason = match server.unsupported_reason.as_deref() {
+                        Some("invalid_json_mcp_config") => Some("invalid_json_mcp_config"),
+                        Some("unsupported_toml_mcp_syntax") => Some("unsupported_toml_mcp_syntax"),
+                        Some("mcp_server_limit_exceeded") => {
+                            observation.state = McpInventoryState::Error;
+                            Some("mcp_inventory_limit_exceeded")
+                        }
+                        Some("server_definition_not_object") => {
+                            Some("server_definition_not_object")
+                        }
+                        Some(_) => Some("missing_command_or_url"),
+                        None => None,
+                    };
+                    observations.push(observation);
+                    if server.unsupported_reason.as_deref() == Some("mcp_server_limit_exceeded") {
+                        return observations;
+                    }
+                }
+            }
+        }
+    }
+    observations
+}
+
+fn is_url_shaped(value: &str) -> bool {
+    let trimmed = value.trim().trim_matches(['\'', '"']);
+    trimmed.contains("://") || trimmed.starts_with("//")
+}
+
+fn safe_command_identity(command: &str) -> String {
+    let command = command.trim();
+    if is_url_shaped(command) {
+        return "[redacted-url]".into();
+    }
+    let executable = if let Some(quote @ ('\'' | '"')) = command.chars().next() {
+        command[1..].split(quote).next().unwrap_or_default()
+    } else {
+        let first = command.split_whitespace().next().unwrap_or_default();
+        if first.contains(['/', '\\']) && first.len() != command.len() {
+            // Unquoted paths with spaces cannot be distinguished from command
+            // lines without guessing; never expose an intermediate directory.
+            return "[unrepresented-command]".into();
+        }
+        first
+    };
+    if is_url_shaped(executable) {
+        return "[redacted-url]".into();
+    }
+    safe_inventory_text(executable.rsplit(['/', '\\']).next().unwrap_or_default())
+}
+
+fn safe_package_identity(package: &str) -> String {
+    let package = package.trim();
+    if is_url_shaped(package) {
+        return "[redacted-url]".into();
+    }
+    // Scoped package names are identities; all other separators describe local
+    // filesystem structure and must be reduced to a basename.
+    if package.starts_with('@')
+        && package.matches('/').count() == 1
+        && package[1..]
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '.'))
+    {
+        safe_inventory_text(package)
+    } else {
+        safe_command_identity(package)
+    }
+}
+
+fn safe_inventory_text(value: &str) -> String {
+    let sanitized = PrivacySanitizer::sanitize(SanitizationContext::Summary, value);
+    if value.contains("://") || sanitized.contains("://") {
+        return "[redacted-url]".into();
+    }
+    sanitized
+}
+
+fn serialize_inventory_client<S: serde::Serializer>(
+    client: &ClientId,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(client.as_str())
+}
+
 pub fn discover_mcp_inventory(root: &Path) -> Vec<(Source, Event)> {
     let mut events = Vec::new();
     for config in discover_mcp_configs(root) {
@@ -362,15 +668,36 @@ fn parse_mcp_config(
     config: &DiscoveredMcpConfig,
 ) -> Result<Vec<McpServerInventory>, std::io::Error> {
     let raw = fs::read_to_string(&config.path)?;
-    let mut inventory = match config.format {
-        ConfigFormat::Json => parse_json_mcp_config(config, &raw),
-        ConfigFormat::Toml => parse_toml_mcp_config(config, &raw),
-    };
-    inventory.sort_by(|left, right| left.server_name.cmp(&right.server_name));
+    let mut inventory = parse_mcp_config_text(config, &raw, usize::MAX);
+    if config.format == ConfigFormat::Toml {
+        // Preserve the established Event3/usage-inference contract: Codex TOML
+        // tool declarations are counted by the static facade, not attributed
+        // to observed calls by the legacy discovery entry point.
+        for server in &mut inventory {
+            server.declared_tools.clear();
+        }
+    }
     Ok(inventory)
 }
 
-fn parse_json_mcp_config(config: &DiscoveredMcpConfig, raw: &str) -> Vec<McpServerInventory> {
+fn parse_mcp_config_text(
+    config: &DiscoveredMcpConfig,
+    raw: &str,
+    server_limit: usize,
+) -> Vec<McpServerInventory> {
+    let mut inventory = match config.format {
+        ConfigFormat::Json => parse_json_mcp_config(config, raw, server_limit),
+        ConfigFormat::Toml => parse_toml_mcp_config_limited(config, raw, server_limit),
+    };
+    inventory.sort_by(|left, right| left.server_name.cmp(&right.server_name));
+    inventory
+}
+
+fn parse_json_mcp_config(
+    config: &DiscoveredMcpConfig,
+    raw: &str,
+    server_limit: usize,
+) -> Vec<McpServerInventory> {
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return vec![unsupported_inventory(
             config,
@@ -381,6 +708,13 @@ fn parse_json_mcp_config(config: &DiscoveredMcpConfig, raw: &str) -> Vec<McpServ
     let Some(servers) = find_mcp_servers_object(&value) else {
         return Vec::new();
     };
+    if servers.len() > server_limit {
+        return vec![unsupported_inventory(
+            config,
+            "unknown",
+            "mcp_server_limit_exceeded",
+        )];
+    }
 
     servers
         .iter()
@@ -460,67 +794,351 @@ fn inventory_from_json_server(
     }
 }
 
+#[cfg(test)]
 fn parse_toml_mcp_config(config: &DiscoveredMcpConfig, raw: &str) -> Vec<McpServerInventory> {
-    let mut servers: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    let mut current_server: Option<String> = None;
+    parse_toml_mcp_config_limited(config, raw, usize::MAX)
+}
 
+/// Deliberately narrow, single-line TOML subset. Section paths are structural:
+/// environment subtables contribute keys only, never values or server commands.
+/// Syntax outside this subset produces an explicit unsupported observation.
+fn parse_toml_mcp_config_limited(
+    config: &DiscoveredMcpConfig,
+    raw: &str,
+    server_limit: usize,
+) -> Vec<McpServerInventory> {
+    let mut servers = BTreeMap::<String, (serde_json::Map<String, Value>, bool)>::new();
+    let mut current: Option<(String, bool)> = None;
+    let mut active_multiline: Option<&'static str> = None;
     for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        if let Some(delimiter) = active_multiline {
+            let count = count_triple_quotes(line, delimiter);
+            if count > 0 && count % 2 == 1 {
+                active_multiline = None;
+            }
             continue;
         }
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            let section = trimmed.trim_matches(&['[', ']'][..]);
-            current_server = section
-                .strip_prefix("mcp_servers.")
-                .or_else(|| section.strip_prefix("mcp.servers."))
-                .map(|name| name.trim_matches('"').to_string());
-            continue;
-        }
-        let Some(server_name) = &current_server else {
-            continue;
-        };
-        let Some((key, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        servers.entry(server_name.clone()).or_default().insert(
-            key.trim().to_string(),
-            value.trim().trim_matches('"').to_string(),
-        );
-    }
 
+        let line_clean = strip_toml_comment(line).trim();
+        if line_clean.is_empty() {
+            continue;
+        }
+
+        let count_double = count_triple_quotes(line_clean, "\"\"\"");
+        let count_single = count_triple_quotes(line_clean, "'''");
+        if count_double > 0 || count_single > 0 {
+            let (delimiter, count) = if count_double > 0 {
+                ("\"\"\"", count_double)
+            } else {
+                ("'''", count_single)
+            };
+            if let Some((name, _)) = &current {
+                servers.get_mut(name).unwrap().1 = true;
+            }
+            if count % 2 == 1 {
+                active_multiline = Some(delimiter);
+            }
+            continue;
+        }
+
+        let Some(line) = toml_without_comment(line) else {
+            if let Some((name, _)) = &current {
+                servers.get_mut(name).unwrap().1 = true;
+                continue;
+            }
+            if line.contains("mcp_servers") || line.contains("mcp.servers") {
+                return vec![unsupported_inventory(
+                    config,
+                    "unknown",
+                    "unsupported_toml_mcp_syntax",
+                )];
+            }
+            continue;
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            current = None;
+            let Some(section) = line
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .and_then(toml_key_path)
+            else {
+                if line.contains("mcp_servers") || line.contains("mcp.servers") {
+                    return vec![unsupported_inventory(
+                        config,
+                        "unknown",
+                        "unsupported_toml_mcp_syntax",
+                    )];
+                }
+                continue;
+            };
+            let tail = if section.first().map(String::as_str) == Some("mcp_servers") {
+                &section[1..]
+            } else if section.first().map(String::as_str) == Some("mcp")
+                && section.get(1).map(String::as_str) == Some("servers")
+            {
+                &section[2..]
+            } else {
+                continue;
+            };
+            let Some(name) = tail.first() else {
+                continue;
+            };
+            let server = servers.entry(name.clone()).or_default();
+            let env = tail.len() == 2 && tail[1] == "env";
+            if tail.len() == 1 || env {
+                current = Some((name.clone(), env));
+            } else {
+                server.1 = true;
+            }
+            if servers.len() > server_limit {
+                return vec![unsupported_inventory(
+                    config,
+                    "unknown",
+                    "mcp_server_limit_exceeded",
+                )];
+            }
+            continue;
+        }
+        let Some((name, env)) = &current else {
+            continue;
+        };
+        let (fields, unsupported) = servers.get_mut(name).unwrap();
+        // Find the assignment outside a quoted key, not inside its contents.
+        let Some((key, value)) = toml_assignment(line) else {
+            *unsupported = true;
+            continue;
+        };
+        let Some(keys) = toml_key_path(key) else {
+            *unsupported = true;
+            continue;
+        };
+        if keys.len() != 1 {
+            *unsupported = true;
+            continue;
+        }
+        let key = &keys[0];
+        if *env {
+            if toml_string(value).is_none() {
+                return vec![unsupported_inventory(
+                    config,
+                    name,
+                    "unsupported_toml_mcp_syntax",
+                )];
+            }
+            fields
+                .entry("env")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .unwrap()
+                .insert(key.clone(), Value::Null);
+            continue;
+        }
+        let parsed = match key.as_str() {
+            "command" | "url" | "transport" | "type" => toml_string(value).map(Value::String),
+            "args" | "tools" => toml_string_array(value)
+                .map(|v| Value::Array(v.into_iter().map(Value::String).collect())),
+            // Inline tables and multiline values are not represented by this subset.
+            "env" => None,
+            _ => continue,
+        };
+        if let Some(parsed) = parsed {
+            fields.insert(key.clone(), parsed);
+        } else {
+            *unsupported = true;
+        }
+    }
     servers
         .into_iter()
-        .map(|(name, fields)| {
-            let command = fields.get("command").cloned();
-            let url_host = fields.get("url").and_then(|url| host_from_url(url));
-            let transport = fields
-                .get("transport")
-                .or_else(|| fields.get("type"))
-                .cloned()
-                .or_else(|| url_host.as_ref().map(|_| "http".to_string()))
-                .or_else(|| command.as_ref().map(|_| "stdio".to_string()));
-            let supported = command.is_some() || url_host.is_some();
-            McpServerInventory {
-                client: config.client,
-                source_id: config.id.to_string(),
-                path: config.path.clone(),
-                server_name: name,
-                transport,
-                package: command.as_deref().and_then(package_from_command),
-                command,
-                url_host,
-                arg_count: fields
-                    .get("args")
-                    .map(|args| args.matches(',').count().saturating_add(1))
-                    .unwrap_or_default(),
-                env_keys: Vec::new(),
-                declared_tools: Vec::new(),
-                supported,
-                unsupported_reason: (!supported).then_some("missing_command_or_url".to_string()),
+        .map(|(name, (fields, unsupported))| {
+            if unsupported {
+                unsupported_inventory(config, &name, "unsupported_toml_mcp_syntax")
+            } else {
+                inventory_from_json_server(config, &name, &fields)
             }
         })
         .collect()
+}
+
+fn count_triple_quotes(line: &str, delimiter: &str) -> usize {
+    let mut count = 0;
+    let mut cursor = line;
+    let is_basic = delimiter == "\"\"\"";
+    while let Some(pos) = cursor.find(delimiter) {
+        if is_basic {
+            let backslashes = cursor[..pos]
+                .chars()
+                .rev()
+                .take_while(|&c| c == '\\')
+                .count();
+            if backslashes % 2 == 1 {
+                cursor = &cursor[pos + 1..];
+                continue;
+            }
+        }
+        count += 1;
+        cursor = &cursor[pos + delimiter.len()..];
+    }
+    count
+}
+
+fn strip_toml_comment(line: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+    for (index, ch) in line.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_double && ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            }
+        } else if in_single {
+            if ch == '\'' {
+                in_single = false;
+            }
+        } else {
+            if ch == '#' {
+                return &line[..index];
+            }
+            if ch == '"' {
+                in_double = true;
+            } else if ch == '\'' {
+                in_single = true;
+            }
+        }
+    }
+    line
+}
+
+fn toml_without_comment(line: &str) -> Option<&str> {
+    let (mut quote, mut escape) = (None, false);
+    for (index, ch) in line.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if quote == Some('"') && ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() {
+            if ch == '#' {
+                return Some(&line[..index]);
+            }
+            if ch == '\'' || ch == '"' {
+                quote = Some(ch);
+            }
+        }
+    }
+    quote.is_none().then_some(line)
+}
+
+fn toml_assignment(line: &str) -> Option<(&str, &str)> {
+    let (mut quote, mut escape) = (None, false);
+    for (index, ch) in line.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if quote == Some('"') && ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() {
+            if ch == '=' {
+                return Some((line[..index].trim(), line[index + 1..].trim()));
+            }
+            if ch == '\'' || ch == '"' {
+                quote = Some(ch);
+            }
+        }
+    }
+    None
+}
+
+fn toml_quoted(value: &str) -> Option<(String, &str)> {
+    let quote = value.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let mut escape = false;
+    for (index, ch) in value.char_indices().skip(1) {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if quote == '"' && ch == '\\' {
+            escape = true;
+            continue;
+        }
+        if ch == quote {
+            let text = if quote == '"' {
+                serde_json::from_str(&value[..index + 1]).ok()?
+            } else {
+                value[1..index].to_string()
+            };
+            return Some((text, &value[index + 1..]));
+        }
+    }
+    None
+}
+
+fn toml_string(value: &str) -> Option<String> {
+    let (text, rest) = toml_quoted(value.trim())?;
+    rest.trim().is_empty().then_some(text)
+}
+
+fn toml_key_path(mut value: &str) -> Option<Vec<String>> {
+    let mut keys = Vec::new();
+    loop {
+        value = value.trim_start();
+        let (key, rest) = if value.starts_with(['\'', '"']) {
+            toml_quoted(value)?
+        } else {
+            let end = value
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                .unwrap_or(value.len());
+            if end == 0 {
+                return None;
+            }
+            (value[..end].to_string(), &value[end..])
+        };
+        keys.push(key);
+        let rest = rest.trim_start();
+        if rest.is_empty() {
+            return Some(keys);
+        }
+        value = rest.strip_prefix('.')?;
+    }
+}
+
+fn toml_string_array(value: &str) -> Option<Vec<String>> {
+    let mut rest = value.trim().strip_prefix('[')?.strip_suffix(']')?.trim();
+    let mut values = Vec::new();
+    while !rest.is_empty() {
+        let (value, tail) = toml_quoted(rest)?;
+        values.push(value);
+        rest = tail.trim();
+        if rest.is_empty() {
+            break;
+        }
+        rest = rest.strip_prefix(',')?.trim();
+    }
+    Some(values)
 }
 
 fn mcp_inventory_event(server: &McpServerInventory) -> Event {
@@ -784,7 +1402,7 @@ fn normalize_tool_name(tool_name: &str) -> String {
 fn host_from_url(url: &str) -> Option<String> {
     let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     after_scheme
-        .split('/')
+        .split(['/', '?', '#'])
         .next()
         .map(|authority| {
             authority
@@ -813,6 +1431,33 @@ mod tests {
     use telltale_schema::observation::ObservedAt;
     use telltale_schema::source::Source;
     use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
+
+    #[test]
+    fn toml_env_values_never_become_inventory_fields_or_events() {
+        let temp = tempdir().unwrap();
+        let config = DiscoveredMcpConfig {
+            client: ClientId::Codex,
+            id: "codex.mcp_config",
+            path: temp.path().join("config.toml"),
+            format: ConfigFormat::Toml,
+        };
+        fs::write(&config.path, "[mcp_servers.s]\ncommand = 'node'\nargs = []\n[mcp_servers.s.env]\ncommand = 'TT_ENV_COMMAND_VALUE'\nurl = 'TT_ENV_URL_VALUE'\n").unwrap();
+        let servers = super::parse_mcp_config(&config).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].server_name, "s");
+        assert_eq!(servers[0].command.as_deref(), Some("node"));
+        assert_eq!(servers[0].arg_count, 0);
+        assert_eq!(servers[0].env_keys.len(), 2);
+        for output in [
+            format!("{servers:?}"),
+            serde_json::to_string(&mcp_inventory_event(&servers[0])).unwrap(),
+        ] {
+            assert!(
+                !output.contains("TT_ENV_"),
+                "environment value escaped parser ownership"
+            );
+        }
+    }
 
     fn canonical_mcp_events(root: &std::path::Path, sources: &[Source]) -> Vec<(Source, Event)> {
         let servers = discover_mcp_inventory_servers(root);
@@ -1135,5 +1780,243 @@ mod tests {
         let expected_hash = evidence_hash(&summary.redacted_value);
         assert!(summary.redacted_value.contains("[redacted-command]"));
         assert_eq!(summary.hash.as_deref(), Some(expected_hash.as_str()));
+    }
+
+    #[test]
+    fn static_inventory_unsupported_identities_do_not_charge_read_budget() {
+        let configs = (0..65)
+            .map(|_| {
+                super::McpConfigInput::new(
+                    ClientId::Claude,
+                    "unsupported",
+                    PathBuf::from("synthetic-missing.json"),
+                )
+            })
+            .collect();
+        let observations =
+            super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
+        assert_eq!(observations.len(), 65);
+        assert!(
+            observations[..64]
+                .iter()
+                .all(|item| { item.reason() == Some("unsupported_mcp_source_identity") })
+        );
+        assert_eq!(
+            observations[64].reason(),
+            Some("mcp_inventory_limit_exceeded")
+        );
+    }
+
+    #[test]
+    fn static_inventory_failed_reads_conservatively_exhaust_the_byte_budget() {
+        let temp = tempdir().unwrap();
+        for (path, reason) in [
+            (temp.path().join("missing.json"), "source_missing"),
+            (temp.path().to_path_buf(), "non_regular_source"),
+        ] {
+            let configs = (0..8)
+                .map(|_| {
+                    super::McpConfigInput::new(
+                        ClientId::Claude,
+                        "claude.project_mcp_config",
+                        path.clone(),
+                    )
+                })
+                .collect();
+            let observations =
+                super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
+            assert_eq!(observations.len(), 5);
+            assert!(
+                observations[..4]
+                    .iter()
+                    .all(|item| item.reason() == Some(reason))
+            );
+            assert_eq!(
+                observations[4].reason(),
+                Some("mcp_inventory_limit_exceeded")
+            );
+        }
+    }
+
+    #[test]
+    fn static_inventory_accepts_exactly_one_mib_and_refunds_unused_read_allowance() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let mut raw = r#"{"mcpServers":{"fixture":{"command":"node"}}}"#.to_owned();
+        raw.push_str(&" ".repeat(1024 * 1024 - raw.len()));
+        fs::write(&path, &raw).unwrap();
+        let tail = temp.path().join("tail.json");
+        fs::write(&tail, &raw[..raw.len() - 1]).unwrap();
+        let configs = (0..3)
+            .map(|_| {
+                super::McpConfigInput::new(
+                    ClientId::Claude,
+                    "claude.project_mcp_config",
+                    path.clone(),
+                )
+            })
+            .chain(std::iter::once(super::McpConfigInput::new(
+                ClientId::Claude,
+                "claude.project_mcp_config",
+                tail,
+            )))
+            .collect();
+        let observations =
+            super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
+        assert_eq!(observations.len(), 4);
+        assert!(
+            observations
+                .iter()
+                .all(|item| item.state() == super::McpInventoryState::Supported)
+        );
+    }
+
+    #[test]
+    fn static_inventory_reserves_overrun_probe_at_aggregate_boundary() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let missing = temp.path().join("missing.json");
+        let tiny = temp.path().join("tiny.json");
+        fs::write(&tiny, "x").unwrap();
+        let mut raw = r#"{"mcpServers":{"fixture":{"command":"node"}}}"#.to_owned();
+        raw.push_str(&" ".repeat(1024 * 1024 - 4 - raw.len()));
+        fs::write(&path, raw).unwrap();
+        // One successful read plus three unknown-consumption failures leaves
+        // exactly one byte: only the overrun probe, no accepted content.
+        let configs = [
+            path,
+            missing.clone(),
+            missing.clone(),
+            missing,
+            tiny.clone(),
+            tiny,
+        ]
+        .into_iter()
+        .map(|path| super::McpConfigInput::new(ClientId::Claude, "claude.project_mcp_config", path))
+        .collect();
+        let observations =
+            super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
+        assert_eq!(observations.len(), 6);
+        assert_eq!(observations[0].state(), super::McpInventoryState::Supported);
+        assert!(
+            observations[1..4]
+                .iter()
+                .all(|item| item.reason() == Some("source_missing"))
+        );
+        assert_eq!(observations[4].reason(), Some("source_limit_exceeded"));
+        assert_eq!(
+            observations[5].reason(),
+            Some("mcp_inventory_limit_exceeded")
+        );
+        assert!(
+            observations[4..]
+                .iter()
+                .all(|item| item.server_name().is_none())
+        );
+    }
+
+    #[test]
+    fn safe_command_and_package_identities_redact_url_credentials_before_splitting() {
+        assert_eq!(
+            super::safe_command_identity("https://alice:pass@example.invalid"),
+            "[redacted-url]"
+        );
+        assert_eq!(
+            super::safe_command_identity("\"https://alice:pass@example.invalid\""),
+            "[redacted-url]"
+        );
+        assert_eq!(
+            super::safe_command_identity("https://alice:pass@example.invalid/bin/server"),
+            "[redacted-url]"
+        );
+        assert_eq!(
+            super::safe_package_identity("https://alice:pass@example.invalid"),
+            "[redacted-url]"
+        );
+        assert_eq!(
+            super::safe_package_identity("mcp-server-https://alice:pass@example.invalid"),
+            "[redacted-url]"
+        );
+        assert_eq!(
+            super::safe_package_identity("@scope/https://alice:pass@example.invalid"),
+            "[redacted-url]"
+        );
+    }
+
+    #[test]
+    fn static_inventory_url_commands_are_safe_in_accessors_debug_and_serialization() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        for command in [
+            "https://TT_MCP_USER:TT_MCP_PASSWORD@example.invalid",
+            "//TT_MCP_USER:TT_MCP_PASSWORD@example.invalid/mcp-server",
+            "\"https://TT_MCP_USER:TT_MCP_PASSWORD@example.invalid/bin/server\"",
+        ] {
+            fs::write(
+                &path,
+                serde_json::json!({"mcpServers": {"fixture": {"command": command}}}).to_string(),
+            )
+            .unwrap();
+            let observations =
+                super::collect_mcp_inventory(&super::McpInventoryInput::Configs(vec![
+                    super::McpConfigInput::new(
+                        ClientId::Claude,
+                        "claude.project_mcp_config",
+                        path.clone(),
+                    ),
+                ]));
+            assert_eq!(observations.len(), 1);
+            assert_eq!(observations[0].command(), Some("[redacted-url]"));
+            for output in [
+                observations[0].command().unwrap().to_owned(),
+                observations[0].package().unwrap_or_default().to_owned(),
+                format!("{observations:?}"),
+                serde_json::to_string(&observations).unwrap(),
+            ] {
+                assert!(
+                    !output.contains("TT_MCP_"),
+                    "inventory retained URL credential marker"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn codex_toml_unrelated_multiline_with_fake_mcp_preserves_tool_attribution() {
+        let temp = tempdir().expect("tempdir");
+        let config = DiscoveredMcpConfig {
+            client: ClientId::Codex,
+            id: "codex.mcp_config",
+            path: temp.path().join("config.toml"),
+            format: ConfigFormat::Toml,
+        };
+        let raw = r#"
+instructions = """
+[mcp_servers.fake_server]
+command = "fake_cmd"
+tools = ["fake_tool"]
+"""
+[mcp_servers.actual]
+command = "node"
+tools = ["lookup"]
+[unrelated]
+notes = '''
+[mcp_servers.second_fake]
+command = "second_fake_cmd"
+tools = ["second_tool"]
+'''
+"#;
+        let servers = parse_toml_mcp_config(&config, raw);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].server_name, "actual");
+        assert_eq!(servers[0].declared_tools, vec!["lookup".to_string()]);
+        assert!(servers[0].supported);
+
+        let index = McpToolIndex::from_servers(&servers);
+        let matches = index.lookup(ClientId::Codex, "lookup").expect("tool match");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].server_name, "actual");
+        assert!(index.lookup(ClientId::Codex, "fake_tool").is_none());
+        assert!(index.lookup(ClientId::Codex, "second_tool").is_none());
     }
 }

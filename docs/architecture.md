@@ -17,7 +17,7 @@ conceptual core stages defined in the principles. Until a policy/decision
 runtime is separately implemented, current decisions remain the deterministic
 response metadata carried by emitted Event 3.0 events.
 
-## Accepted future architecture
+## Current runtime and future boundaries
 
 The accepted future semantic contracts are documented in the [semantic
 foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
@@ -85,30 +85,11 @@ separate source contract.
 `kilocode.tasks`, and `codex.project_sessions` are retired. They are not hidden
 production paths or migration candidates. OpenCode retains only `opencode.sqlite`.
 
-The production migration order is:
-
-1. contract the supported production denominator to the target set;
-2. move Rule v1 compiled evaluation, modifiers, contributions, and scoring onto
-   the Detection v2 runtime while retaining Rule v1 as a content format;
-3. move shipped process-chain matching and correlation onto the Detection v2
-   result path without converting parsed command text into directly observed
-   Process evidence;
-4. make target source adapters produce Canonical Observation v2 directly, plus
-   only the acquisition/checkpoint metadata required by scan/watch operation;
-5. cut scan, watch, and the supported embedding facade over to Canonical
-   Observation v2 -> Detection v2 as one coordinated production boundary;
-6. retire the remaining legacy NormalizedRecord-centered detector path and
-   duplicate scoring/grouping code while retaining deliberate record-level
-   compatibility APIs;
-7. select Event3-only production output for 0.7 and defer Event4 production
-   activation after the internal semantic/detection path is singular.
-
-Steps 1 through 6 established the singular source/acquisition and Detection v2
-path. Step 7 selects Event3-only production output for 0.7 and defers Event4
-production activation. Scanner-owned processing success gates OpenCode cursor
-eligibility; parse success alone cannot advance that cursor. CLI scan/watch and
-supported embedding use Canonical Observation v2 -> Detection v2 -> Event3
-compatibility/activity. Event 3.0 is frozen and Event4 is inactive.
+The migration established one source/acquisition and Detection v2 path for
+CLI scan/watch and supported embedding, including Rule v1 modifiers,
+contributions, scoring, and process-chain semantics. Event 3.0 remains frozen;
+Event4 production activation is deferred. Scanner-owned processing success
+gates OpenCode cursor eligibility; parse success alone cannot advance it.
 
 Acquisition is direct source-native extraction followed by source-owned canonical
 mapping; it is not a conversion bridge. Production must not converge by creating
@@ -134,23 +115,17 @@ closed, content-free reasons distinguishing provider deferral, observed read
 failures, incomplete discovery, and exact correlation/session failures. Operator
 actions and limits are documented with the embedding API; there is no retry state.
 
-Telltale currently runs a repeatable batch pipeline:
+After discovery, the CLI selects new or changed sources using scanner state.
+CLI scan/watch and `Pipeline::scan_root` then use the shared
+`telltale_core::canonical_runtime::process_source` path:
 
-1. **Discover**: enumerate known session stores for enabled clients.
-2. **Ingest**: read new or changed files/databases using offsets, mtimes, or content fingerprints.
-3. **Acquire**: map source-native facts directly to Canonical Observation v2 plus separate accounting/progress metadata.
-4. **Evaluate**: apply the Detection v2 Rule v1 compatibility plan and bounded process-chain semantics.
-5. **Project**: build Event 3.0 compatibility detections and canonical activity without converting through legacy records.
-6. **Score**: aggregate rule scores and modifiers into a risk result.
-7. **Review metadata**: preserve deterministic response guidance and top-level
-   timeline anchors for downstream analyst review when thresholds are crossed.
-8. **Emit**: send canonical events through an event sink. The default sink appends
-   local JSONL for SIEM shippers; optional delivery paths wrap the same event
-   payload for Splunk HEC or Elastic-compatible export.
+```text
+telltale_sources::acquisition -> Detection v2 evaluation/scoring -> Event3 projection/activity
+```
 
-The canonical runtime acquires source-native facts, evaluates Canonical
-Observation v2 with Detection v2, and projects Event 3 activity/detections. Rule
-v1 remains a content-compatibility view. `NormalizedRecordV1` and
+The caller owns event policy, checkpoints, and delivery. The default sink appends
+local JSONL; optional Splunk HEC and Elastic exports wrap the same canonical
+payload. Rule v1 remains a content-compatibility view. `NormalizedRecordV1` and
 `NormalizedRecord` remain supported for record-level compatibility APIs such as
 `detect_records` and `evaluate_session`; they are not the scanner's detection
 handoff. `observed_at` is explicit caller input. OpenCode-only bounded read

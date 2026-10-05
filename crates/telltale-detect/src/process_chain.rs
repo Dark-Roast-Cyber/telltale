@@ -284,7 +284,7 @@ fn statement_is_windows_shaped(statement: &str) -> bool {
 
 /// Splits a command line on statement and pipeline separators, ignoring
 /// separators inside quotes.
-fn split_statements(command_line: &str) -> Vec<String> {
+pub(crate) fn split_statements(command_line: &str) -> Vec<String> {
     let mut statements = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
@@ -332,7 +332,7 @@ fn split_statements(command_line: &str) -> Vec<String> {
 
 /// Quote-aware whitespace tokenizer. Quotes are stripped from the token so that
 /// `"C:\Program Files\7z.exe"` normalizes to `7z`.
-fn tokenize(statement: &str) -> Vec<String> {
+pub(crate) fn tokenize(statement: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;

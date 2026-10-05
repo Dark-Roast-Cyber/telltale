@@ -22,7 +22,7 @@ protected-assignment = ["dep:fs4", "dep:getrandom", "dep:hmac", "dep:rusqlite", 
 fs4 = { version = "1.1", optional = true }
 getrandom = { workspace = true, optional = true }
 hmac = { workspace = true, optional = true }
-rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+rusqlite = { workspace = true, optional = true }
 sha2.workspace = true
 serde.workspace = true
 telltale-schema.workspace = true
@@ -33,7 +33,7 @@ time.workspace = true
 
 [dev-dependencies]
 libc = "0.2"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite.workspace = true
 serde_json.workspace = true
 tempfile = "3.14"
 

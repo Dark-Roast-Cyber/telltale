@@ -1,0 +1,23 @@
+[package]
+name = "telltale-embedding-consumer"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+# Resolve as an external application, independently of the CLI's features/lock.
+[workspace]
+
+[features]
+default = []
+opencode-sqlite = ["telltale-core/opencode-sqlite"]
+protected-assignment = ["telltale-core/protected-assignment"]
+sqlx-sqlite = ["dep:sqlx"]
+
+[dependencies]
+telltale-core = { path = "../../crates/telltale", version = "=0.7.0-rc.1", default-features = false }
+sqlx = { version = "=0.8.6", default-features = false, features = ["sqlite", "runtime-tokio", "macros"], optional = true }
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3.14"

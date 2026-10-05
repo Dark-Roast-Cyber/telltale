@@ -25,10 +25,10 @@ serde_yaml.workspace = true
 sha2.workspace = true
 time.workspace = true
 walkdir = "2.5"
-rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+rusqlite = { workspace = true, optional = true }
 
 [dev-dependencies]
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite.workspace = true
 tempfile = "3.14"
 
 [target.'cfg(windows)'.dependencies]

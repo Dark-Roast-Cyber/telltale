@@ -9,7 +9,7 @@ use crate::source_read::SourceReadError;
 use std::fmt;
 
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::observation::{CanonicalObservationV2, ObservedAt};
+use telltale_schema::observation::{CanonicalBoundContext, CanonicalObservationV2, ObservedAt};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -65,6 +65,10 @@ pub struct AcquisitionBatch {
 #[path = "acquisition_accounting_tests.rs"]
 mod accounting_tests;
 
+#[cfg(test)]
+#[path = "acquisition_bound_tests.rs"]
+mod bound_tests;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum AcquisitionProgress {
     None,
@@ -113,6 +117,7 @@ pub enum AcquisitionError {
     AccountingOverflow,
     CanonicalMapping { code: &'static str },
     CanonicalValidation { code: &'static str },
+    CanonicalBoundValidation { context: CanonicalBoundContext },
 }
 
 impl AcquisitionError {
@@ -129,6 +134,14 @@ impl AcquisitionError {
             Self::AttestationCapacity => "session_attestation_capacity",
             Self::AccountingOverflow => "native_accounting_overflow",
             Self::CanonicalMapping { code } | Self::CanonicalValidation { code } => code,
+            Self::CanonicalBoundValidation { .. } => "unbounded_value",
+        }
+    }
+
+    pub fn bound_context(self) -> Option<CanonicalBoundContext> {
+        match self {
+            Self::CanonicalBoundValidation { context } => Some(context),
+            _ => None,
         }
     }
 }
@@ -483,9 +496,10 @@ fn map_claude_error(error: ClaudeCanonicalError) -> AcquisitionError {
 fn map_codex_error(error: CodexCanonicalError) -> AcquisitionError {
     match error {
         CodexCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        CodexCanonicalError::Observation(error) => {
-            AcquisitionError::CanonicalValidation { code: error.code() }
-        }
+        CodexCanonicalError::Observation(error) => match error.bound_context() {
+            Some(context) => AcquisitionError::CanonicalBoundValidation { context },
+            None => AcquisitionError::CanonicalValidation { code: error.code() },
+        },
     }
 }
 
@@ -922,6 +936,43 @@ mod tests {
                 shifted.observations[1].observation_id()
             );
             std::fs::write(&moved_path, input).unwrap();
+        }
+    }
+
+    #[test]
+    fn codex_bound_diagnostic_rejects_late_source_atomically() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("synthetic-bound.jsonl");
+        let oversized = "x".repeat(4097);
+        let input = format!(
+            "{}\n{}\n",
+            serde_json::json!({"type":"user", "session_id":"synthetic", "content":"ok"}),
+            serde_json::json!({"type":"user", "session_id":"synthetic", "content":oversized})
+        );
+        std::fs::write(&path, input).unwrap();
+        for (source_id, kind) in [
+            ("codex.sessions", SourceKind::Jsonl),
+            ("codex.archived_sessions", SourceKind::ArchivedJsonl),
+            ("codex.headless_sessions", SourceKind::HeadlessJsonl),
+        ] {
+            let source = Source {
+                client: ClientId::Codex,
+                source_id: source_id.into(),
+                kind,
+                path: path.clone(),
+            };
+            let error = acquisition_error(super::acquire_source(&source, options()));
+            assert_eq!(error.code(), "unbounded_value");
+            let diagnostic = format!("{error:?}");
+            assert!(
+                diagnostic.contains("MessageContent"),
+                "missing canonical category"
+            );
+            assert!(
+                diagnostic.contains("StringBytes"),
+                "missing bound dimension"
+            );
+            assert!(!diagnostic.contains(&oversized), "content leaked");
         }
     }
 

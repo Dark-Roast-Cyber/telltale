@@ -60,7 +60,7 @@ external-default-features = "allow"
 skip = [
     { crate = "getrandom@0.2.17", reason = "Live Cargo.lock: ring requires the 0.2 line while tempfile/uuid require newer lines." },
     { crate = "getrandom@0.3.4", reason = "Live Cargo.lock: the 0.3 line is retained by ahash/rusqlite while uuid uses 0.4." },
-    { crate = "hashbrown@0.16.1", reason = "Live Cargo.lock: rusqlite's rsqlite-vfs path requires 0.16 while hashlink/indexmap use 0.17." },
+    { crate = "hashbrown@0.14.5", reason = "Live Cargo.lock: SQLite-compatible rusqlite 0.32 uses hashlink 0.9 with hashbrown 0.14 while indexmap uses 0.17." },
     { crate = "r-efi@5.3.0", reason = "Live Cargo.lock: getrandom 0.3 and 0.4 require incompatible r-efi lines." },
     { crate = "windows-sys@0.52.0", reason = "Live Cargo.lock: ring requires 0.52 while direct and notify paths require newer lines." },
     { crate = "syn@3.0.5", reason = "Live Cargo.lock: clap derive and rusqlite's SQLite WASM path require syn 3 while the broader derive ecosystem retains syn 2." },

@@ -5,12 +5,23 @@
 //! discovery, actions, persistence, and runtime routing remain outside this
 //! boundary.
 
+pub mod actions;
 #[cfg(feature = "source-io")]
 pub mod activity;
 #[cfg(all(test, feature = "source-io"))]
 mod activity_tests;
 mod classification;
+pub use actions::{
+    ActionContextEntry, ActionContribution, ActionCoordinate, ActionEvidence, ActionFinding,
+    ActionFindingKind, ActionModifierSemantics, CanonicalActionFinding, ContextOptions,
+    DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions, ReplayIdentity,
+    SemanticProvenance,
+};
+#[cfg(test)]
+mod action_tests;
 pub mod event3;
+#[cfg(test)]
+mod inference_session_equivalence_tests;
 mod matcher;
 mod observation_match;
 pub mod policy_accounting;
@@ -32,7 +43,7 @@ pub use matcher::{
 };
 pub use session::{
     CanonicalActivity, CanonicalSessionEvaluation, CanonicalSourceEvaluation, CanonicalSourceInput,
-    EvaluationCompletion, ProcessingError, evaluate_source,
+    EvaluationCompletion, ProcessingError, evaluate_source, evaluate_source_with_options,
 };
 pub type Operator = MatcherOperator;
 pub use observation_match::{
@@ -45,50 +56,6 @@ pub(crate) use rule_v1::RuleV1CompatibilityMetadata;
 pub use rule_v1::{RuleV1CompatibilityPlan, RuleV1CompileError, compile_rule_v1};
 pub use rule_v1::{RuleV1DetectorOutcome, RuleV1DetectorSessionEvaluation};
 
-/// Local equivalence harness seam; not a production ingestion API.
-#[doc(hidden)]
-pub fn equivalence_rule_v1_outcomes(
-    plan: &RuleV1CompatibilityPlan,
-    observations: &[&telltale_schema::observation::CanonicalObservationV2],
-) -> Result<std::collections::BTreeMap<String, RuleV1DetectorOutcome>, ProcessingError> {
-    let evaluated = rule_v1::evaluate_rule_v1_session_with_budget(
-        plan,
-        observations,
-        &mut session::RetentionBudget::new(),
-    )
-    .map_err(|error| error.processing_error())?;
-    Ok(evaluated
-        .detectors()
-        .iter()
-        .map(|detector| (detector.detector_id().to_owned(), detector.outcome()))
-        .collect())
-}
-
-/// Local equivalence harness seam; not a production ingestion API.
-#[doc(hidden)]
-pub fn equivalence_tool_process_chains(
-    rules: &telltale_rules::process_chain::CompiledProcessChainRules,
-    observation: &telltale_schema::observation::CanonicalObservationV2,
-    context: &telltale_rules::process_chain::ProcessChainContext,
-) -> Result<Vec<DetectorResult>, DetectionError> {
-    process_chain::evaluate_tool_process_chains(rules, observation, context)
-}
-
-/// Local equivalence harness seam using the default session configuration.
-#[doc(hidden)]
-pub fn equivalence_tool_process_chain_session(
-    rules: &telltale_rules::process_chain::CompiledProcessChainRules,
-    observations: &[&telltale_schema::observation::CanonicalObservationV2],
-    context: &telltale_rules::process_chain::ProcessChainContext,
-) -> Result<Vec<DetectorResult>, DetectionError> {
-    let evaluated = process_chain::evaluate_tool_process_chain_session(
-        rules,
-        observations,
-        context,
-        &crate::process_chain_session::ProcessChainSessionConfig::default(),
-    )?;
-    Ok(evaluated.results().to_vec())
-}
 pub use selector::{
     SelectorBacking, SelectorId, SelectorPresence, SelectorRegistry, SelectorResolution,
 };

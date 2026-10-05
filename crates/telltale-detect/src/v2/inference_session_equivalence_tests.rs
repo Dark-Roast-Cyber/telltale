@@ -14,9 +14,9 @@ use telltale_sources::acquisition::{
     AcquisitionOptions, OpenCodeSqliteReadOptions, acquire_opencode_sqlite, acquire_source,
 };
 
-use telltale_detect::v2::{
-    RuleV1CompatibilityPlan, RuleV1DetectorOutcome, compile_rule_v1, equivalence_rule_v1_outcomes,
-    equivalence_tool_process_chain_session, equivalence_tool_process_chains,
+use super::{
+    RuleV1CompatibilityPlan, RuleV1DetectorOutcome, compile_rule_v1, process_chain, rule_v1,
+    session,
 };
 
 const USER: &str = "Synthetic equivalence user message.";
@@ -1169,7 +1169,12 @@ fn rule_outcomes(
     facts: &[CanonicalObservationV2],
 ) -> BTreeMap<String, RuleV1DetectorOutcome> {
     let refs = facts.iter().collect::<Vec<_>>();
-    equivalence_rule_v1_outcomes(plan, &refs).unwrap()
+    rule_v1::evaluate_rule_v1_session_with_budget(plan, &refs, &mut session::RetentionBudget::new())
+        .unwrap()
+        .detectors()
+        .iter()
+        .map(|detector| (detector.detector_id().to_owned(), detector.outcome()))
+        .collect()
 }
 
 fn process_ids(facts: &[CanonicalObservationV2]) -> Vec<String> {
@@ -1178,7 +1183,7 @@ fn process_ids(facts: &[CanonicalObservationV2]) -> Vec<String> {
     let mut ids = Vec::new();
     for o in facts {
         ids.extend(
-            equivalence_tool_process_chains(&rules, o, &context)
+            process_chain::evaluate_tool_process_chains(&rules, o, &context)
                 .unwrap()
                 .iter()
                 .map(|d| d.detector().id().to_owned()),
@@ -1187,8 +1192,15 @@ fn process_ids(facts: &[CanonicalObservationV2]) -> Vec<String> {
     ids.sort();
     ids.dedup();
     let refs = facts.iter().collect::<Vec<_>>();
-    let session = equivalence_tool_process_chain_session(&rules, &refs, &context).unwrap();
+    let session = process_chain::evaluate_tool_process_chain_session(
+        &rules,
+        &refs,
+        &context,
+        &crate::process_chain_session::ProcessChainSessionConfig::default(),
+    )
+    .unwrap();
     let mut session_ids = session
+        .results()
         .iter()
         .map(|d| d.detector().id().to_owned())
         .collect::<Vec<_>>();

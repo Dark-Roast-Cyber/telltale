@@ -57,6 +57,7 @@ impl std::error::Error for RuleV1CompileError {}
 pub struct RuleV1CompatibilityPlan {
     export: RuleV1CompatibilityExport,
     detectors: Vec<CompiledObservationMatchDetector>,
+    pub(crate) action_rules: Vec<super::actions::ActionRule>,
 }
 
 #[derive(Debug)]
@@ -81,6 +82,29 @@ impl From<RiskAccountingError> for RuleV1SessionError {
 }
 
 impl RuleV1CompatibilityPlan {
+    pub fn semantic_provenance(&self) -> super::SemanticProvenance {
+        self.semantic_provenance_with_options(&super::DetailedEvaluationOptions::default())
+    }
+    pub fn action_modifier_semantics(
+        &self,
+        id: &str,
+        options: &super::DetailedEvaluationOptions,
+    ) -> Option<super::ActionModifierSemantics> {
+        self.export
+            .modifiers()
+            .iter()
+            .find(|modifier| modifier.id == id)
+            .map(|modifier| super::actions::modifier_semantics(modifier, options))
+    }
+    pub fn semantic_provenance_with_options(
+        &self,
+        options: &super::DetailedEvaluationOptions,
+    ) -> super::SemanticProvenance {
+        super::actions::provenance(&self.export, options)
+    }
+    pub(crate) fn action_export(&self) -> &RuleV1CompatibilityExport {
+        &self.export
+    }
     pub fn policy_name(&self) -> Option<&str> {
         self.export.policy_name()
     }
@@ -287,6 +311,7 @@ pub fn compile_rule_v1(
         .map(compile_rule)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(RuleV1CompatibilityPlan {
+        action_rules: super::actions::compile(rules)?,
         export: rules.clone(),
         detectors,
     })
@@ -531,9 +556,9 @@ fn retain_text(
         .map_err(|_| RuleV1SessionError::Bounds)
 }
 
-fn compile_rule(
+pub(crate) fn rule_metadata(
     rule: &RuleV1CompatibilityRule,
-) -> Result<CompiledObservationMatchDetector, RuleV1CompileError> {
+) -> Result<FindingMetadata, RuleV1CompileError> {
     if rule.signal_type != "atomic" {
         return Err(RuleV1CompileError::InvalidMetadata);
     }
@@ -557,6 +582,13 @@ fn compile_rule(
         .map_err(|_| RuleV1CompileError::InvalidMetadata)?
         .with_techniques(techniques)
         .map_err(|_| RuleV1CompileError::InvalidMetadata)?;
+    Ok(metadata)
+}
+
+fn compile_rule(
+    rule: &RuleV1CompatibilityRule,
+) -> Result<CompiledObservationMatchDetector, RuleV1CompileError> {
+    let metadata = rule_metadata(rule)?;
 
     if rule.matchers.is_empty() {
         return Err(RuleV1CompileError::InvalidRule);

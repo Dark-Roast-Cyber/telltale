@@ -13,9 +13,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::DetectionError;
 use super::RuleV1CompatibilityPlan;
-use super::process_chain::{
-    ProcessChainSessionEvaluation, evaluate_tool_process_chain_session_with_budget,
-};
+use super::process_chain::{ProcessChainSessionEvaluation, evaluate_tool_process_chain_views};
 use super::rule_v1::{
     RuleV1DetectorSessionEvaluation, RuleV1SessionEvaluation, evaluate_rule_v1_session_with_budget,
 };
@@ -124,8 +122,12 @@ pub struct CanonicalSessionEvaluation {
     pub(crate) tool_name: Option<String>,
     pub(crate) activity: CanonicalActivity,
     pub(crate) completion: EvaluationCompletion,
+    pub(crate) action_findings: Vec<super::ActionFinding>,
 }
 impl CanonicalSessionEvaluation {
+    pub fn action_findings(&self) -> &[super::ActionFinding] {
+        &self.action_findings
+    }
     pub fn rule_ids(&self) -> &[String] {
         self.rules.effective_rule_ids()
     }
@@ -185,6 +187,27 @@ pub fn evaluate_source(
     rules: &RuleV1CompatibilityPlan,
     process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
 ) -> Result<CanonicalSourceEvaluation, ProcessingError> {
+    evaluate_source_inner(input, rules, process, None)
+}
+
+/// Evaluate the compatibility and action views in the same source invocation.
+/// Options control bounded supplementary context, not detector or replay inputs.
+pub fn evaluate_source_with_options(
+    input: CanonicalSourceInput<'_>,
+    rules: &RuleV1CompatibilityPlan,
+    process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
+    options: &super::DetailedEvaluationOptions,
+) -> Result<CanonicalSourceEvaluation, ProcessingError> {
+    options.validate()?;
+    evaluate_source_inner(input, rules, process, Some(options))
+}
+
+fn evaluate_source_inner(
+    input: CanonicalSourceInput<'_>,
+    rules: &RuleV1CompatibilityPlan,
+    process: Option<(&CompiledProcessChainRules, &ProcessChainConfig)>,
+    detailed: Option<&super::DetailedEvaluationOptions>,
+) -> Result<CanonicalSourceEvaluation, ProcessingError> {
     if input.observations.len() > MAX_SOURCE_OBSERVATIONS {
         return Err(ProcessingError::Bounds);
     }
@@ -224,9 +247,25 @@ pub fn evaluate_source(
         budget.retain_text(instance.value())?;
     }
     let mut completion = EvaluationCompletion::Complete;
+    let mut replay_counts = BTreeMap::new();
     for observations in group_sessions(input.observations, input.source_instance.is_some()) {
         let rule_result = evaluate_rule_v1_session_with_budget(rules, &observations, &mut budget)
             .map_err(|error| error.processing_error())?;
+        let (mut action_findings, candidate_counts) = detailed
+            .map(|options| {
+                super::actions::evaluate(
+                    rules.action_export(),
+                    &rules.action_rules,
+                    &observations,
+                    options,
+                    &mut budget,
+                )
+            })
+            .transpose()?
+            .unwrap_or_default();
+        for (identity, count) in candidate_counts {
+            *replay_counts.entry(identity).or_insert(0usize) += count;
+        }
         // Match precedence is presentation only: it cannot erase an error.
         if rule_result
             .detectors()
@@ -237,7 +276,7 @@ pub fn evaluate_source(
         }
         let processes = process
             .map(|(rules, config)| {
-                evaluate_tool_process_chain_session_with_budget(
+                evaluate_tool_process_chain_views(
                     rules,
                     &observations,
                     &config.context,
@@ -247,6 +286,7 @@ pub fn evaluate_source(
                         max_correlation_risk_per_entity: config.max_correlation_risk_per_entity,
                     },
                     &mut budget,
+                    detailed.is_some(),
                 )
             })
             .transpose()
@@ -254,6 +294,14 @@ pub fn evaluate_source(
                 DetectionError::InvalidBounds => ProcessingError::Bounds,
                 _ => ProcessingError::Evaluation,
             })?;
+        if let (Some(options), Some(processes)) = (detailed, processes.as_ref()) {
+            action_findings.extend(super::actions::process_findings(
+                processes.detailed_results(),
+                &observations,
+                options,
+                &mut budget,
+            )?);
+        }
         let limited = input.source_instance.is_none()
             || rules.has_unavailable_url_visibility()
             || observations[0].session_id().is_none()
@@ -325,9 +373,20 @@ pub fn evaluate_source(
             rules: rule_result,
             processes,
             completion: session_completion,
+            action_findings,
         });
     }
     // These clones are safe because their byte capacity was consumed above.
+    if detailed.is_some() {
+        for finding in sessions.iter_mut().flat_map(|s| &mut s.action_findings) {
+            if finding
+                .replay_identity()
+                .is_some_and(|identity| replay_counts.get(identity.as_str()) != Some(&1))
+            {
+                finding.clear_replay_identity();
+            }
+        }
+    }
     Ok(CanonicalSourceEvaluation {
         client: input.client,
         source_id: input.source_id.to_owned(),

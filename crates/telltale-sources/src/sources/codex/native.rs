@@ -60,6 +60,7 @@ pub(crate) struct CodexNativeRecord {
     pub(crate) discriminator: Option<String>,
     pub(crate) session_metadata: bool,
     pub(crate) auxiliary: bool,
+    pub(crate) external_import: bool,
     pub(crate) role: Option<String>,
     pub(crate) message_content: Option<Value>,
     pub(crate) blocks: Option<Vec<CodexContentBlock>>,
@@ -85,6 +86,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
     };
     let mut records = Vec::with_capacity(values.len());
     let mut inherited_session_id = None;
+    let mut import_turns = std::collections::BTreeMap::new();
 
     for (source_sequence, value) in values.into_iter().enumerate() {
         if !value.is_object() {
@@ -122,6 +124,20 @@ pub(crate) fn extract_codex_native_records_with_limits(
                     .is_none_or(|kind| !is_known_codex_discriminator(kind))
                     && value.get("session_meta").is_some()));
         let effective_session_id = session_id.clone().or(inherited_session_id.clone());
+        if value.get("type").and_then(Value::as_str) == Some("event_msg")
+            && let Some(payload) = value.get("payload")
+            && payload.get("type").and_then(Value::as_str) == Some("task_started")
+            && let Some(turn) = payload.get("turn_id").and_then(Value::as_str)
+        {
+            import_turns.insert(
+                effective_session_id.clone(),
+                turn.starts_with("external-import-turn-"),
+            );
+        }
+        let external_import = import_turns
+            .get(&effective_session_id)
+            .copied()
+            .unwrap_or(false);
         let blocks = (!auxiliary)
             .then(|| content_blocks(semantic_value))
             .flatten()
@@ -148,6 +164,7 @@ pub(crate) fn extract_codex_native_records_with_limits(
             discriminator,
             session_metadata,
             auxiliary,
+            external_import,
             role: role.clone(),
             message_content: if auxiliary {
                 None

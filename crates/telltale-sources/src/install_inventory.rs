@@ -7,6 +7,13 @@ use sha2::{Digest, Sha256};
 
 use telltale_schema::event::{Event, Evidence, evidence_hash, install_inventory_event};
 
+/// Internal cross-crate inventory read boundary, sharing the direct source
+/// reader's regular-file, no-follow, nonblocking-open and byte-limit enforcement.
+#[doc(hidden)]
+pub fn read_inventory_config_bytes(path: &Path, cap: usize) -> Result<Vec<u8>, &'static str> {
+    crate::source_read::bounded_file_bytes(path, cap).map_err(|error| error.code())
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InstallInventorySnapshot {
     pub observed_at_unix_ms: u64,
@@ -15,6 +22,7 @@ pub struct InstallInventorySnapshot {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AgentInstallObservation {
     pub agent: String,
     pub installed: bool,
@@ -31,6 +39,7 @@ pub enum InstallConfidence {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct InstallSignal {
     pub kind: String,
     pub name: String,
@@ -45,6 +54,24 @@ pub struct InstallInventoryContext {
     pub extension_roots: Vec<PathBuf>,
     pub global_storage_roots: Vec<PathBuf>,
     pub node_roots: Vec<PathBuf>,
+}
+
+/// Launcher naming convention, selectable for metadata-only cross-platform probes.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum InstallPlatform {
+    Unix,
+    Windows,
+}
+
+impl InstallPlatform {
+    pub fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Unix
+        }
+    }
 }
 
 impl InstallInventoryContext {
@@ -83,9 +110,17 @@ pub fn collect_install_inventory_with_context(
     context: &InstallInventoryContext,
     observed_at_unix_ms: u64,
 ) -> InstallInventorySnapshot {
+    collect_install_inventory_for_platform(context, observed_at_unix_ms, InstallPlatform::current())
+}
+
+pub fn collect_install_inventory_for_platform(
+    context: &InstallInventoryContext,
+    observed_at_unix_ms: u64,
+    platform: InstallPlatform,
+) -> InstallInventorySnapshot {
     let agents = crate::sources::registry::builtin_install_defs()
         .iter()
-        .map(|def| observe_agent(*def, context))
+        .map(|def| observe_agent(*def, context, platform))
         .collect::<Vec<_>>();
     let hash = inventory_hash(&agents);
     InstallInventorySnapshot {
@@ -93,6 +128,49 @@ pub fn collect_install_inventory_with_context(
         hash,
         agents,
     }
+}
+
+/// Supplement metadata probes with caller-discovered supported session sources.
+/// Does not discover sources or read their contents. Session evidence means an
+/// agent is or was installed, not that a runnable installation still exists.
+pub fn collect_install_inventory_with_sources(
+    context: &InstallInventoryContext,
+    observed_at_unix_ms: u64,
+    sources: &[telltale_schema::source::Source],
+) -> InstallInventorySnapshot {
+    let mut snapshot = collect_install_inventory_with_context(context, observed_at_unix_ms);
+    for agent in &mut snapshot.agents {
+        let mut matching = sources
+            .iter()
+            .filter(|source| {
+                source.client.as_str() == agent.agent
+                    && crate::clients::supported_clients().iter().any(|client| {
+                        client.id == source.client
+                            && client
+                                .sources
+                                .iter()
+                                .any(|def| def.id == source.source_id && def.kind == source.kind)
+                    })
+            })
+            .map(|source| (source.source_id.clone(), path_hash(&source.path)))
+            .collect::<Vec<_>>();
+        matching.sort();
+        matching.dedup();
+        for (name, hash) in matching {
+            agent.signals.push(InstallSignal {
+                kind: "session_store".into(),
+                name,
+                present: true,
+                path_hash: Some(hash),
+            });
+            agent.installed = true;
+            if agent.confidence == InstallConfidence::Absent {
+                agent.confidence = InstallConfidence::Partial;
+            }
+        }
+    }
+    snapshot.hash = inventory_hash(&snapshot.agents);
+    snapshot
 }
 
 pub fn install_inventory_due(
@@ -116,7 +194,7 @@ pub fn snapshot_to_event(
     let installed = snapshot
         .agents
         .iter()
-        .filter(|agent| agent.installed)
+        .filter(|agent| agent.confidence == InstallConfidence::Confirmed)
         .count();
     let partial = snapshot
         .agents
@@ -140,10 +218,15 @@ pub fn snapshot_to_event(
 fn observe_agent(
     def: AgentInstallDef,
     context: &InstallInventoryContext,
+    platform: InstallPlatform,
 ) -> AgentInstallObservation {
     let mut signals = Vec::new();
     for executable in def.executables {
-        signals.push(executable_signal(executable, &context.path_dirs));
+        signals.push(executable_signal_for_platform(
+            executable,
+            &context.path_dirs,
+            platform,
+        ));
     }
     for package in def.node_packages {
         signals.push(node_package_signal(package, &context.node_roots));
@@ -181,10 +264,22 @@ fn observe_agent(
     }
 }
 
-fn executable_signal(executable: &str, path_dirs: &[PathBuf]) -> InstallSignal {
+fn executable_signal_for_platform(
+    executable: &str,
+    path_dirs: &[PathBuf],
+    platform: InstallPlatform,
+) -> InstallSignal {
     let path = path_dirs
         .iter()
-        .map(|dir| dir.join(executable))
+        .flat_map(|dir| {
+            let mut candidates = vec![dir.join(executable)];
+            if platform == InstallPlatform::Windows {
+                candidates.extend(
+                    ["exe", "cmd", "bat", "ps1"].map(|ext| dir.join(format!("{executable}.{ext}"))),
+                );
+            }
+            candidates
+        })
         .find(|candidate| candidate.is_file());
     signal("executable", executable, path)
 }
@@ -367,6 +462,88 @@ pub fn installed_agent_counts(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    #[test]
+    fn inventory_config_fifo_returns_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = tempdir().unwrap();
+        let path = root.path().join("fifo");
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // Synthetic FIFO, with no writer: blocking open would hang this regression.
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        assert_eq!(
+            read_inventory_config_bytes(&path, 1024),
+            Err("non_regular_source")
+        );
+    }
+
+    #[test]
+    fn launcher_suffixes_follow_selected_platform() {
+        let temp = tempdir().unwrap();
+        for suffix in ["exe", "cmd", "bat", "ps1"] {
+            let dir = temp.path().join(suffix);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join(format!("claude.{suffix}")), b"synthetic").unwrap();
+            assert!(
+                executable_signal_for_platform(
+                    "claude",
+                    std::slice::from_ref(&dir),
+                    InstallPlatform::Windows
+                )
+                .present
+            );
+            assert!(
+                !executable_signal_for_platform("claude", &[dir], InstallPlatform::Unix).present
+            );
+        }
+    }
+
+    #[test]
+    fn session_evidence_is_partial_exact_and_content_free() {
+        use telltale_schema::{
+            clients::{ClientId, SourceKind},
+            source::Source,
+        };
+        let temp = tempdir().unwrap();
+        let context = InstallInventoryContext {
+            home: temp.path().into(),
+            path_dirs: vec![],
+            extension_roots: vec![],
+            global_storage_roots: vec![],
+            node_roots: vec![],
+        };
+        let source = Source {
+            client: ClientId::Codex,
+            kind: SourceKind::Jsonl,
+            source_id: "codex.sessions".into(),
+            path: temp.path().join("TT_SESSION_PATH_MARKER"),
+        };
+        let snapshot =
+            collect_install_inventory_with_sources(&context, 1, std::slice::from_ref(&source));
+        let codex = snapshot.agents.iter().find(|a| a.agent == "codex").unwrap();
+        assert!(codex.installed);
+        assert_eq!(codex.confidence, InstallConfidence::Partial);
+        assert!(
+            !serde_json::to_string(&snapshot)
+                .unwrap()
+                .contains("TT_SESSION_PATH_MARKER")
+        );
+        assert!(
+            !serde_json::to_string(&snapshot_to_event(&snapshot).unwrap())
+                .unwrap()
+                .contains("TT_SESSION_PATH_MARKER")
+        );
+        let mut wrong = source;
+        wrong.client = ClientId::Claude;
+        let snapshot = collect_install_inventory_with_sources(&context, 1, &[wrong]);
+        assert!(
+            snapshot
+                .agents
+                .iter()
+                .all(|a| a.confidence == InstallConfidence::Absent)
+        );
+    }
 
     #[test]
     fn detects_cli_and_extension_install_evidence_without_contents() {

@@ -34,7 +34,13 @@ computed. Five-platform candidate-native qualification passed in run
 `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`; each job exercised the exact
 published archive, attestation, pinned archive and binary identity, bundled
 rules, synthetic positive fixture, and Event 3.0 validation. The historical
-rc.3 verifier and qualification do not establish 0.7 evidence. The published `v0.6.0-rc.3`
+rc.3 verifier and qualification do not establish 0.7 evidence. Subsequent
+source modifications on `main` invalidate the Issue #87 exact-source
+CI/CodeQL/local-Git/consumer/preflight release qualification that qualified
+`v0.7.0-rc.1`. Release qualification is distinct from development progress;
+unpublished changed source does not require a new RC solely due to unpublished
+changes, but changed source cannot claim earlier exact-source qualification evidence.
+The published `v0.6.0-rc.3`
 prerelease is Release ID `386482697` from
 source SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`.
 Publication/provenance, the static-CRT publication gate, and five-platform native

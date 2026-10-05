@@ -240,32 +240,93 @@ fn find_sequences(
         let Some(anchor) = candidates[anchor_index].occurred_at else {
             continue;
         };
-        let mut step = 0;
-        let mut matched = Vec::new();
-        for &candidate_index in &indexes[start..] {
-            let candidate = &candidates[candidate_index];
-            let Some(timestamp) = candidate.occurred_at else {
-                continue;
-            };
-            if timestamp - anchor > window {
-                break;
-            }
-            let Some(current) = rule.steps.get(step) else {
-                break;
-            };
-            if current.matches(&candidate.category, &candidate.rule_id, &candidate.child) {
-                matched.push(candidate_index);
-                step += 1;
-                if step == rule.steps.len() {
-                    break;
-                }
-            }
-        }
-        if step == rule.steps.len() {
+        if let Some(matched) = ordered_sequence(
+            &indexes[start..],
+            anchor,
+            window,
+            rule.steps.len(),
+            |index| candidates[index].occurred_at,
+            |step, index| {
+                let candidate = &candidates[index];
+                rule.steps[step].matches(&candidate.category, &candidate.rule_id, &candidate.child)
+            },
+        ) {
             sequences.push(matched);
         }
     }
     sequences
+}
+
+/// Shared bounded sequence kernel. Callers own predicates, session grouping,
+/// completion consumption and presentation, not a second timing evaluator.
+pub(crate) fn ordered_sequence(
+    indexes: &[usize],
+    anchor: OffsetDateTime,
+    window: Duration,
+    steps: usize,
+    timestamp: impl Fn(usize) -> Option<OffsetDateTime>,
+    matches: impl Fn(usize, usize) -> bool,
+) -> Option<Vec<usize>> {
+    if steps == 0 {
+        return None;
+    }
+    let mut matched = Vec::new();
+    let mut previous = anchor;
+    for &index in indexes {
+        let Some(time) = timestamp(index) else {
+            continue;
+        };
+        if time < previous {
+            continue;
+        }
+        if time - anchor > window {
+            break;
+        }
+        if matches(matched.len(), index) {
+            previous = time;
+            matched.push(index);
+            if matched.len() == steps {
+                return Some(matched);
+            }
+        }
+    }
+    None
+}
+
+/// A completion-anchored sequence for streaming action correlations. Work is
+/// explicitly debited even for candidates that cannot satisfy a predecessor.
+pub(crate) fn ordered_predecessors(
+    end_index: usize,
+    window: Duration,
+    steps: usize,
+    timestamp: impl Fn(usize) -> OffsetDateTime,
+    matches: impl Fn(usize, usize) -> bool,
+    remaining_work: &mut usize,
+) -> Result<Option<Vec<usize>>, ()> {
+    if steps == 0 || !matches(steps - 1, end_index) {
+        return Ok(None);
+    }
+    let end = timestamp(end_index);
+    let mut previous = end;
+    let mut support = Vec::with_capacity(steps);
+    let mut step = steps - 1;
+    for index in (0..=end_index).rev() {
+        *remaining_work = remaining_work.checked_sub(1).ok_or(())?;
+        let time = timestamp(index);
+        if time > previous || end - time > window {
+            continue;
+        }
+        if matches(step, index) {
+            support.push(index);
+            previous = time;
+            if step == 0 {
+                support.reverse();
+                return Ok(Some(support));
+            }
+            step -= 1;
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

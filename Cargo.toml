@@ -6,7 +6,6 @@ members = [
     "crates/telltale-rules",
     "crates/telltale-sources",
     "crates/telltale-detect",
-    "crates/telltale-equivalence",
     "crates/telltale",
 ]
 default-members = [
@@ -29,6 +28,7 @@ repository = "https://github.com/Dark-Roast-Cyber/telltale"
 
 [workspace.dependencies]
 regex = "1.11"
+rusqlite = { version = "=0.32.1", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
@@ -91,7 +91,7 @@ flate2.workspace = true
 fs4 = "1.1"
 time.workspace = true
 uuid.workspace = true
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite.workspace = true
 ctrlc = { version = "3.5.2", features = ["termination"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 base64 = "0.22"

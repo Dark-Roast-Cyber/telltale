@@ -554,3 +554,66 @@ retained compatibility text. Capacity MUST be consumed before retention.
 - **WHEN** input order changes but source occurrence coordinates fully determine
   canonical order
 - **THEN** replay-stable evaluation and projection semantics SHALL remain equal
+
+### Requirement: Action interpretation and detailed finding materialization
+
+The implementation SHALL support detailed action-scoped evaluation beside the
+frozen session compatibility view. `ActionFinding` SHALL expose constructor-sanitized,
+immutable DTOs: `coordinate()` SHALL identify the host action grouping;
+`canonical_findings()` SHALL expose native semantic Finding identities from
+`DetectorResult -> Signal -> Finding`; and `promotion_score()` SHALL represent
+the host action contribution sum, which is distinct from native Finding risk points
+and Event 3 session scoring.
+
+Severity and risk points SHALL be analytic metadata derived from detector content and rules,
+not source-reported facts; canonical stage, supporting observation IDs, and occurred_at timestamps
+SHALL be source-reported only. Actual OS execution SHALL NOT be inferred from tool intent.
+Atomic and correlation findings SHALL be transparently distinguished through
+`ActionFindingKind`. Optional replay comparison identity (`ReplayIdentity`, algorithm
+version 1) SHALL NOT be coordinate-based; its semantic preimage frames adapter type,
+family/stage, source time, source-reported call ID, and action view fields, while coordinates,
+session identifiers, and source paths SHALL be excluded. It SHALL be absent when required source
+time is absent, unavailable (`None`) when semantic candidates are ambiguous across the whole
+acquisition, and always `None` for process-chain findings. Truthful continued-session
+support SHALL NOT be claimed as universal authentication, and canonical `OccurrenceId`
+coordinates SHALL remain unchanged.
+
+Startup `Pipeline::semantic_provenance(options)` SHALL match the same-pass manifest
+and hash effective rule fingerprint, action semantics version, native action profile
+version, replay algorithm version, linked download score, and process chain configuration.
+It SHALL NOT hash context options, host YAML paths, or binary identity.
+
+Same-pass context extraction SHALL default all content switches to false (`user_text`,
+`assistant_text`, `tool_arguments`) and bound neighbor offsets to at most 32 before and
+after the anchor observation. Only explicitly enabled user/assistant text and non-result
+tool observations at proposed, requested, started, or completed stages SHALL contribute.
+The anchor observation, tool results, imported observations, and unknown/excluded bodies
+SHALL be excluded from context output, without reopening SQLite databases. All extracted
+context text SHALL be sanitized by `redact_sensitive_text`, bounding each entry to 512 bytes
+and capping total extracted context text at 32 KiB across the maximum 64 neighbor observations.
+
+Action category chains SHALL be ordered within a 15-minute source-time window.
+Bundled downloaded-artifact correlation SHALL link supported download and execution
+forms, defaulting to action-link score 50 and compatibility modifier 35; explicit options
+MAY override the action score between 0 and 100. Native profile adjustments SHALL apply
+only to bundled rule predicates; effective custom rules with matching IDs SHALL preserve
+their own matcher content.
+
+#### Scenario: Detailed action findings maintain distinct scoring
+
+- **WHEN** detailed evaluation processes observations producing atomic and correlation findings
+- **THEN** each `ActionFinding` reports its coordinate and canonical findings
+- **AND** `promotion_score()` reflects the action contribution sum without modifying native Finding risk points or Event 3 session scores
+
+#### Scenario: Same-pass context respects disclosure switches and boundaries
+
+- **WHEN** detailed evaluation requests context with bounded neighbor limits
+- **THEN** only explicitly enabled user, assistant, or tool argument text is returned
+- **AND** the anchor observation, tool results, and imported observations are excluded
+- **AND** all returned text is sanitized by the privacy boundary and capped at 32 KiB
+
+#### Scenario: Semantic provenance captures effective detection configuration
+
+- **WHEN** `Pipeline::semantic_provenance` is evaluated for detailed options
+- **THEN** the returned identity reflects effective rules, profile versions, replay version, and action scores
+- **AND** context switches, host file paths, and runtime clock values are excluded from the digest
