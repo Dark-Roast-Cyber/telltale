@@ -66,6 +66,16 @@ independent efficacy scenario. The denominator is all eight identities in the
 public source registry; the candidate set is empty. Registering a source without
 fixture representation fails the coverage check.
 
+`uc001_fixture_conformance_covers_every_supported_source_identity` separately
+acquires attack and observed benign fixtures for all eight exact registry
+identities. Seven attack fixtures produce critical MCP injection/controlled
+egress matches; Copilot preserves the attack but reports the contract-backed
+UserContext capability gap as indeterminate, not a benign efficacy outcome.
+Mutation tests reject missing/wrong/duplicate identities and bad evidence.
+`uc002_copilot_credential_publish_fixture_is_critical` checks its observable
+credential-harvest/publish chain. These are conformance gates, not additional
+efficacy cases, and do not change the manifest or golden report.
+
 `make evaluation-check` validates the manifest and compares the generated deterministic report with the tracked baseline. `make evaluation-report` writes a current report only under `target/evaluation/`.
 
 ## Canonical synthetic tranche (CE-*)

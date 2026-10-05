@@ -140,8 +140,12 @@ applies when adding an entirely new coding agent or harness.
 - If packaged unit tests resolve fixtures under a crate boundary, mirror the
   exact synthetic files under `crates/<crate>/tests/fixtures/...`.
 - Cover benign user/assistant records, tool calls, tool results, positive
-  deterministic detections, and a quiet negative. UC-001 is the required
-  cross-client conformance fixture for a new `ClientId`. Never use real
+  deterministic detections, and an observed benign input without UC-001 matches
+  (other benign signals may remain). UC-001 conformance is required for each
+  exact source identity, not just each `ClientId`: positive detection or an
+  explicit contract-backed capability gap with preserved attack evidence and
+  asserted indeterminate reasons. See the [Source Validation Matrix](source-validation-matrix.md)
+  for the executable gate; an empty input is not evidence. Never use real
   transcripts, credentials, auth files, private paths, or customer data.
 
 ### 8. Add focused tests

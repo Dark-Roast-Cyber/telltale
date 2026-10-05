@@ -165,6 +165,84 @@ Windows, or live-source qualification, does not satisfy any Issue #66 gate, and
 applies only to that development commit. Splunk/reporting catch-up after the
 test window was not assessed.
 
+## 0.7 stable-readiness decisions
+
+These are decisions and required future gates, not evidence that a gate has
+passed. The current development base
+`7511307b64424e54ee13fa77007d0eb9775acedc` is not a frozen replacement
+candidate. Issue #87's earlier freeze at
+`5a47eaab406c8cb5b139476861722155b0fdf227` was invalidated by subsequent merged
+code; historical evidence is not rebound. Development CI run `37361823509` and
+CodeQL run `37361823885` passed, but do not qualify a release artifact. A new
+reviewed final source SHA and exact standalone Git-consumer proof/preflight are
+required after polish. Freezing that source remains a separate acceptance action;
+integration pins and acceptance are a distinct gate.
+
+The 0.7 source scope remains the six families/eight exact identities in the
+[supported-source denominator](migrations/0.7.0.md#supported-source-denominator).
+Do not restore retired adapters or expand scope to Event 4 or active blocking.
+Event 3 remains the production contract. Keep action-promotion scores distinct
+from native finding assessments and Event 3 session scores. Retain
+`rusqlite = "=0.32.1"`, SQLx coexistence, and the Rust 1.88 supported embedding
+subset; do not claim the CLI/workspace has Rust 1.88 MSRV or full historical
+client parity.
+
+Before stable qualification, finish supported-source synthetic fixture coverage
+and make documentation limits truthful. OpenClaw and Qwen CLI remain
+fixture-only/preview for live stores until bounded, approved validation uses
+client-generated synthetic stores; handwritten fixtures do not prove live
+compatibility, and existing personal stores must not be scanned. Keep their
+current labels until that evidence is accepted. This is a stable-qualification
+gate, not a retroactive change to fixture-based source support. Any unavailable
+host gate remains BLOCKED, never PASS.
+
+**Accepted risk — UPGRADE-01 (deferred), accepted 2026-10-05.** Lossless
+legacy-state upgrades, an executable drain runbook, coordinated
+host-version migration, and upgrade rollback qualification are deferred; they
+are not current 0.7 polish or release prerequisites. Old persisted state without
+pending identities may absorb undelivered actions once on semantic/version
+change. Mixed host protocol versions and rollback of newer state remain
+unqualified; no lossless-upgrade claim is made. The downstream integration
+maintainer owns this follow-up, to revisit before supported in-place migration
+or existing-install rollout is advertised or enabled (not for current fresh-install
+development). Closure remains pending: executable old/new state fixtures
+covering pending work, partial delivery/restart acknowledgment, compatible IPC,
+and rollback preserving new pending work, plus a documented runbook.
+
+This decision permits controlled fresh-install testing only; it does not
+authorize live-source or deployment work. It waives only cross-version upgrade
+safety work. Same-version retry, durability, privacy, and restart recovery, and
+artifact provenance and clean-host gates remain mandatory. A release canary may
+still roll back to its pre-test host baseline; that is separate from qualifying
+cross-version migration rollback.
+
+Performance qualification must use bounded synthetic native Windows and Linux
+cold, warm, steady, and saturated workloads, including slow delivery and restart
+recovery. Record fixture hash, source SHA, toolchain/features/rule options, host
+specification, commands, latency percentiles/max, peak RSS, queue and exclusion
+counts/bytes, and recovery results. Require latency within configured cadence,
+retention within configured caps, no post-warm-up monotonic growth, and no silent
+loss, duplicate promotion, or privacy regression. A byte-visit budget is not an
+RSS bound. Oversized inputs must fail closed without partial source success or
+cursor advance, and queue admission/retry must recover. These are gates, not
+measurements already performed.
+
+Keep standalone published-artifact qualification distinct from downstream
+integration acceptance. Exact-artifact gates remain mandatory; stable promotion
+also requires separately authorized bounded canary and rollback. An integration
+claim additionally requires a real downstream-consumer Windows build and
+integration test; upstream Windows CI is not that evidence. Telltale remains
+useful independently of any downstream consumer. No artifact, workflow dispatch,
+live authorization, or promotion is implied here. Telltale maintainers own source,
+docs, bounds, and consumer contracts; downstream maintainers own vendor pins,
+lockfiles and host integration; the release owner owns freeze, artifact gates,
+and canary approval.
+
+Defer the dependency-update PR as-is. Do not merge major upgrades or loosen the
+SQLite pin merely to repair CI. Security advisories remain mandatory; make only
+targeted necessary fixes before freeze. An unrelated candidate failure in a
+separate open PR is not by itself a release blocker.
+
 ## Historical RC Candidate Handoff
 
 The `v0.5.0-rc.7` handoff completed before stable publication: the reviewed commit was tagged and its

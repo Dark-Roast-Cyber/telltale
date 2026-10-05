@@ -40,7 +40,7 @@ ToolExecution **Unknown**.
 | OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
 | Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
 | OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Workspace conditional; process ID and exit code absent; call ID/error state/parts conditional |
-| Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ Fixture-backed + bounded live validation | User context and content parts absent; tool results conditional; ToolExecution unknown |
+| Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | — | ✅ Fixture-backed + bounded live validation | UC-001 capability-indeterminate: UserContext unsupported; content parts absent; tool results conditional; ToolExecution unknown |
 
 ## Coverage Gates
 
@@ -50,13 +50,25 @@ Every new agent source must pass these required gates before being marked suppor
 2. **Native extraction and canonical acquisition**: a benign fixture is extracted and acquired without errors, with native accounting and progress checked.
 3. **Canonical tool call**: a tool-call fixture maps to the expected canonical observation.
 4. **Canonical tool result**: a tool-result fixture maps to the expected canonical observation.
-5. **Adapter conformance and positive detection**: fixture-backed canonical adapter coverage and Detection v2/evaluation coverage establish the expected source identity, facts, and deterministic signals. Every new `ClientId` must include UC-001 coverage; the repository test `uc001_critical_fixture_coverage_includes_every_supported_client` enforces this cross-client gate.
-6. **Negative detection**: at least one negative or benign source fixture stays quiet under bundled rules.
+5. **Adapter conformance and detection**: fixture-backed canonical adapter coverage and Detection v2/evaluation coverage establish the exact `(ClientId, source_id, kind)`, facts, and deterministic signals. Every new source identity must include a UC-001 attack fixture with positive detection, or an explicit contract-backed capability gap that proves attack content survived acquisition and the expected indeterminate non-detection. A missing or empty fixture is not a visibility gap. `uc001_fixture_conformance_covers_every_supported_source_identity` in `tests/evaluation_corpus/main.rs` enforces all eight identities; run `cargo test --locked --test evaluation_corpus uc001_`.
+6. **Negative detection**: at least one genuinely observed benign source fixture has no UC-001 matches. Other benign signals, such as `execution.shell`, may remain; absence of UC-001 matches under unsupported capabilities is not an efficacy true negative.
 7. **Capability documentation**: known lossy, absent, or derived fields are recorded here and in [Agent Capability Profiles](agent-capability-profiles.md) when the source becomes user-visible.
 
 Live host validation is an additional operational confidence signal, not a
 support gate. Record it when safe and available, but do not scan large or
 sensitive real session stores just to satisfy fixture coverage.
+
+The UC-001 gate proves critical MCP injection plus controlled-domain egress in
+one session for seven identities (five client families). Copilot's attack tool
+result is preserved, but both atomic rules require UserContext, which its
+adapter reports Unsupported. Both detectors are capability-indeterminate with
+`required_capability_unsupported`; the chain cannot fire and evaluation is
+VisibilityLimited. This is a tested visibility gap, not positive coverage or a
+benign outcome. The same gate acquires and evaluates benign inputs for all
+eight identities. `uc002_copilot_credential_publish_fixture_is_critical` in the
+same module separately proves Copilot's credential-harvest/publish chain.
+These are synthetic conformance checks, not new efficacy samples, historical
+source parity, or live client-generated store qualification.
 
 Windows discovery coverage includes deterministic Codex `CodexHome` tests. These
 paths are not live-validated and are not by themselves public live-source
@@ -98,7 +110,7 @@ gates above exist in the same change.
 
 | Use Case | Description | Clients Covered | Status |
 | --- | --- | --- | --- |
-| UC-001 | Fake MCP prompt injection to controlled domain | All 6 supported clients (8 source identities) | ✅ Complete |
+| UC-001 | Fake MCP prompt injection to controlled domain | Positive: 5/6 client families, 7/8 source identities; conformance: all 8 identities | ⚠️ Copilot capability-indeterminate visibility gap |
 | UC-002 | Credential harvesting before package publish | Codex, Copilot | ✅ 2 clients |
 | UC-003 | DNS exfiltration with encoded payload | Codex | ✅ 1 client |
 

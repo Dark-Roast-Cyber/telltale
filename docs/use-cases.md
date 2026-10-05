@@ -43,10 +43,15 @@ Fixture guidance:
 - Include one positive fixture that chains MCP injection, secret access, and controlled-domain egress.
 - Include one negative fixture where a reserved test-domain string appears in benign user text without MCP injection or tool execution.
 - Include one negative fixture where MCP metadata is normal and contains no instruction override language.
-- Keep at least one positive fixture in each supported session client shape so
-  source-adapter differences cannot hide UC-001 detections. Current positive coverage
-  includes Claude Code, the three Codex identities, OpenCode SQLite, OpenClaw,
-  Qwen, and Copilot process logs.
+- Keep a UC-001 attack conformance fixture for each exact supported source
+  identity, with positive detection or an explicit contract-backed visibility
+  gap. Current critical positive coverage includes Claude Code, the three Codex
+  identities, OpenCode SQLite, OpenClaw, and Qwen: seven identities across five
+  client families. Copilot preserves the attack tool result, but both atomic
+  rules are indeterminate because UserContext is Unsupported; the chain cannot
+  fire. This is not a benign outcome or positive detection coverage. See the
+  [Source Validation Matrix](source-validation-matrix.md) for the all-eight
+  conformance gate and the separate live-validation boundary.
 
 Example synthetic string:
 
