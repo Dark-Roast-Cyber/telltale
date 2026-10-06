@@ -13,6 +13,7 @@ pub(crate) mod native;
 mod tests;
 
 pub(crate) use install::INSTALL;
+pub(crate) use install::desktop_install_signals;
 
 pub(crate) const SOURCES: &[ClientSourceDef] = &[ClientSourceDef {
     id: "opencode.sqlite",

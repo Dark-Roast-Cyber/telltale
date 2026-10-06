@@ -5035,6 +5035,103 @@ fn scan_once_refuses_fixture_root_without_allow_fixtures() {
     assert!(!log_path.exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn scan_windows_opencode_desktop_with_default_home_and_data_home_roots() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let data_home = home.join(".local/share");
+    fs::create_dir_all(data_home.join("opencode")).unwrap();
+    fs::copy(
+        "tests/fixtures/session_stores/opencode/opencode.db",
+        data_home.join("opencode/opencode.db"),
+    )
+    .unwrap();
+    let cli = home.join("AppData/Roaming/ai.opencode.desktop/cli/2.0.24/opencode-cli.exe");
+    fs::create_dir_all(cli.parent().unwrap()).unwrap();
+    fs::write(&cli, b"synthetic executable metadata").unwrap();
+
+    for (index, root) in [Path::new("."), home.as_path(), data_home.as_path()]
+        .into_iter()
+        .enumerate()
+    {
+        let log = temp.path().join(format!("events-{index}.jsonl"));
+        let state = temp.path().join(format!("state-{index}.json"));
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .env_clear()
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("LOCALAPPDATA", home.join("AppData/Local"))
+            .env("APPDATA", home.join("AppData/Roaming"))
+            .current_dir(temp.path())
+            .args([
+                "scan",
+                "--once",
+                "--no-local-config",
+                "--emit-activity",
+                "--root",
+            ])
+            .arg(root)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(summary["source_counts"]["opencode.sqlite"], 1);
+        assert_eq!(summary["source_processing"]["parse_error_source_count"], 0);
+        let events = fs::read_to_string(&log).unwrap();
+        let events = events
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            events
+                .iter()
+                .any(|event| event["client"] == "opencode" && event["event_type"] == "activity")
+        );
+        let saved: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        let agents = saved["install_inventory"]["agents"]
+            .as_array()
+            .expect("saved inventory agents");
+        let opencode = agents
+            .iter()
+            .find(|agent| agent["agent"] == "opencode")
+            .unwrap();
+        assert_eq!(opencode["installed"], true);
+        assert_eq!(opencode["confidence"], "confirmed");
+    }
+}
+
+#[test]
+fn scan_once_refuses_marked_opencode_only_fixtures() {
+    let temp = tempdir().unwrap();
+    fs::create_dir(temp.path().join("opencode")).unwrap();
+    fs::write(temp.path().join("opencode/opencode.db"), b"synthetic").unwrap();
+    fs::write(temp.path().join(".telltale-fixtures"), b"").unwrap();
+    let log = temp.path().join("events.jsonl");
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["scan", "--once", "--no-local-config", "--root"])
+        .arg(temp.path())
+        .arg("--log-path")
+        .arg(&log)
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("refusing to write fixture/demo data")
+    );
+    assert!(!log.exists());
+}
+
 #[test]
 fn scan_once_allows_fixture_root_with_dry_run() {
     let temp = tempdir().expect("tempdir");

@@ -14,7 +14,11 @@ Session-store discovery answers “where can Telltale acquire activity from?” 
 intentionally separate from installed-agent inventory, which answers “which
 agent tools appear installed?” using metadata-only checks in
 `crates/telltale-sources/src/install_inventory.rs` such as executables on `PATH`, package roots, VS
-Code-style extension IDs, and globalStorage presence. Install inventory runs on
+Code-style extension IDs, and globalStorage presence. On Windows, OpenCode
+Desktop also has metadata-only executable probes under
+`~/AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe` and
+`~/AppData/Roaming/ai.opencode.desktop/cli/*/opencode-cli.exe`; these do not
+require a PATH shim or Node installation. Install inventory runs on
 a configurable cadence and never reads transcript/session contents.
 
 ## Host Discovery Candidates
@@ -22,8 +26,10 @@ a configurable cadence and never reads transcript/session contents.
 These are the host-side locations Telltale currently resolves when
 `telltale scan --root .` uses host-style discovery instead of a checked-in fixture
 tree. Registered `Home` and `DataHome` sources also resolve on
-Windows through the platform-aware root helpers. Windows entries below are not
-live-validated and are not by themselves public live-source support claims.
+Windows through the platform-aware root helpers. Windows entries below remain
+unvalidated unless a bounded live validation is explicitly recorded. A single
+validated installation does not establish support for every client version or
+installation layout.
 
 These candidates document expected product behavior and the scanner paths Telltale
 can resolve. They are not instructions to publish local session stores,
@@ -41,7 +47,7 @@ than by exact private path or transcript content.
 | Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows unvalidated | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. |
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
-| OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | `%LOCALAPPDATA%\opencode\opencode.db` or `%APPDATA%\opencode\opencode.db` | Confirmed Linux/macOS; Windows unvalidated | Telltale resolves Linux through `XDG_DATA_HOME`, macOS through the platform data root, and Windows through the platform data root. Native Windows live validation is incomplete. |
+| OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | Windows platform data root plus `%XDG_DATA_HOME%\opencode\opencode.db` when set and `~/.local/share/opencode/opencode.db` | Confirmed Linux/macOS; Windows discovery/inventory live-checked | Windows checks the platform data root (`LOCALAPPDATA`, then `APPDATA`, then `~/AppData/Local`) alongside XDG candidates. Desktop v2.0.24 discovery/inventory validation and the live acquisition limit are recorded below. |
 | Copilot | `copilot.process_log` | project-local `logs/copilot` | project-local `logs/copilot` | project-local `logs/copilot` | Telltale-local operational model | **Project-local only** — discovered below configured project roots or applicable default project roots. No home-relative source root. |
 
 ## Project Roots
@@ -75,6 +81,10 @@ escaping rules.
 
 - When `telltale scan --root` points at a checked-in fixture tree such as `tests/fixtures/session_stores`, Telltale does not use host-path resolution.
 - Fixture discovery still uses each source's `fixture_relative_path` directly.
+- A standalone `opencode/opencode.db` does not identify fixtures: real data homes
+  use that same layout. Mark an OpenCode-only synthetic root with an empty
+  `.telltale-fixtures` file to retain the emitting-scan guard. Other flattened
+  client fixture paths continue to identify the checked-in fixture trees.
 - Platform-aware host-path resolution does not change fixture layout or fixture-path expectations.
 - Public verification should prefer checked-in synthetic fixtures and commands that do not touch real agent stores, such as a dry-run fixture scan or focused acquisition/discovery tests.
 
@@ -83,6 +93,11 @@ escaping rules.
 - `Home` sources resolve from `HOME` on Linux/macOS and `HOME` or `USERPROFILE` on Windows.
 - `CodexHome` resolves from `CODEX_HOME` when set, otherwise `~/.codex`.
 - `DataHome` resolves to `XDG_DATA_HOME` or `~/.local/share` on Linux, `~/Library/Application Support` on macOS, and `LOCALAPPDATA`, then `APPDATA`, then `%USERPROFILE%\AppData\Local` on Windows.
+- OpenCode on Windows additionally checks `XDG_DATA_HOME` when set and
+  `~/.local/share`, retaining any distinct databases found in AppData and XDG
+  locations. Scan, watch and bounded discovery use the same candidates. An
+  explicit `--root` is isolated from environment overrides and may name either
+  a home or a data home containing `opencode/opencode.db`.
 
 ## Linux Operational Notes
 
@@ -100,10 +115,24 @@ Codex adapter notes:
 
 OpenCode adapter notes:
 
+- Bounded native Windows validation on 2026-10-05 used OpenCode Desktop v2.0.24
+  and its live WAL-backed SQLite store. Default-root and explicit home/data-home
+  discovery and metadata-only Desktop inventory were checked with isolated
+  output/state paths, without `--allow-fixtures`. Emitting scans passed the
+  fixture guard, but full-store acquisition reported `unbounded_value`: retained
+  tool outputs exceed the existing canonical 4,096-byte string bound. Synthetic
+  end-to-end emitting scans passed. This records one installation's discovery
+  and inventory, not successful full-store live ingestion or complete history.
+  Detailed evidence remains local; canonical limits were not relaxed.
+
 - Newer data lives in `opencode.db`, table `message`, with JSON in `data`.
 - SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a bounded `SourceReadError::Locked` failure instead of hanging indefinitely.
 - Per-source acquisition reads are sequential; a single slow or contended source blocks the current scan (known limitation).
 - OpenCode per-message model attribution reflects the model that generated each message, which may differ from the session's primary model when sub-agents are used.
+- Desktop v2 user messages can carry `model: { modelID, providerID }`, while
+  assistant messages carry scalar `modelID` and `providerID`. Both shapes are
+  acquired; conflicting metadata remains ambiguous and malformed fields fail
+  acquisition atomically.
 - Live OpenCode SQLite stores also carry a top-level `message.session_id` column even when the JSON payload does not.
 - Telltale needs all roles and tool records, not only assistant token-usage rows.
 

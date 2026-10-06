@@ -117,26 +117,28 @@ pub fn discover_sources_bounded(
             .iter()
             .filter(|def| def.root != PathRoot::ProjectLocal)
         {
-            let search = source_search_root(root, *source_def);
-            match fs::symlink_metadata(&search) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
-                Ok(meta) if meta.file_type().is_symlink() => {
-                    return Err(BoundedDiscoveryError::SymlinkRoot);
+            for search in source_search_roots(root, *source_def) {
+                match fs::symlink_metadata(&search) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(BoundedDiscoveryError::from_io(error)),
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        return Err(BoundedDiscoveryError::SymlinkRoot);
+                    }
+                    _ => {}
                 }
-                _ => {}
+                bounded_paths(
+                    &search,
+                    client,
+                    *source_def,
+                    &mut remaining,
+                    MAX_DEPTH,
+                    &mut sources,
+                )?;
             }
-            bounded_paths(
-                &search,
-                client,
-                *source_def,
-                &mut remaining,
-                MAX_DEPTH,
-                &mut sources,
-            )?;
         }
     }
     sources.sort_by(|a, b| (&a.source_id, &a.path).cmp(&(&b.source_id, &b.path)));
+    sources.dedup();
     Ok(sources)
 }
 
@@ -364,19 +366,23 @@ fn source_watch_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> 
         .collect();
     }
 
-    let search_root = source_search_root(root, source_def);
-    if search_root.is_dir() {
-        return vec![search_root];
-    }
-    if search_root.is_file() || matches!(source_def.pattern, SourcePattern::ExactFile(_)) {
-        return search_root
-            .parent()
-            .filter(|parent| parent.is_dir())
-            .map(Path::to_path_buf)
-            .into_iter()
-            .collect();
-    }
-    Vec::new()
+    source_search_roots(root, source_def)
+        .into_iter()
+        .filter_map(|search_root| {
+            if search_root.is_dir() {
+                Some(search_root)
+            } else if search_root.is_file()
+                || matches!(source_def.pattern, SourcePattern::ExactFile(_))
+            {
+                search_root
+                    .parent()
+                    .filter(|parent| parent.is_dir())
+                    .map(Path::to_path_buf)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn discover_source(
@@ -386,8 +392,6 @@ fn discover_source(
     context: &DiscoveryContext<'_>,
     mode: DiscoveryMode,
 ) -> Result<Vec<Source>, DiscoveryError> {
-    let search_root = source_search_root(root, source_def);
-
     // For project-local sources, recursively search for the subpath under the project root
     if source_def.root == PathRoot::ProjectLocal && !is_fixture_root(root) {
         let subpath = source_def
@@ -409,19 +413,22 @@ fn discover_source(
         });
     }
 
-    discover_matching_paths(
-        &search_root,
-        source_def.pattern,
-        source_def.recursive,
-        context,
-        mode,
-    )
-    .map(|paths| {
-        paths
-            .into_iter()
-            .map(|path| new_source(client, source_def, path))
-            .collect()
-    })
+    let mut sources = Vec::new();
+    for search_root in source_search_roots(root, source_def) {
+        let paths = discover_matching_paths(
+            &search_root,
+            source_def.pattern,
+            source_def.recursive,
+            context,
+            mode,
+        )?;
+        sources.extend(
+            paths
+                .into_iter()
+                .map(|path| new_source(client, source_def, path)),
+        );
+    }
+    Ok(sources)
 }
 
 /// Search for project-local subdirectories under a project or workspace root.
@@ -572,10 +579,65 @@ pub fn source_search_root(root: &Path, source_def: ClientSourceDef) -> PathBuf {
 }
 
 pub fn is_fixture_root(root: &Path) -> bool {
-    supported_clients()
-        .iter()
-        .flat_map(|client| client.sources.iter())
-        .any(|source_def| source_def.fixture_path(root).exists())
+    // OpenCode's fixture layout is also its real data-home layout. It cannot
+    // identify synthetic data by itself; single-client fixtures can opt in with
+    // an explicit marker. Other flattened fixture paths differ from host paths.
+    root.join(".telltale-fixtures").is_file()
+        || supported_clients()
+            .iter()
+            .flat_map(|client| client.sources.iter())
+            .filter(|source_def| source_def.id != "opencode.sqlite")
+            .any(|source_def| source_def.fixture_path(root).exists())
+}
+
+fn source_search_roots(root: &Path, source_def: ClientSourceDef) -> Vec<PathBuf> {
+    if is_fixture_root(root) || source_def.id != "opencode.sqlite" {
+        return vec![source_search_root(root, source_def)];
+    }
+    let platform = current_host_platform();
+    let context = if root == Path::new(".") {
+        environment_root_context(platform, root)
+    } else {
+        rooted_path_context(platform, root)
+    };
+    let xdg_data_home = if root == Path::new(".") {
+        env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+    } else {
+        None
+    };
+    let mut roots = opencode_search_roots(&context, platform, source_def, xdg_data_home.as_deref());
+    // Also accept an explicit data-home root without classifying it as fixtures.
+    if root != Path::new(".") {
+        roots.push(root.join(source_def.relative_path));
+    }
+    roots.sort_unstable();
+    roots.dedup();
+    roots
+}
+
+fn opencode_search_roots(
+    context: &RootResolutionContext,
+    platform: HostPlatform,
+    source_def: ClientSourceDef,
+    xdg_data_home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut roots = vec![
+        resolve_path_root_from_context(context, source_def.root).join(source_def.relative_path),
+    ];
+    if platform == HostPlatform::Windows {
+        if let Some(data_home) = xdg_data_home {
+            roots.push(data_home.join(source_def.relative_path));
+        }
+        roots.push(
+            context
+                .home
+                .join(".local/share")
+                .join(source_def.relative_path),
+        );
+    }
+    roots.sort_unstable();
+    roots.dedup();
+    roots
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -1256,6 +1318,94 @@ mod tests {
             roots
                 .iter()
                 .any(|path| path.ends_with(fixture_root.join("opencode")))
+        );
+    }
+
+    #[test]
+    fn opencode_data_home_is_not_a_fixture_and_supports_bounded_discovery_and_watch() {
+        let temp = tempdir().unwrap();
+        let data_home = temp.path().join(".local/share");
+        let db = data_home.join("opencode/opencode.db");
+        fs::create_dir_all(db.parent().unwrap()).unwrap();
+        fs::write(&db, b"synthetic metadata only").unwrap();
+        assert!(!super::is_fixture_root(&data_home));
+        let sources = discover_sources(&data_home).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].path, db);
+        assert_eq!(
+            super::discover_sources_bounded(&data_home, ClientId::OpenCode, 1).unwrap(),
+            sources
+        );
+        assert_eq!(
+            discover_watch_roots_for_clients(&data_home, &[ClientId::OpenCode]),
+            vec![db.parent().unwrap().to_path_buf()]
+        );
+        fs::write(data_home.join(".telltale-fixtures"), b"").unwrap();
+        assert!(super::is_fixture_root(&data_home));
+        assert_eq!(discover_sources(&data_home).unwrap(), sources);
+        assert!(super::is_fixture_root(&crate::test_fixture_path(
+            "session_stores"
+        )));
+    }
+
+    #[test]
+    fn windows_opencode_candidates_include_appdata_xdg_and_home_fallback() {
+        let temp = tempdir().unwrap();
+        let context = RootResolutionContext {
+            home: temp.path().join("home"),
+            codex_home: None,
+            data_home: Some(temp.path().join("local-app-data")),
+        };
+        let xdg = temp.path().join("xdg-data");
+        let source_def = lookup_source("opencode.sqlite").1;
+        let roots =
+            super::opencode_search_roots(&context, HostPlatform::Windows, source_def, Some(&xdg));
+        assert_eq!(roots.len(), 3);
+        for data_home in [
+            context.data_home.clone().unwrap(),
+            xdg,
+            context.home.join(".local/share"),
+        ] {
+            assert!(roots.contains(&data_home.join("opencode/opencode.db")));
+        }
+        let roots = super::opencode_search_roots(
+            &context,
+            HostPlatform::Windows,
+            source_def,
+            context.data_home.as_deref(),
+        );
+        assert_eq!(
+            roots.len(),
+            2,
+            "duplicate candidates must not consume bounded discovery budget"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_opencode_home_discovery_keeps_both_stores_and_watch_roots() {
+        let temp = tempdir().unwrap();
+        let stores = ["AppData/Local/opencode", ".local/share/opencode"]
+            .map(|subpath| temp.path().join(subpath));
+        for store in &stores {
+            fs::create_dir_all(store).unwrap();
+            fs::write(store.join("opencode.db"), b"synthetic metadata only").unwrap();
+        }
+        let sources = discover_sources(temp.path()).unwrap();
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            super::discover_sources_bounded(temp.path(), ClientId::OpenCode, 2).unwrap(),
+            sources
+        );
+        assert_eq!(
+            super::discover_sources_bounded(temp.path(), ClientId::OpenCode, 1),
+            Err(super::BoundedDiscoveryError::LimitExceeded)
+        );
+        let mut expected = stores.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            discover_watch_roots_for_clients(temp.path(), &[ClientId::OpenCode]),
+            expected
         );
     }
 

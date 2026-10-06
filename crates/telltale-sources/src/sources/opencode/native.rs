@@ -646,11 +646,23 @@ fn direct_string_field(value: &Value, key: &str) -> Option<String> {
 }
 
 fn model_label(value: &Value) -> Option<String> {
-    semantic_string(value, "modelID").or_else(|| semantic_string(value, "model"))
+    semantic_string(value, "modelID")
+        .or_else(|| semantic_string(value, "model"))
+        .or_else(|| {
+            value
+                .get("model")
+                .and_then(|model| semantic_string(model, "modelID"))
+        })
 }
 
 fn provider_label(value: &Value) -> Option<String> {
-    semantic_string(value, "providerID").or_else(|| semantic_string(value, "provider"))
+    semantic_string(value, "providerID")
+        .or_else(|| semantic_string(value, "provider"))
+        .or_else(|| {
+            value
+                .get("model")
+                .and_then(|model| semantic_string(model, "providerID"))
+        })
 }
 
 fn part_tool_name(value: &Value) -> Option<String> {
@@ -748,12 +760,32 @@ fn normalize_sqlite_part_value(value: Value) -> (Value, Result<SessionMetadata, 
 }
 
 fn opencode_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> {
-    SessionMetadata::from_fields(
+    // Desktop v2 user messages select a model with an object; assistant
+    // messages retain scalar modelID/providerID fields. Attest both shapes
+    // without resolving contradictory metadata by precedence.
+    let structured_model = value.get("model").filter(|model| model.is_object());
+    let mut metadata = SessionMetadata::from_fields(
         value,
         &["agent"],
-        &["model", "modelID"],
+        if structured_model.is_some() {
+            &["modelID"]
+        } else {
+            &["model", "modelID"]
+        },
         &["provider", "providerID"],
-    )
+    )?;
+    if let Some(model) = structured_model {
+        if model.get("modelID").is_none() || model.get("providerID").is_none() {
+            return Err(AcquisitionError::InvalidAttestation);
+        }
+        metadata.merge(&SessionMetadata::from_fields(
+            model,
+            &[],
+            &["modelID"],
+            &["providerID"],
+        )?);
+    }
+    Ok(metadata)
 }
 
 fn opencode_attestation(row: &Value) -> Result<SessionMetadata, AcquisitionError> {

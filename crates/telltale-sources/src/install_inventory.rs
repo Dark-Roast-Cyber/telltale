@@ -240,6 +240,12 @@ fn observe_agent(
             &context.global_storage_roots,
         ));
     }
+    if def.agent == "opencode" {
+        signals.extend(crate::sources::opencode::desktop_install_signals(
+            &context.home,
+            platform,
+        ));
+    }
 
     let strong_present = signals.iter().any(|signal| {
         signal.present
@@ -269,20 +275,25 @@ fn executable_signal_for_platform(
     path_dirs: &[PathBuf],
     platform: InstallPlatform,
 ) -> InstallSignal {
-    let path = path_dirs
-        .iter()
-        .flat_map(|dir| {
-            let mut candidates = vec![dir.join(executable)];
-            if platform == InstallPlatform::Windows && Path::new(executable).extension().is_none() {
-                candidates.extend(
-                    ["exe", "com", "cmd", "bat", "ps1"]
-                        .map(|ext| dir.join(format!("{executable}.{ext}"))),
-                );
-            }
-            candidates
-        })
-        .find(|candidate| candidate.is_file());
-    signal("executable", executable, path)
+    let candidates = path_dirs.iter().flat_map(|dir| {
+        let mut candidates = vec![dir.join(executable)];
+        if platform == InstallPlatform::Windows && Path::new(executable).extension().is_none() {
+            candidates.extend(
+                ["exe", "com", "cmd", "bat", "ps1"]
+                    .map(|ext| dir.join(format!("{executable}.{ext}"))),
+            );
+        }
+        candidates
+    });
+    executable_path_signal(executable, candidates)
+}
+
+pub(crate) fn executable_path_signal(
+    name: &str,
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> InstallSignal {
+    let path = candidates.into_iter().find(|candidate| candidate.is_file());
+    signal("executable", name, path)
 }
 
 fn node_package_signal(package: &str, node_roots: &[PathBuf]) -> InstallSignal {
@@ -463,6 +474,52 @@ pub fn installed_agent_counts(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn windows_opencode_desktop_is_confirmed_without_path_or_node() {
+        for executable in [
+            "AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe",
+            "AppData/Roaming/ai.opencode.desktop/cli/2.0.24/opencode-cli.exe",
+        ] {
+            let temp = tempdir().unwrap();
+            let context = InstallInventoryContext {
+                home: temp.path().into(),
+                path_dirs: vec![],
+                extension_roots: vec![],
+                global_storage_roots: vec![],
+                node_roots: vec![],
+            };
+            let observe = |platform| {
+                collect_install_inventory_for_platform(&context, 1, platform)
+                    .agents
+                    .into_iter()
+                    .find(|agent| agent.agent == "opencode")
+                    .unwrap()
+            };
+            let path = temp.path().join(executable);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            assert_eq!(
+                observe(InstallPlatform::Windows).confidence,
+                InstallConfidence::Absent
+            );
+            std::fs::write(&path, b"metadata-only-probe-must-not-execute").unwrap();
+            let agent = observe(InstallPlatform::Windows);
+            assert!(agent.installed);
+            assert_eq!(agent.confidence, InstallConfidence::Confirmed);
+            assert!(
+                !serde_json::to_string(&agent)
+                    .unwrap()
+                    .contains(temp.path().to_str().unwrap())
+            );
+            assert!(agent.signals.iter().any(|signal| signal.present
+                && signal.kind == "executable"
+                && signal.path_hash.is_some()));
+            assert_eq!(
+                observe(InstallPlatform::Unix).confidence,
+                InstallConfidence::Absent
+            );
+        }
+    }
 
     #[cfg(windows)]
     #[test]
