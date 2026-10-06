@@ -33,6 +33,10 @@ fn checkout_root(manifest_dir: &Path) -> Option<PathBuf> {
         .then_some(root)
 }
 
+pub(crate) fn git_head_path(root: &Path) -> PathBuf {
+    root.join(".git").join("HEAD")
+}
+
 fn git_sha(root: &Path) -> Option<String> {
     let top = Command::new("git")
         .args(["-C", root.to_str()?, "rev-parse", "--show-toplevel"])
@@ -65,7 +69,7 @@ fn main() {
         Some(None) => "unknown".to_string(),
         None => checkout_root(&manifest_dir)
             .and_then(|root| {
-                println!("cargo:rerun-if-changed={}/.git/HEAD", root.display());
+                println!("cargo:rerun-if-changed={}", git_head_path(&root).display());
                 git_sha(&root)
             })
             .unwrap_or_else(|| "unknown".to_string()),

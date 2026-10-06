@@ -273,9 +273,10 @@ fn executable_signal_for_platform(
         .iter()
         .flat_map(|dir| {
             let mut candidates = vec![dir.join(executable)];
-            if platform == InstallPlatform::Windows {
+            if platform == InstallPlatform::Windows && Path::new(executable).extension().is_none() {
                 candidates.extend(
-                    ["exe", "cmd", "bat", "ps1"].map(|ext| dir.join(format!("{executable}.{ext}"))),
+                    ["exe", "com", "cmd", "bat", "ps1"]
+                        .map(|ext| dir.join(format!("{executable}.{ext}"))),
                 );
             }
             candidates
@@ -463,6 +464,51 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[cfg(windows)]
+    #[test]
+    fn detects_windows_executable_and_script_suffixes() {
+        let temp = tempdir().expect("tempdir");
+        for suffix in ["EXE", "com", "cmd", "bat", "ps1"] {
+            let bin = temp.path().join(suffix);
+            std::fs::create_dir(&bin).expect("bin");
+            std::fs::write(bin.join(format!("codex.{suffix}")), b"")
+                .expect("Windows command metadata");
+            let snapshot = collect_install_inventory_with_context(
+                &InstallInventoryContext {
+                    home: temp.path().to_path_buf(),
+                    path_dirs: vec![bin],
+                    extension_roots: Vec::new(),
+                    global_storage_roots: Vec::new(),
+                    node_roots: Vec::new(),
+                },
+                1_000,
+            );
+            let codex = snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.agent == "codex")
+                .expect("Codex observation");
+            assert!(codex.installed, "suffix {suffix}");
+            assert_eq!(codex.confidence, InstallConfidence::Confirmed);
+            assert!(
+                codex
+                    .signals
+                    .iter()
+                    .any(|signal| signal.kind == "executable"
+                        && signal.present
+                        && signal.path_hash.is_some())
+            );
+        }
+        assert!(
+            !executable_signal_for_platform(
+                "codex",
+                &[temp.path().join("absent")],
+                InstallPlatform::Windows
+            )
+            .present
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn inventory_config_fifo_returns_without_waiting_for_a_writer() {
@@ -481,7 +527,7 @@ mod tests {
     #[test]
     fn launcher_suffixes_follow_selected_platform() {
         let temp = tempdir().unwrap();
-        for suffix in ["exe", "cmd", "bat", "ps1"] {
+        for suffix in ["exe", "com", "cmd", "bat", "ps1"] {
             let dir = temp.path().join(suffix);
             std::fs::create_dir(&dir).unwrap();
             std::fs::write(dir.join(format!("claude.{suffix}")), b"synthetic").unwrap();
@@ -497,6 +543,24 @@ mod tests {
                 !executable_signal_for_platform("claude", &[dir], InstallPlatform::Unix).present
             );
         }
+        std::fs::write(temp.path().join("claude.exe.cmd"), b"synthetic").unwrap();
+        assert!(
+            !executable_signal_for_platform(
+                "claude.exe",
+                &[temp.path().into()],
+                InstallPlatform::Windows
+            )
+            .present
+        );
+        std::fs::write(temp.path().join("claude.exe"), b"synthetic").unwrap();
+        assert!(
+            executable_signal_for_platform(
+                "claude.exe",
+                &[temp.path().into()],
+                InstallPlatform::Windows
+            )
+            .present
+        );
     }
 
     #[test]
