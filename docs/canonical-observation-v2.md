@@ -17,6 +17,11 @@
 > compatibility:** Event 3.0 remains the current frozen external compatibility
 > and output contract.
 
+OpenCode's bounded direct result and exact `apply_patch.patchText` policies,
+work accounting, recovery and live qualification are documented in
+[OpenCode live ingestion](opencode-live-ingestion.md). These extend the earlier
+message-only exception; ordinary structured limits remain.
+
 The accepted data path is:
 
 ```text

@@ -30,7 +30,8 @@ pub use value::{
     JsonValue, LOCAL_MAX_ARRAY_ITEMS, LOCAL_MAX_DEPTH, LOCAL_MAX_ENTRIES, LOCAL_MAX_KEY_BYTES,
     LOCAL_MAX_OBJECT_MEMBERS, LOCAL_MAX_SEARCHABLE_BYTES, LOCAL_MAX_STRING_BYTES,
     LOCAL_MAX_TOTAL_BYTES, LOCAL_MAX_VALUE_BYTES, LocalEvidence, LocalReference, LocalValue,
-    MESSAGE_MAX_TEXT_BYTES, SEMANTIC_MAX_TOTAL_BYTES, SemanticFacet,
+    MESSAGE_MAX_TEXT_BYTES, SEMANTIC_MAX_TOTAL_BYTES, SemanticFacet, TOOL_PATCH_MAX_TEXT_BYTES,
+    TOOL_RESULT_MAX_TEXT_BYTES,
 };
 
 pub const OTHER_REGISTRY_VERSION: &str = "other-v1";
@@ -1753,6 +1754,12 @@ fn validate_semantic_json_bounds(
         let bytes = (|| match (body, path.as_str(), &value) {
             (ObservationBody::Message(_), "message.content", JsonValue::String(text)) => {
                 value::bounded_message_text_bytes(text)
+            }
+            (ObservationBody::Tool(_), "tool.result", JsonValue::String(text)) => {
+                value::bounded_message_text_bytes(text)
+            }
+            (ObservationBody::Tool(tool), "tool.arguments", value) => {
+                value::bounded_tool_arguments_bytes(tool.name(), value)
             }
             (ObservationBody::Message(message), "message.content_parts", _) => {
                 if message.content_parts().len() > LOCAL_MAX_ARRAY_ITEMS {

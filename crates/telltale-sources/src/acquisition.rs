@@ -511,9 +511,10 @@ fn account_unit(
 fn map_canonical_error(error: OpenCodeCanonicalError) -> AcquisitionError {
     match error {
         OpenCodeCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        OpenCodeCanonicalError::Observation(error) => {
-            AcquisitionError::CanonicalValidation { code: error.code() }
-        }
+        OpenCodeCanonicalError::Observation(error) => match error.bound_context() {
+            Some(context) => AcquisitionError::CanonicalBoundValidation { context },
+            None => AcquisitionError::CanonicalValidation { code: error.code() },
+        },
     }
 }
 

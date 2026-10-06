@@ -339,11 +339,19 @@ Non-bound errors SHALL NOT acquire bound context.
 Schema SHALL preserve `JsonValue`, `MessageObservation`, and `ContentPart` and
 allow at most 65,536 raw UTF-8 bytes only for direct string `message.content`
 and direct string values of Text content parts. It SHALL NOT recursively expand
-string bounds in structured content, Text objects/arrays, tools, names, inference
+string bounds in structured content, Text objects/arrays, names, inference
 metadata, facets, identifiers, or local originals. Ordinary values SHALL retain
 4,096 string bytes, 16,384 encoded bytes per value, and existing depth,
 cardinality, and key limits. Part values SHALL include their array/object
 wrappers in depth accounting.
+The later OpenCode tool-text amendment SHALL also permit direct string
+`tool.result` and the exact `apply_patch` tool's direct `arguments.patchText`
+string under this text budget. The patch argument skeleton with that value null
+SHALL retain ordinary structural and encoded limits; all other arguments and
+nested results SHALL retain ordinary bounds. These exceptions SHALL remain
+subject to the same encoded semantic aggregate, source retention and evaluation
+budgets, without truncation or partial-source progress. See
+`docs/opencode-live-ingestion.md` for acquisition and recovery qualification.
 The content-parts field SHALL retain the ordinary 16,384-byte encoded budget for
 entries other than direct Text strings, including their wrappers and separators.
 

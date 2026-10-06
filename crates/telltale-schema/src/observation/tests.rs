@@ -5,6 +5,143 @@ const PRODUCER_KEY: &[u8] = b"synthetic-only-producer-key-epoch-1";
 const ASSIGNMENT_KEY: &[u8] = b"synthetic-only-assignment-comparison-key-1";
 
 #[test]
+fn direct_tool_result_text_bounds_are_distinct_from_structured_values() {
+    let build = |result: JsonValue| {
+        CanonicalObservationV2::builder(
+            ObservationBody::Tool(ToolObservation::new().with_result(result)),
+            ObservationStage::ToolResultReturned,
+            ObservedAt::new(OBSERVED_AT).unwrap(),
+            source(),
+        )
+        .fact_metadata("tool.result", FactMetadata::reported().unwrap())
+        .build()
+    };
+    for text in ["x".repeat(58_346), "é".repeat(32_767), "\n".repeat(32_767)] {
+        let value = JsonValue::try_from_source_tool_result(&serde_json::json!(text)).unwrap();
+        assert_eq!(
+            build(value).unwrap().body(),
+            &ObservationBody::Tool(ToolObservation::new().with_result(JsonValue::string(&text)))
+        );
+    }
+    for (text, dimension) in [
+        ("x".repeat(65_535), BoundDimension::EncodedBytes),
+        ("\n".repeat(32_768), BoundDimension::EncodedBytes),
+        ("é".repeat(32_769), BoundDimension::StringBytes),
+    ] {
+        let error = build(JsonValue::string(text)).unwrap_err();
+        assert_eq!(
+            error.bound_context(),
+            Some(CanonicalBoundContext {
+                category: CanonicalFieldCategory::ToolResult,
+                dimension,
+            })
+        );
+    }
+    assert!(JsonValue::try_from_source_tool_result(&serde_json::json!("x".repeat(65_536))).is_ok());
+    assert_eq!(
+        JsonValue::try_from_source_tool_result(&serde_json::json!("x".repeat(65_537)))
+            .unwrap_err()
+            .bound_dimension(),
+        Some(BoundDimension::StringBytes)
+    );
+    // The relaxation is restricted to a direct result, including on embedding
+    // construction. It does not extend local evidence, facets or arguments.
+    let nested = serde_json::json!({"output": "x".repeat(4_097)});
+    assert!(JsonValue::try_from_source_tool_result(&nested).is_err());
+    assert!(
+        build(
+            JsonValue::try_from_source_value(&serde_json::json!({"output":"x".repeat(4_096)}))
+                .unwrap()
+        )
+        .is_ok()
+    );
+    assert!(
+        LocalValue::new(
+            JsonValue::string("x".repeat(4_097)),
+            None::<&str>,
+            FactProvenance::Reported,
+            Sensitivity::Normal
+        )
+        .is_err()
+    );
+    let arguments = CanonicalObservationV2::builder(
+        ObservationBody::Tool(
+            ToolObservation::new().with_arguments(JsonValue::string("x".repeat(4_097))),
+        ),
+        ObservationStage::ToolRequested,
+        ObservedAt::new(OBSERVED_AT).unwrap(),
+        source(),
+    )
+    .fact_metadata("tool.arguments", FactMetadata::reported().unwrap())
+    .build()
+    .unwrap_err();
+    assert_eq!(
+        arguments.bound_context(),
+        Some(CanonicalBoundContext {
+            category: CanonicalFieldCategory::ToolArguments,
+            dimension: BoundDimension::StringBytes,
+        })
+    );
+}
+
+#[test]
+fn apply_patch_text_is_a_narrow_bounded_argument_exception() {
+    let build = |name: &str, arguments: JsonValue, result: Option<JsonValue>| {
+        let mut tool = ToolObservation::new()
+            .with_name(name)
+            .unwrap()
+            .with_arguments(arguments);
+        if let Some(result) = &result {
+            tool = tool.with_result(result.clone());
+        }
+        let mut builder = CanonicalObservationV2::builder(
+            ObservationBody::Tool(tool),
+            if result.is_some() {
+                ObservationStage::ToolExecutionCompleted
+            } else {
+                ObservationStage::ToolRequested
+            },
+            ObservedAt::new(OBSERVED_AT).unwrap(),
+            source(),
+        )
+        .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+        .fact_metadata("tool.arguments", FactMetadata::reported().unwrap());
+        if result.is_some() {
+            builder = builder.fact_metadata("tool.result", FactMetadata::reported().unwrap());
+        }
+        builder.build()
+    };
+    for (bytes, accepted) in [(9_493, true), (65_507, true), (65_508, false)] {
+        let input = serde_json::json!({"patchText":"x".repeat(bytes)});
+        let arguments =
+            JsonValue::try_from_source_tool_arguments(Some("apply_patch"), &input).unwrap();
+        assert_eq!(build("apply_patch", arguments, None).is_ok(), accepted);
+    }
+    let long = serde_json::json!({"patchText":"x".repeat(9_493)});
+    assert!(JsonValue::try_from_source_tool_arguments(Some("bash"), &long).is_err());
+    for input in [
+        serde_json::json!({"patchText": ["ok"]}),
+        serde_json::json!({"patchText":"x".repeat(65_537)}),
+        serde_json::json!({"patchText":"ok", "command":"x".repeat(4_097)}),
+        serde_json::json!({"nested":{"patchText":"x".repeat(4_097)}}),
+    ] {
+        assert!(JsonValue::try_from_source_tool_arguments(Some("apply_patch"), &input).is_err());
+    }
+    let arguments = JsonValue::try_from_source_tool_arguments(Some("apply_patch"), &long).unwrap();
+    let error = build(
+        "apply_patch",
+        arguments,
+        Some(JsonValue::string("y".repeat(56_020))),
+    )
+    .unwrap_err();
+    assert_eq!(error.bound_dimension(), Some(BoundDimension::EncodedBytes));
+    // Direct embedding construction cannot bypass the tool-name gate.
+    let arguments =
+        JsonValue::object([("patchText".into(), JsonValue::string("x".repeat(9_493)))]).unwrap();
+    assert!(build("bash", arguments, None).is_err());
+}
+
+#[test]
 fn message_text_recursive_failures_precede_partition_encoded_overflow() {
     for prefix in [
         JsonValue::Array(vec![JsonValue::string("\u{1}".repeat(2_731))]),

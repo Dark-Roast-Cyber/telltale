@@ -366,9 +366,69 @@ impl SelectorRegistry {
         ) {
             return message_text(selector, observation, budget);
         }
+        // Canonical direct result strings are already NFC. Copy the selected
+        // text once, without normalizing or reserving unrelated fields for each
+        // rule. Keep searchable-text precedence and structured fallbacks intact.
+        if matches!(
+            selector,
+            SelectorId::ToolResult
+                | SelectorId::CompatToolResult
+                | SelectorId::GovernedFacet("tool.result.text")
+        ) && let ObservationBody::Tool(tool) = observation.body()
+            && (selector == SelectorId::ToolResult || tool.searchable_result().is_none())
+            && let Some(JsonValue::String(text)) = tool.result()
+        {
+            budget.charge(text.len())?;
+            return Ok(field(
+                selector,
+                observation,
+                "tool.result",
+                JsonValue::String(text.clone()),
+                selector.required_capability(),
+            ));
+        }
         // Resolution can copy a structured value, canonicalize its strings, and
-        // clone field metadata. Reserve a conservative whole-observation visit.
-        budget.charge(observation.retained_byte_len().saturating_mul(2))?;
+        // clone field metadata. These closed selectors never visit tool.result;
+        // exclude its direct text length in O(1), retaining the conservative
+        // allowance for all other fields (and JSON escaping overhead). Charging
+        // unrelated output for every control lookup spuriously exhausts work on
+        // ordinary compiler/search output. Result selectors still reserve all
+        // bytes, and matcher/hash/sanitizer passes charge their reached input.
+        let unrelated_result_bytes = if matches!(
+            selector,
+            SelectorId::SessionId
+                | SelectorId::MessageRole
+                | SelectorId::MessageContent
+                | SelectorId::ToolName
+                | SelectorId::ToolArguments
+                | SelectorId::ToolSearchableArguments
+                | SelectorId::ToolReportedStatus
+                | SelectorId::ToolIsError
+                | SelectorId::ToolExitCode
+                | SelectorId::CommandText
+                | SelectorId::ResourcePath
+                | SelectorId::CompatArguments
+                | SelectorId::CompatCommand
+                | SelectorId::CompatFilePath
+                | SelectorId::CompatToolName
+                | SelectorId::CompatUrl
+        ) {
+            match observation.body() {
+                ObservationBody::Tool(tool) => match tool.result() {
+                    Some(JsonValue::String(text)) => text.len(),
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        budget.charge(
+            observation
+                .retained_byte_len()
+                .saturating_sub(unrelated_result_bytes)
+                .saturating_mul(2),
+        )?;
         Ok(self.resolve_value(selector, observation))
     }
 
@@ -1077,6 +1137,38 @@ fn tool_text(
         }
         _ => absent(selector, required_capability),
     }
+}
+
+/// Borrow the direct Rule v1 output view. No payload normalization, metadata
+/// cloning, or text copy is needed; canonical input is already validated.
+/// Other shapes keep the ordinary resolver, including searchable precedence.
+pub(crate) fn borrow_tool_result_text<'a>(
+    observation: &'a CanonicalObservationV2,
+    budget: &mut super::session::RetentionBudget,
+) -> Result<Option<(&'a str, SelectorPresence)>, super::session::ProcessingError> {
+    budget.charge(1)?;
+    let ObservationBody::Tool(tool) = observation.body() else {
+        return Ok(None);
+    };
+    if tool.searchable_result().is_some() {
+        return Ok(None);
+    }
+    let Some(JsonValue::String(text)) = tool.result() else {
+        return Ok(None);
+    };
+    // Conservatively bound key comparisons in the small metadata map before
+    // lookup. Fingerprint values are neither traversed nor cloned on this path.
+    budget.charge(
+        "tool.result"
+            .len()
+            .saturating_mul(observation.fact_metadata().len()),
+    )?;
+    let presence = if observation.fact_metadata().contains_key("tool.result") {
+        SelectorPresence::Present
+    } else {
+        SelectorPresence::MetadataMissing
+    };
+    Ok(Some((text, presence)))
 }
 
 fn tool_argument_keys(

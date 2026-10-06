@@ -659,26 +659,18 @@ fn redact_assignments<E>(
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> Result<String, E> {
     charge(text.len())?;
-    let reservation = if text.contains(['\\', '"', '\'']) {
-        text.len()
-            .saturating_mul(text.len().max(1))
-            .saturating_mul(4)
-    } else {
-        text.split(|character: char| {
-            !(character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-'))
-        })
-        .fold(text.len().saturating_mul(16), |total, word| {
-            total.saturating_add(word.len().saturating_mul(word.len()).saturating_mul(4))
-        })
-    };
-    charge(reservation)?;
+    // Reserve decoding, URL partitioning and output copies linearly. Assignment
+    // scans reserve their reached key/value spans below, before executing them;
+    // one quote must not charge the square of the entire evidence preview.
+    charge(text.len().saturating_mul(16))?;
     let mut redacted = String::with_capacity(text.len());
     let mut offset = 0;
     for url in URL_RE.find_iter(text) {
         redacted.push_str(&redact_assignments_outside_urls(
             &text[offset..url.start()],
             allow_flags,
-        ));
+            charge,
+        )?);
         // URL credentials and query values have their own structural pass.
         redacted.push_str(url.as_str());
         offset = url.end();
@@ -686,7 +678,8 @@ fn redact_assignments<E>(
     redacted.push_str(&redact_assignments_outside_urls(
         &text[offset..],
         allow_flags,
-    ));
+        charge,
+    )?);
     Ok(redacted)
 }
 
@@ -727,15 +720,20 @@ fn label_is_assignment_key(suffix: &str) -> bool {
     matches!(suffix.as_bytes().first(), Some(b'=' | b':'))
 }
 
-fn redact_assignments_outside_urls(text: &str, allow_flags: bool) -> String {
+fn redact_assignments_outside_urls<E>(
+    text: &str,
+    allow_flags: bool,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
     let Some(classified) = decode_assignment_syntax(text) else {
-        return redact_literal_assignments(text, allow_flags);
+        return redact_literal_assignments(text, allow_flags, charge);
     };
     let mut redacted = String::with_capacity(text.len());
     let mut classified_offset = 0;
     let mut source_offset = 0;
 
     while classified_offset < classified.text.len() {
+        reserve_assignment_scan(&classified.text[classified_offset..], charge)?;
         if let Some(assignment) =
             scan_secret_assignment(&classified.text[classified_offset..], allow_flags)
         {
@@ -760,14 +758,19 @@ fn redact_assignments_outside_urls(text: &str, allow_flags: bool) -> String {
     }
     redacted.push_str(&text[source_offset..]);
 
-    redacted
+    Ok(redacted)
 }
 
-fn redact_literal_assignments(text: &str, allow_flags: bool) -> String {
+fn redact_literal_assignments<E>(
+    text: &str,
+    allow_flags: bool,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<String, E> {
     let mut redacted = String::with_capacity(text.len());
     let mut offset = 0;
 
     while offset < text.len() {
+        reserve_assignment_scan(&text[offset..], charge)?;
         if let Some(assignment) = scan_secret_assignment(&text[offset..], allow_flags) {
             let (_, replacement) = redact_assignment_value(
                 &text[offset..],
@@ -786,7 +789,49 @@ fn redact_literal_assignments(text: &str, allow_flags: bool) -> String {
         }
     }
 
-    redacted
+    Ok(redacted)
+}
+
+fn reserve_assignment_scan<E>(
+    text: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<(), E> {
+    if text.starts_with(['"', '\'']) {
+        let quote = text.as_bytes()[0];
+        for (index, byte) in text.bytes().enumerate().skip(1) {
+            charge(1)?;
+            // Match find_quote's existing lexical rules exactly, including its
+            // immediate preceding-backslash check and newline termination.
+            if matches!(byte, b'\n' | b'\r') {
+                return charge(index.saturating_mul(16));
+            }
+            if byte == quote && (index == 1 || text.as_bytes()[index - 1] != b'\\') {
+                charge(index.saturating_mul(16))?;
+                if is_secret_key(&text[1..index]) {
+                    charge(text.len().saturating_mul(16))?;
+                }
+                return Ok(());
+            }
+        }
+        // A missing closing delimiter still visits the complete suffix.
+        return charge(text.len().saturating_mul(16));
+    }
+    let mut end: usize = 0;
+    for byte in text.bytes() {
+        charge(1)?;
+        if !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')) {
+            break;
+        }
+        end += 1;
+    }
+    // Covers rescanning the key, component classification/normalization and
+    // temporary key material. Malicious long tokens still incur quadratic work
+    // over successive suffix attempts and exhaust the same source budget.
+    charge(end.saturating_mul(16))?;
+    if end != 0 && is_secret_key(&text[..end]) {
+        charge(text.len().saturating_mul(16))?;
+    }
+    Ok(())
 }
 
 fn redact_classified_assignment(
@@ -3398,19 +3443,21 @@ safe=value"#,
     #[test]
     fn nested_url_assignment_work_is_reserved_before_assignment_scan() {
         let text = format!("https://example.invalid/{}", "abc.".repeat(750));
-        let mut visits = Vec::new();
+        let mut visits = 0usize;
         PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, &text, &mut |bytes| {
-            visits.push(bytes);
+            visits += bytes;
             Ok::<_, ()>(())
         })
         .unwrap();
         // The URL owner must reserve its reached nested assignment scan, not
         // rely on a later outer assignment reservation after inspection.
-        assert!(visits.iter().any(|bytes| *bytes > 1_000_000));
+        assert!(visits > 1_000_000);
         let path = format!("/{}", "abc.".repeat(750));
+        let mut nested_visits = 0usize;
         assert_eq!(
             super::redact_url_path(&path, 0, false, &mut |bytes| {
-                if bytes > 1_000_000 {
+                nested_visits += bytes;
+                if nested_visits > 1_000_000 {
                     Err("nested assignment budget")
                 } else {
                     Ok(())
@@ -3424,6 +3471,48 @@ safe=value"#,
             super::decode_url_component_for_inspection(&punctuation, &mut |_| Ok::<_, ()>(()))
                 .unwrap(),
             punctuation
+        );
+    }
+
+    #[test]
+    fn quoted_ordinary_output_reserves_reached_assignment_work_and_redacts_secrets() {
+        let input = format!(
+            "{{\"api_key\":\"SYNTHETIC-ASSIGNMENT-SECRET\"}}\n{}",
+            "{\"ordinary\":\"compiler diagnostic\"}\n".repeat(120)
+        );
+        let mut visits = 0usize;
+        let output =
+            PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, &input, &mut |bytes| {
+                visits += bytes;
+                if visits > 8 * 1024 * 1024 {
+                    Err("budget")
+                } else {
+                    Ok(())
+                }
+            })
+            .expect("ordinary quoted output must not reserve an entire quadratic preview");
+        assert!(!output.contains("SYNTHETIC-ASSIGNMENT-SECRET"));
+        assert_eq!(
+            output,
+            PrivacySanitizer::sanitize(SanitizationContext::Evidence, &input)
+        );
+        let malicious = "x".repeat(4_000);
+        let mut used = 0usize;
+        assert!(
+            PrivacySanitizer::try_sanitize(
+                SanitizationContext::Evidence,
+                &malicious,
+                &mut |bytes| {
+                    used += bytes;
+                    if used > 8 * 1024 * 1024 {
+                        Err("budget")
+                    } else {
+                        Ok(())
+                    }
+                }
+            )
+            .is_err(),
+            "quadratic key attempts still fail before unbounded work"
         );
     }
 }

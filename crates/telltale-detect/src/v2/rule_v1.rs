@@ -323,9 +323,11 @@ pub(crate) fn evaluate_rule_v1_session_with_budget(
     budget: &mut super::session::RetentionBudget,
 ) -> Result<RuleV1SessionEvaluation, RuleV1SessionError> {
     let mut detectors = Vec::with_capacity(plan.detectors.len());
+    let mut evidence_material = BTreeMap::new();
     let mut matched_atomic_rule_ids = BTreeSet::new();
     for detector in &plan.detectors {
-        let aggregate = aggregate_detector_session(detector, observations, budget)?;
+        let aggregate =
+            aggregate_detector_session(detector, observations, budget, &mut evidence_material)?;
         if aggregate.outcome == RuleV1DetectorOutcome::Match {
             retain_text(budget, &aggregate.detector_id)?;
             matched_atomic_rule_ids.insert(aggregate.detector_id.clone());
@@ -424,6 +426,7 @@ fn aggregate_detector_session(
     detector: &CompiledObservationMatchDetector,
     observations: &[&telltale_schema::observation::CanonicalObservationV2],
     budget: &mut super::session::RetentionBudget,
+    evidence_material: &mut BTreeMap<(usize, String), (String, String)>,
 ) -> Result<RuleV1DetectorSessionEvaluation, RuleV1SessionError> {
     retain_text(budget, detector.detector().id())?;
     let mut aggregate = RuleV1DetectorSessionEvaluation {
@@ -441,25 +444,57 @@ fn aggregate_detector_session(
                 }
                 let selector =
                     super::SelectorId::parse(path).map_err(|_| RuleV1SessionError::Bounds)?;
-                let resolution = super::SelectorRegistry::new()
-                    .try_resolve(selector, observation, budget)
-                    .map_err(|_| RuleV1SessionError::Bounds)?;
-                let Some(JsonValue::String(value)) = resolution.value() else {
-                    continue;
-                };
                 let field = path.strip_prefix("compat.v1.").unwrap_or(path);
-                let redacted_value = PrivacySanitizer::try_sanitize(
-                    SanitizationContext::Evidence,
-                    value,
-                    &mut |bytes| budget.charge(bytes),
-                )
-                .map_err(|_| RuleV1SessionError::Bounds)?;
-                super::session::RetentionBudget::validate_text(&redacted_value)
-                    .map_err(|_| RuleV1SessionError::Bounds)?;
                 budget
-                    .charge(value.len())
+                    .charge(path.len())
                     .map_err(|_| RuleV1SessionError::Bounds)?;
-                let hash = evidence_hash(value);
+                let key = (occurrence, path.clone());
+                if !evidence_material.contains_key(&key) {
+                    let borrowed = if selector == super::SelectorId::CompatToolResult {
+                        super::selector::borrow_tool_result_text(observation, budget)
+                            .map_err(|_| RuleV1SessionError::Bounds)?
+                    } else {
+                        None
+                    };
+                    let resolution = if borrowed.is_some() {
+                        None
+                    } else {
+                        Some(
+                            super::SelectorRegistry::new()
+                                .try_resolve(selector, observation, budget)
+                                .map_err(|_| RuleV1SessionError::Bounds)?,
+                        )
+                    };
+                    let value = if let Some((text, _)) = borrowed {
+                        text
+                    } else if let Some(JsonValue::String(value)) =
+                        resolution.as_ref().and_then(|r| r.value())
+                    {
+                        value
+                    } else {
+                        continue;
+                    };
+                    let redacted_value = PrivacySanitizer::try_sanitize(
+                        SanitizationContext::Evidence,
+                        value,
+                        &mut |bytes| budget.charge(bytes),
+                    )
+                    .map_err(|_| RuleV1SessionError::Bounds)?;
+                    super::session::RetentionBudget::validate_text(&redacted_value)
+                        .map_err(|_| RuleV1SessionError::Bounds)?;
+                    budget
+                        .charge(value.len())
+                        .map_err(|_| RuleV1SessionError::Bounds)?;
+                    // Cache only bounded sanitized material, never raw text.
+                    // Cache capacity and each rule's projection are charged
+                    // independently before retention. It lives for one session.
+                    budget
+                        .consume(1, 8 + path.len() + redacted_value.len() + 64)
+                        .map_err(|_| RuleV1SessionError::Bounds)?;
+                    evidence_material.insert(key.clone(), (redacted_value, evidence_hash(value)));
+                }
+                let (redacted_value, hash) =
+                    evidence_material.get(&key).expect("material inserted");
                 let occurred_at = observation.occurred_at().map(|time| time.as_str());
                 if let Some(time) = occurred_at {
                     super::session::RetentionBudget::validate_text(time)
@@ -483,8 +518,8 @@ fn aggregate_detector_session(
                     occurred_at: occurred_at.map(str::to_owned),
                     evidence: Evidence {
                         field: field.to_owned(),
-                        redacted_value,
-                        hash: Some(hash),
+                        redacted_value: redacted_value.clone(),
+                        hash: Some(hash.clone()),
                         rule_id: Some(detector.detector().id().to_owned()),
                     },
                 });
@@ -673,23 +708,47 @@ pub(super) fn evaluate_content_matcher(
 ) -> Result<(MatchState, Vec<String>), super::session::ProcessingError> {
     let registry = super::SelectorRegistry::new();
     let mut resolutions = Vec::new();
+    let mut borrowed_results = Vec::new();
     let mut unknown = Vec::new();
     for target in targets {
         let selector = super::SelectorId::parse(&format!("compat.v1.{target}"))
             .expect("validated Rule v1 target");
-        resolutions.push(registry.try_resolve(selector, observation, budget)?);
+        let borrowed = if selector == super::SelectorId::CompatToolResult {
+            super::selector::borrow_tool_result_text(observation, budget)?
+        } else {
+            None
+        };
+        resolutions.push(if borrowed.is_some() {
+            None
+        } else {
+            Some(registry.try_resolve(selector, observation, budget)?)
+        });
+        borrowed_results.push(borrowed);
     }
     let mut fields = Vec::new();
-    for (target, resolution) in targets.iter().zip(&resolutions) {
-        match resolution.presence() {
+    for ((target, resolution), borrowed) in targets.iter().zip(&resolutions).zip(&borrowed_results)
+    {
+        let presence = borrowed.map_or_else(
+            || resolution.as_ref().expect("resolved fallback").presence(),
+            |(_, presence)| presence,
+        );
+        match presence {
             SelectorPresence::UnavailableVisibility => {
                 unknown.push(NonEvaluationReason::InsufficientVisibility)
             }
             SelectorPresence::MetadataMissing => unknown.push(NonEvaluationReason::IneligibleInput),
-            SelectorPresence::Present => match resolution.value() {
-                Some(JsonValue::String(value)) => fields.push((target.as_str(), value.as_str())),
-                _ => unknown.push(NonEvaluationReason::TypeMismatch),
-            },
+            SelectorPresence::Present => {
+                if let Some((text, _)) = borrowed {
+                    fields.push((target.as_str(), *text));
+                } else {
+                    match resolution.as_ref().expect("resolved fallback").value() {
+                        Some(JsonValue::String(value)) => {
+                            fields.push((target.as_str(), value.as_str()))
+                        }
+                        _ => unknown.push(NonEvaluationReason::TypeMismatch),
+                    }
+                }
+            }
             SelectorPresence::Absent => {}
         }
     }

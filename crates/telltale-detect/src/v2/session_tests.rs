@@ -4,6 +4,158 @@ use telltale_rules::load_default_rule_set;
 use telltale_schema::clients::ClientId;
 use telltale_schema::observation::*;
 
+#[test]
+fn tool_control_lookup_does_not_visit_unrelated_large_result() {
+    let observation = CanonicalObservationV2::builder(
+        ObservationBody::Tool(
+            ToolObservation::new()
+                .with_name("bash")
+                .unwrap()
+                .with_result(JsonValue::string("x".repeat(58_000))),
+        ),
+        ObservationStage::ToolResultReturned,
+        ObservedAt::new("2026-10-06T12:00:00Z").unwrap(),
+        SourceProvenance::new(
+            IngestionMode::SessionStore,
+            "opencode",
+            "opencode.sqlite",
+            Fidelity::PartialStructured,
+        )
+        .unwrap()
+        .with_native_id("synthetic-result")
+        .unwrap(),
+    )
+    .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+    .fact_metadata("tool.result", FactMetadata::reported().unwrap())
+    .build()
+    .unwrap();
+    let registry = super::SelectorRegistry::new();
+    let mut borrow_budget = RetentionBudget::new();
+    borrow_budget
+        .charge(MAX_EVALUATION_BYTE_VISITS - 1024)
+        .unwrap();
+    let (borrowed, presence) =
+        super::selector::borrow_tool_result_text(&observation, &mut borrow_budget)
+            .unwrap()
+            .unwrap();
+    assert_eq!(presence, super::selector::SelectorPresence::Present);
+    let ObservationBody::Tool(tool) = observation.body() else {
+        unreachable!()
+    };
+    let Some(JsonValue::String(original)) = tool.result() else {
+        unreachable!()
+    };
+    assert_eq!(
+        borrowed.as_ptr(),
+        original.as_ptr(),
+        "lookup must borrow, not copy, output"
+    );
+    assert!(
+        borrow_budget.charge(borrowed.len()).is_err(),
+        "the subsequent full-content scan must still exhaust insufficient work"
+    );
+    let mut control_budget = RetentionBudget::new();
+    control_budget
+        .charge(MAX_EVALUATION_BYTE_VISITS - 1024)
+        .unwrap();
+    assert_eq!(
+        registry
+            .try_resolve(
+                super::SelectorId::CompatToolName,
+                &observation,
+                &mut control_budget
+            )
+            .unwrap()
+            .value(),
+        Some(&JsonValue::string("bash"))
+    );
+    let mut result_budget = RetentionBudget::new();
+    result_budget
+        .charge(MAX_EVALUATION_BYTE_VISITS - 1024)
+        .unwrap();
+    assert!(
+        registry
+            .try_resolve(
+                super::SelectorId::CompatToolResult,
+                &observation,
+                &mut result_budget
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn default_rules_evaluate_a_store_of_realistic_large_tool_results() {
+    let plan = compile_rule_v1(&load_default_rule_set().unwrap().compatibility_export()).unwrap();
+    let mut observations = Vec::new();
+    for i in 0..64 {
+        let output = format!(
+            "{}\nsynthetic-tail",
+            "compiler output\n".repeat(if i == 0 { 3600 } else { 1000 })
+        );
+        for stage in [
+            ObservationStage::ToolExecutionCompleted,
+            ObservationStage::ToolResultReturned,
+        ] {
+            observations.push(
+                CanonicalObservationV2::builder(
+                    ObservationBody::Tool(
+                        ToolObservation::new()
+                            .with_name("bash")
+                            .unwrap()
+                            .with_arguments(
+                                JsonValue::try_from_source_value(
+                                    &serde_json::json!({"command":"cargo check"}),
+                                )
+                                .unwrap(),
+                            )
+                            .with_result(JsonValue::string(&output)),
+                    ),
+                    stage,
+                    ObservedAt::new("2026-10-06T12:00:00Z").unwrap(),
+                    SourceProvenance::new(
+                        IngestionMode::SessionStore,
+                        "opencode",
+                        "opencode.sqlite",
+                        Fidelity::PartialStructured,
+                    )
+                    .unwrap()
+                    .with_native_id(format!("synthetic-{i}"))
+                    .unwrap(),
+                )
+                .session_id(CorrelationId::source_reported("synthetic-build").unwrap())
+                .capability_context(
+                    CapabilityContext::new()
+                        .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported)
+                        .with_override(
+                            CapabilityId::UserContext,
+                            CapabilityAvailability::Supported,
+                        ),
+                )
+                .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+                .fact_metadata("tool.arguments", FactMetadata::reported().unwrap())
+                .fact_metadata("tool.result", FactMetadata::reported().unwrap())
+                .build()
+                .unwrap(),
+            );
+        }
+    }
+    let instance = CorrelationId::source_reported("synthetic-instance").unwrap();
+    assert!(
+        evaluate_source(
+            CanonicalSourceInput {
+                client: ClientId::OpenCode,
+                source_id: "opencode.sqlite",
+                source_instance: Some(&instance),
+                observations: &observations
+            },
+            &plan,
+            None
+        )
+        .is_ok()
+    );
+}
+
 fn observation(
     id: &str,
     session: Option<&str>,

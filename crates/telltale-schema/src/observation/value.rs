@@ -14,6 +14,11 @@ pub const LOCAL_MAX_ARRAY_ITEMS: usize = 64;
 pub const LOCAL_MAX_OBJECT_MEMBERS: usize = 32;
 pub const LOCAL_MAX_SEARCHABLE_BYTES: usize = 1_024;
 pub const MESSAGE_MAX_TEXT_BYTES: usize = 65_536;
+/// Direct textual tool results share the message text budget. Nested result
+/// strings and ordinary arguments keep their structured bounds; only the exact
+/// apply_patch.patchText argument has the authored-text exception below.
+pub const TOOL_RESULT_MAX_TEXT_BYTES: usize = MESSAGE_MAX_TEXT_BYTES;
+pub const TOOL_PATCH_MAX_TEXT_BYTES: usize = MESSAGE_MAX_TEXT_BYTES;
 pub const SEMANTIC_MAX_TOTAL_BYTES: usize = 65_536;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +90,66 @@ impl JsonValue {
             return Err(ObservationError::bound(BoundDimension::EncodedBytes));
         }
         Ok(converted)
+    }
+
+    /// Preserve direct output text in full; structured results retain ordinary
+    /// JSON bounds. Observation construction also checks the encoded aggregate.
+    pub fn try_from_source_tool_result(
+        value: &serde_json::Value,
+    ) -> Result<Self, ObservationError> {
+        if let serde_json::Value::String(text) = value {
+            Self::try_from_source_message_text(text)
+        } else {
+            Self::try_from_source_value(value)
+        }
+    }
+
+    /// The known apply_patch API carries authored text, rather than a scalar
+    /// control argument. Validate the ordinary skeleton before admitting text.
+    pub fn try_from_source_tool_arguments(
+        name: Option<&str>,
+        value: &serde_json::Value,
+    ) -> Result<Self, ObservationError> {
+        if name == Some("apply_patch")
+            && let serde_json::Value::Object(members) = value
+            && let Some(patch) = members.get("patchText")
+        {
+            let text = patch
+                .as_str()
+                .ok_or_else(|| ObservationError::new(ValidationCode::InvalidBody))?;
+            let patch = Self::try_from_source_message_text(text)?;
+            if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
+                return Err(ObservationError::bound(BoundDimension::ObjectMembers));
+            }
+            if members.keys().any(|key| key.len() > LOCAL_MAX_KEY_BYTES) {
+                return Err(ObservationError::bound(BoundDimension::KeyBytes));
+            }
+            // Convert each other member with ordinary depth admission before
+            // copying it. Never clone an unchecked source tree into a skeleton.
+            let skeleton = members
+                .iter()
+                .map(|(key, value)| {
+                    Ok((
+                        key.clone(),
+                        if key == "patchText" {
+                            Self::Null
+                        } else {
+                            Self::convert_source_value(value, 2)?
+                        },
+                    ))
+                })
+                .collect::<Result<Vec<_>, ObservationError>>()?;
+            let skeleton = Self::object(skeleton)?;
+            if bounded_json_bytes(&skeleton, 1)? > LOCAL_MAX_VALUE_BYTES {
+                return Err(ObservationError::bound(BoundDimension::EncodedBytes));
+            }
+            let Self::Object(mut converted) = skeleton else {
+                unreachable!()
+            };
+            converted.insert("patchText".into(), patch);
+            return Ok(Self::Object(converted));
+        }
+        Self::try_from_source_value(value)
     }
 
     pub fn try_from_source_message_text(text: &str) -> Result<Self, ObservationError> {
@@ -546,6 +611,48 @@ pub(crate) fn bounded_message_text_bytes(text: &str) -> Result<usize, Observatio
         return Err(ObservationError::bound(BoundDimension::StringBytes));
     }
     Ok(escaped_string_bytes(text))
+}
+
+pub(crate) fn bounded_tool_arguments_bytes(
+    name: Option<&str>,
+    value: &JsonValue,
+) -> Result<usize, ObservationError> {
+    if name == Some("apply_patch")
+        && let JsonValue::Object(members) = value
+        && let Some(patch) = members.get("patchText")
+    {
+        let JsonValue::String(text) = patch else {
+            return Err(ObservationError::new(ValidationCode::InvalidBody));
+        };
+        if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
+            return Err(ObservationError::bound(BoundDimension::ObjectMembers));
+        }
+        // Count a borrowed skeleton, with patchText replaced by null. Builder
+        // validation must not clone an unchecked nested value before admission.
+        let mut bytes = 2usize;
+        for (index, (key, item)) in members.iter().enumerate() {
+            if key.len() > LOCAL_MAX_KEY_BYTES {
+                return Err(ObservationError::bound(BoundDimension::KeyBytes));
+            }
+            let item_bytes = if key == "patchText" {
+                4
+            } else {
+                bounded_json_bytes(item, 2)?
+            };
+            bytes = bytes
+                .checked_add(escaped_string_bytes(key) + 1 + item_bytes + usize::from(index != 0))
+                .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
+        }
+        if bytes > LOCAL_MAX_VALUE_BYTES {
+            return Err(ObservationError::bound(BoundDimension::EncodedBytes));
+        }
+        return Ok(bytes - 4 + bounded_message_text_bytes(text)?);
+    }
+    let bytes = bounded_json_bytes(value, 1)?;
+    if bytes > LOCAL_MAX_VALUE_BYTES {
+        return Err(ObservationError::bound(BoundDimension::EncodedBytes));
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn escaped_string_bytes(value: &str) -> usize {

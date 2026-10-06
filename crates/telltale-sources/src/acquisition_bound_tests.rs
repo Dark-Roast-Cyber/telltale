@@ -8,6 +8,95 @@ fn options() -> AcquisitionOptions {
     AcquisitionOptions::new(ObservedAt::new("2026-09-18T12:00:00Z").unwrap())
 }
 
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path: directory.path().join("opencode.db"),
+    };
+    let writer = rusqlite::Connection::open(&source.path).unwrap();
+    writer.execute_batch("pragma journal_mode=WAL; pragma wal_autocheckpoint=0;
+        create table part (id text primary key, session_id text, time_updated integer, data text);
+        insert into part values ('prefix','synthetic',10,'{\"type\":\"text\",\"role\":\"user\",\"text\":\"ok\"}');").unwrap();
+    let mut ids = None;
+    // Include realistic multiline output and exact encoded aggregate boundaries:
+    // name 'bash' costs six bytes and result JSON quotes cost two bytes.
+    for (text, accepted) in [
+        ("build output\n".repeat(4_000), true),
+        ("x".repeat(65_528), true),
+        ("x".repeat(65_529), false),
+        ("x".repeat(65_537), false),
+    ] {
+        writer.execute("insert or replace into part values ('output','synthetic',20,?1)",
+            [json!({"type":"tool","tool":"bash","state":{"status":"completed","output":text}}).to_string()]).unwrap();
+        let result = acquire_opencode_sqlite(
+            &source,
+            options(),
+            OpenCodeSqliteReadOptions {
+                part_min_time_updated: Some(0),
+                part_limit: 10,
+            },
+        );
+        if accepted {
+            let batch = result.unwrap();
+            assert_eq!(
+                batch.progress,
+                AcquisitionProgress::OpenCodeSqlite {
+                    part_max_time_updated: Some(20)
+                }
+            );
+            let tools = batch
+                .observations
+                .iter()
+                .filter(|o| matches!(o.body(), ObservationBody::Tool(_)))
+                .collect::<Vec<_>>();
+            assert_eq!(tools.len(), 2);
+            for observation in &tools {
+                let ObservationBody::Tool(body) = observation.body() else {
+                    unreachable!()
+                };
+                assert_eq!(body.result(), Some(&JsonValue::string(&text)));
+            }
+            let current = tools
+                .iter()
+                .map(|o| o.observation_id().to_owned())
+                .collect::<Vec<_>>();
+            if let Some(previous) = &ids {
+                assert_eq!(&current, previous);
+            }
+            ids = Some(current);
+        } else {
+            let error = result
+                .err()
+                .expect("no observations, accounting or cursor escape");
+            assert_eq!(error.code(), "unbounded_value");
+            assert_eq!(
+                error.bound_context().unwrap().category,
+                CanonicalFieldCategory::ToolResult
+            );
+            assert!(!format!("{error:?}").contains("synthetic"));
+        }
+    }
+    for data in [
+        json!({"type":"tool","tool":"bash","state":[]}),
+        json!({"type":"tool","tool":"bash","state":{"status":5,"output":"ok"}}),
+        json!({"type":"tool","tool":"bash","state":{"status":"completed","output":{"text":"x".repeat(4_097)}}}),
+        json!({"type":"tool","tool":"bash","state":{"status":"completed","input":"x".repeat(4_097),"output":"ok"}}),
+    ] {
+        writer
+            .execute(
+                "update part set data=?1 where id='output'",
+                [data.to_string()],
+            )
+            .unwrap();
+        assert!(acquire_source(&source, options()).is_err());
+    }
+}
+
 #[test]
 fn long_message_text_is_narrowly_acquired_by_each_json_and_process_adapter() {
     use telltale_schema::{

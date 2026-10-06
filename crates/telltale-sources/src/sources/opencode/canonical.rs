@@ -396,11 +396,23 @@ fn emit_tool_observation(
         metadata.push(("tool.name", FactProvenance::Reported));
     }
     if has_arguments && let Some(arguments) = arguments {
-        body = body.with_arguments(value_to_json(arguments)?);
+        body = body.with_arguments(
+            JsonValue::try_from_source_tool_arguments(tool_name, arguments).map_err(|error| {
+                error.with_bound_category(
+                    telltale_schema::observation::CanonicalFieldCategory::ToolArguments,
+                )
+            })?,
+        );
         metadata.push(("tool.arguments", FactProvenance::Reported));
     }
     if has_result && let Some(result) = result {
-        body = body.with_result(value_to_json(result)?);
+        body = body.with_result(JsonValue::try_from_source_tool_result(result).map_err(
+            |error| {
+                error.with_bound_category(
+                    telltale_schema::observation::CanonicalFieldCategory::ToolResult,
+                )
+            },
+        )?);
         metadata.push(("tool.result", FactProvenance::Reported));
     }
     if let Some(is_error) = state.is_error {
@@ -589,10 +601,6 @@ fn argument_string(value: Option<&Value>, key: &str) -> Option<String> {
         .get(key)
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-}
-
-fn value_to_json(value: &Value) -> Result<JsonValue, OpenCodeCanonicalError> {
-    Ok(JsonValue::try_from_source_value(value)?)
 }
 
 fn is_message_type(kind: &str) -> bool {

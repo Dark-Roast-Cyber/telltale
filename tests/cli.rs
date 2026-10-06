@@ -716,6 +716,8 @@ mod export;
 #[path = "cli/migration.rs"]
 mod migration;
 
+#[path = "cli/opencode_large_output.rs"]
+mod opencode_large_output;
 #[path = "cli/provenance.rs"]
 mod provenance;
 #[path = "cli/release_public_boundary.rs"]
