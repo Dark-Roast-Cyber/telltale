@@ -9,10 +9,11 @@ mod workload {
 
     pub(super) struct Measurements {
         name: &'static str,
-        samples: Vec<Value>,
+        pub(super) samples: Vec<Value>,
         hwm_kib: Option<u64>,
         rss_kib: Option<u64>,
         exit_peak_kib: Option<u64>,
+        pid: Option<u32>,
     }
 
     impl Measurements {
@@ -23,6 +24,7 @@ mod workload {
                 hwm_kib: None,
                 rss_kib: None,
                 exit_peak_kib: None,
+                pid: None,
             }
         }
 
@@ -30,9 +32,19 @@ mod workload {
             std::env::var_os("TELLTALE_WORKLOAD_REPORT_DIR").is_some()
         }
 
+        pub(super) fn reset_process(&mut self, pid: u32) {
+            self.pid = Some(pid);
+            self.hwm_kib = None;
+            self.rss_kib = None;
+            self.exit_peak_kib = None;
+        }
+
         pub(super) fn observe(&mut self, pid: u32) {
             if !Self::enabled() {
                 return;
+            }
+            if self.pid != Some(pid) {
+                self.reset_process(pid);
             }
             if let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) {
                 for (key, target) in [("VmHWM:", &mut self.hwm_kib), ("VmRSS:", &mut self.rss_kib)]
@@ -56,6 +68,7 @@ mod workload {
             }
             self.samples.push(serde_json::json!({
                 "stage": stage, "latency_ms": elapsed.as_secs_f64() * 1000.0,
+                "observed_process_pid":self.pid,
                 "observed_process_hwm_kib": self.hwm_kib,
                 "sampled_process_rss_max_kib": self.rss_kib,
                 "exit_process_peak_rss_kib": self.exit_peak_kib,
@@ -70,6 +83,38 @@ mod workload {
                 sample["emitted_count"] = summary["emitted_count"].clone();
                 sample["source_exclusion_bytes"] = Value::Null;
                 sample["source_byte_visits"] = Value::Null;
+            }
+        }
+
+        // Unlike observe(), this is one settled, live-process sample, not a
+        // lifetime maximum. Missing procfs measurements remain null.
+        pub(super) fn settled(&mut self, pid: u32, details: Value) {
+            if let Some(sample) = self.samples.last_mut() {
+                let status = fs::read_to_string(format!("/proc/{pid}/status")).ok();
+                for (key, field) in [
+                    ("VmRSS:", "settled_current_rss_kib"),
+                    ("VmHWM:", "settled_cumulative_hwm_kib"),
+                ] {
+                    sample[field] = status
+                        .as_ref()
+                        .and_then(|s| {
+                            s.lines().find_map(|line| {
+                                line.strip_prefix(key)?
+                                    .split_whitespace()
+                                    .next()?
+                                    .parse::<u64>()
+                                    .ok()
+                            })
+                        })
+                        .map(Value::from)
+                        .unwrap_or(Value::Null);
+                }
+                sample["settled_fd_count"] = fs::read_dir(format!("/proc/{pid}/fd"))
+                    .ok()
+                    .and_then(|entries| entries.collect::<Result<Vec<_>, _>>().ok())
+                    .map(|entries| Value::from(entries.len()))
+                    .unwrap_or(Value::Null);
+                sample["settled"] = details;
             }
         }
 
@@ -190,7 +235,7 @@ mod workload {
                 "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "kernel": String::from_utf8(output("uname", &["-r"])).unwrap().trim(), "cpu": cpu, "memory": memory },
                 "options": options, "samples": self.samples,
                 "latency_ms": { "p50": percentile(50), "p95": percentile(95), "max": latencies.last() },
-                "rss_scope": "Linux scan exit peak uses wait4 ru_maxrss (KiB); watch exit peak unavailable. Watch VmHWM and sampled VmRSS maxima are cumulative over process lifetime through each sample, not per-cycle peaks. VmHWM is observed while alive, a lower bound if exit precedes final read. VmRSS is sampled, not a peak guarantee. null means unavailable.",
+                "rss_scope": "Linux scan exit peak uses wait4 ru_maxrss (KiB); watch exit peak unavailable. Watch VmHWM and sampled VmRSS maxima are cumulative over process lifetime through each sample, not per-cycle peaks. VmHWM is observed while alive, a lower bound if exit precedes final read. VmRSS is sampled, not a peak guarantee. settled_current_rss_kib is one live VmRSS read after settling, not a cumulative maximum; settled_cumulative_hwm_kib is the live process lifetime VmHWM at that read. New watch cases observe at settled/stage boundaries, not at high frequency, and do not measure an exact exit peak. Exited rejection-stage memory is cleared rather than attributed from another process or an earlier live sample. null means unavailable.",
                 "retention": retention,
             });
             fs::create_dir_all(&directory).unwrap();
@@ -5689,6 +5734,1385 @@ impl Drop for WatchChildGuard {
             }
             let _ = child.wait();
         }
+    }
+}
+
+// File-backed process output avoids pipe backpressure and reader threads on
+// panic. All waits have deadlines; WatchChildGuard kills and reaps on unwind.
+#[cfg(target_os = "linux")]
+mod sustained_process {
+    use super::*;
+
+    pub(super) struct Process {
+        child: WatchChildGuard,
+        stdout: std::path::PathBuf,
+        stderr: std::path::PathBuf,
+        output: BufReader<fs::File>,
+        partial: Vec<u8>,
+    }
+
+    impl Process {
+        pub(super) fn watch(command: &mut Command, directory: &Path, name: &str) -> Self {
+            let stdout = directory.join(format!("{name}.stdout"));
+            let stderr = directory.join(format!("{name}.stderr"));
+            let child = WatchChildGuard::new(
+                command
+                    .stdout(fs::File::create(&stdout).unwrap())
+                    .stderr(fs::File::create(&stderr).unwrap())
+                    .spawn()
+                    .unwrap(),
+            );
+            Self {
+                child,
+                output: BufReader::new(fs::File::open(&stdout).unwrap()),
+                partial: Vec::new(),
+                stdout,
+                stderr,
+            }
+        }
+
+        pub(super) fn id(&self) -> u32 {
+            self.child.id()
+        }
+
+        fn diagnostic(&self) -> String {
+            use std::io::{Seek, SeekFrom};
+            let mut file = fs::File::open(&self.stderr).unwrap();
+            let length = file.metadata().unwrap().len();
+            file.seek(SeekFrom::Start(length.saturating_sub(65536)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            file.take(65536).read_to_end(&mut bytes).unwrap();
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+
+        pub(super) fn ready(&mut self, sessions: &Path) {
+            wait_for_watch_ready(self.child.child_mut(), sessions);
+        }
+
+        fn line(&mut self) -> Option<String> {
+            // EOF is temporary for a growing file. Keep only one bounded partial
+            // record, resuming at the reader's offset when the writer appends.
+            let remaining = (1024 * 1024 + 1 - self.partial.len()) as u64;
+            self.output
+                .by_ref()
+                .take(remaining)
+                .read_until(b'\n', &mut self.partial)
+                .unwrap();
+            assert!(self.partial.len() <= 1024 * 1024, "stdout record bound");
+            if self.partial.last() == Some(&b'\n') {
+                Some(String::from_utf8(std::mem::take(&mut self.partial)).unwrap())
+            } else {
+                None
+            }
+        }
+
+        pub(super) fn before_write(&mut self) {
+            // Peek without consuming: even an incomplete late summary makes
+            // the next write-to-health pairing ambiguous.
+            assert!(
+                self.partial.is_empty() && self.output.fill_buf().unwrap().is_empty(),
+                "stale stdout before source write"
+            );
+        }
+
+        pub(super) fn health(&mut self, deadline: Instant) -> Value {
+            loop {
+                if let Some(line) = self.line() {
+                    let summary: Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(summary["event_type"], "health");
+                    return summary;
+                }
+                assert!(
+                    self.child.child_mut().try_wait().unwrap().is_none(),
+                    "watch exited: {}",
+                    self.diagnostic()
+                );
+                assert!(
+                    Instant::now() < deadline,
+                    "health deadline: {}",
+                    self.diagnostic()
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        pub(super) fn quiet(&mut self) {
+            let deadline = Instant::now() + Duration::from_millis(250);
+            loop {
+                assert!(self.line().is_none(), "extra health during settling");
+                assert!(
+                    self.child.child_mut().try_wait().unwrap().is_none(),
+                    "watch exited during settling"
+                );
+                if Instant::now() >= deadline {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        pub(super) fn terminate(mut self) {
+            assert_eq!(
+                unsafe { libc::kill(self.id() as libc::pid_t, libc::SIGTERM) },
+                0
+            );
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(status) = self.child.child_mut().try_wait().unwrap() {
+                    assert!(status.success(), "TERM failed: {}", self.diagnostic());
+                    break;
+                }
+                assert!(Instant::now() < deadline, "TERM deadline");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        pub(super) fn rejected(mut self, dimension: &str) -> String {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                if let Some(status) = self.child.child_mut().try_wait().unwrap() {
+                    let error = self.diagnostic();
+                    assert!(!status.success(), "capacity overflow succeeded");
+                    assert!(
+                        error.contains(dimension),
+                        "not {dimension} capacity rejection: {error}"
+                    );
+                    assert!(
+                        self.line().is_none(),
+                        "rejection produced a successful health summary"
+                    );
+                    return error;
+                }
+                assert!(Instant::now() < deadline, "capacity rejection deadline");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn completed_json(mut self) -> Value {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                if let Some(status) = self.child.child_mut().try_wait().unwrap() {
+                    assert!(status.success(), "status failed: {}", self.diagnostic());
+                    assert!(fs::metadata(&self.stdout).unwrap().len() <= 1024 * 1024);
+                    return serde_json::from_slice(&fs::read(&self.stdout).unwrap()).unwrap();
+                }
+                assert!(Instant::now() < deadline, "status deadline");
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    pub(super) fn command(home: &Path, root: &Path, state: &Path) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", home)
+            .args([
+                "watch",
+                "--allow-fixtures",
+                "--client",
+                "codex",
+                "--install-inventory-disabled",
+                "--debounce-ms",
+                "100",
+                "--min-scan-interval-ms",
+                "0",
+                "--root",
+            ])
+            .arg(root)
+            .arg("--state-path")
+            .arg(state);
+        command
+    }
+
+    #[test]
+    fn process_output_incremental_large_file_and_partial_eof() {
+        let directory = tempdir().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command.env_clear().arg("--version");
+        let mut process = Process::watch(&mut command, directory.path(), "incremental");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while process.child.child_mut().try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        fs::write(&process.stdout, b"").unwrap();
+        let mut writer = fs::OpenOptions::new()
+            .append(true)
+            .open(&process.stdout)
+            .unwrap();
+        for index in 0..1100 {
+            let line = format!("{index}:{}\n", "x".repeat(1024));
+            writer.write_all(line.as_bytes()).unwrap();
+            assert_eq!(process.line().unwrap(), line);
+            assert!(process.line().is_none());
+        }
+        assert!(fs::metadata(&process.stdout).unwrap().len() > 1024 * 1024);
+        writer.write_all(b"partial").unwrap();
+        assert!(process.line().is_none());
+        assert!(process.line().is_none());
+        writer.write_all(b"-tail\nextra\n").unwrap();
+        assert_eq!(process.line().unwrap(), "partial-tail\n");
+        assert_eq!(process.line().unwrap(), "extra\n");
+        assert!(process.line().is_none());
+        process.before_write();
+        writer.write_all(b"{\"event_type\":\"health\"}\n").unwrap();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process.before_write()))
+                .is_err()
+        );
+        assert_eq!(
+            process.line().unwrap(),
+            "{\"event_type\":\"health\"}\n",
+            "prewrite check discarded stale complete record"
+        );
+        process.before_write();
+        writer.write_all(b"{\"event_type\":").unwrap();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process.before_write()))
+                .is_err()
+        );
+        assert!(process.line().is_none());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process.before_write()))
+                .is_err()
+        );
+        writer.write_all(b"\"health\"}\n").unwrap();
+        assert_eq!(
+            process.line().unwrap(),
+            "{\"event_type\":\"health\"}\n",
+            "prewrite check discarded stale partial record"
+        );
+        process.before_write();
+    }
+
+    pub(super) fn report_directory() {
+        let directory = std::env::var_os("TELLTALE_WORKLOAD_REPORT_DIR")
+            .expect("set TELLTALE_WORKLOAD_REPORT_DIR for process measurements");
+        let directory = Path::new(&directory);
+        fs::create_dir_all(directory).unwrap();
+    }
+
+    pub(super) fn collections(state: &Path) -> Value {
+        let value: Value = serde_json::from_slice(&fs::read(state).unwrap()).unwrap();
+        Value::Object(
+            value
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter_map(|(key, value)| {
+                    let count = match value {
+                        Value::Object(v) => v.len(),
+                        Value::Array(v) => v.len(),
+                        _ => return None,
+                    };
+                    Some((key.clone(), Value::from(count)))
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn journal(log: &Path) -> Value {
+        let stem = log.file_stem().unwrap().to_str().unwrap();
+        let paths = fs::read_dir(log.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.extension().is_some_and(|e| e == "jsonl")
+                    && p.file_stem().unwrap().to_str().unwrap().starts_with(stem)
+            })
+            .collect::<Vec<_>>();
+        let mut bytes = 0;
+        let mut events = 0;
+        for path in &paths {
+            let content = fs::read(path).unwrap();
+            bytes += content.len();
+            for line in content
+                .split(|b| *b == b'\n')
+                .filter(|line| !line.is_empty())
+            {
+                let _: Value = serde_json::from_slice(line).unwrap();
+                events += 1;
+            }
+        }
+        serde_json::json!({"file_count": paths.len(), "event_count": events, "bytes": bytes})
+    }
+
+    pub(super) fn positive(phase: u8) -> Vec<u8> {
+        include_str!("../fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl")
+            .replace(
+                "repo_status",
+                if phase == 0 {
+                    "repo_statua"
+                } else {
+                    "repo_statub"
+                },
+            )
+            .into_bytes()
+    }
+
+    #[derive(Clone, Copy)]
+    pub(super) enum ResponseMode {
+        Prompt,
+        Delayed,
+        Timeout,
+    }
+
+    impl ResponseMode {
+        pub(super) fn delay(self, restored: bool) -> Duration {
+            Duration::from_millis(match self {
+                Self::Prompt => 0,
+                Self::Delayed => 750,
+                Self::Timeout if !restored => 1500,
+                Self::Timeout => 0,
+            })
+        }
+        pub(super) fn timeout_ms(self) -> u64 {
+            if matches!(self, Self::Timeout) {
+                500
+            } else {
+                2000
+            }
+        }
+    }
+
+    pub(super) struct Receiver {
+        pub(super) address: std::net::SocketAddr,
+        pub(super) available: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        pub(super) requests: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+        reader: Option<thread::JoinHandle<()>>,
+    }
+
+    impl Receiver {
+        pub(super) fn new(mode: ResponseMode) -> Self {
+            use std::sync::{
+                Arc, Mutex,
+                atomic::{AtomicBool, Ordering},
+            };
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let available = Arc::new(AtomicBool::new(false));
+            let stop = Arc::new(AtomicBool::new(false));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let (worker_available, worker_stop, worker_requests) =
+                (available.clone(), stop.clone(), requests.clone());
+            let epoch = Instant::now();
+            let reader = thread::spawn(move || {
+                while !worker_stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let received = Instant::now();
+                            stream
+                                .set_read_timeout(Some(Duration::from_secs(2)))
+                                .unwrap();
+                            stream
+                                .set_write_timeout(Some(Duration::from_secs(2)))
+                                .unwrap();
+                            let mut reader = BufReader::new(stream.try_clone().unwrap());
+                            let mut length = None;
+                            let mut header_bytes = 0;
+                            loop {
+                                let mut line = String::new();
+                                // Bounded bytes and EOF handling, including on test unwind.
+                                let read = reader.by_ref().take(8192).read_line(&mut line).unwrap();
+                                assert!(read > 0, "receiver header EOF");
+                                header_bytes += read;
+                                assert!(header_bytes <= 32768, "receiver header bound");
+                                if line == "\r\n" {
+                                    break;
+                                }
+                                if let Some((name, value)) = line.split_once(':')
+                                    && name.eq_ignore_ascii_case("content-length")
+                                {
+                                    length = Some(value.trim().parse::<usize>().unwrap());
+                                }
+                            }
+                            let length = length.expect("HEC content length");
+                            assert!(length <= 1024 * 1024, "receiver body bound");
+                            let mut bytes = vec![0; length];
+                            reader.read_exact(&mut bytes).unwrap();
+                            let body: Value = serde_json::from_slice(&bytes).unwrap();
+                            let id = body["event"]["event_id"].as_str().unwrap();
+                            let restored = worker_available.load(Ordering::SeqCst);
+                            let status = if restored { 200 } else { 503 };
+                            let index = {
+                                let mut requests = worker_requests.lock().unwrap();
+                                assert!(requests.len() < 1024, "receiver observation bound");
+                                let index = requests.len();
+                                requests.push(serde_json::json!({
+                                    "event_id":id,"event":body["event"], "status":status,
+                                    "received_unix_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                                    "received_since_start_ms":received.duration_since(epoch).as_secs_f64()*1000.0,
+                                    "request_to_response_ms":Value::Null,"response_write_completed":false,
+                                    "wire_body_sha256":format!("{:x}",sha2::Sha256::digest(&bytes)),
+                                    "hash_scope":"wire HEC envelope bytes, NOT canonical raw Event bytes",
+                                }));
+                                index
+                            };
+                            let until = Instant::now() + mode.delay(restored);
+                            while Instant::now() < until && !worker_stop.load(Ordering::SeqCst) {
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                            if worker_stop.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            let result = write!(
+                                stream,
+                                "HTTP/1.1 {status} Synthetic\r\nRetry-After: 2\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{{\"code\":0}}"
+                            );
+                            if !matches!(mode, ResponseMode::Timeout) {
+                                result.as_ref().unwrap();
+                            }
+                            let mut requests = worker_requests.lock().unwrap();
+                            requests[index]["request_to_response_ms"] =
+                                Value::from(received.elapsed().as_secs_f64() * 1000.0);
+                            requests[index]["response_write_completed"] =
+                                Value::from(result.is_ok());
+                            requests[index]["client_result"] = Value::from(
+                                if matches!(mode, ResponseMode::Timeout) && !restored {
+                                    "configured timeout; server write is not client completion"
+                                } else {
+                                    "client completion independently observed in outbox"
+                                },
+                            );
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(error) => panic!("synthetic accept: {error}"),
+                    }
+                }
+            });
+            Self {
+                address,
+                available,
+                stop,
+                requests,
+                reader: Some(reader),
+            }
+        }
+
+        pub(super) fn finish(mut self) -> Vec<Value> {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.reader.take().unwrap().join().expect("receiver reader");
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for Receiver {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(reader) = self.reader.take() {
+                // Socket operations time out, so a panic cannot strand a reader.
+                let _ = reader.join();
+            }
+        }
+    }
+
+    pub(super) fn outbox(path: &Path) -> Value {
+        let mut connection =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        connection.busy_timeout(Duration::from_secs(2)).unwrap();
+        let db = connection.transaction().unwrap();
+        let mut groups = serde_json::Map::new();
+        for state in ["pending", "blocked", "acked", "dead"] {
+            let (rows, bytes): (u64, u64) = db.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(length(e.payload)),0) FROM deliveries d JOIN events e USING(event_id) WHERE d.state=?1",
+                [state], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+            groups.insert(
+                state.to_owned(),
+                serde_json::json!({"rows":rows,"payload_bytes":bytes}),
+            );
+        }
+        let identities = db
+            .prepare(
+                "SELECT event_id, payload_hash, payload FROM events ORDER BY event_id",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .unwrap()
+            .map(|row| {
+                let (id, hash, payload) = row.unwrap();
+                let computed = sha2::Sha256::digest(&payload);
+                assert_eq!(hash.as_slice(), computed.as_slice(), "canonical payload hash mismatch");
+                (
+                    id,
+                    serde_json::json!({"canonical_payload_sha256":format!("{computed:x}"),"payload_bytes":payload.len(),"event":serde_json::from_slice::<Value>(&payload).unwrap()}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let retry_rows = db.prepare("SELECT event_id, attempt_count, next_attempt_at, last_error_class, updated_at FROM deliveries ORDER BY event_id, sink_id").unwrap()
+            .query_map([], |r| Ok(serde_json::json!({"event_id":r.get::<_,String>(0)?,"attempt_count":r.get::<_,u64>(1)?,"next_attempt_at":r.get::<_,Option<u64>>(2)?,"last_error_class":r.get::<_,Option<String>>(3)?,"updated_at":r.get::<_,u64>(4)?}))).unwrap()
+            .map(Result::unwrap).collect::<Vec<_>>();
+        let sink_errors = db.prepare("SELECT sink_id, last_error_at, last_error_class FROM sink_health ORDER BY sink_id").unwrap()
+            .query_map([], |r| Ok(serde_json::json!({"sink_id":r.get::<_,String>(0)?,"last_error_at":r.get::<_,Option<u64>>(1)?,"last_error_class":r.get::<_,Option<String>>(2)?}))).unwrap()
+            .map(Result::unwrap).collect::<Vec<_>>();
+        let (events, payload_bytes): (u64, u64) = db
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(length(payload)),0) FROM events",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let cursor: Value = db.query_row("SELECT generation_id, byte_offset, observed_length, hex(prefix_hash), hex(window_hash), journal_namespace, journal_path_hash, window_start FROM ingest_cursor WHERE id=1", [], |r| Ok(serde_json::json!({
+            "generation_id":r.get::<_,String>(0)?, "byte_offset":r.get::<_,u64>(1)?, "observed_length":r.get::<_,u64>(2)?,
+            "prefix_hash":r.get::<_,String>(3)?, "window_hash":r.get::<_,String>(4)?,
+            "journal_namespace":r.get::<_,String>(5)?, "journal_path_hash":r.get::<_,String>(6)?, "window_start":r.get::<_,u64>(7)?,
+        }))).unwrap();
+        let sqlite_files = ["", "-wal", "-shm"]
+            .into_iter()
+            .map(|suffix| {
+                (
+                    if suffix.is_empty() {
+                        "db".to_owned()
+                    } else {
+                        suffix.trim_start_matches('-').to_owned()
+                    },
+                    fs::metadata(format!("{}{suffix}", path.display()))
+                        .ok()
+                        .map(|m| Value::from(m.len()))
+                        .unwrap_or(Value::Null),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        serde_json::json!({"deliveries":groups,"retry_rows":retry_rows,"sink_errors":sink_errors,"retained_events":events,"retained_payload_bytes":payload_bytes,"identities":identities,"cursor":cursor,"sqlite_file_bytes":sqlite_files})
+    }
+
+    pub(super) fn queue_health(
+        home: &Path,
+        log: &Path,
+        state: &Path,
+        outbox: &Path,
+        snapshot: &Value,
+    ) -> Value {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", home)
+            .arg("status")
+            .arg("--log-path")
+            .arg(log)
+            .arg("--state-path")
+            .arg(state)
+            .arg("--outbox-path")
+            .arg(outbox);
+        let status = Process::watch(&mut command, home, "queue-health").completed_json();
+        let queue = &status["durable_queue_health"];
+        assert_eq!(queue["mode"], "durable");
+        assert_eq!(
+            queue["sinks"]["remote"]["pending_depth"],
+            snapshot["deliveries"]["pending"]["rows"]
+        );
+        assert_eq!(
+            queue["sinks"]["remote"]["pending_bytes"],
+            snapshot["deliveries"]["pending"]["payload_bytes"]
+        );
+        assert_eq!(
+            queue["sinks"]["remote"]["dead_count"],
+            snapshot["deliveries"]["dead"]["rows"]
+        );
+        queue.clone()
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "real-process durable pending count saturation/restart/recovery; run explicitly"]
+fn watch_synthetic_durable_count_capacity_recovery() {
+    watch_synthetic_durable_capacity_case(false, sustained_process::ResponseMode::Prompt);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "real-process durable pending byte saturation/restart/recovery; run explicitly"]
+fn watch_synthetic_durable_byte_capacity_recovery() {
+    watch_synthetic_durable_capacity_case(true, sustained_process::ResponseMode::Prompt);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "slow-success count capacity restart/recovery; run explicitly"]
+fn watch_synthetic_durable_slow_count_capacity_recovery() {
+    watch_synthetic_durable_capacity_case(false, sustained_process::ResponseMode::Delayed);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "configured timeout byte capacity restart/recovery; run explicitly"]
+fn watch_synthetic_durable_timeout_byte_capacity_recovery() {
+    watch_synthetic_durable_capacity_case(true, sustained_process::ResponseMode::Timeout);
+}
+
+#[cfg(target_os = "linux")]
+fn watch_synthetic_durable_capacity_case(byte_limit: bool, mode: sustained_process::ResponseMode) {
+    let _guard = watch_process_guard();
+    sustained_process::report_directory();
+    // The byte case leaves ample count capacity but cannot admit a second
+    // fixed-size detection payload. Terminal history is not part of either cap.
+    let (count_cap, byte_cap, dimension) = if byte_limit {
+        (16, 5000, "pending_bytes")
+    } else {
+        (1, 1048576, "pending_events")
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let first = sessions.join("first.jsonl");
+    let rejected = sessions.join("rejected.jsonl");
+    for path in [&first, &rejected] {
+        fs::write(path, b"").unwrap();
+    }
+    let phases = [
+        sustained_process::positive(0),
+        sustained_process::positive(1),
+    ];
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let outbox = temp.path().join("private/outbox.sqlite");
+    let config = temp.path().join("config");
+    fs::create_dir_all(config.join("outputs.d")).unwrap();
+    let receiver = sustained_process::Receiver::new(mode);
+    let timeout_ms = mode.timeout_ms();
+    let outputs = format!(
+        "version: 1\ndelivery:\n  policy: durable\n  outbox_path: {}\n  max_pending_events: {count_cap}\n  max_pending_bytes: {byte_cap}\nsinks:\n  - name: canonical\n    type: jsonl\n    path: {}\n  - name: remote\n    type: splunk_hec\n    endpoint: http://{}\n    token: synthetic-capacity-token\n    timeout_ms: {timeout_ms}\n    retry: {{ max_attempts: 100, base_delay_ms: 30000 }}\n",
+        outbox.display(),
+        log.display(),
+        receiver.address
+    );
+    let outputs_path = config.join("outputs.d/outputs.yaml");
+    fs::write(&outputs_path, &outputs).unwrap();
+    let binary_hash = format!(
+        "{:x}",
+        sha2::Sha256::digest(fs::read(env!("CARGO_BIN_EXE_telltale")).unwrap())
+    );
+    let spawn = |name: &str| {
+        assert_eq!(fs::read_to_string(&outputs_path).unwrap(), outputs);
+        assert_eq!(
+            format!(
+                "{:x}",
+                sha2::Sha256::digest(fs::read(env!("CARGO_BIN_EXE_telltale")).unwrap())
+            ),
+            binary_hash
+        );
+        let mut command = sustained_process::command(temp.path(), &root, &state);
+        command.arg("--config-dir").arg(&config);
+        let mut process = sustained_process::Process::watch(&mut command, temp.path(), name);
+        process.ready(&sessions);
+        process
+    };
+    let mut measurements = workload::Measurements::new(match mode {
+        sustained_process::ResponseMode::Delayed => "durable-real-process-slow-count-capacity",
+        sustained_process::ResponseMode::Timeout => "durable-real-process-timeout-byte-capacity",
+        sustained_process::ResponseMode::Prompt if byte_limit => {
+            "durable-real-process-byte-capacity"
+        }
+        sustained_process::ResponseMode::Prompt => "durable-real-process-count-capacity",
+    });
+    let mut process = spawn("fill");
+    process.before_write();
+    let started = Instant::now();
+    fs::write(&first, &phases[0]).unwrap();
+    let summary = process.health(started + Duration::from_secs(20));
+    assert_eq!(summary["emitted_count"], 1);
+    assert_eq!(
+        summary["source_processing"]["parse_success_source_count"],
+        1
+    );
+    let admitted_latency = started.elapsed();
+    process.quiet();
+    let admitted = sustained_process::outbox(&outbox);
+    assert_eq!(admitted["retry_rows"][0]["attempt_count"], 1);
+    let expected_class = if matches!(mode, sustained_process::ResponseMode::Timeout) {
+        "timeout"
+    } else {
+        "http_status"
+    };
+    assert_eq!(
+        admitted["retry_rows"][0]["last_error_class"],
+        expected_class
+    );
+    let due = admitted["retry_rows"][0]["next_attempt_at"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(
+        due - admitted["retry_rows"][0]["updated_at"].as_u64().unwrap(),
+        30000
+    );
+    assert_eq!(
+        admitted["sink_errors"][0]["last_error_class"],
+        expected_class
+    );
+    assert_eq!(
+        admitted["sink_errors"][0]["last_error_at"],
+        admitted["retry_rows"][0]["updated_at"]
+    );
+    let unix_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    assert!(
+        due > unix_ms(),
+        "retry must remain future during restart/rejection"
+    );
+    assert_eq!(
+        receiver.requests.lock().unwrap().len(),
+        1,
+        "one durable attempt"
+    );
+    // Retryable 503 work remains pending, without manufacturing a terminal
+    // delivery diagnostic. Only actual source-generated work fills the queue.
+    assert_eq!(admitted["deliveries"]["pending"]["rows"], 1);
+    assert_eq!(admitted["retained_events"], 1);
+    assert!(
+        admitted["deliveries"]["pending"]["payload_bytes"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        admitted["deliveries"]["pending"]["payload_bytes"]
+            .as_u64()
+            .unwrap()
+            <= byte_cap
+    );
+    if byte_limit {
+        assert!(
+            admitted["deliveries"]["pending"]["payload_bytes"]
+                .as_u64()
+                .unwrap()
+                * 2
+                > byte_cap
+        );
+    }
+    let full_queue_health =
+        sustained_process::queue_health(temp.path(), &log, &state, &outbox, &admitted);
+    measurements.observe(process.id());
+    measurements.sample(
+        "admitted-and-workload-capacity-full",
+        admitted_latency,
+        &state,
+        &log,
+    );
+    measurements.source_counts(&summary);
+    measurements.settled(process.id(), serde_json::json!({"outbox":admitted,"journal":sustained_process::journal(&log),"collections":sustained_process::collections(&state)}));
+    let state_before = fs::read(&state).unwrap();
+    let journal_before = fs::read(&log).unwrap();
+    let shutdown_started = Instant::now();
+    process.terminate();
+    let shutdown_ms = shutdown_started.elapsed().as_secs_f64() * 1000.0;
+    let restart_started = Instant::now();
+    let mut process = spawn("restart-full");
+    let restarted = sustained_process::outbox(&outbox);
+    assert_eq!(restarted["identities"], admitted["identities"]);
+    assert_eq!(restarted["cursor"], admitted["cursor"]);
+    assert!(unix_ms() < due, "restart missed future retry window");
+    assert_eq!(restarted["retry_rows"], admitted["retry_rows"]);
+    assert_eq!(restarted["sink_errors"], admitted["sink_errors"]);
+    assert_eq!(
+        receiver.requests.lock().unwrap().len(),
+        1,
+        "restart sent before due"
+    );
+    assert_eq!(fs::read(&state).unwrap(), state_before);
+    assert_eq!(fs::read(&log).unwrap(), journal_before);
+    measurements.observe(process.id());
+    measurements.sample("restarted-full", restart_started.elapsed(), &state, &log);
+    measurements.settled(
+        process.id(),
+        serde_json::json!({"outbox":restarted,"journal":sustained_process::journal(&log)}),
+    );
+    // Fixed 2000ms start-to-start cadence includes synchronous transport.
+    thread::sleep(
+        (started + Duration::from_millis(2000)).saturating_duration_since(Instant::now()),
+    );
+    process.before_write();
+    let reject_started = Instant::now();
+    let reject_lateness =
+        reject_started.saturating_duration_since(started + Duration::from_millis(2000));
+    fs::write(&rejected, &phases[1]).unwrap();
+    let rejected_pid = process.id();
+    let diagnostic = process.rejected(dimension);
+    let rejected_snapshot = sustained_process::outbox(&outbox);
+    assert_eq!(
+        fs::read(&log).unwrap(),
+        journal_before,
+        "overflow appended canonical journal"
+    );
+    let before: Value = serde_json::from_slice(&state_before).unwrap();
+    let after: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+    for field in [
+        "seen_source_fingerprints",
+        "seen_detection_fingerprints",
+        "baseline_snapshots",
+        "baseline_source_contributions",
+        "sqlite_ingestion_cursors",
+        "install_inventory",
+    ] {
+        assert_eq!(before[field], after[field], "overflow advanced {field}");
+    }
+    let observations = |state: &Value| {
+        let mut observations = state["source_observations"].clone();
+        for value in observations.as_object_mut().unwrap().values_mut() {
+            value.as_object_mut().unwrap().remove("last_seen_unix_ms");
+        }
+        observations
+    };
+    assert_eq!(
+        observations(&before),
+        observations(&after),
+        "overflow promoted a source observation"
+    );
+    assert_eq!(rejected_snapshot["identities"], admitted["identities"]);
+    assert_eq!(
+        rejected_snapshot["cursor"], admitted["cursor"],
+        "overflow advanced ingest cursor"
+    );
+    assert_eq!(rejected_snapshot["deliveries"]["pending"]["rows"], 1);
+    assert!(unix_ms() < due, "rejection missed future retry window");
+    assert_eq!(rejected_snapshot["retry_rows"], admitted["retry_rows"]);
+    assert_eq!(rejected_snapshot["sink_errors"], admitted["sink_errors"]);
+    assert_eq!(
+        receiver.requests.lock().unwrap().len(),
+        1,
+        "rejection sent before due"
+    );
+    // The process has exited and been reaped; no live memory sample is
+    // available for this stage, even if an earlier observation used this PID.
+    measurements.reset_process(rejected_pid);
+    measurements.sample(
+        "rejected-before-append",
+        reject_started.elapsed(),
+        &state,
+        &log,
+    );
+    measurements.samples.last_mut().unwrap()["settled"] =
+        serde_json::json!({"outbox":rejected_snapshot,"journal":sustained_process::journal(&log)});
+    measurements.samples.last_mut().unwrap()["memory_sampling_scope"] =
+        Value::from("exited process; memory unavailable, not sampled after rejection");
+    receiver
+        .available
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let recovery_started = Instant::now();
+    let mut process = spawn("recover");
+    let deadline = recovery_started + Duration::from_secs(30);
+    let recovered = loop {
+        let snapshot = sustained_process::outbox(&outbox);
+        assert_eq!(snapshot["identities"], admitted["identities"]);
+        assert_eq!(snapshot["deliveries"]["dead"]["rows"], 0);
+        if unix_ms() + 25 < due {
+            assert_eq!(snapshot["retry_rows"], admitted["retry_rows"]);
+            assert_eq!(snapshot["sink_errors"], admitted["sink_errors"]);
+            assert_eq!(
+                receiver.requests.lock().unwrap().len(),
+                1,
+                "recovery sent before due"
+            );
+        }
+        if snapshot["deliveries"]["acked"]["rows"] == 1 {
+            break snapshot;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "committed pending recovery deadline"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    let recovery_latency = recovery_started.elapsed();
+    measurements.observe(process.id());
+    measurements.sample(
+        "committed-pending-recovered",
+        recovery_latency,
+        &state,
+        &log,
+    );
+    measurements.settled(
+        process.id(),
+        serde_json::json!({"outbox":recovered,"journal":sustained_process::journal(&log)}),
+    );
+    // Rewriting the rejected bytes is a genuine parser retry after capacity is
+    // freed, not a manual enqueue or DB mutation.
+    process.before_write();
+    let retry_started = Instant::now();
+    fs::write(&rejected, &phases[1]).unwrap();
+    let retry_summary = process.health(retry_started + Duration::from_secs(20));
+    let retry_latency = retry_started.elapsed();
+    assert_eq!(retry_summary["emitted_count"], 1);
+    assert_eq!(
+        retry_summary["source_processing"]["parse_success_source_count"],
+        1
+    );
+    process.quiet();
+    let final_snapshot = sustained_process::outbox(&outbox);
+    let recovered_queue_health =
+        sustained_process::queue_health(temp.path(), &log, &state, &outbox, &final_snapshot);
+    assert_eq!(final_snapshot["deliveries"]["pending"]["rows"], 0);
+    assert_eq!(final_snapshot["deliveries"]["acked"]["rows"], 2);
+    assert_eq!(final_snapshot["deliveries"]["dead"]["rows"], 0);
+    assert_eq!(
+        final_snapshot["retained_events"], 2,
+        "no duplicate promotion or silent loss"
+    );
+    for (id, payload) in admitted["identities"].as_object().unwrap() {
+        assert_eq!(&final_snapshot["identities"][id], payload);
+    }
+    measurements.observe(process.id());
+    measurements.sample(
+        "rejected-source-admitted-after-recovery",
+        retry_latency,
+        &state,
+        &log,
+    );
+    measurements.source_counts(&retry_summary);
+    measurements.settled(process.id(), serde_json::json!({"outbox":final_snapshot,"journal":sustained_process::journal(&log),"collections":sustained_process::collections(&state)}));
+    process.before_write();
+    let repeat_started = Instant::now();
+    fs::write(&rejected, &phases[1]).unwrap();
+    let repeat = process.health(repeat_started + Duration::from_secs(20));
+    let repeat_latency = repeat_started.elapsed();
+    assert_eq!(repeat["emitted_count"], 0);
+    assert!(
+        repeat["detection_flow"]["state_deduplicated_detection_count"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    process.quiet();
+    assert_eq!(
+        sustained_process::outbox(&outbox)["identities"],
+        final_snapshot["identities"]
+    );
+    measurements.observe(process.id());
+    measurements.sample(
+        "recovered-source-deduplicated",
+        repeat_latency,
+        &state,
+        &log,
+    );
+    measurements.source_counts(&repeat);
+    measurements.settled(process.id(), serde_json::json!({"outbox":sustained_process::outbox(&outbox),"journal":sustained_process::journal(&log)}));
+    process.terminate();
+    let requests = receiver.finish();
+    let canonical = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let event: Value = serde_json::from_str(line).unwrap();
+            (event["event_id"].as_str().unwrap().to_owned(), event)
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for request in &requests {
+        let id = request["event_id"].as_str().unwrap();
+        assert_eq!(
+            request["event"], final_snapshot["identities"][id]["event"],
+            "receiver/outbox JSON content parity"
+        );
+        assert_eq!(
+            request["event"], canonical[id],
+            "receiver/journal JSON content parity"
+        );
+    }
+    for request in requests
+        .iter()
+        .skip(1)
+        .filter(|r| r["event_id"] == requests[0]["event_id"])
+    {
+        assert!(
+            request["received_unix_ms"].as_u64().unwrap() >= due,
+            "received retry before stored due time"
+        );
+    }
+    let accepted_ids = requests
+        .iter()
+        .filter(|r| r["status"] == 200)
+        .map(|r| r["event_id"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    for id in final_snapshot["identities"].as_object().unwrap().keys() {
+        assert!(accepted_ids.contains(id.as_str()));
+    }
+    let recipe = format!(
+        "codex first.jsonl/rejected.jsonl initially empty; compiled defaults; phase A fill; TERM; same-binary restart before due; phase B rejected before append; restore same receiver; same-binary restart; ack pending before separate 30s deadline; phase B retry then dedup; pending_events={count_cap}; pending_bytes={byte_cap}; timeout={timeout_ms}ms; retry_base=30000ms; debounce=100ms; min_scan_interval=0ms; quiet=250ms"
+    );
+    measurements.finish(&[&phases[0],&phases[1],recipe.as_bytes()], "ordered two synthetic fixed source phases plus deterministic capacity recipe; actual binary admission only", serde_json::json!({
+        "recipe":recipe,"recipe_sha256":format!("{:x}",sha2::Sha256::digest(recipe.as_bytes())),
+        "max_pending_events":count_cap,"max_pending_bytes":byte_cap,"saturated_dimension":dimension,
+        "full_definition":"cannot admit one more fixed-size synthetic detection; byte cap need not be exactly filled",
+        "fill_to_reject_start_cadence_ms":2000,"reject_schedule_lateness_ms":reject_lateness.as_secs_f64()*1000.0,
+        "fill_to_reject_schedule_cadence_misses":u64::from(reject_lateness >= Duration::from_millis(2000)),
+        "source_to_health_cadence_misses":([admitted_latency,retry_latency,repeat_latency].iter().filter(|d| **d >= Duration::from_millis(2000)).count()),
+        "processing_only_latency":"UNAVAILABLE; source-to-health includes synchronous transport",
+        "shutdown_ms":shutdown_ms,"configured_transport_timeout_ms":timeout_ms,
+        "outage_response_delay_ms":mode.delay(false).as_millis(),"restored_response_delay_ms":mode.delay(true).as_millis(),
+        "stored_retry_due_unix_ms":due,"stored_retry_schedule_delay_ms":due-admitted["retry_rows"][0]["updated_at"].as_u64().unwrap(),
+        "debounce_ms":100,"min_scan_interval_ms":0,"quiet_ms":250,"recovery_deadline_ms":30000,
+        "retry_max_attempts":100,"retry_base_delay_ms":30000,"receiver_retry_after_seconds":2,
+        "receiver":"synthetic loopback HEC; received requests logged before response/stall; server response writes are not client completion",
+        "rules":"compiled defaults","client":"codex","allow_fixtures":true,"install_inventory_disabled":true,
+        "fixed_source_paths":["codex/sessions/first.jsonl","codex/sessions/rejected.jsonl"],
+        "fixed_session_id":"uc001-positive","iterations":"unbounded watch, explicit TERM; overflow exits nonzero",
+        "binary_hash_unchanged_across_restart":binary_hash,"config_unchanged_across_restart":true,
+        "latency_roles":"process write-to-health, restart-to-ready, write-to-rejection, restore/restart-to-persisted-ack; receiver request-to-response is separate",
+    }), serde_json::json!({
+        "receiver_requests":requests,"recovery_ms":recovery_latency.as_secs_f64()*1000.0,
+        "capacity_rejection_diagnostic":diagnostic,
+        "cursor_scope":"canonical JSONL ingest cursor and JSONL source dedup/baseline progress; no SQLite source parser cursor exercised",
+        "semantics":"at least once; request counts are controlled observation, not an exactly-once guarantee",
+        "retention":"pending caps do not cap acked/dead history, retained payload bytes or SQLite physical bytes",
+        "exposed_queue_health":{"full":full_queue_health,"recovered":recovered_queue_health},
+    }));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "60-cycle settled Linux process characterization; run explicitly"]
+fn watch_synthetic_sustained_settled_cycles() {
+    watch_synthetic_settled_case("watch-sustained-60-settled", 60, 1000, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "two-hour fixed-identity settled process characterization; run explicitly"]
+fn watch_synthetic_multi_hour_settled_cycles() {
+    watch_synthetic_settled_case("watch-multi-hour-settled", 7201, 1000, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "fixed one-source load tier; run explicitly"]
+fn watch_synthetic_fixed_load_1_settled_cycles() {
+    watch_synthetic_settled_case("watch-fixed-load-1-settled", 120, 2000, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "fixed sixteen-source load tier; run explicitly"]
+fn watch_synthetic_fixed_load_16_settled_cycles() {
+    watch_synthetic_settled_case("watch-fixed-load-16-settled", 120, 2000, 16);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "fixed sixty-four-source load tier; run explicitly"]
+fn watch_synthetic_fixed_load_64_settled_cycles() {
+    watch_synthetic_settled_case("watch-fixed-load-64-settled", 120, 2000, 64);
+}
+
+#[cfg(target_os = "linux")]
+fn watch_synthetic_settled_case(
+    name: &'static str,
+    default_cycles: u64,
+    cadence_ms: u64,
+    source_count: usize,
+) {
+    let _guard = watch_process_guard();
+    sustained_process::report_directory();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("stores");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let base_phases = [
+        sustained_process::positive(0),
+        sustained_process::positive(1),
+    ];
+    assert_eq!(base_phases[0].len(), 708);
+    let legacy_identity = default_cycles == 60 || default_cycles == 7201;
+    let session_ids = (0..source_count)
+        .map(|index| {
+            if legacy_identity {
+                "uc001-positive".to_owned()
+            } else {
+                format!("fixed-load-{index:03}")
+            }
+        })
+        .collect::<Vec<_>>();
+    let sources = (0..source_count)
+        .map(|index| {
+            sessions.join(if legacy_identity {
+                "fixed.jsonl".to_owned()
+            } else {
+                format!("fixed-{index:03}.jsonl")
+            })
+        })
+        .collect::<Vec<_>>();
+    let phases = (0..source_count)
+        .map(|index| {
+            base_phases.each_ref().map(|phase| {
+                String::from_utf8(phase.clone())
+                    .unwrap()
+                    .replace("uc001-positive", &session_ids[index])
+                    .into_bytes()
+            })
+        })
+        .collect::<Vec<_>>();
+    for (source, phase) in sources.iter().zip(&phases) {
+        assert_eq!(phase[0].len(), 708);
+        assert_eq!(phase[0].len(), phase[1].len());
+        fs::write(source, &phase[1]).unwrap();
+    }
+    let cycles = std::env::var("TELLTALE_WORKLOAD_CYCLES")
+        .ok()
+        .map(|v| v.parse::<u64>().expect("positive smoke cycle count"))
+        .unwrap_or(default_cycles);
+    assert!(
+        cycles > 0 && cycles <= default_cycles,
+        "TELLTALE_WORKLOAD_CYCLES only shortens the fixed default for developer smoke"
+    );
+    let state = temp.path().join("state.json");
+    let log = temp.path().join("events.jsonl");
+    let mut command = sustained_process::command(temp.path(), &root, &state);
+    command
+        .args([
+            "--no-local-config",
+            "--log-rotate-max-size",
+            "1",
+            "--log-rotate-keep",
+            "2",
+        ])
+        .arg("--log-path")
+        .arg(&log);
+    let mut process = sustained_process::Process::watch(&mut command, temp.path(), "sustained");
+    process.ready(&sessions);
+    let mut measurements = workload::Measurements::new(name);
+    let epoch = Instant::now();
+    let mut postwarm_rss = Vec::new();
+    let mut overruns = Vec::new();
+    let mut postwarm_collections = None;
+    let mut postwarm_journal = None;
+    let mut fd_baseline = None;
+    let mut parsed_records = None;
+    let mut cadence_met = true;
+    let mut state_bytes_by_phase = [None, None];
+    let mut latenesses = Vec::new();
+    let mut write_times = Vec::new();
+    let mut cadence_misses = 0;
+    let window_cycles = if default_cycles == 7201 { 300 } else { 12 };
+    for cycle in 0..cycles {
+        let scheduled = epoch + Duration::from_millis(cycle * cadence_ms);
+        thread::sleep(scheduled.saturating_duration_since(Instant::now()));
+        if default_cycles == 7201 && cycles == default_cycles && cycle == cycles - 1 {
+            let first_write = epoch + Duration::from_secs_f64(write_times[0]);
+            thread::sleep(
+                (first_write + Duration::from_secs(7200)).saturating_duration_since(Instant::now()),
+            );
+        }
+        process.before_write();
+        let started = Instant::now();
+        let lateness = started.saturating_duration_since(scheduled);
+        latenesses.push(lateness.as_secs_f64() * 1000.0);
+        write_times.push(started.duration_since(epoch).as_secs_f64());
+        if lateness >= Duration::from_millis(10) {
+            overruns.push(serde_json::json!({"cycle":cycle, "schedule_lateness_ms":lateness.as_secs_f64()*1000.0}));
+        }
+        let mut per_write_lateness_ms = Vec::with_capacity(source_count);
+        for (source, phase) in sources.iter().zip(&phases) {
+            per_write_lateness_ms.push(
+                Instant::now()
+                    .saturating_duration_since(scheduled)
+                    .as_secs_f64()
+                    * 1000.0,
+            );
+            fs::write(source, &phase[cycle as usize % 2]).unwrap();
+        }
+        let batch_write_ms = started.elapsed().as_secs_f64() * 1000.0;
+        assert!(
+            batch_write_ms < 100.0,
+            "tier writes exceeded debounce batch: {batch_write_ms}ms"
+        );
+        let summary = process.health(started + Duration::from_secs(20));
+        let latency = started.elapsed();
+        assert_eq!(
+            summary["source_processing"]["parse_success_source_count"],
+            source_count as u64
+        );
+        assert_eq!(
+            summary["source_processing"]["parsed_record_count"],
+            source_count as u64 * 3
+        );
+        assert!(summary["detection_count"].as_u64().unwrap() > 0);
+        assert_eq!(
+            parsed_records
+                .get_or_insert(summary["source_processing"]["parsed_record_count"].clone()),
+            &summary["source_processing"]["parsed_record_count"]
+        );
+        if cycle >= 2 {
+            assert_eq!(summary["emitted_count"], 0);
+            assert!(
+                summary["detection_flow"]["state_deduplicated_detection_count"]
+                    .as_u64()
+                    .unwrap()
+                    > 0
+            );
+        } else {
+            assert!(summary["emitted_count"].as_u64().unwrap() > 0);
+        }
+        process.quiet();
+        measurements.observe(process.id());
+        measurements.sample("settled-cycle", latency, &state, &log);
+        measurements.source_counts(&summary);
+        let collections = sustained_process::collections(&state);
+        let journal = sustained_process::journal(&log);
+        assert!(journal["file_count"].as_u64().unwrap() <= 3);
+        if cycle >= 12 {
+            let bytes = fs::metadata(&state).unwrap().len();
+            assert_eq!(
+                *state_bytes_by_phase[cycle as usize % 2].get_or_insert(bytes),
+                bytes,
+                "fixed phase state bytes grew"
+            );
+            assert_eq!(
+                postwarm_collections.get_or_insert(collections.clone()),
+                &collections
+            );
+            assert_eq!(
+                postwarm_journal.get_or_insert(journal.clone()),
+                &journal,
+                "deduplicated steady cycles grew retained journal"
+            );
+        }
+        measurements.settled(process.id(), serde_json::json!({
+            "cycle":cycle, "phase":cycle%2, "schedule_lateness_ms":lateness.as_secs_f64()*1000.0,
+            "elapsed_since_epoch_ms":epoch.elapsed().as_secs_f64()*1000.0,
+            "batch_write_ms":batch_write_ms,"source_bytes":708*source_count,"source_records":3*source_count,
+            "per_source_write_schedule_lateness_ms":per_write_lateness_ms,
+            "quiet_ms":250, "collections":collections, "journal":journal,
+            "queue":"NOT CONFIGURED", "terminal_history":"NOT CONFIGURED",
+        }));
+        // Procfs is a prerequisite of this Linux-only case, not an RSS cap.
+        let sample = measurements.samples.last();
+        if let Some(sample) = sample {
+            let fd = sample["settled_fd_count"]
+                .as_u64()
+                .expect("settled FD measurement");
+            if cycle >= 12 {
+                let baseline = *fd_baseline.get_or_insert(fd);
+                assert!(
+                    fd <= baseline,
+                    "fixed watch workload accumulated descriptors"
+                );
+                postwarm_rss.push(
+                    sample["settled_current_rss_kib"]
+                        .as_u64()
+                        .expect("settled RSS measurement"),
+                );
+            }
+        }
+        let met = latency < Duration::from_millis(cadence_ms);
+        cadence_met &= met;
+        cadence_misses += u64::from(!met);
+        if cycle % 60 == 0 {
+            let directory = std::env::var_os("TELLTALE_WORKLOAD_REPORT_DIR").unwrap();
+            fs::write(Path::new(&directory).join(format!("{name}.partial.json")), serde_json::to_vec(&serde_json::json!({
+                "status":"INCOMPLETE", "completed_cycles":cycle+1,"requested_cycles":cycles,"default_cycles":default_cycles,
+                "elapsed_seconds":epoch.elapsed().as_secs_f64(),"samples":measurements.samples,
+                "note":"periodic checkpoint; not full-duration acceptance evidence",
+            })).unwrap()).unwrap();
+        }
+    }
+    // Final sample above is alive and quiet; termination is not the sample.
+    let actual_elapsed = epoch.elapsed().as_secs_f64();
+    let shutdown_started = Instant::now();
+    process.terminate();
+    let shutdown_ms = shutdown_started.elapsed().as_secs_f64() * 1000.0;
+    let windows = postwarm_rss
+        .chunks(window_cycles)
+        .enumerate()
+        .map(|(index, window)| {
+            let start_cycle = 12 + index*window_cycles;
+            let end_cycle = start_cycle+window.len()-1;
+            let samples = &measurements.samples[start_cycle..=end_cycle];
+            let mut latencies = samples.iter().map(|s| s["latency_ms"].as_f64().unwrap()).collect::<Vec<_>>();
+            latencies.sort_by(f64::total_cmp);
+            serde_json::json!({
+                "count":window.len(), "min_kib":window.iter().min(), "max_kib":window.iter().max(),
+                "mean_kib":window.iter().sum::<u64>() as f64 / window.len() as f64,
+                "start_cycle":start_cycle,"end_cycle":end_cycle,
+                "start_elapsed_seconds":write_times[start_cycle],"end_elapsed_seconds":write_times[end_cycle],
+                "rss_first_kib":window.first(),"rss_last_kib":window.last(),
+                "latency_ms":{"p50":latencies[(latencies.len()*50).div_ceil(100)-1],"p95":latencies[(latencies.len()*95).div_ceil(100)-1],"max":latencies.last()},
+                "max_schedule_lateness_ms":samples.iter().map(|s| s["settled"]["schedule_lateness_ms"].as_f64().unwrap()).max_by(f64::total_cmp),
+            })
+        })
+        .collect::<Vec<_>>();
+    let monotonic = if postwarm_rss.len() > 1 {
+        Some(
+            postwarm_rss.windows(2).all(|w| w[1] >= w[0])
+                && postwarm_rss.last() > postwarm_rss.first(),
+        )
+    } else {
+        None
+    };
+    let x = &write_times[write_times.len().min(12)..];
+    let slope = if x.len() > 1 {
+        let mx = x.iter().sum::<f64>() / x.len() as f64;
+        let my = postwarm_rss.iter().sum::<u64>() as f64 / x.len() as f64;
+        let denominator = x.iter().map(|v| (v - mx).powi(2)).sum::<f64>();
+        Some(
+            x.iter()
+                .zip(&postwarm_rss)
+                .map(|(a, b)| (a - mx) * (*b as f64 - my))
+                .sum::<f64>()
+                / denominator
+                * 3600.0,
+        )
+    } else {
+        None
+    };
+    latenesses.sort_by(f64::total_cmp);
+    let late_percentile =
+        |p: usize| latenesses[(latenesses.len() * p).div_ceil(100).saturating_sub(1)];
+    let recipe = format!(
+        "codex {source_count} fixed paths/session IDs precreated phase B; compiled defaults; {cycles} alternating 708-byte/3-record A/B cycles; warmup 12; epoch+cycle*{cadence_ms}ms; batch within debounce; health then >=250ms quiet; rotation_size=1; rotation_keep=2; TERM after final live sample"
+    );
+    let mut fixtures = phases
+        .iter()
+        .flat_map(|p| p.iter().map(Vec::as_slice))
+        .collect::<Vec<_>>();
+    fixtures.push(recipe.as_bytes());
+    measurements.finish(&fixtures, "ordered fixed-size synthetic phases for every fixed identity plus deterministic sustained recipe", serde_json::json!({
+        "recipe":recipe,"recipe_sha256":format!("{:x}",sha2::Sha256::digest(recipe.as_bytes())),
+        "cycles":cycles,"default_cycles":default_cycles,"developer_cycle_override":std::env::var("TELLTALE_WORKLOAD_CYCLES").ok(),
+        "full_default_duration_measured":cycles == default_cycles,"actual_elapsed_seconds":actual_elapsed,
+        "first_to_last_write_seconds":write_times.last().unwrap()-write_times.first().unwrap(),"shutdown_ms":shutdown_ms,
+        "warmup_cycles":12, "cadence_ms":cadence_ms, "cadence":"scheduled epoch, never rescheduled after slow cycles",
+        "cadence_misses":cadence_misses,"schedule_lateness_ms":{"p50":late_percentile(50),"p95":late_percentile(95),"max":latenesses.last()},
+        "scheduled_cadence_misses":latenesses.iter().filter(|ms| **ms >= cadence_ms as f64).count(),
+        "schedule_overrun_threshold_ms":10, "schedule_overruns":overruns,
+        "write_to_health_within_cadence":cadence_met,
+        "debounce_ms":100, "min_scan_interval_ms":0, "quiet_ms":250,
+        "rules":"compiled defaults", "client":"codex", "allow_fixtures":true, "no_local_config":true,
+        "install_inventory_disabled":true, "log_rotate_max_size":1, "log_rotate_keep":2,
+        "source_count":source_count, "bytes_per_source":708,"source_bytes":708*source_count, "source_records":3*source_count,
+        "fixed_source_paths":sources.iter().map(|p| p.strip_prefix(&root).unwrap().to_string_lossy()).collect::<Vec<_>>(),
+        "fixed_session_ids":session_ids,
+        "queue":"NOT CONFIGURED","terminal_history":"NOT CONFIGURED",
+        "iterations":"unbounded watch, explicit TERM after final settled sample",
+    }), serde_json::json!({
+        "postwarm_rss_samples_kib":postwarm_rss, "window_cycles":window_cycles,"rss_windows":windows,
+        "linear_rss_slope_kib_per_hour":slope,"rss_characterization_flag":"REQUIRES OWNER INTERPRETATION; no universal RSS bound",
+        "postwarm_nondecreasing_with_net_growth":monotonic,
+        "sampling":"current live VmRSS after health plus >=250ms quiet; warmup excluded; HWM reported separately",
+        "interpretation":"trajectory and slope diagnostic, not a definitive leak test or RSS cap; oscillation does not establish absence of a leak",
+    }));
+    assert!(
+        cadence_met,
+        "write-to-health exceeded stated cadence; see workload report"
+    );
+    if default_cycles == 7201 && cycles == default_cycles {
+        assert!(
+            write_times.last().unwrap() - write_times.first().unwrap() >= 7200.0,
+            "two-hour first-to-last gate; see report"
+        );
     }
 }
 

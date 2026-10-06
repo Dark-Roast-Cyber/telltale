@@ -417,13 +417,200 @@ bytes are recorded where available. Pending limits do not cap retained terminal
 outbox history; source exclusion bytes and byte visits are unavailable here.
 Byte-visit limits are not RSS bounds.
 
-These finite, synthetic development cases do not establish a memory-leak trend,
+The original cases above do not establish a memory-leak trend,
 post-warm-up growth bound, latency-within-cadence gate, queue-saturation performance,
 all-source saturation, native Windows/macOS behavior, arbitrary backlog recovery,
-cross-version upgrades, or published-artifact qualification. Queue saturation
-remains covered by focused outbox fault tests, not this process measurement run.
-Those missing workload/platform gates remain explicit release evidence gaps;
-UPGRADE-01 remains deferred as documented above.
+cross-version upgrades, or published-artifact qualification. The additional
+process cases below address settled sampling and small configured-capacity
+recovery, not general performance qualification. UPGRADE-01 remains deferred as
+documented above.
+
+#### Settled watch and real-process capacity follow-up
+
+Using the same evidence environment above, run these Linux-only ignored cases:
+
+```sh
+cargo test --locked --release --test cli scan_watch::watch_synthetic_sustained_settled_cycles -- --ignored --exact --test-threads=1
+cargo test --locked --release --test cli scan_watch::watch_synthetic_durable_count_capacity_recovery -- --ignored --exact --test-threads=1
+cargo test --locked --release --test cli scan_watch::watch_synthetic_durable_byte_capacity_recovery -- --ignored --exact --test-threads=1
+```
+
+The sustained case alternates two equal-size synthetic phases at one fixed
+Codex source path/session: 708 bytes, three records, compiled default rules.
+All 60 cycles parse and evaluate; cycles 0–11 are designated warm-up. Writes are
+scheduled at `epoch + cycle * 1000 ms`, not one second after the previous scan.
+Write-to-health latency includes the 100 ms debounce. After each health summary,
+at least 250 ms without another summary precedes a live current `VmRSS` read,
+lifetime `VmHWM`, descriptors, persisted state bytes/collection counts, and
+retained journal files/events/bytes. The final sample precedes shutdown. These
+are settled observations, not allocator-live-byte measurements or exact peaks.
+
+On 2026-10-05, all three release-profile commands exited 0, each executing one
+test. Source was `d53eb1d7b6c32661dd19eb33555432e1b47550e2` plus the archived
+test-only tracked patch SHA-256
+`0f4afbabfb923ddac474911adac6d4e1e30ba5566af7f5645b34c264c7472bc4`.
+The actual CLI binary SHA-256 was
+`607349fdae2c6ecb80da15d57ed31e9c52c415aa336bfa33c2b67ff2364351e0`,
+unchanged across the tested restarts; the test-runner binary is a separate artifact.
+Host: Linux x86_64, kernel `7.2.8-200.fc44.x86_64`, Intel i7-12700F,
+`MemTotal` 65,637,792 KiB, Rust/Cargo 1.95.0, root CLI default features.
+Machine-readable reports, exact commands/exits/logs and the measured patch are
+retained privately. Later documentation edits are not rebound to that patch.
+The reports retain fixture/recipe fingerprints and every settled sample:
+`watch-sustained-60-settled.json`, `durable-real-process-count-capacity.json`, and
+`durable-real-process-byte-capacity.json`.
+
+| Sustained watch observation | Result |
+| --- | --- |
+| Write-to-health p50 / p95 / max | 196.509 / 199.997 / 249.918 ms; all below 1000 ms cadence |
+| Scheduled writes at least 10 ms late | 0; the threshold reports scheduling jitter, not an RSS limit |
+| Current settled RSS, first / final | 149,916 / 152,404 KiB |
+| Post-warm-up current RSS range | 150,936–153,920 KiB; repeatedly returned to 150,936 KiB |
+| Consecutive 12-sample post-warm-up means | 151,425 / 152,059 / 152,460 / 151,852 KiB |
+| Cumulative HWM, first / final | 149,916 / 153,944 KiB; not independent cycle peaks |
+| Descriptors | 6 throughout |
+| Post-warm-up persisted state | 2,533 bytes; fixed counts: 2 source fingerprints, 2 detection fingerprints, 1 source observation, 1 source contribution, 2 baseline snapshots, 0 SQLite source cursors |
+| Post-warm-up journal retention | 2 files, 2 events, 9,410 bytes; no further promotion |
+
+**Accepted for this workload:** cadence, deduplication, stable retained state and
+descriptors, and no sampled post-warm-up monotonic RSS growth. The initial two
+phases populate retained state (2,389 to 2,533 bytes). RSS oscillates rather than
+continuing the earlier six-cycle high-water rise. This does not identify that
+earlier rise's cause, prove absence of a leak, or establish an RSS cap.
+
+Capacity cases generate and admit detections through the actual watch process;
+they do not seed or mutate outbox rows. A synthetic loopback HEC receiver returns
+503 during outage, then 200 with `code: 0`. Retry budgets keep committed work
+pending during the finite test. An admitted process is stopped with TERM and the
+same binary/configuration restarted while full. Overflow exits nonzero with the
+specific capacity diagnostic, without journal append, ingest cursor movement or
+new source dedup/baseline progress. Restoring delivery and restarting recovers
+the committed identity/payload hash, admits the previously rejected source on
+retry, and deduplicates its next scan. Exposed queue health agrees with read-only
+SQLite snapshots. Remote semantics remain **at least once**.
+
+| Process capacity observation | Count-limited case | Byte-limited case |
+| --- | --- | --- |
+| Configured pending limits | 1 event / 1,048,576 bytes | 16 events / 5,000 bytes |
+| Full-for-workload pending rows / bytes | 1 / 4,704 | 1 / 4,704 |
+| Rejected projection | 2 events exceeds 1 | 9,408 bytes exceeds 5,000 |
+| Fill / rejection / recovered-source write-to-result latency (health or rejection exit) | 251.919 / 264.415 / 254.496 ms | 256.289 / 264.094 / 260.135 ms |
+| Restore/restart-to-persisted-ACK | 2,145.281 ms | 132.436 ms |
+| Final pending / blocked / dead rows | 0 / 0 / 0 | 0 / 0 / 0 |
+| Final retained ACK history rows / payload bytes | 2 / 9,408 | 2 / 9,408 |
+| SQLite file bytes, full / final | 81,920 / 86,016 | 81,920 / 86,016 |
+
+**Accepted for these configured caps:** explicit fail-before-append admission,
+same-version pending restart/recovery without silent loss or duplicate promotion,
+and separate pending versus terminal history accounting. Fill-to-reject writes
+were scheduled 1000 ms apart (less than 0.1 ms late); measured processing latencies
+fit that cadence. Recovery is a separate 15-second deadline, not a claim that
+retry-delayed delivery fits one second. “Full” means another fixed-size event
+cannot fit; it does not require filling every byte of headroom. After ACK,
+retained terminal payload bytes exceed the byte-case pending cap, as permitted
+by the documented retention contract. Pending limits cap neither total SQLite
+bytes nor terminal history.
+
+**Remaining gaps:** one minute of one small source is not a multi-hour soak,
+all-source/load-scale or growing-identity characterization, a statistical leak
+analysis, an allocator/heap profile, or a memory bound. Capacity tests use small
+caps and prompt synthetic 503 responses, not large-queue throughput, a slow or
+timed-out transport, forced process death, or disk failure. No SQLite source
+parser cursor, native Windows/macOS, cold OS cache, arbitrary backlog,
+cross-version upgrade or published artifact is qualified by these results.
+Source exclusion bytes and byte visits remain unavailable; byte-visit budgets
+are not RSS bounds. General performance/release qualification remains incomplete.
+
+#### Extended load, transport, and artifact evidence
+
+Evidence dated 2026-10-06 UTC (2026-10-05 local) extends the settled
+watch/capacity observations above; it is not release qualification. All five
+completed release-profile commands exited 0 (one ignored test each), against
+source `d53eb1d7b6c32661dd19eb33555432e1b47550e2`, test-only patch SHA-256
+`46e5c187f9dacf4a9156203c9fe830e065a13124a1d754c20940274f3475ceb1`, and the
+same actual CLI binary SHA-256 `607349fdae2c6ecb80da15d57ed31e9c52c415aa336bfa33c2b67ff2364351e0`.
+The evidence environment and execution controls are those described above;
+`TELLTALE_WORKLOAD_CYCLES` was unset. Later documentation edits are not rebound
+to these measurements.
+
+```sh
+for case in \
+  watch_synthetic_durable_slow_count_capacity_recovery \
+  watch_synthetic_durable_timeout_byte_capacity_recovery \
+  watch_synthetic_fixed_load_1_settled_cycles \
+  watch_synthetic_fixed_load_16_settled_cycles \
+  watch_synthetic_fixed_load_64_settled_cycles; do
+  cargo test --locked --release --test cli "scan_watch::$case" -- --ignored --exact --test-threads=1
+done
+# Full-duration gate below remains incomplete; no cycle override:
+cargo test --locked --release --test cli scan_watch::watch_synthetic_multi_hour_settled_cycles -- --ignored --exact --test-threads=1
+```
+
+The three fixed-load cases ran 120 two-second cycles, including 12 warm-up cycles,
+with at least 250 ms quiet before current RSS, lifetime HWM, state, descriptor,
+and journal observations. Each source was fixed at 708 bytes/three records;
+the tiers used 1/16/64 distinct fixed source paths/session IDs and compiled
+default rules. Queue and terminal history were not configured, not measured as
+zero-capacity queues.
+
+| Sources | Health latency p50 / p95 / max (ms) | Post-warm current RSS range (KiB) | State final (bytes) | Journal files / events / bytes | FD | Duration |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 195.043 / 199.069 / 255.256 | 150,172–153,504 | 2,533 | 2 / 2 / 9,410 | 6 | 238.447 s |
+| 16 | 213.637 / 218.765 / 275.930 | 150,256–155,168 | 26,837 | 2 / 32 / 150,560 | 6 | 238.466 s |
+| 64 | 275.417 / 285.155 / 352.355 | 150,928–155,608 | 104,598 | 2 / 128 / 602,240 | 6 | 238.536 s |
+
+All three had zero write-to-health or scheduled cadence misses. State counts,
+phase-specific state bytes, and journal contents were stable after warm-up.
+Fitted RSS slopes and short-window trends are
+diagnostic, not universal bounds; no sampled monotonic growth is not proof of
+no leak, and these results establish neither a byte budget nor a memory bound.
+The earlier sustained one-source case remains the separate 60-cycle result.
+
+Two transport cases passed. The count-cap-1 case used 750 ms delayed 503 and
+restored 200/code 0 responses with a 2,000 ms transport timeout. The byte-cap
+5,000/count-cap-16 case stalled 1,500 ms against a 500 ms timeout, then restored
+prompt 200/code 0. Each persisted its first-attempt error and 30-second retry
+schedule unchanged across same-binary
+restart; no early resend occurred. Capacity rejection preceded append and
+progress; identities/hashes, receiver/journal/outbox parity, retry admission,
+and subsequent deduplication were preserved. Recovery took 28,915.736 and
+28,176.577 ms respectively against separate 30,000 ms deadlines. Source-to-
+health fill took 1,007.970 and 754.304 ms (includes transport, not processing
+alone); retry after restore took 1,010.001 and 259.641 ms. Final pending,
+blocked, dead rows were 0/0/0, ACK history 2 rows/9,408 bytes, and SQLite grew
+from 81,920 to 86,016 bytes. Delivery remains at-least-once, including uncertain
+success, not exactly-once. Retry configuration allowed 100 total attempts.
+The current shared prompt cases also use 30-second retry,
+2-second fill cadence; previously reported 2-second retry/1-second cadence is
+historical evidence from a different recipe.
+
+The planned 7,201-cycle, one-second soak is **INCOMPLETE, not PASS**: the last
+retained checkpoint has 2,701 cycles over 2,700.442 seconds; there is no terminal
+exit/final report and no process remains. Partial tier checkpoints were
+superseded by the valid complete 120-cycle reports, not failed tier runs.
+Native Windows/macOS/Linux ARM runs are **BLOCKED**: no authorized native host or
+self-hosted runner, and no dispatch approval. Persistent Windows durable
+storage remains unsupported and fail-closed, not best-effort fallback.
+
+Current RC2 artifact qualification is **NOT RUN**: RC2 remains unpublished. The
+older Issue #87 freeze at `5a47eaab406c8cb5b139476861722155b0fdf227` was
+superseded by moving `main`; it is not rebound. Existing RC1 pins above apply
+only to exact tag `v0.7.0-rc.1`: archive SHA-256
+`0da936ff86dbafbf3d2f9260a3579bb44535977de188912c31da0bc87d1ccfaa`, binary
+SHA-256 `0fffed5248f6d46f42e97e3107c131b3e2d6525b449327ffc9ab775827fdf1fe`,
+and provenance workflow run `36299868695`, attempt 1. Its actual watch passed
+12 finite cycles with three records/cycle and deduplication, exiting 0; a separate
+unbounded-watch TERM also exited 0. Frozen Event 3/rules passed. This is
+**PASS** current-host exact-RC1 artifact evidence
+only, not clean-host, service/installer, live-source, or current-source
+qualification; no remote state was mutated. Private evidence retains exact
+commands/exits, patches and provenance, `watch-fixed-load-{1,16,64}-settled.json`,
+`durable-real-process-slow-count-capacity.json`,
+`durable-real-process-timeout-byte-capacity.json`,
+`watch-multi-hour-settled.partial.json`, and the separate artifact ledger.
+General all-source and growing-
+identity load, large queues, forced death, disk failure, cold cache, other
+platforms, and release gates remain unresolved.
 
 ### Development evidence before a candidate
 
