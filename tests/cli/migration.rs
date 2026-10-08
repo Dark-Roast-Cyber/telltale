@@ -1,8 +1,8 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::io::{BufRead, Read, Write};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flate2::Compression;
 use flate2::read::MultiGzDecoder;
@@ -11,7 +11,43 @@ use fs4::FileExt;
 use serde_json::Value;
 use tempfile::tempdir;
 
-fn hold_lock_child(target: &std::path::Path) -> std::process::Child {
+struct TestChild(Child);
+
+impl TestChild {
+    fn output(mut self) -> Output {
+        self.0.stdin.take();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        // CLI summaries are small; drain both pipes concurrently so diagnostics
+        // cannot block the process while the parent waits for its summary.
+        let mut error_pipe = self.0.stderr.take().expect("stderr pipe");
+        let errors = thread::spawn(move || {
+            error_pipe.read_to_end(&mut stderr).expect("stderr");
+            stderr
+        });
+        self.0
+            .stdout
+            .take()
+            .expect("stdout pipe")
+            .read_to_end(&mut stdout)
+            .expect("stdout");
+        let status = self.0.wait().expect("child wait");
+        Output {
+            status,
+            stdout,
+            stderr: errors.join().expect("stderr reader"),
+        }
+    }
+}
+
+impl Drop for TestChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn spawn_lock_child(target: &std::path::Path) -> (TestChild, std::path::PathBuf) {
     let ready = target.with_extension("ready");
     let _ = fs::remove_file(&ready);
     let child = Command::new(std::env::current_exe().expect("test executable"))
@@ -19,14 +55,132 @@ fn hold_lock_child(target: &std::path::Path) -> std::process::Child {
         .arg("--exact")
         .env("TELLTALE_LOCK_HOLDER_TARGET", target)
         .env("TELLTALE_LOCK_HOLDER_READY", &ready)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("lock holder");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    (TestChild(child), ready)
+}
+
+fn acknowledge_lock(child: &mut TestChild, ready: &std::path::Path) {
+    child
+        .0
+        .stdin
+        .as_mut()
+        .expect("control pipe")
+        .write_all(b"acquire\n")
+        .expect("acquire command");
     while !ready.exists() {
-        assert!(Instant::now() < deadline, "lock holder did not start");
+        if let Some(status) = child.0.try_wait().expect("holder status") {
+            let mut stderr = String::new();
+            child
+                .0
+                .stderr
+                .take()
+                .expect("stderr pipe")
+                .read_to_string(&mut stderr)
+                .expect("holder diagnostics");
+            let mut stdout = String::new();
+            child
+                .0
+                .stdout
+                .take()
+                .expect("stdout pipe")
+                .read_to_string(&mut stdout)
+                .expect("holder test diagnostics");
+            panic!("lock holder exited before acknowledgement: {status}: {stderr}{stdout}");
+        }
         thread::sleep(Duration::from_millis(10));
     }
+    assert!(
+        child.0.try_wait().expect("holder status").is_none(),
+        "acknowledged holder exited"
+    );
+}
+
+fn hold_lock_child(target: &std::path::Path) -> TestChild {
+    let (mut child, ready) = spawn_lock_child(target);
+    acknowledge_lock(&mut child, &ready);
     child
+}
+
+fn release_lock_child(child: TestChild) {
+    let output = child.output();
+    assert!(
+        output.status.success(),
+        "holder: {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn assert_busy(output: &Output) {
+    assert!(
+        !output.status.success(),
+        "unexpected success: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("resource busy; retry later"),
+        "{}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn lock_holder_waits_for_parent_and_releases_on_eof() {
+    let temp = tempdir().expect("tempdir");
+    let target = temp.path().join("controlled.json");
+    let (mut child, ready) = spawn_lock_child(&target);
+    assert!(!ready.exists());
+    assert!(!target.with_extension("json.lock").exists());
+    assert!(child.0.try_wait().expect("waiting child").is_none());
+    acknowledge_lock(&mut child, &ready);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(target.with_extension("json.lock"))
+        .expect("sidecar");
+    assert!(matches!(
+        FileExt::try_lock(&file),
+        Err(fs4::TryLockError::WouldBlock)
+    ));
+    release_lock_child(child);
+    FileExt::try_lock(&file).expect("released lock");
+}
+
+#[test]
+fn lock_holder_reports_early_exit_and_cleans_up_on_panic() {
+    let temp = tempdir().expect("tempdir");
+    let failure = std::panic::catch_unwind(|| hold_lock_child(&temp.path().join("missing/target")));
+    let panic = match failure {
+        Ok(_) => panic!("invalid holder succeeded"),
+        Err(panic) => panic,
+    };
+    let message = panic
+        .downcast_ref::<String>()
+        .expect("holder panic message");
+    assert!(
+        message.contains("exited before acknowledgement"),
+        "{message}"
+    );
+    assert!(message.contains("lock file"), "{message}");
+
+    let target = temp.path().join("panic.json");
+    let failure = std::panic::catch_unwind(|| {
+        let _holder = hold_lock_child(&target);
+        panic!("forced parent assertion failure");
+    });
+    assert!(failure.is_err());
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(target.with_extension("json.lock"))
+        .expect("sidecar");
+    FileExt::try_lock(&file)
+        .expect("panic cleanup must terminate and reap holder before returning");
 }
 
 #[test]
@@ -43,7 +197,7 @@ fn migration_and_scan_reject_real_cross_process_state_contention() {
     )
     .expect("legacy state");
 
-    let mut holder = hold_lock_child(&state);
+    let holder = hold_lock_child(&state);
     let migration = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "state", "--from"])
         .arg(&state)
@@ -51,13 +205,10 @@ fn migration_and_scan_reject_real_cross_process_state_contention() {
         .arg(&destination)
         .output()
         .expect("migration");
-    assert!(!migration.status.success());
-    assert!(String::from_utf8_lossy(&migration.stderr).contains("resource busy"));
-    holder.kill().expect("kill lock holder");
-    holder.wait().expect("wait lock holder");
+    assert_busy(&migration);
+    assert!(!destination.exists());
 
     let log = temp.path().join("events.jsonl");
-    let mut holder = hold_lock_child(&state);
     let scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
@@ -73,14 +224,36 @@ fn migration_and_scan_reject_real_cross_process_state_contention() {
         .arg(&log)
         .output()
         .expect("scan");
-    assert!(!scan.status.success());
-    assert!(String::from_utf8_lossy(&scan.stderr).contains("resource busy"));
-    holder.kill().expect("kill lock holder");
-    holder.wait().expect("wait lock holder");
+    assert_busy(&scan);
+    assert!(!log.exists());
+    assert_eq!(
+        fs::read(&state).expect("unchanged state"),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/state/legacy-scan-state.json"
+        ))
+    );
+    release_lock_child(holder);
+
+    // Replaces the timing-dependent two-scan state test: a real process owns
+    // the actual lock, and CLI rejection, unchanged state, release and recovery
+    // are all observed rather than inferred from sidecar creation.
+    let root = synthetic_scan_root(temp.path());
+    let fresh_state = temp.path().join("fresh-state.json");
+    let fresh_log = temp.path().join("fresh-events.jsonl");
+    let holder = hold_lock_child(&fresh_state);
+    assert_busy(&spawn_synthetic_scan(&root, &fresh_state, &fresh_log).output());
+    assert!(!fresh_state.exists());
+    assert!(!fresh_log.exists());
+    release_lock_child(holder);
+    assert_eq!(
+        successful_summary(&spawn_synthetic_scan(&root, &fresh_state, &fresh_log).output())["emitted_count"],
+        1
+    );
 
     let log2 = temp.path().join("events-locked.jsonl");
     let state2 = temp.path().join("state-locked.json");
-    let mut holder = hold_lock_child(&log2);
+    let holder = hold_lock_child(&log2);
     let log_scan = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args([
             "scan",
@@ -97,10 +270,10 @@ fn migration_and_scan_reject_real_cross_process_state_contention() {
         .arg(&log2)
         .output()
         .expect("log contention scan");
-    assert!(!log_scan.status.success());
-    assert!(String::from_utf8_lossy(&log_scan.stderr).contains("resource busy"));
-    holder.kill().expect("kill log holder");
-    holder.wait().expect("wait log holder");
+    assert_busy(&log_scan);
+    assert!(!state2.exists());
+    assert!(!log2.exists());
+    release_lock_child(holder);
 }
 
 #[test]
@@ -115,7 +288,7 @@ fn migration_manifest_lock_fails_without_installing_or_mutating_state() {
     ));
     fs::write(&source, source_bytes).expect("legacy state");
 
-    let mut holder = hold_lock_child(&manifest);
+    let holder = hold_lock_child(&manifest);
     let migration = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["migrate", "state", "--from"])
         .arg(&source)
@@ -138,8 +311,7 @@ fn migration_manifest_lock_fails_without_installing_or_mutating_state() {
                 .contains(".telltale-tmp-")),
         "migration must not leave a prepared data file"
     );
-    holder.kill().expect("kill lock holder");
-    holder.wait().expect("wait lock holder");
+    release_lock_child(holder);
 }
 
 #[test]
@@ -148,6 +320,10 @@ fn migration_lock_holder() {
         return;
     };
     let ready = std::env::var("TELLTALE_LOCK_HOLDER_READY").expect("ready path");
+    let mut control = std::io::stdin().lock();
+    let mut command = String::new();
+    control.read_line(&mut command).expect("acquire command");
+    assert_eq!(command, "acquire\n");
     let path = format!("{target}.lock");
     let file = OpenOptions::new()
         .create(true)
@@ -156,12 +332,12 @@ fn migration_lock_holder() {
         .write(true)
         .open(path)
         .expect("lock file");
-    FileExt::lock(&file).expect("exclusive lock");
+    FileExt::try_lock(&file).expect("exclusive lock");
     File::create(ready)
         .expect("ready file")
         .write_all(b"ready")
         .expect("ready marker");
-    thread::sleep(Duration::from_secs(30));
+    std::io::copy(&mut control, &mut std::io::sink()).expect("release EOF");
 }
 
 #[test]
@@ -724,162 +900,156 @@ fn cursor_time(state: &std::path::Path) -> i64 {
 }
 
 #[test]
-fn two_scan_processes_contend_on_the_same_state_lock() {
-    let temp = tempdir().expect("tempdir");
-    let root = temp.path().join("large-fixture-root");
-    let sessions = root.join("codex/sessions");
-    fs::create_dir_all(&sessions).expect("sessions");
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl");
-    for index in 0..2000 {
-        fs::copy(&fixture, sessions.join(format!("session-{index}.jsonl"))).expect("fixture copy");
-    }
-    let state = temp.path().join("shared-state.json");
-    let log = temp.path().join("shared-events.jsonl");
-    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--emit-activity",
-            "--root",
-        ])
-        .arg(&root)
-        .args(["--state-path"])
-        .arg(&state)
-        .args(["--log-path"])
-        .arg(&log)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("first scan");
-    let lock = state.with_file_name("shared-state.json.lock");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !lock.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "first scan did not acquire state lock"
-        );
-        thread::sleep(Duration::from_millis(5));
-    }
-    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--emit-activity",
-            "--root",
-        ])
-        .arg(&root)
-        .args(["--state-path"])
-        .arg(&state)
-        .args(["--log-path"])
-        .arg(&log)
-        .output()
-        .expect("second scan");
-    let first_output = first.wait_with_output().expect("first scan wait");
-    let first_busy = String::from_utf8_lossy(&first_output.stderr).contains("resource busy");
-    let second_busy = String::from_utf8_lossy(&second.stderr).contains("resource busy");
-    assert!(
-        first_busy || second_busy,
-        "neither scan observed contention"
-    );
-    assert!(
-        first_output.status.success() || second.status.success(),
-        "first: {} / second: {}",
-        String::from_utf8_lossy(&first_output.stderr),
-        String::from_utf8_lossy(&second.stderr)
-    );
-}
-
-#[test]
 fn concurrent_scans_produce_parseable_jsonl_with_rotation() {
-    // This exercises a shared append/rotation target, but does not force a
-    // deterministic inter-process lock collision.
     let temp = tempdir().expect("tempdir");
-    let root = temp.path().join("large-fixture-root");
-    let sessions = root.join("codex/sessions");
-    fs::create_dir_all(&sessions).expect("sessions");
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/session_stores/codex/sessions/2026/04/uc001-positive.jsonl");
-    for index in 0..500 {
-        fs::copy(&fixture, sessions.join(format!("session-{index}.jsonl"))).expect("fixture copy");
-    }
+    let root = synthetic_scan_root(temp.path());
     let log = temp.path().join("shared-events.jsonl");
-    let first = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--emit-activity",
-            "--root",
-        ])
-        .arg(&root)
-        .args(["--state-path"])
-        .arg(temp.path().join("state-one.json"))
-        .args(["--log-path"])
-        .arg(&log)
-        .args(["--log-rotate-max-size", "1000", "--log-rotate-keep", "100"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("first scan");
-    let first_state_lock = temp.path().join("state-one.json.lock");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !first_state_lock.exists() {
-        assert!(Instant::now() < deadline, "first scan did not start");
-        thread::sleep(Duration::from_millis(5));
-    }
-    let second = Command::new(env!("CARGO_BIN_EXE_telltale"))
-        .args([
-            "scan",
-            "--once",
-            "--allow-fixtures",
-            "--no-local-config",
-            "--emit-activity",
-            "--root",
-        ])
-        .arg(&root)
-        .args(["--state-path"])
-        .arg(temp.path().join("state-two.json"))
-        .args(["--log-path"])
-        .arg(&log)
-        .args(["--log-rotate-max-size", "1000", "--log-rotate-keep", "100"])
-        .output()
-        .expect("second scan");
-    let first_output = first.wait_with_output().expect("first scan wait");
-    assert!(first_output.status.success());
+    let states = [
+        temp.path().join("state-one.json"),
+        temp.path().join("state-two.json"),
+    ];
+    // Both real CLI processes must fail closed while an acknowledged process
+    // owns the shared log, regardless of startup or rule-compilation duration.
+    let holder = hold_lock_child(&log);
+    let first = spawn_synthetic_scan(&root, &states[0], &log);
+    let second = spawn_synthetic_scan(&root, &states[1], &log);
+    assert_busy(&first.output());
+    assert_busy(&second.output());
+    assert!(!log.exists());
+    assert!(states.iter().all(|state| !state.exists()));
+    release_lock_child(holder);
+
+    let first = spawn_synthetic_scan(&root, &states[0], &log);
+    let second = spawn_synthetic_scan(&root, &states[1], &log);
+    let outputs = [first.output(), second.output()];
     assert!(
-        second.status.success(),
-        "{}",
-        String::from_utf8_lossy(&second.stderr)
+        outputs.iter().any(|output| output.status.success()),
+        "neither scan recovered"
     );
-    let first_summary: Value = serde_json::from_slice(&first_output.stdout).expect("first summary");
-    let second_summary: Value = serde_json::from_slice(&second.stdout).expect("second summary");
-    let expected_records = first_summary["emitted_count"]
-        .as_u64()
-        .expect("first emitted count")
-        + second_summary["emitted_count"]
-            .as_u64()
-            .expect("second emitted count")
-        + 2;
+    let mut expected_records = 0;
+    for (state, output) in states.iter().zip(outputs) {
+        let accepted = if output.status.success() {
+            output
+        } else {
+            assert_busy(&output);
+            assert!(!state.exists(), "rejected delivery must not commit state");
+            spawn_synthetic_scan(&root, state, &log).output()
+        };
+        let summary = successful_summary(&accepted);
+        assert_eq!(summary["source_processing"]["parsed_record_count"], 2);
+        assert_eq!(summary["emitted_count"], 1);
+        expected_records += summary["emitted_count"].as_u64().expect("emitted count") + 1;
+        let bytes = fs::read(state).expect("committed state");
+        let value: Value = serde_json::from_slice(&bytes).expect("state JSON");
+        assert_eq!(
+            value["seen_source_fingerprints"]
+                .as_array()
+                .expect("source fingerprints")
+                .len(),
+            1
+        );
+        assert_eq!(
+            value["source_observations"]
+                .as_object()
+                .expect("source observations")
+                .len(),
+            1
+        );
+        let repeated = successful_summary(&spawn_synthetic_scan(&root, state, &log).output());
+        assert_eq!(
+            repeated["emitted_count"], 0,
+            "accepted source must be deduplicated"
+        );
+    }
     let mut actual_records = 0;
+    let mut activities = 0;
+    let mut health = 0;
+    let mut generations = 0;
     for entry in fs::read_dir(temp.path()).expect("log directory") {
         let path = entry.expect("log entry").path();
         if path
             .extension()
             .is_some_and(|extension| extension == "jsonl")
         {
-            for line in fs::read_to_string(path).expect("log bytes").lines() {
-                serde_json::from_str::<Value>(line).expect("complete JSONL record");
+            generations += 1;
+            let bytes = fs::read_to_string(path).expect("log bytes");
+            assert!(bytes.ends_with('\n'), "complete JSONL framing");
+            for line in bytes.lines() {
+                let event: Value = serde_json::from_str(line).expect("complete JSONL record");
+                assert_eq!(event["schema_version"], "3.0");
+                match event["event_type"].as_str().expect("event type") {
+                    "activity" => {
+                        activities += 1;
+                        assert_eq!(event["session_id"], "lock-test-session");
+                    }
+                    "health" => {
+                        health += 1;
+                        assert_eq!(event["emitted_count"], 1);
+                    }
+                    other => panic!("unexpected event: {other}"),
+                }
                 actual_records += 1;
             }
         }
     }
     assert_eq!(actual_records, expected_records);
+    assert_eq!(activities, 2);
+    assert_eq!(health, 2);
+    assert_eq!(
+        generations, 2,
+        "second accepted batch must rotate the first"
+    );
+}
+
+fn synthetic_scan_root(directory: &std::path::Path) -> std::path::PathBuf {
+    let root = directory.join("synthetic-root");
+    let sessions = root.join("codex/sessions");
+    fs::create_dir_all(&sessions).expect("sessions");
+    fs::write(sessions.join("session.jsonl"), concat!(
+        "{\"type\":\"session_meta\",\"session_id\":\"lock-test-session\",\"timestamp\":\"2026-04-03T00:00:00Z\",\"payload\":{\"source\":\"cli\"}}\n",
+        "{\"type\":\"event_msg\",\"timestamp\":\"2026-04-03T00:00:01Z\",\"payload\":{\"type\":\"user_message\",\"message\":\"Summarize repository health.\"}}\n"
+    )).expect("synthetic session");
+    root
+}
+
+fn spawn_synthetic_scan(
+    root: &std::path::Path,
+    state: &std::path::Path,
+    log: &std::path::Path,
+) -> TestChild {
+    TestChild(
+        Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args([
+                "scan",
+                "--once",
+                "--allow-fixtures",
+                "--no-local-config",
+                "--emit-activity",
+                "--client",
+                "codex",
+                "--root",
+            ])
+            .arg(root)
+            .arg("--state-path")
+            .arg(state)
+            .arg("--log-path")
+            .arg(log)
+            .args(["--log-rotate-max-size", "1", "--log-rotate-keep", "10"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("scan"),
+    )
+}
+
+fn successful_summary(output: &Output) -> Value {
+    assert!(
+        output.status.success(),
+        "{}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("scan summary")
 }
 
 #[test]

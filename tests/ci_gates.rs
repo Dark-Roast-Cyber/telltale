@@ -23,6 +23,7 @@ fn fixture() -> TempDir {
         "scripts/event3-contract-check",
         "scripts/producer-provenance-check",
         "scripts/local-event-feed-check",
+        "scripts/embedding-contract-check",
         "schemas/event.schema.json",
         "schemas/historical/event-3.0.schema.json",
         "crates/telltale-schema/README.md",
@@ -104,6 +105,80 @@ fn success(output: &Output) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn embedding_gate_preserves_platform_or_explicit_temporary_storage() {
+    let dir = fixture();
+    fs::write(
+        dir.path().join("bin/cargo"),
+        r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$RECORD"
+printf '%s\n' "${TMPDIR-platform-default}" >> "$TEMP_RECORD"
+if test "$1" = tree; then
+    case "$*" in
+        *opencode-sqlite*) printf 'telltale-sources v0.0.0 features=opencode-sqlite\n' ;;
+        *) printf 'telltale-sources v0.0.0 features=\n' ;;
+    esac
+    case "$*" in
+        *opencode-sqlite*|*protected-assignment*) printf 'rusqlite v0.32.1\nlibsqlite3-sys v0.30.1\n' ;;
+        *--prune*) : ;;
+        *sqlx-sqlite*) printf 'libsqlite3-sys v0.30.1\n' ;;
+    esac
+fi
+"#,
+    )
+    .unwrap();
+    for explicit in [false, true] {
+        let record = dir.path().join("embedding-record");
+        let temp_record = dir.path().join("temp-record");
+        fs::write(&record, "").unwrap();
+        fs::write(&temp_record, "").unwrap();
+        let target = dir.path().join("warm-target");
+        let selected_temp = dir.path().join("caller-selected-temp");
+        fs::create_dir_all(&selected_temp).unwrap();
+        let mut command = Command::new("sh");
+        command
+            .arg("scripts/embedding-contract-check")
+            .current_dir(dir.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    dir.path().join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("RECORD", &record)
+            .env("TEMP_RECORD", &temp_record)
+            .env("CARGO_TARGET_DIR", &target)
+            .env_remove("TMPDIR");
+        if explicit {
+            command.env("TMPDIR", &selected_temp);
+        }
+        success(&command.output().unwrap());
+        let expected = if explicit {
+            selected_temp.to_str().unwrap()
+        } else {
+            "platform-default"
+        };
+        let calls = fs::read_to_string(&record).unwrap();
+        let temporary_storage = fs::read_to_string(&temp_record).unwrap();
+        assert_eq!(temporary_storage.lines().count(), calls.lines().count());
+        assert!(temporary_storage.lines().all(|line| line == expected));
+        assert!(
+            !target.exists(),
+            "gate created target-local temporary storage"
+        );
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|line| line.starts_with("test "))
+                .count(),
+            8
+        );
+    }
 }
 
 #[test]
