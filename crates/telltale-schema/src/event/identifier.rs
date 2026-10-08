@@ -340,6 +340,42 @@ pub fn terminal_identifier(kind: &str, value: &str) -> String {
     opaque_identifier(kind, value)
 }
 
+/// Built-in harness tool names of supported clients that terminal identifiers
+/// would otherwise hash because of their casing. A closed vocabulary cannot carry
+/// secrets or paths; MCP and other host-defined names are not listed.
+const KNOWN_HARNESS_TOOL_NAMES: &[&str] = &[
+    "Agent",
+    "Bash",
+    "BashOutput",
+    "Edit",
+    "ExitPlanMode",
+    "Glob",
+    "Grep",
+    "KillShell",
+    "LS",
+    "MultiEdit",
+    "NotebookEdit",
+    "NotebookRead",
+    "Read",
+    "SlashCommand",
+    "Skill",
+    "Task",
+    "TodoRead",
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+];
+
+/// Action-facing tool label: known built-in tool names verbatim, everything else
+/// through [`terminal_identifier`]. Event 3 keeps `terminal_identifier` unchanged.
+pub fn terminal_tool_label(value: &str) -> String {
+    if KNOWN_HARNESS_TOOL_NAMES.contains(&value) {
+        return value.to_string();
+    }
+    terminal_identifier("tool", value)
+}
+
 pub(super) fn is_safe_atlas_tag(value: &str) -> bool {
     value.len() <= 128
         && value.starts_with("atlas:")
@@ -372,6 +408,27 @@ mod tests {
             terminal_identifier("rule", "secret.env.read"),
             "secret.env.read"
         );
+    }
+
+    #[test]
+    fn tool_labels_keep_only_known_harness_names_verbatim() {
+        assert_eq!(terminal_tool_label("Bash"), "Bash");
+        assert_eq!(terminal_tool_label("WebFetch"), "WebFetch");
+        assert_eq!(terminal_tool_label("apply_patch"), "apply_patch");
+        // Unknown mixed-case or host-defined names stay opaque, as in Event 3.
+        for value in [
+            "AKIAABCDEFGHIJKLMNOP",
+            "mcp__Private__Tool",
+            "bash ",
+            "BASH",
+        ] {
+            assert!(terminal_tool_label(value).starts_with("[tool:"), "{value}");
+            assert_eq!(
+                terminal_tool_label(value),
+                terminal_identifier("tool", value)
+            );
+        }
+        assert!(terminal_identifier("tool", "Bash").starts_with("[tool:"));
     }
 
     #[test]

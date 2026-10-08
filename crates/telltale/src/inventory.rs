@@ -1,6 +1,5 @@
 //! Opt-in local install and static MCP configuration inventory.
 //!
-//! Current development after RC1; not covered by published RC1 qualification.
 //! These APIs reuse the existing collectors without compiling rules, connecting
 //! to MCP servers, or starting a watcher. Pipeline scans do not call them, and
 //! this facade does not change CLI scan/watch activation.

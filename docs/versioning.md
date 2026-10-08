@@ -28,7 +28,8 @@ format.
   `v0.7.0` will require separate qualification and a reviewed stable-version
   promotion.
 - Current workspace metadata is `0.7.0-rc.2`, an untagged, unpublished,
-  unqualified development version only. RC1 evidence above applies only to its
+   unqualified candidate-preparation version. Its intended supported 0.7 facade
+   is undergoing qualification, not an unsupported development-only API. RC1 evidence above applies only to its
   immutable published candidate and cannot qualify current main; any next
   reviewed candidate requires its own qualification.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
@@ -167,12 +168,14 @@ exclude its own exact tag only if it resolves to HEAD; `release-tag-review`
 separately rejects any existing prospective tag. Offline checks cannot discover
 remote tags that have not been fetched.
 
-Current development after RC1 changes the supported embedding builder and scan
-return types to `PipelineError`. This is a source-breaking Rust interface change,
-not an Event3 or persisted-state format change. See the
-[0.7.0 migration guide](migrations/0.7.0.md#typed-pipeline-errors-current-development-after-rc1)
-before updating a Git pin; the unpublished development metadata does not qualify
-a candidate or authorize publication.
+The unpublished `0.7.0-rc.2` tree changes the Rust embedding facade (typed
+errors, detailed action scanning, typed accessors, and a surface
+classification) without changing Event3 or persisted state; see the
+[migration guide](migrations/0.7.0.md#rust-embedding-changes-since-rc1) before
+updating a Git pin. Unpublished development metadata neither qualifies a
+candidate nor authorizes publication, and the
+[embedding contract](embedding.md#contract-at-a-glance) is not a stable API
+freeze or a promise for lower-level modules.
 
 The same implementation runs in CI, `release-tag-review` (and therefore
 `release-preflight`), and the release workflow before builds/publication.

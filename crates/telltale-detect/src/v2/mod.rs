@@ -12,9 +12,9 @@ pub mod activity;
 mod activity_tests;
 mod classification;
 pub use actions::{
-    ActionContextEntry, ActionContribution, ActionCoordinate, ActionEvidence, ActionFinding,
-    ActionFindingKind, ActionModifierSemantics, CanonicalActionFinding, ContextOptions,
-    DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions, ReplayIdentity,
+    ActionContextEntry, ActionContextKind, ActionContribution, ActionCoordinate, ActionEvidence,
+    ActionFinding, ActionFindingKind, ActionModifierSemantics, CanonicalActionFinding,
+    ContextOptions, DEFAULT_ACTION_DOWNLOAD_LINK_SCORE, DetailedEvaluationOptions, ReplayIdentity,
     SemanticProvenance,
 };
 #[cfg(test)]
@@ -40,7 +40,7 @@ pub use matcher::{
 };
 pub use session::{
     CanonicalActivity, CanonicalSessionEvaluation, CanonicalSourceEvaluation, CanonicalSourceInput,
-    EvaluationCompletion, EvaluationWorkBudget, ProcessingError, evaluate_source,
+    EvaluationCompletion, EvaluationWorkBudget, ProcessingError, VisibilityLimit, evaluate_source,
     evaluate_source_with_options, evaluate_source_with_options_and_work_budget,
     evaluate_source_with_work_budget,
 };

@@ -26,18 +26,34 @@ pub struct SourceResult {
     pub semantic_provenance: telltale_detect::v2::SemanticProvenance,
     pub progress: AcquisitionProgress,
     pub completion: EvaluationCompletion,
+    pub visibility_limits: Vec<telltale_detect::v2::VisibilityLimit>,
     pub accounting: SourceAccounting,
     pub baseline_replacement: BaselineReplacement,
     pub policy_accounting: Option<Result<PolicyMatchAccounting, PolicyMatchAccountingError>>,
 }
 
+/// Stage at which one source failed; re-exported as `SourceFailureStage`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FailureStage {
     SourceScope,
     Acquisition,
     Evaluation,
     Projection,
     Activity,
+}
+
+impl FailureStage {
+    /// Closed, content-free code used by the Event 3 `scanner_error` adaptation.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::SourceScope => "canonical_source_scope_failed",
+            Self::Acquisition => "canonical_acquisition_failed",
+            Self::Evaluation => "canonical_evaluation_failed",
+            Self::Projection => "canonical_projection_failed",
+            Self::Activity => "canonical_activity_failed",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -57,14 +73,7 @@ impl std::error::Error for SourceFailure {}
 impl SourceFailure {
     /// Adapt typed operational failure to the frozen source-scanning Event3 contract.
     pub fn event(&self, source: &Source) -> Event {
-        let code = match self.stage {
-            FailureStage::SourceScope => "canonical_source_scope_failed",
-            FailureStage::Acquisition => "canonical_acquisition_failed",
-            FailureStage::Evaluation => "canonical_evaluation_failed",
-            FailureStage::Projection => "canonical_projection_failed",
-            FailureStage::Activity => "canonical_activity_failed",
-        };
-        let mut event = telltale_schema::event::scanner_error_event(source, &code);
+        let mut event = telltale_schema::event::scanner_error_event(source, &self.stage.code());
         for evidence in &mut event.evidence {
             if evidence.field == "source_path" {
                 evidence.redacted_value = "canonical source".into();
@@ -311,6 +320,7 @@ fn finish_batch_with_options(
         events: projected.events,
         occurrences: projected.occurrences,
         completion: projected.completion,
+        visibility_limits: evaluation.visibility_limits().iter().copied().collect(),
         progress: batch.progress,
         accounting: batch.accounting,
         baseline_replacement: activity.replacement,

@@ -547,6 +547,11 @@ fn source_failure_reason(error: AcquisitionError) -> SourceUnavailableReason {
             BoundedReadError::MalformedSource => SourceUnavailableReason::MalformedSource,
         },
         AcquisitionError::SourceRead => SourceUnavailableReason::Unreadable,
+        // OpenCode investigation is deferred before acquisition; if a feature-off
+        // acquisition is ever reached, report the missing provider, not a bad file.
+        AcquisitionError::CapabilityNotCompiled => {
+            SourceUnavailableReason::ReadOnlyProviderUnavailable
+        }
         AcquisitionError::ContributionCapacity
         | AcquisitionError::AttestationCapacity
         | AcquisitionError::AccountingOverflow => SourceUnavailableReason::LimitExceeded,

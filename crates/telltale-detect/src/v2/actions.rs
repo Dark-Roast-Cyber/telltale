@@ -1,4 +1,5 @@
 //! Action interpretation beside the frozen session compatibility view. No I/O.
+use super::Severity;
 use super::session::{ProcessingError, RetentionBudget};
 use crate::process_chain::{split_statements, tokenize};
 use regex::Regex;
@@ -11,6 +12,7 @@ use telltale_rules::{
 };
 use telltale_schema::event::{
     PrivacySanitizer, SanitizationContext, terminal_identifier, terminal_session_id,
+    terminal_tool_label,
 };
 use telltale_schema::observation::*;
 use telltale_schema::scoring::{RiskContribution, RiskContributionType};
@@ -71,7 +73,7 @@ impl DetailedEvaluationOptions {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ActionCoordinate(String);
 impl ActionCoordinate {
@@ -82,7 +84,7 @@ impl ActionCoordinate {
 
 /// Privacy-safe projection of one authoritative DetectorResult -> Signal ->
 /// Finding. Its risk is never the host action's aggregate score.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CanonicalActionFinding {
     finding_id: String,
@@ -91,7 +93,7 @@ pub struct CanonicalActionFinding {
     detector_id: String,
     finding_kind: String,
     category: String,
-    severity: String,
+    severity: Severity,
     risk_points: Option<u8>,
 }
 impl CanonicalActionFinding {
@@ -106,7 +108,7 @@ impl CanonicalActionFinding {
             detector_id: safe_identifier("rule", finding.detectors()[0].id(), budget)?,
             finding_kind: finding.finding_kind().as_str().into(),
             category: safe_identifier("category", finding.category(), budget)?,
-            severity: finding.severity().as_str().into(),
+            severity: finding.severity(),
             risk_points: finding.risk_points(),
         })
     }
@@ -128,25 +130,32 @@ impl CanonicalActionFinding {
     pub fn category(&self) -> &str {
         &self.category
     }
-    pub fn severity(&self) -> &str {
-        &self.severity
+    pub fn severity(&self) -> Severity {
+        self.severity
     }
     pub fn risk_points(&self) -> Option<u8> {
         self.risk_points
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ActionFindingKind {
     Atomic,
     Correlation,
 }
+impl ActionFindingKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Atomic => "atomic",
+            Self::Correlation => "correlation",
+        }
+    }
+}
 
 /// Privacy-safe ledger entry. Unlike the internal contribution primitive its
 /// outward ID may be an opaque terminal identifier.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ActionContribution {
     id: String,
@@ -180,7 +189,7 @@ pub struct ContextOptions {
     pub tool_arguments: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ReplayIdentity(String);
 impl ReplayIdentity {
@@ -190,7 +199,7 @@ impl ReplayIdentity {
 }
 
 /// Comparison aid, not authentication or proof of per-event configuration.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SemanticProvenance {
     effective_rule_fingerprint: String,
@@ -217,7 +226,7 @@ impl SemanticProvenance {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ActionEvidence {
     field: String,
@@ -236,11 +245,38 @@ impl ActionEvidence {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// What a same-pass context neighbor is; never a tool result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ActionContextKind {
+    UserMessage,
+    AssistantMessage,
+    ToolCall,
+}
+impl ActionContextKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserMessage => "user_message",
+            Self::AssistantMessage => "assistant_message",
+            Self::ToolCall => "tool_call",
+        }
+    }
+    fn from_projection(kind: &str) -> Option<Self> {
+        match kind {
+            "user_message" => Some(Self::UserMessage),
+            "assistant_message" => Some(Self::AssistantMessage),
+            "tool_call" => Some(Self::ToolCall),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ActionContextEntry {
     offset: i32,
-    kind: String,
+    kind: ActionContextKind,
+    stage: ObservationStage,
     occurred_at: Option<String>,
     tool_name: Option<String>,
     redacted_text: String,
@@ -249,8 +285,12 @@ impl ActionContextEntry {
     pub fn offset(&self) -> i32 {
         self.offset
     }
-    pub fn kind(&self) -> &str {
-        &self.kind
+    pub fn kind(&self) -> ActionContextKind {
+        self.kind
+    }
+    /// Observed stage of the neighbor (for example proposed versus completed).
+    pub fn stage(&self) -> ObservationStage {
+        self.stage
     }
     pub fn occurred_at(&self) -> Option<&str> {
         self.occurred_at.as_deref()
@@ -264,18 +304,22 @@ impl ActionContextEntry {
 }
 
 /// Immutable, constructor-sanitized detailed output; never an Event3 body.
-#[derive(Clone, Serialize)]
+///
+/// This is a Rust value, not a wire format: it deliberately does not implement
+/// `Serialize`. Hosts project accessors into their own versioned envelope;
+/// Telltale's cross-process formats are explicit versioned schemas.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ActionFinding {
     canonical_findings: Vec<CanonicalActionFinding>,
     coordinate: ActionCoordinate,
     finding_kind: ActionFindingKind,
-    severity: String,
+    severity: Severity,
     supporting_observation_ids: Vec<String>,
     detector_kind: String,
     observation_id: String,
-    kind: String,
-    stage: String,
+    kind: ObservationFamily,
+    stage: ObservationStage,
     tool_name: Option<String>,
     session_id: Option<String>,
     timeline_index: usize,
@@ -299,8 +343,8 @@ impl ActionFinding {
     pub fn finding_kind(&self) -> ActionFindingKind {
         self.finding_kind
     }
-    pub fn severity(&self) -> &str {
-        &self.severity
+    pub fn severity(&self) -> Severity {
+        self.severity
     }
     pub fn supporting_observation_ids(&self) -> &[String] {
         &self.supporting_observation_ids
@@ -314,11 +358,13 @@ impl ActionFinding {
     pub fn observation_id(&self) -> &str {
         &self.observation_id
     }
-    pub fn kind(&self) -> &str {
-        &self.kind
+    /// Observed family of the anchor observation.
+    pub fn kind(&self) -> ObservationFamily {
+        self.kind
     }
-    pub fn stage(&self) -> &str {
-        &self.stage
+    /// Observed stage; a requested or proposed tool call is not proof of execution.
+    pub fn stage(&self) -> ObservationStage {
+        self.stage
     }
     pub fn tool_name(&self) -> Option<&str> {
         self.tool_name.as_deref()
@@ -340,9 +386,6 @@ impl ActionFinding {
     }
     pub fn categories(&self) -> &[String] {
         &self.categories
-    }
-    pub fn score(&self) -> u64 {
-        self.promotion_score
     }
     /// Host action contribution sum; not a canonical Finding risk assessment.
     pub fn promotion_score(&self) -> u64 {
@@ -1519,7 +1562,7 @@ pub(crate) fn evaluate(
         let tool_name = match observation.body() {
             ObservationBody::Tool(tool) => tool
                 .name()
-                .map(|name| safe_identifier("tool", name, budget))
+                .map(|name| safe_tool_label(name, budget))
                 .transpose()?,
             _ => None,
         };
@@ -1535,7 +1578,7 @@ pub(crate) fn evaluate(
                 .iter()
                 .map(|e| {
                     e.redacted_text.len()
-                        + e.kind.len()
+                        + e.kind.as_str().len()
                         + e.tool_name.as_ref().map_or(0, String::len)
                         + e.occurred_at.as_ref().map_or(0, String::len)
                 })
@@ -1634,9 +1677,7 @@ pub(crate) fn evaluate(
             .iter()
             .map(|f| f.severity())
             .max()
-            .ok_or(ProcessingError::Evaluation)?
-            .as_str()
-            .to_owned();
+            .ok_or(ProcessingError::Evaluation)?;
         let coordinate = ActionCoordinate(observation.observation_id().to_owned());
         let canonical_findings = native
             .iter()
@@ -1666,9 +1707,12 @@ pub(crate) fn evaluate(
             .collect::<Result<Vec<_>, ProcessingError>>()?;
         budget.consume(
             canonical_findings.len(),
-            serde_json::to_vec(&canonical_findings)
-                .map_err(|_| ProcessingError::Evaluation)?
-                .len(),
+            encoded_len(
+                &canonical_findings
+                    .iter()
+                    .map(EncodedCanonicalFinding::from)
+                    .collect::<Vec<_>>(),
+            )?,
         )?;
         budget.consume(
             0,
@@ -1677,7 +1721,7 @@ pub(crate) fn evaluate(
                     .iter()
                     .map(String::len)
                     .sum::<usize>()
-                + severity.len(),
+                + severity.as_str().len(),
         )?;
         findings.push(ActionFinding {
             canonical_findings,
@@ -1687,8 +1731,8 @@ pub(crate) fn evaluate(
             supporting_observation_ids,
             detector_kind: "rule_v1_action".into(),
             observation_id: observation.observation_id().to_owned(),
-            kind: observation.kind().as_str().to_owned(),
-            stage: observation.stage().as_str().to_owned(),
+            kind: observation.kind(),
+            stage: observation.stage(),
             tool_name,
             session_id,
             timeline_index: index,
@@ -1749,7 +1793,7 @@ pub(crate) fn process_findings(
         let tool_name = match observation.body() {
             ObservationBody::Tool(tool) => tool
                 .name()
-                .map(|name| safe_identifier("tool", name, budget))
+                .map(|name| safe_tool_label(name, budget))
                 .transpose()?,
             _ => None,
         };
@@ -1774,12 +1818,12 @@ pub(crate) fn process_findings(
                 super::FindingKind::Correlation => ActionFindingKind::Correlation,
                 _ => ActionFindingKind::Atomic,
             },
-            severity: result.severity().as_str().into(),
+            severity: result.severity(),
             supporting_observation_ids: result.observation_ids().to_vec(),
             detector_kind: "process_chain".into(),
             observation_id: observation.observation_id().into(),
-            kind: observation.kind().as_str().into(),
-            stage: observation.stage().as_str().into(),
+            kind: observation.kind(),
+            stage: observation.stage(),
             tool_name,
             session_id: observation
                 .session_id()
@@ -1795,9 +1839,7 @@ pub(crate) fn process_findings(
             evidence: Vec::new(),
             context,
         };
-        let bytes = serde_json::to_vec(&action)
-            .map_err(|_| ProcessingError::Evaluation)?
-            .len();
+        let bytes = encoded_len(&EncodedActionFinding::from(&action))?;
         budget.consume(1 + action.context.len(), bytes)?;
         output.push(action);
     }
@@ -1849,6 +1891,11 @@ fn safe_identifier(
 ) -> Result<String, ProcessingError> {
     budget.charge(text.len())?;
     Ok(terminal_identifier(kind, text))
+}
+
+fn safe_tool_label(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {
+    budget.charge(text.len())?;
+    Ok(terminal_tool_label(text))
 }
 
 fn safe_session_id(text: &str, budget: &mut RetentionBudget) -> Result<String, ProcessingError> {
@@ -2175,9 +2222,13 @@ pub(crate) fn context(
         };
         entries.push(ActionContextEntry {
             offset: index as i32 - anchor as i32,
-            kind: kind.to_owned(),
+            kind: ActionContextKind::from_projection(kind).ok_or(ProcessingError::Evaluation)?,
+            stage: o.stage(),
             occurred_at: o.occurred_at().map(|t| t.as_str().to_owned()),
-            tool_name,
+            tool_name: tool_name.and(match o.body() {
+                ObservationBody::Tool(tool) => tool.name().map(terminal_tool_label),
+                _ => None,
+            }),
             redacted_text: text,
         });
     }
@@ -2263,4 +2314,139 @@ fn try_project_context(
     }
     let text = PrivacySanitizer::try_sanitize(SanitizationContext::Evidence, &text, charge)?;
     Ok(Some((kind, text, tool)))
+}
+
+/// Retention accounting only. The public DTOs are not wire formats; these
+/// private mirrors preserve the exact encoded length the budget always charged.
+#[derive(Serialize)]
+struct EncodedCanonicalFinding<'a> {
+    finding_id: &'a str,
+    signal_ids: &'a [String],
+    observation_ids: &'a [String],
+    detector_id: &'a str,
+    finding_kind: &'a str,
+    category: &'a str,
+    severity: &'static str,
+    risk_points: Option<u8>,
+}
+impl<'a> From<&'a CanonicalActionFinding> for EncodedCanonicalFinding<'a> {
+    fn from(f: &'a CanonicalActionFinding) -> Self {
+        Self {
+            finding_id: &f.finding_id,
+            signal_ids: &f.signal_ids,
+            observation_ids: &f.observation_ids,
+            detector_id: &f.detector_id,
+            finding_kind: &f.finding_kind,
+            category: &f.category,
+            severity: f.severity.as_str(),
+            risk_points: f.risk_points,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct EncodedContribution<'a> {
+    id: &'a str,
+    points: u64,
+    contribution_type: RiskContributionType,
+    rationale: &'a str,
+}
+
+#[derive(Serialize)]
+struct EncodedEvidence<'a> {
+    field: &'a str,
+    rule_id: &'a str,
+    redacted_value: &'a str,
+}
+
+#[derive(Serialize)]
+struct EncodedContext<'a> {
+    offset: i32,
+    kind: &'static str,
+    occurred_at: Option<&'a str>,
+    tool_name: Option<&'a str>,
+    redacted_text: &'a str,
+}
+
+#[derive(Serialize)]
+struct EncodedActionFinding<'a> {
+    canonical_findings: Vec<EncodedCanonicalFinding<'a>>,
+    coordinate: &'a str,
+    finding_kind: &'static str,
+    severity: &'static str,
+    supporting_observation_ids: &'a [String],
+    detector_kind: &'a str,
+    observation_id: &'a str,
+    kind: &'static str,
+    stage: &'static str,
+    tool_name: Option<&'a str>,
+    session_id: Option<&'a str>,
+    timeline_index: usize,
+    occurred_at: Option<&'a str>,
+    replay_identity: Option<&'a str>,
+    rule_ids: &'a [String],
+    categories: &'a [String],
+    promotion_score: u64,
+    contributions: Vec<EncodedContribution<'a>>,
+    evidence: Vec<EncodedEvidence<'a>>,
+    context: Vec<EncodedContext<'a>>,
+}
+impl<'a> From<&'a ActionFinding> for EncodedActionFinding<'a> {
+    fn from(a: &'a ActionFinding) -> Self {
+        Self {
+            canonical_findings: a.canonical_findings.iter().map(Into::into).collect(),
+            coordinate: a.coordinate.as_str(),
+            finding_kind: a.finding_kind.as_str(),
+            severity: a.severity.as_str(),
+            supporting_observation_ids: &a.supporting_observation_ids,
+            detector_kind: &a.detector_kind,
+            observation_id: &a.observation_id,
+            kind: a.kind.as_str(),
+            stage: a.stage.as_str(),
+            tool_name: a.tool_name.as_deref(),
+            session_id: a.session_id.as_deref(),
+            timeline_index: a.timeline_index,
+            occurred_at: a.occurred_at.as_deref(),
+            replay_identity: a.replay_identity.as_ref().map(ReplayIdentity::as_str),
+            rule_ids: &a.rule_ids,
+            categories: &a.categories,
+            promotion_score: a.promotion_score,
+            contributions: a
+                .contributions
+                .iter()
+                .map(|c| EncodedContribution {
+                    id: &c.id,
+                    points: c.points,
+                    contribution_type: c.contribution_type,
+                    rationale: &c.rationale,
+                })
+                .collect(),
+            evidence: a
+                .evidence
+                .iter()
+                .map(|e| EncodedEvidence {
+                    field: &e.field,
+                    rule_id: &e.rule_id,
+                    redacted_value: &e.redacted_value,
+                })
+                .collect(),
+            context: a
+                .context
+                .iter()
+                .map(|c| EncodedContext {
+                    offset: c.offset,
+                    kind: c.kind.as_str(),
+                    occurred_at: c.occurred_at.as_deref(),
+                    tool_name: c.tool_name.as_deref(),
+                    redacted_text: &c.redacted_text,
+                })
+                .collect(),
+        }
+    }
+}
+
+fn encoded_len(value: &impl Serialize) -> Result<usize, ProcessingError> {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .map_err(|_| ProcessingError::Evaluation)
 }

@@ -259,7 +259,7 @@ existing evidence fields instead of expanding the schema. Terminal privacy can
 sanitize observation-ID snippets; their evidence hashes retain linkage. Event IDs
 and materialization timestamps remain constructor-generated, not replay-stable
 identities; evaluation results and event ordering are deterministic.
-Current-development embedding occurrences after RC1 are produced in this same
+Embedding occurrences are produced in this same
 `project_event3` pass from retained match context. Their identity reuses
 `observation_id`; core exposes no match content or detect projection DTO as its
 embedding API. Process/correlation occurrences carry no selector evidence fields

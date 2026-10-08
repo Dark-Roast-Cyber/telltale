@@ -40,14 +40,15 @@ fn review_custom_metadata_does_not_survive_detailed_serialization() {
         .scan_sources_detailed(&[source], &DetailedEvaluationOptions::default())
         .unwrap();
     let finding = &scans[0].action_findings[0];
-    assert!(!serde_json::to_string(finding).unwrap().contains(marker));
+    // Debug renders every retained field; the DTO is not a wire format.
+    assert!(!format!("{finding:?}").contains(marker));
     assert_eq!(finding.finding_kind(), ActionFindingKind::Atomic);
     assert_eq!(
         finding.supporting_observation_ids(),
         [finding.observation_id()]
     );
     assert!(!finding.coordinate().as_str().is_empty());
-    assert!(!finding.severity().is_empty());
+    assert_eq!(finding.severity(), Severity::High);
 }
 
 fn write_source(
@@ -111,7 +112,7 @@ fn review_process_details_project_the_existing_owner() {
         assert!(!finding.coordinate().as_str().is_empty());
         assert!(!finding.supporting_observation_ids().is_empty());
         assert_eq!(
-            finding.score(),
+            finding.promotion_score(),
             finding
                 .contributions()
                 .iter()
@@ -152,7 +153,7 @@ fn detailed_scan_is_additive_same_pass_and_replay_is_coordinate_independent() {
         assert_eq!(a.replay_identity(), b.replay_identity());
         assert!(a.replay_identity().is_some());
         assert_ne!(a.observation_id(), b.observation_id());
-        assert_eq!(a.score(), 35);
+        assert_eq!(a.promotion_score(), 35);
     }
     let compatibility = pipeline.scan_sources_with_occurrences(&[first]).unwrap();
     assert!(compatibility[0].action_findings.is_empty());
@@ -201,22 +202,27 @@ fn detailed_context_is_opt_in_same_session_anchor_excluded_and_redacted() {
         finding
             .context()
             .iter()
-            .all(|c| c.kind() != "user_message" && c.kind() != "tool_result" && c.offset() != 0)
+            .all(|c| c.kind() != ActionContextKind::UserMessage && c.offset() != 0)
     );
     let replay = finding.replay_identity().cloned();
     options.context.user_text = true;
     let opted = pipeline.scan_sources_detailed(&[source], &options).unwrap();
     let finding = &opted[0].action_findings[0];
     assert_eq!(finding.replay_identity(), replay.as_ref());
-    assert!(finding.context().iter().any(|c| c.kind() == "user_message"));
-    let serialized = serde_json::to_string(finding).unwrap();
+    assert!(
+        finding
+            .context()
+            .iter()
+            .any(|c| c.kind() == ActionContextKind::UserMessage)
+    );
+    let serialized = format!("{finding:?}");
     assert!(!serialized.contains(marker));
     assert!(!serialized.contains("/home/synthetic/private"));
     assert!(
         finding
             .context()
             .iter()
-            .all(|c| c.offset() != 0 && c.kind() != "tool_result")
+            .all(|c| c.offset() != 0 && c.stage() != ObservationStage::ToolResultReturned)
     );
 }
 
@@ -436,4 +442,72 @@ fn sqlite_detailed_context_comes_from_the_acquired_batch_and_is_session_scoped()
             .iter()
             .all(|c| !c.redacted_text().contains("another session"))
     );
+}
+
+#[test]
+fn pipeline_remains_shareable_across_host_threads() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Pipeline>();
+}
+
+/// Pinned identities for a custom-rule synthetic fixture. Hosts key delivery
+/// and dedup on these values, so a change here must come with the matching
+/// version bump (`REPLAY_ALGORITHM_VERSION`, `ACTION_SEMANTICS_VERSION`, or the
+/// native profile version) and a migration note. Never update values alone.
+#[test]
+fn action_identities_are_pinned_to_their_algorithm_versions() {
+    const RULE: &str = "version: 1\ndescription: synthetic golden\ndefaults: {enabled: true, case_insensitive: false}\nrules:\n  - id: synthetic.golden\n    category: synthetic\n    severity: high\n    score: 30\n    targets: [command]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n";
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    let options = DetailedEvaluationOptions::default();
+    let startup = pipeline.semantic_provenance(&options).unwrap();
+    assert_eq!(
+        (
+            startup.action_semantics_version(),
+            startup.native_profile_version(),
+            startup.replay_algorithm_version(),
+        ),
+        (2, 2, 1)
+    );
+    // Identities exclude paths: two roots must produce the same values.
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let root = tempfile::tempdir().unwrap();
+        let source = write_source(
+            root.path(),
+            "golden.jsonl",
+            "golden-session",
+            &[call("golden-call", "2026-09-17T00:00:00Z", "echo needle")],
+        );
+        let scan = pipeline
+            .scan_sources_detailed(&[source], &options)
+            .unwrap()
+            .remove(0);
+        let action = &scan.action_findings[0];
+        seen.push((
+            scan.semantic_provenance.unwrap().identity().to_owned(),
+            action.replay_identity().unwrap().as_str().to_owned(),
+            action.coordinate().as_str().to_owned(),
+            action.observation_id().to_owned(),
+        ));
+    }
+    assert_eq!(seen[0], seen[1]);
+    let (semantic, replay, coordinate, observation) = &seen[0];
+    assert_eq!(semantic, startup.identity());
+    assert_eq!(
+        semantic,
+        "semantic:v1:sha256:561edc37e9ef08cd55298cbfa99b5b524f0230dbca8d688a3a94d5e0477d9fc5"
+    );
+    assert_eq!(
+        coordinate,
+        "obs:v2:sha256:8c6859e14c8aba279a67d1a85ff2e3f6847614864c0c2f341aa60342ade3a7c1"
+    );
+    assert_eq!(
+        replay,
+        "replay:v1:sha256:e872d2809d69c73a189c8e7e3be73574e8f80985739401ce7b56e4f15c9739c0"
+    );
+    assert_eq!(observation, coordinate);
 }

@@ -155,6 +155,9 @@ Likely later areas include:
 - richer correlation and investigation workflows;
 - optional agent-relevant operating-system context;
 - mature external embedding and integration surfaces.
+- an out-of-process analyzer extension protocol (`analyzer.v1`) whose results
+  return through Telltale's Finding semantics; see
+  [analyzer extensions](docs/development-principles.md#analyzer-extensions-direction-not-implemented).
 
 These are direction, not automatically approved implementation scope. Accepted
 work should be bounded independently before implementation.

@@ -336,6 +336,40 @@ If an external extension mechanism becomes necessary, prefer a versioned subproc
 
 Where reasonable, avoid internal contracts that could never be represented across a versioned external boundary.
 
+### Analyzer extensions (direction, not implemented)
+
+Telltale is the extension host, not one plugin among many. It keeps acquisition,
+canonical observations, identities, provenance, capability and visibility
+semantics, privacy, deterministic detection, Finding semantics, correlation,
+policy, and telemetry. Extensions add specialized analysis on top of that
+visibility instead of rediscovering session stores.
+
+- **Out of process.** Extensions run as separate processes over a small
+  versioned JSONL/IPC protocol (`telltale-extension-v1`), declared by
+  capability. Start with one capability, `analyzer.v1`; add others (for example
+  enrichment) only when a real extension needs them, as distinct capabilities
+  rather than one universal plugin interface. No Rust ABI or shared-library
+  loading.
+- **Bounded input.** An analyzer receives a versioned, privacy-bounded analysis
+  projection (`AnalysisInputV1`), never raw internal structures or source paths.
+- **Results come back through Telltale.** An analyzer returns validated results
+  (`AnalysisResultV1`) linked to specific canonical observation IDs. Telltale
+  converts them into its existing `DetectorResult -> Signal -> Finding` path with
+  analyzer identity and content version as provenance, so console, SIEM, and
+  downstream consumers see one coherent record.
+- **Interpretation, not rewriting.** Analyzers may interpret evidence. They
+  cannot rewrite observed facts (a proposed tool call stays proposed), mint
+  arbitrary Telltale identities, or make policy or action decisions.
+- **Explicit failure.** Analyzer failure or timeout yields explicit
+  not-evaluated or error states; it never blocks native deterministic detection
+  or reports a clean result.
+
+Contracts accepted now keep this path additive: cross-process formats are explicit
+versioned schemas, never `Serialize` derives on facade structs; observation IDs
+are stable and pinned by tests; observed stages are typed; visibility limits are
+an open set of closed reasons. Implementing the protocol requires separately
+accepted scope.
+
 ## Modularity
 
 Modularity means clear responsibilities and dependency direction, not maximizing the number of crates.

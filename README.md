@@ -83,15 +83,12 @@ Linux, macOS, and Windows; they do not establish broad live source-store
 validation. Fixture-backed-only clients remain preview/experimental for live use.
 
 Canonical Observation v2 acquisition and the Detection v2 runtime are now the
-authoritative path for CLI scan/watch and `Pipeline::scan_root` across the eight
-supported source identities. Rule v1 remains the content-compatibility format,
-and Event 3.0 remains the compatibility projection. The record-level
-`detect_records` and `evaluate_session` APIs intentionally remain
-`NormalizedRecord` compatibility surfaces. Event4 and Telemetry/Output v2
-remain inactive.
-Beside `Pipeline::scan_root` / `scan_sources`, current development after RC1
-offers occurrence-aware embedding scans with precise observation associations
-from the same projection; these methods are not in published RC1 artifacts.
+authoritative path for CLI scan/watch and every `Pipeline` scan method across the
+eight supported source identities. Rule v1 remains the content-compatibility
+format, and Event 3.0 remains the compatibility projection. Rust hosts embed
+`telltale-core` and use detailed scans for per-action findings with typed
+outcomes; see [embedding](docs/embedding.md) for the contract and surface
+classification. Event4 and Telemetry/Output v2 remain inactive.
 
 ## Quick start
 

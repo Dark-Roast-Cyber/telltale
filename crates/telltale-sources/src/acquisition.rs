@@ -141,6 +141,9 @@ pub enum AcquisitionError {
     UnsupportedSourceIdentity,
     SourceKindMismatch,
     SourceRead,
+    /// The source identity is supported, but its acquisition was not compiled into
+    /// this build (OpenCode without `opencode-sqlite`). No source I/O is attempted.
+    CapabilityNotCompiled,
     BoundedSourceRead(BoundedReadError),
     InvalidAttestation,
     ConflictingSessionOwnership,
@@ -148,9 +151,15 @@ pub enum AcquisitionError {
     ContributionCapacity,
     AttestationCapacity,
     AccountingOverflow,
-    CanonicalMapping { code: &'static str },
-    CanonicalValidation { code: &'static str },
-    CanonicalBoundValidation { context: CanonicalBoundContext },
+    CanonicalMapping {
+        code: &'static str,
+    },
+    CanonicalValidation {
+        code: &'static str,
+    },
+    CanonicalBoundValidation {
+        context: CanonicalBoundContext,
+    },
 }
 
 impl AcquisitionError {
@@ -159,6 +168,7 @@ impl AcquisitionError {
             Self::UnsupportedSourceIdentity => "unsupported_source_identity",
             Self::SourceKindMismatch => "source_kind_mismatch",
             Self::SourceRead => "source_read",
+            Self::CapabilityNotCompiled => "capability_not_compiled",
             Self::BoundedSourceRead(reason) => reason.code(),
             Self::InvalidAttestation => "invalid_session_attestation",
             Self::ConflictingSessionOwnership => "conflicting_session_ownership",
@@ -448,7 +458,7 @@ pub fn acquire_opencode_sqlite(
     #[cfg(not(feature = "opencode-sqlite"))]
     {
         let _ = (options, read);
-        Err(AcquisitionError::SourceRead)
+        Err(AcquisitionError::CapabilityNotCompiled)
     }
     #[cfg(feature = "opencode-sqlite")]
     {
@@ -660,9 +670,14 @@ mod tests {
                 kind,
                 path: directory.path().to_owned(),
             };
+            let expected = if client == ClientId::OpenCode && !cfg!(feature = "opencode-sqlite") {
+                AcquisitionError::CapabilityNotCompiled
+            } else {
+                AcquisitionError::SourceRead
+            };
             assert_eq!(
                 acquisition_error(super::acquire_source(&source, options())),
-                AcquisitionError::SourceRead
+                expected
             );
         }
     }
@@ -1365,7 +1380,12 @@ mod tests {
                 OpenCodeSqliteReadOptions::default(),
             )),
         ] {
-            assert_eq!(error, AcquisitionError::SourceRead);
+            let expected = if cfg!(feature = "opencode-sqlite") {
+                AcquisitionError::SourceRead
+            } else {
+                AcquisitionError::CapabilityNotCompiled
+            };
+            assert_eq!(error, expected);
             assert!(!source.path.exists());
         }
     }
@@ -1381,7 +1401,10 @@ mod tests {
             super::acquire_source(&source, options()),
             acquire_opencode_sqlite(&source, options(), OpenCodeSqliteReadOptions::default()),
         ] {
-            assert_eq!(acquisition_error(result), AcquisitionError::SourceRead);
+            assert_eq!(
+                acquisition_error(result),
+                AcquisitionError::CapabilityNotCompiled
+            );
         }
         assert_eq!(std::fs::read(&source.path).unwrap(), bytes);
         assert_eq!(

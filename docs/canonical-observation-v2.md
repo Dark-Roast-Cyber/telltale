@@ -94,8 +94,7 @@ unknown conversational content blocks still reject the whole source.
 Canonical bounds can reject otherwise supported public Codex shapes without
 truncation or partial source output. Direct message strings and Text parts use
 the narrow long-message policy below; structured values retain ordinary bounds.
-In current development after RC1, Codex
-canonical bound failures carry a content-free `CanonicalBoundContext` through
+Codex canonical bound failures carry a content-free `CanonicalBoundContext` through
 `AcquisitionError::CanonicalBoundValidation` and runtime `SourceFailure.acquisition`.
 Schema validation owns the bound dimension; the adapter attributes conversion
 failures to the canonical field being constructed. Builder validation attributes
@@ -170,7 +169,7 @@ reservations for composite scanners. Exhaustion is explicit source-atomic failur
 not a benign no-match, and cannot emit partial findings, accounting or progress.
 Standalone native matcher evaluation and selector resolution return a `Result`;
 metadata envelopes are independently governed and do not imply infallible
-selection. See the [development API migration](migrations/0.7.0.md#development-after-rc1-bounded-message-evaluation-apis-79).
+selection. See the [development API migration](migrations/0.7.0.md#bounded-message-evaluation-apis-79).
 Standalone detector
 evaluation translates exhaustion into `DetectorError`.
 

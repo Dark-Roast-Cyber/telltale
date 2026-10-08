@@ -1,62 +1,37 @@
 # telltale-core
 
+The supported Telltale embedding facade. `Pipeline` combines discovery, native
+acquisition, and detection and returns findings and events to the host
+application. It does not write JSONL, connect to a SIEM, or exit the process.
+The source directory remains `crates/telltale` for repository compatibility.
 
-The supported Telltale embedding facade. `Pipeline` combines discovery,
-native acquisition, and detection while returning events to the host application. It does
-not write JSONL, connect to a SIEM, or exit the process. The source directory
-remains `crates/telltale` for repository compatibility.
-
-## Typed pipeline errors (current development after RC1)
-
-`PipelineBuilder::build` and the four `Pipeline` scan methods return the
-non-exhaustive `PipelineError` enum. Builders distinguish missing documents from
-rejected rule/policy configuration. Scans distinguish checked discovery (root
-methods only), batch clock formatting, observation-time validation, and canonical
-rule compilation. Source-processing failures still produce `scanner_error`
-events; they do not become returned errors.
-
-Display and Debug are closed codes and do not render paths, configuration, or
-source text. `Error::source()` preserves payloads except for `InvalidConfiguration`
-and `InvalidOptions`. `Compilation` boxes loader and canonical-compile failures;
-its concrete source type is not a supported subtype taxonomy. Existing typed
-causes are re-exported from the core root. Match the enum with a fallback arm;
-host functions returning boxed errors may still use `?`.
-
-This is a source-breaking Rust interface change in the untagged, unpublished
-`0.7.0-rc.2` development line after RC1. It changes neither Event3/state formats
-nor CLI diagnostics/exit semantics and is not RC1/stable qualification. Validate
-host upgrades after updating the Git pin. See the
-[embedding contract](../../docs/embedding.md#typed-pipeline-errors-current-development-after-rc1)
-and [migration guide](../../docs/migrations/0.7.0.md#typed-pipeline-errors-current-development-after-rc1).
-
-## OpenCode acquisition (current development after RC1)
-
-The default core normal dependency graph has no `rusqlite`. Git-pinned hosts
-scanning OpenCode must explicitly enable `opencode-sqlite`, which forwards the
-default-off sources capability and uses bundled SQLite:
+The full contract (surface classification, detailed action scanning, source
+outcomes, typed errors, OpenCode, inventory, and host wire guidance) lives in
+[docs/embedding.md](../../docs/embedding.md); upgrades are in the
+[0.7.0 migration guide](../../docs/migrations/0.7.0.md).
 
 ```toml
-telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["opencode-sqlite"] }
+[dependencies]
+telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>" }
+# features = ["opencode-sqlite"]        # scan OpenCode (pinned rusqlite 0.32.1)
+# features = ["protected-assignment"]   # Linux-only assignment store
 ```
 
-Without it, OpenCode fails closed with a per-source `scanner_error`, retaining
-JSONL successes in mixed scans. The CLI enables acquisition explicitly.
-`protected-assignment` is separate; it does not enable OpenCode acquisition.
-OpenCode investigation stays deferred either way, before discovery, I/O, or
-process spawn. These development changes require host validation after updating
-the Git pin; they are not RC1 or stable qualification.
+```rust
+use telltale_core::{DetailedEvaluationOptions, Pipeline};
 
-## Inventory (current development after RC1)
+let pipeline = Pipeline::builder().build()?; // build once, reuse
+let scans = pipeline.scan_sources_detailed(&[], &DetailedEvaluationOptions::default())?;
+assert!(scans.is_empty());
+println!("{} rules", pipeline.rule_count());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
 
-`inventory` exposes existing install snapshot/signal types, collection and Event
-projection, and `discover_mcp_inventory(root)` for privacy-projected static MCP
-config events. Prefer `collect_install_inventory_with_context` with explicit
-host-owned roots; `InstallInventoryContext::current()` and
-`collect_install_inventory` read the process environment. Snapshots omit raw
-paths; the context and MCP `Source.path` remain local caller data. No MCP
-connection or rules compilation is needed. This facade does not activate
-inventory in scan/watch or `Pipeline` scan methods. It is an after-RC1 addition,
-not RC1/stable-qualified; validate host upgrades separately.
+Detailed scans return one `SourceScan` per source with typed `failure()`,
+`coverage()`, `completion`, and `visibility_limits()`, plus canonical
+`ActionFinding`s beside unchanged session-scoped Event 3 events. Scans are
+stateless; the host owns delivery, persistence, and retry. Pin an exact
+revision and test host integration; RC1 evidence does not qualify this tree.
 
 ## LocalEventFeed
 
@@ -148,15 +123,12 @@ discovery fails closed; read/parse/limit/provider failures expose no raw errors.
 Direct reads validate a regular opened file and bound bytes including growth;
 they are not filesystem snapshots or hard wall-clock bounds on OS file I/O.
 
-### Context windows (current development after RC1)
+### Context windows
 
 `SessionInvestigator::investigate_context(&request)` is a separate opt-in,
-bounded present-day window; `investigate` remains content-free. User/assistant
-text and tool arguments default off; enabled text is mandatory-redacted and
-tool results are excluded. Scan/watch does not call it; OpenCode stays deferred.
-This after-RC1 development API is not Event3, RC1-qualified, or stable-qualified.
-See the [full embedding contract](../../docs/embedding.md#contextual-investigation-current-development-after-rc1)
-for exact anchors, exclusions, radius/byte limits, and current-index caveats.
+bounded present-day window; `investigate` stays content-free. See
+[contextual investigation](../../docs/embedding.md#contextual-investigation)
+for anchors, exclusions, and limits.
 
 ### Availability reasons and operator actions
 
@@ -229,24 +201,7 @@ initialization can leave a partial store root that must be removed manually
 before reinitializing; `open` never repairs or recreates state. Replacement of
 the entire trusted store boundary by a same-UID attacker is out of scope.
 
-## Pipeline
-
-Returned native events use the Event 3.0 contract, deterministic `response`
-metadata, and optional top-level `timeline_anchors`; the embedding host owns
-transport and any historical-event handling.
-Current development after RC1 adds `Pipeline::scan_root_with_occurrences` and
-`scan_sources_with_occurrences`: `SourceScan` returns the same events with
-content-free `DetectionOccurrence` associations and validated `OccurrenceId`
-observation identities from the same projection pass. These methods are not in
-published RC1 artifacts; see [embedding](../../docs/embedding.md#detection-occurrences-current-development-after-rc1).
-
-```rust
-use telltale_core::Pipeline;
-
-let pipeline = Pipeline::builder().build()?;
-println!("{} rules", pipeline.rule_count());
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
+## Producer provenance
 
 Use `Pipeline::producer_provenance_manifest` to materialize the deterministic
 `ProducerProvenanceManifestV1` for the same already compiled rules and resolved

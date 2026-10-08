@@ -602,7 +602,7 @@ fn disabled_opencode_mixed_scan_retains_jsonl_success_and_safe_source_failure() 
     let failure = canonical[1].1.as_ref().err().unwrap();
     assert_eq!(
         failure.acquisition,
-        Some(telltale_sources::acquisition::AcquisitionError::SourceRead)
+        Some(telltale_sources::acquisition::AcquisitionError::CapabilityNotCompiled)
     );
     let public = pipeline.scan_sources(&sources).unwrap();
     assert!(

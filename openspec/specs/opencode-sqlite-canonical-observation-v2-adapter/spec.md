@@ -465,3 +465,19 @@ persistence MUST still gate scanner-state installation.
 
 - **WHEN** incremental acquisition fails or succeeds
 - **THEN** failure stages no state, successful high-water cannot regress, dry-run/backfill do not stage and durable output gates installation
+
+### Requirement: Embedded OpenCode scans report partial coverage and missing capability
+
+The embedding facade MUST report a successful OpenCode source scan as
+`SourceCoverage::Partial`, because the stateless bounded selection does not
+establish whole-source coverage. JSONL sources with complete source accounting
+MUST report `WholeSource`. Failed sources MUST report no coverage and a typed,
+content-free `SourceScanFailure`. Without the `opencode-sqlite` feature, OpenCode
+acquisition MUST fail before source I/O with `AcquisitionError::CapabilityNotCompiled`
+(`capability_not_compiled`), not `SourceRead`. The Event 3 `scanner_error` code
+MUST remain the generic stage code.
+
+#### Scenario: Embedded OpenCode coverage and capability are explicit
+
+- **WHEN** a host scans OpenCode with and without `opencode-sqlite`
+- **THEN** success reports `Partial` coverage, and the feature-off build reports `capability_not_compiled` without reading the database or changing Event 3
