@@ -481,3 +481,17 @@ MUST remain the generic stage code.
 
 - **WHEN** a host scans OpenCode with and without `opencode-sqlite`
 - **THEN** success reports `Partial` coverage, and the feature-off build reports `capability_not_compiled` without reading the database or changing Event 3
+
+### Requirement: Embedded OpenCode scans resume from a source-bound token
+
+A successful embedded `opencode.sqlite` scan MUST return a versioned
+`ResumeToken` bound to the exact source and never earlier than the token it
+resumed from, and MUST return none when no part high-water exists. A resumed scan
+MUST apply the CLI's single overlap and incremental part limit; exceeding the
+limit MUST fail as `BoundedSourceRead(LimitExceeded)` without a new token. A token
+for another or non-resumable source MUST be rejected before source I/O.
+
+#### Scenario: Embedded OpenCode scans resume from a source-bound token
+
+- **WHEN** a host persists a token, new parts arrive, and it resumes
+- **THEN** only parts within the overlap window are read, the token advances monotonically, overflow is recoverable by a tokenless scan, and a mismatched token fails before I/O

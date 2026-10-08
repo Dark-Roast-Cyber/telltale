@@ -109,6 +109,9 @@ pub enum PipelineError {
     InvalidConfiguration,
     /// Detailed-scan options failed their closed bounds.
     InvalidOptions,
+    /// A resume token does not belong to the supplied source, or the source is
+    /// not resumable. Rejected before any source I/O.
+    InvalidResumeToken,
 }
 
 impl std::fmt::Display for PipelineError {
@@ -120,6 +123,7 @@ impl std::fmt::Display for PipelineError {
             Self::Compilation(_) => "pipeline_compilation_failed",
             Self::InvalidConfiguration => "pipeline_no_rule_documents",
             Self::InvalidOptions => "pipeline_invalid_options",
+            Self::InvalidResumeToken => "pipeline_invalid_resume_token",
         })
     }
 }
@@ -136,7 +140,7 @@ impl std::error::Error for PipelineError {
             Self::Discovery(error) => Some(error),
             Self::Clock(error) | Self::Compilation(error) => Some(error.as_ref()),
             Self::Observation(error) => Some(error),
-            Self::InvalidConfiguration | Self::InvalidOptions => None,
+            Self::InvalidConfiguration | Self::InvalidOptions | Self::InvalidResumeToken => None,
         }
     }
 }
@@ -177,6 +181,99 @@ pub struct SourceScan {
     coverage: Option<SourceCoverage>,
     failure: Option<SourceScanFailure>,
     visibility_limits: Vec<VisibilityLimit>,
+    resume_token: Option<ResumeToken>,
+}
+
+const RESUME_TOKEN_PREFIX: &str = "resume:v1:opencode.sqlite:";
+
+/// Opaque, versioned position after a successful scan of a resumable source
+/// (`opencode.sqlite` today). It is bound to one source, monotone, and carries
+/// no path or content. Persist [`ResumeToken::as_str`] only after durably
+/// accepting that scan's findings, and pass the parsed token to
+/// [`Pipeline::scan_source_detailed_resuming`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResumeToken {
+    text: String,
+    binding: String,
+    high_water: i64,
+}
+
+impl ResumeToken {
+    fn new(binding: String, high_water: i64) -> Self {
+        Self {
+            text: format!("{RESUME_TOKEN_PREFIX}{high_water}:{binding}"),
+            binding,
+            high_water,
+        }
+    }
+
+    /// The stable text form for host persistence.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// Parse a persisted token. Unknown versions and malformed text are errors.
+    pub fn parse(text: &str) -> Result<Self, ResumeTokenError> {
+        let (high_water, binding) = text
+            .strip_prefix(RESUME_TOKEN_PREFIX)
+            .and_then(|rest| rest.split_once(':'))
+            .ok_or(ResumeTokenError)?;
+        let high_water = high_water
+            .parse::<i64>()
+            .ok()
+            .filter(|value| *value >= 0 && high_water == value.to_string())
+            .ok_or(ResumeTokenError)?;
+        if binding.len() != 64
+            || !binding
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(ResumeTokenError);
+        }
+        Ok(Self::new(binding.to_owned(), high_water))
+    }
+}
+
+impl std::fmt::Display for ResumeToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+/// A persisted resume token could not be parsed. Renders a closed code only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResumeTokenError;
+
+impl std::fmt::Display for ResumeTokenError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("invalid_resume_token")
+    }
+}
+
+impl std::error::Error for ResumeTokenError {}
+
+fn is_resumable(source: &Source) -> bool {
+    source.client == ClientId::OpenCode
+        && source.kind == SourceKind::Sqlite
+        && source.source_id == "opencode.sqlite"
+}
+
+/// Source binding for resume tokens: length-framed client, source identity, and
+/// the Event 3 source path hash. No raw path is retained.
+fn resume_binding(source: &Source) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in [
+        "telltale.resume.v1",
+        source.client.as_str(),
+        source.source_id.as_str(),
+        &telltale_schema::event::path_hash(&source.path),
+    ] {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// How much of one successfully scanned source was evaluated.
@@ -268,7 +365,14 @@ impl SourceScan {
         self.failure.as_ref()
     }
 
-    fn from_result(source: Source, result: SourceOutcome) -> Self {
+    /// Position to resume this source from, after a successful scan of a
+    /// resumable source; `None` for other sources, on failure, or when nothing
+    /// has been read yet. Never earlier than the token the scan resumed from.
+    pub fn resume_token(&self) -> Option<&ResumeToken> {
+        self.resume_token.as_ref()
+    }
+
+    fn from_result(source: Source, result: SourceOutcome, resumed_from: Option<i64>) -> Self {
         let success = result.and_then(|mut result| {
             let occurrences = std::mem::take(&mut result.occurrences)
                 .into_iter()
@@ -298,7 +402,6 @@ impl SourceScan {
         });
         match success {
             Ok((result, occurrences)) => Self {
-                source,
                 events: result.events,
                 occurrences,
                 action_findings: result.action_findings,
@@ -314,6 +417,15 @@ impl SourceScan {
                 }),
                 failure: None,
                 visibility_limits: result.visibility_limits,
+                resume_token: match result.progress {
+                    telltale_sources::acquisition::AcquisitionProgress::OpenCodeSqlite {
+                        part_max_time_updated,
+                    } if is_resumable(&source) => part_max_time_updated
+                        .max(resumed_from)
+                        .map(|high_water| ResumeToken::new(resume_binding(&source), high_water)),
+                    _ => None,
+                },
+                source,
             },
             Err(error) => Self {
                 events: vec![error.event(&source)],
@@ -328,6 +440,7 @@ impl SourceScan {
                     acquisition: error.acquisition,
                 }),
                 visibility_limits: Vec::new(),
+                resume_token: None,
             },
         }
     }
@@ -482,6 +595,50 @@ impl Pipeline {
         self.scan_sources_detailed(&sources, options)
     }
 
+    /// Detailed scan of one source, resuming a resumable source
+    /// (`opencode.sqlite`) after a prior [`ResumeToken`]. Without a token it is
+    /// the bounded bootstrap read of [`Self::scan_sources_detailed`]. A resumed
+    /// read re-reads a fixed overlap before the token's high-water, so expect
+    /// repeated actions (dedup with replay identity or coordinates). A resumed
+    /// read that exceeds its part limit fails with
+    /// `AcquisitionError::BoundedSourceRead(LimitExceeded)`: drop the token and
+    /// scan again from bootstrap, treating the gap as unevaluated history.
+    /// A token for another source or a non-resumable source returns
+    /// [`PipelineError::InvalidResumeToken`] before any source I/O.
+    pub fn scan_source_detailed_resuming(
+        &self,
+        source: &Source,
+        resume: Option<&ResumeToken>,
+        options: &DetailedEvaluationOptions,
+    ) -> Result<SourceScan, PipelineError> {
+        options
+            .validate()
+            .map_err(|_| PipelineError::InvalidOptions)?;
+        let resumed_from = match resume {
+            None => None,
+            Some(token) if is_resumable(source) && token.binding == resume_binding(source) => {
+                Some(token.high_water)
+            }
+            Some(_) => return Err(PipelineError::InvalidResumeToken),
+        };
+        let observed_at = telltale_schema::observation::ObservedAt::new(current_rfc3339()?)?;
+        let (rules, process_rules) = self.compile_semantics(Some(options))?;
+        let result = Self::process_one(
+            source,
+            observed_at,
+            Some(options),
+            resumed_from
+                .map(telltale_sources::acquisition::OpenCodeSqliteReadOptions::resume_after),
+            rules,
+            process_rules,
+        );
+        Ok(SourceScan::from_result(
+            source.clone(),
+            result,
+            resumed_from,
+        ))
+    }
+
     #[cfg(test)]
     fn scan_sources_with_time(
         &self,
@@ -506,7 +663,7 @@ impl Pipeline {
         Ok(self
             .scan_canonical_sources_with_options(sources, observed_at, detailed)?
             .into_iter()
-            .map(|(source, result)| SourceScan::from_result(source, result))
+            .map(|(source, result)| SourceScan::from_result(source, result, None))
             .collect())
     }
 
@@ -528,38 +685,53 @@ impl Pipeline {
         detailed: Option<&DetailedEvaluationOptions>,
     ) -> Result<Vec<(Source, SourceOutcome)>, PipelineError> {
         let (rules, process_rules) = self.compile_semantics(detailed)?;
-        let prior = telltale_detect::baseline::BaselineSnapshotStore::default();
-        let process_config = telltale_detect::process_chain::ProcessChainConfig::default();
         Ok(sources
             .iter()
             .map(|source| {
-                let context = canonical_runtime::SourceContext {
-                    mcp_servers: &[],
+                let result = Self::process_one(
+                    source,
+                    observed_at.clone(),
+                    detailed,
+                    None,
                     rules,
-                    pre_policy_rules: None,
-                    process: process_rules.map(|rules| (rules, &process_config)),
-                    prior: &prior,
-                    baseline_deviation: telltale_detect::baseline::BaselineDeviationConfig::default(
-                    ),
-                };
-                let result = match detailed {
-                    Some(options) => canonical_runtime::process_source_detailed(
-                        source,
-                        observed_at.clone(),
-                        None,
-                        context,
-                        options,
-                    ),
-                    None => canonical_runtime::process_source(
-                        source,
-                        observed_at.clone(),
-                        None,
-                        context,
-                    ),
-                };
+                    process_rules,
+                );
                 (source.clone(), result)
             })
             .collect())
+    }
+
+    /// Stateless adapter for one source. `sqlite` selects a resumed OpenCode
+    /// read; `None` keeps the bounded bootstrap selection. No prior baseline
+    /// means no deviation history; replacement remains data.
+    fn process_one(
+        source: &Source,
+        observed_at: telltale_schema::observation::ObservedAt,
+        detailed: Option<&DetailedEvaluationOptions>,
+        sqlite: Option<telltale_sources::acquisition::OpenCodeSqliteReadOptions>,
+        rules: &telltale_detect::v2::RuleV1CompatibilityPlan,
+        process_rules: Option<&telltale_rules::process_chain::CompiledProcessChainRules>,
+    ) -> SourceOutcome {
+        let prior = telltale_detect::baseline::BaselineSnapshotStore::default();
+        let process_config = telltale_detect::process_chain::ProcessChainConfig::default();
+        let context = canonical_runtime::SourceContext {
+            mcp_servers: &[],
+            rules,
+            pre_policy_rules: None,
+            process: process_rules.map(|rules| (rules, &process_config)),
+            prior: &prior,
+            baseline_deviation: telltale_detect::baseline::BaselineDeviationConfig::default(),
+        };
+        match detailed {
+            Some(options) => canonical_runtime::process_source_detailed(
+                source,
+                observed_at,
+                sqlite,
+                context,
+                options,
+            ),
+            None => canonical_runtime::process_source(source, observed_at, sqlite, context),
+        }
     }
 
     /// Materialize a deterministic, privacy-safe identity for this pipeline's

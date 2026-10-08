@@ -221,7 +221,9 @@ fn part_cursor_is_inclusive_and_reports_selected_high_water() {
                 part_limit: 1,
             },
         ),
-        Err(SourceReadError::SchemaDrift { .. })
+        Err(SourceReadError::Bounded(
+            crate::source_read::BoundedReadError::LimitExceeded
+        ))
     ));
     let extracted = extract_sqlite_native_source(
         &selected_source,

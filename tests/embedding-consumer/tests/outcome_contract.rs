@@ -221,3 +221,47 @@ fn actions_link_to_their_projected_session_event() {
     assert!(kinds.contains("rule_v1_action"), "{kinds:?}");
     assert!(kinds.contains("process_chain"), "{kinds:?}");
 }
+
+#[test]
+fn resume_tokens_are_parsed_bound_and_rejected_before_io() {
+    let root = tempfile::tempdir().unwrap();
+    let jsonl = root.path().join("session.jsonl");
+    let row = serde_json::json!({"type":"assistant","uuid":"call","sessionId":"session","timestamp":"2026-09-17T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"echo needle"}}]}});
+    std::fs::write(&jsonl, format!("{row}\n")).unwrap();
+    let jsonl = claude_source(jsonl);
+    let options = DetailedEvaluationOptions::default();
+    let plain = pipeline()
+        .scan_source_detailed_resuming(&jsonl, None, &options)
+        .unwrap();
+    assert!(plain.resume_token().is_none(), "JSONL is not resumable");
+    let foreign =
+        ResumeToken::parse(&format!("resume:v1:opencode.sqlite:1:{}", "0".repeat(64))).unwrap();
+    assert!(matches!(
+        pipeline().scan_source_detailed_resuming(&jsonl, Some(&foreign), &options),
+        Err(PipelineError::InvalidResumeToken)
+    ));
+    let missing = opencode_source(root.path());
+    std::fs::remove_file(&missing.path).unwrap();
+    assert!(matches!(
+        pipeline().scan_source_detailed_resuming(&missing, Some(&foreign), &options),
+        Err(PipelineError::InvalidResumeToken)
+    ));
+    assert!(!missing.path.exists(), "rejected before source I/O");
+    let error: ResumeTokenError = ResumeToken::parse("resume:v2:opencode.sqlite:1:x").unwrap_err();
+    assert_eq!(error.to_string(), "invalid_resume_token");
+}
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn message_only_opencode_stores_issue_no_resume_token() {
+    // Resumption follows part `time_updated`; a store with no part table has
+    // nothing to resume from, so every scan is a bounded bootstrap read.
+    let root = tempfile::tempdir().unwrap();
+    let source = opencode_source(root.path());
+    let scan = pipeline()
+        .scan_source_detailed_resuming(&source, None, &DetailedEvaluationOptions::default())
+        .unwrap();
+    assert!(scan.failure().is_none());
+    assert_eq!(scan.coverage(), Some(SourceCoverage::Partial));
+    assert!(scan.resume_token().is_none());
+}

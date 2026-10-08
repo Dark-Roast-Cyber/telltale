@@ -26,7 +26,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`), `ActionFinding` accessors (including `session_event_index()`), `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `resume_token()`), `ActionFinding` accessors (including `session_event_index()`), `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences` | Session Event 3 and observation linkage for existing callers. Kept for 0.7; new integrations use detailed scans. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -183,6 +183,8 @@ second detector or an Event 3 conversion loop.
   `network.controlled_test_domain.darkroast`) lack `compat.v1.url` visibility.
   Limited evaluation still returns its successful findings; a command-only rule
   set with session identity and source time can be `Complete`.
+- `resume_token()` is a position to resume a resumable source from; see
+  [resuming OpenCode scans](#resuming-opencode-scans).
 
 ### Action findings
 
@@ -332,6 +334,7 @@ outbox guarantees do not transfer to an embedding host.
 | `scan_root`, `scan_root_with_occurrences` | `Discovery`, `Clock`, `Observation` |
 | `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation` |
 | detailed scans and `semantic_provenance` | the matching scan categories, plus `InvalidOptions`, and `Compilation` only if the bundled process pack fails to load when `process_chain` is set |
+| `scan_source_detailed_resuming` | `Clock`, `Observation`, `InvalidOptions`, `InvalidResumeToken`, and the detailed `Compilation` case |
 
 `Observation` is batch observation-time validation, not per-source canonical
 validation. Clock validation runs even for an empty batch. Source-processing
@@ -375,12 +378,11 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
   `failure()` reports `AcquisitionError::CapabilityNotCompiled`
   (`capability_not_compiled`), while Event 3 keeps the generic
   `canonical_acquisition_failed` code. Mixed scans keep JSONL successes.
-- Embedded scans are stateless: each evaluates OpenCode's bounded recent
-  selection (see [limits](opencode-live-ingestion.md#failure-recovery-and-coverage))
-  and reports `coverage() == Some(Partial)`. There is no cursor or lower-bound
-  transition. Repeated unchanged input has stable action semantics with fresh
-  Event 3 IDs and materialization clocks. `PartialSource` accounting never
-  installs a whole-source baseline.
+- Without a resume token, an embedded scan evaluates OpenCode's bounded recent
+  selection (see [limits](opencode-live-ingestion.md#failure-recovery-and-coverage)).
+  Every OpenCode scan reports `coverage() == Some(Partial)`. Repeated unchanged
+  input has stable action semantics with fresh Event 3 IDs and materialization
+  clocks. `PartialSource` accounting never installs a whole-source baseline.
 - CLI scan/watch aggregates also describe bounded selected windows, not
   cumulative snapshots or exactly-once actions: bootstrap-to-incremental
   selection can re-emit changed evidence on an unchanged store. Do not count
@@ -388,6 +390,28 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
 - OpenCode investigation is deferred with either feature setting, before
   discovery, source I/O, or process spawn; a read-only provider is
   [Issue #42](https://github.com/Dark-Roast-Cyber/telltale/issues/42).
+
+### Resuming OpenCode scans
+
+`Pipeline::scan_source_detailed_resuming(source, resume, options)` is a detailed
+scan of one source. A successful `opencode.sqlite` scan returns
+`resume_token()`: an opaque, versioned `ResumeToken` bound to that source (by
+client, source identity, and the Event 3 source path hash; no path or content).
+It is monotone and never earlier than the token the scan resumed from. Sources
+without part history to resume from, and every JSONL source, return `None`.
+
+- Persist `ResumeToken::as_str()` only after durably accepting that scan's
+  findings; restore it with `ResumeToken::parse`, which rejects unknown versions
+  and malformed text with `ResumeTokenError`.
+- A resumed scan reads parts updated since the token's high-water minus a fixed
+  ten-minute overlap, the same policy as the CLI cursor. Expect actions from the
+  overlap again and deduplicate with replay identity or source-bound coordinates.
+  Chains whose earlier steps fall before the window are not reconstructed.
+- A resumed read that selects more than 25,000 parts fails with
+  `AcquisitionError::BoundedSourceRead(LimitExceeded)` and no new token. Drop the
+  token and scan without one; history between the two reads stays unevaluated.
+- A token for another source or a non-resumable source returns
+  `PipelineError::InvalidResumeToken` before any source I/O.
 
 ## Canonical bound diagnostics
 

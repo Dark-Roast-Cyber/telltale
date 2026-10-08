@@ -227,7 +227,7 @@ fn canonical_embedding_invalid_occurrence_identity_fails_source_closed() {
         .pop()
         .unwrap();
     result.as_mut().unwrap().occurrences[0].observation_id = "unchecked synthetic identity".into();
-    let scan = SourceScan::from_result(source, result);
+    let scan = SourceScan::from_result(source, result, None);
     assert_eq!(scan.events.len(), 1);
     assert_eq!(scan.events[0].event_type, "scanner_error");
     assert!(scan.occurrences.is_empty());

@@ -280,8 +280,8 @@ commit/push and subsequent lifecycle checks require separate authorization.
 
 The [selected-window aggregate limitation](opencode-live-ingestion.md#failure-recovery-and-coverage)
 is nonblocking only for the existing session-aggregate/conditional-replay contract,
-not a new-action, cumulative-snapshot, or exactly-once promise. Stateless embedding
-does not perform the CLI cursor transition. Retain source-bound coordinate fallback
+not a new-action, cumulative-snapshot, or exactly-once promise. Embedding performs
+the CLI cursor transition only through a host-persisted resume token. Retain source-bound coordinate fallback
 and empty whole-source baselines for OpenCode `PartialSource` accounting.
 UPGRADE-01 defers only cross-version migration; same-version privacy/durability
 and release gates remain required. Current adoption is fresh-install scope, with

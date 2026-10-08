@@ -123,10 +123,13 @@ different acceptance criteria. Neither arbitrary suppression of changed evidence
 nor installation of a partial baseline is safe; no persisted reconciliation
 redesign is promised by this candidate.
 
-The public embedding facade is stateless: it has no public cursor/lower-bound
-transition or persisted suppression. Repeated scans of unchanged selected input
-have stable action semantics and Event 3 semantic projections, apart from fresh
-event IDs and materialization clocks.
+The public embedding facade persists nothing. Without a resume token it reads the
+bounded bootstrap selection; with a host-persisted `ResumeToken` it applies the
+same incremental read policy as the CLI cursor (high-water minus the overlap,
+25,000-part limit, overflow fails as `LimitExceeded`). It has no persisted
+suppression. Repeated scans of unchanged selected input have stable action
+semantics and Event 3 semantic projections, apart from fresh event IDs and
+materialization clocks.
 Detailed replay identities require source time and unambiguous semantic preimages;
 selection, continuation, or duplicate ambiguity can change identity or availability.
 Retain fallback coordinates bound independently to exact source identity. Measured

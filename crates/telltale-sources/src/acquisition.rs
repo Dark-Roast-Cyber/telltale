@@ -109,11 +109,29 @@ pub enum AcquisitionProgress {
 }
 
 pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
+/// A resumed OpenCode read re-reads parts updated within this window before the
+/// prior high-water, so late or same-millisecond updates are not missed.
+pub const OPENCODE_SQLITE_RESUME_OVERLAP_MS: i64 = 10 * 60 * 1_000;
+/// Parts a resumed OpenCode read may select before failing as `LimitExceeded`.
+pub const OPENCODE_SQLITE_RESUME_PART_LIMIT: i64 = 25_000;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct OpenCodeSqliteReadOptions {
     pub part_min_time_updated: Option<i64>,
     pub part_limit: i64,
+}
+
+impl OpenCodeSqliteReadOptions {
+    /// Resume after a recorded part `time_updated` high-water, applying the one
+    /// shared overlap and incremental part limit.
+    pub fn resume_after(high_water: i64) -> Self {
+        Self {
+            part_min_time_updated: Some(
+                high_water.saturating_sub(OPENCODE_SQLITE_RESUME_OVERLAP_MS),
+            ),
+            part_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
+        }
+    }
 }
 
 impl Default for OpenCodeSqliteReadOptions {
@@ -463,7 +481,14 @@ pub fn acquire_opencode_sqlite(
     #[cfg(feature = "opencode-sqlite")]
     {
         let extraction =
-            extract_sqlite_native_source(source, read).map_err(|_| AcquisitionError::SourceRead)?;
+            extract_sqlite_native_source(source, read).map_err(|error| match error {
+                // A resumed read that selected more parts than its limit: recoverable
+                // by a fresh bootstrap read, unlike an unreadable source.
+                SourceReadError::Bounded(BoundedReadError::LimitExceeded) => {
+                    AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded)
+                }
+                _ => AcquisitionError::SourceRead,
+            })?;
         let progress = AcquisitionProgress::OpenCodeSqlite {
             part_max_time_updated: extraction.sqlite_part_max_time_updated,
         };
@@ -1528,17 +1553,26 @@ mod tests {
         for (limit, expected) in [(8, 7), (7, 7), (6, 6)] {
             let batch = read(Some(i64::MIN), limit);
             if limit == 6 {
-                assert_eq!(acquisition_error(batch), AcquisitionError::SourceRead);
+                assert_eq!(
+                    acquisition_error(batch),
+                    AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded)
+                );
             } else {
                 assert_eq!(batch.unwrap().observations.len(), expected);
             }
         }
-        for limit in [0, -1, 1, 2, 3, 4, 5, i64::MAX] {
+        // Selecting more parts than the (at least one) limit is a typed overflow.
+        for limit in [0, -1, 1, 2, 3, 4, 5] {
             assert_eq!(
                 acquisition_error(read(Some(100), limit)),
-                AcquisitionError::SourceRead,
+                AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded),
             );
         }
+        // An unrepresentable page limit is rejected before reading.
+        assert_eq!(
+            acquisition_error(read(Some(100), i64::MAX)),
+            AcquisitionError::SourceRead,
+        );
         for limit in [0, -1, 1] {
             let one = read(Some(106), limit).unwrap();
             assert_eq!(one.observations.len(), 1);
@@ -1584,7 +1618,7 @@ mod tests {
                     part_limit: 5
                 },
             )),
-            AcquisitionError::SourceRead,
+            AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded),
         );
     }
 
