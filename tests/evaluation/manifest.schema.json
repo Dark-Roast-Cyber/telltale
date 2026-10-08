@@ -30,45 +30,15 @@
       }
     },
     "input": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "fixture", "client", "source_id", "source_kind"],
-          "properties": {
-            "kind": { "const": "source_fixture" },
-            "fixture": { "type": "string", "minLength": 1 },
-            "client": { "$ref": "#/$defs/client" },
-            "source_id": { "type": "string", "minLength": 1 },
-            "source_kind": { "$ref": "#/$defs/source_kind" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "client", "records"],
-          "properties": {
-            "kind": { "const": "normalized_records" },
-            "client": { "$ref": "#/$defs/client" },
-            "records": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/record" } }
-          }
-        }
-      ]
-    },
-    "record": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["session_id", "kind", "content"],
+      "required": ["kind", "fixture", "client", "source_id", "source_kind"],
       "properties": {
-        "session_id": { "type": "string", "minLength": 1 },
-        "kind": { "enum": ["user_message", "assistant_message", "tool_call", "tool_result", "session_meta", "other"] },
-        "tool_name": { "type": ["string", "null"] },
-        "arguments": { "type": ["string", "null"] },
-        "content": { "type": "string" },
-        "agent": { "type": ["string", "null"] },
-        "model": { "type": ["string", "null"] },
-        "provider": { "type": ["string", "null"] },
-        "timestamp": { "type": ["string", "null"] }
+        "kind": { "const": "source_fixture" },
+        "fixture": { "type": "string", "minLength": 1 },
+        "client": { "$ref": "#/$defs/client" },
+        "source_id": { "type": "string", "minLength": 1 },
+        "source_kind": { "$ref": "#/$defs/source_kind" }
       }
     },
     "visibility": {

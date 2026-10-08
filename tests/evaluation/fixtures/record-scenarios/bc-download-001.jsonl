@@ -1,0 +1,2 @@
+{"type":"session_meta","session_id":"benign-download","timestamp":"2026-04-03T07:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"benign-download","timestamp":"2026-04-03T07:00:01Z","payload":{"type":"tool_call","tool_name":"fetch_release","arguments":"curl https://packages.example.invalid/tool.tar.gz","message":"Fetch a documented package archive."}}

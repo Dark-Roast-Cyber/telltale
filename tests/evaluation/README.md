@@ -58,8 +58,7 @@ and benign commands. Office, web-server, and RMM parent relationships cannot be
 recovered from Tool command text; their three correlation visibility gaps are
 explicit in the report. All six shipped correlations also have fixed session-kernel
 tests in `telltale-detect`. These checks are conformance, not scenario efficacy.
-The canonical runtime and `Pipeline::scan_root` use this Detection v2 path;
-`detect_records` and `evaluate_session` retain direct-record Rule v1 compatibility.
+The canonical runtime and every `Pipeline` scan method use this Detection v2 path.
 
 Source-conformance cases are normally `not_scored` unless the fixture is also an
 independent efficacy scenario. The denominator is all eight identities in the
@@ -77,6 +76,28 @@ credential-harvest/publish chain. These are conformance gates, not additional
 efficacy cases, and do not change the manifest or golden report.
 
 `make evaluation-check` validates the manifest and compares the generated deterministic report with the tracked baseline. `make evaluation-report` writes a current report only under `target/evaluation/`.
+
+## Native source inputs only
+
+Every case is a native source fixture evaluated on the production canonical path.
+Seventeen cases (`OC-RT-001`, `RX-MCP-ENUM-INJECT-001`, and the `BC-*` record
+confounders) were previously authored as client-agnostic normalized records and
+scored by the retired direct-record Rule v1 evaluator. They now live in
+`fixtures/record-scenarios/` as `codex.sessions` JSONL with a fixed mapping: one
+`session_meta` line, then each record as the matching Codex `event_msg`
+(`tool_call` with `tool_name`, the record's `arguments` string as native
+`arguments`, and its content as `message`; `tool_result` and `assistant_message`
+carry the content as `message`). Records labeled `opencode` never exercised the
+OpenCode adapter, so they are represented as Codex too; descriptions are
+unchanged.
+
+No label, expectation, score, rule set, or contribution changed: the regenerated
+report differs from the previous golden only in `manifest_sha256` and
+source-coverage counts (17 more `codex.sessions` cases). Fidelity matters here.
+Rule v1 text selectors read native argument strings, but not structured argument
+objects or arrays (see CE-* below), and the injection signature does not read the
+`command` field. A fixture that moves the same text into another field is a
+different scenario, not a migration.
 
 ## Canonical synthetic tranche (CE-*)
 
