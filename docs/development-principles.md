@@ -363,6 +363,19 @@ visibility instead of rediscovering session stores.
 - **Explicit failure.** Analyzer failure or timeout yields explicit
   not-evaluated or error states; it never blocks native deterministic detection
   or reports a clean result.
+- **Harness-neutral projection.** The projection is built from canonical
+  observations, so one extension applies to every supported source. Telltale
+  owns the projection schema. It covers eligible observations whether or not
+  a native rule matched (projecting only native matches limits extensions to
+  triage), and keys facts by the canonical selector registry with their
+  provenance rather than Rule v1 compatibility evidence.
+- **Visibility is explicit.** Each sensitive context kind (user, assistant,
+  tool arguments, and any later instruction, tool-result, agent, or runtime
+  context) is a separate default-off disclosure class that the operator
+  approves per extension. The projection states per-source capability, so an
+  extension can tell "not disclosed" and "not reported by this source" apart.
+  Facts a source does not report are never inferred to fill a slot. Raw
+  reasoning is not retained and is not part of this direction.
 
 Contracts accepted now keep this path additive: cross-process formats are explicit
 versioned schemas, never `Serialize` derives on facade structs; observation IDs
