@@ -376,6 +376,19 @@ pub fn terminal_tool_label(value: &str) -> String {
     terminal_identifier("tool", value)
 }
 
+/// Preserve an action tool label exactly as [`terminal_tool_label`] produced it
+/// (a known built-in name, a safe lowercase name, or a canonical opaque `tool`
+/// marker); normalize anything else. Use this, not
+/// [`terminal_historical_identifier`], to validate stored or received action
+/// tool labels: the generic form re-hashes readable built-in names.
+pub fn terminal_historical_tool_label(value: &str) -> String {
+    if is_canonical_opaque_identifier_for_kind("tool", value) {
+        value.to_string()
+    } else {
+        terminal_tool_label(value)
+    }
+}
+
 pub(super) fn is_safe_atlas_tag(value: &str) -> bool {
     value.len() <= 128
         && value.starts_with("atlas:")
@@ -429,6 +442,36 @@ mod tests {
             );
         }
         assert!(terminal_identifier("tool", "Bash").starts_with("[tool:"));
+    }
+
+    #[test]
+    fn historical_tool_labels_preserve_every_produced_label() {
+        // A host validating a stored or received action tool label must accept
+        // exactly what `terminal_tool_label` produced, without re-hashing it.
+        for value in [
+            "Bash",
+            "WebFetch",
+            "apply_patch",
+            "shell",
+            "BASH",
+            "mcp__Private__Tool",
+            "AKIAABCDEFGHIJKLMNOP",
+            "/home/synthetic/private/tool",
+        ] {
+            let label = terminal_tool_label(value);
+            assert_eq!(terminal_historical_tool_label(&label), label, "{value}");
+        }
+        // The generic historical identifier is not a tool-label validator: it
+        // re-hashes readable built-in names, so it would reject a valid label.
+        assert_ne!(terminal_historical_identifier("tool", "Bash"), "Bash");
+        // Values that are not produced labels are normalized, never preserved.
+        for value in ["BASH", "mcp__Private__Tool", "[tool:not-a-hash]"] {
+            assert_ne!(terminal_historical_tool_label(value), value, "{value}");
+            assert_eq!(
+                terminal_historical_tool_label(value),
+                terminal_tool_label(value)
+            );
+        }
     }
 
     #[test]

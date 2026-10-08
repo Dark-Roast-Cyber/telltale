@@ -204,7 +204,11 @@ second detector or an Event 3 conversion loop.
   with session or scan time.
 - `tool_name()` keeps known built-in harness tool names (for example `Bash`,
   `Read`, `WebFetch`) readable; any other name is an opaque terminal identifier.
-  Event 3 keeps its terminal identifiers unchanged.
+  Event 3 keeps its terminal identifiers unchanged. To validate a received or
+  stored action tool label, check
+  `telltale_schema::event::terminal_historical_tool_label(label) == label`.
+  `terminal_historical_identifier("tool", …)` re-hashes readable built-in names,
+  so it rejects valid action labels.
 - `ActionFinding` and its parts implement `Debug`, `Clone`, and `Eq`, not
   `Serialize`; see [host wire and durable handoff](#host-wire-and-durable-handoff).
 
