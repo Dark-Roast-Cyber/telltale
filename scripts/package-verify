@@ -215,9 +215,10 @@ EOF
 
 cat > "$CORE_CONSUMER_DIR/src/main.rs" <<'EOF'
 use telltale_core::{
-    ClientId, DiscoveryError, Event, Event3Record, LocalEventFeed, LocalEventFeedConfig,
-    MatchResult, NormalizedRecord, PipelineError, RecordKind, RiskAccountingError,
-    RiskContribution, RiskContributionType, Source, SourceKind, StartupMode,
+    AcquisitionError, ActionFinding, ClientId, DetailedEvaluationOptions, DiscoveryError,
+    Event, Event3Record, LocalEventFeed, LocalEventFeedConfig, PipelineError,
+    RiskContribution, RiskContributionType, Source, SourceCoverage, SourceFailureStage,
+    SourceKind, SourceScanFailure, StartupMode, VisibilityLimit,
 };
 
 fn is_discovery_error(error: &PipelineError) -> bool {
@@ -228,15 +229,18 @@ fn main() {
     let _: Option<Event> = None;
     let _: Option<Event3Record> = None;
     let _: Option<Source> = None;
-    let _: Option<NormalizedRecord> = None;
-    let _: Option<MatchResult> = None;
-    let _: Option<RiskAccountingError> = None;
+    let _: Option<ActionFinding> = None;
+    let _: Option<DetailedEvaluationOptions> = None;
+    let _: Option<SourceCoverage> = None;
+    let _: Option<SourceScanFailure> = None;
+    let _: Option<SourceFailureStage> = None;
+    let _: Option<AcquisitionError> = None;
+    let _: Option<VisibilityLimit> = None;
     let _: Option<RiskContribution> = None;
     let _: Option<RiskContributionType> = None;
     let _: fn(&PipelineError) -> bool = is_discovery_error;
     let _: Option<ClientId> = None;
     let _: Option<SourceKind> = None;
-    let _: Option<RecordKind> = None;
     let contribution = RiskContribution::new(
         "rule.consumer",
         RiskContributionType::DeterministicRule,
@@ -425,14 +429,13 @@ cat > "$SOURCES_CONSUMER_DIR/src/main.rs" <<'EOF'
 use std::path::Path;
 
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::record::{NormalizedRecord, RecordKind};
+use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 use telltale_sources::clients::{PathRoot, SourcePattern};
 
 fn main() {
     let _: Option<ClientId> = None;
     let _: Option<SourceKind> = None;
-    let _: Option<NormalizedRecord> = None;
     let _: Option<RecordKind> = None;
     let _: Option<Source> = None;
     let _ = match ClientId::Codex {
