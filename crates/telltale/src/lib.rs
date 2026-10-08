@@ -19,7 +19,7 @@
 //! use telltale_core::{Pipeline, PipelineError};
 //!
 //! let pipeline = Pipeline::builder().build()?;
-//! for (source, event) in pipeline.scan_root(std::path::Path::new("/home/user"))? {
+//! for (source, event) in pipeline.scan_root(std::path::Path::new("tests/fixtures/session_stores"))? {
 //!     println!("{}: {} {:?}", source.source_id, event.event_type, event.rule_ids);
 //! }
 //! # Ok::<(), PipelineError>(())

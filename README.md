@@ -104,8 +104,9 @@ synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
 real-session-store setup. Explicit state and historical-event
 migration guidance is in the [migration contract](docs/migration-contract.md).
-For the source/runtime changes in the published `v0.7.0-rc.1` candidate, see
-the [0.7.0 migration guide](docs/migrations/0.7.0.md).
+For published RC1 and subsequent untagged 0.7.0 preparation changes, see
+the [0.7.0 migration guide](docs/migrations/0.7.0.md). Stable 0.7.0 is not
+published; the current source is not a frozen or qualified release candidate.
 
 ## Development verification
 
@@ -135,11 +136,13 @@ supported subsets. It is not a gateway, live-provider interoperability claim or
 additional production source.
 
 The repository remains a Cargo workspace with six official packages. The 0.6.x
-architecture-convergence sequence is complete; the published `v0.7.0-rc.1`
-candidate documents the supported embedding surface. Five-platform native
-qualification passed in run `36305581215` using verifier tooling
+architecture-convergence sequence is complete; current 0.7.0 preparation includes
+embedding changes beyond the published `v0.7.0-rc.1` candidate. Five-platform native
+qualification of that historical RC1 artifact passed in run `36305581215` using
+verifier tooling
 `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077` against the immutable published
-artifacts. Clean-host qualification and stable promotion remain separate.
+artifacts, not the current source. Clean-host qualification and stable promotion
+remain separate.
 Crates.io publication remains intentionally deferred until that public Rust
 surface is stable enough for deliberate external consumers.
 

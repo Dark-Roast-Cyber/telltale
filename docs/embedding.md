@@ -92,7 +92,7 @@ fn main() -> Result<(), PipelineError> {
     // Bundled default rules. Build once and reuse: canonical semantics compile here.
     let pipeline = Pipeline::builder().build()?;
     let options = DetailedEvaluationOptions::default();
-    for scan in pipeline.scan_root_detailed(std::path::Path::new("/home/user"), &options)? {
+    for scan in pipeline.scan_root_detailed(std::path::Path::new("tests/fixtures/session_stores"), &options)? {
         if let Some(failure) = scan.failure() {
             eprintln!("{}: {}", scan.source.source_id, failure.code());
             continue;
@@ -155,7 +155,7 @@ second detector or an Event 3 conversion loop.
 - `DetailedEvaluationOptions` holds `context` (same-pass context),
   `linked_download_score` (0–100), and `process_chain`, which opts into the
   bundled process pack in the same pass, never a second pass or a replay. There
-  is no custom process pack, process-rule YAML, baseline, cursor, or event
+  is no custom process pack, process-rule YAML, baseline, general cursor, or event
   allowlist API; rule policy controls rule enablement, not event allowlisting.
 
 ### Source outcome
