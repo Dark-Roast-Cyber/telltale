@@ -1704,7 +1704,7 @@ fn release_workflow_requires_exact_current_tag_target_archive_set() {
         .find("- name: Create GitHub Release")
         .expect("GitHub Release step");
     let archive_step_end = workflow[start..]
-        .find("- uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1")
+        .find("- uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1")
         .map(|offset| start + offset)
         .expect("release job Rust setup step");
     let step = &workflow[start..archive_step_end];
@@ -1757,7 +1757,7 @@ fn release_workflow_requires_exact_current_tag_target_archive_set() {
         .map(|(_, job)| job)
         .expect("release publication job");
     let rust_setup = release_job
-        .find("uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1")
+        .find("uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1")
         .expect("release job Rust setup");
     let graph_command = release_job
         .find("python3 scripts/generate-sbom.py --check release-downloads/telltale-sbom.cdx.json")
