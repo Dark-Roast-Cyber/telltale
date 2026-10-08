@@ -224,9 +224,6 @@ impl CanonicalSessionEvaluation {
     pub fn rule_score(&self) -> u64 {
         self.rules.compatibility_score()
     }
-    pub fn suppressed_process_count(&self) -> usize {
-        self.processes.as_ref().map_or(0, |p| p.suppressed_count())
-    }
     pub fn session_id(&self) -> Option<&CorrelationId> {
         self.session_id.as_ref()
     }

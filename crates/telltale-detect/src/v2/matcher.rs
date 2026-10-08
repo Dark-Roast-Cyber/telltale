@@ -135,18 +135,6 @@ impl MatcherSpec {
         }
     }
 
-    pub fn predicate_named(
-        selector: impl Into<String>,
-        operator: &str,
-        value: Option<JsonValue>,
-    ) -> Result<Self, DetectionError> {
-        Ok(Self::predicate(
-            selector,
-            MatcherOperator::parse(operator)?,
-            value,
-        ))
-    }
-
     pub fn all(branches: Vec<Self>) -> Self {
         Self::All(branches)
     }
