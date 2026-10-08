@@ -28,11 +28,10 @@ refresh. Returning a finding is not durable delivery.
 | --- | --- | --- |
 | Supported | `scan_sources_detailed`, `scan_root_detailed`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`), `ActionFinding` accessors, `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences` | Session Event 3 and observation linkage for existing callers. Kept for 0.7; new integrations use detailed scans. |
-| Unstable | `detect_records`, `evaluate_session`, `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. Record APIs evaluate flattened `NormalizedRecord`s, which the canonical architecture no longer builds on. |
+| Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
 
-Core re-exports of `Source`, `Event`, `NormalizedRecord`, and rule result/error
-types serve the facade; they do not make every public module of the originating
+Core re-exports such as `Source`, `Event`, and error types serve the facade; they do not make every public module of the originating
 crate a stable embedding API.
 
 ### Qualification status
@@ -152,8 +151,7 @@ second detector or an Event 3 conversion loop.
   anything. One observation clock covers the batch.
 - `build()` compiles canonical semantics once; keep one long-lived `Pipeline`.
   A canonical rejection is reported by scan and provenance calls, after clock
-  and observation-time validation, so legacy-only content stays usable by the
-  record APIs.
+  and observation-time validation.
 - `DetailedEvaluationOptions` holds `context` (same-pass context),
   `linked_download_score` (0–100), and `process_chain`, which opts into the
   bundled process pack in the same pass, never a second pass or a replay. There
@@ -495,17 +493,13 @@ separate from same-pass context; `investigate` stays content-free, and neither
   is today's order, not proof that history is unchanged; out of range returns
   `timeline_index_absent`. OpenCode is deferred.
 
-### Record evaluation
+### Removed record evaluation
 
-`detect_records(&source, &records)` and `evaluate_session(&records)` evaluate
-caller-supplied `NormalizedRecord`s with Rule v1 semantics. They do not register a
-source, create canonical facts, or supply native accounting. `detect_records`
-stamps events with `source` (use a synthetic path if needed);
-`evaluate_session` returns `Result<Option<MatchResult>, RiskAccountingError>`:
-`Ok(None)` is no match, `Ok(Some(_))` carries rule IDs, categories, score, and
-redacted evidence, and accounting failures are never dropped. Setting an arbitrary
-`NormalizedRecord.client` does not add a supported client; new sources need a
-bundled extractor.
+`detect_records` and `evaluate_session` (Rule v1 over caller-built
+`NormalizedRecord`s) and the core re-exports used only by them are removed.
+Evaluate native session sources with detailed scans instead; synthetic tests can
+write a small native fixture (for example Codex JSONL) and scan it with
+`scan_sources_detailed`.
 
 ### Protected assignment store
 

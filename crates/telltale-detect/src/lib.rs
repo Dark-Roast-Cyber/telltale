@@ -10,7 +10,6 @@
 pub mod allowlist;
 pub mod baseline;
 pub mod correlation;
-pub mod detection;
 #[cfg(feature = "source-io")]
 pub mod mcp;
 pub mod process_chain;

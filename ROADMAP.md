@@ -81,8 +81,8 @@ Completed milestones, in order:
    [CI](https://github.com/Dark-Roast-Cyber/telltale/actions/runs/36067578187),
    [CodeQL](https://github.com/Dark-Roast-Cyber/telltale/actions/runs/36067577883)).
 
-These remain the active constraints: deliberate caller-supplied direct-record
-compatibility is a separate contract. Event 3.0's schema, wire contract,
+These remain the active constraints: caller-supplied direct-record evaluation
+is removed rather than kept as a second evaluation path. Event 3.0's schema, wire contract,
 constructors, privacy behavior, and persisted bytes remain unchanged, though newly
 emitted canonical evidence, hashes, or severity need not match legacy output.
 Future Event4 remains an independent projection from accepted semantic truth.

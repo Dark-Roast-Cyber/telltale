@@ -339,8 +339,7 @@ CLI; event allowlisting stays outside the semantic operation.
 `Pipeline::scan_root` retains its public event return shape while using canonical
 acquisition and Detection v2. Event3 constructors retain fresh envelope IDs and
 times; semantic ordering, not byte-identical newly generated envelopes, is
-deterministic. Record-level `detect_records` and `evaluate_session` remain
-intentional compatibility APIs rather than a second source-runtime design.
+deterministic. There is no record-level detection API beside this runtime.
 
 ### Session attestation and accounting
 

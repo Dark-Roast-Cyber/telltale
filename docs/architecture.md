@@ -125,10 +125,8 @@ telltale_sources::acquisition -> Detection v2 evaluation/scoring -> Event3 proje
 
 The caller owns event policy, checkpoints, and delivery. The default sink appends
 local JSONL; optional Splunk HEC and Elastic exports wrap the same canonical
-payload. Rule v1 remains a content-compatibility view. `NormalizedRecordV1` and
-`NormalizedRecord` remain supported for record-level compatibility APIs such as
-`detect_records` and `evaluate_session`; they are not the scanner's detection
-handoff. `observed_at` is explicit caller input. OpenCode-only bounded read
+payload. Rule v1 remains a content-compatibility view evaluated over canonical
+observations; there is no record-level detection API. `observed_at` is explicit caller input. OpenCode-only bounded read
 controls and high-water progress are operational metadata, not evidence; the
 other seven identities return no progress. Copilot's local state is rebuilt per
 acquisition and is not durable. The `compat.v1.url` view remains truthfully

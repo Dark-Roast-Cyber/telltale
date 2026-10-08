@@ -384,14 +384,15 @@ that canonicalization, while well-formed historical manifests naming
 
 ### Requirement: Rule v1 paths share one content semantic owner
 
-The I/O-free Rule v1 API, direct-record compatibility path, and Detection v2
-MUST share the same Rule v1 content evaluator for matching, exclusions,
-modifier eligibility, contributions, checked score, and compatibility metadata.
-Canonical applicability, capability and provenance remain Detection v2 concerns.
+The I/O-free Rule v1 API and Detection v2 MUST share the same Rule v1 content
+evaluator for matching, exclusions, modifier eligibility, contributions, checked
+score, and compatibility metadata. Canonical applicability, capability and
+provenance remain Detection v2 concerns. No caller-supplied direct-record
+detection path SHALL remain.
 
 #### Scenario: Rule v1 paths share one content semantic owner
 
-- **WHEN** record compatibility or Detection v2 evaluates Rule v1
+- **WHEN** the I/O-free Rule v1 API or Detection v2 evaluates Rule v1
 - **THEN** one evaluator owns content while canonical applicability stays in v2
 
 ### Requirement: Rule v1 risk uses checked canonicalized contributions

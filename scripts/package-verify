@@ -188,36 +188,14 @@ telltale-schema = "=$VERSION"
 EOF
 
 cat > "$DETECT_LIGHT_CONSUMER_DIR/src/main.rs" <<'EOF'
-use std::path::PathBuf;
-
-use telltale_detect::detection::{detect_parsed_source_records, evaluate_session_matches};
 use telltale_rules::load_default_rule_set;
-use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::record::NormalizedRecord;
-use telltale_schema::source::Source;
 
 fn main() {
-    let source = Source {
-        client: ClientId::Codex,
-        kind: SourceKind::Jsonl,
-        source_id: "consumer.synthetic".to_string(),
-        path: PathBuf::from("synthetic://consumer"),
-    };
-    let records = vec![NormalizedRecord {
-        session_id: "session".to_string(),
-        client: "codex".to_string(),
-        agent: None,
-        model: None,
-        provider: None,
-        timestamp: None,
-        kind: telltale_schema::record::RecordKind::ToolCall,
-        tool_name: Some("shell".to_string()),
-        arguments: Some("{\"command\":\"printf test\"}".to_string()),
-        content: "printf test".to_string(),
-    }];
+    // Detection v2 compiles and evaluates without the default source-io feature.
     let rules = load_default_rule_set().expect("rules");
-    let _ = evaluate_session_matches(&rules, &records);
-    let _ = detect_parsed_source_records(&source, &rules, &records);
+    let plan = telltale_detect::v2::compile_rule_v1(&rules.compatibility_export())
+        .expect("canonical rule compilation");
+    let _ = plan.semantic_provenance();
 }
 EOF
 
