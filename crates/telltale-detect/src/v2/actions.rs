@@ -331,6 +331,7 @@ pub struct ActionFinding {
     contributions: Vec<ActionContribution>,
     evidence: Vec<ActionEvidence>,
     context: Vec<ActionContextEntry>,
+    session_event_index: Option<usize>,
 }
 impl ActionFinding {
     pub fn canonical_findings(&self) -> &[CanonicalActionFinding] {
@@ -399,6 +400,19 @@ impl ActionFinding {
     }
     pub fn context(&self) -> &[ActionContextEntry] {
         &self.context
+    }
+    /// Index into the containing scan's `events` of the Event 3 detection
+    /// projected for this action: the session's Rule v1 detection for a Rule v1
+    /// action, or the event projected from the same result for a process-chain
+    /// action. `None` when no such event was projected (for example, a
+    /// suppressed result) or the link is ambiguous; never guessed from session
+    /// identifiers.
+    pub fn session_event_index(&self) -> Option<usize> {
+        self.session_event_index
+    }
+    pub(crate) fn with_session_event_index(mut self, index: Option<usize>) -> Self {
+        self.session_event_index = index;
+        self
     }
 }
 
@@ -1762,6 +1776,7 @@ pub(crate) fn evaluate(
                 })
                 .collect::<Result<Vec<_>, ProcessingError>>()?,
             context,
+            session_event_index: None,
         });
     }
     Ok((findings, counts))
@@ -1838,6 +1853,7 @@ pub(crate) fn process_findings(
             contributions,
             evidence: Vec::new(),
             context,
+            session_event_index: None,
         };
         let bytes = encoded_len(&EncodedActionFinding::from(&action))?;
         budget.consume(1 + action.context.len(), bytes)?;

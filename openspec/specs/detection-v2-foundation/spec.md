@@ -1087,3 +1087,17 @@ matching replay, action-semantics, or native-profile version.
 
 - **WHEN** a refactor changes replay or coordinate framing without a version bump
 - **THEN** the pinned identity test fails
+
+### Requirement: Action findings link to their projected event
+
+`ActionFinding::session_event_index()` SHALL be the index into the containing
+`SourceScan::events` of the event projected for the action: the session's Rule v1
+detection for a Rule v1 action, and the process-chain event projected from the
+same result for a process-chain action. It SHALL be `None` when no such event was
+projected or the link is ambiguous, and SHALL NOT be derived from session
+identifier strings.
+
+#### Scenario: Action findings link to their projected event
+
+- **WHEN** a session yields Rule v1 and process-chain actions
+- **THEN** each action's index names a detection or `process_chain` event that carries its rule, and an unprojected result yields `None`

@@ -172,3 +172,52 @@ fn visibility_limited_completion_names_closed_reasons() {
     assert_eq!(complete.completion, Some(EvaluationCompletion::Complete));
     assert!(complete.visibility_limits().is_empty());
 }
+
+#[test]
+fn actions_link_to_their_projected_session_event() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("session.jsonl");
+    let rows = [
+        serde_json::json!({"type":"assistant","uuid":"a","sessionId":"session","timestamp":"2026-09-17T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"echo needle"}}]}}),
+        serde_json::json!({"type":"assistant","uuid":"b","sessionId":"session","timestamp":"2026-09-17T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"cmd.exe /c hostname && cmd.exe /c whoami"}}]}}),
+    ];
+    let text = rows.iter().map(|r| format!("{r}\n")).collect::<String>();
+    std::fs::write(&path, text).unwrap();
+    let mut options = DetailedEvaluationOptions::default();
+    options.process_chain = true;
+    let scan = Pipeline::builder()
+        .rules_document(RULE)
+        .build()
+        .unwrap()
+        .scan_sources_detailed(&[claude_source(path)], &options)
+        .unwrap()
+        .remove(0);
+    assert!(scan.failure().is_none());
+    let mut kinds = std::collections::BTreeSet::new();
+    for action in &scan.action_findings {
+        let index = action
+            .session_event_index()
+            .expect("every action here has a projected event");
+        let event = &scan.events[index];
+        let expected_type = if action.detector_kind() == "process_chain" {
+            "process_chain"
+        } else {
+            "detection"
+        };
+        assert_eq!(event.event_type, expected_type);
+        assert!(
+            action
+                .rule_ids()
+                .iter()
+                .any(|id| event.rule_ids.contains(id)),
+            "{:?} -> {:?}",
+            action.rule_ids(),
+            event.rule_ids
+        );
+        kinds.insert(action.detector_kind().to_owned());
+    }
+    // Both Rule v1 and process-chain actions are linked exactly, not by
+    // guessing from session identifiers.
+    assert!(kinds.contains("rule_v1_action"), "{kinds:?}");
+    assert!(kinds.contains("process_chain"), "{kinds:?}");
+}

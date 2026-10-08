@@ -308,11 +308,7 @@ fn finish_batch_with_options(
     projected.events.extend(activity.events);
     projected.events.extend(mcp);
     Ok(SourceResult {
-        action_findings: evaluation
-            .sessions()
-            .iter()
-            .flat_map(|s| s.action_findings().iter().cloned())
-            .collect(),
+        action_findings: projected.action_findings,
         semantic_provenance: detailed.map_or_else(
             || context.rules.semantic_provenance(),
             |options| context.rules.semantic_provenance_with_options(options),

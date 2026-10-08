@@ -11,7 +11,7 @@ use telltale_rules::process_chain::{
 use telltale_schema::event::{
     DetectionEventInput, Event, Evidence, ProcessChainEventInput, ProcessContext, TimelineAnchor,
     canonicalize_timeline_anchors, detection_event, evidence_hash, is_canonical_sha256_hex,
-    process_chain_event,
+    process_chain_event, terminal_identifier,
 };
 use telltale_schema::observation::{
     CanonicalObservationV2, CorrelationId, CorrelationOrigin, ObservationBody,
@@ -41,6 +41,10 @@ pub struct ProjectedSource {
     /// Embedding projection input. Not a supported detector or host API.
     #[doc(hidden)]
     pub occurrences: Vec<ProjectedOccurrence>,
+    /// Embedding projection input: session action findings in evaluation order,
+    /// each linked to the event projected for it. Not a host API.
+    #[doc(hidden)]
+    pub action_findings: Vec<super::ActionFinding>,
     pub completion: EvaluationCompletion,
 }
 
@@ -548,7 +552,11 @@ pub fn project_event3(
     validate_projection_budget(evaluation, context, &metadata_index, &mut budget)?;
     let mut events = Vec::new();
     let mut occurrences = Vec::new();
+    let mut action_findings = Vec::new();
     for session in &evaluation.sessions {
+        // Process events by the identity their action findings carry: the
+        // terminal rule identifier and exact supporting observation IDs.
+        let mut process_events = BTreeMap::<(String, Vec<String>), Vec<usize>>::new();
         let metadata_context = session.session_id.as_ref().and_then(|id| {
             metadata_index
                 .get(&(correlation_key(id).0, id.value().to_owned()))
@@ -847,6 +855,13 @@ pub fn project_event3(
                     });
                 }
                 projected_ids.insert(key, event.event_id.clone());
+                process_events
+                    .entry((
+                        terminal_identifier("rule", rule_id),
+                        result.observation_ids().to_vec(),
+                    ))
+                    .or_default()
+                    .push(events.len());
                 events.push(event);
             }
         }
@@ -854,7 +869,26 @@ pub fn project_event3(
             occurrence.finding_index = events.len();
         }
         occurrences.extend(session_occurrences);
+        let rule_event = ordinary_detection.as_ref().map(|_| events.len());
         events.extend(ordinary_detection);
+        for action in &session.action_findings {
+            let index = if action.detector_kind() == "process_chain" {
+                action
+                    .rule_ids()
+                    .first()
+                    .and_then(|rule| {
+                        process_events
+                            .get(&(rule.clone(), action.supporting_observation_ids().to_vec()))
+                    })
+                    .and_then(|indexes| match indexes.as_slice() {
+                        [index] => Some(*index),
+                        _ => None,
+                    })
+            } else {
+                rule_event
+            };
+            action_findings.push(action.clone().with_session_event_index(index));
+        }
     }
     occurrences.sort_by(|a, b| {
         a.finding_index
@@ -872,6 +906,7 @@ pub fn project_event3(
     Ok(ProjectedSource {
         events,
         occurrences,
+        action_findings,
         completion: evaluation.completion(),
     })
 }

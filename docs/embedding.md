@@ -26,7 +26,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`), `ActionFinding` accessors, `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`), `ActionFinding` accessors (including `session_event_index()`), `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences` | Session Event 3 and observation linkage for existing callers. Kept for 0.7; new integrations use detailed scans. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -209,6 +209,12 @@ second detector or an Event 3 conversion loop.
   `telltale_schema::event::terminal_historical_tool_label(label) == label`.
   `terminal_historical_identifier("tool", …)` re-hashes readable built-in names,
   so it rejects valid action labels.
+- `session_event_index()` is the index into the same `SourceScan::events` of
+  the Event 3 event projected for this action: the session's Rule v1 detection
+  for a Rule v1 action, or the `process_chain` event from the same result for a
+  process-chain action. It is `None` when no such event was projected (for
+  example, a suppressed process result) or the link would be ambiguous. Use it
+  instead of matching session identifiers.
 - `ActionFinding` and its parts implement `Debug`, `Clone`, and `Eq`, not
   `Serialize`; see [host wire and durable handoff](#host-wire-and-durable-handoff).
 
