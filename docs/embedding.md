@@ -150,8 +150,8 @@ second detector or an Event 3 conversion loop.
   watch, debounce, backfill, persist seen state, cursors, or baselines, or deliver
   anything. One observation clock covers the batch.
 - `build()` compiles canonical semantics once; keep one long-lived `Pipeline`.
-  A canonical rejection is reported by scan and provenance calls, after clock
-  and observation-time validation.
+  Rule content that loads as Rule v1 but that canonical compilation rejects
+  fails `build()` with `Compilation`, so a built `Pipeline` can always scan.
 - `DetailedEvaluationOptions` holds `context` (same-pass context),
   `linked_download_score` (0–100), and `process_chain`, which opts into the
   bundled process pack in the same pass, never a second pass or a replay. There
@@ -321,13 +321,13 @@ outbox guarantees do not transfer to an embedding host.
 | Operation | Returned categories |
 | --- | --- |
 | `build` | `InvalidConfiguration`, `Compilation` |
-| `scan_root`, `scan_root_with_occurrences` | `Discovery`, `Clock`, `Observation`, `Compilation` |
-| `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation`, `Compilation` |
-| detailed scans and `semantic_provenance` | the matching scan categories, plus `InvalidOptions` |
+| `scan_root`, `scan_root_with_occurrences` | `Discovery`, `Clock`, `Observation` |
+| `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation` |
+| detailed scans and `semantic_provenance` | the matching scan categories, plus `InvalidOptions`, and `Compilation` only if the bundled process pack fails to load when `process_chain` is set |
 
 `Observation` is batch observation-time validation, not per-source canonical
-validation. Clock validation and canonical compilation checks run even for an
-empty batch. Source-processing failures are per-source `scanner_error` events
+validation. Clock validation runs even for an empty batch. Source-processing
+failures are per-source `scanner_error` events
 (see [source outcome](#source-outcome)), not returned errors.
 
 Display and Debug render closed codes (`pipeline_discovery_failed`,

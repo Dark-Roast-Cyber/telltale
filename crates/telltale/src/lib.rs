@@ -337,10 +337,9 @@ impl SourceScan {
 /// to evaluate discovered session stores or caller-supplied records.
 pub struct Pipeline {
     rule_set: CompiledRuleSet,
-    /// Canonical semantics compiled once in `build`. A rejection is retained,
-    /// not raised there: the record APIs can still use legacy-accepted content,
-    /// and scans keep their clock -> observation -> compilation error order.
-    canonical: Result<telltale_detect::v2::RuleV1CompatibilityPlan, RuleV1CompileError>,
+    /// Canonical semantics compiled once in `build`; content they reject never
+    /// becomes a `Pipeline`.
+    canonical: telltale_detect::v2::RuleV1CompatibilityPlan,
     /// The bundled process pack, loaded on first opt-in use and then reused.
     process_rules: std::sync::OnceLock<telltale_rules::process_chain::CompiledProcessChainRules>,
 }
@@ -391,10 +390,7 @@ impl Pipeline {
                 .validate()
                 .map_err(|_| PipelineError::InvalidOptions)?;
         }
-        let rules = self
-            .canonical
-            .as_ref()
-            .map_err(|error| PipelineError::Compilation(Box::new(*error)))?;
+        let rules = &self.canonical;
         let process = match options {
             Some(options) if options.process_chain => Some(self.process_rules()?),
             _ => None,
@@ -602,8 +598,9 @@ impl PipelineBuilder {
 
     /// Compile bundled and supplied Rule v1 documents with the optional policy.
     /// Missing documents or rejected rules/policy return [`PipelineError`].
-    /// Canonical semantics are compiled once here and reused by every scan; a
-    /// canonical rejection is reported by the scan and provenance methods.
+    /// Canonical semantics are compiled once here and reused by every scan.
+    /// Content that Rule v1 loading accepts but canonical compilation rejects
+    /// returns [`PipelineError::Compilation`] here, not later from a scan.
     pub fn build(self) -> Result<Pipeline, PipelineError> {
         let mut documents: Vec<&str> = Vec::new();
         if !self.custom_only {
@@ -618,7 +615,8 @@ impl PipelineBuilder {
             self.policy_document.as_deref(),
         )
         .map_err(PipelineError::Compilation)?;
-        let canonical = telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export());
+        let canonical = telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export())
+            .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
         Ok(Pipeline {
             rule_set,
             canonical,
@@ -654,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_time_failures_precede_compilation_and_source_io() {
+    fn canonical_rejection_fails_build_and_batch_time_precedes_source_io() {
         let invalid_rules = r#"
 version: 1
 description: synthetic batch error precedence
@@ -672,41 +670,38 @@ rules:
     explanation: synthetic
 modifiers: []
 "#;
-        let invalid = Pipeline::builder()
+        // Rule v1 loading accepts the severity; canonical compilation rejects
+        // it at build time, so no pipeline exists that can only fail scans.
+        let error = Pipeline::builder()
             .without_bundled_defaults()
             .rules_document(invalid_rules)
             .build()
-            .expect("legacy rules accept severity");
+            .err()
+            .expect("canonical rejection at build");
+        assert!(matches!(error, PipelineError::Compilation(_)));
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
+            Some(RuleV1CompileError::InvalidSeverity)
+        ));
         let valid = Pipeline::builder().build().unwrap();
         let sources = [synthetic_source()];
         for batch in [&[][..], &sources[..]] {
-            for pipeline in [&valid, &invalid] {
-                let error = pipeline
-                    .scan_sources_with_time(batch, || {
-                        time::Date::from_calendar_date(2026, time::Month::October, 4)
-                            .unwrap()
-                            .format(&time::format_description::parse("[offset_hour]").unwrap())
-                    })
-                    .err()
-                    .expect("clock failure");
-                assert!(matches!(error, PipelineError::Clock(_)));
-                let error = pipeline
-                    .scan_sources_with_time(batch, || Ok("invalid-observed-at".into()))
-                    .err()
-                    .expect("observation failure");
-                assert!(matches!(error, PipelineError::Observation(_)));
-            }
-            let error = invalid
-                .scan_sources_with_time(batch, || Ok("2026-10-04T00:00:00Z".into()))
+            let error = valid
+                .scan_sources_with_time(batch, || {
+                    time::Date::from_calendar_date(2026, time::Month::October, 4)
+                        .unwrap()
+                        .format(&time::format_description::parse("[offset_hour]").unwrap())
+                })
                 .err()
-                .expect("compilation failure");
-            assert!(matches!(error, PipelineError::Compilation(_)));
-            assert!(matches!(
-                error
-                    .source()
-                    .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-                Some(RuleV1CompileError::InvalidSeverity)
-            ));
+                .expect("clock failure");
+            assert!(matches!(error, PipelineError::Clock(_)));
+            let error = valid
+                .scan_sources_with_time(batch, || Ok("invalid-observed-at".into()))
+                .err()
+                .expect("observation failure");
+            assert!(matches!(error, PipelineError::Observation(_)));
         }
         let scans = valid
             .scan_sources_with_time(&sources, || Ok("2026-10-04T00:00:00Z".into()))

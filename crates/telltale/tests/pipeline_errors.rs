@@ -87,7 +87,7 @@ fn pipeline_error_characterization_builder_diagnostics() {
 }
 
 #[test]
-fn pipeline_error_characterization_compilation_precedes_source_processing() {
+fn pipeline_error_characterization_canonical_rejection_fails_build() {
     for (document, expected) in [
         (
             RULE.replace("severity: low", "severity: unknown"),
@@ -98,28 +98,16 @@ fn pipeline_error_characterization_compilation_precedes_source_processing() {
             "score_out_of_range",
         ),
     ] {
-        let pipeline = Pipeline::builder()
+        // Rule v1 loading accepts these; canonical compilation rejects them at
+        // build time, before any scan or source processing can be attempted.
+        let error = Pipeline::builder()
             .without_bundled_defaults()
             .rules_document(document)
             .build()
-            .expect("Rule v1 builder accepts document");
-        for error in [
-            pipeline.scan_sources(&[]).expect_err("compilation"),
-            pipeline
-                .scan_sources_with_occurrences(&[])
-                .err()
-                .expect("compilation"),
-            pipeline
-                .scan_root(tempfile::tempdir().unwrap().path())
-                .expect_err("compilation"),
-            pipeline
-                .scan_root_with_occurrences(tempfile::tempdir().unwrap().path())
-                .err()
-                .expect("compilation"),
-        ] {
-            assert_eq!(error.to_string(), "pipeline_compilation_failed");
-            assert_eq!(error.source().unwrap().to_string(), expected);
-        }
+            .err()
+            .expect("canonical rejection at build");
+        assert_eq!(error.to_string(), "pipeline_compilation_failed");
+        assert_eq!(error.source().unwrap().to_string(), expected);
     }
 }
 
@@ -178,27 +166,19 @@ fn pipeline_error_typed_public_operations() -> Result<(), PipelineError> {
             PipelineError::Discovery(DiscoveryError::InvalidRoot { .. })
         ));
     }
-    let invalid = Pipeline::builder()
+    let error = Pipeline::builder()
         .without_bundled_defaults()
         .rules_document(RULE.replace("severity: low", "severity: unknown"))
-        .build()?;
-    for error in [
-        invalid.scan_sources(&[]).err().unwrap(),
-        invalid.scan_sources_with_occurrences(&[]).err().unwrap(),
-        invalid.scan_root(root.path()).err().unwrap(),
-        invalid
-            .scan_root_with_occurrences(root.path())
-            .err()
-            .unwrap(),
-    ] {
-        assert!(matches!(error, PipelineError::Compilation(_)));
-        assert!(matches!(
-            error
-                .source()
-                .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
-            Some(RuleV1CompileError::InvalidSeverity)
-        ));
-    }
+        .build()
+        .err()
+        .unwrap();
+    assert!(matches!(error, PipelineError::Compilation(_)));
+    assert!(matches!(
+        error
+            .source()
+            .and_then(|cause| cause.downcast_ref::<RuleV1CompileError>()),
+        Some(RuleV1CompileError::InvalidSeverity)
+    ));
     assert!(pipeline.scan_sources(&[])?.is_empty());
     assert!(pipeline.scan_sources_with_occurrences(&[])?.is_empty());
     Ok(())
