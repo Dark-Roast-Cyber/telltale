@@ -170,8 +170,8 @@ test window was not assessed.
 
 These are decisions and required future gates, not evidence that a gate has
 passed. Development through `43344648edf450a13a1cb3b3a29cd310acad3b34`
-and the subsequent uncommitted preparation are not a frozen replacement
-candidate. Issue #87's earlier freeze at
+and the subsequent 0.7 embedding-contract preparation commits are not a
+frozen replacement candidate. Issue #87's earlier freeze at
 `5a47eaab406c8cb5b139476861722155b0fdf227` was invalidated by subsequent merged
 code; historical evidence is not rebound. Development CI run `37361823509` and
 CodeQL run `37361823885` passed for `7511307b64424e54ee13fa77007d0eb9775acedc`,

@@ -1010,3 +1010,80 @@ their own matcher content.
 
 - **WHEN** download/execution or category actions correlate
 - **THEN** source-time window and bounded scores apply without rewriting effective custom predicates
+
+### Requirement: Embedding facade values are not wire formats
+
+`ActionFinding`, its component DTOs, and `RuleCatalogEntry` SHALL NOT implement
+`Serialize`. Telltale cross-process formats SHALL be explicit versioned schemas
+(Event 3 today). Hosts SHALL obtain delivery identity from `coordinate()` and
+`replay_identity()` and project other accessors into their own versioned
+envelope; no derived field name SHALL be an implied contract.
+
+#### Scenario: Embedding facade values are not wire formats
+
+- **WHEN** a host transports or stores an action finding or catalog entry
+- **THEN** it projects accessors into a host-owned schema, and Telltale adding a private field changes no host bytes
+
+### Requirement: Action observed facts are typed
+
+`ActionFinding::stage()` SHALL return `ObservationStage`, `kind()` SHALL return
+`ObservationFamily`, and `severity()` SHALL return `Severity`;
+`ActionContextEntry` SHALL expose `ActionContextKind` and `ObservationStage`.
+Their `as_str()` labels SHALL equal the existing canonical labels. A requested
+or proposed tool stage SHALL NOT be reported as execution.
+
+#### Scenario: Action observed facts are typed
+
+- **WHEN** a host reads an action's stage, family, severity, or context kind
+- **THEN** it matches typed values with a fallback arm, and `as_str()` yields the unchanged canonical label
+
+### Requirement: Action tool labels keep a closed readable vocabulary
+
+Action and context tool labels SHALL keep only a closed list of built-in harness
+tool names verbatim and SHALL map every other name through the terminal
+identifier policy; Event 3 terminal identifiers SHALL remain unchanged.
+`terminal_historical_tool_label` SHALL preserve every label that
+`terminal_tool_label` produces and SHALL normalize any other value.
+
+#### Scenario: Action tool labels keep a closed readable vocabulary
+
+- **WHEN** a host validates a received action tool label such as `Bash`, a safe lowercase name, or an opaque tool marker
+- **THEN** `terminal_historical_tool_label(label) == label`, while MCP and credential-shaped names stay opaque
+
+### Requirement: Source scans report typed outcome, coverage, and visibility reasons
+
+`SourceScan::failure()` SHALL be present exactly when a source failed, carrying
+the failure stage, an optional `AcquisitionError`, and the Event 3
+`scanner_error` code. A successful source SHALL report `coverage()` as
+`WholeSource` or `Partial` and SHALL report `visibility_limits()` non-empty
+exactly when `completion` is `VisibilityLimited`.
+
+#### Scenario: Source scans report typed outcome, coverage, and visibility reasons
+
+- **WHEN** a host scans a failing source, a whole JSONL source, and a bounded OpenCode window
+- **THEN** it distinguishes failure, `WholeSource`, and `Partial` without matching `event_type` strings, and each limited result names closed reasons
+
+### Requirement: Pipeline construction rejects content that cannot scan
+
+`Pipeline::build` SHALL compile canonical semantics once and SHALL return
+`PipelineError::Compilation` for rule content that loads as Rule v1 but that
+canonical compilation rejects. Scans SHALL reuse the compiled semantics and
+SHALL NOT return `Compilation` except when an opted-in bundled process pack
+fails to load.
+
+#### Scenario: Pipeline construction rejects content that cannot scan
+
+- **WHEN** a rule document has an unknown severity or an out-of-range score
+- **THEN** `build()` fails with `Compilation` carrying the canonical cause, and no pipeline exists whose scans all fail
+
+### Requirement: Action identities are pinned to algorithm versions
+
+Tests SHALL pin `ReplayIdentity`, `ActionCoordinate`, observation ID, and
+`SemanticProvenance::identity()` values for a synthetic custom-rule fixture,
+independent of source path. Changing a pinned value SHALL require bumping the
+matching replay, action-semantics, or native-profile version.
+
+#### Scenario: Action identities are pinned to algorithm versions
+
+- **WHEN** a refactor changes replay or coordinate framing without a version bump
+- **THEN** the pinned identity test fails
