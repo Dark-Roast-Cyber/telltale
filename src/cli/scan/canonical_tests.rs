@@ -585,10 +585,8 @@ fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progr
         None,
     );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
-    assert_eq!(
-        result.completion,
-        Some(EvaluationCompletion::VisibilityLimited)
-    );
+    // URL is an observable tool-argument fact; text parts have none.
+    assert_eq!(result.completion, Some(EvaluationCompletion::Complete));
     assert_eq!(
         result.accounting.as_ref().unwrap().sessions[0]
             .metadata
@@ -915,11 +913,13 @@ fn benign_opencode_sqlite_partial_source_has_no_canonical_detection() {
 }
 
 #[test]
-fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_policy() {
+fn sqlite_partial_success_retains_progress_without_installing_and_reuses_read_policy() {
     let dir = tempdir().unwrap();
     let source = database(&dir.path().join("synthetic.db"));
     let mut state = ScanState::default();
-    let plan = plan("url"); // URL visibility is explicitly unavailable.
+    // Partial (selected-window) accounting, not completion, prevents installing
+    // a whole-source baseline; successful completion keeps progress eligible.
+    let plan = plan("url");
     let result = process_canonical_source(
         &source,
         &state,
@@ -929,10 +929,7 @@ fn sqlite_limited_success_retains_progress_without_installing_and_reuses_read_po
         None,
     );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
-    assert_eq!(
-        result.completion,
-        Some(EvaluationCompletion::VisibilityLimited)
-    );
+    assert_eq!(result.completion, Some(EvaluationCompletion::Complete));
     assert_eq!(
         result.progress,
         AcquisitionProgress::OpenCodeSqlite {

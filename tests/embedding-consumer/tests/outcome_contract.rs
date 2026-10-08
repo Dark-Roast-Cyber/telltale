@@ -135,42 +135,39 @@ fn feature_off_opencode_reports_capability_not_compiled_without_reading() {
 }
 
 #[test]
-fn visibility_limited_completion_names_closed_reasons() {
+fn bundled_default_scans_are_complete_and_limits_name_closed_reasons() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("session.jsonl");
     let row = serde_json::json!({"type":"assistant","uuid":"call","sessionId":"session","timestamp":"2026-09-17T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"echo needle"}}]}});
     std::fs::write(&path, format!("{row}\n")).unwrap();
     let source = claude_source(path);
     let options = DetailedEvaluationOptions::default();
-    // Bundled URL-target rules lack URL visibility: limited, with a named reason.
+    // Bundled URL-target rules read tool-argument URLs, so an ordinary
+    // bundled scan with session identity and source time is complete.
     let bundled = Pipeline::builder()
         .build()
         .unwrap()
         .scan_sources_detailed(std::slice::from_ref(&source), &options)
         .unwrap()
         .remove(0);
-    assert_eq!(
-        bundled.completion,
-        Some(EvaluationCompletion::VisibilityLimited)
-    );
-    assert!(
-        bundled
-            .visibility_limits()
-            .contains(&VisibilityLimit::RuleTargetUnavailable)
-    );
-    assert!(
-        bundled
-            .visibility_limits()
-            .iter()
-            .all(|limit| !limit.as_str().is_empty())
-    );
-    // A command-only rule set is complete and names no limits.
+    assert_eq!(bundled.completion, Some(EvaluationCompletion::Complete));
+    assert!(bundled.visibility_limits().is_empty());
+    // A custom command-only rule set is complete too; when a result is
+    // limited, `visibility_limits()` names closed reasons with stable codes.
     let complete = pipeline()
         .scan_sources_detailed(&[source], &options)
         .unwrap()
         .remove(0);
     assert_eq!(complete.completion, Some(EvaluationCompletion::Complete));
     assert!(complete.visibility_limits().is_empty());
+    for limit in [
+        VisibilityLimit::UnverifiedSourceInstance,
+        VisibilityLimit::MissingSessionIdentity,
+        VisibilityLimit::DetectorNotEvaluated,
+        VisibilityLimit::ProcessCapabilityUnavailable,
+    ] {
+        assert!(!limit.as_str().is_empty());
+    }
 }
 
 #[test]

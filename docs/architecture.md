@@ -129,9 +129,8 @@ payload. Rule v1 remains a content-compatibility view evaluated over canonical
 observations; there is no record-level detection API. `observed_at` is explicit caller input. OpenCode-only bounded read
 controls and high-water progress are operational metadata, not evidence; the
 other seven identities return no progress. Copilot's local state is rebuilt per
-acquisition and is not durable. The `compat.v1.url` view remains truthfully
-absent without URL/path/network manufacturing; focused synthetic harness
-coverage demonstrates the compatibility gap.
+acquisition and is not durable. The `compat.v1.url` view reads URL-keyed tool
+arguments only, without URL/path/network manufacturing from other facts.
 
 ## Module Boundaries
 

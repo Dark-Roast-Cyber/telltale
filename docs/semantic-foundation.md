@@ -22,9 +22,8 @@ metadata, not evidence; the other seven identities return
 interpretation without durable progress; active session and ordinal state is
 rebuilt on each acquisition. Scan, watch, and embedding share the canonical
 source runtime. Event 3.0 remains the external event contract; Event4 and
-Telemetry/Output v2 remain inactive. The `compat.v1.url` view is intentionally
-visibility-limited to truthful absence; focused synthetic harness coverage
-demonstrates the compatibility gap.
+Telemetry/Output v2 remain inactive. The `compat.v1.url` view reads URL-keyed
+tool arguments and is otherwise truthfully absent.
 
 Acquisition is not a conversion bridge from `CanonicalObservationV2` to either
 record compatibility representation.

@@ -13,7 +13,7 @@ source-free session evaluator, source-instance-scoped session
 orchestration, and a source-free Event3 compatibility projection. Process-chain
 repeat/correlation semantics have one pure owner used by the v2 session
 evaluator before Event3 compatibility projection. `compat.v1.url`
-remains compiler-supported but truthfully absent. There is no advanced detector
+reads URL-keyed tool arguments only. There is no advanced detector
 runtime, Event4, gateway, or Detection Content v2 runtime
 loader; the Event 3.0 schema remains unchanged.
 ## Native selector inventory
@@ -103,14 +103,18 @@ Selectors MUST resolve through an explicit registry over typed observation body
 fields and governed facets.
 The eight `compat.v1` names MUST compile as views,
 preserve truthful absence, require their documented capabilities, and never
-reparse raw structured arguments/results or invent URL/network facts.
+reparse raw structured arguments/results or invent URL/network facts. The one
+exception is `compat.v1.url`: it MUST resolve the top-level string members named
+`url`, `uri`, `href`, or `endpoint` of object arguments, or of an argument string
+that is exactly one JSON object, using the same rule as the action view, and
+MUST NOT copy command text or results into URL.
 
 #### Scenario: Compatibility selectors preserve absence
 
 - **WHEN** a tool observation contains structured arguments but no searchable
   derivative or direct URL activity
 - **THEN** the arguments view is absent for text matching when no text is
-  available and `compat.v1.url` remains absent
+  available and `compat.v1.url` is absent unless a URL-keyed argument exists
 
 #### Scenario: Capability visibility is not occurrence
 
@@ -273,14 +277,13 @@ is supported; shadowed or disabled definitions MUST NOT bypass this check.
 - **THEN** compatibility compilation rejects it rather than mapping it to a
   security or informational Finding kind
 
-#### Scenario: Rule v1 URL compatibility remains explicitly unavailable
+#### Scenario: Rule v1 URL compatibility reads tool-argument URLs
 
 - **WHEN** an effective Rule v1 rule uses the `url` target
 - **THEN** compilation succeeds to `compat.v1.url`, which requires `ToolCall`
-  visibility but cannot resolve a URL value without manufacturing URL, path, or
-  network facts
-- **AND** a URL-only rule is indeterminate, mixed rules evaluate their available
-  alternatives, and source completion records the visibility limitation
+  visibility and resolves only URL-keyed top-level tool arguments
+- **AND** a tool call without one is an evaluated absence, so URL-only and mixed
+  rules evaluate normally and do not limit completion
 
 #### Scenario: Caller-defined session uses one compatibility plan
 
@@ -1056,7 +1059,8 @@ identifier policy; Event 3 terminal identifiers SHALL remain unchanged.
 the failure stage, an optional `AcquisitionError`, and the Event 3
 `scanner_error` code. A successful source SHALL report `coverage()` as
 `WholeSource` or `Partial` and SHALL report `visibility_limits()` non-empty
-exactly when `completion` is `VisibilityLimited`.
+exactly when `completion` is `VisibilityLimited`. Bundled rule content SHALL NOT
+by itself limit a timed, session-scoped source.
 
 #### Scenario: Source scans report typed outcome, coverage, and visibility reasons
 

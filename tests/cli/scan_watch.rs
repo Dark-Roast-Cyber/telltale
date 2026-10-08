@@ -598,11 +598,11 @@ fn scan_dry_run_reports_selected_source_coverage_without_private_details() {
         complete["source_processing"]["selected_source_coverage"],
         "complete"
     );
+    // A tool call without source time limits process-chain visibility: a
+    // successful but visibility-limited evaluation.
     fs::write(
-        &rules,
-        fs::read_to_string(&rules)
-            .unwrap()
-            .replace("user_context", "url"),
+        &source,
+        "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"PRIVATE-COVERAGE-SESSION\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec\",\"call_id\":\"PRIVATE-COVERAGE-ID\",\"arguments\":{\"command\":\"PRIVATE-COVERAGE-CONTENT\"}}}\n",
     )
     .unwrap();
     let limited = scan();
@@ -629,6 +629,7 @@ fn scan_dry_run_reports_selected_source_coverage_without_private_details() {
             .iter()
             .any(|w| w["code"] == "source_coverage_partial")
     );
+    fs::write(&source, "{\"type\":\"user\",\"session_id\":\"PRIVATE-COVERAGE-SESSION\",\"content\":\"PRIVATE-COVERAGE-CONTENT\"}\n").unwrap();
     fs::write(
         directory.join("parse.jsonl"),
         "PRIVATE-COVERAGE-CONTENT invalid json\n",

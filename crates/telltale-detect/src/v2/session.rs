@@ -163,8 +163,6 @@ pub enum EvaluationCompletion {
 pub enum VisibilityLimit {
     /// The source instance could not be verified, so grouping is unavailable.
     UnverifiedSourceInstance,
-    /// An enabled rule targets a field this runtime cannot observe (URL today).
-    RuleTargetUnavailable,
     /// Some observations carry no session identity.
     MissingSessionIdentity,
     /// A detector reported observations it could not evaluate.
@@ -176,7 +174,6 @@ impl VisibilityLimit {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UnverifiedSourceInstance => "unverified_source_instance",
-            Self::RuleTargetUnavailable => "rule_target_unavailable",
             Self::MissingSessionIdentity => "missing_session_identity",
             Self::DetectorNotEvaluated => "detector_not_evaluated",
             Self::ProcessCapabilityUnavailable => "process_capability_unavailable",
@@ -429,10 +426,6 @@ fn evaluate_source_inner(
             (
                 input.source_instance.is_none(),
                 VisibilityLimit::UnverifiedSourceInstance,
-            ),
-            (
-                rules.has_unavailable_url_visibility(),
-                VisibilityLimit::RuleTargetUnavailable,
             ),
             (
                 observations[0].session_id().is_none(),

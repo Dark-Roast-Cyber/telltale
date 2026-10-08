@@ -12,7 +12,7 @@
 > Observation v2 acquisition coverage (`claude.projects`;
 > `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions`;
 > `opencode.sqlite`; `openclaw.agents`; `qwen.projects`; `copilot.process_log`).
-> `compat.v1.url` remains intentionally absent. Copilot native-v2 capabilities
+> `compat.v1.url` reads URL-keyed tool arguments. Copilot native-v2 capabilities
 > are ToolCall **Supported**, UserContext **Unsupported**, and ToolExecution
 > **Unknown**. Rule v1 remains its content-compatibility input and Event3
 > remains the external projection. The process-chain session path delegates
@@ -29,8 +29,8 @@ The Rule v1 compatibility compiler retains one effective export with its compile
 observation-match detectors. The source-free canonical session adapter aggregates
 caller-grouped observations and delegates Rule v1 match, modifier, contribution,
 score, and metadata decisions to `telltale-rules`.
-`compat.v1.url` is compiler-supported but truthfully absent; URL evidence is
-not fabricated from unrelated canonical facts.
+`compat.v1.url` reads URL-keyed top-level tool arguments; URL evidence is not
+fabricated from command text, results, or other canonical facts.
 
 ## Detection path and units
 
@@ -202,10 +202,11 @@ detector counters preserve match, no-match, not-applicable, visibility reasons,
 and errors separately, even when aggregate match precedence hides a lower-ranked
 status. Session modifiers, effective policy/exclusion behavior, checked
 contributions, and overflow behavior are unchanged. `compile_rule_v1` still
-rejects unsupported custom rule metadata. `compat.v1.url` is unavailable rather
-than negatively observed: URL-only rules are indeterminate, mixed-target rules
-evaluate only their available alternatives, and source completion remains
-visibility-limited whenever the plan contains URL compatibility.
+rejects unsupported custom rule metadata. `compat.v1.url` resolves the URL-keyed
+top-level string arguments of a tool call (`url`, `uri`, `href`, `endpoint`;
+object arguments or a string that is exactly one JSON object), the rule the
+action view uses. A tool call without one is an evaluated absence, so URL rules
+no longer limit completion.
 
 The v2 process-chain evaluator remains the sole canonical matcher pass and uses
 the existing shared suppression/correlation kernel. It retains Event3-specific
@@ -390,9 +391,8 @@ applied by either evaluation API.
 
 ### Compatibility behavior
 
-- `compat.v1.url` remains unavailable. URL-only rules are indeterminate, mixed
-  rules use their available alternatives, and completion records the visibility
-  limitation; no URL evidence is fabricated.
+- `compat.v1.url` reads URL-keyed tool arguments only. URL-only and mixed rules
+  evaluate normally; no URL evidence is fabricated from commands or results.
 - Acquisition retains source-attested agent/model/provider metadata where
   available. Missing or ambiguous values remain absent; no client-name-as-agent
   or message-content-as-tool fallback is reproduced.
@@ -589,11 +589,9 @@ selectors: `arguments` uses searchable or string tool arguments,
 `assistant_context` and `user_context` use role-specific message content,
 `command` uses `command.text`, `file_path` uses `resource.path`, `tool_name`
 uses the typed tool name, and `tool_result` uses searchable or string result
-content. `url` is compiler-supported as `compat.v1.url` but resolves truthfully
-absent; it does not manufacture URL, path, or network facts. All tool-side
-compatibility views require `ToolCall`, not `ToolExecution`. Focused synthetic
-compatibility coverage demonstrates this URL visibility gap; this does not add
-URL visibility.
+content. `url` uses the URL-keyed top-level tool arguments; it does not
+manufacture URL, path, or network facts from other text. All tool-side
+compatibility views require `ToolCall`, not `ToolExecution`.
 
 ## Sequence, correlation, and process declarations
 
@@ -680,9 +678,8 @@ general session aggregate-risk model. The compiler and evaluator do not
 implement Rule v1 allowlist or suppression behavior or Event3
 projection/equivalence. Native v2 selectors are observation-scoped,
 preserve absence, and do not treat parsed paths or URLs as observed side
-effects. `url` remains compiler-supported as `compat.v1.url`, but it resolves
-truthfully absent; focused synthetic compatibility coverage demonstrates the
-gap without manufacturing URL facts.
+effects. `url` (`compat.v1.url`) resolves only URL-keyed tool arguments, never
+URLs manufactured from other facts.
 Results without a lossless Event3 mapping are not projected by this foundation;
 future Event4 handling is outside this scope.
 

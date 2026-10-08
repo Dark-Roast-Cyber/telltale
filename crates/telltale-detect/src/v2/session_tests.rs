@@ -632,34 +632,49 @@ fn capability_limited_completion_is_not_no_match_or_operational_failure() {
 }
 
 #[test]
-fn unavailable_url_visibility_is_indeterminate_and_limits_completion() {
-    let observations = [command(
-        "url-unavailable",
+fn url_target_reads_tool_argument_urls_and_keeps_completion_complete() {
+    // A tool call with no URL-keyed argument has no URL: an evaluated no-match,
+    // not a visibility gap.
+    let plain = [command(
+        "url-absent",
         "ordinary synthetic text",
         Some("2026-09-17T00:00:00Z"),
         0,
     )];
-    let evaluation = evaluate(&observations, &target_plan("url", "example")).unwrap();
+    let evaluation = evaluate(&plain, &target_plan("url", "example")).unwrap();
+    assert_eq!(evaluation.completion(), EvaluationCompletion::Complete);
+    assert!(evaluation.visibility_limits().is_empty());
     assert_eq!(
-        evaluation.completion(),
-        EvaluationCompletion::VisibilityLimited
-    );
-    let detector = &evaluation.sessions()[0].detectors()[0];
-    assert_eq!(
-        detector.outcome(),
-        super::RuleV1DetectorOutcome::Indeterminate
-    );
-    assert_eq!(detector.evaluated_no_match_count(), 0);
-    assert_eq!(
-        detector.non_evaluation_reason_counts()["insufficient_visibility"],
-        1
+        evaluation.sessions()[0].detectors()[0].outcome(),
+        super::RuleV1DetectorOutcome::NoMatch
     );
 
-    let available = evaluate(&observations, &target_plan("arguments", "does-not-match")).unwrap();
-    assert_eq!(available.completion(), EvaluationCompletion::Complete);
+    // URL-keyed top-level string arguments (also JSON-encoded) are the URL fact;
+    // other argument text is not.
+    let encoded = [command(
+        "url-present",
+        r#"{"url":"https://fetch.example.invalid/page","prompt":"see other.example.org"}"#,
+        Some("2026-09-17T00:00:00Z"),
+        0,
+    )];
+    let evaluation = evaluate(&encoded, &target_plan("url", "fetch\\.example")).unwrap();
+    assert_eq!(evaluation.completion(), EvaluationCompletion::Complete);
     assert_eq!(
-        available.sessions()[0].detectors()[0].outcome(),
+        evaluation.sessions()[0].detectors()[0].outcome(),
+        super::RuleV1DetectorOutcome::Match
+    );
+    let prompt_only = evaluate(&encoded, &target_plan("url", "other\\.example")).unwrap();
+    assert_eq!(
+        prompt_only.sessions()[0].detectors()[0].outcome(),
         super::RuleV1DetectorOutcome::NoMatch
+    );
+
+    // Mixed-target rules evaluate the URL alternative too, still complete.
+    let mixed = evaluate(&encoded, &target_plan("command, url", "fetch\\.example")).unwrap();
+    assert_eq!(mixed.completion(), EvaluationCompletion::Complete);
+    assert_eq!(
+        mixed.sessions()[0].detectors()[0].outcome(),
+        super::RuleV1DetectorOutcome::Match
     );
 }
 

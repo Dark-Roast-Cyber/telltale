@@ -325,14 +325,12 @@ fn detailed_scanning_is_source_selected_session_scoped_and_source_atomic() {
             .iter()
             .all(|e| e.session_id == "selected" && !e.timeline_anchors.is_empty())
     );
-    assert_eq!(
-        scan.completion,
-        Some(EvaluationCompletion::VisibilityLimited)
-    );
+    // Bundled rules are fully visible for timed, session-scoped tool calls.
+    assert_eq!(scan.completion, Some(EvaluationCompletion::Complete));
     assert!(scan.events.iter().all(|e| e.event_type != "scanner_error"));
     assert_eq!(
         host_scan_summary(scan),
-        (&selected, scan.events.len(), Some(false))
+        (&selected, scan.events.len(), Some(true))
     );
 
     let malformed = source(

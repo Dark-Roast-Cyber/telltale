@@ -828,7 +828,7 @@ fn structured_input(
             "old_string" | "prompt" | "description" | "todos" | "plan" | "questions"
             | "summary" | "title" | "message" | "reason" | "tldr" | "caption" | "activeForm"
             | "subject" => {}
-            "url" | "uri" | "href" | "endpoint" => {
+            key if super::selector::is_url_argument_key(key) => {
                 if let Some(v) = string(value) {
                     out.put("url", v.to_owned());
                 }

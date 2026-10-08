@@ -178,13 +178,24 @@ second detector or an Event 3 conversion loop.
   `VisibilityLimited`; match variants, not Debug text. `visibility_limits()`
   names the reasons as non-exhaustive `VisibilityLimit` values with stable
   `as_str()` codes, and `VisibilityLimited` holds exactly when that set is
-  non-empty. Ordinary bundled scans report `RuleTargetUnavailable`, because the
-  bundled URL-target rules (`exfil.outbound_upload`,
-  `network.controlled_test_domain.darkroast`) lack `compat.v1.url` visibility.
-  Limited evaluation still returns its successful findings; a command-only rule
-  set with session identity and source time can be `Complete`.
+  non-empty. Ordinary bundled scans of timed, session-scoped sources are
+  `Complete`: the Rule v1 `url` target reads URL-keyed tool arguments (see
+  [Rule v1 URL target](#rule-v1-url-target)). Limits come from the source or
+  options, such as missing session identity, a detector that could not evaluate
+  an input, or process-chain evaluation over tool calls without source time.
+  Limited evaluation still returns its successful findings.
 - `resume_token()` is a position to resume a resumable source from; see
   [resuming OpenCode scans](#resuming-opencode-scans).
+
+### Rule v1 URL target
+
+The Rule v1 `url` target (`compat.v1.url`) is the URL-keyed top-level string
+arguments of a tool call: `url`, `uri`, `href`, and `endpoint`, read from object
+arguments or from an argument string that is exactly one JSON object. This is
+the same rule the action view applies. Command text and tool results are their
+own targets and are not copied into `url`, so a URL in a shell command matches
+through `command` and a URL in output through `tool_result`. A tool call without
+such an argument is an evaluated absence, not a visibility gap.
 
 ### Action findings
 
