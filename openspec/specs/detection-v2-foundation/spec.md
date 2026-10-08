@@ -16,22 +16,36 @@ evaluator before Event3 compatibility projection. `compat.v1.url`
 remains compiler-supported but truthfully absent. There is no advanced detector
 runtime, Event4, gateway, or Detection Content v2 runtime
 loader; the Event 3.0 schema remains unchanged.
+## Native selector inventory
+
+```text
+session.id
+message.role, message.content, message.text
+tool.name, tool.arguments, tool.searchable_arguments, tool.result,
+tool.searchable_result, tool.reported_status, tool.is_error, tool.exit_code,
+tool.call_id, tool.stage, tool.arguments.text, tool.arguments.keys,
+tool.result.text, tool.result.is_error, tool.result.exit_code
+command.text
+resource.path, resource.operation, resource.path_class
+network.domain, network.destination_class, network.operation, network.port,
+network.protocol
+process.name, process.pid, process.instance_id, process.privilege
+inference.provider, inference.requested_model, inference.resolved_model,
+inference.streaming, inference.stop_reason
+mcp.server.id, mcp.server.transport, mcp.server.location_class, mcp.tool.name
+runtime.execution_mode, runtime.isolation.state, runtime.privilege,
+runtime.workspace.class
+browser.surface, browser.origin_class, browser.navigation_id
+```
+
 ## Requirements
 ### Requirement: Detector result materialization
 
 The implementation MUST expose the closed detector taxonomy and exact five
-evaluation statuses and seven non-evaluation reasons. Only
+evaluation statuses and seven non-evaluation reasons.
+Only
 `evaluated_match` may materialize a Signal, and only a Signal may materialize
-one atomic Finding with the documented domain-separated identities. Signal IDs
-MUST hash this exact fixed-order tuple:
-`["telltale:detection-v2-signal", 2, kind, id, version|null, engine|null,
-content_ref|null, rule_version|null, match_surface|null,
-sorted/deduplicated_observation_ids, semantic_identity_else_dedupe_key_else_null,
-status, selector_path_digest]`. Absent optionals are JSON `null`, and
-`match_surface` is a separate semantic-context member. Finding IDs MUST hash
-`["telltale:detection-v2-finding", 1, "atomic", signal_id]`; prefixes remain
-`sig:v2:sha256:` and `fnd:v2:sha256:`. Matched raw values MUST NOT enter either
-materialized identity.
+one atomic Finding with the documented domain-separated identities.
 
 #### Scenario: Non-match does not materialize output
 
@@ -54,45 +68,42 @@ materialized identity.
   non-match and non-evaluated statuses are not required to carry an observation
   ID
 
+### Requirement: Signal identity uses the fixed semantic-context tuple
+
+Signal IDs
+MUST hash this exact fixed-order tuple:
+`["telltale:detection-v2-signal", 2, kind, id, version|null, engine|null,
+content_ref|null, rule_version|null, match_surface|null,
+sorted/deduplicated_observation_ids, semantic_identity_else_dedupe_key_else_null,
+status, selector_path_digest]`.
+Absent optionals are JSON `null`, and
+`match_surface` is a separate semantic-context member.
+
+#### Scenario: Signal identity uses the fixed semantic-context tuple
+
+- **WHEN** a matched detector materializes a Signal
+- **THEN** its identity hashes the exact fixed-order tuple with null absent optionals
+
+### Requirement: Finding identity is atomic and excludes matched values
+
+Finding IDs MUST hash
+`["telltale:detection-v2-finding", 1, "atomic", signal_id]`; prefixes remain
+`sig:v2:sha256:` and `fnd:v2:sha256:`.
+Matched raw values MUST NOT enter either
+materialized identity.
+
+#### Scenario: Finding identity is atomic and excludes matched values
+
+- **WHEN** a Signal materializes an atomic Finding
+- **THEN** the domain-separated Finding tuple and published prefixes apply without raw matched values
+
 ### Requirement: Typed selector and capability boundary
 
 Selectors MUST resolve through an explicit registry over typed observation body
-fields and governed facets. The eight `compat.v1` names MUST compile as views,
+fields and governed facets.
+The eight `compat.v1` names MUST compile as views,
 preserve truthful absence, require their documented capabilities, and never
 reparse raw structured arguments/results or invent URL/network facts.
-The published registry MUST contain exactly 48 native selectors and exactly
-these backing counts: 2 direct, 37 typed, 7 derived, and 2 explicitly governed
-facets (`command.text` and `resource.path`). Native selectors without a typed
-field/accessor, deterministic derivation, or an explicitly governed facet name
-MUST be rejected; a permitted namespace is not sufficient governance.
-
-The native selector counts by group MUST be: `session` 1, `message` 3,
-`tool` 15, `command` 1, `resource` 3, `network` 5, `process` 4,
-`inference` 5, `mcp` 4, `runtime` 4, and `browser` 3. The eight compatibility
-targets MUST remain exactly `arguments`, `assistant_context`, `command`,
-`file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
-
-The native selector names MUST be exactly:
-
-```text
-session.id
-message.role, message.content, message.text
-tool.name, tool.arguments, tool.searchable_arguments, tool.result,
-tool.searchable_result, tool.reported_status, tool.is_error, tool.exit_code,
-tool.call_id, tool.stage, tool.arguments.text, tool.arguments.keys,
-tool.result.text, tool.result.is_error, tool.result.exit_code
-command.text
-resource.path, resource.operation, resource.path_class
-network.domain, network.destination_class, network.operation, network.port,
-network.protocol
-process.name, process.pid, process.instance_id, process.privilege
-inference.provider, inference.requested_model, inference.resolved_model,
-inference.streaming, inference.stop_reason
-mcp.server.id, mcp.server.transport, mcp.server.location_class, mcp.tool.name
-runtime.execution_mode, runtime.isolation.state, runtime.privilege,
-runtime.workspace.class
-browser.surface, browser.origin_class, browser.navigation_id
-```
 
 #### Scenario: Compatibility selectors preserve absence
 
@@ -115,15 +126,48 @@ browser.surface, browser.origin_class, browser.navigation_id
   unavailable capability or mismatched provenance still returns its respective
   `not_evaluated` state before the operator
 
+### Requirement: Native selector backing is explicitly governed
+
+The published registry MUST contain exactly 48 native selectors and exactly
+these backing counts: 2 direct, 37 typed, 7 derived, and 2 explicitly governed
+facets (`command.text` and `resource.path`).
+Native selectors without a typed
+field/accessor, deterministic derivation, or an explicitly governed facet name
+MUST be rejected; a permitted namespace is not sufficient governance.
+
+#### Scenario: Native selector backing is explicitly governed
+
+- **WHEN** a selector has no typed, derived or governed-facet backing
+- **THEN** it is rejected despite a permitted namespace
+
+### Requirement: Selector group counts and compatibility targets are closed
+
+The native selector counts by group MUST be: `session` 1, `message` 3,
+`tool` 15, `command` 1, `resource` 3, `network` 5, `process` 4,
+`inference` 5, `mcp` 4, `runtime` 4, and `browser` 3.
+The eight compatibility
+targets MUST remain exactly `arguments`, `assistant_context`, `command`,
+`file_path`, `tool_name`, `tool_result`, `url`, and `user_context`.
+
+#### Scenario: Selector group counts and compatibility targets are closed
+
+- **WHEN** the registry is published
+- **THEN** exact group counts and eight compatibility targets remain fixed
+
+### Requirement: Native selector names form a closed inventory
+
+The native selector names MUST be exactly those listed in Native selector inventory.
+
+#### Scenario: Native selector names form a closed inventory
+
+- **WHEN** a selector name is compiled
+- **THEN** only the exact native inventory is permitted
+
 ### Requirement: Matcher semantics
 
 The matcher MUST implement only the documented predicate and boolean operators,
 bounded compilation, typed/no-coercion values, provenance checks, capability
 preflight, deterministic precedence, and three-state `all`/`any`/`not` algebra.
-Integer equality and ordering MUST be exact, including signed/unsigned
-comparisons. Mixed integer/floating-point comparison is allowed only when the
-integer round-trips exactly to a finite `f64`; otherwise it is
-`type_mismatch`. Floating-point operands MUST be finite.
 
 #### Scenario: Invalid content fails before evaluation
 
@@ -178,57 +222,29 @@ integer round-trips exactly to a finite `f64`; otherwise it is
 - **THEN** it is absent; for a Tool observation it remains the derived
   lifecycle-stage value
 
+### Requirement: Numeric matcher comparison preserves exactness
+
+Integer equality and ordering MUST be exact, including signed/unsigned
+comparisons.
+Mixed integer/floating-point comparison is allowed only when the
+integer round-trips exactly to a finite `f64`; otherwise it is
+`type_mismatch`.
+Floating-point operands MUST be finite.
+
+#### Scenario: Numeric matcher comparison preserves exactness
+
+- **WHEN** integer and floating-point values are compared
+- **THEN** integers remain exact and lossy or nonfinite comparisons cannot be coerced
+
 ### Requirement: Rule v1 compatibility
 
-Every RuleSet document MUST declare version 1 to load, merge, or compile. Direct
+Every RuleSet document MUST declare version 1 to load, merge, or compile.
+Direct
 document loading, library merge, CLI tiered pack resolution, and direct RuleSet
 compilation MUST reject other versions before source documents are merged or
-enabled content is filtered. The error MUST explicitly state that only version 1
+enabled content is filtered.
+The error MUST explicitly state that only version 1
 is supported; shadowed or disabled definitions MUST NOT bypass this check.
-Supported version 1 MUST retain existing tier, override, provenance, rule
-identity, matcher, and scoring behavior.
-
-`telltale-rules` MUST expose only an effective read-only Rule v1 compatibility
-view containing compiled target/regex pairs and optional target exclusions,
-exact IDs, effective metadata,
-policy identity, and modifier plans. The v2 compiler MUST consume that view,
-map supported classes/severity/scores/ATLAS losslessly, reject operational
-health without a truthful mapping, and not create modifier detectors. The
-compiled plan MUST retain the effective compatibility view needed to evaluate
-one caller-defined canonical session without a separately synchronized export.
-The Detection v2 session adapter MUST aggregate each detector over the supplied
-observations using match, error, indeterminate, evaluated no-match, then not-applicable
-precedence while retaining status/reason counts and sorted matched selector
-paths. It MUST determine matched atomic IDs and pass them to the shared Rule v1
-content evaluator, which MUST trigger modifiers from all declared category and
-rule-ID conditions and reconstruct deterministic compatibility metadata.
-Empty-condition modifiers MUST NOT fire.
-
-Each Rule v1 target exclusion MUST be evaluated with its positive matcher by
-the shared Rule v1 content evaluator after Detection v2 resolves applicability,
-capabilities, and truthful selector values. A matching exclusion regex removes
-the positive match. Exclusions MUST remain target-scoped, MUST name a target in
-the same `detection.selection`, MUST NOT be accepted on the simple `targets` plus
-`regex` form, and MUST NOT depend on rule IDs in either evaluator. Rule
-evaluation MUST continue to other target matchers after an excluded candidate.
-The effective Rule v1 fingerprint MUST include compiled exclusions under current
-canonicalization `rule-v1-compiled-compatibility-v2` and digest domain
-`telltale:producer-rule-v1-fingerprint:v2`. New producer manifests MUST emit
-that canonicalization, while well-formed historical manifests naming
-`rule-v1-compiled-compatibility-v1` remain valid under manifest schema v1.
-
-The I/O-free Rule v1 API, direct-record compatibility path, and Detection v2
-MUST share the same Rule v1 content evaluator for matching, exclusions,
-modifier eligibility, contributions, checked score, and compatibility metadata.
-Canonical applicability, capability and provenance remain Detection v2 concerns.
-Rule v1 compatibility contributions and their checked score MUST use
-`RiskContribution`, `DeterministicRule`, `ChainModifier`,
-`canonicalize_contributions`, and `checked_risk_sum`. A matched rule or triggered
-modifier MUST contribute at most once per session and zero-score entries MUST
-remain matched/triggered without creating a contribution. This compatibility
-sum MUST NOT be treated as native Detection v2 aggregate risk. Modifiers MUST
-remain Rule v1 compatibility session constructs and MUST NOT become
-DetectorResults, Signals, Findings, or native v2 detector kinds.
 
 #### Scenario: Effective rules compile as atomic detectors
 
@@ -274,45 +290,147 @@ DetectorResults, Signals, Findings, or native v2 detector kinds.
   and returns the bounded detector aggregates, effective Rule v1 IDs,
   compatibility contributions and checked score, and compatibility metadata
 
+### Requirement: Supported Rule v1 content retains current semantics
+
+Supported version 1 MUST retain existing tier, override, provenance, rule
+identity, matcher, and scoring behavior.
+
+#### Scenario: Supported Rule v1 content retains current semantics
+
+- **WHEN** a supported version-1 pack is resolved
+- **THEN** tier, override, provenance, identity, matcher and score behavior remain intact
+
+### Requirement: Rule v1 exposes one effective read-only compatibility view
+
+`telltale-rules` MUST expose only an effective read-only Rule v1 compatibility
+view containing compiled target/regex pairs and optional target exclusions,
+exact IDs, effective metadata,
+policy identity, and modifier plans.
+The v2 compiler MUST consume that view,
+map supported classes/severity/scores/ATLAS losslessly, reject operational
+health without a truthful mapping, and not create modifier detectors.
+
+#### Scenario: Rule v1 exposes one effective read-only compatibility view
+
+- **WHEN** v2 compiles effective Rule v1 content
+- **THEN** the read-only view maps metadata losslessly without modifier detectors
+
+### Requirement: Rule v1 sessions use one retained plan and deterministic status precedence
+
+The
+compiled plan MUST retain the effective compatibility view needed to evaluate
+one caller-defined canonical session without a separately synchronized export.
+The Detection v2 session adapter MUST aggregate each detector over the supplied
+observations using match, error, indeterminate, evaluated no-match, then not-applicable
+precedence while retaining status/reason counts and sorted matched selector
+paths.
+
+#### Scenario: Rule v1 sessions use one retained plan and deterministic status precedence
+
+- **WHEN** a caller-defined session is evaluated
+- **THEN** the plan retains the effective view and detector aggregates use documented precedence
+
+### Requirement: Rule v1 modifiers use matched atomic IDs and declared conditions
+
+It MUST determine matched atomic IDs and pass them to the shared Rule v1
+content evaluator, which MUST trigger modifiers from all declared category and
+rule-ID conditions and reconstruct deterministic compatibility metadata.
+Empty-condition modifiers MUST NOT fire.
+
+#### Scenario: Rule v1 modifiers use matched atomic IDs and declared conditions
+
+- **WHEN** a compatibility session applies modifiers
+- **THEN** the shared evaluator uses all category/rule-ID conditions and empty conditions never fire
+
+### Requirement: Rule v1 target exclusions use resolved canonical applicability
+
+Each Rule v1 target exclusion MUST be evaluated with its positive matcher by
+the shared Rule v1 content evaluator after Detection v2 resolves applicability,
+capabilities, and truthful selector values.
+A matching exclusion regex removes
+the positive match.
+
+#### Scenario: Rule v1 target exclusions use resolved canonical applicability
+
+- **WHEN** a target candidate matches an exclusion
+- **THEN** the shared evaluator removes the match after canonical resolution
+
+### Requirement: Rule v1 exclusions remain target-scoped and allow other matchers
+
+Exclusions MUST remain target-scoped, MUST name a target in
+the same `detection.selection`, MUST NOT be accepted on the simple `targets` plus
+`regex` form, and MUST NOT depend on rule IDs in either evaluator.
+Rule
+evaluation MUST continue to other target matchers after an excluded candidate.
+
+#### Scenario: Rule v1 exclusions remain target-scoped and allow other matchers
+
+- **WHEN** a target exclusion is declared
+- **THEN** it must name a selection target and cannot use rule-ID conditions or simple targets/regex form
+
+### Requirement: Rule v1 fingerprints include effective compiled exclusions
+
+The effective Rule v1 fingerprint MUST include compiled exclusions under current
+canonicalization `rule-v1-compiled-compatibility-v2` and digest domain
+`telltale:producer-rule-v1-fingerprint:v2`.
+New producer manifests MUST emit
+that canonicalization, while well-formed historical manifests naming
+`rule-v1-compiled-compatibility-v1` remain valid under manifest schema v1.
+
+#### Scenario: Rule v1 fingerprints include effective compiled exclusions
+
+- **WHEN** producer manifests fingerprint effective rules
+- **THEN** current v2 canonicalization is emitted while valid historical v1 manifests remain accepted
+
+### Requirement: Rule v1 paths share one content semantic owner
+
+The I/O-free Rule v1 API, direct-record compatibility path, and Detection v2
+MUST share the same Rule v1 content evaluator for matching, exclusions,
+modifier eligibility, contributions, checked score, and compatibility metadata.
+Canonical applicability, capability and provenance remain Detection v2 concerns.
+
+#### Scenario: Rule v1 paths share one content semantic owner
+
+- **WHEN** record compatibility or Detection v2 evaluates Rule v1
+- **THEN** one evaluator owns content while canonical applicability stays in v2
+
+### Requirement: Rule v1 risk uses checked canonicalized contributions
+
+Rule v1 compatibility contributions and their checked score MUST use
+`RiskContribution`, `DeterministicRule`, `ChainModifier`,
+`canonicalize_contributions`, and `checked_risk_sum`.
+A matched rule or triggered
+modifier MUST contribute at most once per session and zero-score entries MUST
+remain matched/triggered without creating a contribution.
+
+#### Scenario: Rule v1 risk uses checked canonicalized contributions
+
+- **WHEN** a rule or modifier contributes compatibility risk
+- **THEN** it contributes once with checked scoring; zero-score matches remain without contributions
+
+### Requirement: Rule v1 modifier risk does not become native Detection v2 risk
+
+This compatibility
+sum MUST NOT be treated as native Detection v2 aggregate risk.
+Modifiers MUST
+remain Rule v1 compatibility session constructs and MUST NOT become
+DetectorResults, Signals, Findings, or native v2 detector kinds.
+
+#### Scenario: Rule v1 modifier risk does not become native Detection v2 risk
+
+- **WHEN** compatibility modifiers are evaluated
+- **THEN** they do not become native detector results, Signals or Findings
+
 ### Requirement: Tool-derived process-chain evaluation
 
 `process_chain` MUST be runtime-supported without activating `sequence`,
-`correlation`, `imported`, `baseline`, or `guard_model`. The evaluator MUST
+`correlation`, `imported`, `baseline`, or `guard_model`.
+The evaluator MUST
 accept already-created Canonical Observation v2 values and MUST
 evaluate only Tool observations at `ToolProposed`, `ToolRequested`,
-`ToolExecutionStarted`, or `ToolExecutionCompleted`. `ToolResultReturned` and
+`ToolExecutionStarted`, or `ToolExecutionCompleted`.
+`ToolResultReturned` and
 all non-Tool families MUST produce no process-chain candidates.
-
-Command candidates MUST come only from the governed `command.text` facet,
-reported `tool.searchable_arguments`, or string-valued `tool.arguments`. Tool
-names MUST NOT become commands and arbitrary JSON objects MUST NOT be
-stringified. Identical strings within one observation MUST be parsed once;
-distinct strings MUST all be evaluated. Private matcher candidates MUST retain
-the command parser's traversal order for session semantics, including derived
-statements within one Tool observation. Outward atomic results MUST instead be
-detector-ordered and duplicate-free. Distinct private candidates that produce
-the same final Detection v2 Signal identity MUST yield one outward result for
-that supporting Tool observation without discarding child context needed by a
-correlation predicate; this result normalization MUST NOT replace
-matcher-owned rule deduplication.
-
-The existing command parser MUST produce private matcher working state for the
-existing `CompiledProcessChainRules`. That matcher MUST remain authoritative for
-parent/child and standalone matching, rule-level deduplication, context
-adjustment, inferred-parent confidence weakening, winning rule identity, and
-merged techniques. The adapter MUST NOT construct or return Canonical Process
-observations, `ProcessObserved` stages, PIDs, or process-instance identities.
-Direct Canonical Process evidence is a separate stronger evidence class and is
-not consumed by this evaluator.
-
-Each surviving match MUST become one ordinary `DetectorResult` with kind
-`process_chain`, the immutable process-chain rule ID, `rule_version: 1`, the
-supporting Tool observation ID, effective severity/risk/confidence, category,
-dedupe key, `CorrelationScope::Process`, and canonically available session ID.
-Detection-class mapping MUST share one fail-closed helper with Rule v1. Valid
-bare ATT&CK IDs MUST normalize to typed `attack:` IDs and malformed values MUST
-fail closed. A zero-risk informational match MUST remain `evaluated_match` and
-MUST materialize through the ordinary Signal and atomic Finding path.
 
 #### Scenario: Tool command evidence produces a process-chain result
 
@@ -343,78 +461,108 @@ MUST materialize through the ordinary Signal and atomic Finding path.
   specialized process-chain correlation, while Event4, direct Process evidence,
   and any OpenShell integration remain inactive
 
+### Requirement: Process-chain commands use only governed string candidates
+
+Command candidates MUST come only from the governed `command.text` facet,
+reported `tool.searchable_arguments`, or string-valued `tool.arguments`.
+Tool
+names MUST NOT become commands and arbitrary JSON objects MUST NOT be
+stringified.
+Identical strings within one observation MUST be parsed once;
+distinct strings MUST all be evaluated.
+
+#### Scenario: Process-chain commands use only governed string candidates
+
+- **WHEN** a Tool observation has candidate command text
+- **THEN** only command facet or string arguments are parsed and duplicate strings parse once
+
+### Requirement: Process-chain private order and outward normalization remain distinct
+
+Private matcher candidates MUST retain
+the command parser's traversal order for session semantics, including derived
+statements within one Tool observation.
+Outward atomic results MUST instead be
+detector-ordered and duplicate-free.
+
+#### Scenario: Process-chain private order and outward normalization remain distinct
+
+- **WHEN** private command variants share an outward Signal identity
+- **THEN** private child context survives while outward results remain ordered and duplicate-free
+
+### Requirement: Process-chain outward normalization preserves private child context
+
+Distinct private candidates that produce
+the same final Detection v2 Signal identity MUST yield one outward result for
+that supporting Tool observation without discarding child context needed by a
+correlation predicate; this result normalization MUST NOT replace
+matcher-owned rule deduplication.
+
+#### Scenario: Process-chain outward normalization preserves private child context
+
+- **WHEN** private candidates share one Signal identity
+- **THEN** one outward result remains without losing private child correlation context
+
+### Requirement: Process-chain matching retains the existing command semantic owner
+
+The existing command parser MUST produce private matcher working state for the
+existing `CompiledProcessChainRules`.
+That matcher MUST remain authoritative for
+parent/child and standalone matching, rule-level deduplication, context
+adjustment, inferred-parent confidence weakening, winning rule identity, and
+merged techniques.
+
+#### Scenario: Process-chain matching retains the existing command semantic owner
+
+- **WHEN** compiled process-chain rules match a command
+- **THEN** the existing matcher owns effective matching, deduplication and confidence adjustment
+
+### Requirement: Tool-derived process chains do not fabricate Process evidence
+
+The adapter MUST NOT construct or return Canonical Process
+observations, `ProcessObserved` stages, PIDs, or process-instance identities.
+Direct Canonical Process evidence is a separate stronger evidence class and is
+not consumed by this evaluator.
+
+#### Scenario: Tool-derived process chains do not fabricate Process evidence
+
+- **WHEN** Tool evidence is evaluated
+- **THEN** no Canonical Process stage, PID or instance identity is created
+
+### Requirement: Atomic process-chain matches use ordinary detector materialization
+
+Each surviving match MUST become one ordinary `DetectorResult` with kind
+`process_chain`, the immutable process-chain rule ID, `rule_version: 1`, the
+supporting Tool observation ID, effective severity/risk/confidence, category,
+dedupe key, `CorrelationScope::Process`, and canonically available session ID.
+Detection-class mapping MUST share one fail-closed helper with Rule v1.
+
+#### Scenario: Atomic process-chain matches use ordinary detector materialization
+
+- **WHEN** a process-chain match survives
+- **THEN** its immutable rule metadata and supporting Tool identity form an ordinary DetectorResult
+
+### Requirement: Process-chain technique normalization and zero-risk matches fail safely
+
+Valid
+bare ATT&CK IDs MUST normalize to typed `attack:` IDs and malformed values MUST
+fail closed.
+A zero-risk informational match MUST remain `evaluated_match` and
+MUST materialize through the ordinary Signal and atomic Finding path.
+
+#### Scenario: Process-chain technique normalization and zero-risk matches fail safely
+
+- **WHEN** an ATT&CK ID is malformed or a match has zero risk
+- **THEN** malformed IDs reject while valid informational matches still materialize
+
 ### Requirement: Process-chain session semantics
 
 The implementation MUST provide one crate-private, I/O-free process-chain
-session semantic owner for the Detection v2 caller-grouped evaluator. No parallel
+session semantic owner for the Detection v2 caller-grouped evaluator.
+No parallel
 direct-record process-chain detector or Event-based suppression/correlation
-adapter SHALL remain. Shared configuration SHALL remain public; command
-extraction SHALL have one crate-private implementation. The owner MUST operate
-only on rule ID, category,
-normalized child name, matcher-owned dedupe key, resolved entity, an opaque
-occurrence-group identity, and an optional caller-supplied ordering timestamp.
-The kernel MUST NOT assign or reinterpret timestamp provenance. It MUST remain
-independent of Event3 values, Canonical Observation values, DetectorResult,
-source access, policy, and enforcement. `CompiledProcessChainRules::correlations()` and
-`CorrelationStep::matches` remain authoritative for the six shipped
-correlations and their predicates; no generic temporal engine or v2 content
-loader is introduced.
-
-The caller MUST supply the observation group. The evaluator MUST NOT discover
-sessions or sources, and mixed input MUST NOT correlate or suppress across
-different resolved session/entity values. A valid atomic match MUST survive
-when session semantics lack an entity or ordering time.
-
-Timed session semantics MUST use only canonical source-reported `occurred_at`.
-`observed_at`, materialization time, Event3 construction time, and wall-clock
-time MUST NOT be fallbacks. Candidates MUST be ordered chronologically with
-stable parser/caller order for equal occurrence times. A missing `occurred_at`
-MUST retain its atomic result but MUST NOT be a timed repeat anchor, timed
-repeat, or timed correlation step.
-
-Tool-derived matcher inputs in this tranche have no truthful host or user. The
-v2 Tool session path MUST therefore use only the opaque canonical session ID as
-its session scope, MUST NOT compose it with delimiter-separated matcher values,
-and MUST NOT label it as a host. Direct host/user-scoped evidence remains
-deferred to the future canonical Process path. Without a canonical session ID,
-only the atomic result is retained.
-
-Private matcher variants MUST be grouped into atomic occurrences before repeat
-suppression. For the v2 Tool path, occurrence identity MUST use supporting
-canonical observation identity, detector identity, and matcher-owned dedupe
-identity; raw command text and private child name MUST NOT participate. The
-shared kernel MUST receive only an opaque occurrence-group identity.
-
-Repeat suppression MUST compare atomic occurrences using `rule ID + resolved
-entity + matcher-owned dedupe key`. The first eligible timed occurrence is the
-anchor; equivalent timed occurrences inside the configured window are
-suppressed once per occurrence. Correlation MUST evaluate only private variants
-from retained occurrences, while every ordered child variant associated with a
-retained occurrence remains eligible for `CorrelationStep::matches`. The
-retained private anchor count MUST include the anchor as occurrence 1, and
-suppressed-occurrence count MUST remain available privately. The existing
-defaults MUST remain one hour, one correlation per rule/entity per caller
-evaluation, and 150 correlation-risk points per entity.
-
-Each satisfied shipped correlation MUST normalize to an ordinary evaluated
-`DetectorResult` with `DetectorKind::ProcessChain`, the immutable correlation
-rule ID, `rule_version: 1`, `FindingKind::Correlation`, and
-`CorrelationScope::Sequence`. It MUST contain all actual supporting canonical
-Tool observation IDs, normalized and deduplicated by the common constructor; no
-synthetic observation ID may be created. The ordinary Signal/Finding path MUST
-materialize the result, and exact duplicate semantic identity with the same
-supporting set MUST collapse without collapsing different supporting sets. A
-correlation result MUST omit `capability_context` rather than attribute one
-supporting observation's context to the aggregate.
-
-Correlation matching MUST preserve ordered steps, the compiled per-rule window,
-the per-rule/per-entity throttle, and the authored correlation-rule iteration
-order for risk accounting. Zero-risk atomic matches MUST remain eligible steps.
-When an authored correlation score would exceed the per-entity cap, the
-correlation MUST still emit as `EvaluatedMatch` with effective risk 0,
-informational effective severity, retained detector/confidence/ATT&CK metadata,
-and a bounded `risk_capped` tag; the capped score MUST NOT increase accumulated
-entity risk.
+adapter SHALL remain.
+Shared configuration SHALL remain public; command
+extraction SHALL have one crate-private implementation.
 
 #### Scenario: Canonical process-chain session correlation
 
@@ -476,17 +624,178 @@ entity risk.
 - **THEN** its detector kind is `ProcessChain`, not generic `Sequence` or
   `Correlation`, and those generic kinds remain runtime-unsupported
 
+### Requirement: Process-chain kernel uses only private semantic working state
+
+The owner MUST operate
+only on rule ID, category,
+normalized child name, matcher-owned dedupe key, resolved entity, an opaque
+occurrence-group identity, and an optional caller-supplied ordering timestamp.
+The kernel MUST NOT assign or reinterpret timestamp provenance.
+It MUST remain
+independent of Event3 values, Canonical Observation values, DetectorResult,
+source access, policy, and enforcement.
+
+#### Scenario: Process-chain kernel uses only private semantic working state
+
+- **WHEN** the session kernel receives candidate state
+- **THEN** it remains independent of Event3, observation and policy types without reinterpreting timestamp provenance
+
+### Requirement: Shipped process-chain predicates remain authoritative
+
+`CompiledProcessChainRules::correlations()` and
+`CorrelationStep::matches` remain authoritative for the six shipped
+correlations and their predicates; no generic temporal engine or v2 content
+loader is introduced.
+The caller MUST supply the observation group.
+The evaluator MUST NOT discover
+sessions or sources, and mixed input MUST NOT correlate or suppress across
+different resolved session/entity values.
+A valid atomic match MUST survive
+when session semantics lack an entity or ordering time.
+
+#### Scenario: Shipped process-chain predicates remain authoritative
+
+- **WHEN** a shipped correlation is evaluated
+- **THEN** compiled correlation predicates remain the authority without a generic temporal engine
+
+### Requirement: Timed process-chain semantics require source occurrence time
+
+Timed session semantics MUST use only canonical source-reported `occurred_at`.
+`observed_at`, materialization time, Event3 construction time, and wall-clock
+time MUST NOT be fallbacks.
+Candidates MUST be ordered chronologically with
+stable parser/caller order for equal occurrence times.
+A missing `occurred_at`
+MUST retain its atomic result but MUST NOT be a timed repeat anchor, timed
+repeat, or timed correlation step.
+
+#### Scenario: Timed process-chain semantics require source occurrence time
+
+- **WHEN** a candidate lacks occurred_at
+- **THEN** its atomic result remains but it cannot anchor or satisfy timed semantics
+
+### Requirement: Tool process-chain scope is opaque session identity
+
+Tool-derived matcher inputs in this tranche have no truthful host or user.
+The
+v2 Tool session path MUST therefore use only the opaque canonical session ID as
+its session scope, MUST NOT compose it with delimiter-separated matcher values,
+and MUST NOT label it as a host.
+Direct host/user-scoped evidence remains
+deferred to the future canonical Process path.
+Without a canonical session ID,
+only the atomic result is retained.
+
+#### Scenario: Tool process-chain scope is opaque session identity
+
+- **WHEN** Tool candidates have no truthful host or user
+- **THEN** only canonical session scope is used and missing scope leaves atomic results
+
+### Requirement: Process-chain occurrence identity excludes command text
+
+Private matcher variants MUST be grouped into atomic occurrences before repeat
+suppression.
+For the v2 Tool path, occurrence identity MUST use supporting
+canonical observation identity, detector identity, and matcher-owned dedupe
+identity; raw command text and private child name MUST NOT participate.
+The
+shared kernel MUST receive only an opaque occurrence-group identity.
+
+#### Scenario: Process-chain occurrence identity excludes command text
+
+- **WHEN** private variants are grouped before repeat suppression
+- **THEN** supporting observation, detector and matcher dedupe identities define an opaque occurrence group
+
+### Requirement: Process-chain repeats suppress atomic occurrences once
+
+Repeat suppression MUST compare atomic occurrences using `rule ID + resolved
+entity + matcher-owned dedupe key`.
+The first eligible timed occurrence is the
+anchor; equivalent timed occurrences inside the configured window are
+suppressed once per occurrence.
+
+#### Scenario: Process-chain repeats suppress atomic occurrences once
+
+- **WHEN** equivalent timed occurrences fall inside the window
+- **THEN** the first eligible occurrence anchors once-per-occurrence suppression
+
+### Requirement: Process-chain correlation sees retained private variants only
+
+Correlation MUST evaluate only private variants
+from retained occurrences, while every ordered child variant associated with a
+retained occurrence remains eligible for `CorrelationStep::matches`.
+The
+retained private anchor count MUST include the anchor as occurrence 1, and
+suppressed-occurrence count MUST remain available privately.
+The existing
+defaults MUST remain one hour, one correlation per rule/entity per caller
+evaluation, and 150 correlation-risk points per entity.
+
+#### Scenario: Process-chain correlation sees retained private variants only
+
+- **WHEN** an occurrence is suppressed or retained
+- **THEN** only retained occurrences supply ordered child variants with private counts and existing defaults
+
+### Requirement: Process-chain correlation results use actual supporting observations
+
+Each satisfied shipped correlation MUST normalize to an ordinary evaluated
+`DetectorResult` with `DetectorKind::ProcessChain`, the immutable correlation
+rule ID, `rule_version: 1`, `FindingKind::Correlation`, and
+`CorrelationScope::Sequence`.
+It MUST contain all actual supporting canonical
+Tool observation IDs, normalized and deduplicated by the common constructor; no
+synthetic observation ID may be created.
+
+#### Scenario: Process-chain correlation results use actual supporting observations
+
+- **WHEN** a shipped correlation is satisfied
+- **THEN** ordinary ProcessChain correlation output contains all normalized actual supporting Tool IDs
+
+### Requirement: Process-chain correlation materialization preserves supporting-set identity
+
+The ordinary Signal/Finding path MUST
+materialize the result, and exact duplicate semantic identity with the same
+supporting set MUST collapse without collapsing different supporting sets.
+A
+correlation result MUST omit `capability_context` rather than attribute one
+supporting observation's context to the aggregate.
+
+#### Scenario: Process-chain correlation materialization preserves supporting-set identity
+
+- **WHEN** correlation results share semantic identity
+- **THEN** only identical supporting sets collapse and aggregate capability context is omitted
+
+### Requirement: Process-chain risk accounting preserves authored order and caps
+
+Correlation matching MUST preserve ordered steps, the compiled per-rule window,
+the per-rule/per-entity throttle, and the authored correlation-rule iteration
+order for risk accounting.
+Zero-risk atomic matches MUST remain eligible steps.
+
+#### Scenario: Process-chain risk accounting preserves authored order and caps
+
+- **WHEN** a correlation would exceed the entity cap
+- **THEN** it still emits informational zero-risk output without increasing accumulated risk
+
+### Requirement: Process-chain capped correlations still emit informational matches
+
+When an authored correlation score would exceed the per-entity cap, the
+correlation MUST still emit as `EvaluatedMatch` with effective risk 0,
+informational effective severity, retained detector/confidence/ATT&CK metadata,
+and a bounded `risk_capped` tag; the capped score MUST NOT increase accumulated
+entity risk.
+
+#### Scenario: Process-chain capped correlations still emit informational matches
+
+- **WHEN** an authored correlation exceeds the per-entity cap
+- **THEN** it emits zero-risk informational output with retained metadata and risk_capped
+
 ### Requirement: Runtime and privacy boundary
 
 The Detection v2 evaluator MUST remain free of source I/O and source-crate
-dependencies. The shared canonical runtime MUST own source acquisition and
+dependencies.
+The shared canonical runtime MUST own source acquisition and
 Event3 projection around that evaluator without adding policy/action authority.
-Diagnostics and identities MUST contain no raw matched values. Evidence
-references MUST be representation-specific validated handles (selector paths,
-valid typed IDs, safe fingerprints, bounded classifications, or accepted local
-structured references), not arbitrary content. Debug output for results,
-signals, findings, and their evidence-bearing supporting values MUST redact
-semantic strings and evidence payloads.
 
 #### Scenario: Local evaluator remains source-free
 
@@ -507,6 +816,22 @@ semantic strings and evidence payloads.
   formats a result containing a valid evidence reference
 - **THEN** construction rejects the arbitrary text, and Debug output contains no
   evidence payload
+
+### Requirement: Detection evidence and diagnostics exclude raw matched content
+
+Diagnostics and identities MUST contain no raw matched values.
+Evidence
+references MUST be representation-specific validated handles (selector paths,
+valid typed IDs, safe fingerprints, bounded classifications, or accepted local
+structured references), not arbitrary content.
+Debug output for results,
+signals, findings, and their evidence-bearing supporting values MUST redact
+semantic strings and evidence payloads.
+
+#### Scenario: Detection evidence and diagnostics exclude raw matched content
+
+- **WHEN** results or evidence-bearing values are constructed or formatted
+- **THEN** only validated representation-specific handles remain and Debug redacts semantic payloads
 
 ### Requirement: Canonical source/session evaluation
 
@@ -558,46 +883,7 @@ retained compatibility text. Capacity MUST be consumed before retention.
 ### Requirement: Action interpretation and detailed finding materialization
 
 The implementation SHALL support detailed action-scoped evaluation beside the
-frozen session compatibility view. `ActionFinding` SHALL expose constructor-sanitized,
-immutable DTOs: `coordinate()` SHALL identify the host action grouping;
-`canonical_findings()` SHALL expose native semantic Finding identities from
-`DetectorResult -> Signal -> Finding`; and `promotion_score()` SHALL represent
-the host action contribution sum, which is distinct from native Finding risk points
-and Event 3 session scoring.
-
-Severity and risk points SHALL be analytic metadata derived from detector content and rules,
-not source-reported facts; canonical stage, supporting observation IDs, and occurred_at timestamps
-SHALL be source-reported only. Actual OS execution SHALL NOT be inferred from tool intent.
-Atomic and correlation findings SHALL be transparently distinguished through
-`ActionFindingKind`. Optional replay comparison identity (`ReplayIdentity`, algorithm
-version 1) SHALL NOT be coordinate-based; its semantic preimage frames adapter type,
-family/stage, source time, source-reported call ID, and action view fields, while coordinates,
-session identifiers, and source paths SHALL be excluded. It SHALL be absent when required source
-time is absent, unavailable (`None`) when semantic candidates are ambiguous across the whole
-acquisition, and always `None` for process-chain findings. Truthful continued-session
-support SHALL NOT be claimed as universal authentication, and canonical `OccurrenceId`
-coordinates SHALL remain unchanged.
-
-Startup `Pipeline::semantic_provenance(options)` SHALL match the same-pass manifest
-and hash effective rule fingerprint, action semantics version, native action profile
-version, replay algorithm version, linked download score, and process chain configuration.
-It SHALL NOT hash context options, host YAML paths, or binary identity.
-
-Same-pass context extraction SHALL default all content switches to false (`user_text`,
-`assistant_text`, `tool_arguments`) and bound neighbor offsets to at most 32 before and
-after the anchor observation. Only explicitly enabled user/assistant text and non-result
-tool observations at proposed, requested, started, or completed stages SHALL contribute.
-The anchor observation, tool results, imported observations, and unknown/excluded bodies
-SHALL be excluded from context output, without reopening SQLite databases. All extracted
-context text SHALL be sanitized by `redact_sensitive_text`, bounding each entry to 512 bytes
-and capping total extracted context text at 32 KiB across the maximum 64 neighbor observations.
-
-Action category chains SHALL be ordered within a 15-minute source-time window.
-Bundled downloaded-artifact correlation SHALL link supported download and execution
-forms, defaulting to action-link score 50 and compatibility modifier 35; explicit options
-MAY override the action score between 0 and 100. Native profile adjustments SHALL apply
-only to bundled rule predicates; effective custom rules with matching IDs SHALL preserve
-their own matcher content.
+frozen session compatibility view.
 
 #### Scenario: Detailed action findings maintain distinct scoring
 
@@ -617,3 +903,109 @@ their own matcher content.
 - **WHEN** `Pipeline::semantic_provenance` is evaluated for detailed options
 - **THEN** the returned identity reflects effective rules, profile versions, replay version, and action scores
 - **AND** context switches, host file paths, and runtime clock values are excluded from the digest
+### Requirement: Action finding DTOs distinguish coordinates and scores
+
+`ActionFinding` SHALL expose constructor-sanitized,
+immutable DTOs: `coordinate()` SHALL identify the host action grouping;
+`canonical_findings()` SHALL expose native semantic Finding identities from
+`DetectorResult -> Signal -> Finding`; and `promotion_score()` SHALL represent
+the host action contribution sum, which is distinct from native Finding risk points
+and Event 3 session scoring.
+
+#### Scenario: Action finding DTOs distinguish coordinates and scores
+
+- **WHEN** detailed findings are returned
+- **THEN** immutable sanitized DTOs keep native Finding risk and host promotion scoring distinct
+
+### Requirement: Action analytic metadata does not imply source-reported execution
+
+Severity and risk points SHALL be analytic metadata derived from detector content and rules,
+not source-reported facts; canonical stage, supporting observation IDs, and occurred_at timestamps
+SHALL be source-reported only.
+Actual OS execution SHALL NOT be inferred from tool intent.
+
+#### Scenario: Action analytic metadata does not imply source-reported execution
+
+- **WHEN** a tool action is interpreted
+- **THEN** analytic severity/risk are distinct from reported stage, observation IDs and source time
+
+### Requirement: Action replay comparison uses semantic rather than coordinate identity
+
+Atomic and correlation findings SHALL be transparently distinguished through
+`ActionFindingKind`.
+Optional replay comparison identity (`ReplayIdentity`, algorithm
+version 1) SHALL NOT be coordinate-based; its semantic preimage frames adapter type,
+family/stage, source time, source-reported call ID, and action view fields, while coordinates,
+session identifiers, and source paths SHALL be excluded.
+
+#### Scenario: Action replay comparison uses semantic rather than coordinate identity
+
+- **WHEN** an action replay identity is available
+- **THEN** atomic/correlation kind is explicit and replay preimage excludes coordinates, sessions and paths
+
+### Requirement: Action replay comparison exposes absence and ambiguity
+
+It SHALL be absent when required source
+time is absent, unavailable (`None`) when semantic candidates are ambiguous across the whole
+acquisition, and always `None` for process-chain findings.
+Truthful continued-session
+support SHALL NOT be claimed as universal authentication, and canonical `OccurrenceId`
+coordinates SHALL remain unchanged.
+
+#### Scenario: Action replay comparison exposes absence and ambiguity
+
+- **WHEN** required source time is missing or candidates are ambiguous
+- **THEN** replay identity is None; process-chain findings always have None
+
+### Requirement: Semantic provenance hashes effective detection configuration
+
+Startup `Pipeline::semantic_provenance(options)` SHALL match the same-pass manifest
+and hash effective rule fingerprint, action semantics version, native action profile
+version, replay algorithm version, linked download score, and process chain configuration.
+It SHALL NOT hash context options, host YAML paths, or binary identity.
+
+#### Scenario: Semantic provenance hashes effective detection configuration
+
+- **WHEN** startup semantic provenance is computed
+- **THEN** same-pass effective rules, versions and scores are hashed without context options or host paths
+
+### Requirement: Action context extraction defaults to no content disclosure
+
+Same-pass context extraction SHALL default all content switches to false (`user_text`,
+`assistant_text`, `tool_arguments`) and bound neighbor offsets to at most 32 before and
+after the anchor observation.
+Only explicitly enabled user/assistant text and non-result
+tool observations at proposed, requested, started, or completed stages SHALL contribute.
+
+#### Scenario: Action context extraction defaults to no content disclosure
+
+- **WHEN** context is requested beside an action
+- **THEN** only explicitly enabled user/assistant/tool argument text within bounded neighbors contributes
+
+### Requirement: Action context excludes anchors and sanitizes bounded text
+
+The anchor observation, tool results, imported observations, and unknown/excluded bodies
+SHALL be excluded from context output, without reopening SQLite databases.
+All extracted
+context text SHALL be sanitized by `redact_sensitive_text`, bounding each entry to 512 bytes
+and capping total extracted context text at 32 KiB across the maximum 64 neighbor observations.
+
+#### Scenario: Action context excludes anchors and sanitizes bounded text
+
+- **WHEN** same-pass context is returned
+- **THEN** anchors, results and imported/unknown bodies are excluded and text is sanitized within entry/aggregate caps
+
+### Requirement: Bundled action correlations retain bounded source-time and rule authority
+
+Action category chains SHALL be ordered within a 15-minute source-time window.
+Bundled downloaded-artifact correlation SHALL link supported download and execution
+forms, defaulting to action-link score 50 and compatibility modifier 35; explicit options
+MAY override the action score between 0 and 100.
+Native profile adjustments SHALL apply
+only to bundled rule predicates; effective custom rules with matching IDs SHALL preserve
+their own matcher content.
+
+#### Scenario: Bundled action correlations retain bounded source-time and rule authority
+
+- **WHEN** download/execution or category actions correlate
+- **THEN** source-time window and bounded scores apply without rewriting effective custom predicates

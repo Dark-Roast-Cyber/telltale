@@ -70,14 +70,11 @@ reference. Dependabot SHALL propose weekly GitHub Actions and Cargo updates.
 
 The release process SHALL generate a fixed-name `telltale-sbom.cdx.json` in
 CycloneDX JSON from `cargo metadata --locked` and the released workspace's
-normal/build dependency graph. Generation SHALL omit host paths and
+normal/build dependency graph.
+Generation SHALL omit host paths and
 nondeterministic timestamps, SHALL compare repeated output bytes before the
 asset is accepted, and SHALL validate the emitted deterministic CycloneDX 1.6
-subset. That subset SHALL enforce mutually exclusive license choices, required
-document/metadata/root/component/dependency/ref relationships, component
-SHA-256 hashes, lockfile/scope properties, and lowercase serial format. SPDX
-`WITH`, `AND`, and `OR` expressions SHALL use `licenses[].expression`, not
-`licenses[].license.id`.
+subset.
 
 #### Scenario: SBOM generation is repeated
 
@@ -99,6 +96,20 @@ SHA-256 hashes, lockfile/scope properties, and lowercase serial format. SPDX
 - **THEN** the publication job SHALL run the repository graph-match checker after
   downloaded artifact-set validation and fail before checksum generation; the
   artifact manifest and publication gates SHALL also fail before publication
+
+### Requirement: Release SBOM validates deterministic CycloneDX relationships and licenses
+
+That subset SHALL enforce mutually exclusive license choices, required
+document/metadata/root/component/dependency/ref relationships, component
+SHA-256 hashes, lockfile/scope properties, and lowercase serial format.
+SPDX
+`WITH`, `AND`, and `OR` expressions SHALL use `licenses[].expression`, not
+`licenses[].license.id`.
+
+#### Scenario: Release SBOM validates deterministic CycloneDX relationships and licenses
+
+- **WHEN** the deterministic SBOM subset is validated
+- **THEN** required graph/ref/hash/scope relationships and SPDX expression representation hold
 
 ### Requirement: Existing release integrity remains mandatory
 

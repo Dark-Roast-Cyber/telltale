@@ -28,30 +28,10 @@ compatibility.
 ### Requirement: SQLite source contract remains bounded
 
 The adapter MUST retain the five-second busy timeout, lock mapping, uncursored
-message query and selected `tool`/`text` part filter. It MUST open existing SQLite
+message query and selected `tool`/`text` part filter.
+It MUST open existing SQLite
 databases read-only without creating a missing database and establish one read
 transaction before schema inspection, covering messages and every part page.
-Uncursored parts MUST retain newest-L sampling and ascending returned ordering,
-where L is the supplied aggregate part limit clamped to at least one.
-Incremental parts MUST retain the inclusive minimum timestamp and strictly
-ascending `(time_updated, rowid)` selection, using internal keyset pages of at
-most 5,000 rows. Continuation coordinates MUST be integer and strictly increasing;
-invalid coordinates MUST fail the whole extraction, not be defaulted or coerced.
-Incremental reads MUST return the complete selected result when it contains at
-most L rows, or fail the entire acquisition when it contains more than L rows.
-Checked L+1 lookahead MUST check exhaustion even after an exact full page; a
-truncated successful incremental result MUST NOT be returned. Native records
-MUST be accumulated before one canonical projection and evaluation, preserving
-cross-page message suppression and process-chain correlation. The public default
-L remains 5,000. CLI scans with an actual incremental lower bound MUST use
-L=25,000; bootstrap, dry-run and backfill retain newest-5,000 sampling.
-Independent canonical and projection budgets MUST remain enforced. The adapter
-MUST NOT read the event table or broaden the selected part set. Page and aggregate
-limits bound selected part rows, not whole-cycle CPU or memory. The separate
-SQLite row-admission requirement specifies projected envelope and delivered row
-caps across messages and parts; it does not establish end-to-end bounds.
-Recovery covers only the finite selected snapshot, not arbitrary backlogs,
-deleted or overwritten history, or backdated updates outside overlap.
 
 #### Scenario: Incremental part extraction remains stable
 
@@ -98,32 +78,89 @@ deleted or overwritten history, or backdated updates outside overlap.
 - **AND** subsequent polls reread updates inside the existing ten-minute overlap;
   restart or failed required output persistence retries from committed progress
 
+### Requirement: Uncursored SQLite parts retain newest-L sampling
+
+Uncursored parts MUST retain newest-L sampling and ascending returned ordering,
+where L is the supplied aggregate part limit clamped to at least one.
+
+#### Scenario: Uncursored SQLite parts retain newest-L sampling
+
+- **WHEN** OpenCode acquisition has no lower bound
+- **THEN** newest-L sampling returns ascending parts
+
+### Requirement: Incremental SQLite pages use validated keyset coordinates
+
+Incremental parts MUST retain the inclusive minimum timestamp and strictly
+ascending `(time_updated, rowid)` selection, using internal keyset pages of at
+most 5,000 rows.
+Continuation coordinates MUST be integer and strictly increasing;
+invalid coordinates MUST fail the whole extraction, not be defaulted or coerced.
+
+#### Scenario: Incremental SQLite pages use validated keyset coordinates
+
+- **WHEN** an incremental query continues to another page
+- **THEN** integer coordinates increase strictly under the inclusive lower bound
+
+### Requirement: Incremental SQLite acquisition proves exact-L exhaustion
+
+Incremental reads MUST return the complete selected result when it contains at
+most L rows, or fail the entire acquisition when it contains more than L rows.
+Checked L+1 lookahead MUST check exhaustion even after an exact full page; a
+truncated successful incremental result MUST NOT be returned.
+
+#### Scenario: Incremental SQLite acquisition proves exact-L exhaustion
+
+- **WHEN** an incremental selection reaches its aggregate limit
+- **THEN** complete selections at or below L succeed and over-L selections fail atomically
+
+### Requirement: SQLite pages feed one canonical native batch
+
+Native records
+MUST be accumulated before one canonical projection and evaluation, preserving
+cross-page message suppression and process-chain correlation.
+The public default
+L remains 5,000.
+CLI scans with an actual incremental lower bound MUST use
+L=25,000; bootstrap, dry-run and backfill retain newest-5,000 sampling.
+
+#### Scenario: SQLite pages feed one canonical native batch
+
+- **WHEN** selected parts span pages
+- **THEN** one complete native batch preserves cross-page semantics
+
+### Requirement: SQLite selection budgets do not claim unlimited recovery
+
+Independent canonical and projection budgets MUST remain enforced.
+The adapter
+MUST NOT read the event table or broaden the selected part set.
+
+#### Scenario: SQLite selection budgets do not claim unlimited recovery
+
+- **WHEN** bounded SQLite recovery runs
+- **THEN** independent budgets remain enforced without broadening the selected part set or recovery claims
+
+### Requirement: SQLite recovery claims remain limited to the selected snapshot
+
+SQLite selected-row limits MUST remain distinct from end-to-end resource bounds. Page and aggregate
+limits bound selected part rows, not whole-cycle CPU or memory.
+The separate
+SQLite row-admission requirement specifies projected envelope and delivered row
+caps across messages and parts; it does not establish end-to-end bounds.
+Recovery covers only the finite selected snapshot, not arbitrary backlogs,
+deleted or overwritten history, or backdated updates outside overlap.
+
+#### Scenario: SQLite recovery claims remain limited to the selected snapshot
+
+- **WHEN** selected row caps are described
+- **THEN** they do not establish end-to-end resource bounds or arbitrary history recovery
+
 ### Requirement: Projected SQLite row admission is source atomic
 
 Each extraction MUST use fresh counters shared by all messages and selected part
-pages. Inclusive fixed caps MUST be 8,388,608 bytes per projected TEXT/BLOB cell
+pages.
+Inclusive fixed caps MUST be 8,388,608 bytes per projected TEXT/BLOB cell
 or UTF-8 column name, 134,217,728 aggregate row-envelope bytes, and 100,000
-delivered rows. Each column occurrence MUST charge its UTF-8 name and cell:
-SQLite-exposed borrowed TEXT bytes, actual BLOB bytes, NULL zero, INTEGER/REAL
-eight. Unknown fields, overwritten aliases, metadata, suppressed messages and
-repeated joined context MUST count independently.
-
-Names MUST be checked borrowed by index before cloning, even for zero-row
-schemas; zero rows MUST charge zero aggregate bytes. Whole-row prospective
-checked totals MUST pass before owned JSON, keys, decoding or native construction.
-Incremental excess lookahead MUST reject before owning its payload, retaining
-exact-L exhaustion. Schema inspection, messages and all pages MUST remain in
-one read-only transaction. Admitted rows MUST stream into native records without
-retained raw row batches; one complete native batch MUST feed suppression and
-evaluation. Queries, selected parts, ordering and sampling MUST remain unchanged.
-
-Rejection MUST use privacy-safe fixed SourceRead detail and return no
-observations, accounting or progress. It MUST NOT replace the source baseline or
-cursor; other sources MAY succeed. Successful coverage MUST remain PartialSource.
-Independent canonical/accounting/projection and durable output gates MUST remain.
-Admission MUST NOT be described as bounding SQLite preparation/filtering/UTF-8
-conversion, decoded DOM/native heap, RSS, CPU or end-to-end memory. Delivered-row
-counting MUST NOT claim exhaustive recovery of nonunique message joins.
+delivered rows.
 
 #### Scenario: Inclusive boundary and fresh extraction
 - **WHEN** a projected cell, key, aggregate or delivered row count equals its cap
@@ -134,16 +171,81 @@ counting MUST NOT claim exhaustive recovery of nonunique message joins.
 - **WHEN** a later message, part page or lookahead exceeds a cap while a WAL writer changes the store
 - **THEN** the pinned snapshot governs all charges and no successful prefix or source state replacement is returned
 
+### Requirement: SQLite row accounting includes every projected occurrence
+
+Each column occurrence MUST charge its UTF-8 name and cell:
+SQLite-exposed borrowed TEXT bytes, actual BLOB bytes, NULL zero, INTEGER/REAL
+eight.
+Unknown fields, overwritten aliases, metadata, suppressed messages and
+repeated joined context MUST count independently.
+
+#### Scenario: SQLite row accounting includes every projected occurrence
+
+- **WHEN** metadata, aliases or repeated join context are delivered
+- **THEN** each UTF-8 name and cell is charged independently
+
+### Requirement: SQLite admission checks borrowed data before ownership
+
+Names MUST be checked borrowed by index before cloning, even for zero-row
+schemas; zero rows MUST charge zero aggregate bytes.
+Whole-row prospective
+checked totals MUST pass before owned JSON, keys, decoding or native construction.
+
+#### Scenario: SQLite admission checks borrowed data before ownership
+
+- **WHEN** a row or even a zero-row schema is inspected
+- **THEN** names and whole-row prospective totals pass before cloning or constructing owned JSON
+
+### Requirement: SQLite admitted rows stream inside one coherent native batch
+
+Incremental excess lookahead MUST reject before owning its payload, retaining
+exact-L exhaustion.
+Schema inspection, messages and all pages MUST remain in
+one read-only transaction.
+Admitted rows MUST stream into native records without
+retained raw row batches; one complete native batch MUST feed suppression and
+evaluation.
+Queries, selected parts, ordering and sampling MUST remain unchanged.
+
+#### Scenario: SQLite admitted rows stream inside one coherent native batch
+
+- **WHEN** part pages and incremental lookahead are processed
+- **THEN** lookahead rejects before ownership and one read transaction feeds one native batch
+
+### Requirement: SQLite admission rejection preserves source state atomically
+
+Rejection MUST use privacy-safe fixed SourceRead detail and return no
+observations, accounting or progress.
+It MUST NOT replace the source baseline or
+cursor; other sources MAY succeed.
+Successful coverage MUST remain PartialSource.
+Independent canonical/accounting/projection and durable output gates MUST remain.
+
+#### Scenario: SQLite admission rejection preserves source state atomically
+
+- **WHEN** any projected admission limit is exceeded
+- **THEN** no observations/accounting/progress or baseline/cursor replacement survives
+
+### Requirement: SQLite row admission makes no end-to-end resource or join-recovery claim
+
+Admission MUST NOT be described as bounding SQLite preparation/filtering/UTF-8
+conversion, decoded DOM/native heap, RSS, CPU or end-to-end memory.
+Delivered-row
+counting MUST NOT claim exhaustive recovery of nonunique message joins.
+
+#### Scenario: SQLite row admission makes no end-to-end resource or join-recovery claim
+
+- **WHEN** projected row caps are documented
+- **THEN** they do not bound SQLite work, heap, RSS, CPU or exhaustive nonunique joins
+
 ### Requirement: Native identity and source session are truthful
 
 Canonical observations MUST use non-empty source `message.id` or `part.id` as
 `SourceProvenance::native_id`, with `SessionStore`, adapter type `opencode`,
 adapter ID `opencode.sqlite`, no adapter version/path identity, and
-`PartialStructured` fidelity. Rowid, time_updated, row ordinal, path, filename,
-workspace, and semantic content MUST NOT be observation identity. Canonical
-session correlation MUST use only source-reported SQLite session fields or
-truthful joined message context. Missing/empty native IDs MUST fail closed and
-MUST NOT be replaced by semantic content.
+`PartialStructured` fidelity.
+Rowid, time_updated, row ordinal, path, filename,
+workspace, and semantic content MUST NOT be observation identity.
 
 #### Scenario: Message and part IDs are coordinate-only
 
@@ -158,17 +260,29 @@ MUST NOT be replaced by semantic content.
 - **THEN** canonical projection returns a safe replay-unverifiable failure and
   does not derive an ID from content, input/output, path, or rowid
 
+### Requirement: OpenCode session and missing native identity remain truthful
+
+Canonical
+session correlation MUST use only source-reported SQLite session fields or
+truthful joined message context.
+Missing/empty native IDs MUST fail closed and
+MUST NOT be replaced by semantic content.
+
+#### Scenario: OpenCode session and missing native identity remain truthful
+
+- **WHEN** source session context is joined or native ID is empty
+- **THEN** only reported session context is used and missing IDs fail without semantic fallback
+
 ### Requirement: Messages and parts preserve source relationships
 
 Selected text/tool parts MUST own canonical semantic observations when related to
 a message; the message row MUST serve as context and MUST NOT create a duplicate
-message envelope observation. Text parts with truthful user/assistant context
-MUST map to `MessageObserved`. Message-only rows MAY map known role/content or
+message envelope observation.
+Text parts with truthful user/assistant context
+MUST map to `MessageObserved`.
+Message-only rows MAY map known role/content or
 independent tool facts; unknown future message variants MUST fail closed or be
-skipped without arbitrary canonical meaning. Present serialized message data
-MUST be a string encoding a JSON object; malformed or non-object data MUST fail
-acquisition source-atomically. A valid metadata-only JSON object MUST remain
-supported.
+skipped without arbitrary canonical meaning.
 
 #### Scenario: Joined text is one message observation
 
@@ -181,16 +295,28 @@ supported.
 - **WHEN** any read message row has present malformed or non-object serialized data
 - **THEN** acquisition fails without a successful prefix, accounting, or progress
 
+### Requirement: OpenCode serialized message data validates atomically
+
+Present serialized message data
+MUST be a string encoding a JSON object; malformed or non-object data MUST fail
+acquisition source-atomically.
+A valid metadata-only JSON object MUST remain
+supported.
+
+#### Scenario: OpenCode serialized message data validates atomically
+
+- **WHEN** message data is malformed or is a metadata-only JSON object
+- **THEN** malformed/non-object data rejects and valid metadata-only objects remain supported
+
 ### Requirement: Direct OpenCode tool lifecycle is preserved
 
 The canonical adapter MUST map only the lifecycle state directly reported by a
 selected tool part: pending to `ToolRequested`, running to
 `ToolExecutionStarted`, terminal completed/error/cancelled/denied to
 `ToolExecutionCompleted`, and explicit output/error returned evidence also to
-`ToolResultReturned`. A current terminal row MUST NOT create earlier pending or
-running observations. Completed MUST NOT be mapped to `Succeeded`; absent
-success/failure MUST remain unknown or absent. Error MUST remain a truthful
-failure. The adapter MUST NOT invent process exit codes or OS side effects.
+`ToolResultReturned`.
+A current terminal row MUST NOT create earlier pending or
+running observations.
 
 #### Scenario: Running directly proves execution start
 
@@ -204,6 +330,19 @@ failure. The adapter MUST NOT invent process exit codes or OS side effects.
 - **THEN** ToolExecutionCompleted and ToolResultReturned are emitted for that
   same source part, with no fabricated pending/running stage and no Succeeded
   status
+
+### Requirement: OpenCode terminal state does not infer success or OS effects
+
+Completed MUST NOT be mapped to `Succeeded`; absent
+success/failure MUST remain unknown or absent.
+Error MUST remain a truthful
+failure.
+The adapter MUST NOT invent process exit codes or OS side effects.
+
+#### Scenario: OpenCode terminal state does not infer success or OS effects
+
+- **WHEN** a terminal tool row has no explicit success/failure
+- **THEN** unknown/absent remains truthful and no exit code or side effect is invented
 
 ### Requirement: Structured values, linkage, and facets remain bounded
 
@@ -269,19 +408,10 @@ native model, adapter trait, registry, or production cutover.
 
 The authoritative public acquisition API MUST accept caller-owned
 `observed_at` plus the existing bounded part minimum-update and limit read
-options. It MUST validate the exact `ClientId`, source ID, and SQLite source kind
+options.
+It MUST validate the exact `ClientId`, source ID, and SQLite source kind
 before source I/O, perform exactly one existing OpenCode native extraction, and
-map that extraction through the existing canonical semantics. It MUST return the
-canonical observations separately from operational progress containing exactly
-the selected extraction's optional part `time_updated` high-water coordinate.
-The progress coordinate MUST NOT enter canonical evidence, provenance,
-observation identity, or occurrence time, and the acquisition boundary MUST NOT
-persist cursor or scanner state.
-Failed extraction MUST NOT return observations, accounting, or progress. The
-scanner MUST stage a successful incremental high-water at no less than the
-previously stored high-water and MUST NOT stage cursor or baseline replacement
-on source failure. Dry-run and backfill MUST NOT stage a cursor. Required output
-persistence MUST still gate scanner-state installation.
+map that extraction through the existing canonical semantics.
 
 #### Scenario: Bounded acquisition returns matching progress
 
@@ -306,3 +436,32 @@ persistence MUST still gate scanner-state installation.
   the stored timestamp or no parts are selected
 - **THEN** scanner installation retains the prior high-water or stages no new
   candidate, respectively
+### Requirement: OpenCode acquisition progress is not canonical evidence
+
+It MUST return the
+canonical observations separately from operational progress containing exactly
+the selected extraction's optional part `time_updated` high-water coordinate.
+The progress coordinate MUST NOT enter canonical evidence, provenance,
+observation identity, or occurrence time, and the acquisition boundary MUST NOT
+persist cursor or scanner state.
+
+#### Scenario: OpenCode acquisition progress is not canonical evidence
+
+- **WHEN** acquisition returns selected-part high-water
+- **THEN** it is separate from observations and cannot become identity, provenance or occurrence time
+
+### Requirement: OpenCode scanner progress is monotone and durability-gated
+
+Failed extraction MUST NOT return observations, accounting, or progress.
+The
+scanner MUST stage a successful incremental high-water at no less than the
+previously stored high-water and MUST NOT stage cursor or baseline replacement
+on source failure.
+Dry-run and backfill MUST NOT stage a cursor.
+Required output
+persistence MUST still gate scanner-state installation.
+
+#### Scenario: OpenCode scanner progress is monotone and durability-gated
+
+- **WHEN** incremental acquisition fails or succeeds
+- **THEN** failure stages no state, successful high-water cannot regress, dry-run/backfill do not stage and durable output gates installation

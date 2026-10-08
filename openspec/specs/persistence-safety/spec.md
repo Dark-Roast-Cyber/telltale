@@ -55,8 +55,6 @@ metadata checks and SHALL compare the complete current content with a digest
 captured at acquisition whenever the inexpensive metadata still compares equal.
 The digest comparison SHALL use a pinned read observation with before/after
 stability checks; an unstable read or digest mismatch SHALL fail closed.
-Timestamp values, including `LastWriteTime` or an independently available
-change-time value, SHALL NOT be treated as a complete mutation counter.
 
 #### Scenario: Timestamp-coalesced same-length rewrite fails
 
@@ -71,6 +69,16 @@ change-time value, SHALL NOT be treated as a complete mutation counter.
   verification
 - **THEN** verification returns an error rather than accepting the read as an
   unchanged baseline
+
+### Requirement: Windows timestamps are not complete mutation counters
+
+Timestamp values, including `LastWriteTime` or an independently available
+change-time value, SHALL NOT be treated as a complete mutation counter.
+
+#### Scenario: Windows timestamps are not complete mutation counters
+
+- **WHEN** metadata timestamps compare equal
+- **THEN** strict verification cannot treat them as complete mutation counters
 
 ### Requirement: Intentional mutation paths retain lock-only coordination
 

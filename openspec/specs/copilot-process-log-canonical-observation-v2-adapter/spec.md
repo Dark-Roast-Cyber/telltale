@@ -10,20 +10,12 @@ projection.
 ### Requirement: Stateful source-owned interpretation
 
 The Copilot process-log adapter MUST read the source into one source-owned
-native event interpretation for each projection invocation. The native stream
+native event interpretation for each projection invocation.
+The native stream
 MUST distinguish workspace initialization, accumulated output items, session
-completion, and malformed structured output. Plain operational lines MUST NOT
-become canonical observations. Control phrases MUST be recognized only in the
-trusted Copilot log prefix/control position before an accumulated structured
-payload; phrases in assistant content, tool arguments, direct tool messages or
-results, embedded JSON, heartbeat/object values, and arbitrary operational text
-MUST NOT change canonical session state. Here, "trusted" means the top-level
-source-record/control position only; it MUST NOT be treated as authentication of
-the leading timestamp token, which remains metadata and may be opaque or
-invalid. A legitimate control and accumulated-output payload on one line MUST
-remain supported. Native types MUST remain crate-private, MUST NOT retain
-structured payload text in workspace events, and MUST NOT retain
-`encrypted_content`.
+completion, and malformed structured output.
+Plain operational lines MUST NOT
+become canonical observations.
 
 #### Scenario: Canonical projection consumes native facts
 
@@ -66,6 +58,44 @@ structured payload text in workspace events, and MUST NOT retain
   the trusted control prefix, not the prefix text, structured payload, or
   sensitive suffix
 
+### Requirement: Copilot control recognition uses the source prefix only
+
+Control phrases MUST be recognized only in the
+trusted Copilot log prefix/control position before an accumulated structured
+payload; phrases in assistant content, tool arguments, direct tool messages or
+results, embedded JSON, heartbeat/object values, and arbitrary operational text
+MUST NOT change canonical session state.
+
+#### Scenario: Copilot control recognition uses the source prefix only
+
+- **WHEN** assistant or tool content contains a control phrase
+- **THEN** it cannot alter canonical session state
+
+### Requirement: Copilot control position does not authenticate source timestamps
+
+Here, "trusted" means the top-level
+source-record/control position only; it MUST NOT be treated as authentication of
+the leading timestamp token, which remains metadata and may be opaque or
+invalid.
+A legitimate control and accumulated-output payload on one line MUST
+remain supported.
+
+#### Scenario: Copilot control position does not authenticate source timestamps
+
+- **WHEN** a legitimate control shares a line with accumulated output
+- **THEN** control/payload support remains without authenticating the timestamp
+
+### Requirement: Copilot native state excludes private payload retention
+
+Native types MUST remain crate-private, MUST NOT retain
+structured payload text in workspace events, and MUST NOT retain
+`encrypted_content`.
+
+#### Scenario: Copilot native state excludes private payload retention
+
+- **WHEN** native workspace events are retained
+- **THEN** types remain private and structured workspace/encrypted payload text is not retained
+
 ### Requirement: Canonical session state and ordinals
 
 The adapter MUST maintain one canonical active session. It MUST start absent,
@@ -91,14 +121,15 @@ the existing ordinal.
 ### Requirement: Exact canonical identity and provenance
 
 The canonical projector MUST accept only ClientId Copilot, source ID
-`copilot.process_log`, and SourceKind CopilotProcessLog. It MUST use
+`copilot.process_log`, and SourceKind CopilotProcessLog.
+It MUST use
 SessionStore, PartialStructured, adapter type `copilot`, and adapter ID
-`copilot.process_log`. A source-reported active session and its per-session
-ordinal MUST be the identity-scoped source sequence. It MUST NOT use filename,
+`copilot.process_log`.
+A source-reported active session and its per-session
+ordinal MUST be the identity-scoped source sequence.
+It MUST NOT use filename,
 path, PID, item ID, call ID, content, arguments, time, or random identity
-fallbacks. Caller-provided `observed_at` MUST be retained; no wall clock may be
-consulted. Valid leading RFC3339 tokens MAY populate occurred_at, while invalid
-or missing tokens MUST be absent.
+fallbacks.
 
 #### Scenario: Stable identity is content-independent
 
@@ -113,27 +144,29 @@ or missing tokens MUST be absent.
 - **THEN** their observation IDs differ because identity uses the session-scoped
   ordinal rather than the native item ID
 
+### Requirement: Copilot acquisition and occurrence times remain truthful
+
+Caller-provided `observed_at` MUST be retained; no wall clock may be
+consulted.
+Valid leading RFC3339 tokens MAY populate occurred_at, while invalid
+or missing tokens MUST be absent.
+
+#### Scenario: Copilot acquisition and occurrence times remain truthful
+
+- **WHEN** leading timestamp is missing or invalid
+- **THEN** occurred_at is absent and caller observed_at remains unchanged
+
 ### Requirement: Canonical tool and message mapping
 
 An explicit `function_call` with a meaningful name or raw arguments MUST emit
-one ToolRequested observation. A missing name MAY be omitted when another
+one ToolRequested observation.
+A missing name MAY be omitted when another
 meaningful tool fact exists; a function call with no meaningful facts MUST fail
-closed. A non-empty function-call message MUST emit one ToolResultReturned
-child, but status alone MUST NOT emit a result. Source call IDs MUST be
+closed.
+A non-empty function-call message MUST emit one ToolResultReturned
+child, but status alone MUST NOT emit a result.
+Source call IDs MUST be
 optional source-reported `correlations.call_id` values, never fabricated.
-Valid JSON argument strings MUST become bounded parsed `tool.arguments` with
-Parsed metadata and retain the original string as reported
-`tool.searchable_arguments`. Invalid JSON MUST retain the same source string in
-both fields with Reported metadata. Only explicit top-level command/cmd and
-path/file_path object keys MAY create parsed command/resource facets.
-
-`type: message` with role assistant MUST emit MessageObserved with ordered
-`output_text` content parts. User messages MUST NOT be fabricated. Unknown
-roles, unsupported content-block types, and unknown explicit output item types
-MUST fail closed without copying their payloads. Reasoning items MUST consume
-their ordinal and emit nothing. No Process, File, Network, Inference, Session,
-ToolProposed, ToolExecutionStarted, ToolExecutionCompleted, or ToolStatus fact
-MAY be projected by this adapter.
 
 #### Scenario: Tool request and direct result are separate children
 
@@ -163,6 +196,40 @@ MAY be projected by this adapter.
   payload, source ID, call ID, argument, assistant text, path, URL, or encrypted
   reasoning
 
+### Requirement: Copilot arguments preserve reported text beside parsed structure
+
+Valid JSON argument strings MUST become bounded parsed `tool.arguments` with
+Parsed metadata and retain the original string as reported
+`tool.searchable_arguments`.
+Invalid JSON MUST retain the same source string in
+both fields with Reported metadata.
+Only explicit top-level command/cmd and
+path/file_path object keys MAY create parsed command/resource facets.
+
+#### Scenario: Copilot arguments preserve reported text beside parsed structure
+
+- **WHEN** argument strings parse as JSON or fail parsing
+- **THEN** reported strings remain available and only governed top-level keys create facets
+
+### Requirement: Copilot message mapping is assistant-only and fail closed
+
+`type: message` with role assistant MUST emit MessageObserved with ordered
+`output_text` content parts.
+User messages MUST NOT be fabricated.
+Unknown
+roles, unsupported content-block types, and unknown explicit output item types
+MUST fail closed without copying their payloads.
+Reasoning items MUST consume
+their ordinal and emit nothing.
+No Process, File, Network, Inference, Session,
+ToolProposed, ToolExecutionStarted, ToolExecutionCompleted, or ToolStatus fact
+MAY be projected by this adapter.
+
+#### Scenario: Copilot message mapping is assistant-only and fail closed
+
+- **WHEN** an output item reports a role or unsupported block
+- **THEN** only supported assistant output_text maps; reasoning consumes its ordinal without emitting content
+
 ### Requirement: Explicit capability context
 
 Every Copilot canonical observation MUST report ToolCall Supported, UserContext
@@ -179,18 +246,11 @@ independent of fact provenance and fidelity.
 
 The authoritative public acquisition API MUST validate exact
 `(Copilot, copilot.process_log)` identity and `CopilotProcessLog` kind before
-source I/O. Each invocation reaching extraction MUST invoke the existing native
+source I/O.
+Each invocation reaching extraction MUST invoke the existing native
 extractor exactly once and feed its
 events directly into the same canonical mapping used by the reference projector,
-without a legacy record conversion. Each invocation MUST rebuild source-local
-session state and per-session ordinals from the supplied source. These values
-MUST NOT become durable scanner state or acquisition progress.
-
-Acquisition MUST preserve the lifecycle, replay identity, evidence strength,
-capability, and error semantics above, accept caller-owned `observed_at`, and
-return `AcquisitionProgress::None`. Failures MUST retain bounded source-read,
-mapping, and validation categories without raw native errors or source content
-in Display/Debug. Failure MUST NOT return a partial successful batch.
+without a legacy record conversion.
 
 #### Scenario: Complete-source replay preserves session ordinals
 
@@ -218,3 +278,29 @@ in Display/Debug. Failure MUST NOT return a partial successful batch.
 - **WHEN** authoritative public acquisition covers all eight source identities
 - **THEN** scan, watch, and embedding consume those canonical batches through
   the shared runtime without legacy record conversion
+### Requirement: Copilot acquisition session state is rebuilt and non-durable
+
+Each invocation MUST rebuild source-local
+session state and per-session ordinals from the supplied source.
+These values
+MUST NOT become durable scanner state or acquisition progress.
+
+#### Scenario: Copilot acquisition session state is rebuilt and non-durable
+
+- **WHEN** a new source acquisition starts
+- **THEN** session state and per-session ordinals are rebuilt without durable progress
+
+### Requirement: Copilot acquisition preserves mapping failures atomically
+
+Acquisition MUST preserve the lifecycle, replay identity, evidence strength,
+capability, and error semantics above, accept caller-owned `observed_at`, and
+return `AcquisitionProgress::None`.
+Failures MUST retain bounded source-read,
+mapping, and validation categories without raw native errors or source content
+in Display/Debug.
+Failure MUST NOT return a partial successful batch.
+
+#### Scenario: Copilot acquisition preserves mapping failures atomically
+
+- **WHEN** Copilot extraction, mapping or validation fails
+- **THEN** bounded categories remain private and no partial successful batch returns
