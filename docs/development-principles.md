@@ -376,6 +376,9 @@ visibility instead of rediscovering session stores.
   extension can tell "not disclosed" and "not reported by this source" apart.
   Facts a source does not report are never inferred to fill a slot. Raw
   reasoning is not retained and is not part of this direction.
+- **One-way dependency.** Telltale never depends on an analyzer or plugin built
+  on it. Plugins depend on Telltale's public contracts. Telltale's code,
+  schemas, tests, and public docs do not name a plugin.
 
 Contracts accepted now keep this path additive: cross-process formats are explicit
 versioned schemas, never `Serialize` derives on facade structs; observation IDs
