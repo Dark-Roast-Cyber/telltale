@@ -93,8 +93,8 @@ gates OpenCode cursor eligibility; parse success alone cannot advance it.
 
 Acquisition is direct source-native extraction followed by source-owned canonical
 mapping; it is not a conversion bridge. Production must not converge by creating
-a permanent `CanonicalObservationV2 -> NormalizedRecord` bridge or a permanent
-`NormalizedRecord -> CanonicalObservationV2` bridge. Event3 and Event4 are
+a bridge between Canonical Observation v2 and a flattened record type, in either
+direction. Event3 and Event4 are
 projections from accepted internal semantics, not conversion stages between the
 old and new internal models.
 
@@ -142,8 +142,6 @@ coverage demonstrates the compatibility gap.
 - `acquisition`: the public `telltale_sources::acquisition` single router for
   source-native extraction, source-owned canonical mapping, and acquisition
   batches across the supported identities. Its source mappers are crate-private.
-- `normalizer`: retains `NormalizedRecord` compatibility APIs; canonical
-  acquisition is the production semantic center.
 - `rules`: loads and validates detection content; Rule v1 remains a content
   compatibility format during Detection v2 convergence.
 - `scoring`: legacy record-level compatibility scoring remains available while

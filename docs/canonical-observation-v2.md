@@ -3,8 +3,8 @@
 > **Status:** **Active internal source evidence contract.** Canonical
 > Observation v2 is produced by source-native acquisition for all eight supported
 > identities and consumed by Detection v2 in CLI scan/watch and
-> `Pipeline::scan_root`. Rule v1 remains the content-compatibility format;
-> `NormalizedRecord` types remain explicit record-level compatibility surfaces.
+> every `Pipeline` scan method. Rule v1 remains the content-compatibility
+> format; there is no flattened record type or record-level detection path.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**.
 > `opencode.legacy_json` is retired. The public
@@ -741,7 +741,6 @@ Event3 until explicit migration gates pass, and future semantics are not
 backported. Event3 and Event4 are independent projections from common accepted
 internal semantics, not canonical conversions of each other.
 
-See the [Event4 architecture](event4.md) and the [current normalization
-schema](normalization-schema.md). The authoritative packaged Event4 4.0
+See the [Event4 architecture](event4.md). The authoritative packaged Event4 4.0
 structural schema at `crates/telltale-schema/data/event-4.0.schema.json` is an
 external contract boundary, not the internal observation schema.

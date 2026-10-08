@@ -119,9 +119,9 @@ The Cargo/package version is not the version of every data contract:
 - **Package and CLI version:** the workspace root, five library crates and Console
   move in lockstep. Internal workspace dependency requirements must be updated
   together. The root binary and library crates use the same release version.
-- **Event schema version:** `schema_version` and named schema types such as
-  `NormalizedRecordV1` describe emitted data compatibility independently of the
-  Cargo version. Change them only when the event contract changes.
+- **Event schema version:** `schema_version` and versioned identities such as
+  Event 3.0 and `obs:v2` describe data compatibility independently of the Cargo
+  version. Change them only when the event contract changes.
 - **Configuration version:** configuration documents such as `version: 1` have
   their own migration rules. A package release does not automatically change a
   configuration version.

@@ -13,7 +13,7 @@ println!("{} sources", sources.len());
 
 The public acquisition route is source discovery, native extraction, native
 accounting and progress, then source-owned canonical mapping. There is no
-parser registry and no source-backed conversion into `NormalizedRecord`.
+parser registry and no conversion into a flattened record type.
 Production OpenCode remains only `opencode.sqlite`. Its SQLite read options,
 busy timeout, part limit, and cursor overlap stay on that native path.
 

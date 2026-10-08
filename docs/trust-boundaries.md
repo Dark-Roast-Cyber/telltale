@@ -200,6 +200,5 @@ user session belongs in local-only notes rather than public repository content.
 - [privacy-model.md](privacy-model.md) — Evidence classes and redaction rules
 - [detection-model.md](detection-model.md) — Rule categories and context modifiers
 - [threat-taxonomy.md](threat-taxonomy.md) — Telltale detection categories
-- [normalization-schema.md](normalization-schema.md) — Canonical transcript schema
 - [detection-content-standard.md](detection-content-standard.md) — Rule quality requirements
 - [agent-capability-profiles.md](agent-capability-profiles.md) — Source-level field availability and known gaps

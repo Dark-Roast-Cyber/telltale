@@ -11,9 +11,7 @@ This is not a runtime extension contract. Operators can select scan roots and
 project roots through the CLI and project configuration. Telltale does not
 support runtime source/client registration or a parser extension API through
 plugins, external configuration, dynamic loading, or a trait ABI. New source
-support is a compiled-in registry and native-extractor change. Caller-supplied
-`NormalizedRecord` evaluation stays a separate compatibility path and is not a
-source adapter output.
+support is a compiled-in registry and native-extractor change.
 
 ## Current architecture
 
@@ -37,7 +35,7 @@ source adapter output.
   `sources/common/` directory; do not create one just to house a single helper.
 - A known extraction or schema failure is terminal. It must not retry through a
   generic parser. There is no secondary fallback after failure, and no
-  source-backed conversion into `NormalizedRecord`.
+  conversion into a flattened record type.
 
 The current table has eight exact identities across six agent families, all
 using modeled source-owned native extractors. There are no candidate or
@@ -170,8 +168,7 @@ Avoid exact separators and Unix-only assumptions.
 
 - Update `docs/session-sources.md` and `docs/source-validation-matrix.md`.
 - Update `docs/agent-capability-profiles.md` for user-visible source
-  visibility. Update `docs/normalization-schema.md` only if the separate
-  caller-provided record compatibility contract changes.
+  visibility.
 - Update telemetry or schema documentation only if a separately justified
   cross-agent contract changes. Do not fork normalized or event schemas for one
   source.

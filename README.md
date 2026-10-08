@@ -315,7 +315,6 @@ These files are the source-of-truth for Telltale's current implementation, rules
 - [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content
 - [Adding an agent source](docs/adding-agent-source.md) — contributor checklist for new agent/session-source support
 - [Use cases](docs/use-cases.md) — concrete detection use cases with fixture guidance
-- [Normalization schema](docs/normalization-schema.md) — direct-record `NormalizedRecordV1` compatibility contract
 - [Source validation matrix](docs/source-validation-matrix.md) — coverage and validation gates
 - [Requirements](docs/requirements.md) — functional, security, and operational requirements
 - [Trust boundaries](docs/trust-boundaries.md) — trust model for untrusted agent content

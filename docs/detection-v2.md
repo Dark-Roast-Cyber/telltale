@@ -271,7 +271,7 @@ and omit per-step times for multi-observation findings.
 `scan_root_detailed` add detailed action findings beside Event3 events and existing
 coordinate-based occurrences. Event3 output is unchanged for equivalent processing
 configuration; opting into process-chain processing can add events. They consume the same acquisition;
-there is no source-to-`NormalizedRecord` bridge, second source read, or Event4
+there is no source-to-flattened-record bridge, second source read, or Event4
 projection. Tool intent, tool output, conversation, and authored file content
 have distinct interpretation surfaces. Imported Codex turns retain import
 provenance and are inert for action findings and supplementary context.

@@ -1,3 +1,5 @@
+//! Native record kinds that source adapters count for acquisition accounting.
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RecordKind {
@@ -7,18 +9,4 @@ pub enum RecordKind {
     ToolResult,
     SessionMeta,
     Other,
-}
-
-#[derive(Debug, Clone)]
-pub struct NormalizedRecord {
-    pub session_id: String,
-    pub client: String,
-    pub agent: Option<String>,
-    pub model: Option<String>,
-    pub provider: Option<String>,
-    pub timestamp: Option<String>,
-    pub kind: RecordKind,
-    pub tool_name: Option<String>,
-    pub arguments: Option<String>,
-    pub content: String,
 }
