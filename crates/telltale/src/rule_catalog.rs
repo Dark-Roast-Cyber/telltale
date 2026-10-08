@@ -1,9 +1,7 @@
 //! Presentation metadata for bundled compatibility content and native actions.
 use crate::{DetailedEvaluationOptions, Pipeline, PipelineError};
-use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RuleCatalogKind {
     Rule,
@@ -13,7 +11,9 @@ pub enum RuleCatalogKind {
 /// Immutable display metadata, not executable content or a detection AST.
 /// Session scores describe frozen compatibility contributions; action scores
 /// describe individual native contributions, not host promotion totals.
-#[derive(Clone, Debug, Serialize)]
+/// A Rust value, not a wire format: hosts project accessors into their own
+/// versioned catalog document.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RuleCatalogEntry {
     id: String,
@@ -274,11 +274,11 @@ mod tests {
             assert_eq!(entry.when_all_categories(), modifier.when_all_categories);
             assert_eq!(entry.when_all_rule_ids(), modifier.when_all_rule_ids);
         }
-        let serialized = serde_json::to_value(&catalog).unwrap();
-        for entry in serialized.as_array().unwrap() {
-            assert!(entry.get("regex").is_none());
-            assert!(entry.get("matchers").is_none());
-            assert!(entry.get("targets").is_none());
+        for entry in &catalog {
+            let debug = format!("{entry:?}");
+            for field in ["regex:", "matchers:", "targets:"] {
+                assert!(!debug.contains(field), "{field}");
+            }
         }
     }
     #[test]

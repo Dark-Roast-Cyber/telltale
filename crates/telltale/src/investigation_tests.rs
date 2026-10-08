@@ -147,7 +147,7 @@ fn investigation_context_default_and_arguments_are_private() {
     assert_eq!(found.entries[0].text, None);
     assert!(!found.text_budget_exhausted);
     assert_eq!(result.reason_code(), None);
-    let public = format!("{result:?} {}", serde_json::to_string(found).unwrap());
+    let public = format!("{result:?} {found:?}");
     for excluded in [
         "ordinary prose",
         "synthetic-secret",
@@ -175,7 +175,7 @@ fn investigation_context_default_and_arguments_are_private() {
     };
     let text = found.entries[0].text.as_deref().unwrap();
     assert!(text.contains("ordinary prose"));
-    let public = format!("{result:?} {}", serde_json::to_string(found).unwrap());
+    let public = format!("{result:?} {found:?}");
     for excluded in [
         "synthetic-secret",
         "synthetic-token",
@@ -245,7 +245,7 @@ fn investigation_context_mixed_native_blocks_never_export_results() {
         let ContextInvestigationResult::Found(found) = &result else {
             panic!("{result:?}")
         };
-        let public = format!("{result:?} {}", serde_json::to_string(found).unwrap());
+        let public = format!("{result:?} {found:?}");
         for marker in [
             "RESULT_MARKER",
             "RESULT_ARGUMENT_MARKER",
@@ -305,7 +305,7 @@ fn investigation_context_mixed_native_blocks_never_export_results() {
     let ContextInvestigationResult::Found(found) = &result else {
         panic!("{result:?}")
     };
-    let public = format!("{result:?} {}", serde_json::to_string(found).unwrap());
+    let public = format!("{result:?} {found:?}");
     assert!(public.contains("ordinary_content_canary"));
     assert!(!public.contains("RETURNED_ARGUMENT_MARKER"));
     assert!(!public.contains("OUTPUT_CANARY"));
@@ -359,7 +359,7 @@ fn investigation_context_supported_messages_have_independent_class_gates() {
                     .contains("ordinary assistant prose")
             );
         }
-        let public = format!("{result:?} {}", serde_json::to_string(found).unwrap());
+        let public = format!("{result:?} {found:?}");
         assert!(!public.contains("synthetic-secret"));
         assert!(!public.contains("synthetic-token"));
     }
@@ -460,11 +460,7 @@ fn investigation_context_occurrences_are_exact_source_facts() {
         };
         assert_eq!(Some(found.anchor_index), occurrence.timeline_index);
         assert_eq!(found.entries.len(), 1);
-        assert!(
-            !serde_json::to_string(found)
-                .unwrap()
-                .contains(occurrence.identity.as_str())
-        );
+        assert!(!format!("{found:?}").contains(occurrence.identity.as_str()));
     }
     assert!(!scans[1].occurrences.is_empty());
     let result = backend.investigate_context(&ContextInvestigationRequest {

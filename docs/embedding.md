@@ -283,7 +283,9 @@ never reopens a source.
 `action_within_seconds`, `action_link`). Session scores are frozen compatibility
 contributions; action scores are individual native contributions, not host
 promotion totals. It exposes no detector internals, custom documents, policy
-overrides, or executable process AST.
+overrides, or executable process AST. Like `ActionFinding`, catalog entries do
+not implement `Serialize`; project accessors into the host's own catalog
+document.
 
 ## Host wire and durable handoff
 

@@ -646,14 +646,12 @@ fn linked_action_catalog_policy_scores_and_startup_rebaseline_are_explicit() {
     assert!(chain.action_ordered());
     assert_eq!(chain.action_link(), Some("downloaded_artifact"));
     assert_eq!(chain.action_within_seconds(), Some(900));
-    let display = serde_json::to_value(&catalog).unwrap();
-    assert!(
-        display
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|e| e.get("regex").is_none() && e.get("targets").is_none())
-    );
+    // Catalog entries are Rust values, not a wire format; hosts project
+    // accessors. They carry no executable matcher content.
+    assert!(catalog.iter().all(|e| {
+        let debug = format!("{e:?}");
+        !debug.contains("regex:") && !debug.contains("targets:")
+    }));
     configured.linked_download_score = Some(7);
     let changed = pipeline.semantic_provenance(&configured).unwrap();
     assert_ne!(startup, changed);

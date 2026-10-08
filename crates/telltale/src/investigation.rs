@@ -516,7 +516,7 @@ impl ContextInvestigationResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct OccurrenceContext {
     pub anchor_index: usize,
@@ -524,7 +524,7 @@ pub struct OccurrenceContext {
     pub text_budget_exhausted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ContextEntry {
     pub index: usize,
