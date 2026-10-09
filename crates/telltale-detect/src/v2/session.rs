@@ -156,6 +156,31 @@ pub enum EvaluationCompletion {
     VisibilityLimited,
 }
 
+/// Closed, content-free reason a successful evaluation is `VisibilityLimited`.
+/// A source is limited exactly when at least one reason is present.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[non_exhaustive]
+pub enum VisibilityLimit {
+    /// The source instance could not be verified, so grouping is unavailable.
+    UnverifiedSourceInstance,
+    /// Some observations carry no session identity.
+    MissingSessionIdentity,
+    /// A detector reported observations it could not evaluate.
+    DetectorNotEvaluated,
+    /// Process-chain evaluation lacked tool time or tool-call capability.
+    ProcessCapabilityUnavailable,
+}
+impl VisibilityLimit {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnverifiedSourceInstance => "unverified_source_instance",
+            Self::MissingSessionIdentity => "missing_session_identity",
+            Self::DetectorNotEvaluated => "detector_not_evaluated",
+            Self::ProcessCapabilityUnavailable => "process_capability_unavailable",
+        }
+    }
+}
+
 /// The instance is an opaque, caller-verified identity, not a path or a session
 /// string. None means unverifiable scope and disables cross-observation grouping.
 /// Never combine acquisitions from unrelated instances in this slice.
@@ -196,9 +221,6 @@ impl CanonicalSessionEvaluation {
     pub fn rule_score(&self) -> u64 {
         self.rules.compatibility_score()
     }
-    pub fn suppressed_process_count(&self) -> usize {
-        self.processes.as_ref().map_or(0, |p| p.suppressed_count())
-    }
     pub fn session_id(&self) -> Option<&CorrelationId> {
         self.session_id.as_ref()
     }
@@ -223,6 +245,7 @@ pub struct CanonicalSourceEvaluation {
     source_instance: Option<CorrelationId>,
     pub(crate) sessions: Vec<CanonicalSessionEvaluation>,
     completion: EvaluationCompletion,
+    visibility_limits: BTreeSet<VisibilityLimit>,
 }
 impl CanonicalSourceEvaluation {
     pub fn source_instance(&self) -> Option<&CorrelationId> {
@@ -236,6 +259,9 @@ impl CanonicalSourceEvaluation {
     }
     pub fn completion(&self) -> EvaluationCompletion {
         self.completion
+    }
+    pub fn visibility_limits(&self) -> &BTreeSet<VisibilityLimit> {
+        &self.visibility_limits
     }
 }
 
@@ -340,6 +366,7 @@ fn evaluate_source_inner(
         budget.retain_text(instance.value())?;
     }
     let mut completion = EvaluationCompletion::Complete;
+    let mut visibility_limits = BTreeSet::new();
     let mut replay_counts = BTreeMap::new();
     for observations in group_sessions(input.observations, input.source_instance.is_some()) {
         let rule_result = evaluate_rule_v1_session_with_budget(rules, &observations, &mut budget)
@@ -395,21 +422,41 @@ fn evaluate_source_inner(
                 &mut budget,
             )?);
         }
-        let limited = input.source_instance.is_none()
-            || rules.has_unavailable_url_visibility()
-            || observations[0].session_id().is_none()
-            || rule_result
-                .detectors()
-                .iter()
-                .any(|d| d.not_evaluated_count() != 0)
-            || (process.is_some()
-                && observations.iter().any(|o| {
-                    matches!(o.body(), ObservationBody::Tool(_))
-                        && (o.occurred_at().is_none()
-                            || o.capability_context()
-                                .map(|c| c.resolve(CapabilityId::ToolCall))
-                                != Some(CapabilityAvailability::Supported))
-                }));
+        let session_limits = [
+            (
+                input.source_instance.is_none(),
+                VisibilityLimit::UnverifiedSourceInstance,
+            ),
+            (
+                observations[0].session_id().is_none(),
+                VisibilityLimit::MissingSessionIdentity,
+            ),
+            (
+                rule_result
+                    .detectors()
+                    .iter()
+                    .any(|d| d.not_evaluated_count() != 0),
+                VisibilityLimit::DetectorNotEvaluated,
+            ),
+            (
+                process.is_some()
+                    && observations.iter().any(|o| {
+                        matches!(o.body(), ObservationBody::Tool(_))
+                            && (o.occurred_at().is_none()
+                                || o.capability_context()
+                                    .map(|c| c.resolve(CapabilityId::ToolCall))
+                                    != Some(CapabilityAvailability::Supported))
+                    }),
+                VisibilityLimit::ProcessCapabilityUnavailable,
+            ),
+        ];
+        let mut limited = false;
+        for (applies, limit) in session_limits {
+            if applies {
+                limited = true;
+                visibility_limits.insert(limit);
+            }
+        }
         let session_completion = if limited {
             EvaluationCompletion::VisibilityLimited
         } else {
@@ -487,6 +534,7 @@ fn evaluate_source_inner(
         source_instance: input.source_instance.cloned(),
         sessions,
         completion,
+        visibility_limits,
     })
 }
 

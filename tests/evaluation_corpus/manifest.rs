@@ -41,31 +41,6 @@ pub enum Input {
         source_id: String,
         source_kind: SourceKindName,
     },
-    NormalizedRecords {
-        client: Client,
-        records: Vec<RecordInput>,
-    },
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RecordInput {
-    pub session_id: String,
-    pub kind: RecordKindName,
-    #[serde(default)]
-    pub tool_name: Option<String>,
-    #[serde(default)]
-    pub arguments: Option<String>,
-    #[serde(default)]
-    pub content: String,
-    #[serde(default)]
-    pub agent: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub provider: Option<String>,
-    #[serde(default)]
-    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -371,10 +346,7 @@ fn validate_input(input: &Input, repo_root: &Path) -> Result<(), String> {
         client,
         source_id,
         source_kind,
-    } = input
-    else {
-        return Ok(());
-    };
+    } = input;
     let relative = Path::new(fixture);
     if relative.is_absolute()
         || relative
@@ -443,19 +415,8 @@ fn validate_tags(case: &Case) -> Result<(), String> {
             case.id
         ));
     }
-    if has_tag("source_conformance") && !matches!(case.input, Input::SourceFixture { .. }) {
-        return Err(format!(
-            "case {} has source_conformance without a source fixture",
-            case.id
-        ));
-    }
     if has_tag("candidate_source") {
-        let Input::SourceFixture { source_id, .. } = &case.input else {
-            return Err(format!(
-                "case {} has candidate_source without a source fixture",
-                case.id
-            ));
-        };
+        let Input::SourceFixture { source_id, .. } = &case.input;
         if !candidate_source_ids().contains(source_id) || scored {
             return Err(format!(
                 "case {} has an invalid candidate_source tag",

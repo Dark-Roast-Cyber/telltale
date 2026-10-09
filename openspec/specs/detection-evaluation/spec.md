@@ -115,7 +115,7 @@ The report SHALL distinguish process-chain definition conformance from independe
 
 #### Scenario: Pipeline isolation
 
-- **WHEN** regex/session cases run through `Pipeline::evaluate_session`
+- **WHEN** corpus cases run as native source fixtures through canonical Detection v2
 - **THEN** process-chain coverage is evaluated separately without changing Pipeline
 
 ### Requirement: Reports are deterministic and golden-compared

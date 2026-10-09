@@ -93,8 +93,8 @@ gates OpenCode cursor eligibility; parse success alone cannot advance it.
 
 Acquisition is direct source-native extraction followed by source-owned canonical
 mapping; it is not a conversion bridge. Production must not converge by creating
-a permanent `CanonicalObservationV2 -> NormalizedRecord` bridge or a permanent
-`NormalizedRecord -> CanonicalObservationV2` bridge. Event3 and Event4 are
+a bridge between Canonical Observation v2 and a flattened record type, in either
+direction. Event3 and Event4 are
 projections from accepted internal semantics, not conversion stages between the
 old and new internal models.
 
@@ -125,15 +125,12 @@ telltale_sources::acquisition -> Detection v2 evaluation/scoring -> Event3 proje
 
 The caller owns event policy, checkpoints, and delivery. The default sink appends
 local JSONL; optional Splunk HEC and Elastic exports wrap the same canonical
-payload. Rule v1 remains a content-compatibility view. `NormalizedRecordV1` and
-`NormalizedRecord` remain supported for record-level compatibility APIs such as
-`detect_records` and `evaluate_session`; they are not the scanner's detection
-handoff. `observed_at` is explicit caller input. OpenCode-only bounded read
+payload. Rule v1 remains a content-compatibility view evaluated over canonical
+observations; there is no record-level detection API. `observed_at` is explicit caller input. OpenCode-only bounded read
 controls and high-water progress are operational metadata, not evidence; the
 other seven identities return no progress. Copilot's local state is rebuilt per
-acquisition and is not durable. The `compat.v1.url` view remains truthfully
-absent without URL/path/network manufacturing; focused synthetic harness
-coverage demonstrates the compatibility gap.
+acquisition and is not durable. The `compat.v1.url` view reads URL-keyed tool
+arguments only, without URL/path/network manufacturing from other facts.
 
 ## Module Boundaries
 
@@ -144,8 +141,6 @@ coverage demonstrates the compatibility gap.
 - `acquisition`: the public `telltale_sources::acquisition` single router for
   source-native extraction, source-owned canonical mapping, and acquisition
   batches across the supported identities. Its source mappers are crate-private.
-- `normalizer`: retains `NormalizedRecord` compatibility APIs; canonical
-  acquisition is the production semantic center.
 - `rules`: loads and validates detection content; Rule v1 remains a content
   compatibility format during Detection v2 convergence.
 - `scoring`: legacy record-level compatibility scoring remains available while

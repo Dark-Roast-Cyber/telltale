@@ -1,24 +1,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use telltale_core::Pipeline;
 use telltale_detect::v2::{
     compile_rule_v1,
     session::{CanonicalSourceInput, evaluate_source},
 };
-use telltale_rules::{MatchResult, bundled_default_rule_set};
+use telltale_rules::bundled_default_rule_set;
 use telltale_schema::observation::{
     CanonicalObservationV2, CorrelationId, MessageRole, ObservationBody, ObservationStage,
     ObservedAt,
 };
-use telltale_schema::record::{NormalizedRecord, RecordKind};
 use telltale_schema::scoring::{RiskContributionType, RiskThresholds, assess_risk_with_thresholds};
 use telltale_schema::source::Source;
 use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
 
 use crate::manifest::{
-    Case, Client, Input, Manifest, RecordKindName, RuleExpectationKind, VisibilityField,
-    candidate_source_ids, fixture_path, supported_source_ids,
+    Case, Client, Input, Manifest, RuleExpectationKind, VisibilityField, candidate_source_ids,
+    fixture_path, supported_source_ids,
 };
 
 pub const CANONICAL_EVALUATION_THRESHOLDS: RiskThresholds = RiskThresholds {
@@ -93,9 +91,6 @@ pub struct Evaluation {
 }
 
 pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evaluation, String> {
-    let pipeline = Pipeline::builder()
-        .build()
-        .map_err(|error| error.to_string())?;
     let rule_set = bundled_default_rule_set().map_err(|error| error.to_string())?;
     let canonical_rules = compile_rule_v1(
         &telltale_rules::load_default_rule_set()
@@ -126,13 +121,7 @@ pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evalua
         visibility_field_coverage: BTreeMap::new(),
     };
     for case in cases {
-        let result = evaluate_case(
-            case,
-            &pipeline,
-            &canonical_rules,
-            repo_root,
-            &mut source_coverage,
-        )?;
+        let result = evaluate_case(case, &canonical_rules, repo_root, &mut source_coverage)?;
         results.push(result);
     }
     let rule_coverage = coverage_for(&manifest.cases, &enabled_regex);
@@ -149,7 +138,6 @@ pub fn evaluate_manifest(manifest: &Manifest, repo_root: &Path) -> Result<Evalua
 
 fn evaluate_case(
     case: &Case,
-    pipeline: &Pipeline,
     canonical_rules: &telltale_detect::v2::RuleV1CompatibilityPlan,
     repo_root: &Path,
     source_coverage: &mut SourceCoverage,
@@ -159,42 +147,22 @@ fn evaluate_case(
         matched_rules,
         contributions,
         mut failures,
-    } = match &case.input {
-        Input::SourceFixture {
+    } = {
+        // Every case is a native source fixture on the production canonical path.
+        let Input::SourceFixture {
             fixture,
             client,
             source_id,
             source_kind,
-        } => {
-            let source = Source {
-                client: client.client_id(),
-                kind: source_kind.source_kind(),
-                source_id: source_id.clone(),
-                path: fixture_path(repo_root, fixture),
-            };
-            record_source_coverage(case, *client, source_id, source_coverage);
-            evaluate_source_fixture(case, canonical_rules, &source)?
-        }
-        Input::NormalizedRecords { client, records } => {
-            let records = records
-                .iter()
-                .map(|record| normalize_record(record, client.client_id().as_str()))
-                .collect::<Vec<_>>();
-            let failures = visibility_failures(case, &records);
-            let matches = pipeline
-                .evaluate_session(&records)
-                .map_err(|error| format!("case {} evaluation failure: {error}", case.id))?;
-            let (score, matched_rules, contributions) = match matches {
-                Some(result) => match_result(result)?,
-                None => (0, Vec::new(), Vec::new()),
-            };
-            FixtureDetection {
-                score,
-                matched_rules,
-                contributions,
-                failures,
-            }
-        }
+        } = &case.input;
+        let source = Source {
+            client: client.client_id(),
+            kind: source_kind.source_kind(),
+            source_id: source_id.clone(),
+            path: fixture_path(repo_root, fixture),
+        };
+        record_source_coverage(case, *client, source_id, source_coverage);
+        evaluate_source_fixture(case, canonical_rules, &source)?
     };
     let assessment = assess_risk_with_thresholds(score, CANONICAL_EVALUATION_THRESHOLDS);
     let observed_positive_risk = score > 0;
@@ -399,114 +367,12 @@ fn observation_field_available(
     }
 }
 
-fn normalize_record(record: &crate::manifest::RecordInput, client: &str) -> NormalizedRecord {
-    NormalizedRecord {
-        session_id: record.session_id.clone(),
-        client: client.to_string(),
-        agent: record.agent.clone(),
-        model: record.model.clone(),
-        provider: record.provider.clone(),
-        timestamp: record.timestamp.clone(),
-        kind: match record.kind {
-            RecordKindName::UserMessage => RecordKind::UserMessage,
-            RecordKindName::AssistantMessage => RecordKind::AssistantMessage,
-            RecordKindName::ToolCall => RecordKind::ToolCall,
-            RecordKindName::ToolResult => RecordKind::ToolResult,
-            RecordKindName::SessionMeta => RecordKind::SessionMeta,
-            RecordKindName::Other => RecordKind::Other,
-        },
-        tool_name: record.tool_name.clone(),
-        arguments: record.arguments.clone(),
-        content: record.content.clone(),
-    }
-}
-
-fn match_result(result: MatchResult) -> Result<(u64, Vec<String>, Vec<Contribution>), String> {
-    let score = result.score;
-    let mut rule_ids = result.rule_ids;
-    rule_ids.sort();
-    rule_ids.dedup();
-    let contributions = result
-        .contributions
-        .iter()
-        .map(|contribution| Contribution {
-            id: contribution.id().to_string(),
-            contribution_type: contribution.contribution_type(),
-            points: contribution.points(),
-        })
-        .collect::<Vec<_>>();
-    let actual_sum = telltale_schema::scoring::checked_risk_sum(&result.contributions)
-        .map_err(|error| error.to_string())?;
-    if score != actual_sum {
-        return Err(format!(
-            "MatchResult score {score} does not equal {actual_sum}"
-        ));
-    }
-    Ok((score, rule_ids, contributions))
-}
-
 fn checked_risk_sum_from(contributions: &[Contribution]) -> Result<u64, String> {
     contributions.iter().try_fold(0_u64, |total, contribution| {
         total
             .checked_add(contribution.points)
             .ok_or_else(|| "contribution total overflow".to_string())
     })
-}
-
-fn visibility_failures(case: &Case, records: &[NormalizedRecord]) -> Vec<String> {
-    let kinds = record_kinds(records).into_iter().collect::<BTreeSet<_>>();
-    let mut failures = Vec::new();
-    for required in &case.expected_visibility.required_record_kinds {
-        if !kinds.contains(required.as_str()) {
-            failures.push(format!(
-                "required record kind unavailable: {}",
-                required.as_str()
-            ));
-        }
-    }
-    for unavailable in &case.expected_visibility.unavailable_fields {
-        if field_is_available(*unavailable, records) {
-            failures.push(format!(
-                "field declared unavailable is present: {}",
-                unavailable.as_str()
-            ));
-        }
-    }
-    failures
-}
-
-fn field_is_available(field: VisibilityField, records: &[NormalizedRecord]) -> bool {
-    match field {
-        VisibilityField::Pid | VisibilityField::ParentPid => false,
-        VisibilityField::UserIntent => records
-            .iter()
-            .any(|record| record.kind == RecordKind::UserMessage),
-        VisibilityField::Timestamp => records.iter().any(|record| record.timestamp.is_some()),
-        VisibilityField::ToolName => records.iter().any(|record| record.tool_name.is_some()),
-        VisibilityField::Arguments => records.iter().any(|record| record.arguments.is_some()),
-        VisibilityField::Content => records.iter().any(|record| !record.content.is_empty()),
-        VisibilityField::Agent => records.iter().any(|record| record.agent.is_some()),
-        VisibilityField::Model => records.iter().any(|record| record.model.is_some()),
-        VisibilityField::Provider => records.iter().any(|record| record.provider.is_some()),
-    }
-}
-
-fn record_kinds(records: &[NormalizedRecord]) -> Vec<String> {
-    records
-        .iter()
-        .map(|record| match record.kind {
-            RecordKind::UserMessage => "user_message",
-            RecordKind::AssistantMessage => "assistant_message",
-            RecordKind::ToolCall => "tool_call",
-            RecordKind::ToolResult => "tool_result",
-            RecordKind::SessionMeta => "session_meta",
-            RecordKind::Other => "other",
-            _ => "other",
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(str::to_string)
-        .collect()
 }
 
 fn enabled_rule_ids() -> BTreeSet<String> {

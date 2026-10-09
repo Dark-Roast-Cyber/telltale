@@ -114,24 +114,7 @@ than overwriting or reusing the published candidate.
 Native Windows and native macOS release gates SHALL prove runtime behavior of
 the exact final published GitHub Release artifact for the target architecture.
 A native platform gate MAY be satisfied by either an explicitly authorized
-native host or an appropriate GitHub-hosted native runner. The evidence MUST
-download that Release archive, verify its filename and SHA-256 against the
-published `SHA256SUMS` and the pinned candidate identity, extract it into an
-isolated temporary directory, verify the extracted binary SHA-256, and execute
-that same downloaded binary. The gate MUST NOT treat cross-compilation, archive
-creation, source-unit tests on another OS, staged or rebuilt binaries, or
-binary inspection without native execution as native-release evidence.
-
-Required native targets are Windows x86_64, macOS x86_64, and macOS arm64.
-Each target MUST record runner OS and architecture, archive filename and hash,
-binary hash, exact version identity, bundled-rule validation, one bounded
-positive synthetic fixture scan, and canonical Event 3.0 schema validation.
-The scan MUST use fixture-safe, no-local-config behavior and MUST NOT load
-host or operator rule packs, scan runner session stores, send HEC events,
-query Splunk, query ADR runtime resources, install Telltale persistently, or
-publish artifacts. If GitHub-hosted CI cannot supply a required native
-architecture, that target MUST be recorded as `BLOCKED_EXTERNAL` rather than
-silently substituted.
+native host or an appropriate GitHub-hosted native runner.
 
 #### Scenario: GitHub-hosted native runner executes the published artifact
 
@@ -155,17 +138,60 @@ silently substituted.
 - **THEN** that target is recorded as `BLOCKED_EXTERNAL` and MUST NOT be
   silently replaced by another architecture
 
+### Requirement: Native gates download and execute exact verified release bytes
+
+The evidence MUST
+download that Release archive, verify its filename and SHA-256 against the
+published `SHA256SUMS` and the pinned candidate identity, extract it into an
+isolated temporary directory, verify the extracted binary SHA-256, and execute
+that same downloaded binary.
+The gate MUST NOT treat cross-compilation, archive
+creation, source-unit tests on another OS, staged or rebuilt binaries, or
+binary inspection without native execution as native-release evidence.
+
+#### Scenario: Native gates download and execute exact verified release bytes
+
+- **WHEN** a native gate runs
+- **THEN** published archive and binary hashes verify before executing that same binary
+
+### Requirement: Native release targets require explicit architecture-scoped evidence
+
+Required native targets are Windows x86_64, macOS x86_64, and macOS arm64.
+Each target MUST record runner OS and architecture, archive filename and hash,
+binary hash, exact version identity, bundled-rule validation, one bounded
+positive synthetic fixture scan, and canonical Event 3.0 schema validation.
+
+#### Scenario: Native release targets require explicit architecture-scoped evidence
+
+- **WHEN** required Windows or macOS targets are qualified
+- **THEN** OS/architecture, exact hashes, version, rules, fixture scan and Event3 schema evidence are recorded
+
+### Requirement: Native release smoke is synthetic and external gaps remain explicit
+
+The scan MUST use fixture-safe, no-local-config behavior and MUST NOT load
+host or operator rule packs, scan runner session stores, send HEC events,
+query Splunk, query ADR runtime resources, install Telltale persistently, or
+publish artifacts.
+If GitHub-hosted CI cannot supply a required native
+architecture, that target MUST be recorded as `BLOCKED_EXTERNAL` rather than
+silently substituted.
+
+#### Scenario: Native release smoke is synthetic and external gaps remain explicit
+
+- **WHEN** a native runner cannot supply a required architecture
+- **THEN** BLOCKED_EXTERNAL is recorded without substitution; scans remain fixture-safe
+
 ### Requirement: Live HEC and Splunk validation are environment-dependent
 
 Live G-HEC and live G-SPLUNK SHALL use the outcomes `PASS`,
-`SKIPPED_EXTERNAL`, and `FAIL`. `PASS` means an approved controlled
+`SKIPPED_EXTERNAL`, and `FAIL`.
+`PASS` means an approved controlled
 environment was available and the bounded live validation succeeded; that
 result is additional release evidence and is not required for stable
-promotion. `SKIPPED_EXTERNAL` means no approved endpoint, credential,
+promotion.
+`SKIPPED_EXTERNAL` means no approved endpoint, credential,
 authorization, or suitable environment was available; it is not a product
-failure, not `BLOCKED`, and not a stable-release blocker. `FAIL` means an
-approved environment was available, validation was attempted, and evidence
-demonstrates a Telltale product defect.
+failure, not `BLOCKED`, and not a stable-release blocker.
 
 #### Scenario: Live HEC is skipped without an approved environment
 
@@ -180,6 +206,17 @@ demonstrates a Telltale product defect.
   is available
 - **THEN** live G-SPLUNK is recorded as `SKIPPED_EXTERNAL` and MUST NOT be
   treated as a missing required PASS
+
+### Requirement: Attempted live product failures remain release evidence
+
+Live defect classification MUST retain the following FAIL meaning. `FAIL` means an
+approved environment was available, validation was attempted, and evidence
+demonstrates a Telltale product defect.
+
+#### Scenario: Attempted live product failures remain release evidence
+
+- **WHEN** an approved live environment reveals a Telltale defect
+- **THEN** the outcome is FAIL rather than an external skip
 
 ### Requirement: Deterministic HEC and Splunk-format evidence remains mandatory
 
@@ -202,23 +239,11 @@ in those gates SHALL block stable promotion even when live G-HEC is
 Stable `v0.5.0` GitHub promotion SHALL require explicit PASS evidence for the
 required G-SERVICE, native Windows, native macOS, release-preflight,
 artifact-boundary, and GitHub publication-prerequisite gates, and for the
-mandatory deterministic HEC and Splunk-format product gates. Native Windows
+mandatory deterministic HEC and Splunk-format product gates.
+Native Windows
 and native macOS PASS MAY be produced by an authorized native host or by a
 GitHub-hosted native runner that executed the final published Release artifact
-for that architecture. Live G-HEC and live G-SPLUNK SHALL be
-environment-dependent evidence: `PASS` or `SKIPPED_EXTERNAL` satisfies the
-stable matrix, and `FAIL` remains a release blocker. A required `BLOCKED`,
-`BLOCKED_EXTERNAL`, or `FAIL` gate MUST NOT be silently reclassified as
-`PASS`.
-
-Preparing a reviewed reversible stable-version commit at package version
-`0.5.0` is a prerequisite for final stable preflight and is not itself
-irreversible promotion. Final stable `make release-preflight` SHALL run
-against that exact reviewed commit while `v0.5.0` is absent. The existing
-tag-review gate SHALL continue to reject an already-existing matching tag.
-Irreversible stable GitHub tagging and GitHub Release publication remain
-prohibited until that preflight, the separate artifact-boundary gate, and the
-GitHub publication-prerequisite gate all have PASS evidence.
+for that architecture.
 
 #### Scenario: Complete stable gate matrix
 
@@ -255,19 +280,56 @@ GitHub publication-prerequisite gate all have PASS evidence.
 - **THEN** `release-tag-review` fails and release-preflight MUST NOT be
   considered passing
 
+### Requirement: Live evidence cannot disguise required release failures
+
+Live G-HEC and live G-SPLUNK SHALL be
+environment-dependent evidence: `PASS` or `SKIPPED_EXTERNAL` satisfies the
+stable matrix, and `FAIL` remains a release blocker.
+A required `BLOCKED`,
+`BLOCKED_EXTERNAL`, or `FAIL` gate MUST NOT be silently reclassified as
+`PASS`.
+
+#### Scenario: Live evidence cannot disguise required release failures
+
+- **WHEN** a release gate is blocked, failed or lacks an approved live environment
+- **THEN** required failures remain failures while live external absence is SKIPPED_EXTERNAL
+
+### Requirement: Stable preparation is reversible and final preflight is exact-commit scoped
+
+Preparing a reviewed reversible stable-version commit at package version
+`0.5.0` is a prerequisite for final stable preflight and is not itself
+irreversible promotion.
+Final stable `make release-preflight` SHALL run
+against that exact reviewed commit while `v0.5.0` is absent.
+
+#### Scenario: Stable preparation is reversible and final preflight is exact-commit scoped
+
+- **WHEN** a reviewed stable-version commit is prepared
+- **THEN** preflight runs on that commit before the matching tag exists
+
+### Requirement: Stable tagging waits for all publication prerequisites
+
+The existing
+tag-review gate SHALL continue to reject an already-existing matching tag.
+Irreversible stable GitHub tagging and GitHub Release publication remain
+prohibited until that preflight, the separate artifact-boundary gate, and the
+GitHub publication-prerequisite gate all have PASS evidence.
+
+#### Scenario: Stable tagging waits for all publication prerequisites
+
+- **WHEN** preflight or publication prerequisite is missing
+- **THEN** existing tag-review and irreversible-publication prohibitions remain
+
 ### Requirement: GitHub stable publication is independent of crates.io
 
 Stable GitHub `v0.5.0` tagging and GitHub binary Release SHALL require the
 accepted release gate matrix, final stable preflight, artifact-boundary
-review, and GitHub publication prerequisites. Crates.io publication SHALL
+review, and GitHub publication prerequisites.
+Crates.io publication SHALL
 remain a separate later distribution action and MUST NOT be a required PASS
-for GitHub stable publication. Deferring crates.io publication MUST NOT block
-stable GitHub `v0.5.0`. Cargo package readiness SHALL remain a mandatory
-stable-release gate, including version lockstep, internal dependency pins,
-lock entries, `release-crate-manifest`, `package-verify`, registry-style
-consumer verification, normalized CLI installation verification, and package
-public-boundary checks. When crates.io publication is later attempted, the
-existing registry-specific safety requirements SHALL remain mandatory.
+for GitHub stable publication.
+Deferring crates.io publication MUST NOT block
+stable GitHub `v0.5.0`.
 
 #### Scenario: Operator defers crates.io publication
 
@@ -283,3 +345,17 @@ existing registry-specific safety requirements SHALL remain mandatory.
   credential readiness, dependency-order publication, registry propagation
   waits, unpatched external consumer verification, and unpatched CLI
   installation verification remain mandatory
+### Requirement: Cargo readiness remains mandatory despite deferred registry publication
+
+Cargo package readiness SHALL remain a mandatory
+stable-release gate, including version lockstep, internal dependency pins,
+lock entries, `release-crate-manifest`, `package-verify`, registry-style
+consumer verification, normalized CLI installation verification, and package
+public-boundary checks.
+When crates.io publication is later attempted, the
+existing registry-specific safety requirements SHALL remain mandatory.
+
+#### Scenario: Cargo readiness remains mandatory despite deferred registry publication
+
+- **WHEN** GitHub stable release proceeds before crates.io publication
+- **THEN** package and registry-style consumer readiness gates still pass and later registry safety remains mandatory

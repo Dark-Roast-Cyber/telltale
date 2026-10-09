@@ -109,11 +109,29 @@ pub enum AcquisitionProgress {
 }
 
 pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
+/// A resumed OpenCode read re-reads parts updated within this window before the
+/// prior high-water, so late or same-millisecond updates are not missed.
+pub const OPENCODE_SQLITE_RESUME_OVERLAP_MS: i64 = 10 * 60 * 1_000;
+/// Parts a resumed OpenCode read may select before failing as `LimitExceeded`.
+pub const OPENCODE_SQLITE_RESUME_PART_LIMIT: i64 = 25_000;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct OpenCodeSqliteReadOptions {
     pub part_min_time_updated: Option<i64>,
     pub part_limit: i64,
+}
+
+impl OpenCodeSqliteReadOptions {
+    /// Resume after a recorded part `time_updated` high-water, applying the one
+    /// shared overlap and incremental part limit.
+    pub fn resume_after(high_water: i64) -> Self {
+        Self {
+            part_min_time_updated: Some(
+                high_water.saturating_sub(OPENCODE_SQLITE_RESUME_OVERLAP_MS),
+            ),
+            part_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
+        }
+    }
 }
 
 impl Default for OpenCodeSqliteReadOptions {
@@ -141,6 +159,9 @@ pub enum AcquisitionError {
     UnsupportedSourceIdentity,
     SourceKindMismatch,
     SourceRead,
+    /// The source identity is supported, but its acquisition was not compiled into
+    /// this build (OpenCode without `opencode-sqlite`). No source I/O is attempted.
+    CapabilityNotCompiled,
     BoundedSourceRead(BoundedReadError),
     InvalidAttestation,
     ConflictingSessionOwnership,
@@ -148,9 +169,15 @@ pub enum AcquisitionError {
     ContributionCapacity,
     AttestationCapacity,
     AccountingOverflow,
-    CanonicalMapping { code: &'static str },
-    CanonicalValidation { code: &'static str },
-    CanonicalBoundValidation { context: CanonicalBoundContext },
+    CanonicalMapping {
+        code: &'static str,
+    },
+    CanonicalValidation {
+        code: &'static str,
+    },
+    CanonicalBoundValidation {
+        context: CanonicalBoundContext,
+    },
 }
 
 impl AcquisitionError {
@@ -159,6 +186,7 @@ impl AcquisitionError {
             Self::UnsupportedSourceIdentity => "unsupported_source_identity",
             Self::SourceKindMismatch => "source_kind_mismatch",
             Self::SourceRead => "source_read",
+            Self::CapabilityNotCompiled => "capability_not_compiled",
             Self::BoundedSourceRead(reason) => reason.code(),
             Self::InvalidAttestation => "invalid_session_attestation",
             Self::ConflictingSessionOwnership => "conflicting_session_ownership",
@@ -448,12 +476,19 @@ pub fn acquire_opencode_sqlite(
     #[cfg(not(feature = "opencode-sqlite"))]
     {
         let _ = (options, read);
-        Err(AcquisitionError::SourceRead)
+        Err(AcquisitionError::CapabilityNotCompiled)
     }
     #[cfg(feature = "opencode-sqlite")]
     {
         let extraction =
-            extract_sqlite_native_source(source, read).map_err(|_| AcquisitionError::SourceRead)?;
+            extract_sqlite_native_source(source, read).map_err(|error| match error {
+                // A resumed read that selected more parts than its limit: recoverable
+                // by a fresh bootstrap read, unlike an unreadable source.
+                SourceReadError::Bounded(BoundedReadError::LimitExceeded) => {
+                    AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded)
+                }
+                _ => AcquisitionError::SourceRead,
+            })?;
         let progress = AcquisitionProgress::OpenCodeSqlite {
             part_max_time_updated: extraction.sqlite_part_max_time_updated,
         };
@@ -660,9 +695,14 @@ mod tests {
                 kind,
                 path: directory.path().to_owned(),
             };
+            let expected = if client == ClientId::OpenCode && !cfg!(feature = "opencode-sqlite") {
+                AcquisitionError::CapabilityNotCompiled
+            } else {
+                AcquisitionError::SourceRead
+            };
             assert_eq!(
                 acquisition_error(super::acquire_source(&source, options())),
-                AcquisitionError::SourceRead
+                expected
             );
         }
     }
@@ -1365,7 +1405,12 @@ mod tests {
                 OpenCodeSqliteReadOptions::default(),
             )),
         ] {
-            assert_eq!(error, AcquisitionError::SourceRead);
+            let expected = if cfg!(feature = "opencode-sqlite") {
+                AcquisitionError::SourceRead
+            } else {
+                AcquisitionError::CapabilityNotCompiled
+            };
+            assert_eq!(error, expected);
             assert!(!source.path.exists());
         }
     }
@@ -1381,7 +1426,10 @@ mod tests {
             super::acquire_source(&source, options()),
             acquire_opencode_sqlite(&source, options(), OpenCodeSqliteReadOptions::default()),
         ] {
-            assert_eq!(acquisition_error(result), AcquisitionError::SourceRead);
+            assert_eq!(
+                acquisition_error(result),
+                AcquisitionError::CapabilityNotCompiled
+            );
         }
         assert_eq!(std::fs::read(&source.path).unwrap(), bytes);
         assert_eq!(
@@ -1505,17 +1553,26 @@ mod tests {
         for (limit, expected) in [(8, 7), (7, 7), (6, 6)] {
             let batch = read(Some(i64::MIN), limit);
             if limit == 6 {
-                assert_eq!(acquisition_error(batch), AcquisitionError::SourceRead);
+                assert_eq!(
+                    acquisition_error(batch),
+                    AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded)
+                );
             } else {
                 assert_eq!(batch.unwrap().observations.len(), expected);
             }
         }
-        for limit in [0, -1, 1, 2, 3, 4, 5, i64::MAX] {
+        // Selecting more parts than the (at least one) limit is a typed overflow.
+        for limit in [0, -1, 1, 2, 3, 4, 5] {
             assert_eq!(
                 acquisition_error(read(Some(100), limit)),
-                AcquisitionError::SourceRead,
+                AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded),
             );
         }
+        // An unrepresentable page limit is rejected before reading.
+        assert_eq!(
+            acquisition_error(read(Some(100), i64::MAX)),
+            AcquisitionError::SourceRead,
+        );
         for limit in [0, -1, 1] {
             let one = read(Some(106), limit).unwrap();
             assert_eq!(one.observations.len(), 1);
@@ -1561,7 +1618,7 @@ mod tests {
                     part_limit: 5
                 },
             )),
-            AcquisitionError::SourceRead,
+            AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded),
         );
     }
 

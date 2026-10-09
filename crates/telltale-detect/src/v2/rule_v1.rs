@@ -111,12 +111,6 @@ impl RuleV1CompatibilityPlan {
     pub fn detectors(&self) -> &[CompiledObservationMatchDetector] {
         &self.detectors
     }
-    pub(crate) fn has_unavailable_url_visibility(&self) -> bool {
-        self.export
-            .rules()
-            .iter()
-            .any(|rule| rule.matchers.iter().any(|matcher| matcher.target == "url"))
-    }
 }
 
 /// Session-level Rule v1 compatibility outcome after applying deterministic
@@ -657,16 +651,7 @@ fn compile_rule(
     let mut clauses = Vec::new();
     let mut targets = Vec::new();
     let mut families = Vec::new();
-    // URL has no truthful COv2 compatibility value. In a mixed-target Rule v1
-    // detector, evaluate only the available alternatives and report the source
-    // visibility limitation separately. A URL-only detector retains its URL
-    // predicate so it becomes explicitly indeterminate rather than NoMatch.
-    let has_available_target = rule.matchers.iter().any(|matcher| matcher.target != "url");
-    for matcher in rule
-        .matchers
-        .iter()
-        .filter(|matcher| matcher.target != "url" || !has_available_target)
-    {
+    for matcher in &rule.matchers {
         let selector = compat_selector(&matcher.target)?;
         targets.push(matcher.target.clone());
         for family in selector_families(&matcher.target) {

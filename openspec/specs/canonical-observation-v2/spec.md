@@ -58,13 +58,11 @@ values.
 ### Requirement: Source and fact semantics remain distinct
 
 Source provenance MUST require a non-empty adapter type and ID, an ingestion
-mode, and fidelity. Fact provenance MUST be one of reported, parsed, derived,
-inferred, or observed. Capability availability MUST be exactly supported,
-unsupported, or unknown and independent of fact provenance and fidelity. Process,
-File, and Network bodies MUST contain an operation or state, and at least one
-populated operation or state field MUST have observed provenance at its matching
-body path. Observed provenance on a non-activity field MUST NOT satisfy this
-minimum.
+mode, and fidelity.
+Fact provenance MUST be one of reported, parsed, derived,
+inferred, or observed.
+Capability availability MUST be exactly supported,
+unsupported, or unknown and independent of fact provenance and fidelity.
 
 #### Scenario: Parsed activity is not observed activity
 
@@ -83,6 +81,20 @@ minimum.
 - **WHEN** a capability query is unsupported or unresolved
 - **THEN** it resolves to unsupported or unknown and is not treated as clean,
   false, or an observed occurrence
+
+### Requirement: Observed activity provenance is required at the activity field
+
+Process,
+File, and Network bodies MUST contain an operation or state, and at least one
+populated operation or state field MUST have observed provenance at its matching
+body path.
+Observed provenance on a non-activity field MUST NOT satisfy this
+minimum.
+
+#### Scenario: Observed activity provenance is required at the activity field
+
+- **WHEN** a Process, File or Network body is constructed
+- **THEN** an operation/state field itself has observed provenance
 
 ### Requirement: Governed facets and metadata
 
@@ -135,18 +147,7 @@ domain-separated canonical UTF-8 JSON tuple:
 ```
 
 It MUST retain the external form `obs:v2:sha256:<64 lowercase hexadecimal
-digits>`. The tuple MUST NOT contain semantic values, semantic fingerprints,
-fingerprint epochs, adapter versions, paths, filenames, session titles,
-collection locations, privacy keys, HMAC material, or producer text.
-
-Coordinate selection MUST be native_id, then an explicitly identity-scoped
-source sequence, then an explicitly identity-scoped offset. A producer-local
-sequence or offset is not a stable observation coordinate unless its uniqueness
-namespace is itself stable and explicit. Bare producer coordinates remain
-provenance only. Missing coordinates and missing protected assignment state
-MUST fail with `replay_unverifiable`; no random or path-derived fallback is
-allowed. Sensitive values MUST NOT be hashed unkeyed merely to create a stable
-coordinate ID.
+digits>`.
 
 #### Scenario: Stable identity ignores semantic comparison material
 
@@ -194,16 +195,52 @@ coordinate ID.
   offset are all absent and protected assignment state is unavailable
 - **THEN** construction returns `replay_unverifiable` and creates no random ID
 
+### Requirement: Stable coordinate tuples exclude semantic and private material
+
+The tuple MUST NOT contain semantic values, semantic fingerprints,
+fingerprint epochs, adapter versions, paths, filenames, session titles,
+collection locations, privacy keys, HMAC material, or producer text.
+
+#### Scenario: Stable coordinate tuples exclude semantic and private material
+
+- **WHEN** a stable coordinate tuple is formed
+- **THEN** semantic values, keys and source-controlled private labels are excluded
+
+### Requirement: Coordinate selection requires a stable explicit namespace
+
+Coordinate selection MUST be native_id, then an explicitly identity-scoped
+source sequence, then an explicitly identity-scoped offset.
+A producer-local
+sequence or offset is not a stable observation coordinate unless its uniqueness
+namespace is itself stable and explicit.
+Bare producer coordinates remain
+provenance only.
+
+#### Scenario: Coordinate selection requires a stable explicit namespace
+
+- **WHEN** native ID is absent
+- **THEN** only identity-scoped sequence or offset is eligible
+
+### Requirement: Missing replay authority fails without identity fallback
+
+Missing coordinates and missing protected assignment state
+MUST fail with `replay_unverifiable`; no random or path-derived fallback is
+allowed.
+Sensitive values MUST NOT be hashed unkeyed merely to create a stable
+coordinate ID.
+
+#### Scenario: Missing replay authority fails without identity fallback
+
+- **WHEN** no stable coordinate or protected assignment exists
+- **THEN** replay_unverifiable is returned without random, path or unkeyed-sensitive fallback
+
 ### Requirement: Protected assignment replay
 
 Persisted assignment MUST continue to verify the complete semantic commitment
-with its protected comparison key. Missing assignment state, missing key, or a
+with its protected comparison key.
+Missing assignment state, missing key, or a
 commitment mismatch MUST return `replay_unverifiable` or `replay_collision` as
-currently defined. The assignment record MUST additionally bind the expected
-adapter domain, protected replay key, and child ordinal; a wrong assignment
-reference MUST NOT alias another assignment merely because complete semantics
-match. This amendment MUST NOT weaken assignment verification or make an unkeyed
-assignment comparison appear equivalent.
+currently defined.
 
 #### Scenario: Matching assignment replays idempotently
 
@@ -223,6 +260,20 @@ assignment comparison appear equivalent.
 
 - **WHEN** complete semantic content changes under an existing bound assignment
 - **THEN** construction returns `replay_collision` without exposing content
+
+### Requirement: Protected replay binds assignment scope without weakening verification
+
+The assignment record MUST additionally bind the expected
+adapter domain, protected replay key, and child ordinal; a wrong assignment
+reference MUST NOT alias another assignment merely because complete semantics
+match.
+This amendment MUST NOT weaken assignment verification or make an unkeyed
+assignment comparison appear equivalent.
+
+#### Scenario: Protected replay binds assignment scope without weakening verification
+
+- **WHEN** a wrong assignment reference has matching semantics
+- **THEN** scope binding rejects aliasing and unkeyed comparison remains inequivalent
 
 ### Requirement: Event 3.0 and export boundary remain frozen
 
@@ -245,19 +296,11 @@ the local core is scaffolding and not an external output contract.
 ### Requirement: Separate semantic comparison and identity basis
 
 `IdentityBasis::StableSourceCoordinate` MUST contain only its domain,
-coordinate kind, coordinate value, and child ordinal. It MUST NOT own semantic
-fingerprints, fingerprint epochs, or adapter versions. The stable basis domain
+coordinate kind, coordinate value, and child ordinal.
+It MUST NOT own semantic
+fingerprints, fingerprint epochs, or adapter versions.
+The stable basis domain
 MUST match `adapter_type:adapter_id`, without an adapter-version suffix.
-
-The implementation MUST store semantic comparison state separately on the local
-`CanonicalObservationV2` as either comparable fingerprint plus key epoch or
-`Unavailable`. It MUST provide comparison verdicts `Equivalent`, `Mutated`, and
-`Incomparable`: same-epoch equal comparable fingerprints are Equivalent,
-same-epoch different comparable fingerprints are Mutated, and unavailable or
-different-epoch material is Incomparable. Unavailable versus Unavailable MUST
-NOT be Equivalent, and epoch mismatch MUST NOT be reported as mutation. This
-comparison state MUST have no generic serde or export path and MUST be redacted
-from Debug/Display output.
 
 #### Scenario: Normal semantic change is compared separately
 
@@ -279,6 +322,34 @@ from Debug/Display output.
   fingerprints, but a valid stable coordinate exists
 - **THEN** construction succeeds with a stable ID; normal facts are Comparable
   at epoch `none`, while missing sensitive comparison is `Unavailable`
+
+### Requirement: Semantic comparison state is separate from stable coordinates
+
+The implementation MUST store semantic comparison state separately on the local
+`CanonicalObservationV2` as either comparable fingerprint plus key epoch or
+`Unavailable`.
+It MUST provide comparison verdicts `Equivalent`, `Mutated`, and
+`Incomparable`: same-epoch equal comparable fingerprints are Equivalent,
+same-epoch different comparable fingerprints are Mutated, and unavailable or
+different-epoch material is Incomparable.
+
+#### Scenario: Semantic comparison state is separate from stable coordinates
+
+- **WHEN** local semantic comparison is available
+- **THEN** fingerprint and key epoch live outside IdentityBasis
+
+### Requirement: Unavailable semantic comparison is private and incomparable
+
+Unavailable versus Unavailable MUST
+NOT be Equivalent, and epoch mismatch MUST NOT be reported as mutation.
+This
+comparison state MUST have no generic serde or export path and MUST be redacted
+from Debug/Display output.
+
+#### Scenario: Unavailable semantic comparison is private and incomparable
+
+- **WHEN** comparison is unavailable or epochs differ
+- **THEN** absence is not equivalence and epoch mismatch is not mutation; private state is not exported
 
 ### Requirement: Identity, correlation, and exported event identity remain distinct
 
@@ -306,18 +377,10 @@ v2 is the active internal source evidence model.
 The schema MUST provide only the small source-neutral helpers required by both
 reference adapters: conversion from a `serde_json::Value` to bounded
 `JsonValue`, Normal `FactMetadata::reported()` and `FactMetadata::parsed()`
-constructors, and `CorrelationId::source_reported`. These helpers MUST fail
+constructors, and `CorrelationId::source_reported`.
+These helpers MUST fail
 closed on unsupported/non-finite values and MUST NOT introduce JSONL,
 filesystem, provider, lifecycle, adapter registry, or export abstractions.
-
-Canonical JSON bound errors MAY carry a closed typed bound dimension and optional
-closed canonical field category, without raw content, keys, paths, IDs, indices,
-measured sizes, or underlying error strings. Schema SHALL attach the dimension
-at the existing failure site and attribute assembled body fields/facets; adapters
-MAY attribute existing conversion failures to the canonical field they construct.
-Except for the explicitly scoped long-message schema amendment below, limits,
-first-failure order, normalization, and code/Display SHALL NOT change.
-Non-bound errors SHALL NOT acquire bound context.
 
 #### Scenario: Source JSON conversion is bounded and safe
 
@@ -334,67 +397,39 @@ Non-bound errors SHALL NOT acquire bound context.
   field category and bound dimension, without retaining the dynamic field/facet
   name or source content
 
+### Requirement: Canonical bound context has closed attribution
+
+Canonical JSON bound errors MAY carry a closed typed bound dimension and optional
+closed canonical field category, without raw content, keys, paths, IDs, indices,
+measured sizes, or underlying error strings.
+Schema SHALL attach the dimension
+at the existing failure site and attribute assembled body fields/facets; adapters
+MAY attribute existing conversion failures to the canonical field they construct.
+
+#### Scenario: Canonical bound context has closed attribution
+
+- **WHEN** an existing canonical bound failure occurs
+- **THEN** only closed field/dimension context is attributed at the existing failure site
+
+### Requirement: Bound attribution preserves existing failure semantics
+
+Except for the explicitly scoped long-message schema amendment below, limits,
+first-failure order, normalization, and code/Display SHALL NOT change.
+Non-bound errors SHALL NOT acquire bound context.
+
+#### Scenario: Bound attribution preserves existing failure semantics
+
+- **WHEN** a failure is attributed
+- **THEN** limits and ordering remain unchanged except the scoped amendment; non-bound errors acquire no context
+
 ### Requirement: Bounded long-message acquisition and evaluation
 
 Schema SHALL preserve `JsonValue`, `MessageObservation`, and `ContentPart` and
 allow at most 65,536 raw UTF-8 bytes only for direct string `message.content`
-and direct string values of Text content parts. It SHALL NOT recursively expand
+and direct string values of Text content parts.
+It SHALL NOT recursively expand
 string bounds in structured content, Text objects/arrays, names, inference
-metadata, facets, identifiers, or local originals. Ordinary values SHALL retain
-4,096 string bytes, 16,384 encoded bytes per value, and existing depth,
-cardinality, and key limits. Part values SHALL include their array/object
-wrappers in depth accounting.
-The later OpenCode tool-text amendment SHALL also permit direct string
-`tool.result` and the exact `apply_patch` tool's direct `arguments.patchText`
-string under this text budget. The patch argument skeleton with that value null
-SHALL retain ordinary structural and encoded limits; all other arguments and
-nested results SHALL retain ordinary bounds. These exceptions SHALL remain
-subject to the same encoded semantic aggregate, source retention and evaluation
-budgets, without truncation or partial-source progress. See
-`docs/opencode-live-ingestion.md` for acquisition and recovery qualification.
-The content-parts field SHALL retain the ordinary 16,384-byte encoded budget for
-entries other than direct Text strings, including their wrappers and separators.
-
-Schema SHALL additionally bound the sum of encoded semantic body-field and facet
-values to 65,536 bytes per observation, including quotes, escaping and content-part
-wrappers but excluding path/facet labels, metadata, identity/provenance envelopes,
-and independently bounded local evidence. Aggregate validation SHALL follow
-existing body-field order then sorted facets and attribute `EncodedBytes` to the
-field/facet crossing the limit. Builder construction, protected assignment
-commitment/preflight, and assignment replay SHALL share this policy. Comparison
-and protected commitments SHALL include complete accepted text, never a prefix.
-
-Recursive validation of all content parts SHALL precede partitioned ordinary
-encoded limits, and all field/facet validation SHALL precede observation aggregate
-validation. Aggregate numeric size SHALL match canonical identity JSON spelling;
-ordinary/local finite-float bound sizing SHALL retain its legacy spelling.
-
-Schema MAY expose only narrow source conversion helpers for direct message content
-and typed content parts. Source conversion SHALL check original bytes before NFC;
-builder validation SHALL retain its post-canonicalization NFC check order. Source
-conversion success SHALL NOT promise observation aggregate acceptance.
-
-Native adapters SHALL activate only narrow message string conversion. Acquisition
-SHALL reject a source before retaining the next observation when its canonical
-semantic/local retention exceeds 8 MiB; evaluation ingress SHALL enforce the same
-budget with nonallocating sizing. Inference-specific limits SHALL remain unchanged.
-This bound does not govern whole-file native-reader intermediate memory.
-
-Evaluation and projection SHALL share one source-wide 256 MiB charged byte-visit
-budget. Reached clones, joins, comparisons, scans, exclusions, evidence resolution,
-hashing and sanitization SHALL charge before execution, including no matches,
-repeated predicates and empty operations. Composite operations MAY conservatively
-reserve visits. Exhaustion SHALL fail explicitly and atomically without partial
-findings, accounting or installed progress; budgets SHALL NOT reset per detector.
-
-Native message text and role-specific compatibility selection SHALL share a view:
-direct scalar content takes precedence even when empty; otherwise only ordered
-direct Text strings join with newlines, retaining sensitivity with Derived joined
-provenance. Other parts and nested strings SHALL be excluded. Full-view matching,
-anchors and exclusions SHALL preserve occurrence/session scoring. Evidence hashes
-SHALL cover the complete matched input and excerpts SHALL retain existing bounded
-sanitization. Event 3.0 and compatibility limits (4,096 items, 4,096-byte strings,
-4 MiB retained output) SHALL NOT be weakened.
+metadata, facets, identifiers, or local originals.
 
 #### Scenario: Source retention and repeated no-match work exhaust atomically
 
@@ -445,22 +480,180 @@ sanitization. Event 3.0 and compatibility limits (4,096 items, 4,096-byte string
 - **THEN** same-coordinate semantic comparison reports mutation and protected
   assignment replay rejects the changed complete commitment with `replay_collision`
 
+### Requirement: Ordinary canonical values retain structural and string limits
+
+Ordinary values SHALL retain
+4,096 string bytes, 16,384 encoded bytes per value, and existing depth,
+cardinality, and key limits.
+Part values SHALL include their array/object
+wrappers in depth accounting.
+
+#### Scenario: Ordinary canonical values retain structural and string limits
+
+- **WHEN** a value is outside the direct long-text exceptions
+- **THEN** ordinary string, encoded, depth, cardinality and key limits apply
+
+### Requirement: OpenCode tool text has narrowly scoped long-text exceptions
+
+The later OpenCode tool-text amendment SHALL also permit direct string
+`tool.result` and the exact `apply_patch` tool's direct `arguments.patchText`
+string under this text budget.
+The patch argument skeleton with that value null
+SHALL retain ordinary structural and encoded limits; all other arguments and
+nested results SHALL retain ordinary bounds.
+
+#### Scenario: OpenCode tool text has narrowly scoped long-text exceptions
+
+- **WHEN** direct tool.result or exact apply_patch patchText is acquired
+- **THEN** the text exception applies while patch skeleton and other arguments/results retain ordinary bounds
+
+### Requirement: Long-text exceptions retain shared budgets and content-part partitioning
+
+These exceptions SHALL remain
+subject to the same encoded semantic aggregate, source retention and evaluation
+budgets, without truncation or partial-source progress.
+See
+`docs/opencode-live-ingestion.md` for acquisition and recovery qualification.
+The content-parts field SHALL retain the ordinary 16,384-byte encoded budget for
+entries other than direct Text strings, including their wrappers and separators.
+
+#### Scenario: Long-text exceptions retain shared budgets and content-part partitioning
+
+- **WHEN** long text is accepted
+- **THEN** aggregate, retention and evaluation budgets still apply without truncation
+
+### Requirement: Observation semantic aggregate is encoded and bounded
+
+Schema SHALL additionally bound the sum of encoded semantic body-field and facet
+values to 65,536 bytes per observation, including quotes, escaping and content-part
+wrappers but excluding path/facet labels, metadata, identity/provenance envelopes,
+and independently bounded local evidence.
+Aggregate validation SHALL follow
+existing body-field order then sorted facets and attribute `EncodedBytes` to the
+field/facet crossing the limit.
+
+#### Scenario: Observation semantic aggregate is encoded and bounded
+
+- **WHEN** semantic body fields and facets are validated
+- **THEN** their encoded aggregate is at most 65,536 bytes and failure is attributed in canonical order
+
+### Requirement: Assignment commitments share complete accepted-text bounds
+
+Builder construction, protected assignment
+commitment/preflight, and assignment replay SHALL share this policy.
+Comparison
+and protected commitments SHALL include complete accepted text, never a prefix.
+
+#### Scenario: Assignment commitments share complete accepted-text bounds
+
+- **WHEN** a builder or protected assignment processes long text
+- **THEN** the shared bound policy commits complete text rather than a prefix
+
+### Requirement: Canonical text validation order and numeric sizing remain fixed
+
+Recursive validation of all content parts SHALL precede partitioned ordinary
+encoded limits, and all field/facet validation SHALL precede observation aggregate
+validation.
+Aggregate numeric size SHALL match canonical identity JSON spelling;
+ordinary/local finite-float bound sizing SHALL retain its legacy spelling.
+
+#### Scenario: Canonical text validation order and numeric sizing remain fixed
+
+- **WHEN** content parts and facets are validated
+- **THEN** recursive and field checks precede aggregate checks with their respective numeric spelling
+
+### Requirement: Message conversion preserves original-byte and NFC ordering
+
+Schema MAY expose only narrow source conversion helpers for direct message content
+and typed content parts.
+Source conversion SHALL check original bytes before NFC;
+builder validation SHALL retain its post-canonicalization NFC check order.
+Source
+conversion success SHALL NOT promise observation aggregate acceptance.
+
+#### Scenario: Message conversion preserves original-byte and NFC ordering
+
+- **WHEN** source message content is converted
+- **THEN** original bytes are checked before NFC and successful conversion does not promise aggregate acceptance
+
+### Requirement: Canonical source retention is bounded before insertion
+
+Native adapters SHALL activate only narrow message string conversion.
+Acquisition
+SHALL reject a source before retaining the next observation when its canonical
+semantic/local retention exceeds 8 MiB; evaluation ingress SHALL enforce the same
+budget with nonallocating sizing.
+Inference-specific limits SHALL remain unchanged.
+This bound does not govern whole-file native-reader intermediate memory.
+
+#### Scenario: Canonical source retention is bounded before insertion
+
+- **WHEN** the next canonical observation exceeds 8 MiB retained source budget
+- **THEN** acquisition rejects before retention and evaluation enforces the same budget
+
+### Requirement: Evaluation byte visits are charged source-wide
+
+Evaluation and projection SHALL share one source-wide 256 MiB charged byte-visit
+budget.
+Reached clones, joins, comparisons, scans, exclusions, evidence resolution,
+hashing and sanitization SHALL charge before execution, including no matches,
+repeated predicates and empty operations.
+Composite operations MAY conservatively
+reserve visits.
+
+#### Scenario: Evaluation byte visits are charged source-wide
+
+- **WHEN** evaluation or projection reaches clones, joins or scans
+- **THEN** execution is charged against one 256 MiB source-wide budget
+
+### Requirement: Evaluation budget exhaustion is atomic
+
+Exhaustion SHALL fail explicitly and atomically without partial
+findings, accounting or installed progress; budgets SHALL NOT reset per detector.
+
+#### Scenario: Evaluation budget exhaustion is atomic
+
+- **WHEN** the source-wide byte-visit budget is exhausted
+- **THEN** no partial findings, accounting or installed progress survive
+
+### Requirement: Message matching uses one truthful ordered text view
+
+Native message text and role-specific compatibility selection SHALL share a view:
+direct scalar content takes precedence even when empty; otherwise only ordered
+direct Text strings join with newlines, retaining sensitivity with Derived joined
+provenance.
+Other parts and nested strings SHALL be excluded.
+Full-view matching,
+anchors and exclusions SHALL preserve occurrence/session scoring.
+
+#### Scenario: Message matching uses one truthful ordered text view
+
+- **WHEN** scalar content is absent
+- **THEN** only direct ordered Text strings form the derived newline-joined view
+
+### Requirement: Long-message evidence preserves complete hashes and Event3 limits
+
+Evidence hashes
+SHALL cover the complete matched input and excerpts SHALL retain existing bounded
+sanitization.
+Event 3.0 and compatibility limits (4,096 items, 4,096-byte strings,
+4 MiB retained output) SHALL NOT be weakened.
+
+#### Scenario: Long-message evidence preserves complete hashes and Event3 limits
+
+- **WHEN** full-view matching emits compatibility evidence
+- **THEN** hashes cover complete input while excerpts and Event3 output retain existing bounds
+
 ### Requirement: Protected assignment is a separate durable identity authority
 
 When no stable source coordinate exists, first protected-assignment allocation
 MAY create a domain-separated observation ID from cryptographically appropriate
 random seed material only when the ID, assignment reference, protected replay
 association, complete semantic commitment, and comparison-key reference are
-persisted atomically by the assignment authority. The random seed is not a
+persisted atomically by the assignment authority.
+The random seed is not a
 source coordinate and MUST NOT be inserted into or reinterpret the published
 stable-coordinate tuple.
-
-The resulting observation ID MUST retain the external
-`obs:v2:sha256:<64 lowercase hexadecimal digits>` form, MUST NOT be regenerated
-for an existing assignment, and MUST NOT encode source path, timestamp, semantic
-value/hash, mutable ordinal, task directory, adapter version, or public content.
-Absent safe replay association or durable assignment authority MUST remain
-`replay_unverifiable` rather than triggering random fallback.
 
 #### Scenario: Durable allocation is not random source identity
 
@@ -475,6 +668,20 @@ Absent safe replay association or durable assignment authority MUST remain
   assignment state
 - **THEN** construction returns `replay_unverifiable` and no random observation
   ID is returned
+
+### Requirement: Protected assigned IDs remain stable and private
+
+The resulting observation ID MUST retain the external
+`obs:v2:sha256:<64 lowercase hexadecimal digits>` form, MUST NOT be regenerated
+for an existing assignment, and MUST NOT encode source path, timestamp, semantic
+value/hash, mutable ordinal, task directory, adapter version, or public content.
+Absent safe replay association or durable assignment authority MUST remain
+`replay_unverifiable` rather than triggering random fallback.
+
+#### Scenario: Protected assigned IDs remain stable and private
+
+- **WHEN** an assignment already exists or safe authority is absent
+- **THEN** existing IDs are not regenerated and unsafe allocation fails replay_unverifiable
 
 ### Requirement: First-assignment preparation remains I/O-free and source-neutral
 

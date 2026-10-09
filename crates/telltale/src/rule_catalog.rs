@@ -1,9 +1,7 @@
 //! Presentation metadata for bundled compatibility content and native actions.
 use crate::{DetailedEvaluationOptions, Pipeline, PipelineError};
-use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RuleCatalogKind {
     Rule,
@@ -13,7 +11,9 @@ pub enum RuleCatalogKind {
 /// Immutable display metadata, not executable content or a detection AST.
 /// Session scores describe frozen compatibility contributions; action scores
 /// describe individual native contributions, not host promotion totals.
-#[derive(Clone, Debug, Serialize)]
+/// A Rust value, not a wire format: hosts project accessors into their own
+/// versioned catalog document.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct RuleCatalogEntry {
     id: String,
@@ -225,14 +225,12 @@ mod tests {
     #[test]
     fn startup_compilation_errors_are_typed_and_payload_safe() {
         let document = "version: 1\ndescription: synthetic\ndefaults: {enabled: true, case_insensitive: false}\nrules:\n  - id: synthetic.rule\n    category: /home/synthetic/private\n    severity: high\n    score: 101\n    targets: [command]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n";
-        let pipeline = Pipeline::builder()
+        let error = Pipeline::builder()
             .without_bundled_defaults()
             .rules_document(document)
             .build()
-            .unwrap();
-        let error = pipeline
-            .semantic_provenance(&DetailedEvaluationOptions::default())
-            .unwrap_err();
+            .err()
+            .expect("canonical rejection at build");
         assert!(matches!(error, PipelineError::Compilation(_)));
         assert!(std::error::Error::source(&error).is_some());
         assert_eq!(format!("{error:?}"), "pipeline_compilation_failed");
@@ -276,11 +274,11 @@ mod tests {
             assert_eq!(entry.when_all_categories(), modifier.when_all_categories);
             assert_eq!(entry.when_all_rule_ids(), modifier.when_all_rule_ids);
         }
-        let serialized = serde_json::to_value(&catalog).unwrap();
-        for entry in serialized.as_array().unwrap() {
-            assert!(entry.get("regex").is_none());
-            assert!(entry.get("matchers").is_none());
-            assert!(entry.get("targets").is_none());
+        for entry in &catalog {
+            let debug = format!("{entry:?}");
+            for field in ["regex:", "matchers:", "targets:"] {
+                assert!(!debug.contains(field), "{field}");
+            }
         }
     }
     #[test]

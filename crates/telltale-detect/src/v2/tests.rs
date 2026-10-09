@@ -1822,12 +1822,21 @@ fn compatibility_views_preserve_roles_and_truthful_absence() {
         url_matcher.required_capabilities().collect::<Vec<_>>(),
         vec![CapabilityId::ToolCall]
     );
+    // No URL-keyed argument is an evaluated absence, not a visibility gap; a
+    // network facet alone is not a tool-argument URL.
     assert_eq!(
         url_matcher
             .evaluate(&tool("synthetic arguments", "url-capability"))
             .unwrap()
             .state(),
-        &MatchState::NotEvaluated(NonEvaluationReason::InsufficientVisibility)
+        &MatchState::NoMatch
+    );
+    assert_eq!(
+        url_matcher
+            .evaluate(&tool(r#"{"url":"https://example"}"#, "url-argument"))
+            .unwrap()
+            .state(),
+        &MatchState::Match
     );
 }
 

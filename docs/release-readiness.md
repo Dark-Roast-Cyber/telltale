@@ -113,7 +113,8 @@ Release are now published and immutable. Subsequent development version alignmen
 does not replace those artifacts or the separately pinned controlled-development lab.
 
 The current workspace metadata `0.7.0-rc.2` is an untagged, unpublished, and
-unqualified development version only. The RC1 evidence below applies solely to
+unqualified candidate-preparation version. Its intended supported 0.7 facade is
+undergoing qualification, not an unsupported development-only API. The RC1 evidence below applies solely to
 the immutable published RC1 artifact; it cannot qualify current main. Any next
 reviewed candidate requires its own qualification. No tag, release, artifact, or
 publication is authorized by this metadata correction.
@@ -168,12 +169,13 @@ test window was not assessed.
 ## 0.7 stable-readiness decisions
 
 These are decisions and required future gates, not evidence that a gate has
-passed. The current development base
-`7511307b64424e54ee13fa77007d0eb9775acedc` is not a frozen replacement
-candidate. Issue #87's earlier freeze at
+passed. Development through `43344648edf450a13a1cb3b3a29cd310acad3b34`
+and the subsequent 0.7 embedding-contract preparation commits are not a
+frozen replacement candidate. Issue #87's earlier freeze at
 `5a47eaab406c8cb5b139476861722155b0fdf227` was invalidated by subsequent merged
 code; historical evidence is not rebound. Development CI run `37361823509` and
-CodeQL run `37361823885` passed, but do not qualify a release artifact. A new
+CodeQL run `37361823885` passed for `7511307b64424e54ee13fa77007d0eb9775acedc`,
+not the current tree, and do not qualify a release artifact. A new
 reviewed final source SHA and exact standalone Git-consumer proof/preflight are
 required after polish. Freezing that source remains a separate acceptance action;
 integration pins and acceptance are a distinct gate.
@@ -242,6 +244,49 @@ Defer the dependency-update PR as-is. Do not merge major upgrades or loosen the
 SQLite pin merely to repair CI. Security advisories remain mandatory; make only
 targeted necessary fixes before freeze. An unrelated candidate failure in a
 separate open PR is not by itself a release blocker.
+
+### Post-RC1 embedding qualification
+
+The current RC2 development embedding facade is an intended 0.7.0 contract, not
+qualification evidence. Before claiming the upstream facade qualified, bind
+results to the reviewed candidate SHA and retain results for
+`make embedding-contract-check`, the explicit Rust 1.88 embedding subset, and an
+exact standalone Git consumer using strict Event 3 and the public facade. Native
+platform/artifact qualification is a separate upstream gate. Integrated
+downstream-consumer host validation is a separate integration gate, not a
+prerequisite to Telltale's standalone usability or upstream release qualification.
+None is an RC1 gate retroactively; RC1 evidence remains bound to its published
+artifact. Do not report a gate as passed until its candidate-bound evidence exists.
+
+### Current candidate blocking checklist
+
+Current statuses below are **NOT RUN / PENDING**, not release passes inferred
+from focused development evidence. Bind local results to source base, tracked
+patch hash, relevant untracked-input manifest/hashes, toolchain/features, exact
+commands/exits and logs. That identifies a tested tree, not an exact Git revision.
+An uncommitted tree cannot satisfy the exact Git-candidate gate; reviewed
+commit/push and subsequent lifecycle checks require separate authorization.
+
+| Required gate | Current status and completion evidence |
+| --- | --- |
+| Canonical local CI, source coverage/privacy and same-version durability/retry | PENDING: full final-tree gates; focused synthetic WAL, large-output, safe-read/retry and concurrency results are supporting evidence only. Live client WAL append was not demonstrated. |
+| Strict OpenSpec and independent review | PENDING: bind strict validation and independent review to the complete final candidate; prior 37 passing specs are development evidence, not final approval. |
+| Full local two-hour settled soak | PENDING: complete all 7,201 one-second cycles, no `TELLTALE_WORKLOAD_CYCLES` override, with terminal exit and final report. The 2,701-cycle checkpoint is not a pass. |
+| Public facade feature matrix and Rust 1.88 subset | PENDING: all eight feature combinations plus explicit Rust 1.88 subset on final inputs; no global workspace/CLI MSRV claim. |
+| Exact standalone Git consumer, CI/CodeQL and preflight | NOT RUN: after an authorized reviewed commit/push, test the exact candidate revision and public facade/strict Event 3; package metadata or a base-plus-patch run cannot satisfy this gate. |
+| Real downstream-consumer candidate adoption | PENDING integration gate: isolated public-facade suites (33 + 75 tests) passed, but require final candidate rebinding and native Windows build/integration evidence for an integrated claim. Not a dependency of standalone Telltale. |
+| Native platforms and performance | NOT RUN: Windows x86_64, Linux ARM, macOS x86_64/arm64 and bounded cold/warm/steady/saturated performance evidence. No native Windows access; unavailable required targets remain blocked, not passed by Linux tests. |
+| Five-platform RC2 artifacts and clean-host qualification | NOT RUN: RC2 is unpublished. Verify exact new archive/binary hashes, manifests, SBOM/attestations, native execution, clean-host installer/service and functional gates; RC1 evidence is historical only. |
+
+The [selected-window aggregate limitation](opencode-live-ingestion.md#failure-recovery-and-coverage)
+is nonblocking only for the existing session-aggregate/conditional-replay contract,
+not a new-action, cumulative-snapshot, or exactly-once promise. Embedding performs
+the CLI cursor transition only through a host-persisted resume token. Retain source-bound coordinate fallback
+and empty whole-source baselines for OpenCode `PartialSource` accounting.
+UPGRADE-01 defers only cross-version migration; same-version privacy/durability
+and release gates remain required. Current adoption is fresh-install scope, with
+OpenClaw/Qwen live-store support still preview. No checklist authorizes lifecycle
+actions or claims stable qualification.
 
 ## Historical RC Candidate Handoff
 
@@ -679,7 +724,11 @@ workspace packages. It then compiles a registry-style external consumer and
 installs the normalized `telltale-cli` package into a temporary root, checking
 the canonical `telltale` install, `telltale --version`, and packaged provenance
 materialization. The target supports Linux and macOS and cleans
-its temporary workspace on exit.
+its temporary normalized sources, consumer manifests and installation roots on
+exit. All Cargo gates reuse the caller's `CARGO_TARGET_DIR` (or Cargo's configured
+workspace target directory); cleanup never deletes that shared cache. Normalized
+packages are freshly generated by locked package verification, then copied into
+the isolated temporary source tree; cache reuse does not skip any gate.
 
 `make producer-provenance-check` is the authoritative focused gate for the
 closed manifest. It validates the schema/rules/allowlist/core/CLI tests, runs

@@ -14,16 +14,10 @@ SQLite downstream replay state.
 ### Requirement: Delivery semantics are transport-neutral
 
 The system SHALL represent transport, delivery policy, and persistence role as
-distinct semantics. A local transport MUST be able to use BestEffort policy and
+distinct semantics.
+A local transport MUST be able to use BestEffort policy and
 a non-local transport MUST be able to use Durable policy without locality alone
 changing reliability behavior.
-
-The former `SinkEntry.durable` flag MUST NOT be the semantic authority, and
-the former `add_remote` construction meaning MUST resolve to an explicit
-BestEffort policy plus no downstream delivery-state persistence. Sink identity,
-transport, delivery policy, and persistence role MUST remain independently
-represented with minimal compatibility mapping for existing callers. Durable
-MUST NOT mean HTTP, and a future local IPC transport MAY be BestEffort.
 
 #### Scenario: Best-effort remote compatibility
 
@@ -44,6 +38,22 @@ MUST NOT mean HTTP, and a future local IPC transport MAY be BestEffort.
 - **THEN** it creates a sink with an explicit identity and transport,
   BestEffort delivery policy, and no downstream delivery-state persistence;
   locality and reliability are not inferred from the helper name
+
+### Requirement: Legacy sink construction does not own delivery semantics
+
+The former `SinkEntry.durable` flag MUST NOT be the semantic authority, and
+the former `add_remote` construction meaning MUST resolve to an explicit
+BestEffort policy plus no downstream delivery-state persistence.
+Sink identity,
+transport, delivery policy, and persistence role MUST remain independently
+represented with minimal compatibility mapping for existing callers.
+Durable
+MUST NOT mean HTTP, and a future local IPC transport MAY be BestEffort.
+
+#### Scenario: Legacy sink construction does not own delivery semantics
+
+- **WHEN** an existing sink is mapped to explicit semantics
+- **THEN** policy, identity, transport and persistence remain independent without Durable implying HTTP
 
 ### Requirement: Durable downstream policy is opt-in and requires JSONL
 
@@ -80,28 +90,11 @@ configured identity. Remote-only output SHALL remain BestEffort in this change.
 ### Requirement: Durable private storage has an explicit platform and threat boundary
 
 Persistent Durable delivery SHALL use the private local-storage profile
-defined here. On Windows, every persistent durable-delivery/storage
+defined here.
+On Windows, every persistent durable-delivery/storage
 entry point MUST fail closed deterministically before creating, opening,
 inspecting, or mutating an outbox or its sidecars, before a prospective
-canonical JSONL append, and before scanner-state progress. The diagnostic MUST
-be structured as `DurableStorage` and contain the bounded message
-`persistent durable-delivery private storage is not supported on Windows yet`.
-The failure MUST NOT silently change the requested policy to BestEffort or
-otherwise claim that the batch was accepted.
-
-This platform boundary applies only to persistent durable delivery/storage.
-Telltale itself and existing Windows BestEffort operation remain supported.
-Cross-platform API/cfg compilation and deterministic policy tests are not
-native Windows durable-runtime evidence. Network filesystems are unsupported.
-
-Durable storage guarantees assume private local storage controlled by a
-cooperating Telltale process/user boundary. Hostile actors with the same OS
-principal and privileged/root/admin actors are outside this threat model.
-Path, advisory-lock, and stable-identity checks remain integrity defenses for
-cooperating writers, but MUST NOT be described as an atomic pathname-to-opened
-SQLite-object binding against excluded actors. A stronger opened-object-aware
-SQLite/VFS design is required for that stronger defense and is outside this
-capability.
+canonical JSONL append, and before scanner-state progress.
 
 #### Scenario: Windows durable configuration is rejected before initialization
 
@@ -126,6 +119,58 @@ capability.
 - **WHEN** an existing BestEffort configuration is initialized on Windows
 - **THEN** it remains valid and is not rejected by the persistent durable-storage
   platform guard
+
+### Requirement: Unsupported Windows durability fails explicitly without policy downgrade
+
+The diagnostic MUST
+be structured as `DurableStorage` and contain the bounded message
+`persistent durable-delivery private storage is not supported on Windows yet`.
+The failure MUST NOT silently change the requested policy to BestEffort or
+otherwise claim that the batch was accepted.
+
+#### Scenario: Unsupported Windows durability fails explicitly without policy downgrade
+
+- **WHEN** persistent durable storage is requested on Windows
+- **THEN** DurableStorage returns the fixed message and never silently accepts as BestEffort
+
+### Requirement: Windows BestEffort support is separate from durable storage support
+
+The Windows platform boundary MUST remain specific to persistent durable storage. This platform boundary applies only to persistent durable delivery/storage.
+Telltale itself and existing Windows BestEffort operation remain supported.
+Cross-platform API/cfg compilation and deterministic policy tests are not
+native Windows durable-runtime evidence.
+Network filesystems are unsupported.
+
+#### Scenario: Windows BestEffort support is separate from durable storage support
+
+- **WHEN** cross-platform API tests or Windows BestEffort runs
+- **THEN** they do not establish native durable support; network storage remains unsupported
+
+### Requirement: Durable storage threat model excludes hostile same-principal actors
+
+Durable storage guarantees MUST retain this cooperating-writer threat model. Durable storage guarantees assume private local storage controlled by a
+cooperating Telltale process/user boundary.
+Hostile actors with the same OS
+principal and privileged/root/admin actors are outside this threat model.
+
+#### Scenario: Durable storage threat model excludes hostile same-principal actors
+
+- **WHEN** private durable storage integrity checks are described
+- **THEN** cooperating-writer checks are not claimed as atomic opened-object binding against excluded actors
+
+### Requirement: Durable integrity checks do not claim hostile-actor opened-object binding
+
+Path, advisory-lock, and stable-identity checks remain integrity defenses for
+cooperating writers, but MUST NOT be described as an atomic pathname-to-opened
+SQLite-object binding against excluded actors.
+A stronger opened-object-aware
+SQLite/VFS design is required for that stronger defense and is outside this
+capability.
+
+#### Scenario: Durable integrity checks do not claim hostile-actor opened-object binding
+
+- **WHEN** hostile same-principal actors are considered
+- **THEN** cooperating-writer checks do not imply atomic SQLite-object binding; a stronger VFS design is outside scope
 
 ### Requirement: Canonical JSONL is the durable first write
 
@@ -284,52 +329,12 @@ other sink from progressing.
 ### Requirement: Retry and failure classes are structured
 
 Delivery results SHALL expose a structured class rather than requiring callers
-to parse diagnostic strings. The model MUST distinguish transport/no-response,
+to parse diagnostic strings.
+The model MUST distinguish transport/no-response,
 independently observable timeout, received HTTP/status failure,
 sink/application rejection, authentication/authorization blocked, payload or
 collision, durable-storage failure, and unknown/internal failure, while
 remaining extensible for later protocols.
-
-Both direct and durable Splunk HEC sends MUST require HTTP 2xx containing a JSON
-object with integer `code: 0` before reporting success or acknowledging a row.
-Codes 8–9, 17–20, and 23–27 MUST be `SinkApplicationRetryable`; codes 1–4 and
-21–22 MUST be `AuthenticationBlocked`; codes 5–7 and 10–16 MUST be permanent
-`SinkApplicationRejected`. Unknown codes or missing, malformed, or noninteger
-codes MUST be `SinkResponseBlocked`, retaining durable rows blocked for operator
-action rather than acknowledging or dead-lettering them as event poison.
-Response bodies and parser diagnostics MUST NOT appear in delivery diagnostics.
-Direct retries MUST share one configured total attempt budget across application,
-HTTP, and transport failures. Durable sends MUST perform one transport attempt
-per selected row per dispatch and retain existing persistent retry limits.
-Non-2xx classification MUST remain unchanged. HEC request acceptance MUST NOT be
-described as indexer acknowledgment.
-
-Durable Elasticsearch single-event Bulk sends MUST acknowledge only exactly one
-`index` item with the stored event's `_id`, `errors: false`, no error field, and
-status/result `200`/`updated` or `201`/`created`. A matching single-item rejection
-with `errors: true`, an error object with a nonempty string `type`, and no result
-field SHALL classify item
-408, 429, and 5xx as retryable `HttpStatus`, 401/403 as
-`AuthenticationBlocked`, and 400/413/422 as permanent `SinkApplicationRejected`.
-Malformed, inconsistent, mismatched, or otherwise unrecognized outcomes MUST be
-`SinkResponseBlocked`, not acknowledged or declared event poison. Diagnostics
-MUST exclude endpoint-controlled content. Durable sends MUST retain one transport
-attempt per selected row and the existing persisted scheduling and budget.
-Best-effort Elastic item-error reporting and lack of item retries MUST remain
-unchanged.
-
-Outbox persistence MUST read existing supported classes and MUST NOT silently
-convert, drop, or reset unknown classes. Persisted `sink_application_retryable`
-and `sink_response_blocked` classes MUST have a documented rollback boundary:
-older binaries cannot decode them despite an unchanged SQLite schema version.
-Rollback MUST require a verified coordinated pre-upgrade snapshot taken with
-writers and schedules stopped. It MUST quarantine post-upgrade data and restore
-the matching old binary, configuration, scanner state, JSONL and rotations, and
-outbox with sidecars together. Post-snapshot events MUST remain available for
-explicit reconciliation; snapshot restoration alone does not deliver them and
-replay may duplicate already accepted events. Without that snapshot, guidance
-MUST require keeping the compatible binary and repairing forward, not a
-binary-only downgrade or in-place class conversion, row deletion, or queue reset.
 
 #### Scenario: Network failure is retryable
 
@@ -399,6 +404,134 @@ binary-only downgrade or in-place class conversion, row deletion, or queue reset
 - **THEN** guidance requires retaining the compatible binary and repairing
   forward rather than resetting or dropping delivery rows
 
+### Requirement: HEC acknowledgement requires application success
+
+Both direct and durable Splunk HEC sends MUST require HTTP 2xx containing a JSON
+object with integer `code: 0` before reporting success or acknowledging a row.
+
+#### Scenario: HEC acknowledgement requires application success
+
+- **WHEN** direct or durable HEC receives HTTP 2xx
+- **THEN** only integer code zero reports success or acknowledges
+
+### Requirement: HEC application response codes have closed retry classes
+
+Codes 8–9, 17–20, and 23–27 MUST be `SinkApplicationRetryable`; codes 1–4 and
+21–22 MUST be `AuthenticationBlocked`; codes 5–7 and 10–16 MUST be permanent
+`SinkApplicationRejected`.
+
+#### Scenario: HEC application response codes have closed retry classes
+
+- **WHEN** HEC returns a recognized application code
+- **THEN** the documented retryable, authentication-blocked or permanently rejected class applies
+
+### Requirement: Unrecognized HEC responses block without content exposure
+
+Unknown codes or missing, malformed, or noninteger
+codes MUST be `SinkResponseBlocked`, retaining durable rows blocked for operator
+action rather than acknowledging or dead-lettering them as event poison.
+Response bodies and parser diagnostics MUST NOT appear in delivery diagnostics.
+
+#### Scenario: Unrecognized HEC responses block without content exposure
+
+- **WHEN** HEC code is absent, malformed or unknown
+- **THEN** durable rows remain blocked and response/parser content stays out of diagnostics
+
+### Requirement: HEC attempts share bounded direct and durable retry policies
+
+Direct retries MUST share one configured total attempt budget across application,
+HTTP, and transport failures.
+Durable sends MUST perform one transport attempt
+per selected row per dispatch and retain existing persistent retry limits.
+Non-2xx classification MUST remain unchanged.
+HEC request acceptance MUST NOT be
+described as indexer acknowledgment.
+
+#### Scenario: HEC attempts share bounded direct and durable retry policies
+
+- **WHEN** HEC application, HTTP or transport sends fail
+- **THEN** direct sends share one total budget and durable rows use one attempt per dispatch
+
+### Requirement: Elasticsearch durable acknowledgement validates the exact stored item
+
+Durable Elasticsearch single-event Bulk sends MUST acknowledge only exactly one
+`index` item with the stored event's `_id`, `errors: false`, no error field, and
+status/result `200`/`updated` or `201`/`created`.
+
+#### Scenario: Elasticsearch durable acknowledgement validates the exact stored item
+
+- **WHEN** single-event Bulk returns apparent success
+- **THEN** only one matching index item with consistent errors/status/result acknowledges
+
+### Requirement: Elasticsearch item rejections use structured status classification
+
+A matching single-item rejection
+with `errors: true`, an error object with a nonempty string `type`, and no result
+field SHALL classify item
+408, 429, and 5xx as retryable `HttpStatus`, 401/403 as
+`AuthenticationBlocked`, and 400/413/422 as permanent `SinkApplicationRejected`.
+
+#### Scenario: Elasticsearch item rejections use structured status classification
+
+- **WHEN** one matching Bulk item rejects with consistent error fields
+- **THEN** 408/429/5xx retry, 401/403 block authentication and 400/413/422 reject permanently
+
+### Requirement: Unknown Elasticsearch responses block safely
+
+Malformed, inconsistent, mismatched, or otherwise unrecognized outcomes MUST be
+`SinkResponseBlocked`, not acknowledged or declared event poison.
+Diagnostics
+MUST exclude endpoint-controlled content.
+Durable sends MUST retain one transport
+attempt per selected row and the existing persisted scheduling and budget.
+Best-effort Elastic item-error reporting and lack of item retries MUST remain
+unchanged.
+
+#### Scenario: Unknown Elasticsearch responses block safely
+
+- **WHEN** Bulk outcome is malformed, inconsistent or mismatched
+- **THEN** it blocks without endpoint diagnostics or changing durable scheduling and best-effort behavior
+
+### Requirement: Persisted delivery classes retain an explicit binary rollback boundary
+
+Outbox persistence MUST read existing supported classes and MUST NOT silently
+convert, drop, or reset unknown classes.
+Persisted `sink_application_retryable`
+and `sink_response_blocked` classes MUST have a documented rollback boundary:
+older binaries cannot decode them despite an unchanged SQLite schema version.
+
+#### Scenario: Persisted delivery classes retain an explicit binary rollback boundary
+
+- **WHEN** outbox classes are read by a binary
+- **THEN** unknown classes are not reset and newly persisted classes document old-binary incompatibility
+
+### Requirement: Delivery rollback restores one stopped-writer coordinated snapshot
+
+Rollback MUST require a verified coordinated pre-upgrade snapshot taken with
+writers and schedules stopped.
+It MUST quarantine post-upgrade data and restore
+the matching old binary, configuration, scanner state, JSONL and rotations, and
+outbox with sidecars together.
+
+#### Scenario: Delivery rollback restores one stopped-writer coordinated snapshot
+
+- **WHEN** a compatible pre-upgrade snapshot exists
+- **THEN** matching binary/config/state/JSONL/outbox are restored together while post-snapshot data is quarantined
+
+### Requirement: Delivery rollback preserves reconciliation data and forbids unsafe downgrade
+
+Post-snapshot events MUST remain available for
+explicit reconciliation; snapshot restoration alone does not deliver them and
+replay may duplicate already accepted events.
+Without that snapshot, guidance
+MUST require keeping the compatible binary and repairing forward, not a
+binary-only downgrade or in-place class conversion, row deletion, or queue reset.
+
+#### Scenario: Delivery rollback preserves reconciliation data and forbids unsafe downgrade
+
+- **WHEN** no verified coordinated snapshot exists
+- **THEN** repair forward is required without class conversion, row deletion or queue reset
+
 ### Requirement: Poison events do not wedge delivery
 
 Payload or application failures that are permanent for the event SHALL be
@@ -414,32 +547,13 @@ attempted.
 
 ### Requirement: Capacity exhaustion is visible and fail-safe
 
-Durable queue limits SHALL bound pending event count and payload bytes. Capacity
+Durable queue limits SHALL bound pending event count and payload bytes.
+Capacity
 accounting MUST include committed JSONL bytes that have not yet been ingested.
 When projected headroom or required persistent state cannot be established, the
 system MUST reject the new batch before appending it and before advancing new
-scanner dedup/cursor state. It MUST NOT silently delete accepted telemetry.
-
-Admission for one canonical JSONL/outbox pair MUST be serialized by its private
-admission sidecar lock. The lock MUST remain held across recovery reconciliation,
-eligible ready-work dispatch, capacity inspection, canonical JSONL append, and
-follow-up reconciliation. Before a prospective batch is checked, eligible ready
-rows SHALL be attempted without sleeping or hot-looping: successfully
-acknowledged rows release pending capacity, while blocked and retry-delayed rows
-continue to consume it. Cooperating durable writers MUST therefore not both
-admit against the same observed headroom.
-
-The same private admission sidecar MUST serialize standalone delivery selection,
-transport attempts, and result commits, including dispatchers with distinct
-scanner-state paths. Standalone dispatch MUST acquire ownership after
-path/platform validation and before opening the outbox, retain it throughout the
-drain, close the outbox before final lock verification, and release by guard
-lifetime. Admission predrain MUST reuse its already-held owner without recursive
-acquisition. Contention MUST fail immediately with structured `DurableStorage`
-and zero transport attempts; the losing invocation MUST NOT send, update delivery
-state, or prune generations. This does not roll back previously accepted
-journal/outbox work or scanner progress. A subsequent invocation MAY retry after
-owner release. At-least-once crash/uncertain-success duplicates remain permitted.
+scanner dedup/cursor state.
+It MUST NOT silently delete accepted telemetry.
 
 #### Scenario: Pending queue reaches its limit
 
@@ -495,17 +609,73 @@ owner release. At-least-once crash/uncertain-success duplicates remain permitted
   delivery history and cursor unchanged, and does not prune eligible rotations
 - **AND** after owner release, an uncontended invocation can dispatch normally
 
+### Requirement: Durable admission lock spans the whole local acceptance transaction
+
+Admission for one canonical JSONL/outbox pair MUST be serialized by its private
+admission sidecar lock.
+The lock MUST remain held across recovery reconciliation,
+eligible ready-work dispatch, capacity inspection, canonical JSONL append, and
+follow-up reconciliation.
+
+#### Scenario: Durable admission lock spans the whole local acceptance transaction
+
+- **WHEN** a JSONL/outbox pair admits a batch
+- **THEN** one private owner spans reconciliation, predrain, capacity, append and follow-up
+
+### Requirement: Admission predrain releases acknowledged capacity only
+
+Before a prospective batch is checked, eligible ready
+rows SHALL be attempted without sleeping or hot-looping: successfully
+acknowledged rows release pending capacity, while blocked and retry-delayed rows
+continue to consume it.
+Cooperating durable writers MUST therefore not both
+admit against the same observed headroom.
+
+#### Scenario: Admission predrain releases acknowledged capacity only
+
+- **WHEN** eligible ready rows are attempted before admission
+- **THEN** acknowledged rows release capacity while blocked/retry-delayed rows retain it
+
+### Requirement: Standalone durable dispatch uses the admission owner
+
+The same private admission sidecar MUST serialize standalone delivery selection,
+transport attempts, and result commits, including dispatchers with distinct
+scanner-state paths.
+Standalone dispatch MUST acquire ownership after
+path/platform validation and before opening the outbox, retain it throughout the
+drain, close the outbox before final lock verification, and release by guard
+lifetime.
+
+#### Scenario: Standalone durable dispatch uses the admission owner
+
+- **WHEN** dispatchers have distinct scanner-state paths
+- **THEN** one sidecar still serializes selection, sends and commits
+
+### Requirement: Durable lock contention sends nothing and preserves accepted work
+
+Admission predrain MUST reuse its already-held owner without recursive
+acquisition.
+Contention MUST fail immediately with structured `DurableStorage`
+and zero transport attempts; the losing invocation MUST NOT send, update delivery
+state, or prune generations.
+This does not roll back previously accepted
+journal/outbox work or scanner progress.
+A subsequent invocation MAY retry after
+owner release.
+At-least-once crash/uncertain-success duplicates remain permitted.
+
+#### Scenario: Durable lock contention sends nothing and preserves accepted work
+
+- **WHEN** a competing dispatcher cannot acquire ownership
+- **THEN** it fails immediately without transport attempts or state/pruning changes and may retry after release
+
 ### Requirement: Durable alert follow-up is non-recursive
 
 An operational `operational_alert` with `check_name=sink_delivery` SHALL remain
 canonical Event 3.0 data and may be first-written to JSONL and represented in
 the outbox event table, but it MUST NOT create per-sink durable replay rows.
 The durable dispatcher MUST not send such an alert as ordinary replay work or
-create another alert when an older outbox contains one. The follow-up path SHALL
-skip the sink named by the failure, deliver an admitted alert directly to other
-eligible sinks, and report follow-up errors through bounded diagnostics without
-emitting another alert. This is an alert-loop guard, not an exactly-once claim
-for repeated caller invocations or receiver delivery.
+create another alert when an older outbox contains one.
 
 #### Scenario: Durable delivery failure does not recurse
 
@@ -521,6 +691,20 @@ for repeated caller invocations or receiver delivery.
 - **THEN** its canonical append and outbox event are rejected before acceptance,
   durable sinks do not receive an unadmitted follow-up, and no recursive alert
   is created
+
+### Requirement: Delivery alerts skip the failed sink without recursive alerts
+
+The follow-up path SHALL
+skip the sink named by the failure, deliver an admitted alert directly to other
+eligible sinks, and report follow-up errors through bounded diagnostics without
+emitting another alert.
+This is an alert-loop guard, not an exactly-once claim
+for repeated caller invocations or receiver delivery.
+
+#### Scenario: Delivery alerts skip the failed sink without recursive alerts
+
+- **WHEN** an admitted delivery alert is followed up
+- **THEN** other eligible sinks receive it directly and bounded failures do not create another alert
 
 ### Requirement: Storage failures are bounded and fail closed
 
@@ -543,22 +727,14 @@ MUST NOT treat an unverified cursor commit or unverified deletion as successful.
 
 ### Requirement: Rotation cannot prune unread durable generations
 
-The active JSONL generation MUST NOT be pruned. A rotated generation SHALL
+The active JSONL generation MUST NOT be pruned.
+A rotated generation SHALL
 remain pinned while its durable ingest cursor has unread bytes, or while its
-identity/integrity is uncertain. Pruning eligibility MUST be independent of
+identity/integrity is uncertain.
+Pruning eligibility MUST be independent of
 downstream Pending, Blocked, retrying, or terminal/ACK state: once durable state
 proves that the cursor fully consumed the generation, downstream rows remain in
-SQLite as replay state and do not pin the JSONL generation. Non-durable mode
-MUST retain the existing rotation behavior.
-
-Pruning MUST be fail-safe and metadata-driven: active, unread, unknown,
-identity-mismatched, corrupt, or not-provably-consumed generations MUST remain
-pinned. Missing, corrupt, locked, or ambiguous cursor/generation/outbox state
-MUST disable pruning, and failed prepare, rename, metadata commit, deletion, or
-finalization MUST retain the generation for later recovery. Prepare/delete/
-finalize and restart recovery MUST be idempotent. The implementation MUST
-actually invoke this eligibility check from the rotation lifecycle; a dead-code
-eligibility helper is insufficient.
+SQLite as replay state and do not pin the JSONL generation.
 
 #### Scenario: Rotation finds unread bytes
 
@@ -588,26 +764,44 @@ eligibility helper is insufficient.
   eligibility decision and coordinated deletion succeed; any failure retains
   the bytes
 
+### Requirement: Rotation pruning fails safe on uncertain metadata
+
+Non-durable mode
+MUST retain the existing rotation behavior.
+Pruning MUST be fail-safe and metadata-driven: active, unread, unknown,
+identity-mismatched, corrupt, or not-provably-consumed generations MUST remain
+pinned.
+Missing, corrupt, locked, or ambiguous cursor/generation/outbox state
+MUST disable pruning, and failed prepare, rename, metadata commit, deletion, or
+finalization MUST retain the generation for later recovery.
+
+#### Scenario: Rotation pruning fails safe on uncertain metadata
+
+- **WHEN** generation state is unknown, corrupt, unread or mismatched
+- **THEN** the generation stays pinned and failed rotation lifecycle steps remain recoverable
+
+### Requirement: Rotation recovery is idempotent and actually invokes eligibility
+
+Prepare/delete/
+finalize and restart recovery MUST be idempotent.
+The implementation MUST
+actually invoke this eligibility check from the rotation lifecycle; a dead-code
+eligibility helper is insufficient.
+
+#### Scenario: Rotation recovery is idempotent and actually invokes eligibility
+
+- **WHEN** rotation prepares, deletes, finalizes or restarts
+- **THEN** eligibility gates the lifecycle rather than remaining a dead helper
+
 ### Requirement: Durable storage resource and writer boundaries are explicit
 
 Capacity inspection has a bounded unread-byte scan, but reconciliation currently
 loads complete discovered JSONL generations and their complete payload plan in
-memory. This capability SHALL NOT claim an arbitrary-size or streaming reconciliation
+memory.
+This capability SHALL NOT claim an arbitrary-size or streaming reconciliation
 guarantee; deployments must keep generation sizes within available process
 resources, and an oversized generation remains a local operational failure
 boundary rather than permission to advance an unverified cursor.
-
-The SQLite event table SHALL retain canonical payload bytes for `Acked` and
-`Dead` delivery history. Those terminal rows are excluded from pending capacity,
-have no automatic retention or compaction guarantee in this change, and may
-grow the private outbox beyond the configured pending queue limits.
-
-Verified rotation deletion SHALL claim coordination only for writers that honor
-the corresponding private JSONL sidecar lock. A non-cooperating local writer can
-still change a path between final verification and unlink (with an additional
-close/recheck window on Windows), so external writers, external rotation in the
-managed generation namespace, and network filesystems are unsupported durable
-storage configurations.
 
 #### Scenario: Reconciliation size is an explicit operational boundary
 
@@ -629,6 +823,34 @@ storage configurations.
   Telltale's sidecar lock during verified deletion
 - **THEN** Telltale makes no atomic deletion guarantee against that race; only
   cooperating local writers and the fail-safe verification path are supported
+
+### Requirement: Terminal outbox payload retention is outside pending capacity
+
+The SQLite event table SHALL retain canonical payload bytes for `Acked` and
+`Dead` delivery history.
+Those terminal rows are excluded from pending capacity,
+have no automatic retention or compaction guarantee in this change, and may
+grow the private outbox beyond the configured pending queue limits.
+
+#### Scenario: Terminal outbox payload retention is outside pending capacity
+
+- **WHEN** delivery reaches Acked or Dead
+- **THEN** canonical payload history remains without an automatic compaction guarantee
+
+### Requirement: Rotation deletion coordinates cooperating writers only
+
+Verified rotation deletion SHALL claim coordination only for writers that honor
+the corresponding private JSONL sidecar lock.
+A non-cooperating local writer can
+still change a path between final verification and unlink (with an additional
+close/recheck window on Windows), so external writers, external rotation in the
+managed generation namespace, and network filesystems are unsupported durable
+storage configurations.
+
+#### Scenario: Rotation deletion coordinates cooperating writers only
+
+- **WHEN** an external writer or network filesystem participates
+- **THEN** private sidecar coordination is not claimed for that unsupported configuration
 
 ### Requirement: Queue health does not inspect payloads
 
@@ -661,19 +883,10 @@ into unlimited alert queuing.
 
 The change MUST keep `telltale-core::Pipeline` I/O-free, keep collector
 metadata outside Event 3.0, and avoid in-process plugins, DLL/shared-library
-ABIs, adopter-specific implementations, and adopter branding. A future
+ABIs, adopter-specific implementations, and adopter branding.
+A future
 collector's received time MUST remain distinct from Event `ingested_at`, and
 Event `session_id` MUST NOT be treated as a Windows session identity.
-
-This capability MUST NOT add named pipes, adopter-specific protocol identities
-or concepts, collector framing or ACK behavior, collector
-configuration/identity/security, protocol versioning, or protocol-only error
-classes. Those future generic local-collector concerns are deferred to a
-separately versioned effort. JSONL-only is not the final managed-adoption
-architecture; that work requires separately accepted requirements.
-Any future transport extension SHALL reuse the generic structured delivery
-classification and outbox dispatch seam without requiring a foundational sink
-refactor.
 
 #### Scenario: Unrelated EDR adopts the public boundary
 
@@ -682,16 +895,40 @@ refactor.
 - **THEN** it can supply its own deployment/tenant/receipt metadata outside the
   event without requiring Telltale to become a multi-tenant identity boundary
 
+### Requirement: Collector protocol expansion requires separate accepted scope
+
+This capability MUST NOT add named pipes, adopter-specific protocol identities
+or concepts, collector framing or ACK behavior, collector
+configuration/identity/security, protocol versioning, or protocol-only error
+classes.
+Those future generic local-collector concerns are deferred to a
+separately versioned effort.
+JSONL-only is not the final managed-adoption
+architecture; that work requires separately accepted requirements.
+
+#### Scenario: Collector protocol expansion requires separate accepted scope
+
+- **WHEN** future managed collection is proposed
+- **THEN** this capability does not add framing, identity or protocol-only concerns
+
+### Requirement: Future transport extensions reuse structured delivery semantics
+
+Any future transport extension SHALL reuse the generic structured delivery
+classification and outbox dispatch seam without requiring a foundational sink
+refactor.
+
+#### Scenario: Future transport extensions reuse structured delivery semantics
+
+- **WHEN** an accepted future transport is added
+- **THEN** it reuses delivery classification and outbox dispatch without foundational refactoring
+
 ### Requirement: Deployment routing and TLS remain explicit
 
-Local durable Event 3.0 JSONL SHALL remain the first write. A deployment MUST
+Local durable Event 3.0 JSONL SHALL remain the first write.
+A deployment MUST
 select either direct HEC or Universal Forwarder monitoring of that JSONL as its
 canonical remote ingestion route and MUST NOT enable both for the same event
-stream unless intentional duplicate ingestion is explicitly documented. HEC
-certificate verification SHALL remain enabled by default. Any insecure opt-out
-MUST be explicit, lab-only, and reported as risk. Tests and evidence MUST use
-synthetic credentials and MUST report only credential/configuration presence
-and request results.
+stream unless intentional duplicate ingestion is explicitly documented.
 
 #### Scenario: HEC-primary deployment
 
@@ -708,6 +945,21 @@ and request results.
 - **WHEN** request behavior is validated without production credentials
 - **THEN** a local endpoint and synthetic token are used and no token value is
   written to operator evidence
+
+### Requirement: HEC TLS and validation evidence remain safe
+
+HEC
+certificate verification SHALL remain enabled by default.
+Any insecure opt-out
+MUST be explicit, lab-only, and reported as risk.
+Tests and evidence MUST use
+synthetic credentials and MUST report only credential/configuration presence
+and request results.
+
+#### Scenario: HEC TLS and validation evidence remain safe
+
+- **WHEN** HEC uses an insecure opt-out in a lab
+- **THEN** opt-out is explicit risk and validation uses synthetic credentials only
 
 ### Requirement: Fault-injection and platform evidence is required
 

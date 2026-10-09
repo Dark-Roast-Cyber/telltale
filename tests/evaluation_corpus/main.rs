@@ -147,13 +147,6 @@ fn manifest_schema_validation_failures() {
         1,
     );
     assert!(validate_manifest_bytes(&benign_tag_contradiction, &root).is_err());
-
-    let source_tag_on_normalized_input = base.replacen(
-        "tags: [seed, opencode, routine, efficacy, characterization]",
-        "tags: [seed, opencode, routine, efficacy, characterization, source_conformance]",
-        1,
-    );
-    assert!(validate_manifest_bytes(&source_tag_on_normalized_input, &root).is_err());
 }
 
 #[test]
@@ -189,9 +182,7 @@ fn canonical_efficacy_native_invariants() {
         .iter()
         .filter(|case| case.tags.iter().any(|tag| tag == "canonical_efficacy"))
     {
-        let Input::SourceFixture { fixture, .. } = &case.input else {
-            panic!("native fixture")
-        };
+        let Input::SourceFixture { fixture, .. } = &case.input;
         let native = fs::read_to_string(root.join(fixture))
             .unwrap()
             .lines()

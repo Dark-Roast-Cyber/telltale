@@ -40,14 +40,15 @@ fn review_custom_metadata_does_not_survive_detailed_serialization() {
         .scan_sources_detailed(&[source], &DetailedEvaluationOptions::default())
         .unwrap();
     let finding = &scans[0].action_findings[0];
-    assert!(!serde_json::to_string(finding).unwrap().contains(marker));
+    // Debug renders every retained field; the DTO is not a wire format.
+    assert!(!format!("{finding:?}").contains(marker));
     assert_eq!(finding.finding_kind(), ActionFindingKind::Atomic);
     assert_eq!(
         finding.supporting_observation_ids(),
         [finding.observation_id()]
     );
     assert!(!finding.coordinate().as_str().is_empty());
-    assert!(!finding.severity().is_empty());
+    assert_eq!(finding.severity(), Severity::High);
 }
 
 fn write_source(
@@ -111,7 +112,7 @@ fn review_process_details_project_the_existing_owner() {
         assert!(!finding.coordinate().as_str().is_empty());
         assert!(!finding.supporting_observation_ids().is_empty());
         assert_eq!(
-            finding.score(),
+            finding.promotion_score(),
             finding
                 .contributions()
                 .iter()
@@ -152,7 +153,7 @@ fn detailed_scan_is_additive_same_pass_and_replay_is_coordinate_independent() {
         assert_eq!(a.replay_identity(), b.replay_identity());
         assert!(a.replay_identity().is_some());
         assert_ne!(a.observation_id(), b.observation_id());
-        assert_eq!(a.score(), 35);
+        assert_eq!(a.promotion_score(), 35);
     }
     let compatibility = pipeline.scan_sources_with_occurrences(&[first]).unwrap();
     assert!(compatibility[0].action_findings.is_empty());
@@ -201,22 +202,27 @@ fn detailed_context_is_opt_in_same_session_anchor_excluded_and_redacted() {
         finding
             .context()
             .iter()
-            .all(|c| c.kind() != "user_message" && c.kind() != "tool_result" && c.offset() != 0)
+            .all(|c| c.kind() != ActionContextKind::UserMessage && c.offset() != 0)
     );
     let replay = finding.replay_identity().cloned();
     options.context.user_text = true;
     let opted = pipeline.scan_sources_detailed(&[source], &options).unwrap();
     let finding = &opted[0].action_findings[0];
     assert_eq!(finding.replay_identity(), replay.as_ref());
-    assert!(finding.context().iter().any(|c| c.kind() == "user_message"));
-    let serialized = serde_json::to_string(finding).unwrap();
+    assert!(
+        finding
+            .context()
+            .iter()
+            .any(|c| c.kind() == ActionContextKind::UserMessage)
+    );
+    let serialized = format!("{finding:?}");
     assert!(!serialized.contains(marker));
     assert!(!serialized.contains("/home/synthetic/private"));
     assert!(
         finding
             .context()
             .iter()
-            .all(|c| c.offset() != 0 && c.kind() != "tool_result")
+            .all(|c| c.offset() != 0 && c.stage() != ObservationStage::ToolResultReturned)
     );
 }
 
@@ -436,4 +442,240 @@ fn sqlite_detailed_context_comes_from_the_acquired_batch_and_is_session_scoped()
             .iter()
             .all(|c| !c.redacted_text().contains("another session"))
     );
+}
+
+#[test]
+fn pipeline_remains_shareable_across_host_threads() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Pipeline>();
+}
+
+/// Pinned identities for a custom-rule synthetic fixture. Hosts key delivery
+/// and dedup on these values, so a change here must come with the matching
+/// version bump (`REPLAY_ALGORITHM_VERSION`, `ACTION_SEMANTICS_VERSION`, or the
+/// native profile version) and a migration note. Never update values alone.
+#[test]
+fn action_identities_are_pinned_to_their_algorithm_versions() {
+    const RULE: &str = "version: 1\ndescription: synthetic golden\ndefaults: {enabled: true, case_insensitive: false}\nrules:\n  - id: synthetic.golden\n    category: synthetic\n    severity: high\n    score: 30\n    targets: [command]\n    regex: needle\n    tags: []\n    explanation: synthetic\nmodifiers: []\n";
+    let pipeline = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(RULE)
+        .build()
+        .unwrap();
+    let options = DetailedEvaluationOptions::default();
+    let startup = pipeline.semantic_provenance(&options).unwrap();
+    assert_eq!(
+        (
+            startup.action_semantics_version(),
+            startup.native_profile_version(),
+            startup.replay_algorithm_version(),
+        ),
+        (2, 2, 1)
+    );
+    // Identities exclude paths: two roots must produce the same values.
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let root = tempfile::tempdir().unwrap();
+        let source = write_source(
+            root.path(),
+            "golden.jsonl",
+            "golden-session",
+            &[call("golden-call", "2026-09-17T00:00:00Z", "echo needle")],
+        );
+        let scan = pipeline
+            .scan_sources_detailed(&[source], &options)
+            .unwrap()
+            .remove(0);
+        let action = &scan.action_findings[0];
+        seen.push((
+            scan.semantic_provenance.unwrap().identity().to_owned(),
+            action.replay_identity().unwrap().as_str().to_owned(),
+            action.coordinate().as_str().to_owned(),
+            action.observation_id().to_owned(),
+        ));
+    }
+    assert_eq!(seen[0], seen[1]);
+    let (semantic, replay, coordinate, observation) = &seen[0];
+    assert_eq!(semantic, startup.identity());
+    assert_eq!(
+        semantic,
+        "semantic:v1:sha256:561edc37e9ef08cd55298cbfa99b5b524f0230dbca8d688a3a94d5e0477d9fc5"
+    );
+    assert_eq!(
+        coordinate,
+        "obs:v2:sha256:8c6859e14c8aba279a67d1a85ff2e3f6847614864c0c2f341aa60342ade3a7c1"
+    );
+    assert_eq!(
+        replay,
+        "replay:v1:sha256:e872d2809d69c73a189c8e7e3be73574e8f80985739401ce7b56e4f15c9739c0"
+    );
+    assert_eq!(observation, coordinate);
+}
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn opencode_resume_token_reads_from_the_overlap_window_and_binds_to_its_source() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("resume.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let tool = |id: &str, call: &str, updated: i64| {
+        format!(
+            r#"INSERT INTO part VALUES ('{id}','a','s',{updated},'{{"type":"tool","tool":"shell","callID":"{call}","state":{{"status":"running","input":{{"command":"cat .env"}},"time":{{"start":{start}}}}}}}');"#,
+            start = 1_789_603_200_000_i64 + updated
+        )
+    };
+    conn.execute_batch(&format!(
+        r#"CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+        CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+        INSERT INTO message VALUES ('a','s','{{"role":"assistant","time":{{"created":1789603200000}}}}');
+        {old}
+        {mid}"#,
+        old = tool("old", "call-old", 1_000),
+        mid = tool("mid", "call-mid", 2_000_000),
+    ))
+    .unwrap();
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path: path.clone(),
+    };
+    let pipeline = Pipeline::builder().build().unwrap();
+    let options = DetailedEvaluationOptions::default();
+
+    // Bootstrap reads the bounded recent window and issues a token.
+    let bootstrap = pipeline
+        .scan_source_detailed_resuming(&source, None, &options)
+        .unwrap();
+    assert!(bootstrap.failure().is_none());
+    assert_eq!(bootstrap.coverage(), Some(SourceCoverage::Partial));
+    assert_eq!(bootstrap.action_findings.len(), 2);
+    let token = bootstrap.resume_token().cloned().expect("bootstrap token");
+    assert!(
+        token
+            .as_str()
+            .starts_with("resume:v1:opencode.sqlite:2000000:")
+    );
+    assert_eq!(ResumeToken::parse(token.as_str()).unwrap(), token);
+    let mid = bootstrap
+        .action_findings
+        .iter()
+        .map(|a| a.coordinate().clone())
+        .collect::<Vec<_>>();
+
+    // Resuming reads parts updated since the high-water minus the overlap:
+    // the overlap part again (same coordinate), the new part, not the old one.
+    conn.execute_batch(&tool("new", "call-new", 9_000_000))
+        .unwrap();
+    let resumed = pipeline
+        .scan_source_detailed_resuming(&source, Some(&token), &options)
+        .unwrap();
+    assert!(resumed.failure().is_none());
+    assert_eq!(resumed.action_findings.len(), 2);
+    assert!(
+        resumed
+            .action_findings
+            .iter()
+            .any(|a| mid.contains(a.coordinate()))
+    );
+    let next = resumed.resume_token().cloned().expect("resumed token");
+    assert!(
+        next.as_str()
+            .starts_with("resume:v1:opencode.sqlite:9000000:")
+    );
+
+    // No newer parts: the token never moves backwards.
+    let idle_token = {
+        conn.execute_batch("DELETE FROM part WHERE id = 'new';")
+            .unwrap();
+        pipeline
+            .scan_source_detailed_resuming(&source, Some(&next), &options)
+            .unwrap()
+            .resume_token()
+            .cloned()
+    };
+    assert_eq!(idle_token.as_ref(), Some(&next));
+
+    // A token is bound to its source and is rejected before any I/O.
+    let other_path = root.path().join("other-missing.db");
+    let other = Source {
+        path: other_path.clone(),
+        ..source.clone()
+    };
+    assert!(matches!(
+        pipeline.scan_source_detailed_resuming(&other, Some(&next), &options),
+        Err(PipelineError::InvalidResumeToken)
+    ));
+    assert!(!other_path.exists());
+    let jsonl = write_source(
+        root.path(),
+        "plain.jsonl",
+        "session",
+        &[call("call", "2026-09-17T00:00:00Z", "cat .env")],
+    );
+    assert!(matches!(
+        pipeline.scan_source_detailed_resuming(&jsonl, Some(&next), &options),
+        Err(PipelineError::InvalidResumeToken)
+    ));
+    let plain = pipeline
+        .scan_source_detailed_resuming(&jsonl, None, &options)
+        .unwrap();
+    assert!(plain.resume_token().is_none());
+    for bad in ["", "resume:v1:opencode.sqlite:-1:00", "resume:v2:x:1:y"] {
+        assert!(ResumeToken::parse(bad).is_err(), "{bad}");
+    }
+}
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn opencode_resume_overflow_is_typed_and_recoverable_by_bootstrap() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("overflow.db");
+    let mut conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(r#"CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+        CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+        INSERT INTO message VALUES ('a','s','{"role":"assistant","time":{"created":1789603200000}}');
+        INSERT INTO part VALUES ('first','a','s',1000,'{"type":"text","text":"synthetic"}');"#)
+        .unwrap();
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path,
+    };
+    let pipeline = Pipeline::builder().build().unwrap();
+    let options = DetailedEvaluationOptions::default();
+    let token = pipeline
+        .scan_source_detailed_resuming(&source, None, &options)
+        .unwrap()
+        .resume_token()
+        .cloned()
+        .expect("bootstrap token");
+    let transaction = conn.transaction().unwrap();
+    for i in 0..=telltale_sources::acquisition::OPENCODE_SQLITE_RESUME_PART_LIMIT {
+        transaction
+            .execute(
+                "INSERT INTO part VALUES (?1, 'a', 's', 2000, '{\"type\":\"text\",\"text\":\"synthetic\"}')",
+                [format!("bulk-{i}")],
+            )
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+    let overflow = pipeline
+        .scan_source_detailed_resuming(&source, Some(&token), &options)
+        .unwrap();
+    let failure = overflow.failure().expect("resumed overflow fails");
+    assert_eq!(
+        failure.acquisition_error(),
+        Some(AcquisitionError::BoundedSourceRead(
+            BoundedReadError::LimitExceeded
+        ))
+    );
+    assert!(overflow.resume_token().is_none());
+    // Recovery: a bootstrap read of the bounded recent window succeeds.
+    let recovered = pipeline
+        .scan_source_detailed_resuming(&source, None, &options)
+        .unwrap();
+    assert!(recovered.failure().is_none());
+    assert!(recovered.resume_token().is_some());
 }

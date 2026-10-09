@@ -3,8 +3,8 @@
 > **Status:** **Active internal source evidence contract.** Canonical
 > Observation v2 is produced by source-native acquisition for all eight supported
 > identities and consumed by Detection v2 in CLI scan/watch and
-> `Pipeline::scan_root`. Rule v1 remains the content-compatibility format;
-> `NormalizedRecord` types remain explicit record-level compatibility surfaces.
+> every `Pipeline` scan method. Rule v1 remains the content-compatibility
+> format; there is no flattened record type or record-level detection path.
 > Copilot native-v2 capabilities are ToolCall **Supported**, UserContext
 > **Unsupported**, and ToolExecution **Unknown**.
 > `opencode.legacy_json` is retired. The public
@@ -94,8 +94,7 @@ unknown conversational content blocks still reject the whole source.
 Canonical bounds can reject otherwise supported public Codex shapes without
 truncation or partial source output. Direct message strings and Text parts use
 the narrow long-message policy below; structured values retain ordinary bounds.
-In current development after RC1, Codex
-canonical bound failures carry a content-free `CanonicalBoundContext` through
+Codex canonical bound failures carry a content-free `CanonicalBoundContext` through
 `AcquisitionError::CanonicalBoundValidation` and runtime `SourceFailure.acquisition`.
 Schema validation owns the bound dimension; the adapter attributes conversion
 failures to the canonical field being constructed. Builder validation attributes
@@ -170,7 +169,7 @@ reservations for composite scanners. Exhaustion is explicit source-atomic failur
 not a benign no-match, and cannot emit partial findings, accounting or progress.
 Standalone native matcher evaluation and selector resolution return a `Result`;
 metadata envelopes are independently governed and do not imply infallible
-selection. See the [development API migration](migrations/0.7.0.md#development-after-rc1-bounded-message-evaluation-apis-79).
+selection. See the [development API migration](migrations/0.7.0.md#bounded-message-evaluation-apis-79).
 Standalone detector
 evaluation translates exhaustion into `DetectorError`.
 
@@ -340,8 +339,7 @@ CLI; event allowlisting stays outside the semantic operation.
 `Pipeline::scan_root` retains its public event return shape while using canonical
 acquisition and Detection v2. Event3 constructors retain fresh envelope IDs and
 times; semantic ordering, not byte-identical newly generated envelopes, is
-deterministic. Record-level `detect_records` and `evaluate_session` remain
-intentional compatibility APIs rather than a second source-runtime design.
+deterministic. There is no record-level detection API beside this runtime.
 
 ### Session attestation and accounting
 
@@ -743,7 +741,6 @@ Event3 until explicit migration gates pass, and future semantics are not
 backported. Event3 and Event4 are independent projections from common accepted
 internal semantics, not canonical conversions of each other.
 
-See the [Event4 architecture](event4.md) and the [current normalization
-schema](normalization-schema.md). The authoritative packaged Event4 4.0
+See the [Event4 architecture](event4.md). The authoritative packaged Event4 4.0
 structural schema at `crates/telltale-schema/data/event-4.0.schema.json` is an
 external contract boundary, not the internal observation schema.

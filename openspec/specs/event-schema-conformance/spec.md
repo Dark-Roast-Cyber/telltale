@@ -5,21 +5,25 @@ Define the conformance and compatibility evidence for the stable native Event
 3.0 scanner/detection output contract. This specification covers parity,
 terminal privacy, timing documentation, and the boundaries around durable and
 SIEM output. It does not introduce a new Event 3.0 field or runtime semantic.
+## Controlled Event3 field inventory
+
+`schema_version`, `time_source`,
+`time_confidence`, `event_type`, `severity`, `confidence`,
+`detection_classes`, `signal_types`, `analytic_intents`, `risk_entity_type`,
+`component`, `check_name`, `status`, `response.recommended_action`,
+`response.escalation`, `process.rule_severity`, and family-controlled
+`client`, `session_id`, correlation dimensions, and install-inventory tags.
+
 ## Requirements
 ### Requirement: Native constructors SHALL conform to the strict Event 3.0 schema
 
 The native Event 3.0 constructor set MUST cover detection, standard activity,
 install-inventory activity, session-risk summary, health, scanner error,
-operational alert, process chain, and correlation. Each constructor output
+operational alert, process chain, and correlation.
+Each constructor output
 MUST pass through the terminal Event serialization boundary, parse as one JSON
 object, contain no top-level JSON nulls, and validate against the current strict
-Event 3.0 schema with `unevaluatedProperties` enforcement. The current reviewed
-source-level constructor inventory MUST carry explicit descriptors and corpus
-cases for all nine native families, and each descriptor's wire `event_type` MUST
-agree with its builder. The registry's wire-event projection MUST remain aligned
-with the current schema, so a new wire event type is visible as drift. A new
-same-event-type subfamily cannot be mechanically detected by this descriptor
-check; reviewer and test maintenance MUST add its descriptor and corpus case.
+Event 3.0 schema with `unevaluatedProperties` enforcement.
 
 #### Scenario: Complete native constructor corpus validates
 
@@ -36,16 +40,28 @@ check; reviewer and test maintenance MUST add its descriptor and corpus case.
   two activity subfamilies remain distinct, and the registry's wire projection
   matches the Event 3.0 schema
 
+### Requirement: Event3 constructor inventory exposes family and wire drift
+
+The current reviewed
+source-level constructor inventory MUST carry explicit descriptors and corpus
+cases for all nine native families, and each descriptor's wire `event_type` MUST
+agree with its builder.
+The registry's wire-event projection MUST remain aligned
+with the current schema, so a new wire event type is visible as drift.
+A new
+same-event-type subfamily cannot be mechanically detected by this descriptor
+check; reviewer and test maintenance MUST add its descriptor and corpus case.
+
+#### Scenario: Event3 constructor inventory exposes family and wire drift
+
+- **WHEN** a constructor or same-type subfamily is added
+- **THEN** its descriptor and corpus case remain explicit and aligned to schema wire types
+
 ### Requirement: Event 3.0 field parity SHALL be explicit and closed
 
 The native domain model, terminal wire representation, current schema, privacy
 surface, constructor coverage, synthetic corpus, and family applicability MUST
-be recorded for every Event 3.0 field in the parity matrix. Fields omitted by a
-family MUST be absent from that family's terminal JSON, and optional fields
-MUST be omitted rather than emitted as null. Existing `response`, risk fields,
-rule IDs/categories/classes/signal types/intents, evidence, process,
-correlation, health, and scanner-error fields MUST remain represented with
-their current meaning.
+be recorded for every Event 3.0 field in the parity matrix.
 
 #### Scenario: Optional fields are omitted from sparse output
 
@@ -61,6 +77,21 @@ their current meaning.
 - **THEN** native output contains no such property and strict validation
   rejects the injected property; workspace MUST NOT be added to the Event 3.0
   schema
+
+### Requirement: Event3 omission preserves field meaning without nulls
+
+Fields omitted by a
+family MUST be absent from that family's terminal JSON, and optional fields
+MUST be omitted rather than emitted as null.
+Existing `response`, risk fields,
+rule IDs/categories/classes/signal types/intents, evidence, process,
+correlation, health, and scanner-error fields MUST remain represented with
+their current meaning.
+
+#### Scenario: Event3 omission preserves field meaning without nulls
+
+- **WHEN** a family omits an optional field
+- **THEN** it is absent rather than null and existing field meanings remain unchanged
 
 ### Requirement: The install-inventory activity variant SHALL remain distinct
 
@@ -82,28 +113,10 @@ score MUST remain zero.
 
 Every externally reachable textual Event 3.0 field that can be changed after
 construction MUST cross the terminal privacy boundary before emitted bytes are
-returned. Repeated terminal serialization of the same Event MUST produce
+returned.
+Repeated terminal serialization of the same Event MUST produce
 byte-identical JSON, and terminalizing already terminal-safe values MUST NOT
-re-hash or otherwise change them. Synthetic credential, path, URL, diagnostic,
-response, risk-rationale, process, identifier, and timing-marker cases MUST
-remain absent or safely transformed according to their existing context policy.
-Native `telltale_version` MUST equal the trusted compile-time `TELLTALE_VERSION`
-on terminal serialization; any public mutation, including credential-bearing
-SemVer prerelease/build metadata, MUST be replaced by that current package
-version rather than a fabricated hash version. Historical JSONL/Elastic export
-MUST retain its existing shape and MAY preserve a safe historical package
-version.
-`source_path_hash` MUST preserve an established 64-character lowercase
-hexadecimal SHA-256 value and MUST deterministically hash any other non-empty
-value before emission. `mitre_attack_techniques` MUST preserve canonical
-ATT&CK technique shapes `T1234` and `T1234.001`; any other value MUST become a
-deterministic schema-compatible `mitre:<sha256>` identifier. Both transformations
-MUST be idempotent.
-`source_counts` MUST preserve known `<client>.<source-kind>` keys and MUST map
-other keys to deterministic schema-compatible `source_count:<sha256>` keys.
-Transformed-key collisions MUST receive deterministic numeric suffixes so each
-source count remains a separate entry with its original value. This correction
-MUST be idempotent.
+re-hash or otherwise change them.
 
 #### Scenario: Externally mutated text is sanitized on every route
 
@@ -129,21 +142,68 @@ MUST be idempotent.
   canonical values, emit deterministic `evidence_hash`/`mitre:<sha256>` fallbacks,
   remain schema-valid, and produce identical bytes on repeated sanitization
 
+### Requirement: Event3 adversarial text respects existing context policy
+
+Synthetic credential, path, URL, diagnostic,
+response, risk-rationale, process, identifier, and timing-marker cases MUST
+remain absent or safely transformed according to their existing context policy.
+
+#### Scenario: Event3 adversarial text respects existing context policy
+
+- **WHEN** synthetic sensitive values enter textual event fields
+- **THEN** they remain absent or safely transformed
+
+### Requirement: Native Event3 version is trusted compile-time identity
+
+Native `telltale_version` MUST equal the trusted compile-time `TELLTALE_VERSION`
+on terminal serialization; any public mutation, including credential-bearing
+SemVer prerelease/build metadata, MUST be replaced by that current package
+version rather than a fabricated hash version.
+Historical JSONL/Elastic export
+MUST retain its existing shape and MAY preserve a safe historical package
+version.
+
+#### Scenario: Native Event3 version is trusted compile-time identity
+
+- **WHEN** public telltale_version is mutated
+- **THEN** terminal serialization replaces it with the current trusted version while historical safe versions may survive
+
+### Requirement: Source hashes and MITRE terminal identifiers are canonical and idempotent
+
+`source_path_hash` MUST preserve an established 64-character lowercase
+hexadecimal SHA-256 value and MUST deterministically hash any other non-empty
+value before emission.
+`mitre_attack_techniques` MUST preserve canonical
+ATT&CK technique shapes `T1234` and `T1234.001`; any other value MUST become a
+deterministic schema-compatible `mitre:<sha256>` identifier.
+Both transformations
+MUST be idempotent.
+
+#### Scenario: Source hashes and MITRE terminal identifiers are canonical and idempotent
+
+- **WHEN** source hashes or ATT&CK labels are noncanonical
+- **THEN** deterministic schema-compatible transformations are idempotent
+
+### Requirement: Event3 source-count key transformation retains collisions
+
+`source_counts` MUST preserve known `<client>.<source-kind>` keys and MUST map
+other keys to deterministic schema-compatible `source_count:<sha256>` keys.
+Transformed-key collisions MUST receive deterministic numeric suffixes so each
+source count remains a separate entry with its original value.
+This correction
+MUST be idempotent.
+
+#### Scenario: Event3 source-count key transformation retains collisions
+
+- **WHEN** unknown source-count keys collide after transformation
+- **THEN** deterministic suffixes retain separate counts and terminalization is idempotent
+
 ### Requirement: Invalid controlled fields SHALL fail closed at terminal serialization
 
 After sanitizable free-text, noncanonical hash, MITRE, and source-count values
 have crossed their existing terminal transformations, native Event serialization
 MUST reject any noncanonical closed or schema-controlled value before invoking
-the wire serializer. This includes `schema_version`, `time_source`,
-`time_confidence`, `event_type`, `severity`, `confidence`,
-`detection_classes`, `signal_types`, `analytic_intents`, `risk_entity_type`,
-`component`, `check_name`, `status`, `response.recommended_action`,
-`response.escalation`, `process.rule_severity`, and family-controlled
-`client`, `session_id`, correlation dimensions, and install-inventory tags.
-The returned serialization error MUST be generic and privacy-safe: it MUST NOT
-include the invalid field name or value. Runtime validation MUST use local
-code-owned constraints rather than loading a filesystem schema. Schema
-validation remains test evidence for the boundary, not the runtime boundary.
+the wire serializer. The controlled values MUST include every field in Controlled Event3 field inventory.
 
 #### Scenario: Invalid controlled mutations produce no direct bytes
 
@@ -160,21 +220,30 @@ validation remains test evidence for the boundary, not the runtime boundary.
   written, without echoing the invalid marker; remote sink serializers inherit
   the same terminal failure before transport
 
+### Requirement: Controlled-field errors and runtime constraints remain local and private
+
+The returned serialization error MUST be generic and privacy-safe: it MUST NOT
+include the invalid field name or value.
+Runtime validation MUST use local
+code-owned constraints rather than loading a filesystem schema.
+Schema
+validation remains test evidence for the boundary, not the runtime boundary.
+
+#### Scenario: Controlled-field errors and runtime constraints remain local and private
+
+- **WHEN** a noncanonical controlled field is rejected
+- **THEN** the error reveals no field/value and runtime uses code-owned constraints
+
 ### Requirement: Native terminal identity and observation times SHALL remain canonical
 
 Native `Event` and in-memory `HistoricalDerivedEvent` serialization MUST
 validate `event_id`, `timestamp`, `observed_at`, and `ingested_at` before invoking
-the wire serializer. `event_id` MUST match the exact Event 3.0
-`telltale-` UUID-v4 syntax and length. Each top-level timestamp MUST be accepted
+the wire serializer.
+`event_id` MUST match the exact Event 3.0
+`telltale-` UUID-v4 syntax and length.
+Each top-level timestamp MUST be accepted
 by the local canonical RFC3339/Event 3.0 timestamp parser used by native
-construction and accepted by the Event 3.0 schema. Invalid public values MUST
-fail closed with the same generic privacy-safe serialization error and MUST NOT
-be transformed into another identity or time value. `event_time` MUST continue
-to use its existing terminal policy: parseable RFC3339 values and canonical
-`invalid-event-time` markers are preserved, while other values become
-deterministic `invalid-event-time` markers. Correlation related-detection text
-and any timeline timestamp surfaces MUST use that same event-time terminal
-policy; neither path may emit raw invalid timestamps.
+construction and accepted by the Event 3.0 schema.
 
 #### Scenario: Invalid identity and observation times produce no direct bytes
 
@@ -198,15 +267,40 @@ policy; neither path may emit raw invalid timestamps.
   `invalid-event-time` marker and repeated native or historical-derived
   serialization remains byte-identical
 
+### Requirement: Invalid native identities and times fail without fabrication
+
+Invalid public values MUST
+fail closed with the same generic privacy-safe serialization error and MUST NOT
+be transformed into another identity or time value.
+
+#### Scenario: Invalid native identities and times fail without fabrication
+
+- **WHEN** public native identity or top-level time is invalid
+- **THEN** generic serialization failure is returned without replacing identity or time
+
+### Requirement: Event-time text uses one deterministic terminal policy
+
+`event_time` MUST continue
+to use its existing terminal policy: parseable RFC3339 values and canonical
+`invalid-event-time` markers are preserved, while other values become
+deterministic `invalid-event-time` markers.
+Correlation related-detection text
+and any timeline timestamp surfaces MUST use that same event-time terminal
+policy; neither path may emit raw invalid timestamps.
+
+#### Scenario: Event-time text uses one deterministic terminal policy
+
+- **WHEN** related-detection or timeline text contains invalid time
+- **THEN** existing deterministic invalid-event-time policy applies without raw timestamps
+
 ### Requirement: Event 3.0 timing semantics SHALL remain coarse and documented
 
 For native events, `timestamp` MUST use a valid source timestamp normalized to
-UTC millisecond precision when available. Missing or unparseable source
+UTC millisecond precision when available.
+Missing or unparseable source
 timestamps, and source timestamps more than five minutes in the future, MUST
 fall back to local observation time and record `time_override_reason` with the
-existing `time_source` and `time_confidence` semantics. `event_time` MUST retain
-the available source/derived time, while `observed_at` and `ingested_at` MUST
-represent local scan/ingestion time rather than source event time.
+existing `time_source` and `time_confidence` semantics.
 
 #### Scenario: Valid source time is normalized
 
@@ -223,26 +317,27 @@ represent local scan/ingestion time rather than source event time.
   `time_confidence` identify the fallback, and `time_override_reason` records
   the bounded reason without changing detection/scoring semantics
 
+### Requirement: Event3 source and local ingestion times remain distinct
+
+`event_time` MUST retain
+the available source/derived time, while `observed_at` and `ingested_at` MUST
+represent local scan/ingestion time rather than source event time.
+
+#### Scenario: Event3 source and local ingestion times remain distinct
+
+- **WHEN** an event has source or derived time
+- **THEN** event_time retains it while observed_at and ingested_at reflect local scan/ingestion
+
 ### Requirement: Durable and SIEM projections SHALL preserve canonical bytes
 
 Canonical JSONL MUST remain the terminal-sanitized Event 3.0 durable first
-write. When durable downstream delivery is enabled, outbox ingestion and replay
+write.
+When durable downstream delivery is enabled, outbox ingestion and replay
 MUST use those exact canonical bytes rather than reconstructing or reprojecting
-the Event. Splunk HEC MUST wrap the canonical payload and derive envelope time
+the Event.
+Splunk HEC MUST wrap the canonical payload and derive envelope time
 from canonical `timestamp`; Elastic MUST use the canonical payload with
-`event_id` as `_id`. This conformance change MUST NOT alter delivery policy,
-retry, outbox, or transport behavior.
-Canonical output and event identity from the reviewed constructors remain
-unchanged. Noncanonical public source hashes, MITRE values, and source-count
-keys, and mutated native `telltale_version` values, are corrected before a
-newly emitted event's JSONL first write, so those emitted/persisted bytes
-intentionally change. Persisted historical bytes MUST never be replay-time
-reserialized. Invalid public controlled mutations are rejected before the
-JSONL first write and are not mapped to another event family or invented
-semantic value. Invalid public `event_id`, `timestamp`, `observed_at`, and
-`ingested_at` mutations are rejected by the same terminal boundary, including
-through in-memory historical-derived serialization; valid constructor bytes
-remain unchanged.
+`event_id` as `_id`.
 
 #### Scenario: Durable replay uses persisted terminal bytes
 
@@ -266,15 +361,46 @@ remain unchanged.
   applying the existing historical sanitization and does not replace it with
   the native current package version
 
+### Requirement: Event3 conformance preserves delivery policy and reviewed constructor output
+
+This conformance change MUST NOT alter delivery policy,
+retry, outbox, or transport behavior.
+Canonical output and event identity from the reviewed constructors remain
+unchanged.
+Noncanonical public source hashes, MITRE values, and source-count
+keys, and mutated native `telltale_version` values, are corrected before a
+newly emitted event's JSONL first write, so those emitted/persisted bytes
+intentionally change.
+
+#### Scenario: Event3 conformance preserves delivery policy and reviewed constructor output
+
+- **WHEN** conformance correction changes newly emitted unsafe public fields
+- **THEN** delivery semantics and valid reviewed constructor bytes remain unchanged
+
+### Requirement: Historical Event3 replay never reserializes unsafe public mutations
+
+Persisted historical bytes MUST never be replay-time
+reserialized.
+Invalid public controlled mutations are rejected before the
+JSONL first write and are not mapped to another event family or invented
+semantic value.
+Invalid public `event_id`, `timestamp`, `observed_at`, and
+`ingested_at` mutations are rejected by the same terminal boundary, including
+through in-memory historical-derived serialization; valid constructor bytes
+remain unchanged.
+
+#### Scenario: Historical Event3 replay never reserializes unsafe public mutations
+
+- **WHEN** persisted historical events replay
+- **THEN** stored bytes remain exact and invalid new public mutations reject before first write
+
 ### Requirement: Event 3.0 SHALL be explicitly frozen
 
 Event 3.0 MUST be treated as stable external compatibility for the v0.6
-scanner and deterministic detection layer. After this freeze, only
+scanner and deterministic detection layer.
+After this freeze, only
 security/privacy/correctness/documentation/compatibility fixes MAY change its
-implementation or evidence. New runtime semantics—including observation
-lifecycle, gateway telemetry, decisions, actions, approvals, runtime/browser/
-OS context, or equivalent future context—MUST be specified under Event 4.0 or
-future architecture and MUST NOT be added implicitly to Event 3.0.
+implementation or evidence.
 
 #### Scenario: Existing detection and response meaning is preserved
 
@@ -291,15 +417,27 @@ future architecture and MUST NOT be added implicitly to Event 3.0.
 - **THEN** it is deferred to a separately reviewed Event 4.0/future-architecture
   contract and does not extend the frozen Event 3.0 wire
 
+### Requirement: New runtime semantics require Event4 or future architecture scope
+
+New runtime semantics—including observation
+lifecycle, gateway telemetry, decisions, actions, approvals, runtime/browser/
+OS context, or equivalent future context—MUST be specified under Event 4.0 or
+future architecture and MUST NOT be added implicitly to Event 3.0.
+
+#### Scenario: New runtime semantics require Event4 or future architecture scope
+
+- **WHEN** new lifecycle, gateway, decision or execution context is proposed
+- **THEN** it is not implicitly added to frozen Event3
+
 ### Requirement: Canonical Event3 compatibility projection
 
 A source-free adapter SHALL construct Event3 from canonical evaluation output and
 explicit compatibility context using existing constructors and terminal privacy
-serialization. It MUST NOT rerun legacy detection or convert canonical
-observations into legacy records. It SHALL retain truthful evidence linkage,
+serialization.
+It MUST NOT rerun legacy detection or convert canonical
+observations into legacy records.
+It SHALL retain truthful evidence linkage,
 checked contributions, timeline occurrence anchors, and process-chain context.
-It SHALL require a canonical lowercase SHA-256 artifact hash and validate session
-metadata through one deterministic index before projection.
 
 #### Scenario: Missing compatibility information
 - **WHEN** a legacy field lacks truthful canonical evidence or compatibility context
@@ -322,3 +460,12 @@ metadata through one deterministic index before projection.
 - **WHEN** scan, watch, or embedding evaluates a canonical source
 - **THEN** the canonical adapter SHALL project Event3 without legacy reevaluation
 - **AND** Event3 schema/wire/privacy compatibility and Event4 inactivity remain
+### Requirement: Canonical projection validates artifact and session context
+
+It SHALL require a canonical lowercase SHA-256 artifact hash and validate session
+metadata through one deterministic index before projection.
+
+#### Scenario: Canonical projection validates artifact and session context
+
+- **WHEN** canonical output is projected to Event3
+- **THEN** artifact hash and indexed session metadata validate before projection

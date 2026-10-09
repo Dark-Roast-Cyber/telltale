@@ -14,8 +14,7 @@ This page maps the active semantic source path and the still-distinct future
 Event4 and telemetry boundaries.
 
 The eight source adapters feed Canonical Observation v2 directly to Detection
-v2. `NormalizedRecord` and `NormalizedRecordV1` remain only explicit
-record-level compatibility surfaces; neither is the scanner-to-detector handoff.
+v2. There is no flattened record type or record-level detection path.
 Every acquisition call receives explicit caller-owned `observed_at`. OpenCode's
 bounded read controls and high-water progress are source-specific operational
 metadata, not evidence; the other seven identities return
@@ -23,9 +22,8 @@ metadata, not evidence; the other seven identities return
 interpretation without durable progress; active session and ordinal state is
 rebuilt on each acquisition. Scan, watch, and embedding share the canonical
 source runtime. Event 3.0 remains the external event contract; Event4 and
-Telemetry/Output v2 remain inactive. The `compat.v1.url` view is intentionally
-visibility-limited to truthful absence; focused synthetic harness coverage
-demonstrates the compatibility gap.
+Telemetry/Output v2 remain inactive. The `compat.v1.url` view reads URL-keyed
+tool arguments and is otherwise truthfully absent.
 
 Acquisition is not a conversion bridge from `CanonicalObservationV2` to either
 record compatibility representation.
@@ -163,8 +161,6 @@ Current implementation documentation:
   sink behavior.
 - [Current detection model](detection-model.md) — current Rule v1 scoring and
   process-chain behavior.
-- [Current normalization schema](normalization-schema.md) — current
-  `NormalizedRecordV1` compatibility contract.
 
 Machine-readable references:
 

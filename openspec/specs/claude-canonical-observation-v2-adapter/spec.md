@@ -233,14 +233,11 @@ record abstraction, registry, or runtime migration.
 ### Requirement: Claude acquisition reuses canonical semantics without progress
 
 The authoritative public acquisition API MUST validate the exact
-`(Claude, claude.projects)` identity and `Jsonl` kind before I/O. It MUST invoke
+`(Claude, claude.projects)` identity and `Jsonl` kind before I/O.
+It MUST invoke
 the existing native extractor exactly once and map those records through the
 same canonical semantics as the reference projector, without a legacy record
-conversion. It MUST accept only
-caller-owned `observed_at` as shared acquisition configuration, not SQLite read
-controls, and return `AcquisitionProgress::None`. It MUST preserve source time,
-session-scoped replay identity, structured evidence, and bounded source-read,
-mapping, and validation errors. Failure MUST NOT return successful progress.
+conversion.
 
 #### Scenario: Acquisition preserves reference evidence
 
@@ -259,3 +256,17 @@ mapping, and validation errors. Failure MUST NOT return successful progress.
 - **WHEN** the client/source pair or source kind does not match this contract
 - **THEN** acquisition rejects it before opening the path, without exposing the
   path or source contents through Display or Debug
+### Requirement: Claude acquisition time and failures remain caller-owned and bounded
+
+It MUST accept only
+caller-owned `observed_at` as shared acquisition configuration, not SQLite read
+controls, and return `AcquisitionProgress::None`.
+It MUST preserve source time,
+session-scoped replay identity, structured evidence, and bounded source-read,
+mapping, and validation errors.
+Failure MUST NOT return successful progress.
+
+#### Scenario: Claude acquisition time and failures remain caller-owned and bounded
+
+- **WHEN** Claude acquisition succeeds or fails
+- **THEN** caller observation time and None progress are preserved with bounded failures

@@ -21,8 +21,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => {
             match &error {
                 PipelineError::Discovery(_) => eprintln!("could not discover session stores"),
-                PipelineError::Compilation(_) => {
-                    eprintln!("rules cannot evaluate canonical sources")
+                PipelineError::Clock(_) | PipelineError::Observation(_) => {
+                    eprintln!("could not establish the scan observation time")
                 }
                 // PipelineError is non-exhaustive; retain a fallback for future categories.
                 _ => {}

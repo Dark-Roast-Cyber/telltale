@@ -8,8 +8,8 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 manifest="$root/tests/embedding-consumer/Cargo.toml"
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"$root/target/embedding-contract-check"}
-export TMPDIR=${TMPDIR:-"$CARGO_TARGET_DIR/tmp"}
-mkdir -p "$TMPDIR"
+# Leave temporary storage to the platform default unless the caller selects it.
+# A target directory may have writable, non-sticky ancestors unsafe for assignment.
 printf 'External embedding contracts: '
 cargo --version
 
@@ -57,5 +57,5 @@ do
             }
             ;;
     esac
-    cargo test "$@" --quiet
+    cargo test "$@"
 done

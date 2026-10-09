@@ -13,10 +13,15 @@ REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 CARGO_BIN=${CARGO:-cargo}
 python3 "$REPO_ROOT/scripts/version-consistency-check" --check-publication-order \
     telltale-schema telltale-rules telltale-sources telltale-detect telltale-core telltale-cli
-VERSION=$("$CARGO_BIN" metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "telltale-cli"))')
+WORKSPACE_METADATA=$(cd "$REPO_ROOT" && "$CARGO_BIN" metadata --locked --no-deps --format-version 1)
+VERSION=$(printf '%s' "$WORKSPACE_METADATA" | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "telltale-cli"))')
+TARGET_DIR=${CARGO_TARGET_DIR:-$(printf '%s' "$WORKSPACE_METADATA" | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')}
+mkdir -p "$TARGET_DIR"
+TARGET_DIR=$(CDPATH= cd -- "$TARGET_DIR" && pwd -P)
+export CARGO_TARGET_DIR="$TARGET_DIR"
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/telltale-package-verify.XXXXXX")
-TARGET_DIR="$WORK_DIR/target"
-PACKAGE_DIR="$TARGET_DIR/package"
+PACKAGE_DIR="$WORK_DIR/packages"
+mkdir -p "$PACKAGE_DIR"
 DETECT_CONSUMER_DIR="$WORK_DIR/detect-consumer"
 DETECT_LIGHT_CONSUMER_DIR="$WORK_DIR/detect-light-consumer"
 CORE_CONSUMER_DIR="$WORK_DIR/core-consumer"
@@ -67,10 +72,12 @@ run_package() {
     done
     echo "== cargo package $package =="
     (cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" "$@")
-    test -f "$(package_path "$package")/Cargo.toml" || {
+    normalized_source="$TARGET_DIR/package/$package-$VERSION"
+    test -f "$normalized_source/Cargo.toml" || {
         echo "cargo did not produce normalized source for $package" >&2
         exit 1
     }
+    cp -R "$normalized_source" "$(package_path "$package")"
 }
 
 run_package telltale-schema
@@ -107,7 +114,7 @@ run_normalized_test() {
         set -- "$@" --config "patch.crates-io.$dependency.path=\"$(package_path "$dependency")\""
     done
     echo "== normalized cargo test $package =="
-    CARGO_TARGET_DIR="$TARGET_DIR/test-$package" "$@"
+    "$@"
 }
 
 run_normalized_test telltale-schema
@@ -124,7 +131,7 @@ mkdir -p "$EMPTY_ROOT"
 set -- "$CARGO_BIN" run --locked --manifest-path "$(package_path telltale-rules)/Cargo.toml" --example evaluate_stream
 set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path telltale-schema)\""
 echo "== normalized telltale-rules example =="
-CARGO_TARGET_DIR="$TARGET_DIR/example-rules" "$@" >/dev/null
+"$@" >/dev/null
 
 set -- "$CARGO_BIN" run --locked --manifest-path "$(package_path telltale-core)/Cargo.toml" --example embed_scan
 for package in telltale-schema telltale-rules telltale-sources telltale-detect; do
@@ -132,7 +139,7 @@ for package in telltale-schema telltale-rules telltale-sources telltale-detect; 
 done
 set -- "$@" -- "$EMPTY_ROOT"
 echo "== normalized telltale-core example =="
-CARGO_TARGET_DIR="$TARGET_DIR/example-core" "$@" >/dev/null
+"$@" >/dev/null
 
 PACKAGED_SHA_FULL=$(python3 - "$(package_path telltale-cli)/.cargo_vcs_info.json" <<'PY'
 import json
@@ -181,36 +188,14 @@ telltale-schema = "=$VERSION"
 EOF
 
 cat > "$DETECT_LIGHT_CONSUMER_DIR/src/main.rs" <<'EOF'
-use std::path::PathBuf;
-
-use telltale_detect::detection::{detect_parsed_source_records, evaluate_session_matches};
 use telltale_rules::load_default_rule_set;
-use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::record::NormalizedRecord;
-use telltale_schema::source::Source;
 
 fn main() {
-    let source = Source {
-        client: ClientId::Codex,
-        kind: SourceKind::Jsonl,
-        source_id: "consumer.synthetic".to_string(),
-        path: PathBuf::from("synthetic://consumer"),
-    };
-    let records = vec![NormalizedRecord {
-        session_id: "session".to_string(),
-        client: "codex".to_string(),
-        agent: None,
-        model: None,
-        provider: None,
-        timestamp: None,
-        kind: telltale_schema::record::RecordKind::ToolCall,
-        tool_name: Some("shell".to_string()),
-        arguments: Some("{\"command\":\"printf test\"}".to_string()),
-        content: "printf test".to_string(),
-    }];
+    // Detection v2 compiles and evaluates without the default source-io feature.
     let rules = load_default_rule_set().expect("rules");
-    let _ = evaluate_session_matches(&rules, &records);
-    let _ = detect_parsed_source_records(&source, &rules, &records);
+    let plan = telltale_detect::v2::compile_rule_v1(&rules.compatibility_export())
+        .expect("canonical rule compilation");
+    let _ = plan.semantic_provenance();
 }
 EOF
 
@@ -230,9 +215,10 @@ EOF
 
 cat > "$CORE_CONSUMER_DIR/src/main.rs" <<'EOF'
 use telltale_core::{
-    ClientId, DiscoveryError, Event, Event3Record, LocalEventFeed, LocalEventFeedConfig,
-    MatchResult, NormalizedRecord, PipelineError, RecordKind, RiskAccountingError,
-    RiskContribution, RiskContributionType, Source, SourceKind, StartupMode,
+    AcquisitionError, ActionFinding, ClientId, DetailedEvaluationOptions, DiscoveryError,
+    Event, Event3Record, LocalEventFeed, LocalEventFeedConfig, PipelineError,
+    RiskContribution, RiskContributionType, Source, SourceCoverage, SourceFailureStage,
+    SourceKind, SourceScanFailure, StartupMode, VisibilityLimit,
 };
 
 fn is_discovery_error(error: &PipelineError) -> bool {
@@ -243,15 +229,18 @@ fn main() {
     let _: Option<Event> = None;
     let _: Option<Event3Record> = None;
     let _: Option<Source> = None;
-    let _: Option<NormalizedRecord> = None;
-    let _: Option<MatchResult> = None;
-    let _: Option<RiskAccountingError> = None;
+    let _: Option<ActionFinding> = None;
+    let _: Option<DetailedEvaluationOptions> = None;
+    let _: Option<SourceCoverage> = None;
+    let _: Option<SourceScanFailure> = None;
+    let _: Option<SourceFailureStage> = None;
+    let _: Option<AcquisitionError> = None;
+    let _: Option<VisibilityLimit> = None;
     let _: Option<RiskContribution> = None;
     let _: Option<RiskContributionType> = None;
     let _: fn(&PipelineError) -> bool = is_discovery_error;
     let _: Option<ClientId> = None;
     let _: Option<SourceKind> = None;
-    let _: Option<RecordKind> = None;
     let contribution = RiskContribution::new(
         "rule.consumer",
         RiskContributionType::DeterministicRule,
@@ -440,14 +429,13 @@ cat > "$SOURCES_CONSUMER_DIR/src/main.rs" <<'EOF'
 use std::path::Path;
 
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::record::{NormalizedRecord, RecordKind};
+use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 use telltale_sources::clients::{PathRoot, SourcePattern};
 
 fn main() {
     let _: Option<ClientId> = None;
     let _: Option<SourceKind> = None;
-    let _: Option<NormalizedRecord> = None;
     let _: Option<RecordKind> = None;
     let _: Option<Source> = None;
     let _ = match ClientId::Codex {
@@ -494,7 +482,7 @@ EOF
 set -- "$CARGO_BIN" run --manifest-path "$SCHEMA_CONSUMER_DIR/Cargo.toml"
 set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path telltale-schema)\""
 echo "== registry-style schema consumer =="
-schema_version=$(CARGO_TARGET_DIR="$TARGET_DIR/schema-consumer" "$@")
+schema_version=$("$@")
 case "$schema_version" in
     "$VERSION") ;;
     *) echo "unexpected schema provenance: $schema_version" >&2; exit 1 ;;
@@ -506,14 +494,14 @@ for package in telltale-schema telltale-rules telltale-sources; do
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== registry-style detect-only consumer =="
-CARGO_TARGET_DIR="$TARGET_DIR/detect-consumer" "$@"
+"$@"
 
 set -- "$CARGO_BIN" check --manifest-path "$DETECT_LIGHT_CONSUMER_DIR/Cargo.toml"
 for package in telltale-detect telltale-rules telltale-schema; do
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== registry-style detect no-default-features consumer =="
-CARGO_TARGET_DIR="$TARGET_DIR/detect-light-consumer" "$@"
+"$@"
 
 LIGHT_METADATA="$WORK_DIR/detect-light-metadata.json"
 set -- "$CARGO_BIN" metadata --format-version 1 --no-default-features \
@@ -554,14 +542,14 @@ set -- "$CARGO_BIN" check --manifest-path "$RULES_CONSUMER_DIR/Cargo.toml"
 set -- "$@" --config "patch.crates-io.telltale-rules.path=\"$(package_path telltale-rules)\""
 set -- "$@" --config "patch.crates-io.telltale-schema.path=\"$(package_path telltale-schema)\""
 echo "== registry-style rules consumer =="
-CARGO_TARGET_DIR="$TARGET_DIR/rules-consumer" "$@"
+"$@"
 
 set -- "$CARGO_BIN" check --manifest-path "$SOURCES_CONSUMER_DIR/Cargo.toml"
 for package in telltale-sources telltale-schema; do
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== registry-style sources consumer =="
-CARGO_TARGET_DIR="$TARGET_DIR/sources-consumer" "$@"
+"$@"
 
 set -- "$CARGO_BIN" run --manifest-path "$CORE_CONSUMER_DIR/Cargo.toml"
 set -- "$@" --config "patch.crates-io.telltale-core.path=\"$(package_path telltale-core)\""
@@ -569,7 +557,7 @@ for package in telltale-schema telltale-rules telltale-sources telltale-detect; 
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== registry-style core-only consumer =="
-CARGO_TARGET_DIR="$TARGET_DIR/core-consumer" "$@" >/dev/null
+"$@" >/dev/null
 
 if test "$(uname -s)" = Linux; then
     set -- "$CARGO_BIN" run --features protected-assignment --manifest-path "$CORE_ASSIGNMENT_CONSUMER_DIR/Cargo.toml"
@@ -578,7 +566,7 @@ if test "$(uname -s)" = Linux; then
     done
     echo "== registry-style protected-assignment core consumer (Linux) =="
     TELLTALE_PACKAGE_ASSIGNMENT_ROOT="$WORK_DIR/protected-assignment-store" \
-        CARGO_TARGET_DIR="$TARGET_DIR/core-assignment-consumer" "$@" >/dev/null
+        "$@" >/dev/null
 fi
 
 for variant in normal assignment; do
@@ -632,14 +620,14 @@ for package in telltale-schema telltale-rules telltale-sources telltale-detect t
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== registry-style CLI consumer =="
-CARGO_TARGET_DIR="$TARGET_DIR/cli-consumer" "$@"
+"$@"
 
 set -- "$CARGO_BIN" install --locked --path "$(package_path telltale-cli)" --root "$INSTALL_ROOT"
 for package in telltale-schema telltale-rules telltale-sources telltale-detect telltale-core; do
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
 echo "== packaged telltale-cli install =="
-CARGO_TARGET_DIR="$TARGET_DIR/install" "$@"
+"$@"
 
 expected_binary_count=0
 for binary_path in "$INSTALL_ROOT/bin"/*; do

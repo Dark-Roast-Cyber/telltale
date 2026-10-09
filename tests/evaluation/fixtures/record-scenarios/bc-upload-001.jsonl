@@ -1,0 +1,2 @@
+{"type":"session_meta","session_id":"benign-upload","timestamp":"2026-04-03T07:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"benign-upload","timestamp":"2026-04-03T07:00:01Z","payload":{"type":"tool_call","tool_name":"publish_artifact","arguments":"aws s3 cp dist/app.tar.gz s3://example-invalid/artifacts/","message":"Upload a documented build artifact to the project bucket."}}

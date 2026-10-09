@@ -29,18 +29,10 @@ and canonical Telltale destinations and units within current-user scope.
 ### Requirement: Canonical transactional sequencing
 
 The installer SHALL resolve and validate selected release provenance before any
-installer or systemd mutation. For an explicit candidate it SHALL require exact
+installer or systemd mutation.
+For an explicit candidate it SHALL require exact
 tag identity, matching package/binary version, the exact canonical archive
-manifest, and the archive digest from that tag's `SHA256SUMS`. Only after those
-checks pass SHALL it acquire the installer lock, validate canonical destinations,
- quiesce canonical schedules, recover only proven marker-owned staging, stage the
-sole canonical artifact, install canonical units disabled, prove the base
-canonical service declaration and allowed inherited policy, validate effective
-canonical behavior, smoke-test, and enable only the canonical schedule when
-requested. Effective validation and all declaration/drop-in proofs SHALL
-complete before binary replacement, and activation SHALL remain the last
-mutating step. It SHALL never activate a canonical schedule before the
-validated candidate binary is installed.
+manifest, and the archive digest from that tag's `SHA256SUMS`.
 
 #### Scenario: Candidate provenance fails before mutation
 
@@ -64,24 +56,43 @@ validated candidate binary is installed.
 - **THEN** the installer fails before replacing the installed binary or enabling
   the canonical schedule
 
+### Requirement: Installer stages only after provenance verification
+
+Only after those
+checks pass SHALL it acquire the installer lock, validate canonical destinations,
+ quiesce canonical schedules, recover only proven marker-owned staging, stage the
+sole canonical artifact, install canonical units disabled, prove the base
+canonical service declaration and allowed inherited policy, validate effective
+canonical behavior, smoke-test, and enable only the canonical schedule when
+requested.
+
+#### Scenario: Installer stages only after provenance verification
+
+- **WHEN** candidate provenance checks pass
+- **THEN** lock, path, staging, declaration and effective-policy proofs precede installation and activation
+
+### Requirement: Installer activation follows validated binary replacement
+
+Effective validation and all declaration/drop-in proofs SHALL
+complete before binary replacement, and activation SHALL remain the last
+mutating step.
+It SHALL never activate a canonical schedule before the
+validated candidate binary is installed.
+
+#### Scenario: Installer activation follows validated binary replacement
+
+- **WHEN** effective declaration/drop-in validation succeeds
+- **THEN** the validated binary is installed before activation, which remains last
+
 ### Requirement: Fail-closed canonical safety
 
 The installer SHALL fail closed on ownership ambiguity, unsafe canonical path
 aliases, unsafe or unproven canonical service declarations, Telltale-specific
 or ambiguous effective drop-ins, unsafe effective configuration, non-regular
 destinations, unsafe modes, archive violations, or destructive deletion of an
-unidentified canonical file. It SHALL refuse system scope and
-unmanaged paths. The base canonical service declaration SHALL be positively
-proven from its canonical path and exact generated representation or equivalent
-integrity-bound bytes; a separately duplicated divergent template SHALL not be
-used as the authority. Unit-specific drop-ins SHALL remain forbidden. Inherited
-type-wide or global drop-ins MAY coexist only when each allowed file is
-independently inspected and proven to contain no `EnvironmentFile` or
-`WorkingDirectory` directive, reset, injection, ambiguous continuation, or
-other unreviewed environment or execution-path contribution. Benign inherited
-lifecycle-only policy MAY coexist only when the
-effective canonical execution, identity, environment, path, security, and
-timer contract remains unchanged.
+unidentified canonical file.
+It SHALL refuse system scope and
+unmanaged paths.
 
 #### Scenario: Canonical effective-unit ambiguity
 
@@ -124,29 +135,50 @@ timer contract remains unchanged.
 - **WHEN** the installer validates the destination
 - **THEN** it fails closed before destructive mutation
 
+### Requirement: Installer proves one authoritative service declaration
+
+The base canonical service declaration SHALL be positively
+proven from its canonical path and exact generated representation or equivalent
+integrity-bound bytes; a separately duplicated divergent template SHALL not be
+used as the authority.
+
+#### Scenario: Installer proves one authoritative service declaration
+
+- **WHEN** canonical base declaration is inspected
+- **THEN** exact generated or integrity-bound bytes prove it without a divergent duplicate template
+
+### Requirement: Installer inherited drop-ins cannot inject environment or execution paths
+
+Unit-specific drop-ins SHALL remain forbidden.
+Inherited
+type-wide or global drop-ins MAY coexist only when each allowed file is
+independently inspected and proven to contain no `EnvironmentFile` or
+`WorkingDirectory` directive, reset, injection, ambiguous continuation, or
+other unreviewed environment or execution-path contribution.
+
+#### Scenario: Installer inherited drop-ins cannot inject environment or execution paths
+
+- **WHEN** type-wide or global drop-ins coexist
+- **THEN** independent file proof and unchanged effective canonical contract are required
+
+### Requirement: Benign inherited lifecycle policy cannot alter the service contract
+
+Allowed inherited lifecycle policy MUST preserve the canonical service contract. Benign inherited
+lifecycle-only policy MAY coexist only when the
+effective canonical execution, identity, environment, path, security, and
+timer contract remains unchanged.
+
+#### Scenario: Benign inherited lifecycle policy cannot alter the service contract
+
+- **WHEN** allowed inherited lifecycle-only policy coexists
+- **THEN** effective canonical execution, identity, environment, path, security and timer behavior remain unchanged
+
 ### Requirement: Canonical service and timer identity
 
 Systemd user units SHALL use only `telltale-scan.service` and
 `telltale-scan.timer`, with the expected canonical `FragmentPath`,
 `TELLTALE_*` environment, canonical executable/path identity, and canonical
-JSONL path. The service's base declaration SHALL include exactly one optional
-canonical environment-file declaration for
-`${XDG_CONFIG_HOME:-$HOME/.config}/telltale/telltale.env`, with missing-file
-errors ignored, and that declaration SHALL be proven independently of the
-effective `EnvironmentFiles` report. An empty effective `EnvironmentFiles`
-report SHALL be accepted only after that declaration proof succeeds. A
-non-empty report SHALL contain exactly the canonical optional path with the
-missing-file-ignore form; extra, alternate, reset, glob, or unknown forms SHALL
-fail closed. The canonical service need not declare `WorkingDirectory=`; its
-absence SHALL be positively proven in the base declaration and allowed inherited
-policy before accepting the exact manager-reported `!<canonical-home>` default.
-Explicit, inherited, reset, alternate, missing-ok, or ambiguous
-`WorkingDirectory=` contributions SHALL fail closed even when their effective
-path equals the canonical home. The effective service execution/security
-properties and timer's effective target, two-entry monotonic cadence, empty
-calendar schedule, and persistence contract SHALL be validated independently. A
-successful transaction
-SHALL leave at most one canonical schedule.
+JSONL path.
 
 #### Scenario: Canonical unit installation
 
@@ -248,6 +280,61 @@ SHALL leave at most one canonical schedule.
 - **WHEN** the installer validates the effective canonical service
 - **THEN** validation fails closed before binary replacement or activation
 
+### Requirement: Service optional environment declaration is independently proven
+
+The service's base declaration SHALL include exactly one optional
+canonical environment-file declaration for
+`${XDG_CONFIG_HOME:-$HOME/.config}/telltale/telltale.env`, with missing-file
+errors ignored, and that declaration SHALL be proven independently of the
+effective `EnvironmentFiles` report.
+
+#### Scenario: Service optional environment declaration is independently proven
+
+- **WHEN** the canonical service declaration is inspected
+- **THEN** one canonical optional environment file is proven independently of effective reporting
+
+### Requirement: Service effective environment report is closed
+
+An empty effective `EnvironmentFiles`
+report SHALL be accepted only after that declaration proof succeeds.
+A
+non-empty report SHALL contain exactly the canonical optional path with the
+missing-file-ignore form; extra, alternate, reset, glob, or unknown forms SHALL
+fail closed.
+
+#### Scenario: Service effective environment report is closed
+
+- **WHEN** manager reports empty or nonempty EnvironmentFiles
+- **THEN** empty requires declaration proof and nonempty permits exactly the canonical optional path
+
+### Requirement: Service default working directory requires absence proofs
+
+The canonical service need not declare `WorkingDirectory=`; its
+absence SHALL be positively proven in the base declaration and allowed inherited
+policy before accepting the exact manager-reported `!<canonical-home>` default.
+Explicit, inherited, reset, alternate, missing-ok, or ambiguous
+`WorkingDirectory=` contributions SHALL fail closed even when their effective
+path equals the canonical home.
+
+#### Scenario: Service default working directory requires absence proofs
+
+- **WHEN** manager reports the canonical home default
+- **THEN** base and inherited policy prove no WorkingDirectory directive; explicit/reset/ambiguous contributions reject
+
+### Requirement: Service execution and timer cadence are independently validated
+
+The effective service execution/security
+properties and timer's effective target, two-entry monotonic cadence, empty
+calendar schedule, and persistence contract SHALL be validated independently.
+A
+successful transaction
+SHALL leave at most one canonical schedule.
+
+#### Scenario: Service execution and timer cadence are independently validated
+
+- **WHEN** an installation transaction activates a schedule
+- **THEN** effective execution/security and exact timer contract validate with at most one canonical schedule
+
 ### Requirement: Unrelated resource isolation
 
 Non-canonical host resources SHALL be outside the installer's support boundary.
@@ -323,12 +410,11 @@ canonical user destinations.
 ### Requirement: Parser-valid current-user environment file and migration
 
 The current-user service SHALL declare exactly one optional absolute environment
-file in the representation accepted by the target systemd parser. The optional
+file in the representation accepted by the target systemd parser.
+The optional
 prefix and path SHALL remain one directive value, paths containing supported
 whitespace SHALL remain one path, and malformed or ambiguous representations
-SHALL fail closed. The installer SHALL accept the exact known valid v0.5.0 host
-representation as bounded migration input only when the remaining declaration
-and effective policy are canonical.
+SHALL fail closed.
 
 #### Scenario: Parser-valid optional path
 
@@ -349,6 +435,17 @@ and effective policy are canonical.
 
 - **WHEN** a declaration uses another path, reset, multiple directives, malformed quoting, or a unit-specific drop-in
 - **THEN** canonical validation fails closed before replacement or activation
+
+### Requirement: Installer accepts only bounded known canonical migration input
+
+The installer SHALL accept the exact known valid v0.5.0 host
+representation as bounded migration input only when the remaining declaration
+and effective policy are canonical.
+
+#### Scenario: Installer accepts only bounded known canonical migration input
+
+- **WHEN** a known valid v0.5.0 host representation is encountered
+- **THEN** it is accepted only with otherwise canonical declaration and effective policy
 
 ### Requirement: Exact development installation identity
 

@@ -28,7 +28,8 @@ The system SHALL apply sanitization appropriate to the output context so that ev
 
 ### Requirement: URL credentials are not emitted
 
-The system SHALL remove URL userinfo and SHALL redact credential-like query values before emitting URL-derived text. For a percent-encoded URL candidate, it SHALL make no more than two whole-candidate percent-decode passes and SHALL stop at the first syntactically supported `scheme://` representation (including mixed literal/encoded scheme forms). Once that representation is found, its authority, path, query, and fragment boundaries are immutable. Any later percent decoding SHALL be component-local for classification/redaction and SHALL NOT create or redefine an outer URL component. Percent-encoded text that does not expose a supported `scheme://` within that bound SHALL not be claimed as recognized URL input.
+The system SHALL remove URL userinfo and SHALL redact credential-like query values before emitting URL-derived text.
+For a percent-encoded URL candidate, it SHALL make no more than two whole-candidate percent-decode passes and SHALL stop at the first syntactically supported `scheme://` representation (including mixed literal/encoded scheme forms).
 
 #### Scenario: URL contains userinfo
 
@@ -49,6 +50,25 @@ The system SHALL remove URL userinfo and SHALL redact credential-like query valu
 
 - **WHEN** URL syntax is literal, fully encoded, mixed literal/encoded, or double encoded and a supported `scheme://` becomes recognizable within two whole-candidate decode passes
 - **THEN** sanitization starts at that first representation and applies the immutable component policy; ordinary percent-encoded non-URL text and URL-looking text beyond the two-pass recognition bound remain ordinary text and are not claimed as supported URL recognition
+
+### Requirement: URL component boundaries stay immutable after recognition
+
+Once that representation is found, its authority, path, query, and fragment boundaries are immutable.
+Any later percent decoding SHALL be component-local for classification/redaction and SHALL NOT create or redefine an outer URL component.
+
+#### Scenario: URL component boundaries stay immutable after recognition
+
+- **WHEN** later percent-decoding occurs after scheme recognition
+- **THEN** decoding is component-local and cannot redefine outer boundaries
+
+### Requirement: Unrecognized encoded URLs are not claimed as supported input
+
+Percent-encoded text that does not expose a supported `scheme://` within that bound SHALL not be claimed as recognized URL input.
+
+#### Scenario: Unrecognized encoded URLs are not claimed as supported input
+
+- **WHEN** two whole-candidate passes expose no supported scheme
+- **THEN** the candidate is not reported as recognized URL input
 
 ### Requirement: Sensitive paths are not emitted
 
@@ -148,7 +168,7 @@ The change SHALL preserve Event 3.0 shape, source identity, explicit source-acqu
 
 ### Requirement: Historical opaque labels remain stable without gaining trust
 
-For historical Event 3.0 export and derived timeline/correlation output, the system SHALL preserve an opaque identifier only when one authoritative full-string recognizer accepts a registered expected type and the exact form `[type:64-lowercase-hex-digest]`. The preserved value SHALL be treated only as an unauthenticated pseudonymous label. Marker recognition SHALL NOT authenticate provenance, authorize behavior, suppress detections, or alter detector/scoring semantics. Native/source-controlled values SHALL continue through their ordinary emitted identifier policy.
+For historical Event 3.0 export and derived timeline/correlation output, the system SHALL preserve an opaque identifier only when one authoritative full-string recognizer accepts a registered expected type and the exact form `[type:64-lowercase-hex-digest]`.
 
 #### Scenario: Exact historical marker survives re-export and derived linkage
 
@@ -164,6 +184,17 @@ For historical Event 3.0 export and derived timeline/correlation output, the sys
 
 - **WHEN** an untrusted historical Event 3.0 record contains an exact recognized marker
 - **THEN** the label may be preserved for idempotence and correlation linkage but is not authenticated or trusted provenance
+
+### Requirement: Historical opaque markers never authenticate or suppress detection
+
+The preserved value SHALL be treated only as an unauthenticated pseudonymous label.
+Marker recognition SHALL NOT authenticate provenance, authorize behavior, suppress detections, or alter detector/scoring semantics.
+Native/source-controlled values SHALL continue through their ordinary emitted identifier policy.
+
+#### Scenario: Historical opaque markers never authenticate or suppress detection
+
+- **WHEN** a registered opaque marker is preserved
+- **THEN** it remains an unauthenticated label and native values use ordinary identifier policy
 
 ### Requirement: Bounded canonical processing errors and evidence
 

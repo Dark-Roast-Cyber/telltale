@@ -83,14 +83,6 @@ impl LocalEventFeedConfig {
         Self::new(resolve_log_path(profile, explicit), startup)
     }
 
-    pub fn from_profile(
-        profile: PathProfile,
-        explicit: Option<PathBuf>,
-        startup: StartupMode,
-    ) -> Self {
-        Self::for_profile(profile, explicit, startup)
-    }
-
     pub fn with_limits(mut self, limits: FeedLimits) -> Self {
         self.limits = limits;
         self

@@ -516,7 +516,7 @@ impl ContextInvestigationResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct OccurrenceContext {
     pub anchor_index: usize,
@@ -524,7 +524,7 @@ pub struct OccurrenceContext {
     pub text_budget_exhausted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ContextEntry {
     pub index: usize,
@@ -547,6 +547,11 @@ fn source_failure_reason(error: AcquisitionError) -> SourceUnavailableReason {
             BoundedReadError::MalformedSource => SourceUnavailableReason::MalformedSource,
         },
         AcquisitionError::SourceRead => SourceUnavailableReason::Unreadable,
+        // OpenCode investigation is deferred before acquisition; if a feature-off
+        // acquisition is ever reached, report the missing provider, not a bad file.
+        AcquisitionError::CapabilityNotCompiled => {
+            SourceUnavailableReason::ReadOnlyProviderUnavailable
+        }
         AcquisitionError::ContributionCapacity
         | AcquisitionError::AttestationCapacity
         | AcquisitionError::AccountingOverflow => SourceUnavailableReason::LimitExceeded,

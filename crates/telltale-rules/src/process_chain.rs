@@ -371,12 +371,6 @@ pub struct ProcessChainDetection {
     pub risk_adjustment: Option<String>,
 }
 
-impl ProcessChainDetection {
-    pub fn is_informational(&self) -> bool {
-        self.informational
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Compiled rules
 // ---------------------------------------------------------------------------

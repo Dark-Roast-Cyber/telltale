@@ -698,20 +698,65 @@ impl SelectorRegistry {
                 resolved.selector = selector;
                 resolved
             }
-            // The v1 URL view is unavailable, not negatively observed, even
-            // when Tool visibility is otherwise supported. Compatibility must
-            // neither invent a tool-side URL fact nor turn the visibility gap
-            // into a genuine no-match.
-            SelectorId::CompatUrl => SelectorResolution {
-                selector,
-                presence: SelectorPresence::UnavailableVisibility,
-                value: None,
-                metadata: None,
-                required_capability,
+            // The v1 URL view is the URL-keyed top-level string arguments of a
+            // tool call. Command text and tool results are separate targets;
+            // they are not copied into URL (the action view, unlike this
+            // selector, also reads command text as URL).
+            SelectorId::CompatUrl => match observation.body() {
+                ObservationBody::Tool(tool) => {
+                    let urls = tool_argument_urls(tool.arguments());
+                    if urls.is_empty() {
+                        absent(selector, required_capability)
+                    } else {
+                        derived_field(
+                            selector,
+                            JsonValue::string(urls.join("\n")),
+                            required_capability,
+                        )
+                    }
+                }
+                _ => absent(selector, required_capability),
             },
             _ => absent(selector, required_capability),
         }
     }
+}
+
+/// Top-level tool argument keys whose string values are destination URLs.
+pub(crate) fn is_url_argument_key(key: &str) -> bool {
+    matches!(key, "url" | "uri" | "href" | "endpoint")
+}
+
+/// URL-keyed top-level string arguments, in key order, from an object or a
+/// JSON-encoded object string. Nothing else in the arguments is a URL fact.
+/// Callers charge the argument bytes before resolution.
+pub(crate) fn tool_argument_urls(arguments: Option<&JsonValue>) -> Vec<String> {
+    let parsed;
+    let object = match arguments {
+        Some(JsonValue::Object(object)) => object,
+        Some(JsonValue::String(text)) => {
+            match serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .and_then(|value| JsonValue::try_from_source_value(&value).ok())
+            {
+                Some(JsonValue::Object(object)) => {
+                    parsed = object;
+                    &parsed
+                }
+                _ => return Vec::new(),
+            }
+        }
+        _ => return Vec::new(),
+    };
+    object
+        .iter()
+        .filter(|(key, _)| is_url_argument_key(key))
+        .filter_map(|(_, value)| match value {
+            JsonValue::String(value) => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn absent(selector: SelectorId, required_capability: Option<CapabilityId>) -> SelectorResolution {

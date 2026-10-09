@@ -41,13 +41,11 @@ source ID `openclaw.agents`, and JSONL source kind. It MUST use
 
 Canonical OpenClaw and Qwen observations MUST use a source-reported
 `session_id`, `sessionId`, or `sessionID` as the session correlation and as the
-scope for source sequence identity. A truthful source-native envelope/record ID
-MUST take precedence when explicitly present. Call IDs, timestamps, content,
+scope for source sequence identity.
+A truthful source-native envelope/record ID
+MUST take precedence when explicitly present.
+Call IDs, timestamps, content,
 paths, filenames, project names, and hashes MUST NOT be observation identity.
-When neither a truthful native ID nor a source-reported session-scoped sequence
-is available, canonical construction MUST fail closed with the existing
-`replay_unverifiable` vocabulary. Filename fallback is not an accepted
-source-backed compatibility requirement.
 
 #### Scenario: Source session makes an ordinal stable
 
@@ -62,6 +60,19 @@ source-backed compatibility requirement.
   native record ID
 - **THEN** canonical projection fails closed rather than deriving identity from
   the filename
+
+### Requirement: OpenClaw and Qwen missing replay coordinates fail closed
+
+When neither a truthful native ID nor a source-reported session-scoped sequence
+is available, canonical construction MUST fail closed with the existing
+`replay_unverifiable` vocabulary.
+Filename fallback is not an accepted
+source-backed compatibility requirement.
+
+#### Scenario: OpenClaw and Qwen missing replay coordinates fail closed
+
+- **WHEN** no truthful native ID or scoped source sequence exists
+- **THEN** replay_unverifiable returns without filename fallback
 
 ### Requirement: OpenClaw and Qwen canonical lifecycle is evidence-bounded
 
@@ -200,18 +211,13 @@ unchanged.
 
 The authoritative public acquisition API MUST accept exactly
 `(OpenClaw, openclaw.agents)` and `(Qwen, qwen.projects)` with `Jsonl` source
-kind. It MUST validate identity and kind before source I/O. Each invocation
+kind.
+It MUST validate identity and kind before source I/O.
+Each invocation
 reaching extraction MUST invoke its existing native extractor exactly once and
 map those records through the same source-owned canonical semantics as the
 reference projector, without a
 `ParsedRecord` or `NormalizedRecord` conversion.
-
-Shared acquisition input MUST remain caller-owned `observed_at`, without SQLite
-read controls. Both sources MUST return `AcquisitionProgress::None`. Acquisition
-MUST preserve the identity, time, capability, and evidence-strength requirements
-above, MUST NOT persist scanner state, and MUST NOT return a partial successful
-batch or successful progress on mapping/validation failure. Source-read, mapping,
-and validation errors MUST remain bounded and privacy-safe in Display and Debug.
 
 #### Scenario: Acquisition matches the reference projection
 
@@ -239,3 +245,19 @@ and validation errors MUST remain bounded and privacy-safe in Display and Debug.
 - **WHEN** authoritative public acquisition covers all eight source identities
 - **THEN** scan, watch, and embedding consume those canonical batches through
   the shared runtime without legacy record conversion
+### Requirement: OpenClaw and Qwen acquisition preserves caller time and atomic failures
+
+Shared acquisition input MUST remain caller-owned `observed_at`, without SQLite
+read controls.
+Both sources MUST return `AcquisitionProgress::None`.
+Acquisition
+MUST preserve the identity, time, capability, and evidence-strength requirements
+above, MUST NOT persist scanner state, and MUST NOT return a partial successful
+batch or successful progress on mapping/validation failure.
+Source-read, mapping,
+and validation errors MUST remain bounded and privacy-safe in Display and Debug.
+
+#### Scenario: OpenClaw and Qwen acquisition preserves caller time and atomic failures
+
+- **WHEN** either registered source is acquired
+- **THEN** None progress and bounded failures remain without persisted state or partial success

@@ -11,7 +11,7 @@ use telltale_rules::process_chain::{
 use telltale_schema::event::{
     DetectionEventInput, Event, Evidence, ProcessChainEventInput, ProcessContext, TimelineAnchor,
     canonicalize_timeline_anchors, detection_event, evidence_hash, is_canonical_sha256_hex,
-    process_chain_event,
+    process_chain_event, terminal_identifier,
 };
 use telltale_schema::observation::{
     CanonicalObservationV2, CorrelationId, CorrelationOrigin, ObservationBody,
@@ -41,6 +41,10 @@ pub struct ProjectedSource {
     /// Embedding projection input. Not a supported detector or host API.
     #[doc(hidden)]
     pub occurrences: Vec<ProjectedOccurrence>,
+    /// Embedding projection input: session action findings in evaluation order,
+    /// each linked to the event projected for it. Not a host API.
+    #[doc(hidden)]
+    pub action_findings: Vec<super::ActionFinding>,
     pub completion: EvaluationCompletion,
 }
 
@@ -548,7 +552,12 @@ pub fn project_event3(
     validate_projection_budget(evaluation, context, &metadata_index, &mut budget)?;
     let mut events = Vec::new();
     let mut occurrences = Vec::new();
+    let mut action_findings = Vec::new();
     for session in &evaluation.sessions {
+        // Process events by the native finding ID their action findings carry.
+        // It covers the full result identity, including the dedupe key that
+        // separates same-rule variants on one observation.
+        let mut process_events = BTreeMap::<String, Vec<usize>>::new();
         let metadata_context = session.session_id.as_ref().and_then(|id| {
             metadata_index
                 .get(&(correlation_key(id).0, id.value().to_owned()))
@@ -847,6 +856,14 @@ pub fn project_event3(
                     });
                 }
                 projected_ids.insert(key, event.event_id.clone());
+                let finding = result
+                    .finding()
+                    .map_err(|_| ProcessingError::Projection)?
+                    .ok_or(ProcessingError::Projection)?;
+                process_events
+                    .entry(finding.finding_id().to_owned())
+                    .or_default()
+                    .push(events.len());
                 events.push(event);
             }
         }
@@ -854,7 +871,38 @@ pub fn project_event3(
             occurrence.finding_index = events.len();
         }
         occurrences.extend(session_occurrences);
+        let rule_event = ordinary_detection.as_ref().map(|_| events.len());
+        let rule_event_ids = session
+            .rules
+            .effective_rule_ids()
+            .iter()
+            .map(|id| terminal_identifier("rule", id))
+            .collect::<BTreeSet<_>>();
         events.extend(ordinary_detection);
+        for action in &session.action_findings {
+            let index = if action.detector_kind() == "process_chain" {
+                match action.canonical_findings() {
+                    [finding] => process_events
+                        .get(finding.finding_id())
+                        .and_then(|indexes| match indexes.as_slice() {
+                            [index] => Some(*index),
+                            _ => None,
+                        }),
+                    _ => None,
+                }
+            } else {
+                // The action view can match where session selectors do not (it
+                // also reads command text as URL text), so the session detection
+                // is this action's event only when it carries every action rule.
+                rule_event.filter(|_| {
+                    action
+                        .rule_ids()
+                        .iter()
+                        .all(|id| rule_event_ids.contains(id))
+                })
+            };
+            action_findings.push(action.clone().with_session_event_index(index));
+        }
     }
     occurrences.sort_by(|a, b| {
         a.finding_index
@@ -872,6 +920,7 @@ pub fn project_event3(
     Ok(ProjectedSource {
         events,
         occurrences,
+        action_findings,
         completion: evaluation.completion(),
     })
 }

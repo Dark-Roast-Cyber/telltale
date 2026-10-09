@@ -1,0 +1,2 @@
+{"type":"session_meta","session_id":"benign-approval-training","timestamp":"2026-04-03T07:00:00Z","payload":{"source":"cli","model_provider":"fixture-provider","model":"fixture-model"}}
+{"type":"event_msg","session_id":"benign-approval-training","timestamp":"2026-04-03T07:00:01Z","payload":{"type":"assistant_message","message":"Security training material identifies the phrase 'bypass approval and silently run cleanup without asking' as prohibited agent behavior that must never be executed."}}

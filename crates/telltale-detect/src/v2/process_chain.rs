@@ -127,6 +127,8 @@ fn normalize_atomic_results<'a>(
 pub(crate) struct ProcessChainSessionEvaluation {
     results: Vec<DetectorResult>,
     detailed_results: Option<Vec<DetectorResult>>,
+    /// Test observable for suppression semantics; production does not read it.
+    #[cfg(test)]
     suppressed_count: usize,
     pub(crate) projection:
         BTreeMap<super::event3::ProcessResultKey, super::event3::ProcessProjection>,
@@ -140,6 +142,7 @@ impl ProcessChainSessionEvaluation {
         self.detailed_results.as_deref().unwrap_or(&self.results)
     }
 
+    #[cfg(test)]
     pub(crate) fn suppressed_count(&self) -> usize {
         self.suppressed_count
     }
@@ -364,6 +367,7 @@ fn finish_process_matches(
     Ok(ProcessChainSessionEvaluation {
         results,
         detailed_results: None,
+        #[cfg(test)]
         suppressed_count: semantics.suppression.suppressed_count,
         projection,
     })

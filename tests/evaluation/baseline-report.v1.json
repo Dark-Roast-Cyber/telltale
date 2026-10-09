@@ -3,7 +3,7 @@
     "schema": "telltale.evaluation.baseline",
     "version": 1,
     "manifest_version": 1,
-    "manifest_sha256": "2ad3337723de1b324a3bfa61887dc08514c40a48d9a1ffd68d919a8716e7dc38",
+    "manifest_sha256": "674afd5b012e13b09eb9fb70131144f3446b95be3fc267f1dbc508c63f142152",
     "synthetic": true,
     "characterization_purpose": "What does the current deterministic detector do on this synthetic corpus?",
     "efficacy_purpose": "Against independently authored scenario expectations, does the current detector require security review for the scenarios we intend to escalate while avoiding security-review escalation for the benign scenarios we intend not to escalate?",
@@ -532,7 +532,7 @@
       "claude.claude.projects": 1,
       "codex.codex.archived_sessions": 1,
       "codex.codex.headless_sessions": 1,
-      "codex.codex.sessions": 22,
+      "codex.codex.sessions": 39,
       "copilot.copilot.process_log": 1,
       "openclaw.openclaw.agents": 1,
       "opencode.opencode.sqlite": 1,
@@ -546,12 +546,12 @@
       },
       "arguments": {
         "required": 0,
-        "optional": 23,
+        "optional": 37,
         "unavailable": 6
       },
       "content": {
         "required": 0,
-        "optional": 28,
+        "optional": 45,
         "unavailable": 0
       },
       "model": {
@@ -562,12 +562,12 @@
       "parent_pid": {
         "required": 0,
         "optional": 0,
-        "unavailable": 29
+        "unavailable": 46
       },
       "pid": {
         "required": 0,
         "optional": 0,
-        "unavailable": 29
+        "unavailable": 46
       },
       "provider": {
         "required": 0,
@@ -575,28 +575,28 @@
         "unavailable": 0
       },
       "record_kind:assistant_message": {
-        "required": 13,
+        "required": 15,
         "optional": 0,
         "unavailable": 0
       },
       "record_kind:tool_call": {
-        "required": 12,
+        "required": 25,
         "optional": 0,
         "unavailable": 0
       },
       "record_kind:tool_result": {
-        "required": 5,
+        "required": 7,
         "optional": 0,
         "unavailable": 0
       },
       "timestamp": {
         "required": 0,
-        "optional": 20,
+        "optional": 21,
         "unavailable": 9
       },
       "tool_name": {
         "required": 0,
-        "optional": 20,
+        "optional": 36,
         "unavailable": 9
       },
       "user_intent": {

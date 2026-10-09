@@ -12,6 +12,10 @@ const FIXTURE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const FAKE_CARGO: &str = r##"#!/bin/sh
 set -eu
 VERSION=@@VERSION@@
+case "$*" in
+    *--no-deps*) ;;
+    *) printf '%s|%s\n' "$1" "${CARGO_TARGET_DIR:-}" >> "$FAKE_CARGO_TARGET_RECORD" ;;
+esac
 
 case "$1" in
 metadata)
@@ -112,7 +116,7 @@ run)
     for argument in "$@"; do
         case "$argument" in
             */core-assignment-consumer/Cargo.toml)
-                expected_root="${CARGO_TARGET_DIR%/target/core-assignment-consumer}/protected-assignment-store"
+                expected_root="${argument%/core-assignment-consumer/Cargo.toml}/protected-assignment-store"
                 test "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT" = "$expected_root"
                 test ! -e "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT"
                 mkdir "$TELLTALE_PACKAGE_ASSIGNMENT_ROOT"
@@ -254,7 +258,18 @@ fn package_verifier_enforces_the_canonical_executable_set() {
     }
 }
 
+#[test]
+fn package_verifier_reuses_relative_caller_target_without_removing_it() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = run_package_verifier_with_target(root, "success", true);
+    assert!(output.status.success(), "{}", output_text(&output));
+}
+
 fn run_package_verifier(root: &Path, case: &str) -> Output {
+    run_package_verifier_with_target(root, case, false)
+}
+
+fn run_package_verifier_with_target(root: &Path, case: &str, relative: bool) -> Output {
     let fixture = tempdir().expect("fake cargo fixture directory");
     let metadata = Command::new(env!("CARGO"))
         .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
@@ -271,14 +286,41 @@ fn run_package_verifier(root: &Path, case: &str) -> Output {
         .expect("make fake cargo executable");
 
     let assignment_record = fixture.path().join("assignment-root.txt");
+    let target_record = fixture.path().join("cargo-targets.txt");
+    let target = fixture.path().join("warm-target");
+    fs::create_dir(&target).expect("warm target");
+    fs::write(target.join("cache-sentinel"), "preserve").expect("cache sentinel");
+    let caller_target = if relative {
+        Path::new("warm-target")
+    } else {
+        &target
+    };
     let output = Command::new(root.join("scripts/package-verify"))
-        .current_dir(root)
+        .current_dir(if relative { fixture.path() } else { root })
         .env("CARGO", &cargo)
+        .env("CARGO_TARGET_DIR", caller_target)
+        .env("FAKE_CARGO_TARGET_RECORD", &target_record)
         .env("FAKE_WORKSPACE_METADATA", metadata_path)
         .env("FAKE_PACKAGE_VERIFY_CASE", case)
         .env("FAKE_ASSIGNMENT_STORE_RECORD", &assignment_record)
         .output()
         .expect("run package verifier");
+    assert_eq!(
+        fs::read_to_string(target.join("cache-sentinel")).unwrap(),
+        "preserve"
+    );
+    let targets = fs::read_to_string(target_record).expect("recorded Cargo targets");
+    let expected_target = target.canonicalize().expect("canonical caller target");
+    for line in targets.lines() {
+        let (_, actual) = line.split_once('|').expect("command and target");
+        assert_eq!(
+            Path::new(actual)
+                .canonicalize()
+                .expect("canonical Cargo target"),
+            expected_target,
+            "Cargo gate used a separate target: {line}"
+        );
+    }
     if assignment_record.exists() {
         let store_root = fs::read_to_string(assignment_record).expect("recorded assignment root");
         assert!(

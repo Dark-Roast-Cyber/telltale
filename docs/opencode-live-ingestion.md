@@ -97,20 +97,46 @@ parts outside bootstrap selection, upstream omissions/truncation and unsupported
 parts remain coverage limitations. Accounting remains `PartialSource`, even for
 a store that fits in the sample, and cannot replace a whole-database baseline.
 
-An unchanged `scan --once` retains cursor high-water, but bootstrap-to-incremental
-window changes can alter session aggregates and event fingerprints. In live
-validation, that first transition emitted one additional detection and six
-activity events without any source append. The subsequent identical incremental
-window emitted nothing and retained semantic state, while refreshing observation
-timestamps by existing policy. Byte-identical state files are not promised.
-This existing window-dependent aggregation/deduplication limitation remains a
-production risk. Fixing it requires a separate persisted session/contribution
-design; dropping old observations or suppressing changed aggregates here would
-risk lost detection coverage.
-An isolated two-part synthetic store reproduced the same behavior on starting
-commit `0fe85f062db5e7ebe818ebde83b6ac0aa693ac48` and the corrected build: record
-counts 2/1/1 and emitted counts 2/2/0 across three fresh-process scans, with fixed
-cursor high-water. It is not introduced by the tool-text change.
+OpenCode scan/watch evaluates bounded selected windows, **not cumulative session
+snapshots or exactly-once actions**. An unchanged `scan --once` retains cursor
+high-water, but bootstrap-to-incremental selection can change session activity/
+detection evidence and fingerprints, emitting another aggregate. Identical later
+incremental projections are suppressed. Do not count these emissions as new
+actions solely by Event 3 event ID; retain the evidence's selected-window meaning.
+Observation timestamps can refresh; byte-identical state files are not promised.
+
+The earlier live validation emitted one additional detection and six activity
+events without a source append, then settled to zero. Its production-risk note
+remains relevant: consumers treating every aggregate as a new action can miscount
+activity or promote duplicate incidents. The isolated two-part store on starting
+commit `0fe85f062db5e7ebe818ebde83b6ac0aa693ac48` and the corrected build showed
+2/1/1 parsed records and 2/2/0 emitted aggregates. Current synthetic
+characterization confirms those counts with unchanged database/WAL bytes and
+high-water; earlier fingerprints remain retained. Both whole-source baseline
+snapshots and source contributions stay empty because `PartialSource` cannot
+replace whole-source accounting.
+
+This limitation is accepted as nonblocking **only within the existing bounded
+selected-window/session-aggregate contract**, not because it predates this change.
+Cumulative snapshots, exactly-once actions, or global replay invariance would be
+different acceptance criteria. Neither arbitrary suppression of changed evidence
+nor installation of a partial baseline is safe; no persisted reconciliation
+redesign is promised by this candidate.
+
+The public embedding facade persists nothing. Without a resume token it reads the
+bounded bootstrap selection; with a host-persisted `ResumeToken` it applies the
+same incremental read policy as the CLI cursor (high-water minus the overlap,
+25,000-part limit, overflow fails as `LimitExceeded`). It has no persisted
+suppression. Repeated scans of unchanged selected input have stable action
+semantics and Event 3 semantic projections, apart from fresh event IDs and
+materialization clocks.
+Detailed replay identities require source time and unambiguous semantic preimages;
+selection, continuation, or duplicate ambiguity can change identity or availability.
+Retain fallback coordinates bound independently to exact source identity. Measured
+adoption through an isolated vendor-neutral public facade passed 33 and 75
+downstream-consumer tests; this supports that adoption path, not native platform,
+live append, or release qualification. Updates outside overlap and unsampled
+history remain coverage limits.
 
 ## Validation scope
 
@@ -158,3 +184,7 @@ tests fail on the starting commit too,
 at their ten-second startup deadlines. The temporary lock-holder lifetime is
 also only thirty seconds. These timing-sensitive failures are not treated as
 passing release gates or as demonstrated regressions in this change.
+Subsequent candidate test-harness repairs address the confirmed concurrency
+defects with focused Linux synthetic validation; they do not retroactively pass
+that Windows run. The exact original eight failing test names are unavailable,
+and no native Windows rerun is available. Required candidate gates remain pending.

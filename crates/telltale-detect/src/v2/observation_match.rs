@@ -290,17 +290,6 @@ impl CompiledObservationMatchDetector {
         let signal = result.signal().expect("evaluated result identity is valid");
         (result, signal)
     }
-
-    pub fn evaluate_to_finding(
-        &self,
-        observation: &CanonicalObservationV2,
-    ) -> (DetectorResult, Option<super::types::Finding>) {
-        let result = self.evaluate(observation);
-        let finding = result
-            .finding()
-            .expect("evaluated result identity is valid");
-        (result, finding)
-    }
 }
 
 fn family_compatible_with_any(stage: ObservationStage, families: &[ObservationFamily]) -> bool {

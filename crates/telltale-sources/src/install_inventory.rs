@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -437,37 +436,6 @@ fn node_roots(home: &Path) -> Vec<PathBuf> {
         home.join(".bun/install/global/node_modules"),
         home.join("AppData/Roaming/npm/node_modules"),
     ]
-}
-
-pub fn installed_agent_counts(
-    snapshot: &InstallInventorySnapshot,
-) -> BTreeMap<&'static str, usize> {
-    let mut counts = BTreeMap::new();
-    counts.insert(
-        "confirmed",
-        snapshot
-            .agents
-            .iter()
-            .filter(|agent| agent.confidence == InstallConfidence::Confirmed)
-            .count(),
-    );
-    counts.insert(
-        "partial",
-        snapshot
-            .agents
-            .iter()
-            .filter(|agent| agent.confidence == InstallConfidence::Partial)
-            .count(),
-    );
-    counts.insert(
-        "absent",
-        snapshot
-            .agents
-            .iter()
-            .filter(|agent| agent.confidence == InstallConfidence::Absent)
-            .count(),
-    );
-    counts
 }
 
 #[cfg(test)]

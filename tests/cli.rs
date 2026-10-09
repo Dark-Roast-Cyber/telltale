@@ -718,6 +718,8 @@ mod migration;
 
 #[path = "cli/opencode_large_output.rs"]
 mod opencode_large_output;
+#[path = "cli/opencode_window_contract.rs"]
+mod opencode_window_contract;
 #[path = "cli/provenance.rs"]
 mod provenance;
 #[path = "cli/release_public_boundary.rs"]

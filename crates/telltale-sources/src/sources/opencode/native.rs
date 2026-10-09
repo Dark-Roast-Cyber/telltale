@@ -602,7 +602,9 @@ fn stream_sqlite_rows<P: rusqlite::Params>(
     let mut delivered = 0;
     while let Some(row) = rows.next()? {
         if remaining.is_some_and(|remaining| delivered as i64 >= remaining) {
-            return Err(part_read_error("incremental part limit exceeded"));
+            return Err(SourceReadError::Bounded(
+                crate::source_read::BoundedReadError::LimitExceeded,
+            ));
         }
         admission.admit(row)?;
         #[cfg(test)]
@@ -1132,10 +1134,7 @@ mod admission_tests {
                     .unwrap_err();
             assert!(matches!(
                 error,
-                SourceReadError::SchemaDrift {
-                    detail: "incremental part limit exceeded",
-                    ..
-                }
+                SourceReadError::Bounded(crate::source_read::BoundedReadError::LimitExceeded)
             ));
             assert_eq!(owned(), 1);
             assert_eq!(admission.rows, 1);

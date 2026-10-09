@@ -336,6 +336,56 @@ If an external extension mechanism becomes necessary, prefer a versioned subproc
 
 Where reasonable, avoid internal contracts that could never be represented across a versioned external boundary.
 
+### Analyzer extensions (direction, not implemented)
+
+Telltale is the extension host, not one plugin among many. It keeps acquisition,
+canonical observations, identities, provenance, capability and visibility
+semantics, privacy, deterministic detection, Finding semantics, correlation,
+policy, and telemetry. Extensions add specialized analysis on top of that
+visibility instead of rediscovering session stores.
+
+- **Out of process.** Extensions run as separate processes over a small
+  versioned JSONL/IPC protocol (`telltale-extension-v1`), declared by
+  capability. Start with one capability, `analyzer.v1`; add others (for example
+  enrichment) only when a real extension needs them, as distinct capabilities
+  rather than one universal plugin interface. No Rust ABI or shared-library
+  loading.
+- **Bounded input.** An analyzer receives a versioned, privacy-bounded analysis
+  projection (`AnalysisInputV1`), never raw internal structures or source paths.
+- **Results come back through Telltale.** An analyzer returns validated results
+  (`AnalysisResultV1`) linked to specific canonical observation IDs. Telltale
+  converts them into its existing `DetectorResult -> Signal -> Finding` path with
+  analyzer identity and content version as provenance, so console, SIEM, and
+  downstream consumers see one coherent record.
+- **Interpretation, not rewriting.** Analyzers may interpret evidence. They
+  cannot rewrite observed facts (a proposed tool call stays proposed), mint
+  arbitrary Telltale identities, or make policy or action decisions.
+- **Explicit failure.** Analyzer failure or timeout yields explicit
+  not-evaluated or error states; it never blocks native deterministic detection
+  or reports a clean result.
+- **Harness-neutral projection.** The projection is built from canonical
+  observations, so one extension applies to every supported source. Telltale
+  owns the projection schema. It covers eligible observations whether or not
+  a native rule matched (projecting only native matches limits extensions to
+  triage), and keys facts by the canonical selector registry with their
+  provenance rather than Rule v1 compatibility evidence.
+- **Visibility is explicit.** Each sensitive context kind (user, assistant,
+  tool arguments, and any later instruction, tool-result, agent, or runtime
+  context) is a separate default-off disclosure class that the operator
+  approves per extension. The projection states per-source capability, so an
+  extension can tell "not disclosed" and "not reported by this source" apart.
+  Facts a source does not report are never inferred to fill a slot. Raw
+  reasoning is not retained and is not part of this direction.
+- **One-way dependency.** Telltale never depends on an analyzer or plugin built
+  on it. Plugins depend on Telltale's public contracts. Telltale's code,
+  schemas, tests, and public docs do not name a plugin.
+
+Contracts accepted now keep this path additive: cross-process formats are explicit
+versioned schemas, never `Serialize` derives on facade structs; observation IDs
+are stable and pinned by tests; observed stages are typed; visibility limits are
+an open set of closed reasons. Implementing the protocol requires separately
+accepted scope.
+
 ## Modularity
 
 Modularity means clear responsibilities and dependency direction, not maximizing the number of crates.

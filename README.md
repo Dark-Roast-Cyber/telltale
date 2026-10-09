@@ -83,15 +83,12 @@ Linux, macOS, and Windows; they do not establish broad live source-store
 validation. Fixture-backed-only clients remain preview/experimental for live use.
 
 Canonical Observation v2 acquisition and the Detection v2 runtime are now the
-authoritative path for CLI scan/watch and `Pipeline::scan_root` across the eight
-supported source identities. Rule v1 remains the content-compatibility format,
-and Event 3.0 remains the compatibility projection. The record-level
-`detect_records` and `evaluate_session` APIs intentionally remain
-`NormalizedRecord` compatibility surfaces. Event4 and Telemetry/Output v2
-remain inactive.
-Beside `Pipeline::scan_root` / `scan_sources`, current development after RC1
-offers occurrence-aware embedding scans with precise observation associations
-from the same projection; these methods are not in published RC1 artifacts.
+authoritative path for CLI scan/watch and every `Pipeline` scan method across the
+eight supported source identities. Rule v1 remains the content-compatibility
+format, and Event 3.0 remains the compatibility projection. Rust hosts embed
+`telltale-core` and use detailed scans for per-action findings with typed
+outcomes; see [embedding](docs/embedding.md) for the contract and surface
+classification. Event4 and Telemetry/Output v2 remain inactive.
 
 ## Quick start
 
@@ -107,8 +104,9 @@ synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
 real-session-store setup. Explicit state and historical-event
 migration guidance is in the [migration contract](docs/migration-contract.md).
-For the source/runtime changes in the published `v0.7.0-rc.1` candidate, see
-the [0.7.0 migration guide](docs/migrations/0.7.0.md).
+For published RC1 and subsequent untagged 0.7.0 preparation changes, see
+the [0.7.0 migration guide](docs/migrations/0.7.0.md). Stable 0.7.0 is not
+published; the current source is not a frozen or qualified release candidate.
 
 ## Development verification
 
@@ -138,11 +136,13 @@ supported subsets. It is not a gateway, live-provider interoperability claim or
 additional production source.
 
 The repository remains a Cargo workspace with six official packages. The 0.6.x
-architecture-convergence sequence is complete; the published `v0.7.0-rc.1`
-candidate documents the supported embedding surface. Five-platform native
-qualification passed in run `36305581215` using verifier tooling
+architecture-convergence sequence is complete; current 0.7.0 preparation includes
+embedding changes beyond the published `v0.7.0-rc.1` candidate. Five-platform native
+qualification of that historical RC1 artifact passed in run `36305581215` using
+verifier tooling
 `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077` against the immutable published
-artifacts. Clean-host qualification and stable promotion remain separate.
+artifacts, not the current source. Clean-host qualification and stable promotion
+remain separate.
 Crates.io publication remains intentionally deferred until that public Rust
 surface is stable enough for deliberate external consumers.
 
@@ -318,7 +318,6 @@ These files are the source-of-truth for Telltale's current implementation, rules
 - [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content
 - [Adding an agent source](docs/adding-agent-source.md) — contributor checklist for new agent/session-source support
 - [Use cases](docs/use-cases.md) — concrete detection use cases with fixture guidance
-- [Normalization schema](docs/normalization-schema.md) — direct-record `NormalizedRecordV1` compatibility contract
 - [Source validation matrix](docs/source-validation-matrix.md) — coverage and validation gates
 - [Requirements](docs/requirements.md) — functional, security, and operational requirements
 - [Trust boundaries](docs/trust-boundaries.md) — trust model for untrusted agent content

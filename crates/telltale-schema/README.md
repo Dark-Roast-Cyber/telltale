@@ -1,8 +1,8 @@
 # telltale-schema
 
 
-Canonical Telltale events, normalized records, source identities, redaction,
-and scoring types. This crate owns data contracts only; it does not discover
+Canonical Telltale events, Canonical Observation v2, source identities,
+redaction, and scoring types. This crate owns data contracts only; it does not discover
 session stores or evaluate detection rules.
 
 Native serialized events use Event 3.0, package-only `telltale_version`,
@@ -20,9 +20,9 @@ does not emit Event4 from the production pipeline or implement persistence,
 replay, CanonicalPayload, or transport.
 
 ```rust
-use telltale_schema::record::NormalizedRecord;
+use telltale_schema::clients::ClientId;
 
-let _record: Option<NormalizedRecord> = None;
+assert_eq!(ClientId::Codex.as_str(), "codex");
 ```
 
 ## Event 3.0 consumer

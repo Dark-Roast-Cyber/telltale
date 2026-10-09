@@ -27,8 +27,8 @@ caller transport -> inference -----> COv2 -> one Detection v2 core
 caller collection -> runtime -----/       -> existing eligible Event3 projection
 ```
 
-Normalize source-native evidence directly into COv2, never through
-`NormalizedRecord` or Event3. Keep session adapters for retrospective scanning,
+Normalize source-native evidence directly into COv2, never through a flattened
+record type or Event3. Keep session adapters for retrospective scanning,
 offline/unmanaged deployments, compatibility, and source-specific enrichment.
 The eight exact production `(ClientId, source_id)` identities and their parser
 ownership remain unchanged. NemoClaw/OpenShell deployment does not establish a
