@@ -204,9 +204,10 @@ status. Session modifiers, effective policy/exclusion behavior, checked
 contributions, and overflow behavior are unchanged. `compile_rule_v1` still
 rejects unsupported custom rule metadata. `compat.v1.url` resolves the URL-keyed
 top-level string arguments of a tool call (`url`, `uri`, `href`, `endpoint`;
-object arguments or a string that is exactly one JSON object), the rule the
-action view uses. A tool call without one is an evaluated absence, so URL rules
-no longer limit completion.
+object arguments or a string that is exactly one JSON object). The action view
+reads the same keys and also reads command text as URL text, which this selector
+does not. A tool call without such an argument is an evaluated absence, so URL
+rules no longer limit completion.
 
 The v2 process-chain evaluator remains the sole canonical matcher pass and uses
 the existing shared suppression/correlation kernel. It retains Event3-specific

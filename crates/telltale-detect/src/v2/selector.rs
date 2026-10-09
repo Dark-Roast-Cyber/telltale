@@ -699,8 +699,9 @@ impl SelectorRegistry {
                 resolved
             }
             // The v1 URL view is the URL-keyed top-level string arguments of a
-            // tool call, the same fact the action view reads. Command text and
-            // tool results are separate targets; they are not copied into URL.
+            // tool call. Command text and tool results are separate targets;
+            // they are not copied into URL (the action view, unlike this
+            // selector, also reads command text as URL).
             SelectorId::CompatUrl => match observation.body() {
                 ObservationBody::Tool(tool) => {
                     let urls = tool_argument_urls(tool.arguments());

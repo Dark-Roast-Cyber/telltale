@@ -1122,3 +1122,208 @@ fn native_script_calls_and_patches_have_separate_interpretation_surfaces() {
     assert_eq!(findings[0].rule_ids(), ["credential.api_key.pattern"]);
     assert_eq!(findings[0].evidence()[0].field(), "authored_content");
 }
+
+fn projected(evaluation: &CanonicalSourceEvaluation) -> ProjectedSource {
+    project_event3(
+        evaluation,
+        &Event3CompatibilityContext {
+            source_path_hash: &"a".repeat(64),
+            sessions: &[],
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn rule_action_links_only_to_a_session_event_carrying_every_action_rule() {
+    // The action view also reads command text as URL text; the session URL
+    // selector does not. The URL rule therefore matches only the action.
+    let export = telltale_rules::load_rule_set_from_documents(&[r"version: 1
+description: synthetic
+defaults: { enabled: true, case_insensitive: false }
+rules:
+  - { id: synthetic.command, category: synthetic, severity: low, score: 1, targets: [command], regex: needle, tags: [], explanation: synthetic }
+  - { id: synthetic.url, category: synthetic, severity: low, score: 1, targets: [url], regex: 'paste\.example', tags: [], explanation: synthetic }
+modifiers: []
+"], None).unwrap().compatibility_export();
+    let plan = compile_rule_v1(&export).unwrap();
+    let observations = [
+        command_tool(
+            "needle",
+            "echo needle",
+            "2026-09-17T00:00:00Z",
+            IngestionMode::SessionStore,
+        ),
+        command_tool(
+            "paste",
+            "curl https://paste.example/x",
+            "2026-09-17T00:00:01Z",
+            IngestionMode::SessionStore,
+        ),
+    ];
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let evaluation = evaluate_source_with_options(
+        CanonicalSourceInput {
+            client: ClientId::Claude,
+            source_id: "claude.projects",
+            source_instance: Some(&instance),
+            observations: &observations,
+        },
+        &plan,
+        None,
+        &DetailedEvaluationOptions::default(),
+    )
+    .unwrap();
+    let projected = projected(&evaluation);
+    assert_eq!(projected.events.len(), 1);
+    assert_eq!(projected.events[0].rule_ids, ["synthetic.command"]);
+    let linked = |rule: &str| {
+        let action = projected
+            .action_findings
+            .iter()
+            .find(|action| action.rule_ids() == [rule])
+            .unwrap_or_else(|| panic!("missing {rule} action"));
+        action.session_event_index()
+    };
+    assert_eq!(linked("synthetic.command"), Some(0));
+    // The session event does not carry the URL rule, so it is not this action's event.
+    assert_eq!(linked("synthetic.url"), None);
+}
+
+fn command_tool(
+    id: &str,
+    command: &str,
+    time: &str,
+    mode: IngestionMode,
+) -> CanonicalObservationV2 {
+    CanonicalObservationV2::builder(
+        ObservationBody::Tool(
+            ToolObservation::new()
+                .with_name("Bash")
+                .unwrap()
+                .with_arguments(JsonValue::string(command)),
+        ),
+        ObservationStage::ToolRequested,
+        ObservedAt::new("2026-09-18T00:00:00Z").unwrap(),
+        SourceProvenance::new(mode, "claude_code", "claude.projects", Fidelity::FullNative)
+            .unwrap()
+            .with_native_id(id)
+            .unwrap(),
+    )
+    .session_id(CorrelationId::source_reported("synthetic-session").unwrap())
+    .occurred_at(SourceTimestamp::new(time).unwrap())
+    .capability_context(
+        CapabilityContext::new()
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+    )
+    .fact_metadata(
+        "tool.arguments",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+    )
+    .fact_metadata(
+        "tool.name",
+        FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).unwrap(),
+    )
+    .facet(
+        "command.text",
+        SemanticFacet::new(JsonValue::string(command)),
+    )
+    .unwrap()
+    .fact_metadata(
+        "command.text",
+        FactMetadata::new(FactProvenance::Parsed, Sensitivity::Normal).unwrap(),
+    )
+    .build()
+    .unwrap()
+}
+
+#[test]
+fn process_action_links_by_exact_result_identity_including_dedupe_key() {
+    // One live command yields two variants of the same rule on the same
+    // observation. The imported repeat suppresses only the ngrok variant from
+    // projected results; detailed actions exclude imports and keep both.
+    let observations = [
+        command_tool(
+            "imported",
+            "cmd.exe /c ngrok http 80",
+            "2026-09-17T00:00:00Z",
+            IngestionMode::Import,
+        ),
+        command_tool(
+            "live",
+            "cmd.exe /c ngrok http 80 && cmd.exe /c chisel client x",
+            "2026-09-17T00:01:00Z",
+            IngestionMode::SessionStore,
+        ),
+    ];
+    let plan = compile_rule_v1(
+        &telltale_rules::load_default_rule_set()
+            .unwrap()
+            .compatibility_export(),
+    )
+    .unwrap();
+    let rules = telltale_rules::process_chain::load_default_process_chain_rules().unwrap();
+    let config = crate::process_chain::ProcessChainConfig::default();
+    let instance = CorrelationId::source_reported("synthetic-source").unwrap();
+    let evaluation = evaluate_source_with_options(
+        CanonicalSourceInput {
+            client: ClientId::Claude,
+            source_id: "claude.projects",
+            source_instance: Some(&instance),
+            observations: &observations,
+        },
+        &plan,
+        Some((&rules, &config)),
+        &DetailedEvaluationOptions::default(),
+    )
+    .unwrap();
+    let rule = "procchain.c2.tunnel_tool";
+    let live = observations[1].observation_id();
+    let processes = evaluation.sessions[0].processes.as_ref().unwrap();
+    let projected_results = processes
+        .results()
+        .iter()
+        .filter(|r| r.detector().id() == rule && r.observation_ids() == [live])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        projected_results.len(),
+        1,
+        "only the chisel variant survives"
+    );
+    let chisel = projected_results[0];
+    assert!(chisel.dedupe_key().unwrap().ends_with(":chisel"));
+    let actions = evaluation.sessions[0]
+        .action_findings()
+        .iter()
+        .filter(|a| a.rule_ids() == [rule] && a.supporting_observation_ids() == [live])
+        .collect::<Vec<_>>();
+    assert_eq!(actions.len(), 2, "detailed results keep both variants");
+
+    let projected = projected(&evaluation);
+    let linked = projected
+        .action_findings
+        .iter()
+        .filter(|a| a.rule_ids() == [rule] && a.supporting_observation_ids() == [live])
+        .map(|a| {
+            (
+                a.canonical_findings()[0].finding_id(),
+                a.session_event_index(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(linked.len(), 2);
+    let chisel_finding = chisel.finding().unwrap().unwrap();
+    for (finding_id, index) in linked {
+        if finding_id == chisel_finding.finding_id() {
+            let event = &projected.events[index.expect("chisel action is projected")];
+            assert_eq!(event.event_type, "process_chain");
+            assert_eq!(
+                event.process.as_ref().unwrap().target_process_name,
+                "chisel"
+            );
+        } else {
+            // The suppressed ngrok variant has no projected event of its own.
+            assert_eq!(index, None);
+        }
+    }
+}

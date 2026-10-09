@@ -106,8 +106,10 @@ preserve truthful absence, require their documented capabilities, and never
 reparse raw structured arguments/results or invent URL/network facts. The one
 exception is `compat.v1.url`: it MUST resolve the top-level string members named
 `url`, `uri`, `href`, or `endpoint` of object arguments, or of an argument string
-that is exactly one JSON object, using the same rule as the action view, and
-MUST NOT copy command text or results into URL.
+that is exactly one JSON object, and MUST NOT copy command text or results into
+URL. The action view reads the same URL-keyed members and also reads a tool
+call's command text as URL text, so an action URL match need not be a session
+selector match.
 
 #### Scenario: Compatibility selectors preserve absence
 
@@ -1096,12 +1098,20 @@ matching replay, action-semantics, or native-profile version.
 
 `ActionFinding::session_event_index()` SHALL be the index into the containing
 `SourceScan::events` of the event projected for the action: the session's Rule v1
-detection for a Rule v1 action, and the process-chain event projected from the
-same result for a process-chain action. It SHALL be `None` when no such event was
-projected or the link is ambiguous, and SHALL NOT be derived from session
-identifier strings.
+detection for a Rule v1 action when that detection carries every rule of the
+action, and the process-chain event projected from the same result (rule,
+supporting observations, and dedupe key) for a process-chain action. It SHALL be
+`None` when no such event was projected or the link is ambiguous, and SHALL NOT
+be derived from session identifier strings.
 
 #### Scenario: Action findings link to their projected event
 
 - **WHEN** a session yields Rule v1 and process-chain actions
 - **THEN** each action's index names a detection or `process_chain` event that carries its rule, and an unprojected result yields `None`
+
+#### Scenario: Action links are not borrowed from related events
+
+- **WHEN** a Rule v1 action has a rule that the session detection does not
+  carry, or a process-chain result variant is unprojected while another variant
+  of the same rule on the same observation is projected
+- **THEN** that action's index is `None`

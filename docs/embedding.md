@@ -191,11 +191,13 @@ second detector or an Event 3 conversion loop.
 
 The Rule v1 `url` target (`compat.v1.url`) is the URL-keyed top-level string
 arguments of a tool call: `url`, `uri`, `href`, and `endpoint`, read from object
-arguments or from an argument string that is exactly one JSON object. This is
-the same rule the action view applies. Command text and tool results are their
-own targets and are not copied into `url`, so a URL in a shell command matches
-through `command` and a URL in output through `tool_result`. A tool call without
-such an argument is an evaluated absence, not a visibility gap.
+arguments or from an argument string that is exactly one JSON object. Command
+text and tool results are their own targets and are not copied into `url`, so a
+URL in a shell command matches through `command` and a URL in output through
+`tool_result`. A tool call without such an argument is an evaluated absence, not
+a visibility gap. The action view reads the same keys and also reads command
+text as `url`, so an action can match a URL rule that the session detection does
+not carry; `session_event_index()` is then `None`.
 
 ### Action findings
 
@@ -224,9 +226,10 @@ such an argument is an evaluated absence, not a visibility gap.
   so it rejects valid action labels.
 - `session_event_index()` is the index into the same `SourceScan::events` of
   the Event 3 event projected for this action: the session's Rule v1 detection
-  for a Rule v1 action, or the `process_chain` event from the same result for a
-  process-chain action. It is `None` when no such event was projected (for
-  example, a suppressed process result) or the link would be ambiguous. Use it
+  when it carries every rule of a Rule v1 action, or the `process_chain` event
+  from the same result (including its dedupe key) for a process-chain action. It
+  is `None` when no such event was projected (for example, a suppressed process
+  result or an action-only rule match) or the link would be ambiguous. Use it
   instead of matching session identifiers.
 - `ActionFinding` and its parts implement `Debug`, `Clone`, and `Eq`, not
   `Serialize`; see [host wire and durable handoff](#host-wire-and-durable-handoff).

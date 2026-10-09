@@ -402,11 +402,11 @@ impl ActionFinding {
         &self.context
     }
     /// Index into the containing scan's `events` of the Event 3 detection
-    /// projected for this action: the session's Rule v1 detection for a Rule v1
-    /// action, or the event projected from the same result for a process-chain
-    /// action. `None` when no such event was projected (for example, a
-    /// suppressed result) or the link is ambiguous; never guessed from session
-    /// identifiers.
+    /// projected for this action: the session's Rule v1 detection when it
+    /// carries every rule of a Rule v1 action, or the event projected from the
+    /// same result for a process-chain action. `None` when no such event was
+    /// projected (for example, a suppressed result or an action-only rule
+    /// match) or the link is ambiguous; never guessed from session identifiers.
     pub fn session_event_index(&self) -> Option<usize> {
         self.session_event_index
     }
@@ -692,6 +692,7 @@ fn view(
                     }
                 }
             }
+            // Unlike the session URL selector, command text is also action URL text.
             out.put("url", command);
         }
         _ => {}

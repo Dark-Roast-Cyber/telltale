@@ -554,9 +554,10 @@ pub fn project_event3(
     let mut occurrences = Vec::new();
     let mut action_findings = Vec::new();
     for session in &evaluation.sessions {
-        // Process events by the identity their action findings carry: the
-        // terminal rule identifier and exact supporting observation IDs.
-        let mut process_events = BTreeMap::<(String, Vec<String>), Vec<usize>>::new();
+        // Process events by the native finding ID their action findings carry.
+        // It covers the full result identity, including the dedupe key that
+        // separates same-rule variants on one observation.
+        let mut process_events = BTreeMap::<String, Vec<usize>>::new();
         let metadata_context = session.session_id.as_ref().and_then(|id| {
             metadata_index
                 .get(&(correlation_key(id).0, id.value().to_owned()))
@@ -855,11 +856,12 @@ pub fn project_event3(
                     });
                 }
                 projected_ids.insert(key, event.event_id.clone());
+                let finding = result
+                    .finding()
+                    .map_err(|_| ProcessingError::Projection)?
+                    .ok_or(ProcessingError::Projection)?;
                 process_events
-                    .entry((
-                        terminal_identifier("rule", rule_id),
-                        result.observation_ids().to_vec(),
-                    ))
+                    .entry(finding.finding_id().to_owned())
                     .or_default()
                     .push(events.len());
                 events.push(event);
@@ -870,22 +872,34 @@ pub fn project_event3(
         }
         occurrences.extend(session_occurrences);
         let rule_event = ordinary_detection.as_ref().map(|_| events.len());
+        let rule_event_ids = session
+            .rules
+            .effective_rule_ids()
+            .iter()
+            .map(|id| terminal_identifier("rule", id))
+            .collect::<BTreeSet<_>>();
         events.extend(ordinary_detection);
         for action in &session.action_findings {
             let index = if action.detector_kind() == "process_chain" {
-                action
-                    .rule_ids()
-                    .first()
-                    .and_then(|rule| {
-                        process_events
-                            .get(&(rule.clone(), action.supporting_observation_ids().to_vec()))
-                    })
-                    .and_then(|indexes| match indexes.as_slice() {
-                        [index] => Some(*index),
-                        _ => None,
-                    })
+                match action.canonical_findings() {
+                    [finding] => process_events
+                        .get(finding.finding_id())
+                        .and_then(|indexes| match indexes.as_slice() {
+                            [index] => Some(*index),
+                            _ => None,
+                        }),
+                    _ => None,
+                }
             } else {
-                rule_event
+                // The action view can match where session selectors do not (it
+                // also reads command text as URL text), so the session detection
+                // is this action's event only when it carries every action rule.
+                rule_event.filter(|_| {
+                    action
+                        .rule_ids()
+                        .iter()
+                        .all(|id| rule_event_ids.contains(id))
+                })
             };
             action_findings.push(action.clone().with_session_event_index(index));
         }
