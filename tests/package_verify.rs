@@ -310,11 +310,14 @@ fn run_package_verifier_with_target(root: &Path, case: &str, relative: bool) -> 
         "preserve"
     );
     let targets = fs::read_to_string(target_record).expect("recorded Cargo targets");
+    let expected_target = target.canonicalize().expect("canonical caller target");
     for line in targets.lines() {
         let (_, actual) = line.split_once('|').expect("command and target");
         assert_eq!(
-            Path::new(actual),
-            target,
+            Path::new(actual)
+                .canonicalize()
+                .expect("canonical Cargo target"),
+            expected_target,
             "Cargo gate used a separate target: {line}"
         );
     }
