@@ -1,5 +1,6 @@
 //! Explicit Canonical Observation v2 selector registry.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use telltale_schema::observation::{
@@ -727,36 +728,55 @@ pub(crate) fn is_url_argument_key(key: &str) -> bool {
     matches!(key, "url" | "uri" | "href" | "endpoint")
 }
 
-/// URL-keyed top-level string arguments, in key order, from an object or a
-/// JSON-encoded object string. Nothing else in the arguments is a URL fact.
+/// URL-keyed top-level non-empty string arguments, in key order, from an object
+/// or a JSON-encoded object string. Nothing else in the arguments is a URL fact.
 /// Callers charge the argument bytes before resolution.
 pub(crate) fn tool_argument_urls(arguments: Option<&JsonValue>) -> Vec<String> {
-    let parsed;
+    let decoded;
     let object = match arguments {
         Some(JsonValue::Object(object)) => object,
-        Some(JsonValue::String(text)) => {
-            match serde_json::from_str::<serde_json::Value>(text)
-                .ok()
-                .filter(serde_json::Value::is_object)
-                .and_then(|value| JsonValue::try_from_source_value(&value).ok())
-            {
-                Some(JsonValue::Object(object)) => {
-                    parsed = object;
-                    &parsed
-                }
-                _ => return Vec::new(),
+        Some(JsonValue::String(text)) => match decoded_argument_object(text) {
+            Some((object, _)) => {
+                decoded = object;
+                &decoded
             }
-        }
+            None => return Vec::new(),
+        },
         _ => return Vec::new(),
     };
     object
         .iter()
         .filter(|(key, _)| is_url_argument_key(key))
         .filter_map(|(_, value)| match value {
-            JsonValue::String(value) => Some(value.clone()),
+            JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
             _ => None,
         })
         .collect()
+}
+
+/// Decode tool arguments that a native envelope carries as an encoded JSON
+/// object. Each top-level member is admitted under the ordinary value bounds on
+/// its own; a member that exceeds them is skipped rather than hiding the other
+/// members, and the returned flag reports that a member was skipped. Shared by
+/// the session selectors and the action view so both read the same facts.
+pub(crate) fn decoded_argument_object(text: &str) -> Option<(BTreeMap<String, JsonValue>, bool)> {
+    let serde_json::Value::Object(members) = serde_json::from_str(text).ok()? else {
+        return None;
+    };
+    let total = members.len();
+    let admitted: BTreeMap<_, _> = members
+        .into_iter()
+        .filter_map(|(key, value)| {
+            // Wrapping keeps the member at its real depth and checks its key.
+            let wrapped = serde_json::Value::Object([(key, value)].into_iter().collect());
+            match JsonValue::try_from_source_value(&wrapped).ok()? {
+                JsonValue::Object(member) => member.into_iter().next(),
+                _ => None,
+            }
+        })
+        .collect();
+    let skipped = admitted.len() < total;
+    Some((admitted, skipped))
 }
 
 fn absent(selector: SelectorId, required_capability: Option<CapabilityId>) -> SelectorResolution {

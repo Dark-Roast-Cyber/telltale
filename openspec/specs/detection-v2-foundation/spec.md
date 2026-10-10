@@ -107,9 +107,13 @@ reparse raw structured arguments/results or invent URL/network facts. The one
 exception is `compat.v1.url`: it MUST resolve the top-level string members named
 `url`, `uri`, `href`, or `endpoint` of object arguments, or of an argument string
 that is exactly one JSON object, and MUST NOT copy command text or results into
-URL. The action view reads the same URL-keyed members and also reads a tool
-call's command text as URL text, so an action URL match need not be a session
-selector match.
+URL. Empty strings MUST NOT be URL facts. An encoded argument object MUST be
+decoded member by member under the ordinary value bounds, so a member that
+exceeds them is skipped without hiding the other members. The session selector
+and the action view MUST share that decoding. The action view reads the same
+URL-keyed members, keeps a skipped member searchable as command text, and also
+reads a tool call's command text as URL text, so an action URL match need not
+be a session selector match.
 
 #### Scenario: Compatibility selectors preserve absence
 
@@ -117,6 +121,13 @@ selector match.
   derivative or direct URL activity
 - **THEN** the arguments view is absent for text matching when no text is
   available and `compat.v1.url` is absent unless a URL-keyed argument exists
+
+#### Scenario: Session and action views agree on URL arguments
+
+- **WHEN** a tool call's encoded arguments carry an empty URL value, or a valid
+  URL beside a member that exceeds the value bounds
+- **THEN** neither view treats the empty value as a URL, and both views match
+  the valid URL
 
 #### Scenario: Capability visibility is not occurrence
 

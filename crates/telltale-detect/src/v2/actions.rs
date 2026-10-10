@@ -620,12 +620,12 @@ fn view(
                 Some(JsonValue::String(text)) => {
                     // Some native envelopes carry an encoded object as a string.
                     budget.charge(text.len())?;
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text)
-                        && value.is_object()
-                        && let Ok(JsonValue::Object(input)) =
-                            JsonValue::try_from_source_value(&value)
-                    {
+                    if let Some((input, skipped)) = super::selector::decoded_argument_object(text) {
                         structured_input(&input, &mut out, &mut command);
+                        // Members beyond the value bounds stay searchable as text.
+                        if skipped {
+                            command.push_str(text);
+                        }
                     } else {
                         command.push_str(text);
                     }
