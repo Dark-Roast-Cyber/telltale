@@ -398,9 +398,22 @@ fn canonical_embedding_is_stateless_and_deterministic() {
     }
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
 
+    // Disabling the only rule leaves nothing to detect and is refused.
+    assert!(matches!(
+        Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(RULE)
+            .policy_document("version: 1\ndisabled_rules: [synthetic.target]\n")
+            .build(),
+        Err(PipelineError::EmptyRuleSet)
+    ));
     let disabled = Pipeline::builder()
         .without_bundled_defaults()
         .rules_document(RULE)
+        .rules_document(
+            RULE.replace("synthetic.target", "synthetic.never")
+                .replace("regex: needle", "regex: NEVER-MATCH"),
+        )
         .policy_document("version: 1\ndisabled_rules: [synthetic.target]\n")
         .build()
         .unwrap();

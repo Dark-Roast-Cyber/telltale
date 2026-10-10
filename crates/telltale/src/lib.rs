@@ -107,6 +107,9 @@ pub enum PipelineError {
     Compilation(BoxError),
     /// No rule documents were supplied after disabling bundled defaults.
     InvalidConfiguration,
+    /// Accepted rule content and policy left no effective rule, so the
+    /// pipeline would detect nothing. Never built as an empty rule set.
+    EmptyRuleSet,
     /// Detailed-scan options failed their closed bounds.
     InvalidOptions,
     /// A resume token does not belong to the supplied source, or the source is
@@ -122,6 +125,7 @@ impl std::fmt::Display for PipelineError {
             Self::Observation(_) => "pipeline_observation_failed",
             Self::Compilation(_) => "pipeline_compilation_failed",
             Self::InvalidConfiguration => "pipeline_no_rule_documents",
+            Self::EmptyRuleSet => "pipeline_empty_rule_set",
             Self::InvalidOptions => "pipeline_invalid_options",
             Self::InvalidResumeToken => "pipeline_invalid_resume_token",
         })
@@ -140,7 +144,10 @@ impl std::error::Error for PipelineError {
             Self::Discovery(error) => Some(error),
             Self::Clock(error) | Self::Compilation(error) => Some(error.as_ref()),
             Self::Observation(error) => Some(error),
-            Self::InvalidConfiguration | Self::InvalidOptions | Self::InvalidResumeToken => None,
+            Self::InvalidConfiguration
+            | Self::EmptyRuleSet
+            | Self::InvalidOptions
+            | Self::InvalidResumeToken => None,
         }
     }
 }
@@ -809,6 +816,8 @@ impl PipelineBuilder {
     /// Canonical semantics are compiled once here and reused by every scan.
     /// Content that Rule v1 loading accepts but canonical compilation rejects
     /// returns [`PipelineError::Compilation`] here, not later from a scan.
+    /// Content and policy that leave no effective rule return
+    /// [`PipelineError::EmptyRuleSet`].
     pub fn build(self) -> Result<Pipeline, PipelineError> {
         let mut documents: Vec<&str> = Vec::new();
         if !self.custom_only {
@@ -823,6 +832,11 @@ impl PipelineBuilder {
             self.policy_document.as_deref(),
         )
         .map_err(PipelineError::Compilation)?;
+        // Modifiers only combine rule matches, so no effective rule means no
+        // detection. Fail closed instead of building an empty pipeline.
+        if rule_set.rule_count() == 0 {
+            return Err(PipelineError::EmptyRuleSet);
+        }
         let canonical = telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export())
             .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
         Ok(Pipeline {

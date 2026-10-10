@@ -118,7 +118,8 @@ let pipeline = Pipeline::builder()
     .policy_document(policy_yaml)     // enable/disable, like --policy
     .build()?;
 // .without_bundled_defaults() mirrors --no-default-rules; with no documents
-// left, build() fails with PipelineError::InvalidConfiguration.
+// left, build() fails with PipelineError::InvalidConfiguration. Content and
+// policy that leave no effective rule fail with PipelineError::EmptyRuleSet.
 ```
 
 What an embedder inherits:
@@ -280,6 +281,21 @@ Three scores exist and must stay distinct: native finding risk
   permission to invent a substitute. Golden values are pinned by tests and change
   only with a version bump.
 
+### Replacing rule content
+
+Rule content can change without a new Telltale build. A `Pipeline` never
+changes after `build()`, so replace it as a whole:
+
+1. Build a new `Pipeline` from the new rule and policy documents.
+2. On `Err`, keep the active pipeline. Rejected or empty content
+   (`Compilation`, `InvalidConfiguration`, `EmptyRuleSet`) never produces one.
+3. On `Ok`, compare `semantic_provenance(&options)` with the active pipeline's,
+   then swap. A different identity is a semantic rebaseline; keep admitted
+   pending work across it.
+
+Telltale does not fetch, sign, or schedule rule content. Obtaining and
+authenticating documents is the host's job.
+
 ### Same-pass context
 
 `action.context()` is scan-time context from the same acquired observations; it
@@ -344,7 +360,7 @@ outbox guarantees do not transfer to an embedding host.
 
 | Operation | Returned categories |
 | --- | --- |
-| `build` | `InvalidConfiguration`, `Compilation` |
+| `build` | `InvalidConfiguration`, `EmptyRuleSet`, `Compilation` |
 | `scan_root`, `scan_root_with_occurrences` | `Discovery`, `Clock`, `Observation` |
 | `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation` |
 | detailed scans and `semantic_provenance` | the matching scan categories, plus `InvalidOptions`, and `Compilation` only if the bundled process pack fails to load when `process_chain` is set |
@@ -358,9 +374,10 @@ failures are per-source `scanner_error` events
 Display and Debug render closed codes (`pipeline_discovery_failed`,
 `pipeline_clock_failed`, `pipeline_observation_failed`,
 `pipeline_compilation_failed`, `pipeline_no_rule_documents`,
-`pipeline_invalid_options`) without paths, configuration, or source text.
-`Error::source()` keeps the original cause except for `InvalidConfiguration` and
-`InvalidOptions`. `DiscoveryError`, `RuleV1CompileError`, and `ObservationError`
+`pipeline_empty_rule_set`, `pipeline_invalid_options`,
+`pipeline_invalid_resume_token`) without paths, configuration, or source text.
+`Error::source()` keeps the original cause except for `InvalidConfiguration`,
+`EmptyRuleSet`, `InvalidOptions`, and `InvalidResumeToken`. `DiscoveryError`, `RuleV1CompileError`, and `ObservationError`
 are re-exported from core. `Compilation`'s boxed cause is not a supported subtype
 taxonomy; do not parse strings to classify failures.
 
