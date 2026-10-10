@@ -622,14 +622,7 @@ fn view(
                     budget.charge(text.len())?;
                     if let Some((input, skipped)) = super::selector::decoded_argument_object(text) {
                         structured_input(&input, &mut out, &mut command);
-                        // Members beyond the value bounds stay searchable as
-                        // command text, except keys structured input ignores.
-                        for (key, raw) in &skipped {
-                            if !is_ignored_argument_key(key) {
-                                command.push_str(raw);
-                                command.push('\n');
-                            }
-                        }
+                        skipped_input(&skipped, &mut out, &mut command);
                     } else {
                         command.push_str(text);
                     }
@@ -795,6 +788,82 @@ fn script_literal(
     Ok(None)
 }
 
+fn is_command_argument_key(key: &str) -> bool {
+    matches!(key, "command" | "cmd" | "commandLine" | "command_line")
+}
+
+fn is_authored_argument_key(key: &str) -> bool {
+    matches!(key, "content" | "new_string" | "new_source")
+}
+
+fn is_path_argument_key(key: &str) -> bool {
+    matches!(
+        key,
+        "file_path"
+            | "filePath"
+            | "path"
+            | "paths"
+            | "notebook_path"
+            | "file"
+            | "filename"
+            | "target_file"
+            | "glob"
+            | "pattern"
+    )
+}
+
+/// Encoded-argument members skipped by value-bound admission. Members with a
+/// known role are routed exactly as admitted members are, from a transient value
+/// used only for this view (its bytes were charged before decoding), so replaced
+/// `old_string` text never becomes command text. Other members, and members too
+/// deep to parse, stay searchable as command text unless their key is ignored.
+fn skipped_input(skipped: &[(String, String)], out: &mut ActionView, command: &mut String) {
+    for (key, raw) in skipped {
+        if is_ignored_argument_key(key) {
+            continue;
+        }
+        let routed = is_command_argument_key(key)
+            || is_authored_argument_key(key)
+            || is_path_argument_key(key)
+            || key == "edits"
+            || super::selector::is_url_argument_key(key);
+        match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(value) if routed => {
+                let member = BTreeMap::from([(key.clone(), transient_value(&value))]);
+                structured_input(&member, out, command);
+            }
+            _ => {
+                command.push_str(raw);
+                command.push('\n');
+            }
+        }
+    }
+}
+
+/// Unbounded copy for routing only; never retained or emitted as observation
+/// data. Depth is limited by the JSON parser that produced `value`.
+fn transient_value(value: &serde_json::Value) -> JsonValue {
+    match value {
+        serde_json::Value::Null => JsonValue::Null,
+        serde_json::Value::Bool(value) => JsonValue::Bool(*value),
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .map(JsonValue::Integer)
+            .or_else(|| number.as_u64().map(JsonValue::Unsigned))
+            .unwrap_or_else(|| JsonValue::Number(number.as_f64().unwrap_or_default())),
+        serde_json::Value::String(text) => JsonValue::String(text.clone()),
+        serde_json::Value::Array(items) => {
+            JsonValue::Array(items.iter().map(transient_value).collect())
+        }
+        serde_json::Value::Object(members) => JsonValue::Object(
+            members
+                .iter()
+                .map(|(key, value)| (key.clone(), transient_value(value)))
+                .collect(),
+        ),
+    }
+}
+
 /// Argument keys whose values are prose or replaced text, never action facts.
 fn is_ignored_argument_key(key: &str) -> bool {
     matches!(
@@ -823,7 +892,7 @@ fn structured_input(
 ) {
     for (key, value) in input {
         match key.as_str() {
-            "command" | "cmd" | "commandLine" | "command_line" => {
+            key if is_command_argument_key(key) => {
                 if let Some(v) = string(value) {
                     command.push_str(v);
                     command.push('\n');
@@ -835,7 +904,7 @@ fn structured_input(
                     }
                 }
             }
-            "content" | "new_string" | "new_source" => {
+            key if is_authored_argument_key(key) => {
                 if let Some(v) = string(value) {
                     out.put("authored_content", v.to_owned());
                 }
@@ -857,8 +926,7 @@ fn structured_input(
                     out.put("url", v.to_owned());
                 }
             }
-            "file_path" | "filePath" | "path" | "paths" | "notebook_path" | "file" | "filename"
-            | "target_file" | "glob" | "pattern" => {
+            key if is_path_argument_key(key) => {
                 if let Some(v) = string(value) {
                     out.put("file_path", v.to_owned());
                 }

