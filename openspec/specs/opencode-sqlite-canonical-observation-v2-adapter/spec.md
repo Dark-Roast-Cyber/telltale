@@ -458,6 +458,9 @@ scanner MUST stage a successful incremental high-water at no less than the
 previously stored high-water and MUST NOT stage cursor or baseline replacement
 on source failure.
 Dry-run and backfill MUST NOT stage a cursor.
+An incremental poll MUST fail the source as `resume_regressed`, staging nothing,
+when no part with an integer `time_updated` at or after the stored high-water
+remains.
 Required output
 persistence MUST still gate scanner-state installation.
 
@@ -465,6 +468,11 @@ persistence MUST still gate scanner-state installation.
 
 - **WHEN** incremental acquisition fails or succeeds
 - **THEN** failure stages no state, successful high-water cannot regress, dry-run/backfill do not stage and durable output gates installation
+
+#### Scenario: A regressed store fails the scanner closed
+
+- **WHEN** an incremental scanner poll finds no part with an integer `time_updated` at or after the stored high-water (restored or replaced older store, newest parts deleted, or part table removed)
+- **THEN** the source fails with acquisition code `resume_regressed` and a privacy-safe scanner error, the stored cursor is neither advanced nor reset, backfill still reads without staging, and polling resumes once a part at or after the cursor exists
 
 ### Requirement: Embedded OpenCode scans report partial coverage and missing capability
 

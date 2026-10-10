@@ -664,14 +664,8 @@ impl Pipeline {
             source,
             observed_at,
             Some(options),
-            resumed_from.map(|high_water| {
-                telltale_sources::acquisition::OpenCodeSqliteReadOptions {
-                    resume_high_water: Some(high_water),
-                    ..telltale_sources::acquisition::OpenCodeSqliteReadOptions::resume_after(
-                        high_water,
-                    )
-                }
-            }),
+            resumed_from
+                .map(telltale_sources::acquisition::OpenCodeSqliteReadOptions::resume_after),
             rules,
             process_rules,
         );

@@ -811,7 +811,10 @@ correlations:
             .collect::<Vec<_>>()
     );
     state.observe_sqlite_ingestion_cursor(&source, "part", 2000, 2);
-    conn.execute("UPDATE part SET data='{\"type\":\"text\",\"text\":\"needle changed\"}', time_updated=1500 WHERE id='extra-4999'", []).unwrap();
+    // An overlap update below the cursor is re-read; a newer part keeps the
+    // store at the cursor, so this is not a regressed store.
+    conn.execute_batch("UPDATE part SET data='{\"type\":\"text\",\"text\":\"needle changed\"}', time_updated=1500 WHERE id='extra-4999';
+        UPDATE part SET time_updated=2000 WHERE id='extra-4998';").unwrap();
     let changed = read(&state);
     assert_eq!(changed.status, SourceProcessingStatus::Succeeded);
     assert!(changed.events.iter().any(|e| {
@@ -820,11 +823,87 @@ correlations:
                 .iter()
                 .any(|v| v.redacted_value.contains("changed"))
     }));
-    assert_eq!(changed.sqlite_progress_candidate(false, false), Some(1500));
+    assert_eq!(changed.sqlite_progress_candidate(false, false), Some(2000));
     state.observe_sqlite_ingestion_cursor(&source, "part", 1500, 3);
     assert_eq!(
         state.sqlite_ingestion_cursor_time_updated(&source, "part"),
         Some(2000)
+    );
+}
+
+#[test]
+fn regressed_store_fails_closed_keeps_cursor_and_recovers_on_new_activity() {
+    let dir = tempdir().unwrap();
+    let source = database(&dir.path().join("synthetic.db"));
+    let conn = rusqlite::Connection::open(&source.path).unwrap();
+    conn.execute(
+        "INSERT INTO part VALUES ('newest','m','s',2000,2000,'{\"type\":\"text\",\"text\":\"synthetic\"}')",
+        [],
+    )
+    .unwrap();
+    let plan = plan("url");
+    let mut state = ScanState::default();
+    state.observe_sqlite_ingestion_cursor(&source, "part", 2000, 1);
+    let read = |state: &ScanState| {
+        process_canonical_source(
+            &source,
+            state,
+            CanonicalProcessingOptions::default(),
+            clock(),
+            &plan,
+            None,
+        )
+    };
+
+    // An idle store still holding the cursor's part resumes normally.
+    let idle = read(&state);
+    assert_eq!(idle.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(idle.sqlite_progress_candidate(false, false), Some(2000));
+
+    // Deleting the newest part (as session deletion can) regresses the store.
+    conn.execute("DELETE FROM part WHERE id = 'newest'", [])
+        .unwrap();
+    let before = state.canonical_bytes().unwrap();
+    for _ in 0..2 {
+        let failed = read(&state);
+        assert_eq!(failed.status, SourceProcessingStatus::Failed);
+        assert_eq!(failed.events.len(), 1);
+        assert_eq!(failed.events[0].event_type, "scanner_error");
+        assert_eq!(failed.sqlite_progress_candidate(false, false), None);
+        assert_eq!(
+            failed.baseline_replacement,
+            BaselineReplacement::NoReplacement
+        );
+        let summary = super::super::source_processing_accounting(std::slice::from_ref(&failed))
+            .unwrap()
+            .json();
+        assert_eq!(
+            summary["failures"][0]["acquisition_code"],
+            "resume_regressed"
+        );
+        assert_eq!(state.canonical_bytes().unwrap(), before);
+    }
+
+    // New activity at or after the cursor resumes without resetting it.
+    conn.execute(
+        "INSERT INTO part VALUES ('later','m','s',2500,2500,'{\"type\":\"text\",\"text\":\"synthetic\"}')",
+        [],
+    )
+    .unwrap();
+    let resumed = read(&state);
+    assert_eq!(resumed.status, SourceProcessingStatus::Succeeded);
+    assert_eq!(resumed.sqlite_progress_candidate(false, false), Some(2500));
+
+    // A store without its part table cannot hold the cursor either.
+    conn.execute("DROP TABLE part", []).unwrap();
+    let missing = read(&state);
+    assert_eq!(missing.status, SourceProcessingStatus::Failed);
+    let summary = super::super::source_processing_accounting(std::slice::from_ref(&missing))
+        .unwrap()
+        .json();
+    assert_eq!(
+        summary["failures"][0]["acquisition_code"],
+        "resume_regressed"
     );
 }
 
@@ -954,7 +1033,10 @@ fn sqlite_partial_success_retains_progress_without_installing_and_reuses_read_po
     for (dry_run, backfill) in [(true, false), (false, true), (true, true)] {
         assert_eq!(result.sqlite_progress_candidate(dry_run, backfill), None);
     }
+    // A cursor ahead of every part is a regressed store: the live read fails
+    // closed and keeps the cursor, while dry-run and backfill still read.
     state.observe_sqlite_ingestion_cursor(&source, "part", 700_001, 1);
+    let before = state.canonical_bytes().unwrap();
     let live = process_canonical_source(
         &source,
         &state,
@@ -963,16 +1045,19 @@ fn sqlite_partial_success_retains_progress_without_installing_and_reuses_read_po
         &plan,
         None,
     );
+    assert_eq!(live.status, SourceProcessingStatus::Failed);
+    assert!(live.accounting.is_none());
+    assert_eq!(live.sqlite_progress_candidate(false, false), None);
+    assert_eq!(live.events.len(), 1);
+    assert_eq!(live.events[0].event_type, "scanner_error");
+    let summary = super::super::source_processing_accounting(std::slice::from_ref(&live))
+        .unwrap()
+        .json();
     assert_eq!(
-        live.accounting.as_ref().unwrap().coverage,
-        telltale_sources::acquisition::AccountingCoverage::PartialSource
+        summary["failures"][0]["acquisition_code"],
+        "resume_regressed"
     );
-    assert_eq!(
-        live.progress,
-        AcquisitionProgress::OpenCodeSqlite {
-            part_max_time_updated: None
-        }
-    );
+    assert_eq!(state.canonical_bytes().unwrap(), before);
     for (dry_run, backfill) in [(true, false), (false, true)] {
         let full = process_canonical_source(
             &source,

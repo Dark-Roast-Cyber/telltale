@@ -89,6 +89,19 @@ state/output configuration: the inclusive overlap retries pending data. Deleting
 state or bypassing rejection is not required. Remote-only best-effort delivery
 retains its documented non-recoverable posture; this change adds no durability.
 
+A store regressed below the cursor fails the same way. That includes a restored
+or replaced older copy, a store whose newest parts were deleted (ordinary session
+deletion can do this) and a store with no `part` table. The scan finds no part
+with an integer `time_updated` at or after the cursor. It emits a privacy-safe
+`scanner_error` and reports acquisition code `resume_regressed` in
+`source_processing.failures`. The cursor is not advanced, reset or replaced.
+Scans resume on their own once OpenCode writes a part at or after the cursor.
+Changes the store lost before that point stay unevaluated. `--backfill` reads the
+newest bootstrap window without the cursor and stages nothing. There is no reset
+or rebaseline command; deleting the state file discards every other source's
+state as well. The check does not detect a replaced store whose newest part is at
+or after the cursor, or a clock rollback while such parts remain.
+
 Bootstrap and backfill still select the **newest 5,000 eligible tool/text parts**,
 plus message-table records. Incremental reads use the prior part update high-water
 minus ten minutes, and permit 25,000 selected parts across keyset pages. Overflow
@@ -127,8 +140,8 @@ The public embedding facade persists nothing. Without a resume token it reads th
 bounded bootstrap selection; with a host-persisted `ResumeToken` it applies the
 same incremental read policy as the CLI cursor (high-water minus the overlap,
 25,000-part limit, overflow fails as
-`AcquisitionError::BoundedSourceRead(LimitExceeded)`), and a store older than the
-token fails as `AcquisitionError::ResumeRegressed`. It has no persisted
+`AcquisitionError::BoundedSourceRead(LimitExceeded)`, and a store older than the
+token fails as `AcquisitionError::ResumeRegressed`). It has no persisted
 suppression. Repeated scans of unchanged selected input have stable action
 semantics and Event 3 semantic projections, apart from fresh event IDs and
 materialization clocks.
