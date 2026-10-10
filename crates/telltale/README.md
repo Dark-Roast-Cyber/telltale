@@ -13,23 +13,28 @@ outcomes, typed errors, OpenCode, inventory, and host wire guidance) lives in
 ```toml
 [dependencies]
 telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>" }
-# features = ["opencode-sqlite"]        # scan OpenCode (pinned rusqlite 0.32.1)
-# features = ["protected-assignment"]   # Linux-only assignment store
+# To scan OpenCode (pinned rusqlite 0.32.1), add the feature inline instead:
+# telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<commit>", features = ["opencode-sqlite"] }
+# The Linux-only assignment store is the `protected-assignment` feature.
 ```
 
 ```rust
 use telltale_core::{DetailedEvaluationOptions, Pipeline};
 
-let pipeline = Pipeline::builder().build()?; // build once, reuse
-let scans = pipeline.scan_sources_detailed(&[], &DetailedEvaluationOptions::default())?;
-assert!(scans.is_empty());
-println!("{} rules", pipeline.rule_count());
-# Ok::<(), Box<dyn std::error::Error>>(())
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let pipeline = Pipeline::builder().build()?; // build once, reuse
+    let scans = pipeline.scan_sources_detailed(&[], &DetailedEvaluationOptions::default())?;
+    assert!(scans.is_empty());
+    println!("{} rules", pipeline.rule_count());
+    Ok(())
+}
 ```
 
 Detailed scans return one `SourceScan` per source with typed `failure()`,
 `coverage()`, `completion`, and `visibility_limits()`, plus canonical
-`ActionFinding`s beside unchanged session-scoped Event 3 events. Scans are
+`ActionFinding`s beside session-scoped Event 3 events. The Event 3 schema is
+unchanged; event evidence can differ (for example, URL targets now add `url`
+evidence). Scans are
 stateless; the host owns delivery, persistence, and retry. Pin an exact
 revision and test host integration; RC1 evidence does not qualify this tree.
 

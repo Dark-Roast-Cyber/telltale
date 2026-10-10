@@ -266,7 +266,12 @@ session-scoped replay identity, structured evidence, and bounded source-read,
 mapping, and validation errors.
 Failure MUST NOT return successful progress.
 
-#### Scenario: Claude acquisition time and failures remain caller-owned and bounded
+#### Scenario: Successful Claude acquisition keeps caller time and no progress
 
-- **WHEN** Claude acquisition succeeds or fails
-- **THEN** caller observation time and None progress are preserved with bounded failures
+- **WHEN** Claude acquisition succeeds
+- **THEN** the caller's observation time and `AcquisitionProgress::None` are preserved
+
+#### Scenario: Failed Claude acquisition returns only a bounded error
+
+- **WHEN** Claude acquisition fails
+- **THEN** it returns a bounded, content-free error and no batch or progress

@@ -14,8 +14,6 @@ in `codex-rs/core/src/session/mod.rs` and `codex-rs/rollout/src/policy.rs`, and
 the serialized system-role resumed-history fixture in
 `codex-rs/core/tests/suite/client.rs`.
 
-## Truthful messages preserve order evidence
-
 The fixture establishes a public shape,
 not production generation of system messages on every turn.
 
@@ -27,8 +25,6 @@ This bounded compatibility evidence is public `openai/codex` commit
 `codex-rs/protocol/src/models.rs` (ResponseItem::Reasoning),
 `codex-rs/protocol/src/items.rs` (distinct typed TurnItems), and
 `codex-rs/rollout/src/policy.rs` (persistence selection).
-
-## Closed auxiliary envelopes produce no canonical observations evidence
 
 Pinned world-state evidence is public commit
 `47379efd5289cba801c5a66273064fbe3bf92f60`,

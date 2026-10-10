@@ -411,7 +411,8 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
   `canonical_acquisition_failed` code. Mixed scans keep JSONL successes.
 - Without a resume token, an embedded scan evaluates OpenCode's bounded recent
   selection (see [limits](opencode-live-ingestion.md#failure-recovery-and-coverage)).
-  Every OpenCode scan reports `coverage() == Some(Partial)`. Repeated unchanged
+  Every successful OpenCode scan reports `coverage() == Some(Partial)`; a
+  failed scan reports `None`. Repeated unchanged
   input has stable action semantics with fresh Event 3 IDs and materialization
   clocks. `PartialSource` accounting never installs a whole-source baseline.
 - CLI scan/watch aggregates also describe bounded selected windows, not
