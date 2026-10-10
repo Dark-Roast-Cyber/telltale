@@ -170,7 +170,8 @@ pub enum AcquisitionError {
     /// this build (OpenCode without `opencode-sqlite`). No source I/O is attempted.
     CapabilityNotCompiled,
     /// A resumed OpenCode read found the store older than the resume high-water
-    /// (restored, replaced, clock rollback, or newest parts deleted). Recover with
+    /// (restored or replaced, or newest parts deleted, including by session
+    /// deletion). Recover with
     /// a read that carries no resume position.
     ResumeRegressed,
     BoundedSourceRead(BoundedReadError),

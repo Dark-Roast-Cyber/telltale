@@ -141,11 +141,13 @@ fn lock_holder_waits_for_parent_and_releases_on_eof() {
     // Wait until the holder is running and blocked on its control pipe, so the
     // absence checks below would catch a lock taken before the command.
     let started = target.with_extension("started");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !started.exists() {
         assert!(
             child.0.try_wait().expect("holder status").is_none(),
             "holder exited before start"
         );
+        assert!(std::time::Instant::now() < deadline, "holder did not start");
         thread::sleep(Duration::from_millis(10));
     }
     assert!(!ready.exists());

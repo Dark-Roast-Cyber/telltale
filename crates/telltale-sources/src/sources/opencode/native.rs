@@ -1,7 +1,7 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 pub(crate) use crate::acquisition::{OpenCodeSqliteReadOptions, SQLITE_PART_LIMIT};
 use crate::source_read::{SourceReadError, collect_string_values};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -249,14 +249,20 @@ fn extract_sqlite_native_source_admitted(
     if let Some(high_water) = options.resume_high_water {
         // Checked in the read snapshot before any selection: a store whose
         // newest part is older than the resume position cannot be resumed.
-        let newest = if has_part_table {
-            snapshot.query_row("select max(time_updated) from part", [], |row| {
-                row.get::<_, Option<i64>>(0)
-            })?
-        } else {
-            None
-        };
-        if newest.is_none_or(|newest| newest < high_water) {
+        // Like `max(time_updated) >= high_water` over integer timestamps, but
+        // scanning from the newest rowid usually stops at the first row
+        // instead of reading the whole table when `time_updated` has no index.
+        // Non-integer values never count: SQLite orders TEXT above INTEGER.
+        let reaches_high_water = has_part_table
+            && snapshot
+                .query_row(
+                    "select 1 from part where typeof(time_updated) = 'integer' and time_updated >= ?1 order by rowid desc limit 1",
+                    [high_water],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+        if !reaches_high_water {
             return Err(SourceReadError::ResumeRegressed);
         }
     }

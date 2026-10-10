@@ -119,7 +119,8 @@ let pipeline = Pipeline::builder()
     .build()?;
 // .without_bundled_defaults() mirrors --no-default-rules; with no documents
 // left, build() fails with PipelineError::InvalidConfiguration. Content and
-// policy that leave no effective rule fail with PipelineError::EmptyRuleSet.
+// policy that leave no effective rule fail with PipelineError::EmptyRuleSet,
+// even if scans enable process_chain (build() cannot know that).
 ```
 
 What an embedder inherits:
@@ -448,9 +449,13 @@ source, return `None`.
   | `failure().acquisition_error()` | Cause | Host action |
   | --- | --- | --- |
   | `BoundedSourceRead(LimitExceeded)` | More than 25,000 parts selected | Drop the token and scan without one; history between the two reads stays unevaluated. |
-  | `ResumeRegressed` (`resume_regressed`) | The store's newest part is older than the token's high-water: restored or replaced database, clock rollback, or newest parts deleted | Drop the token and scan without one; deduplicate repeats with replay identity or coordinates. |
+  | `ResumeRegressed` (`resume_regressed`) | No part with an integer `time_updated` at or after the token's high-water remains: a restored or replaced database, or its newest parts deleted (ordinary session deletion or undo can do this) | Drop the token and scan without one; deduplicate repeats with replay identity or coordinates. |
 
-  A replaced store whose newest part is newer than the token is not detected.
+  Not detected: a replaced store whose newest part is at or after the token,
+  and a clock rollback while parts at or after the high-water remain. Parts
+  written below the overlap window in those cases are not read.
+- `InvalidResumeToken` means the token does not bind to this source, including
+  tokens from an older binding. Drop it and scan without one.
 - A token for another source or a non-resumable source returns
   `PipelineError::InvalidResumeToken` before any source I/O.
 

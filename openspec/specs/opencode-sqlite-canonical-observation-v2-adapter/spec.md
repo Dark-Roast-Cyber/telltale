@@ -495,9 +495,11 @@ lower bound onward; exceeding the limit MUST fail as
 non-resumable source MUST be rejected before source I/O.
 
 A resumed scan MUST fail as `AcquisitionError::ResumeRegressed`, with no coverage
-and no token, when the store's newest part is older than the token's
-high-water or the store has no parts. The check MUST use the same read snapshot
-as the selection and MUST run before any part is selected.
+and no token, when no part with an integer `time_updated` at or after the
+token's high-water remains, including when the store has no parts. The check
+MUST use the same read snapshot as the selection and MUST run before any part is
+selected. It does not detect a replaced store whose newest part is at or after
+the token, or a clock rollback while such parts remain.
 
 #### Scenario: Embedded OpenCode scans resume from a source-bound token
 
@@ -511,5 +513,5 @@ as the selection and MUST run before any part is selected.
 
 #### Scenario: A regressed store fails instead of stalling
 
-- **WHEN** a host resumes against a store whose newest part is older than the token (restored, replaced, clock rollback, newest parts deleted, or part table removed)
+- **WHEN** a host resumes against a store with no integer-timed part at or after the token's high-water (restored, replaced, newest parts deleted, or part table removed)
 - **THEN** the scan fails as `ResumeRegressed` with no token or coverage, and a tokenless scan recovers and issues a new token

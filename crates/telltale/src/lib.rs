@@ -637,8 +637,8 @@ impl Pipeline {
     /// read that exceeds its part limit fails with
     /// `AcquisitionError::BoundedSourceRead(LimitExceeded)`: drop the token and
     /// scan again from bootstrap, treating the gap as unevaluated history.
-    /// A store whose newest part is older than the token's high-water
-    /// (restored, replaced, clock rollback, or newest parts deleted) fails with
+    /// A store with no part at or after the token's high-water (restored,
+    /// replaced, or newest parts deleted) fails with
     /// `AcquisitionError::ResumeRegressed` and the same bootstrap recovery.
     /// A token for another source or a non-resumable source returns
     /// [`PipelineError::InvalidResumeToken`] before any source I/O.
@@ -832,8 +832,10 @@ impl PipelineBuilder {
             self.policy_document.as_deref(),
         )
         .map_err(PipelineError::Compilation)?;
-        // Modifiers only combine rule matches, so no effective rule means no
-        // detection. Fail closed instead of building an empty pipeline.
+        // Modifiers only combine rule matches, so no effective rule leaves no
+        // Rule v1 detection. Fail closed instead of building an empty pipeline,
+        // even though opt-in process-chain detection does not use this rule set:
+        // `build()` cannot know whether a later scan enables it.
         if rule_set.rule_count() == 0 {
             return Err(PipelineError::EmptyRuleSet);
         }

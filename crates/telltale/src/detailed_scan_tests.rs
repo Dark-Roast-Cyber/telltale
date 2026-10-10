@@ -706,10 +706,12 @@ fn opencode_resume_against_an_older_store_fails_typed_and_recovers_by_bootstrap(
         .expect("bootstrap token");
 
     // The store no longer reaches the token's high-water (restored, replaced,
-    // clock rollback, or newest parts deleted). Older parts written later
+    // or newest parts deleted). Older parts written later
     // would never be selected, so this is a typed failure, not an idle scan.
     for regress in [
         "DELETE FROM part WHERE id = 'newest';",
+        // SQLite orders TEXT above INTEGER; a non-integer timestamp never counts.
+        r#"INSERT INTO part VALUES ('textual','a','s','not-a-time','{"type":"step-finish"}');"#,
         "DELETE FROM part;",
         "DROP TABLE part;",
     ] {
