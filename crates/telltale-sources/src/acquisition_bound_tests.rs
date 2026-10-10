@@ -39,6 +39,7 @@ fn opencode_large_results_preserve_content_identity_and_atomic_bounds() {
             OpenCodeSqliteReadOptions {
                 part_min_time_updated: Some(0),
                 part_limit: 10,
+                resume_high_water: None,
             },
         );
         if accepted {

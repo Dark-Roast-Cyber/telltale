@@ -729,6 +729,7 @@ fn sqlite_accounts_suppressed_parents_selected_parts_and_unscoped_rows() {
         OpenCodeSqliteReadOptions {
             part_min_time_updated: Some(11),
             part_limit: 1,
+            resume_high_water: None,
         },
     )
     .unwrap();
@@ -843,6 +844,7 @@ fn sqlite_overlap_and_mutable_rereads_never_attest_source_replacement() {
             OpenCodeSqliteReadOptions {
                 part_min_time_updated: min,
                 part_limit: limit,
+                resume_high_water: None,
             },
         )
         .unwrap()

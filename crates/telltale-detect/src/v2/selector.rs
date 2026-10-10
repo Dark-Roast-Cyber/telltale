@@ -1,5 +1,6 @@
 //! Explicit Canonical Observation v2 selector registry.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use telltale_schema::observation::{
@@ -727,36 +728,74 @@ pub(crate) fn is_url_argument_key(key: &str) -> bool {
     matches!(key, "url" | "uri" | "href" | "endpoint")
 }
 
-/// URL-keyed top-level string arguments, in key order, from an object or a
-/// JSON-encoded object string. Nothing else in the arguments is a URL fact.
+/// URL-keyed top-level non-empty string arguments, in key order, from an object
+/// or a JSON-encoded object string. Nothing else in the arguments is a URL fact.
 /// Callers charge the argument bytes before resolution.
 pub(crate) fn tool_argument_urls(arguments: Option<&JsonValue>) -> Vec<String> {
-    let parsed;
+    let decoded;
     let object = match arguments {
         Some(JsonValue::Object(object)) => object,
-        Some(JsonValue::String(text)) => {
-            match serde_json::from_str::<serde_json::Value>(text)
-                .ok()
-                .filter(serde_json::Value::is_object)
-                .and_then(|value| JsonValue::try_from_source_value(&value).ok())
-            {
-                Some(JsonValue::Object(object)) => {
-                    parsed = object;
-                    &parsed
-                }
-                _ => return Vec::new(),
+        Some(JsonValue::String(text)) => match decoded_argument_object(text) {
+            Some((object, _)) => {
+                decoded = object;
+                &decoded
             }
-        }
+            None => return Vec::new(),
+        },
         _ => return Vec::new(),
     };
     object
         .iter()
         .filter(|(key, _)| is_url_argument_key(key))
         .filter_map(|(_, value)| match value {
-            JsonValue::String(value) => Some(value.clone()),
+            JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
             _ => None,
         })
         .collect()
+}
+
+/// Admitted members, and skipped members as `(key, raw JSON text)`.
+pub(crate) type DecodedArguments = (BTreeMap<String, JsonValue>, Vec<(String, String)>);
+
+/// Decode tool arguments that a native envelope carries as an encoded JSON
+/// object. Each top-level member is admitted under the ordinary per-value bounds
+/// on its own; a member that exceeds them, including nesting beyond the JSON
+/// parser's recursion limit, is skipped rather than hiding the other members.
+/// Skipped members are returned as `(key, raw JSON text)`. Shared by the session
+/// selectors and the action view so both read the same facts.
+pub(crate) fn decoded_argument_object(text: &str) -> Option<DecodedArguments> {
+    // Raw member values are scanned without recursion, so an over-deep member
+    // cannot fail the parse of the whole object. Later duplicate keys win, as in
+    // ordinary JSON object decoding.
+    let members: BTreeMap<String, Box<serde_json::value::RawValue>> =
+        serde_json::from_str(text).ok()?;
+    let mut admitted = BTreeMap::new();
+    let mut skipped = Vec::new();
+    for (key, raw) in members {
+        // Wrapping keeps the member at its real depth and checks its key.
+        let member = serde_json::from_str::<serde_json::Value>(raw.get())
+            .ok()
+            .map(|value| serde_json::Value::Object([(key.clone(), value)].into_iter().collect()))
+            .and_then(|wrapped| JsonValue::try_from_source_value(&wrapped).ok());
+        match member {
+            Some(JsonValue::Object(member)) => {
+                for (admitted_key, value) in member {
+                    // Keys equal only after normalization keep the first value;
+                    // the colliding member stays searchable as skipped text.
+                    match admitted.entry(admitted_key) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(value);
+                        }
+                        std::collections::btree_map::Entry::Occupied(_) => {
+                            skipped.push((key.clone(), raw.get().to_owned()));
+                        }
+                    }
+                }
+            }
+            _ => skipped.push((key, raw.get().to_owned())),
+        }
+    }
+    Some((admitted, skipped))
 }
 
 fn absent(selector: SelectorId, required_capability: Option<CapabilityId>) -> SelectorResolution {

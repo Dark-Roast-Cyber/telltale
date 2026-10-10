@@ -458,6 +458,9 @@ scanner MUST stage a successful incremental high-water at no less than the
 previously stored high-water and MUST NOT stage cursor or baseline replacement
 on source failure.
 Dry-run and backfill MUST NOT stage a cursor.
+An incremental poll MUST fail the source as `resume_regressed`, staging nothing,
+when no part with an integer `time_updated` at or after the stored high-water
+remains.
 Required output
 persistence MUST still gate scanner-state installation.
 
@@ -465,6 +468,11 @@ persistence MUST still gate scanner-state installation.
 
 - **WHEN** incremental acquisition fails or succeeds
 - **THEN** failure stages no state, successful high-water cannot regress, dry-run/backfill do not stage and durable output gates installation
+
+#### Scenario: A regressed store fails the scanner closed
+
+- **WHEN** an incremental scanner poll finds no part with an integer `time_updated` at or after the stored high-water (restored or replaced older store, newest parts deleted, or part table removed)
+- **THEN** the source fails with acquisition code `resume_regressed` and a privacy-safe scanner error, the stored cursor is neither advanced nor reset, backfill still reads without staging, and polling resumes once a part at or after the cursor exists
 
 ### Requirement: Embedded OpenCode scans report partial coverage and missing capability
 
@@ -485,13 +493,33 @@ MUST remain the generic stage code.
 ### Requirement: Embedded OpenCode scans resume from a source-bound token
 
 A successful embedded `opencode.sqlite` scan MUST return a versioned
-`ResumeToken` bound to the exact source and never earlier than the token it
-resumed from, and MUST return none when no part high-water exists. A resumed scan
-MUST apply the CLI's single overlap and incremental part limit; exceeding the
-limit MUST fail as `BoundedSourceRead(LimitExceeded)` without a new token. A token
-for another or non-resumable source MUST be rejected before source I/O.
+`ResumeToken` bound to the exact source, including its exact platform-native
+path, and never earlier than the token it resumed from. A resumed scan with no
+newer parts MUST return the token it resumed from. A tokenless scan MUST return
+none when no part high-water exists. A resumed scan MUST apply the CLI's single
+overlap and incremental part limit, selecting parts from the overlap-adjusted
+lower bound onward; exceeding the limit MUST fail as
+`BoundedSourceRead(LimitExceeded)` without a new token. A token for another or
+non-resumable source MUST be rejected before source I/O.
+
+A resumed scan MUST fail as `AcquisitionError::ResumeRegressed`, with no coverage
+and no token, when no part with an integer `time_updated` at or after the
+token's high-water remains, including when the store has no parts. The check
+MUST use the same read snapshot as the selection and MUST run before any part is
+selected. It does not detect a replaced store whose newest part is at or after
+the token, or a clock rollback while such parts remain.
 
 #### Scenario: Embedded OpenCode scans resume from a source-bound token
 
 - **WHEN** a host persists a token, new parts arrive, and it resumes
-- **THEN** only parts within the overlap window are read, the token advances monotonically, overflow is recoverable by a tokenless scan, and a mismatched token fails before I/O
+- **THEN** parts from the overlap-adjusted lower bound onward are read, the token advances monotonically, an idle resume keeps its token, overflow is recoverable by a tokenless scan, and a mismatched token fails before I/O
+
+#### Scenario: Resume tokens distinguish lossy-equal paths
+
+- **WHEN** two Unix paths differ only in bytes that are not valid UTF-8
+- **THEN** their tokens have different bindings and a token for one is rejected for the other
+
+#### Scenario: A regressed store fails instead of stalling
+
+- **WHEN** a host resumes against a store with no integer-timed part at or after the token's high-water (restored, replaced, newest parts deleted, or part table removed)
+- **THEN** the scan fails as `ResumeRegressed` with no token or coverage, and a tokenless scan recovers; it issues a new token once the store has a part high-water

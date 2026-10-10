@@ -119,17 +119,24 @@ pub const OPENCODE_SQLITE_RESUME_PART_LIMIT: i64 = 25_000;
 pub struct OpenCodeSqliteReadOptions {
     pub part_min_time_updated: Option<i64>,
     pub part_limit: i64,
+    /// When set, the store's newest part must still be updated at or after this
+    /// high-water; otherwise the read fails as [`AcquisitionError::ResumeRegressed`]
+    /// before selecting parts. Set by callers that hold a resume position.
+    pub resume_high_water: Option<i64>,
 }
 
 impl OpenCodeSqliteReadOptions {
     /// Resume after a recorded part `time_updated` high-water, applying the one
-    /// shared overlap and incremental part limit.
+    /// shared overlap and incremental part limit. It also sets
+    /// [`Self::resume_high_water`], so a store regressed below the high-water
+    /// fails as [`AcquisitionError::ResumeRegressed`] instead of reading nothing.
     pub fn resume_after(high_water: i64) -> Self {
         Self {
             part_min_time_updated: Some(
                 high_water.saturating_sub(OPENCODE_SQLITE_RESUME_OVERLAP_MS),
             ),
             part_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
+            resume_high_water: Some(high_water),
         }
     }
 }
@@ -139,6 +146,7 @@ impl Default for OpenCodeSqliteReadOptions {
         Self {
             part_min_time_updated: None,
             part_limit: SQLITE_PART_LIMIT,
+            resume_high_water: None,
         }
     }
 }
@@ -155,6 +163,7 @@ impl AcquisitionOptions {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum AcquisitionError {
     UnsupportedSourceIdentity,
     SourceKindMismatch,
@@ -162,6 +171,11 @@ pub enum AcquisitionError {
     /// The source identity is supported, but its acquisition was not compiled into
     /// this build (OpenCode without `opencode-sqlite`). No source I/O is attempted.
     CapabilityNotCompiled,
+    /// A resumed OpenCode read found the store older than the resume high-water
+    /// (restored or replaced, or newest parts deleted, including by session
+    /// deletion). Recover with
+    /// a read that carries no resume position.
+    ResumeRegressed,
     BoundedSourceRead(BoundedReadError),
     InvalidAttestation,
     ConflictingSessionOwnership,
@@ -187,6 +201,7 @@ impl AcquisitionError {
             Self::SourceKindMismatch => "source_kind_mismatch",
             Self::SourceRead => "source_read",
             Self::CapabilityNotCompiled => "capability_not_compiled",
+            Self::ResumeRegressed => "resume_regressed",
             Self::BoundedSourceRead(reason) => reason.code(),
             Self::InvalidAttestation => "invalid_session_attestation",
             Self::ConflictingSessionOwnership => "conflicting_session_ownership",
@@ -487,6 +502,7 @@ pub fn acquire_opencode_sqlite(
                 SourceReadError::Bounded(BoundedReadError::LimitExceeded) => {
                     AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded)
                 }
+                SourceReadError::ResumeRegressed => AcquisitionError::ResumeRegressed,
                 _ => AcquisitionError::SourceRead,
             })?;
         let progress = AcquisitionProgress::OpenCodeSqlite {
@@ -811,7 +827,8 @@ mod tests {
                     options(),
                     OpenCodeSqliteReadOptions {
                         part_min_time_updated: Some(99),
-                        part_limit: 1
+                        part_limit: 1,
+                        resume_high_water: None,
                     }
                 )),
                 AcquisitionError::UnsupportedSourceIdentity
@@ -1547,6 +1564,7 @@ mod tests {
                 OpenCodeSqliteReadOptions {
                     part_min_time_updated: min,
                     part_limit: limit,
+                    resume_high_water: None,
                 },
             )
         };
@@ -1615,7 +1633,8 @@ mod tests {
                 options(),
                 OpenCodeSqliteReadOptions {
                     part_min_time_updated: Some(1_000),
-                    part_limit: 5
+                    part_limit: 5,
+                    resume_high_water: None,
                 },
             )),
             AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded),
@@ -1661,6 +1680,7 @@ mod tests {
         let read = OpenCodeSqliteReadOptions {
             part_min_time_updated: Some(3_000),
             part_limit: 1,
+            resume_high_water: None,
         };
 
         let acquired = acquire_opencode_sqlite(&source, options(), read).unwrap();

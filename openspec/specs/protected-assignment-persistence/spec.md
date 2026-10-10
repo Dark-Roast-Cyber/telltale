@@ -150,8 +150,9 @@ only a bounded number of times inside the same transaction and then fail closed.
 
 #### Scenario: Assignment ID persistence and collision handling remain transactional
 
-- **WHEN** random allocation collides or an assignment already exists
-- **THEN** bounded retries occur in one transaction and existing IDs are never regenerated
+- **WHEN** random observation-ID or assignment-reference allocation collides
+- **THEN** bounded retries occur in one transaction and then fail closed, and an
+  ID returned earlier is never regenerated
 
 ### Requirement: Complete semantic commitment remains the replay authority
 

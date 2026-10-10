@@ -777,6 +777,99 @@ fn linked_action_catalog_policy_scores_and_startup_rebaseline_are_explicit() {
 }
 
 #[test]
+fn replacement_rule_content_builds_a_new_pipeline_or_fails_without_one() {
+    let rule = |regex: &str| {
+        format!(
+            "version: 1\ndescription: synthetic\ndefaults: {{enabled: true, case_insensitive: false}}\nrules:\n  - id: synthetic.replaceable\n    category: synthetic\n    severity: high\n    score: 7\n    targets: [command]\n    regex: {regex}\n    tags: []\n    explanation: synthetic\nmodifiers: []\n"
+        )
+    };
+    let build = |document: String| {
+        Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(document)
+            .build()
+    };
+    let root = tempfile::tempdir().unwrap();
+    let selected = source(
+        root.path(),
+        "replace.jsonl",
+        "replace",
+        &[call("replace", "echo first-needle")],
+    );
+    let matches = |pipeline: &Pipeline| {
+        pipeline
+            .scan_sources_detailed(std::slice::from_ref(&selected), &options())
+            .unwrap()[0]
+            .action_findings
+            .iter()
+            .any(|f| f.rule_ids().iter().any(|r| r == "synthetic.replaceable"))
+    };
+
+    // The active pipeline, then replacement content. The host swaps only on Ok.
+    let active = build(rule("first-needle")).unwrap();
+    let active_identity = active.semantic_provenance(&options()).unwrap();
+    assert!(matches(&active));
+    let replacement = build(rule("second-needle")).unwrap();
+    let replacement_identity = replacement.semantic_provenance(&options()).unwrap();
+    assert_ne!(active_identity, replacement_identity);
+    assert_ne!(
+        active_identity.effective_rule_fingerprint(),
+        replacement_identity.effective_rule_fingerprint()
+    );
+    assert!(!matches(&replacement));
+
+    // Rejected content never yields a pipeline, so it cannot become an empty or
+    // weakened active rule set; the existing pipeline is unaffected.
+    for invalid in ["not: [valid".to_owned(), rule("(unclosed")] {
+        assert!(
+            matches!(build(invalid.clone()), Err(PipelineError::Compilation(_))),
+            "{invalid}"
+        );
+    }
+    // Valid content that leaves no effective rule is refused, not built empty.
+    let empty = "version: 1\ndescription: synthetic\ndefaults: {enabled: true, case_insensitive: false}\nrules: []\nmodifiers: []\n";
+    assert!(matches!(
+        build(empty.to_owned()),
+        Err(PipelineError::EmptyRuleSet)
+    ));
+    assert!(matches!(
+        Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(rule("first-needle"))
+            .policy_document("version: 1\ndisabled_rules: [synthetic.replaceable]\n")
+            .build(),
+        Err(PipelineError::EmptyRuleSet)
+    ));
+    assert_eq!(
+        PipelineError::EmptyRuleSet.to_string(),
+        "pipeline_empty_rule_set"
+    );
+    assert!(matches!(
+        Pipeline::builder().without_bundled_defaults().build(),
+        Err(PipelineError::InvalidConfiguration)
+    ));
+    assert_eq!(
+        active.semantic_provenance(&options()).unwrap(),
+        active_identity
+    );
+    assert!(matches(&active));
+
+    // A policy applies to supplied content and changes semantic identity too.
+    let disabled = Pipeline::builder()
+        .without_bundled_defaults()
+        .rules_document(rule("first-needle"))
+        .rules_document(rule("first-needle").replace("synthetic.replaceable", "synthetic.kept"))
+        .policy_document("version: 1\ndisabled_rules: [synthetic.replaceable]\n")
+        .build()
+        .unwrap();
+    assert_ne!(
+        disabled.semantic_provenance(&options()).unwrap(),
+        active_identity
+    );
+    assert!(!matches(&disabled));
+}
+
+#[test]
 fn linked_and_process_correlations_preserve_supporting_action_coordinates() {
     let root = tempfile::tempdir().unwrap();
     let mut execute = call("execute", "bash payload.sh");

@@ -151,15 +151,9 @@ arguments only, without URL/path/network manufacturing from other facts.
 
 ## Normalized Record Types
 
-The record-level compatibility model includes:
-
-- `conversation.message`: user, assistant, system, developer, or tool-result content.
-- `tool.call`: tool name plus normalized arguments and raw evidence hash.
-- `tool.result`: exit status, stdout/stderr summary, file metadata, or error.
-- `detection.event`: rule matches, deterministic score, timeline anchors, and response metadata.
-
-These remain available to explicit record-level callers, not to the production
-source runtime. Canonical Observation v2 is the active source evidence model.
+The record-level types and record evaluation were removed in 0.7.0. Canonical
+Observation v2 is the only source evidence model; Rule v1 content is evaluated
+over it. See the [migration guide](migrations/0.7.0.md).
 
 ## Analyst Review Context
 

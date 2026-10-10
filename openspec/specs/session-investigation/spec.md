@@ -76,12 +76,11 @@ Existing supported JSONL identities MUST use bounded direct file reads and the
 authoritative acquisition dispatcher/native mapper, including explicit call IDs.
 Retired source layouts and parser/normalized record conversion MUST NOT return.
 
-#### Scenario: OpenCode export cannot mutate investigation artifacts
+#### Scenario: Supported JSONL investigation uses canonical acquisition
 
-- **WHEN** an OpenCode event is investigated with a fake executable available
-- **THEN** no executable is launched, no database/sidecar is read or created, the
-  result contains only the bounded provider reason, and synthetic DB/WAL/SHM bytes
-  stay unchanged; Linux synthetic access probes observe no opens or reads
+- **WHEN** a supported JSONL source is investigated
+- **THEN** it is read with bounded direct reads through the authoritative native
+  mapper, with explicit call IDs and no record conversion
 
 ### Requirement: Investigation defers OpenCode before discovery or native I/O
 
@@ -96,6 +95,13 @@ OpenCode before I/O.
 
 - **WHEN** a source-correlatable OpenCode record is investigated
 - **THEN** SourceUnavailable denotes a deferred provider rather than proof of store existence
+
+#### Scenario: OpenCode export cannot mutate investigation artifacts
+
+- **WHEN** an OpenCode event is investigated with a fake executable available
+- **THEN** no executable is launched, no database/sidecar is read or created, the
+  result contains only the bounded provider reason, and synthetic DB/WAL/SHM bytes
+  stay unchanged; Linux synthetic access probes observe no opens or reads
 
 ### Requirement: Investigation exposes no native export or SQLite fallback
 

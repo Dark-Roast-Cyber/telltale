@@ -22,7 +22,8 @@ telltale-schema.workspace = true
 telltale-rules.workspace = true
 telltale-sources = { workspace = true, optional = true }
 serde.workspace = true
-serde_json.workspace = true
+# raw_value: skip over-deep argument members without the parser's recursion limit.
+serde_json = { workspace = true, features = ["raw_value"] }
 serde_yaml.workspace = true
 regex.workspace = true
 sha2.workspace = true

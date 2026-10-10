@@ -1,7 +1,7 @@
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 pub(crate) use crate::acquisition::{OpenCodeSqliteReadOptions, SQLITE_PART_LIMIT};
 use crate::source_read::{SourceReadError, collect_string_values};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
@@ -245,11 +245,32 @@ fn extract_sqlite_native_source_admitted(
     let mut records = Vec::new();
     let mut sqlite_part_max_time_updated = None;
 
+    let has_part_table = sqlite_table_exists(&snapshot, "part")?;
+    if let Some(high_water) = options.resume_high_water {
+        // Checked in the read snapshot before any selection: a store whose
+        // newest part is older than the resume position cannot be resumed.
+        // Like `max(time_updated) >= high_water` over integer timestamps, but
+        // scanning from the newest rowid usually stops at the first row
+        // instead of reading the whole table when `time_updated` has no index.
+        // Non-integer values never count: SQLite orders TEXT above INTEGER.
+        let reaches_high_water = has_part_table
+            && snapshot
+                .query_row(
+                    "select 1 from part where typeof(time_updated) = 'integer' and time_updated >= ?1 order by rowid desc limit 1",
+                    [high_water],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+        if !reaches_high_water {
+            return Err(SourceReadError::ResumeRegressed);
+        }
+    }
     let has_message_table = sqlite_table_exists(&snapshot, "message")?;
     if has_message_table {
         records.extend(extract_sqlite_message_records(&snapshot, admission)?);
     }
-    if sqlite_table_exists(&snapshot, "part")? {
+    if has_part_table {
         let (part_records, max_time_updated) =
             extract_sqlite_part_records(&snapshot, options, has_message_table, admission)?;
         records.extend(part_records);
@@ -1164,6 +1185,7 @@ mod admission_tests {
         let options = OpenCodeSqliteReadOptions {
             part_min_time_updated: Some(10),
             part_limit: 3,
+            resume_high_water: None,
         };
         let mut exact = budget(usize::MAX, 3);
         let acquired =
@@ -1285,6 +1307,7 @@ mod admission_tests {
                 OpenCodeSqliteReadOptions {
                     part_min_time_updated: Some(10),
                     part_limit: 2,
+                    resume_high_water: None,
                 },
                 &mut SqliteAdmission {
                     cell_limit: 19,

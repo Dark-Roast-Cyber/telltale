@@ -107,9 +107,20 @@ reparse raw structured arguments/results or invent URL/network facts. The one
 exception is `compat.v1.url`: it MUST resolve the top-level string members named
 `url`, `uri`, `href`, or `endpoint` of object arguments, or of an argument string
 that is exactly one JSON object, and MUST NOT copy command text or results into
-URL. The action view reads the same URL-keyed members and also reads a tool
-call's command text as URL text, so an action URL match need not be a session
-selector match.
+URL. Empty strings MUST NOT be URL facts. An encoded argument object MUST be
+decoded member by member, each member under the ordinary per-value bounds, so a
+member that exceeds them, including nesting beyond the JSON parser's recursion
+limit, is skipped without hiding the other members. Whole-object
+member-count and aggregate-byte limits do not apply to the decoded object; work
+is bounded by charging the encoded text's length before decoding. The session selector
+and the action view MUST share that decoding. The action view reads the same
+URL-keyed members. It routes a skipped member with a known argument role
+(command, authored content, `edits`, path, or URL) exactly as an admitted member,
+so replaced `old_string` text never becomes command text; it keeps other skipped
+members searchable as command text unless their key is one structured input
+ignores (such as `prompt` or `description`). It also
+reads a tool call's command text as URL text, so an action URL match need not
+be a session selector match.
 
 #### Scenario: Compatibility selectors preserve absence
 
@@ -117,6 +128,13 @@ selector match.
   derivative or direct URL activity
 - **THEN** the arguments view is absent for text matching when no text is
   available and `compat.v1.url` is absent unless a URL-keyed argument exists
+
+#### Scenario: Session and action views agree on URL arguments
+
+- **WHEN** a tool call's encoded arguments carry an empty URL value, or a valid
+  URL beside a member that exceeds the value bounds
+- **THEN** neither view treats the empty value as a URL, and both views match
+  the valid URL
 
 #### Scenario: Capability visibility is not occurrence
 

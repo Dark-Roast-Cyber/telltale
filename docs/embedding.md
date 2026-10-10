@@ -118,7 +118,9 @@ let pipeline = Pipeline::builder()
     .policy_document(policy_yaml)     // enable/disable, like --policy
     .build()?;
 // .without_bundled_defaults() mirrors --no-default-rules; with no documents
-// left, build() fails with PipelineError::InvalidConfiguration.
+// left, build() fails with PipelineError::InvalidConfiguration. Content and
+// policy that leave no effective rule fail with PipelineError::EmptyRuleSet,
+// even if scans enable process_chain (build() cannot know that).
 ```
 
 What an embedder inherits:
@@ -280,6 +282,21 @@ Three scores exist and must stay distinct: native finding risk
   permission to invent a substitute. Golden values are pinned by tests and change
   only with a version bump.
 
+### Replacing rule content
+
+Rule content can change without a new Telltale build. A `Pipeline` never
+changes after `build()`, so replace it as a whole:
+
+1. Build a new `Pipeline` from the new rule and policy documents.
+2. On `Err`, keep the active pipeline. Rejected or empty content
+   (`Compilation`, `InvalidConfiguration`, `EmptyRuleSet`) never produces one.
+3. On `Ok`, compare `semantic_provenance(&options)` with the active pipeline's,
+   then swap. A different identity is a semantic rebaseline; keep admitted
+   pending work across it.
+
+Telltale does not fetch, sign, or schedule rule content. Obtaining and
+authenticating documents is the host's job.
+
 ### Same-pass context
 
 `action.context()` is scan-time context from the same acquired observations; it
@@ -344,7 +361,7 @@ outbox guarantees do not transfer to an embedding host.
 
 | Operation | Returned categories |
 | --- | --- |
-| `build` | `InvalidConfiguration`, `Compilation` |
+| `build` | `InvalidConfiguration`, `EmptyRuleSet`, `Compilation` |
 | `scan_root`, `scan_root_with_occurrences` | `Discovery`, `Clock`, `Observation` |
 | `scan_sources`, `scan_sources_with_occurrences` | `Clock`, `Observation` |
 | detailed scans and `semantic_provenance` | the matching scan categories, plus `InvalidOptions`, and `Compilation` only if the bundled process pack fails to load when `process_chain` is set |
@@ -358,9 +375,10 @@ failures are per-source `scanner_error` events
 Display and Debug render closed codes (`pipeline_discovery_failed`,
 `pipeline_clock_failed`, `pipeline_observation_failed`,
 `pipeline_compilation_failed`, `pipeline_no_rule_documents`,
-`pipeline_invalid_options`) without paths, configuration, or source text.
-`Error::source()` keeps the original cause except for `InvalidConfiguration` and
-`InvalidOptions`. `DiscoveryError`, `RuleV1CompileError`, and `ObservationError`
+`pipeline_empty_rule_set`, `pipeline_invalid_options`,
+`pipeline_invalid_resume_token`) without paths, configuration, or source text.
+`Error::source()` keeps the original cause except for `InvalidConfiguration`,
+`EmptyRuleSet`, `InvalidOptions`, and `InvalidResumeToken`. `DiscoveryError`, `RuleV1CompileError`, and `ObservationError`
 are re-exported from core. `Compilation`'s boxed cause is not a supported subtype
 taxonomy; do not parse strings to classify failures.
 
@@ -394,7 +412,8 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
   `canonical_acquisition_failed` code. Mixed scans keep JSONL successes.
 - Without a resume token, an embedded scan evaluates OpenCode's bounded recent
   selection (see [limits](opencode-live-ingestion.md#failure-recovery-and-coverage)).
-  Every OpenCode scan reports `coverage() == Some(Partial)`. Repeated unchanged
+  Every successful OpenCode scan reports `coverage() == Some(Partial)`; a
+  failed scan reports `None`. Repeated unchanged
   input has stable action semantics with fresh Event 3 IDs and materialization
   clocks. `PartialSource` accounting never installs a whole-source baseline.
 - CLI scan/watch aggregates also describe bounded selected windows, not
@@ -410,9 +429,10 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
 `Pipeline::scan_source_detailed_resuming(source, resume, options)` is a detailed
 scan of one source. A successful `opencode.sqlite` scan returns
 `resume_token()`: an opaque, versioned `ResumeToken` bound to that source (by
-client, source identity, and the Event 3 source path hash; no path or content).
-It is monotone and never earlier than the token the scan resumed from. Sources
-without part history to resume from, and every JSONL source, return `None`.
+client, source identity, and a hash of the exact platform-native path; no path or
+content). It is monotone: a resumed scan with no newer parts returns the token it
+resumed from. Sources without part history to resume from, and every JSONL
+source, return `None`.
 
 - Persist `ResumeToken::as_str()` only after durably accepting that scan's
   findings; restore it with `ResumeToken::parse`, which rejects unknown versions
@@ -421,9 +441,21 @@ without part history to resume from, and every JSONL source, return `None`.
   ten-minute overlap, the same policy as the CLI cursor. Expect actions from the
   overlap again and deduplicate with replay identity or source-bound coordinates.
   Chains whose earlier steps fall before the window are not reconstructed.
-- A resumed read that selects more than 25,000 parts fails with
-  `AcquisitionError::BoundedSourceRead(LimitExceeded)` and no new token. Drop the
-  token and scan without one; history between the two reads stays unevaluated.
+- A resumed scan selects every part updated at or after that lower bound, not
+  only parts inside the overlap.
+- Two resumed failures need a tokenless rescan. Both fail atomically with
+  `coverage() == None` and no token:
+
+  | `failure().acquisition_error()` | Cause | Host action |
+  | --- | --- | --- |
+  | `BoundedSourceRead(LimitExceeded)` | More than 25,000 parts selected | Drop the token and scan without one; history between the two reads stays unevaluated. |
+  | `ResumeRegressed` (`resume_regressed`) | No part with an integer `time_updated` at or after the token's high-water remains: a restored or replaced database, or its newest parts deleted (ordinary session deletion or undo can do this) | Drop the token and scan without one; deduplicate repeats with replay identity or coordinates. |
+
+  Not detected: a replaced store whose newest part is at or after the token,
+  and a clock rollback while parts at or after the high-water remain. Parts
+  written below the overlap window in those cases are not read.
+- `InvalidResumeToken` means the token does not bind to this source, including
+  tokens from an older binding. Drop it and scan without one.
 - A token for another source or a non-resumable source returns
   `PipelineError::InvalidResumeToken` before any source I/O.
 

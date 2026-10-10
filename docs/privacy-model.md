@@ -123,8 +123,9 @@ only the already-acquired observations, never reopening a source. Bounds:
 
 Action and context `tool_name` values keep a closed list of built-in harness
 tool names (for example `Bash`, `Read`, `WebFetch`) readable. A fixed vocabulary
-cannot carry secrets or paths; every other name, including MCP and host-defined
-tools, stays an opaque terminal identifier. Event3 terminal identifiers are
+cannot carry secrets or paths. Every other name, including MCP and host-defined
+tools, passes through the terminal identifier policy: safe lowercase names stay
+readable, and anything else becomes opaque. Event3 terminal identifiers are
 unchanged.
 
 ### Structured inventory safe DTOs

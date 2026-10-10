@@ -775,6 +775,7 @@ mod tests {
             OpenCodeSqliteReadOptions {
                 part_min_time_updated: Some(1_001),
                 part_limit: 1,
+                resume_high_water: None,
             },
         )
         .unwrap();

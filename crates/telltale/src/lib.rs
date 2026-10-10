@@ -107,6 +107,9 @@ pub enum PipelineError {
     Compilation(BoxError),
     /// No rule documents were supplied after disabling bundled defaults.
     InvalidConfiguration,
+    /// Accepted rule content and policy left no effective rule, so the
+    /// pipeline would detect nothing. Never built as an empty rule set.
+    EmptyRuleSet,
     /// Detailed-scan options failed their closed bounds.
     InvalidOptions,
     /// A resume token does not belong to the supplied source, or the source is
@@ -122,6 +125,7 @@ impl std::fmt::Display for PipelineError {
             Self::Observation(_) => "pipeline_observation_failed",
             Self::Compilation(_) => "pipeline_compilation_failed",
             Self::InvalidConfiguration => "pipeline_no_rule_documents",
+            Self::EmptyRuleSet => "pipeline_empty_rule_set",
             Self::InvalidOptions => "pipeline_invalid_options",
             Self::InvalidResumeToken => "pipeline_invalid_resume_token",
         })
@@ -140,7 +144,10 @@ impl std::error::Error for PipelineError {
             Self::Discovery(error) => Some(error),
             Self::Clock(error) | Self::Compilation(error) => Some(error.as_ref()),
             Self::Observation(error) => Some(error),
-            Self::InvalidConfiguration | Self::InvalidOptions | Self::InvalidResumeToken => None,
+            Self::InvalidConfiguration
+            | Self::EmptyRuleSet
+            | Self::InvalidOptions
+            | Self::InvalidResumeToken => None,
         }
     }
 }
@@ -260,20 +267,47 @@ fn is_resumable(source: &Source) -> bool {
 }
 
 /// Source binding for resume tokens: length-framed client, source identity, and
-/// the Event 3 source path hash. No raw path is retained.
+/// the exact platform-native path. Distinct paths never share a binding, even
+/// when their lossy UTF-8 renderings collide. No raw path is retained.
 fn resume_binding(source: &Source) -> String {
     use sha2::{Digest, Sha256};
+    let path = native_path_bytes(&source.path);
     let mut hasher = Sha256::new();
     for part in [
-        "telltale.resume.v1",
-        source.client.as_str(),
-        source.source_id.as_str(),
-        &telltale_schema::event::path_hash(&source.path),
+        b"telltale.resume.v1".as_slice(),
+        source.client.as_str().as_bytes(),
+        source.source_id.as_bytes(),
+        path.0.as_bytes(),
+        &path.1,
     ] {
         hasher.update((part.len() as u64).to_le_bytes());
-        hasher.update(part.as_bytes());
+        hasher.update(part);
     }
     format!("{:x}", hasher.finalize())
+}
+
+/// Path encoding tag and exact bytes: Unix bytes, or Windows UTF-16LE units.
+fn native_path_bytes(path: &std::path::Path) -> (&'static str, Vec<u8>) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        ("unix-bytes", path.as_os_str().as_bytes().to_vec())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        (
+            "windows-utf16le",
+            path.as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        ("utf8", path.to_string_lossy().into_owned().into_bytes())
+    }
 }
 
 /// How much of one successfully scanned source was evaluated.
@@ -603,6 +637,9 @@ impl Pipeline {
     /// read that exceeds its part limit fails with
     /// `AcquisitionError::BoundedSourceRead(LimitExceeded)`: drop the token and
     /// scan again from bootstrap, treating the gap as unevaluated history.
+    /// A store with no part at or after the token's high-water (restored,
+    /// replaced, or newest parts deleted) fails with
+    /// `AcquisitionError::ResumeRegressed` and the same bootstrap recovery.
     /// A token for another source or a non-resumable source returns
     /// [`PipelineError::InvalidResumeToken`] before any source I/O.
     pub fn scan_source_detailed_resuming(
@@ -773,6 +810,8 @@ impl PipelineBuilder {
     /// Canonical semantics are compiled once here and reused by every scan.
     /// Content that Rule v1 loading accepts but canonical compilation rejects
     /// returns [`PipelineError::Compilation`] here, not later from a scan.
+    /// Content and policy that leave no effective rule return
+    /// [`PipelineError::EmptyRuleSet`].
     pub fn build(self) -> Result<Pipeline, PipelineError> {
         let mut documents: Vec<&str> = Vec::new();
         if !self.custom_only {
@@ -787,6 +826,13 @@ impl PipelineBuilder {
             self.policy_document.as_deref(),
         )
         .map_err(PipelineError::Compilation)?;
+        // Modifiers only combine rule matches, so no effective rule leaves no
+        // Rule v1 detection. Fail closed instead of building an empty pipeline,
+        // even though opt-in process-chain detection does not use this rule set:
+        // `build()` cannot know whether a later scan enables it.
+        if rule_set.rule_count() == 0 {
+            return Err(PipelineError::EmptyRuleSet);
+        }
         let canonical = telltale_detect::v2::compile_rule_v1(&rule_set.compatibility_export())
             .map_err(|error| PipelineError::Compilation(Box::new(error)))?;
         Ok(Pipeline {

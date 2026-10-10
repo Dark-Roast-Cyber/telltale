@@ -232,3 +232,131 @@ rules:
         wal_bytes
     );
 }
+
+#[test]
+fn opencode_regressed_store_fails_closed_and_keeps_cursor() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("stores");
+    fs::create_dir_all(root.join("opencode")).unwrap();
+    let database = root.join("opencode/opencode.db");
+    let writer = Connection::open(&database).unwrap();
+    writer
+        .execute_batch(
+            "create table part (id text primary key, session_id text, time_updated integer, data text);",
+        )
+        .unwrap();
+    let insert = |id: &str, time: i64| {
+        writer
+            .execute(
+                "insert into part values (?1,'regressed-session',?2,?3)",
+                rusqlite::params![
+                    id,
+                    time,
+                    serde_json::json!({"type":"tool","tool":"bash","callID":id,"state":{"status":"completed","input":{"command":format!("echo synthetic-{id}")},"output":"ok","time":{"start":time,"end":time}}}).to_string()
+                ],
+            )
+            .unwrap();
+    };
+    let high_water = 1_775_002_000_000_i64;
+    insert("recent", high_water);
+    let log = temp.path().join("events.jsonl");
+    let state = temp.path().join("state.json");
+    let scan = |extra: &[&str]| {
+        let result = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .env_clear()
+            .current_dir(temp.path())
+            .args([
+                "scan",
+                "--once",
+                "--client",
+                "opencode",
+                "--no-local-config",
+                "--emit-activity",
+                "--install-inventory-disabled",
+                "--root",
+            ])
+            .arg(&root)
+            .args(extra)
+            .arg("--log-path")
+            .arg(&log)
+            .arg("--state-path")
+            .arg(&state)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+        assert!(result.status.success(), "{stderr}");
+        let summary: Value = serde_json::from_slice(&result.stdout).unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+        let cursor = saved["sqlite_ingestion_cursors"]
+            .as_object()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()["last_time_updated"]
+            .as_i64()
+            .unwrap();
+        (summary, cursor, stderr)
+    };
+    let (_, cursor, _) = scan(&[]);
+    assert_eq!(cursor, high_water);
+
+    // Replace the store with an older copy: every part predates the cursor.
+    writer.execute("delete from part", []).unwrap();
+    insert("restored", high_water - 3_600_000);
+    let before_log = fs::read_to_string(&log).unwrap();
+    for _ in 0..2 {
+        let (summary, cursor, stderr) = scan(&[]);
+        assert_eq!(
+            cursor, high_water,
+            "a regressed store must not move the cursor"
+        );
+        let failures = summary["source_processing"]["failures"].as_array().unwrap();
+        assert_eq!(failures.len(), 1, "{summary}");
+        assert_eq!(failures[0]["acquisition_code"], "resume_regressed");
+        assert!(!stderr.contains(database.to_str().unwrap()));
+    }
+    let failed_log = fs::read_to_string(&log).unwrap();
+    let appended = failed_log.strip_prefix(&before_log).unwrap();
+    // No activity or detection from the unread store; one deduplicated
+    // scanner error, without the path or any part content.
+    let appended = appended
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        appended
+            .iter()
+            .filter(|event| event["event_type"] == "scanner_error")
+            .count(),
+        1
+    );
+    assert!(appended.iter().all(|event| matches!(
+        event["event_type"].as_str(),
+        Some("scanner_error" | "health")
+    )));
+    assert!(!failed_log.contains("synthetic-restored"));
+    assert!(!failed_log.contains(database.to_str().unwrap()));
+
+    // Backfill reads the store without the cursor and does not stage it.
+    let (summary, cursor, _) = scan(&["--backfill"]);
+    assert_eq!(cursor, high_water);
+    assert!(
+        summary["source_processing"]["failures"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{summary}"
+    );
+
+    // New activity at or after the cursor resumes without a reset.
+    insert("later", high_water + 1_000);
+    let (summary, cursor, _) = scan(&[]);
+    assert_eq!(cursor, high_water + 1_000);
+    assert!(
+        summary["source_processing"]["failures"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{summary}"
+    );
+}

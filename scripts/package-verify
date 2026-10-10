@@ -188,14 +188,65 @@ telltale-schema = "=$VERSION"
 EOF
 
 cat > "$DETECT_LIGHT_CONSUMER_DIR/src/main.rs" <<'EOF'
-use telltale_rules::load_default_rule_set;
+use telltale_detect::v2::{
+    CanonicalSourceInput, RuleV1DetectorOutcome, compile_rule_v1, evaluate_source,
+};
+use telltale_rules::load_rule_set_from_documents;
+use telltale_schema::clients::ClientId;
+use telltale_schema::observation::*;
+
+const RULE: &str = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.package\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [arguments]\n    regex: package-needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers: []\n";
 
 fn main() {
     // Detection v2 compiles and evaluates without the default source-io feature.
-    let rules = load_default_rule_set().expect("rules");
-    let plan = telltale_detect::v2::compile_rule_v1(&rules.compatibility_export())
-        .expect("canonical rule compilation");
+    let rules = load_rule_set_from_documents(&[RULE], None).expect("rules");
+    let plan = compile_rule_v1(&rules.compatibility_export()).expect("canonical rule compilation");
     let _ = plan.semantic_provenance();
+    let metadata = FactMetadata::new(FactProvenance::Reported, Sensitivity::Normal).expect("metadata");
+    let observation = CanonicalObservationV2::builder(
+        ObservationBody::Tool(
+            ToolObservation::new()
+                .with_name("shell")
+                .expect("tool name")
+                .with_arguments(JsonValue::string("echo package-needle")),
+        ),
+        ObservationStage::ToolRequested,
+        ObservedAt::new("2026-09-18T00:00:00Z").expect("observed at"),
+        SourceProvenance::new(
+            IngestionMode::SessionStore,
+            "claude_code",
+            "claude.projects",
+            Fidelity::FullNative,
+        )
+        .expect("provenance")
+        .with_native_id("package-call")
+        .expect("native id"),
+    )
+    .session_id(CorrelationId::source_reported("package-session").expect("session"))
+    .sequence(0)
+    .fact_metadata("tool.name", metadata.clone())
+    .fact_metadata("tool.arguments", metadata)
+    .capability_context(
+        CapabilityContext::new()
+            .with_override(CapabilityId::ToolCall, CapabilityAvailability::Supported),
+    )
+    .build()
+    .expect("observation");
+    let instance = CorrelationId::source_reported("package-instance").expect("instance");
+    let evaluation = evaluate_source(
+        CanonicalSourceInput {
+            client: ClientId::Claude,
+            source_id: "claude.projects",
+            source_instance: Some(&instance),
+            observations: &[observation],
+        },
+        &plan,
+        None,
+    )
+    .expect("evaluation");
+    let session = &evaluation.sessions()[0];
+    assert_eq!(session.detectors()[0].outcome(), RuleV1DetectorOutcome::Match);
+    assert_eq!(session.rule_ids(), ["synthetic.package"]);
 }
 EOF
 
@@ -496,11 +547,11 @@ done
 echo "== registry-style detect-only consumer =="
 "$@"
 
-set -- "$CARGO_BIN" check --manifest-path "$DETECT_LIGHT_CONSUMER_DIR/Cargo.toml"
+set -- "$CARGO_BIN" run --manifest-path "$DETECT_LIGHT_CONSUMER_DIR/Cargo.toml"
 for package in telltale-detect telltale-rules telltale-schema; do
     set -- "$@" --config "patch.crates-io.$package.path=\"$(package_path "$package")\""
 done
-echo "== registry-style detect no-default-features consumer =="
+echo "== registry-style detect no-default-features consumer (evaluates) =="
 "$@"
 
 LIGHT_METADATA="$WORK_DIR/detect-light-metadata.json"

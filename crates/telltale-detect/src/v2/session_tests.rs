@@ -679,6 +679,81 @@ fn url_target_reads_tool_argument_urls_and_keeps_completion_complete() {
 }
 
 #[test]
+fn url_fact_agrees_between_session_selector_and_action_view() {
+    let outcome = |arguments: &str, regex: &str| {
+        let observations = [command(
+            "url-agree",
+            arguments,
+            Some("2026-09-17T00:00:00Z"),
+            0,
+        )];
+        let instance = CorrelationId::source_reported("synthetic-source-instance").unwrap();
+        let evaluation = super::session::evaluate_source_with_options(
+            CanonicalSourceInput {
+                client: ClientId::Claude,
+                source_id: "claude.projects",
+                source_instance: Some(&instance),
+                observations: &observations,
+            },
+            &target_plan("url", regex),
+            None,
+            &super::DetailedEvaluationOptions::default(),
+        )
+        .unwrap();
+        let session = &evaluation.sessions()[0];
+        (
+            session.detectors()[0].outcome(),
+            session.action_findings().len(),
+        )
+    };
+    let matched = (super::RuleV1DetectorOutcome::Match, 1);
+    let missed = (super::RuleV1DetectorOutcome::NoMatch, 0);
+
+    // An empty URL value is not a URL fact in either view.
+    assert_eq!(outcome(r#"{"url":""}"#, "^$"), missed);
+    assert_eq!(outcome(r#"{"url":"","href":""}"#, "^\\n?$"), missed);
+
+    // A member beyond the value bounds is skipped; it does not hide the URL.
+    let deep =
+        r#"{"url":"https://fetch.example.invalid/page","deep":[[[[[[[["skippedmarker"]]]]]]]]}"#;
+    assert_eq!(outcome(deep, "fetch\\.example"), matched);
+    let long = format!(
+        r#"{{"url":"https://fetch.example.invalid/page","wide":[{}]}}"#,
+        vec!["1"; 200].join(",")
+    );
+    assert_eq!(outcome(&long, "fetch\\.example"), matched);
+    // The skipped member is never a URL argument. It stays searchable as action
+    // command text, which the action view (only) also reads as URL text.
+    assert_eq!(
+        outcome(deep, "skippedmarker"),
+        (super::RuleV1DetectorOutcome::NoMatch, 1)
+    );
+    // Nesting beyond the JSON parser's own recursion limit is skipped per
+    // member too, rather than rejecting the whole object.
+    let parser_deep = format!(
+        r#"{{"url":"https://fetch.example.invalid/page","deep":{}"x"{}}}"#,
+        "[".repeat(200),
+        "]".repeat(200)
+    );
+    assert_eq!(outcome(&parser_deep, "fetch\\.example"), matched);
+    // Only skipped members are added to command text, never the prose members
+    // that structured input deliberately ignores.
+    let prose = r#"{"prompt":"prosemarker","url":"https://fetch.example.invalid/page","deep":[[[[[[[["skippedmarker"]]]]]]]]}"#;
+    assert_eq!(outcome(prose, "prosemarker"), missed);
+    assert_eq!(
+        outcome(prose, "skippedmarker"),
+        (super::RuleV1DetectorOutcome::NoMatch, 1)
+    );
+
+    // Intended difference: command text is a URL fact for actions, not for
+    // session URL selectors.
+    assert_eq!(
+        outcome("curl https://fetch.example.invalid/page", "fetch\\.example"),
+        (super::RuleV1DetectorOutcome::NoMatch, 1)
+    );
+}
+
+#[test]
 fn event3_aggregates_one_deterministic_anchor_per_occurrence() {
     let document = "version: 1\ndescription: synthetic\ndefaults:\n  case_insensitive: false\n  enabled: true\nrules:\n  - id: synthetic.alpha\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 1\n    targets: [arguments, tool_name]\n    regex: shell\n    tags: [synthetic]\n    explanation: synthetic\n  - id: synthetic.beta\n    category: synthetic\n    detection_class: security_detection\n    signal_type: atomic\n    analytic_intent: alert\n    severity: low\n    score: 2\n    targets: [arguments]\n    regex: needle\n    tags: [synthetic]\n    explanation: synthetic\nmodifiers:\n  - id: chain.synthetic_both\n    score: 3\n    detection_class: security_detection\n    signal_type: chain\n    analytic_intent: audit\n    atlas_tags: []\n    when_all_rule_ids: [synthetic.alpha, synthetic.beta]\n    explanation: synthetic\n";
     let anchor_plan = compile_rule_v1(
