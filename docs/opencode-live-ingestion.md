@@ -97,9 +97,10 @@ with an integer `time_updated` at or after the cursor. It emits a privacy-safe
 `source_processing.failures`. The cursor is not advanced, reset or replaced.
 Scans resume on their own once OpenCode writes a part at or after the cursor.
 Changes the store lost before that point stay unevaluated. `--backfill` reads the
-newest bootstrap window without the cursor and stages nothing. There is no reset
-or rebaseline command; deleting the state file discards every other source's
-state as well. The check does not detect a replaced store whose newest part is at
+newest bootstrap window without the cursor and stages nothing. No command resets
+or rebaselines the OpenCode cursor (`--rebuild-baselines` rebuilds baseline
+snapshots only), and deleting the state file discards every other source's state
+as well. The check does not detect a replaced store whose newest part is at
 or after the cursor, or a clock rollback while such parts remain.
 
 Bootstrap and backfill still select the **newest 5,000 eligible tool/text parts**,
