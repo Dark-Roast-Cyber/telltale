@@ -728,6 +728,22 @@ fn url_fact_agrees_between_session_selector_and_action_view() {
         outcome(deep, "skippedmarker"),
         (super::RuleV1DetectorOutcome::NoMatch, 1)
     );
+    // Nesting beyond the JSON parser's own recursion limit is skipped per
+    // member too, rather than rejecting the whole object.
+    let parser_deep = format!(
+        r#"{{"url":"https://fetch.example.invalid/page","deep":{}"x"{}}}"#,
+        "[".repeat(200),
+        "]".repeat(200)
+    );
+    assert_eq!(outcome(&parser_deep, "fetch\\.example"), matched);
+    // Only skipped members are added to command text, never the prose members
+    // that structured input deliberately ignores.
+    let prose = r#"{"prompt":"prosemarker","url":"https://fetch.example.invalid/page","deep":[[[[[[[["skippedmarker"]]]]]]]]}"#;
+    assert_eq!(outcome(prose, "prosemarker"), missed);
+    assert_eq!(
+        outcome(prose, "skippedmarker"),
+        (super::RuleV1DetectorOutcome::NoMatch, 1)
+    );
 
     // Intended difference: command text is a URL fact for actions, not for
     // session URL selectors.

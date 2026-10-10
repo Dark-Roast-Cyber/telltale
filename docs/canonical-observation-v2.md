@@ -74,7 +74,7 @@ progress reporting does not itself persist a cursor. Event 3.0 remains the
 external contract and Event4 remains inactive.
 
 Acquisition directly maps source-native facts to Canonical Observation v2. It is
-not a conversion bridge to or from any record type.
+not a conversion bridge to or from a flattened compatibility record type.
 
 ### Codex message roles and auxiliary records
 

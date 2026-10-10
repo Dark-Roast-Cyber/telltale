@@ -622,9 +622,13 @@ fn view(
                     budget.charge(text.len())?;
                     if let Some((input, skipped)) = super::selector::decoded_argument_object(text) {
                         structured_input(&input, &mut out, &mut command);
-                        // Members beyond the value bounds stay searchable as text.
-                        if skipped {
-                            command.push_str(text);
+                        // Members beyond the value bounds stay searchable as
+                        // command text, except keys structured input ignores.
+                        for (key, raw) in &skipped {
+                            if !is_ignored_argument_key(key) {
+                                command.push_str(raw);
+                                command.push('\n');
+                            }
                         }
                     } else {
                         command.push_str(text);
@@ -791,6 +795,27 @@ fn script_literal(
     Ok(None)
 }
 
+/// Argument keys whose values are prose or replaced text, never action facts.
+fn is_ignored_argument_key(key: &str) -> bool {
+    matches!(
+        key,
+        "old_string"
+            | "prompt"
+            | "description"
+            | "todos"
+            | "plan"
+            | "questions"
+            | "summary"
+            | "title"
+            | "message"
+            | "reason"
+            | "tldr"
+            | "caption"
+            | "activeForm"
+            | "subject"
+    )
+}
+
 fn structured_input(
     input: &BTreeMap<String, JsonValue>,
     out: &mut ActionView,
@@ -826,9 +851,7 @@ fn structured_input(
                     }
                 }
             }
-            "old_string" | "prompt" | "description" | "todos" | "plan" | "questions"
-            | "summary" | "title" | "message" | "reason" | "tldr" | "caption" | "activeForm"
-            | "subject" => {}
+            key if is_ignored_argument_key(key) => {}
             key if super::selector::is_url_argument_key(key) => {
                 if let Some(v) = string(value) {
                     out.put("url", v.to_owned());

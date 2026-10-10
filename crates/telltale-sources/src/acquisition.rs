@@ -127,7 +127,10 @@ pub struct OpenCodeSqliteReadOptions {
 
 impl OpenCodeSqliteReadOptions {
     /// Resume after a recorded part `time_updated` high-water, applying the one
-    /// shared overlap and incremental part limit.
+    /// shared overlap and incremental part limit. This does not set
+    /// [`Self::resume_high_water`]: callers that want a regressed store to fail
+    /// as [`AcquisitionError::ResumeRegressed`] set it as well (the embedding
+    /// facade does; the CLI cursor does not).
     pub fn resume_after(high_water: i64) -> Self {
         Self {
             part_min_time_updated: Some(

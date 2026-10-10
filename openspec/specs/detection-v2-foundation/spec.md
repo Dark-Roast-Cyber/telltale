@@ -109,11 +109,13 @@ exception is `compat.v1.url`: it MUST resolve the top-level string members named
 that is exactly one JSON object, and MUST NOT copy command text or results into
 URL. Empty strings MUST NOT be URL facts. An encoded argument object MUST be
 decoded member by member, each member under the ordinary per-value bounds, so a
-member that exceeds them is skipped without hiding the other members. Whole-object
+member that exceeds them, including nesting beyond the JSON parser's recursion
+limit, is skipped without hiding the other members. Whole-object
 member-count and aggregate-byte limits do not apply to the decoded object; work
 is bounded by charging the encoded text's length before decoding. The session selector
 and the action view MUST share that decoding. The action view reads the same
-URL-keyed members, keeps a skipped member searchable as command text, and also
+URL-keyed members, keeps a skipped member searchable as command text unless its
+key is one structured input ignores (such as `prompt` or `description`), and also
 reads a tool call's command text as URL text, so an action URL match need not
 be a session selector match.
 

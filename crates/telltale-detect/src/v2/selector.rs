@@ -754,28 +754,47 @@ pub(crate) fn tool_argument_urls(arguments: Option<&JsonValue>) -> Vec<String> {
         .collect()
 }
 
+/// Admitted members, and skipped members as `(key, raw JSON text)`.
+pub(crate) type DecodedArguments = (BTreeMap<String, JsonValue>, Vec<(String, String)>);
+
 /// Decode tool arguments that a native envelope carries as an encoded JSON
-/// object. Each top-level member is admitted under the ordinary value bounds on
-/// its own; a member that exceeds them is skipped rather than hiding the other
-/// members, and the returned flag reports that a member was skipped. Shared by
-/// the session selectors and the action view so both read the same facts.
-pub(crate) fn decoded_argument_object(text: &str) -> Option<(BTreeMap<String, JsonValue>, bool)> {
-    let serde_json::Value::Object(members) = serde_json::from_str(text).ok()? else {
-        return None;
-    };
-    let total = members.len();
-    let admitted: BTreeMap<_, _> = members
-        .into_iter()
-        .filter_map(|(key, value)| {
-            // Wrapping keeps the member at its real depth and checks its key.
-            let wrapped = serde_json::Value::Object([(key, value)].into_iter().collect());
-            match JsonValue::try_from_source_value(&wrapped).ok()? {
-                JsonValue::Object(member) => member.into_iter().next(),
-                _ => None,
+/// object. Each top-level member is admitted under the ordinary per-value bounds
+/// on its own; a member that exceeds them, including nesting beyond the JSON
+/// parser's recursion limit, is skipped rather than hiding the other members.
+/// Skipped members are returned as `(key, raw JSON text)`. Shared by the session
+/// selectors and the action view so both read the same facts.
+pub(crate) fn decoded_argument_object(text: &str) -> Option<DecodedArguments> {
+    // Raw member values are scanned without recursion, so an over-deep member
+    // cannot fail the parse of the whole object. Later duplicate keys win, as in
+    // ordinary JSON object decoding.
+    let members: BTreeMap<String, Box<serde_json::value::RawValue>> =
+        serde_json::from_str(text).ok()?;
+    let mut admitted = BTreeMap::new();
+    let mut skipped = Vec::new();
+    for (key, raw) in members {
+        // Wrapping keeps the member at its real depth and checks its key.
+        let member = serde_json::from_str::<serde_json::Value>(raw.get())
+            .ok()
+            .map(|value| serde_json::Value::Object([(key.clone(), value)].into_iter().collect()))
+            .and_then(|wrapped| JsonValue::try_from_source_value(&wrapped).ok());
+        match member {
+            Some(JsonValue::Object(member)) => {
+                for (admitted_key, value) in member {
+                    // Keys equal only after normalization keep the first value;
+                    // the colliding member stays searchable as skipped text.
+                    match admitted.entry(admitted_key) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(value);
+                        }
+                        std::collections::btree_map::Entry::Occupied(_) => {
+                            skipped.push((key.clone(), raw.get().to_owned()));
+                        }
+                    }
+                }
             }
-        })
-        .collect();
-    let skipped = admitted.len() < total;
+            _ => skipped.push((key, raw.get().to_owned())),
+        }
+    }
     Some((admitted, skipped))
 }
 

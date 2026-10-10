@@ -514,4 +514,4 @@ the token, or a clock rollback while such parts remain.
 #### Scenario: A regressed store fails instead of stalling
 
 - **WHEN** a host resumes against a store with no integer-timed part at or after the token's high-water (restored, replaced, newest parts deleted, or part table removed)
-- **THEN** the scan fails as `ResumeRegressed` with no token or coverage, and a tokenless scan recovers and issues a new token
+- **THEN** the scan fails as `ResumeRegressed` with no token or coverage, and a tokenless scan recovers; it issues a new token once the store has a part high-water
