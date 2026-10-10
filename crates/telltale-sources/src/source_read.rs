@@ -24,6 +24,8 @@ pub enum SourceReadError {
     Sqlite,
     #[cfg_attr(not(feature = "opencode-sqlite"), allow(dead_code))]
     Locked,
+    #[cfg_attr(not(feature = "opencode-sqlite"), allow(dead_code))]
+    ResumeRegressed,
     SchemaDrift {
         client: ClientId,
         source_id: String,
@@ -39,6 +41,7 @@ impl fmt::Display for SourceReadError {
             Self::Json(error) => write!(formatter, "json parse error: {error}"),
             Self::Sqlite => formatter.write_str("sqlite error"),
             Self::Locked => formatter.write_str("sqlite locked"),
+            Self::ResumeRegressed => formatter.write_str("resume_regressed"),
             Self::SchemaDrift {
                 client,
                 source_id,

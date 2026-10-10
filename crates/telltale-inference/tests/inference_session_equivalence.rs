@@ -362,6 +362,7 @@ fn native_with_args(client: ClientId, args: &Value, result: &str) -> Vec<Canonic
             OpenCodeSqliteReadOptions {
                 part_min_time_updated: None,
                 part_limit: 100,
+                resume_high_water: None,
             },
         )
         .unwrap()
@@ -1413,6 +1414,7 @@ fn native_execution_is_an_expected_difference_not_a_returned_result() {
         OpenCodeSqliteReadOptions {
             part_min_time_updated: None,
             part_limit: 100,
+            resume_high_water: None,
         },
     )
     .unwrap()

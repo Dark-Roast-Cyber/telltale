@@ -245,11 +245,26 @@ fn extract_sqlite_native_source_admitted(
     let mut records = Vec::new();
     let mut sqlite_part_max_time_updated = None;
 
+    let has_part_table = sqlite_table_exists(&snapshot, "part")?;
+    if let Some(high_water) = options.resume_high_water {
+        // Checked in the read snapshot before any selection: a store whose
+        // newest part is older than the resume position cannot be resumed.
+        let newest = if has_part_table {
+            snapshot.query_row("select max(time_updated) from part", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })?
+        } else {
+            None
+        };
+        if newest.is_none_or(|newest| newest < high_water) {
+            return Err(SourceReadError::ResumeRegressed);
+        }
+    }
     let has_message_table = sqlite_table_exists(&snapshot, "message")?;
     if has_message_table {
         records.extend(extract_sqlite_message_records(&snapshot, admission)?);
     }
-    if sqlite_table_exists(&snapshot, "part")? {
+    if has_part_table {
         let (part_records, max_time_updated) =
             extract_sqlite_part_records(&snapshot, options, has_message_table, admission)?;
         records.extend(part_records);
@@ -1164,6 +1179,7 @@ mod admission_tests {
         let options = OpenCodeSqliteReadOptions {
             part_min_time_updated: Some(10),
             part_limit: 3,
+            resume_high_water: None,
         };
         let mut exact = budget(usize::MAX, 3);
         let acquired =
@@ -1285,6 +1301,7 @@ mod admission_tests {
                 OpenCodeSqliteReadOptions {
                     part_min_time_updated: Some(10),
                     part_limit: 2,
+                    resume_high_water: None,
                 },
                 &mut SqliteAdmission {
                     cell_limit: 19,

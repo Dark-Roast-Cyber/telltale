@@ -410,9 +410,10 @@ telltale-core = { git = "https://github.com/Dark-Roast-Cyber/telltale", rev = "<
 `Pipeline::scan_source_detailed_resuming(source, resume, options)` is a detailed
 scan of one source. A successful `opencode.sqlite` scan returns
 `resume_token()`: an opaque, versioned `ResumeToken` bound to that source (by
-client, source identity, and the Event 3 source path hash; no path or content).
-It is monotone and never earlier than the token the scan resumed from. Sources
-without part history to resume from, and every JSONL source, return `None`.
+client, source identity, and a hash of the exact platform-native path; no path or
+content). It is monotone: a resumed scan with no newer parts returns the token it
+resumed from. Sources without part history to resume from, and every JSONL
+source, return `None`.
 
 - Persist `ResumeToken::as_str()` only after durably accepting that scan's
   findings; restore it with `ResumeToken::parse`, which rejects unknown versions
@@ -421,9 +422,17 @@ without part history to resume from, and every JSONL source, return `None`.
   ten-minute overlap, the same policy as the CLI cursor. Expect actions from the
   overlap again and deduplicate with replay identity or source-bound coordinates.
   Chains whose earlier steps fall before the window are not reconstructed.
-- A resumed read that selects more than 25,000 parts fails with
-  `AcquisitionError::BoundedSourceRead(LimitExceeded)` and no new token. Drop the
-  token and scan without one; history between the two reads stays unevaluated.
+- A resumed scan selects every part updated at or after that lower bound, not
+  only parts inside the overlap.
+- Two resumed failures need a tokenless rescan. Both fail atomically with
+  `coverage() == None` and no token:
+
+  | `failure().acquisition_error()` | Cause | Host action |
+  | --- | --- | --- |
+  | `BoundedSourceRead(LimitExceeded)` | More than 25,000 parts selected | Drop the token and scan without one; history between the two reads stays unevaluated. |
+  | `ResumeRegressed` (`resume_regressed`) | The store's newest part is older than the token's high-water: restored or replaced database, clock rollback, or newest parts deleted | Drop the token and scan without one; deduplicate repeats with replay identity or coordinates. |
+
+  A replaced store whose newest part is newer than the token is not detected.
 - A token for another source or a non-resumable source returns
   `PipelineError::InvalidResumeToken` before any source I/O.
 

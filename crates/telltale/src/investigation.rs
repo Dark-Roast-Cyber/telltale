@@ -564,6 +564,9 @@ fn source_failure_reason(error: AcquisitionError) -> SourceUnavailableReason {
         AcquisitionError::UnsupportedSourceIdentity
         | AcquisitionError::SourceKindMismatch
         | AcquisitionError::ConflictingSessionOwnership => SourceUnavailableReason::MalformedSource,
+        // Investigation never resumes; future variants stay private if reached.
+        AcquisitionError::ResumeRegressed => SourceUnavailableReason::Unreadable,
+        _ => SourceUnavailableReason::Unreadable,
     }
 }
 

@@ -584,16 +584,12 @@ fn opencode_resume_token_reads_from_the_overlap_window_and_binds_to_its_source()
             .starts_with("resume:v1:opencode.sqlite:9000000:")
     );
 
-    // No newer parts: the token never moves backwards.
-    let idle_token = {
-        conn.execute_batch("DELETE FROM part WHERE id = 'new';")
-            .unwrap();
-        pipeline
-            .scan_source_detailed_resuming(&source, Some(&next), &options)
-            .unwrap()
-            .resume_token()
-            .cloned()
-    };
+    // No newer parts: an idle resumed scan keeps its token.
+    let idle_token = pipeline
+        .scan_source_detailed_resuming(&source, Some(&next), &options)
+        .unwrap()
+        .resume_token()
+        .cloned();
     assert_eq!(idle_token.as_ref(), Some(&next));
 
     // A token is bound to its source and is rejected before any I/O.
@@ -678,4 +674,192 @@ fn opencode_resume_overflow_is_typed_and_recoverable_by_bootstrap() {
         .unwrap();
     assert!(recovered.failure().is_none());
     assert!(recovered.resume_token().is_some());
+}
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn opencode_resume_against_an_older_store_fails_typed_and_recovers_by_bootstrap() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("regressed.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(r#"CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+        CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+        INSERT INTO message VALUES ('a','s','{"role":"assistant","time":{"created":1789603200000}}');
+        INSERT INTO part VALUES ('old','a','s',1000,'{"type":"text","text":"synthetic"}');
+        INSERT INTO part VALUES ('newest','a','s',5000000,'{"type":"text","text":"synthetic"}');"#)
+        .unwrap();
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path,
+    };
+    let pipeline = Pipeline::builder().build().unwrap();
+    let options = DetailedEvaluationOptions::default();
+    let token = pipeline
+        .scan_source_detailed_resuming(&source, None, &options)
+        .unwrap()
+        .resume_token()
+        .cloned()
+        .expect("bootstrap token");
+
+    // The store no longer reaches the token's high-water (restored, replaced,
+    // clock rollback, or newest parts deleted). Older parts written later
+    // would never be selected, so this is a typed failure, not an idle scan.
+    for regress in [
+        "DELETE FROM part WHERE id = 'newest';",
+        "DELETE FROM part;",
+        "DROP TABLE part;",
+    ] {
+        conn.execute_batch(regress).unwrap();
+        let regressed = pipeline
+            .scan_source_detailed_resuming(&source, Some(&token), &options)
+            .unwrap();
+        let failure = regressed.failure().expect("regressed store fails");
+        assert_eq!(
+            failure.acquisition_error(),
+            Some(AcquisitionError::ResumeRegressed),
+            "{regress}"
+        );
+        assert_eq!(regressed.coverage(), None);
+        assert!(regressed.resume_token().is_none());
+        assert!(regressed.action_findings.is_empty());
+    }
+
+    // Recovery: a tokenless bootstrap read succeeds and rebaselines.
+    conn.execute_batch(r#"CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+        INSERT INTO part VALUES ('restored','a','s',2000,'{"type":"text","text":"synthetic"}');"#)
+        .unwrap();
+    let recovered = pipeline
+        .scan_source_detailed_resuming(&source, None, &options)
+        .unwrap();
+    assert!(recovered.failure().is_none());
+    let rebaselined = recovered.resume_token().cloned().expect("new token");
+    assert!(
+        rebaselined
+            .as_str()
+            .starts_with("resume:v1:opencode.sqlite:2000:")
+    );
+}
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn opencode_resume_survives_wal_commits_and_fails_closed_when_the_store_disappears() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("wal.db");
+    let create = |path: &std::path::Path, parts: &[(&str, i64)]| {
+        let conn = rusqlite::Connection::open(path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.execute_batch(r#"CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+            CREATE TABLE part (id TEXT, message_id TEXT, session_id TEXT, time_updated INTEGER, data TEXT);
+            INSERT INTO message VALUES ('a','s','{"role":"assistant","time":{"created":1789603200000}}');"#)
+            .unwrap();
+        for (id, updated) in parts {
+            conn.execute(
+                "INSERT INTO part VALUES (?1,'a','s',?2,'{\"type\":\"text\",\"text\":\"synthetic\"}')",
+                (id, updated),
+            )
+            .unwrap();
+        }
+        conn
+    };
+    let writer = create(&path, &[("first", 1_000_000)]);
+    // Keep the WAL from being checkpointed into the main file.
+    writer.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path: path.clone(),
+    };
+    let pipeline = Pipeline::builder().build().unwrap();
+    let options = DetailedEvaluationOptions::default();
+    let token = pipeline
+        .scan_source_detailed_resuming(&source, None, &options)
+        .unwrap()
+        .resume_token()
+        .cloned()
+        .expect("bootstrap token");
+
+    // A part committed only to the WAL is visible to the resumed read.
+    writer
+        .execute(
+            "INSERT INTO part VALUES ('wal','a','s',9000000,'{\"type\":\"text\",\"text\":\"synthetic\"}')",
+            [],
+        )
+        .unwrap();
+    assert!(root.path().join("wal.db-wal").metadata().unwrap().len() > 0);
+    let resumed = pipeline
+        .scan_source_detailed_resuming(&source, Some(&token), &options)
+        .unwrap();
+    assert!(resumed.failure().is_none());
+    let token = resumed.resume_token().cloned().expect("advanced token");
+    assert!(
+        token
+            .as_str()
+            .starts_with("resume:v1:opencode.sqlite:9000000:")
+    );
+
+    // The store disappears: a typed failure, no token, nothing created.
+    drop(writer);
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(root.path().join(format!("wal.db{suffix}")));
+    }
+    let missing = pipeline
+        .scan_source_detailed_resuming(&source, Some(&token), &options)
+        .unwrap();
+    assert!(missing.failure().is_some());
+    assert!(missing.resume_token().is_none());
+    assert!(!path.exists());
+
+    // Recreated at the same path with older content: the same binding, but a
+    // regressed store. A tokenless scan rebaselines.
+    let _recreated = create(&path, &[("recreated", 2_000_000)]);
+    let regressed = pipeline
+        .scan_source_detailed_resuming(&source, Some(&token), &options)
+        .unwrap();
+    assert_eq!(
+        regressed.failure().and_then(|f| f.acquisition_error()),
+        Some(AcquisitionError::ResumeRegressed)
+    );
+    let rebaselined = pipeline
+        .scan_source_detailed_resuming(&source, None, &options)
+        .unwrap();
+    assert!(rebaselined.failure().is_none());
+    assert!(
+        rebaselined
+            .resume_token()
+            .unwrap()
+            .as_str()
+            .starts_with("resume:v1:opencode.sqlite:2000000:")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resume_binding_uses_exact_path_bytes() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let source = |bytes: &[u8]| Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path: std::path::PathBuf::from(OsStr::from_bytes(bytes)),
+    };
+    // Distinct invalid-UTF-8 paths that are equal under `to_string_lossy`.
+    let first = source(b"/stores/\xff/opencode.db");
+    let second = source(b"/stores/\xfe/opencode.db");
+    assert_eq!(first.path.to_string_lossy(), second.path.to_string_lossy());
+    assert_ne!(resume_binding(&first), resume_binding(&second));
+
+    let token = ResumeToken::new(resume_binding(&first), 10);
+    let pipeline = Pipeline::builder().build().unwrap();
+    assert!(matches!(
+        pipeline.scan_source_detailed_resuming(
+            &second,
+            Some(&token),
+            &DetailedEvaluationOptions::default()
+        ),
+        Err(PipelineError::InvalidResumeToken)
+    ));
 }

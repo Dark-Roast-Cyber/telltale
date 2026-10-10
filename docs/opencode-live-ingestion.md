@@ -126,7 +126,9 @@ redesign is promised by this candidate.
 The public embedding facade persists nothing. Without a resume token it reads the
 bounded bootstrap selection; with a host-persisted `ResumeToken` it applies the
 same incremental read policy as the CLI cursor (high-water minus the overlap,
-25,000-part limit, overflow fails as `LimitExceeded`). It has no persisted
+25,000-part limit, overflow fails as
+`AcquisitionError::BoundedSourceRead(LimitExceeded)`), and a store older than the
+token fails as `AcquisitionError::ResumeRegressed`. It has no persisted
 suppression. Repeated scans of unchanged selected input have stable action
 semantics and Event 3 semantic projections, apart from fresh event IDs and
 materialization clocks.

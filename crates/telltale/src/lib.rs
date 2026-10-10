@@ -260,20 +260,47 @@ fn is_resumable(source: &Source) -> bool {
 }
 
 /// Source binding for resume tokens: length-framed client, source identity, and
-/// the Event 3 source path hash. No raw path is retained.
+/// the exact platform-native path. Distinct paths never share a binding, even
+/// when their lossy UTF-8 renderings collide. No raw path is retained.
 fn resume_binding(source: &Source) -> String {
     use sha2::{Digest, Sha256};
+    let path = native_path_bytes(&source.path);
     let mut hasher = Sha256::new();
     for part in [
-        "telltale.resume.v1",
-        source.client.as_str(),
-        source.source_id.as_str(),
-        &telltale_schema::event::path_hash(&source.path),
+        b"telltale.resume.v1".as_slice(),
+        source.client.as_str().as_bytes(),
+        source.source_id.as_bytes(),
+        path.0.as_bytes(),
+        &path.1,
     ] {
         hasher.update((part.len() as u64).to_le_bytes());
-        hasher.update(part.as_bytes());
+        hasher.update(part);
     }
     format!("{:x}", hasher.finalize())
+}
+
+/// Path encoding tag and exact bytes: Unix bytes, or Windows UTF-16LE units.
+fn native_path_bytes(path: &std::path::Path) -> (&'static str, Vec<u8>) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        ("unix-bytes", path.as_os_str().as_bytes().to_vec())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        (
+            "windows-utf16le",
+            path.as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        ("utf8", path.to_string_lossy().into_owned().into_bytes())
+    }
 }
 
 /// How much of one successfully scanned source was evaluated.
@@ -603,6 +630,9 @@ impl Pipeline {
     /// read that exceeds its part limit fails with
     /// `AcquisitionError::BoundedSourceRead(LimitExceeded)`: drop the token and
     /// scan again from bootstrap, treating the gap as unevaluated history.
+    /// A store whose newest part is older than the token's high-water
+    /// (restored, replaced, clock rollback, or newest parts deleted) fails with
+    /// `AcquisitionError::ResumeRegressed` and the same bootstrap recovery.
     /// A token for another source or a non-resumable source returns
     /// [`PipelineError::InvalidResumeToken`] before any source I/O.
     pub fn scan_source_detailed_resuming(
@@ -627,8 +657,14 @@ impl Pipeline {
             source,
             observed_at,
             Some(options),
-            resumed_from
-                .map(telltale_sources::acquisition::OpenCodeSqliteReadOptions::resume_after),
+            resumed_from.map(|high_water| {
+                telltale_sources::acquisition::OpenCodeSqliteReadOptions {
+                    resume_high_water: Some(high_water),
+                    ..telltale_sources::acquisition::OpenCodeSqliteReadOptions::resume_after(
+                        high_water,
+                    )
+                }
+            }),
             rules,
             process_rules,
         );

@@ -485,13 +485,31 @@ MUST remain the generic stage code.
 ### Requirement: Embedded OpenCode scans resume from a source-bound token
 
 A successful embedded `opencode.sqlite` scan MUST return a versioned
-`ResumeToken` bound to the exact source and never earlier than the token it
-resumed from, and MUST return none when no part high-water exists. A resumed scan
-MUST apply the CLI's single overlap and incremental part limit; exceeding the
-limit MUST fail as `BoundedSourceRead(LimitExceeded)` without a new token. A token
-for another or non-resumable source MUST be rejected before source I/O.
+`ResumeToken` bound to the exact source, including its exact platform-native
+path, and never earlier than the token it resumed from. A resumed scan with no
+newer parts MUST return the token it resumed from. A tokenless scan MUST return
+none when no part high-water exists. A resumed scan MUST apply the CLI's single
+overlap and incremental part limit, selecting parts from the overlap-adjusted
+lower bound onward; exceeding the limit MUST fail as
+`BoundedSourceRead(LimitExceeded)` without a new token. A token for another or
+non-resumable source MUST be rejected before source I/O.
+
+A resumed scan MUST fail as `AcquisitionError::ResumeRegressed`, with no coverage
+and no token, when the store's newest part is older than the token's
+high-water or the store has no parts. The check MUST use the same read snapshot
+as the selection and MUST run before any part is selected.
 
 #### Scenario: Embedded OpenCode scans resume from a source-bound token
 
 - **WHEN** a host persists a token, new parts arrive, and it resumes
-- **THEN** only parts within the overlap window are read, the token advances monotonically, overflow is recoverable by a tokenless scan, and a mismatched token fails before I/O
+- **THEN** parts from the overlap-adjusted lower bound onward are read, the token advances monotonically, an idle resume keeps its token, overflow is recoverable by a tokenless scan, and a mismatched token fails before I/O
+
+#### Scenario: Resume tokens distinguish lossy-equal paths
+
+- **WHEN** two Unix paths differ only in bytes that are not valid UTF-8
+- **THEN** their tokens have different bindings and a token for one is rejected for the other
+
+#### Scenario: A regressed store fails instead of stalling
+
+- **WHEN** a host resumes against a store whose newest part is older than the token (restored, replaced, clock rollback, newest parts deleted, or part table removed)
+- **THEN** the scan fails as `ResumeRegressed` with no token or coverage, and a tokenless scan recovers and issues a new token
