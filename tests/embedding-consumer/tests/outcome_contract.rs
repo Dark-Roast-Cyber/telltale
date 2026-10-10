@@ -160,14 +160,27 @@ fn bundled_default_scans_are_complete_and_limits_name_closed_reasons() {
         .remove(0);
     assert_eq!(complete.completion, Some(EvaluationCompletion::Complete));
     assert!(complete.visibility_limits().is_empty());
-    for limit in [
-        VisibilityLimit::UnverifiedSourceInstance,
-        VisibilityLimit::MissingSessionIdentity,
-        VisibilityLimit::DetectorNotEvaluated,
-        VisibilityLimit::ProcessCapabilityUnavailable,
+    for (limit, code) in [
+        (
+            VisibilityLimit::UnverifiedSourceInstance,
+            "unverified_source_instance",
+        ),
+        (
+            VisibilityLimit::MissingSessionIdentity,
+            "missing_session_identity",
+        ),
+        (
+            VisibilityLimit::DetectorNotEvaluated,
+            "detector_not_evaluated",
+        ),
+        (
+            VisibilityLimit::ProcessCapabilityUnavailable,
+            "process_capability_unavailable",
+        ),
     ] {
-        assert!(!limit.as_str().is_empty());
+        assert_eq!(limit.as_str(), code);
     }
+    assert_eq!(AcquisitionError::ResumeRegressed.code(), "resume_regressed");
 }
 
 #[test]

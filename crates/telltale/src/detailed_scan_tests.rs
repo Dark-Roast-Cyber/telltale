@@ -202,7 +202,9 @@ fn detailed_context_is_opt_in_same_session_anchor_excluded_and_redacted() {
         finding
             .context()
             .iter()
-            .all(|c| c.kind() != ActionContextKind::UserMessage && c.offset() != 0)
+            .all(|c| c.kind() != ActionContextKind::UserMessage
+                && c.offset() != 0
+                && c.stage() != ObservationStage::ToolResultReturned)
     );
     let replay = finding.replay_identity().cloned();
     options.context.user_text = true;

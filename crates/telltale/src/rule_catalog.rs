@@ -274,10 +274,17 @@ mod tests {
             assert_eq!(entry.when_all_categories(), modifier.when_all_categories);
             assert_eq!(entry.when_all_rule_ids(), modifier.when_all_rule_ids);
         }
+        // Field names only: pretty Debug puts each field at the start of a line,
+        // so rule text that happens to contain these words cannot trip this.
         for entry in &catalog {
-            let debug = format!("{entry:?}");
+            let debug = format!("{entry:#?}");
             for field in ["regex:", "matchers:", "targets:"] {
-                assert!(!debug.contains(field), "{field}");
+                assert!(
+                    !debug
+                        .lines()
+                        .any(|line| line.trim_start().starts_with(field)),
+                    "{field}"
+                );
             }
         }
     }

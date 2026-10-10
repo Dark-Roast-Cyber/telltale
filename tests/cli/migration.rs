@@ -55,6 +55,10 @@ fn spawn_lock_child(target: &std::path::Path) -> (TestChild, std::path::PathBuf)
         .arg("--exact")
         .env("TELLTALE_LOCK_HOLDER_TARGET", target)
         .env("TELLTALE_LOCK_HOLDER_READY", &ready)
+        .env(
+            "TELLTALE_LOCK_HOLDER_STARTED",
+            target.with_extension("started"),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -134,6 +138,16 @@ fn lock_holder_waits_for_parent_and_releases_on_eof() {
     let temp = tempdir().expect("tempdir");
     let target = temp.path().join("controlled.json");
     let (mut child, ready) = spawn_lock_child(&target);
+    // Wait until the holder is running and blocked on its control pipe, so the
+    // absence checks below would catch a lock taken before the command.
+    let started = target.with_extension("started");
+    while !started.exists() {
+        assert!(
+            child.0.try_wait().expect("holder status").is_none(),
+            "holder exited before start"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
     assert!(!ready.exists());
     assert!(!target.with_extension("json.lock").exists());
     assert!(child.0.try_wait().expect("waiting child").is_none());
@@ -320,6 +334,10 @@ fn migration_lock_holder() {
         return;
     };
     let ready = std::env::var("TELLTALE_LOCK_HOLDER_READY").expect("ready path");
+    // Best effort: invalid-target cases must still fail at the lock file.
+    if let Ok(started) = std::env::var("TELLTALE_LOCK_HOLDER_STARTED") {
+        let _ = File::create(started);
+    }
     let mut control = std::io::stdin().lock();
     let mut command = String::new();
     control.read_line(&mut command).expect("acquire command");
