@@ -481,7 +481,7 @@ impl SourceScan {
 }
 
 /// A compiled detection pipeline: bundled (and optional custom) rules, ready
-/// to evaluate discovered session stores or caller-supplied records.
+/// to evaluate supported session stores through canonical acquisition.
 pub struct Pipeline {
     rule_set: CompiledRuleSet,
     /// Canonical semantics compiled once in `build`; content they reject never

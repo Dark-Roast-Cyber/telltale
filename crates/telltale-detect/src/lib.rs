@@ -1,5 +1,5 @@
-//! Telltale's detection layer: deterministic evaluation over caller-supplied
-//! records or canonical observations, session timelines, baseline state and
+//! Telltale's detection layer: deterministic evaluation over canonical
+//! observations, session timelines, baseline state and
 //! deviation, correlation, allowlist suppression, and optional MCP analysis.
 //!
 //! Source discovery and canonical acquisition live in `telltale-sources`; source orchestration
