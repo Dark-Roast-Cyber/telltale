@@ -2851,6 +2851,89 @@ fn release_native_verify_rc1_pin_matches_published_artifacts() {
     assert_eq!(pin["targets"].as_object().unwrap().len(), 5);
 }
 
+#[test]
+fn release_native_verify_rc2_pin_matches_published_artifacts() {
+    let pin: Value = serde_json::from_str(
+        &fs::read_to_string("scripts/release-native-verify-0.7.0-rc.2.json")
+            .expect("RC2 native verification pin"),
+    )
+    .expect("RC2 native verification pin JSON");
+    assert_eq!(pin["release_tag"], "v0.7.0-rc.2");
+    assert_eq!(pin["package_version"], "0.7.0-rc.2");
+    assert_eq!(
+        pin["source_sha"],
+        "c3132f22f0758912fbcbc7451f5fefee514c5bdb"
+    );
+    assert_eq!(pin["version_prefix"], "telltale 0.7.0-rc.2 (c3132f22f075");
+    assert_eq!(pin["release_id"], 409281155);
+
+    let expected = [
+        (
+            "x86_64-pc-windows-msvc",
+            "telltale-v0.7.0-rc.2-x86_64-pc-windows-msvc.zip",
+            "1cce360d9170c3300039c813ef8291b7f6f0abd1b39ecbe9b09ef2b2978e72d9",
+            "3df1a25da5a3173f3561bd7a26ad938f6d9c0e84b077d697763aa9fb72df1171",
+            "windows-latest",
+            "Windows",
+            serde_json::json!(["AMD64", "x86_64"]),
+        ),
+        (
+            "x86_64-apple-darwin",
+            "telltale-v0.7.0-rc.2-x86_64-apple-darwin.tar.gz",
+            "61771e95d4de279cfd89bc99e77bdf1a87ed261267a62134de75850009e1d268",
+            "078658a59f6f999cd649567f52ba9d40a8a3a3e9ed928660e9e64f21712a49bc",
+            "macos-15-intel",
+            "macOS",
+            serde_json::json!(["x86_64"]),
+        ),
+        (
+            "aarch64-apple-darwin",
+            "telltale-v0.7.0-rc.2-aarch64-apple-darwin.tar.gz",
+            "acb693f1d055ad19df4a147f494abc09a657f4d55a02bd6277aa2dd1a60a6658",
+            "6e8fb3069daf732c0a4b0411b1bf4b99c774b704aeefcc7e41f0ebec7322caa9",
+            "macos-latest",
+            "macOS",
+            serde_json::json!(["arm64", "aarch64"]),
+        ),
+        (
+            "x86_64-unknown-linux-gnu",
+            "telltale-v0.7.0-rc.2-x86_64-unknown-linux-gnu.tar.gz",
+            "3cb772acd93a26381e3ef79c7990db51a2a42800bbc40e9fe1d32f6695b75c2a",
+            "f950bed1534bc8fb9740a517c8d089a80b095f883830bc4ddac639aac0af5f22",
+            "ubuntu-latest",
+            "Linux",
+            serde_json::json!(["x86_64"]),
+        ),
+        (
+            "aarch64-unknown-linux-gnu",
+            "telltale-v0.7.0-rc.2-aarch64-unknown-linux-gnu.tar.gz",
+            "a3d72537985ec33c0c0b243d4fefddda572d1e1b011b9c611fe17f101649f4a5",
+            "d3eedc2f87648d2eb84c853a5a70e9dcd56a0bbbf6f4e40ac834664393afc122",
+            "ubuntu-24.04-arm",
+            "Linux",
+            serde_json::json!(["aarch64", "arm64"]),
+        ),
+    ];
+
+    for (target, archive, archive_hash, binary_hash, runner, os, unames) in expected {
+        assert_eq!(pin["targets"][target]["archive"], archive);
+        assert_eq!(pin["targets"][target]["archive_sha256"], archive_hash);
+        assert_eq!(
+            pin["targets"][target]["binary"],
+            if os == "Windows" {
+                "telltale.exe"
+            } else {
+                "telltale"
+            }
+        );
+        assert_eq!(pin["targets"][target]["binary_sha256"], binary_hash);
+        assert_eq!(pin["targets"][target]["runner"], runner);
+        assert_eq!(pin["targets"][target]["expected_os"], os);
+        assert_eq!(pin["targets"][target]["expected_unames"], unames);
+    }
+    assert_eq!(pin["targets"].as_object().unwrap().len(), 5);
+}
+
 #[cfg(unix)]
 #[test]
 fn release_native_verify_script_rejects_malformed_pin_and_target_mismatches() {
