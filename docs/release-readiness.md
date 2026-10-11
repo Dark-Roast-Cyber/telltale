@@ -637,8 +637,9 @@ last retained checkpoint had 2,701 cycles over 2,700.442 seconds, with no termin
 exit or final report. The full soak later passed at `c3132f2` (checklist above);
 that result is not rebound to this source. Partial tier checkpoints were
 superseded by the valid complete 120-cycle reports, not failed tier runs.
-Native Windows/macOS/Linux ARM runs are **BLOCKED**: no authorized native host or
-self-hosted runner, and no dispatch approval. Persistent Windows durable
+Native Windows/macOS/Linux ARM runs were **BLOCKED** at this source: no
+authorized native host or self-hosted runner, and no dispatch approval. Functional
+native verification of the published rc.2 artifacts later passed (checklist above). Persistent Windows durable
 storage remains unsupported and fail-closed, not best-effort fallback.
 
 RC2 artifact qualification at the time of this evidence was **NOT RUN**. RC2 was

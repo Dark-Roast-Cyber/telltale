@@ -36,8 +36,8 @@ crate a stable embedding API.
 
 ### Qualification status
 
-The current untagged `0.7.0-rc.2` tree implements this contract; it is not a
-stable API freeze or a qualified release. Published RC1 evidence does not cover
+The published `v0.7.0-rc.2` prerelease implements this contract; it is not a
+stable API freeze or a fully qualified release (clean-host gates are pending). Published RC1 evidence does not cover
 post-RC1 additions, and a passing host test of a Git pin is integration evidence,
 not release qualification. Candidate gates live in
 [release readiness](release-readiness.md#post-rc1-embedding-qualification).
