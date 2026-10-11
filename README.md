@@ -104,9 +104,9 @@ synthetic writes in CI or local development, not normal scans. See
 [Install](docs/install.md) for the full fixture-safe verification sequence and
 real-session-store setup. Explicit state and historical-event
 migration guidance is in the [migration contract](docs/migration-contract.md).
-For published RC1 and subsequent untagged 0.7.0 preparation changes, see
-the [0.7.0 migration guide](docs/migrations/0.7.0.md). Stable 0.7.0 is not
-published; the current source is not a frozen or qualified release candidate.
+For the published 0.7.0 prereleases (current: `v0.7.0-rc.2`), see the
+[0.7.0 migration guide](docs/migrations/0.7.0.md). Stable 0.7.0 is not
+published.
 
 ## Development verification
 

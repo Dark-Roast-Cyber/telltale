@@ -27,11 +27,11 @@ format.
   `3.0` and Rule v1 stays version 1; neither follows the package version. Stable
   `v0.7.0` will require separate qualification and a reviewed stable-version
   promotion.
-- Current workspace metadata is `0.7.0-rc.2`, an untagged, unpublished,
-   unqualified candidate-preparation version. Its intended supported 0.7 facade
-   is undergoing qualification, not an unsupported development-only API. RC1 evidence above applies only to its
-  immutable published candidate and cannot qualify current main; any next
-  reviewed candidate requires its own qualification.
+- `v0.7.0-rc.2` is published as prerelease Release ID `409281155` from source
+  SHA `c3132f22f0758912fbcbc7451f5fefee514c5bdb`; five-platform native
+  verification passed in run `38098389234`. Clean-host qualification and stable
+  promotion remain pending. RC1 evidence applies only to its immutable published
+  candidate. A further tagged candidate needs the next unused RC version.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
   static-CRT publication gate, five-platform native verification, and Issue #23
@@ -168,7 +168,7 @@ exclude its own exact tag only if it resolves to HEAD; `release-tag-review`
 separately rejects any existing prospective tag. Offline checks cannot discover
 remote tags that have not been fetched.
 
-The unpublished `0.7.0-rc.2` tree changes the Rust embedding facade (typed
+The published `v0.7.0-rc.2` prerelease changes the Rust embedding facade (typed
 errors, detailed action scanning, typed accessors, and a surface
 classification) without changing Event3 or persisted state; see the
 [migration guide](migrations/0.7.0.md#rust-embedding-changes-since-rc1) before

@@ -1,6 +1,26 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.1` is published as prerelease ID `397543935` from `e2386cb53454a8384449ea0729f0e3b71072006c`; five-platform native qualification passed in run `36305581215` using verifier tooling `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077`. Clean-host qualification and stable promotion remain pending. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.2` is published as prerelease ID `409281155` from `c3132f22f0758912fbcbc7451f5fefee514c5bdb`; five-platform native verification passed in run `38098389234` using verifier tooling `8bc745fac485ffede1c4b06dbbc4ae6862ec5349`. Clean-host qualification and stable promotion remain pending. `v0.7.0-rc.1` (prerelease ID `397543935`) is superseded. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
+
+---
+
+## 0.7.0-rc.2 — published prerelease (five-platform native verified)
+
+- Typed, wire-neutral Rust embedding contract: `PipelineError` and
+  `AcquisitionError` are typed and `#[non_exhaustive]`; `scan_sources`,
+  detailed action findings with replay identity, semantic provenance and
+  `SourceScan::failure()` / `coverage()`. Record evaluation APIs are removed.
+  See the [migration guide](docs/migrations/0.7.0.md).
+- OpenCode resume tokens for embedding hosts, bound to the exact source path.
+  A store regressed below the saved position now fails as `resume_regressed`
+  for both embedded and CLI scans instead of reporting an empty success; the
+  CLI keeps its cursor.
+- `build()` rejects a rule set with no enabled rules.
+- Encoded tool arguments are decoded member by member, so one oversized member
+  cannot hide URL facts or put replaced text into command text.
+- Event 3.0 and persisted state formats are unchanged. Five-platform native
+  verification passed in run `38098389234`; clean-host gates are pending.
+  Crates.io publication remains deferred.
 
 ---
 

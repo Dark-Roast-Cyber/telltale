@@ -112,12 +112,14 @@ the accepted candidate artifacts. The resulting `v0.5.0` tag and stable GitHub
 Release are now published and immutable. Subsequent development version alignment
 does not replace those artifacts or the separately pinned controlled-development lab.
 
-The current workspace metadata `0.7.0-rc.2` is an untagged, unpublished, and
-unqualified candidate-preparation version. Its intended supported 0.7 facade is
-undergoing qualification, not an unsupported development-only API. The RC1 evidence below applies solely to
-the immutable published RC1 artifact; it cannot qualify current main. Any next
-reviewed candidate requires its own qualification. No tag, release, artifact, or
-publication is authorized by this metadata correction.
+`v0.7.0-rc.2` is published as prerelease Release ID `409281155` from frozen
+source `c3132f22f0758912fbcbc7451f5fefee514c5bdb` (Issue #87). Exact-source
+preflight, five-platform native verification of the published artifacts and the
+full settled soak passed; clean-host gates are blocked (see the checklist below).
+It is a qualified-in-part prerelease, not a stable release. RC1 evidence applies
+solely to the immutable RC1 artifact. A validation-relevant change after
+publication requires the next unused RC; the published tag, Release and assets
+are never replaced.
 
 ## 0.7 RC1 current-host qualification
 
@@ -260,8 +262,9 @@ artifact. Do not report a gate as passed until its candidate-bound evidence exis
 
 ### Current candidate blocking checklist
 
-Current statuses below are **NOT RUN / PENDING**, not release passes inferred
-from focused development evidence. Bind local results to source base, tracked
+Statuses below are bound to `v0.7.0-rc.2` (`c3132f2`) unless stated; exact
+commands, run IDs and limits are on Issue #87. Earlier development results are
+supporting evidence, not release passes. Bind local results to source base, tracked
 patch hash, relevant untracked-input manifest/hashes, toolchain/features, exact
 commands/exits and logs. That identifies a tested tree, not an exact Git revision.
 An uncommitted tree cannot satisfy the exact Git-candidate gate; reviewed
@@ -269,14 +272,14 @@ commit/push and subsequent lifecycle checks require separate authorization.
 
 | Required gate | Current status and completion evidence |
 | --- | --- |
-| Canonical local CI, source coverage/privacy and same-version durability/retry | PENDING: full final-tree gates; focused synthetic WAL, large-output, safe-read/retry and concurrency results are supporting evidence only. Live client WAL append was not demonstrated. |
-| Strict OpenSpec and independent review | PENDING: bind strict validation and independent review to the complete final candidate; prior 37 passing specs are development evidence, not final approval. |
-| Full local two-hour settled soak | PENDING: complete all 7,201 one-second cycles, no `TELLTALE_WORKLOAD_CYCLES` override, with terminal exit and final report. The 2,701-cycle checkpoint is not a pass. |
-| Public facade feature matrix and Rust 1.88 subset | PENDING: all eight feature combinations plus explicit Rust 1.88 subset on final inputs; no global workspace/CLI MSRV claim. |
-| Exact standalone Git consumer, CI/CodeQL and preflight | NOT RUN: after an authorized reviewed commit/push, test the exact candidate revision and public facade/strict Event 3; package metadata or a base-plus-patch run cannot satisfy this gate. |
+| Canonical local CI, source coverage/privacy and same-version durability/retry | PASS for the source tree: `make ci-local` passed on PR #90 (3,783 tests) and exact-source CI passed at `c3132f2`; focused synthetic WAL, large-output, safe-read/retry and concurrency results are supporting evidence only. Live client WAL append was not demonstrated. |
+| Strict OpenSpec and independent review | PASS: strict OpenSpec validation (21 specs) and independent automated review (cubic, cloud ultrareview) on PR #90, all findings resolved. |
+| Full local two-hour settled soak | PASS at `c3132f2`: 7,201/7,201 one-second cycles, no override, 0 cadence misses, exit 0 with final report; FD 6 throughout. Linux only. |
+| Public facade feature matrix and Rust 1.88 subset | PASS at `c3132f2`: all eight feature combinations and the explicit Rust 1.88.0 subset (160 tests each); no global workspace/CLI MSRV claim. |
+| Exact standalone Git consumer, CI/CodeQL and preflight | PASS at `c3132f2`: Git-rev consumer across five feature sets, CI 10/10, CodeQL 3/3, `make release-preflight` exit 0 on clean canonical `main`. |
 | Real downstream-consumer candidate adoption | PENDING integration gate: isolated public-facade suites (33 + 75 tests) passed, but require final candidate rebinding and native Windows build/integration evidence for an integrated claim. Not a dependency of standalone Telltale. |
-| Native platforms and performance | NOT RUN: Windows x86_64, Linux ARM, macOS x86_64/arm64 and bounded cold/warm/steady/saturated performance evidence. No native Windows access; unavailable required targets remain blocked, not passed by Linux tests. |
-| Five-platform RC2 artifacts and clean-host qualification | NOT RUN: RC2 is unpublished. Verify exact new archive/binary hashes, manifests, SBOM/attestations, native execution, clean-host installer/service and functional gates; RC1 evidence is historical only. |
+| Native platforms and performance | Functional PASS on GitHub-hosted runners for all five targets (published-artifact run `38098389234`). Bounded cold/warm/steady/saturated performance on native Windows, Linux ARM and macOS is NOT RUN. No native Windows access; unavailable required targets remain blocked, not passed by Linux tests. |
+| Five-platform RC2 artifacts and clean-host qualification | Artifacts PASS: Release `409281155`, checksums, attestations and native execution verified. Clean Linux installer/G-SERVICE and clean Windows no-Redistributable: BLOCKED (no authorized clean host). RC1 evidence is historical only. |
 
 The [selected-window aggregate limitation](opencode-live-ingestion.md#failure-recovery-and-coverage)
 is nonblocking only for the existing session-aggregate/conditional-replay contract,
@@ -629,17 +632,20 @@ The current shared prompt cases also use 30-second retry,
 2-second fill cadence; previously reported 2-second retry/1-second cadence is
 historical evidence from a different recipe.
 
-The planned 7,201-cycle, one-second soak is **INCOMPLETE, not PASS**: the last
-retained checkpoint has 2,701 cycles over 2,700.442 seconds; there is no terminal
-exit/final report and no process remains. Partial tier checkpoints were
+The planned 7,201-cycle, one-second soak was **INCOMPLETE** at this source: the
+last retained checkpoint had 2,701 cycles over 2,700.442 seconds, with no terminal
+exit or final report. The full soak later passed at `c3132f2` (checklist above);
+that result is not rebound to this source. Partial tier checkpoints were
 superseded by the valid complete 120-cycle reports, not failed tier runs.
-Native Windows/macOS/Linux ARM runs are **BLOCKED**: no authorized native host or
-self-hosted runner, and no dispatch approval. Persistent Windows durable
+Native Windows/macOS/Linux ARM runs were **BLOCKED** at this source: no
+authorized native host or self-hosted runner, and no dispatch approval. Functional
+native verification of the published rc.2 artifacts later passed (checklist above). Persistent Windows durable
 storage remains unsupported and fail-closed, not best-effort fallback.
 
-Current RC2 artifact qualification is **NOT RUN**: RC2 remains unpublished. The
+RC2 artifact qualification at the time of this evidence was **NOT RUN**. RC2 was
+later published from `c3132f2` and its artifacts verified (checklist above). The
 older Issue #87 freeze at `5a47eaab406c8cb5b139476861722155b0fdf227` was
-superseded by moving `main`; it is not rebound. Existing RC1 pins above apply
+superseded; it is not rebound. Existing RC1 pins above apply
 only to exact tag `v0.7.0-rc.1`: archive SHA-256
 `0da936ff86dbafbf3d2f9260a3579bb44535977de188912c31da0bc87d1ccfaa`, binary
 SHA-256 `0fffed5248f6d46f42e97e3107c131b3e2d6525b449327ffc9ab775827fdf1fe`,
