@@ -1140,6 +1140,51 @@ mod tests {
     }
 
     #[test]
+    fn rule_yaml_preserves_aliases_and_rejects_ambiguous_documents() {
+        let document = r#"
+version: 1
+description: synthetic YAML compatibility
+defaults: {case_insensitive: false, enabled: true}
+rules:
+  - id: synthetic.yaml
+    category: execution
+    severity: low
+    score: 7
+    targets: [command]
+    regex: &pattern '^needle$'
+    tags: []
+    explanation: *pattern
+modifiers: []
+"#;
+        let compiled = super::load_rule_set_from_documents(&[document], None)
+            .expect("offline rules support YAML anchors and aliases");
+        let export = compiled.compatibility_export();
+        let matcher = export.rules()[0].compile_content_matcher().unwrap();
+        assert_eq!(
+            matcher.matching_fields(&[("command", "needle"), ("command", "not needle")]),
+            [("command", "needle")]
+        );
+        assert!(matcher.matching_fields(&[("command", "NEEDLE")]).is_empty());
+
+        for (case, invalid) in [
+            document.replacen("version: 1", "version: 1\nversion: 1", 1),
+            document.replacen("    tags: []", "    regex: other\n    tags: []", 1),
+            document.replacen("    tags: []", "    unknown_field: true\n    tags: []", 1),
+            format!("{document}\n---\n{document}"),
+            document.replace("explanation: *pattern", "explanation: *missing"),
+            document.replace("targets: [command]", "targets: [command"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(
+                super::load_rule_set_from_documents(&[&invalid], None).is_err(),
+                "invalid YAML case {case} was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn content_owner_matches_excludes_and_scores_once_per_session() {
         let document = r#"
 version: 1

@@ -848,8 +848,9 @@ RC_TAG='v0.7.0-rc.1' # published prerelease; qualify before production use
 
 The candidate path verifies exact Release metadata, the canonical archive
 manifest, the tag-derived `SHA256SUMS` entry, and the extracted binary version
-before acquiring its installer lock. It never uses `--skip-checksum` for the
-G-SERVICE procedure and never falls back to `releases/latest`.
+before acquiring its installer lock. It never falls back to `releases/latest`,
+and the installer rejects `--skip-checksum` on every path, including the default
+latest-stable install.
 
 For a synthetic G-SERVICE run, install the candidate with `--no-timer`, then add
 the temporary qualification drop-in before the first candidate service start.

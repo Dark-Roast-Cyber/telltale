@@ -98,9 +98,9 @@ The explicit path requires that tag's published non-draft prerelease metadata,
 derives every archive and checksum URL from that tag, and verifies the archive
 manifest, checksum, and binary version before any installer lock, file,
 schedule, or systemd-manager mutation. It does not fall back to
-`releases/latest` or permit `--skip-checksum`. RC artifacts are immutable; a
-validation-relevant change needs the next reviewed RC. GitHub binary releases
-remain separate from the later dependency-ordered crates.io publication.
+`releases/latest`. RC artifacts are immutable; a validation-relevant change
+needs the next reviewed RC. GitHub binary releases remain separate from the
+later dependency-ordered crates.io publication.
 
 ### Verify a release archive
 
@@ -124,8 +124,10 @@ environment is required. The Linux installer verifies the published
 
 A repository installer is available for Linux. It downloads the latest release
 binary, verifies it against the release's published `SHA256SUMS`, and installs
-it to `~/.local/bin/telltale` (no sudo). It does not enable anything beyond the
-binary install unless you opt in:
+it to `~/.local/bin/telltale` (no sudo). A missing or mismatched `SHA256SUMS`
+entry stops the install, and `--skip-checksum` is rejected on every install path
+before any download. It does not enable anything beyond the binary install unless
+you opt in:
 
 ```sh
 ./scripts/install-telltale

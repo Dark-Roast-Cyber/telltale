@@ -40,6 +40,15 @@ The baseline lockfile exposed two live RustSec findings during implementation:
 `RUSTSEC-2026-0204` was resolved by upgrading `crossbeam-epoch` to `0.9.20`.
 Neither advisory is ignored in `deny.toml` or the audit command.
 
+`RUSTSEC-2024-0449` reports the archived `unsafe-libyaml` dependency as
+unmaintained. The workspace replaces deprecated `serde_yaml` with the YAML
+Organization's maintained `yaml_serde` and `libyaml-rs`. Cargo's package rename
+preserves existing `serde_yaml` imports; no advisory exception is added. The
+parser still uses unsafe Rust internally, so this is a maintenance correction,
+not a claim of memory safety. Rule-loader regression tests preserve offline
+anchor/alias support and rejection of malformed and ambiguous documents;
+the HTTP editor retains its stricter anchor/alias admission policy.
+
 `deny.toml` is derived from the live locked graph. Sources, wildcard
 requirements, and advisories fail closed. The allow list contains only SPDX
 identifiers observed in the graph. Unusual license expressions use

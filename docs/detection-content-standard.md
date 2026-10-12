@@ -205,7 +205,7 @@ Follow this checklist:
 7. Add one or more `tags` for filtering and documentation.
 8. Create a positive fixture under `tests/fixtures/`.
 9. Create a negative fixture if the rule could false-positive on common activity.
-10. Add a detection test in `src/detection.rs` (or the current detection test module).
+10. Add a detection test in `crates/telltale-detect/src/v2/tests.rs` or the matching sibling `*_tests.rs` module (for example `action_tests.rs` or `session_tests.rs`).
 11. Run `telltale rules validate --rules <path>` to check YAML syntax and regex compilation.
 12. Run `telltale rules test --rules <path> <fixture>` to preview matches.
 13. Run `cargo test` to verify no regressions.

@@ -384,8 +384,8 @@ fn preview_rules_request(
     default_rule_set: &CompiledRuleSet,
 ) -> Result<ApiResponse, Box<dyn std::error::Error>> {
     let request: RulePreviewRequest = serde_json::from_slice(body)?;
-    let fixture_path = match canonical_fixture_path(&request.fixture_path) {
-        Ok(path) => path,
+    let (fixture_checkout, fixture_path) = match canonical_fixture_path(&request.fixture_path) {
+        Ok(paths) => paths,
         Err(error) => return Ok(ApiResponse::bad_request(error.to_string())),
     };
     let rule_set = if let Some(rules_yaml) = request.rules_yaml.as_deref() {
@@ -443,7 +443,7 @@ fn preview_rules_request(
         "status": "ok",
         "fixture_path": PrivacySanitizer::sanitize(
             SanitizationContext::Path,
-            &display_fixture_path(&fixture_path),
+            &display_fixture_path(&fixture_checkout, &fixture_path),
         ),
         "match_count": matches.len(),
         "matches": matches,
@@ -499,15 +499,37 @@ fn reject_yaml_references(document: &str) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-fn canonical_fixture_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+fn canonical_fixture_path(path: &Path) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
+    let cwd = std::env::current_dir().ok();
+    let root = fixture_checkout_root(Path::new(env!("CARGO_MANIFEST_DIR")), cwd.as_deref())?;
+    let canonical = contained_fixture_path(&root, path)?;
+    Ok((root, canonical))
+}
+
+/// Selects exactly one checkout whose `tests/fixtures` bounds preview reads:
+/// the build checkout when present, otherwise the working directory. Parents
+/// and other roots are never searched.
+fn fixture_checkout_root(
+    manifest_dir: &Path,
+    cwd: Option<&Path>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let root = std::iter::once(manifest_dir)
+        .chain(cwd)
+        .find(|root| root.join("tests/fixtures").is_dir())
+        .ok_or(
+            "preview requires running rules serve from a source checkout containing tests/fixtures",
+        )?;
+    Ok(root.canonicalize()?)
+}
+
+fn contained_fixture_path(root: &Path, path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let requested = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        manifest_dir.join(path)
+        root.join(path)
     };
     let canonical = requested.canonicalize()?;
-    let fixture_root = manifest_dir.join("tests/fixtures").canonicalize()?;
+    let fixture_root = root.join("tests/fixtures").canonicalize()?;
     if !canonical.starts_with(&fixture_root) {
         return Err("preview fixture must be under tests/fixtures".into());
     }
@@ -518,13 +540,9 @@ fn canonical_fixture_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Er
     Ok(canonical)
 }
 
-fn display_fixture_path(path: &Path) -> String {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let relative = match manifest_dir.canonicalize() {
-        Ok(canonical_manifest_dir) => path.strip_prefix(&canonical_manifest_dir).unwrap_or(path),
-        Err(_) => path.strip_prefix(manifest_dir).unwrap_or(path),
-    };
-    relative
+fn display_fixture_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
         .display()
         .to_string()
         .replace(std::path::MAIN_SEPARATOR, "/")
@@ -597,6 +615,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 <main>
 <h1>Telltale Rules</h1>
 <p>Read-only validation and preview. Edit rule files locally; saving over HTTP is disabled.</p>
+<p>Open the numeric listen address printed by <code>rules serve</code>, not a hostname alias such as <code>localhost</code>.</p>
 <table>
 <thead><tr><th>ID</th><th>Category</th><th>Severity</th><th>Score</th></tr></thead>
 <tbody id="rules"></tbody>
@@ -610,6 +629,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 </section>
 <section>
 <h2>Fixture Preview</h2>
+<p>Preview only works from a source checkout containing <code>tests/fixtures</code> (the build checkout, or else the directory where <code>rules serve</code> started); fixtures must be regular files under that directory.</p>
 <label for="fixture-path">Fixture path</label>
 <input id="fixture-path" value="tests/fixtures/rule_samples/tool-injection-shape.jsonl">
 <button id="preview-rules">Preview</button>
@@ -782,6 +802,69 @@ modifiers: []
         assert!(response.body["error"].as_str().is_some_and(|value| {
             value.contains("canonical source processing failed: Acquisition")
         }));
+    }
+
+    #[test]
+    fn preview_fixture_root_is_one_checkout_and_reads_stay_under_its_fixtures() {
+        use std::path::{Path, PathBuf};
+
+        let build_checkout = tempfile::tempdir().expect("build checkout");
+        let cwd_checkout = tempfile::tempdir().expect("cwd checkout");
+        let fixtures = cwd_checkout.path().join("tests/fixtures/rule_samples");
+        std::fs::create_dir_all(&fixtures).expect("fixture dir");
+        std::fs::write(fixtures.join("synthetic.jsonl"), "{}\n").expect("fixture");
+        let outside = cwd_checkout.path().join("outside.jsonl");
+        std::fs::write(&outside, "{}\n").expect("outside file");
+
+        assert!(
+            super::fixture_checkout_root(build_checkout.path(), None)
+                .unwrap_err()
+                .to_string()
+                .contains("source checkout containing tests/fixtures")
+        );
+        let root = super::fixture_checkout_root(build_checkout.path(), Some(cwd_checkout.path()))
+            .expect("cwd checkout selected when the build checkout has no fixtures");
+        assert_eq!(root, cwd_checkout.path().canonicalize().unwrap());
+        // A build checkout with fixtures wins even when the working directory has them too.
+        let build_fixtures = build_checkout.path().join("tests/fixtures");
+        std::fs::create_dir_all(&build_fixtures).expect("build fixture dir");
+        std::fs::write(build_fixtures.join("build.jsonl"), "{}\n").expect("build fixture");
+        let preferred =
+            super::fixture_checkout_root(build_checkout.path(), Some(cwd_checkout.path()))
+                .expect("build checkout selected when it has fixtures");
+        assert_eq!(preferred, build_checkout.path().canonicalize().unwrap());
+        assert_ne!(preferred, root);
+
+        let fixture = super::contained_fixture_path(
+            &root,
+            Path::new("tests/fixtures/rule_samples/synthetic.jsonl"),
+        )
+        .expect("relative fixture under the selected checkout");
+        assert_eq!(
+            super::display_fixture_path(&root, &fixture),
+            "tests/fixtures/rule_samples/synthetic.jsonl"
+        );
+
+        let escapes = vec![
+            outside.clone(),
+            PathBuf::from("tests/fixtures/../../outside.jsonl"),
+        ];
+        #[cfg(unix)]
+        let escapes = {
+            let mut escapes = escapes;
+            std::os::unix::fs::symlink(&outside, fixtures.join("escape.jsonl")).expect("symlink");
+            escapes.push(PathBuf::from("tests/fixtures/rule_samples/escape.jsonl"));
+            escapes
+        };
+        for path in escapes {
+            // Containment is decided from the canonical path before the file is opened.
+            assert_eq!(
+                super::contained_fixture_path(&root, &path)
+                    .unwrap_err()
+                    .to_string(),
+                "preview fixture must be under tests/fixtures"
+            );
+        }
     }
 
     #[test]

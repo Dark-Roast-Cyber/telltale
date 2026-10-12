@@ -1320,8 +1320,42 @@ fn explicit_rc_never_allows_checksum_bypass() {
         &["--release-tag", tag, "--skip-checksum", "--no-timer"],
     );
     assert!(!output.status.success());
-    assert!(output_text(&output).contains("not permitted with --release-tag"));
+    assert!(output_text(&output).contains("--skip-checksum is not supported"));
+    assert!(!temp.path().join("curl.log").exists());
     assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!temp.path().join("systemctl.log").exists());
+}
+
+#[test]
+fn default_install_rejects_checksum_bypass_and_missing_sums_before_lock() {
+    let temp = tempdir().unwrap();
+    let name = format!("telltale-v0.5.0-{}.tar.gz", target());
+    let _selected = archive(temp.path(), &name, "0.5.0", None);
+    let metadata = release_metadata(temp.path(), "v0.5.0");
+
+    let output = run_release(
+        temp.path(),
+        &metadata,
+        temp.path(),
+        None,
+        &["--skip-checksum", "--no-timer"],
+    );
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("--skip-checksum is not supported"));
+    assert!(
+        !temp.path().join("curl.log").exists(),
+        "rejected bypass must not fetch release metadata or the archive"
+    );
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!temp.path().join("home/bin/telltale").exists());
+    assert!(!temp.path().join("systemctl.log").exists());
+
+    let output = run_release(temp.path(), &metadata, temp.path(), None, &["--no-timer"]);
+    assert!(!output.status.success());
+    assert!(output_text(&output).contains("could not fetch SHA256SUMS for v0.5.0"));
+    assert!(!output_text(&output).contains("--skip-checksum"));
+    assert!(!temp.path().join("home/.telltale-installer.lock").exists());
+    assert!(!temp.path().join("home/bin/telltale").exists());
     assert!(!temp.path().join("systemctl.log").exists());
 }
 

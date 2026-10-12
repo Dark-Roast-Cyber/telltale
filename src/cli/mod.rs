@@ -440,8 +440,14 @@ enum RulesCommand {
     },
 
     /// Serve a read-only local rule editor shell.
+    ///
+    /// Open the printed numeric listen address, not a hostname alias such as
+    /// localhost. Fixture preview only works from a source checkout containing
+    /// tests/fixtures (the build checkout, or else the current directory) and
+    /// only reads fixtures under that directory.
     Serve {
-        /// Loopback address for the read-only rule editor server.
+        /// Loopback address for the read-only rule editor server. Open the printed
+        /// numeric listen address, not a hostname alias.
         #[arg(long, default_value = "127.0.0.1:8787")]
         addr: std::net::SocketAddr,
 

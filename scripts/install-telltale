@@ -15,7 +15,6 @@ REPO="Dark-Roast-Cyber/telltale"
 INSTALL_DIR="${HOME:-}/.local/bin"
 FROM_SOURCE=0
 WITH_TIMER=0
-SKIP_CHECKSUM=0
 RELEASE_TAG=""
 RELEASE_TAG_SET=0
 DEVELOPMENT_ARCHIVE=""
@@ -54,7 +53,6 @@ Options:
   --install-dir DIR  Install the canonical telltale binary below the current user's home.
   --with-timer        Install and enable the canonical telltale-scan.timer user schedule.
   --no-timer          Do not enable the canonical timer.
-  --skip-checksum     Explicitly bypass SHA256SUMS verification.
   --development-archive FILE
                        Install one local canonical development bundle.
   --development-sha SHA
@@ -87,7 +85,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --with-timer) WITH_TIMER=1; shift ;;
         --no-timer) WITH_TIMER=0; shift ;;
-        --skip-checksum) SKIP_CHECKSUM=1; shift ;;
+        --skip-checksum) die "--skip-checksum is not supported; checksum verification is mandatory" ;;
         --development-archive)
             [[ $# -ge 2 ]] || die "--development-archive requires a file"
             [[ -z "$DEVELOPMENT_ARCHIVE" ]] || die "--development-archive may be passed only once"
@@ -130,8 +128,8 @@ if [[ -n "$DEVELOPMENT_ARCHIVE$DEVELOPMENT_SHA$DEVELOPMENT_SHA256$DEVELOPMENT_BI
         && -n "$DEVELOPMENT_VERSION" ]] \
         || die "development install requires archive, source SHA, archive SHA-256, binary SHA-256, and version"
     DEVELOPMENT_MODE=1
-    [[ "$FROM_SOURCE" -eq 0 && "$RELEASE_TAG_SET" -eq 0 && "$SKIP_CHECKSUM" -eq 0 ]] \
-        || die "development install cannot use --from-source, --release-tag, or --skip-checksum"
+    [[ "$FROM_SOURCE" -eq 0 && "$RELEASE_TAG_SET" -eq 0 ]] \
+        || die "development install cannot use --from-source or --release-tag"
     [[ "$DEVELOPMENT_ARCHIVE" == /* ]] \
         || die "--development-archive must be an absolute path"
     [[ "$DEVELOPMENT_SHA" =~ ^[0-9a-f]{40}$ ]] \
@@ -148,8 +146,6 @@ if [[ "$RELEASE_TAG_SET" -eq 1 ]]; then
     [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ \
         || "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.(0|[1-9][0-9]*)$ ]] \
         || die "--release-tag must be an exact stable tag or exact v<major>.<minor>.<patch>-rc.<n> tag"
-    [[ "$SKIP_CHECKSUM" -eq 0 ]] \
-        || die "--skip-checksum is not permitted with --release-tag"
 fi
 
 [[ "$(uname -s)" == "Linux" ]] || die "This installer supports Linux current-user installs only"
@@ -1471,13 +1467,9 @@ sha256_file() {
 
 verify_checksum() {
     local archive="$1" archive_name="$2" checksum_dir="$3" sums_file expected actual
-    if [[ "$SKIP_CHECKSUM" -eq 1 ]]; then
-        warn "skipping checksum verification (--skip-checksum passed)"
-        return 0
-    fi
     sums_file="$checksum_dir/SHA256SUMS"
     download_to "${RELEASE_BASE_URL}/${version_tag}/SHA256SUMS" "$sums_file" \
-        || die "could not fetch SHA256SUMS for ${version_tag}; use --skip-checksum only intentionally"
+        || die "could not fetch SHA256SUMS for ${version_tag}"
     [[ -s "$sums_file" ]] || die "SHA256SUMS for ${version_tag} was empty"
     expected="$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; found=1; exit } END { if (!found) exit 1 }' "$sums_file")" \
         || die "no exact SHA256SUMS entry for ${archive_name}"
