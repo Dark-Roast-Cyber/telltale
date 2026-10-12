@@ -370,6 +370,20 @@ implicitly to Event 3.0.
 
 ## Sinks and Delivery Failures
 
+**Development hardening (not release qualification):** non-loopback HTTP
+endpoints now require `tls.allow_insecure_http: true` in outputs configuration.
+This lab-only choice emits a warning: credentials and telemetry are plaintext.
+Use HTTPS normally; certificate verification remains enabled by default.
+Only literal loopback IPs may use HTTP without this opt-in (`localhost` is not
+an IP exemption). Credential-bearing CLI HEC endpoints use the same validation
+and require HTTPS outside loopback; use outputs configuration for a lab opt-in.
+Endpoint user information and fragments are rejected. HTTP redirects are never
+followed, including same-origin redirects; configure the final collector URL.
+Redirect responses block durable rows for operator correction and explicit
+release rather than declaring them poison. Plaintext HTTP requests bypass ambient
+proxies so loopback-only HTTP cannot escape through a proxy. HTTPS retains
+environment proxy support and end-to-end certificate verification.
+
 Beyond the default local JSONL sink, scans can deliver the same events to
 Splunk HEC and the Elasticsearch Bulk API, configured centrally through
 `outputs.d` YAML files under the standard config roots (`/etc/telltale`, the
@@ -476,6 +490,15 @@ admission predrain reuses its held owner without recursive locking. Contention
 fails immediately with structured `DurableStorage`: the losing invocation does
 not send, update delivery state, or prune generations. This is not a distributed
 lock service and does not prevent at-least-once crash replay duplicates.
+
+Each dispatch invocation now selects at most 16 rows per sink and stops selecting
+for that sink after 100 ms. An in-flight request may finish up to its configured
+transport timeout; this is not a 100 ms cancellation deadline. Each configured
+sink receives its own share, so a large backlog in one cannot exhaust another's
+share. Unselected rows remain durable for later invocations. A full queue can
+still reject admission if the bounded drain does not free enough capacity.
+Total network time scales with configured sink count and timeouts, not backlog
+length. Reconciliation and storage costs remain separate limitations below.
 
 Persistent durable delivery currently has one explicit platform boundary:
 Windows durable private storage is rejected fail-closed before outbox or
@@ -729,6 +752,21 @@ Each delivery path uses the same terminal canonical event payload:
 
 - `telltale export --format jsonl` reads existing JSONL telemetry.
 - `telltale export --format elastic-bulk` writes Elasticsearch Bulk API pairs.
+
+Development export admission accepts regular files only, with inclusive limits
+of 8 MiB per physical frame (including terminators), 1 GiB per journal,
+1,000,000 distinct event IDs, and 64 MiB of ID text. These resource limits apply
+equally to historical schemas 1.0/2.0 and native 3.0; they do not change schema
+validation. Duplicate IDs still require byte-identical objects, excluding line
+terminators. Exceeding a limit fails explicitly rather than truncating output.
+Summary and ordinary filtered exports stream records; non-summary output is
+sanitized into a temporary spool before publication, so an invalid tail produces
+no output prefix. The spool is capped at 1 GiB and removed on normal completion
+or errors. Status also streams rather than retaining the journal.
+Timeline/correlation and other retaining readers additionally cap
+retention at 128 MiB of admitted frames and 100,000 records. Split larger evidence
+journals before using these retaining modes. These are physical input limits,
+not promises about allocator overhead or immutable acquisition snapshots.
 - `telltale scan --splunk-hec-endpoint ... --splunk-hec-token ...` can post the same
   events through a Splunk HEC envelope when a deployment explicitly opts in.
 

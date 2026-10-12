@@ -508,7 +508,6 @@ struct LocalConfigCliArgs {
 struct ResolvedRuleConfig {
     explicit_rule_paths: Vec<PathBuf>,
     rule_pack_paths: RulePackPaths,
-    editable_rule_paths: Vec<PathBuf>,
     override_paths: Vec<PathBuf>,
     policy_path: Option<PathBuf>,
     rule_load_mode: RuleLoadMode,
@@ -998,7 +997,6 @@ impl RuleConfigCliArgs {
         Ok(ResolvedRuleConfig {
             explicit_rule_paths: self.rule_paths.clone(),
             rule_pack_paths,
-            editable_rule_paths: self.rule_paths.clone(),
             override_paths: discovered.override_paths.clone(),
             policy_path: crate::config::resolve_policy_path(
                 self.policy.as_deref(),
@@ -1180,6 +1178,9 @@ fn run_config_validate(config: &ConfigRuleCliArgs) -> Result<(), Box<dyn std::er
                 )
             }),
     );
+    output_warnings.extend(output_specs.iter().filter(|spec| spec.allows_insecure_http()).map(|spec| {
+        format!("sink '{}' permits remote plaintext HTTP (allow_insecure_http); credentials and telemetry are exposed outside a lab", terminal_identifier("sink", &spec.name))
+    }));
     match delivery_posture {
         crate::sink::DeliveryPosture::BestEffortNoReplay => output_warnings.push(
             "remote-only delivery is best-effort with no persistent replay; events may be lost after retry exhaustion, process exit, or restart"
@@ -1572,7 +1573,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     rules_server::RuleServerConfig {
                         rule_pack_paths: &resolved_config.rule_pack_paths,
                         explicit_rule_paths: &resolved_config.explicit_rule_paths,
-                        editable_rule_paths: &resolved_config.editable_rule_paths,
                         override_paths: &resolved_config.override_paths,
                         policy_path: resolved_config.policy_path.as_deref(),
                         rule_load_mode: resolved_config.rule_load_mode,

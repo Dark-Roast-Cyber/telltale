@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::sync::LazyLock;
 
 use jsonschema::{Validator, validator_for};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const EVENT_1_SCHEMA: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -133,18 +135,83 @@ pub fn validate_event_record(
 pub fn read_jsonl_records(
     path: &std::path::Path,
 ) -> Result<Vec<JsonlEventRecord>, Box<dyn std::error::Error>> {
-    let bytes = fs::read(path)?;
     let mut records = Vec::new();
-    let mut seen_ids: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    let mut start = 0;
+    let mut retained_bytes = 0usize;
+    visit_jsonl_records(path, |record, bytes| {
+        retained_bytes = retained_bytes
+            .checked_add(bytes)
+            .ok_or("historical retention limit exceeded")?;
+        if retained_bytes > 128 * 1024 * 1024 || records.len() == 100_000 {
+            return Err("historical retention limit exceeded; select a smaller journal".into());
+        }
+        records.push(record);
+        Ok(())
+    })?;
+    Ok(records)
+}
 
-    while start < bytes.len() {
-        let end = bytes[start..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|offset| start + offset + 1)
-            .unwrap_or(bytes.len());
-        let raw_bytes = &bytes[start..end];
+/// Stream all schema generations with the same physical bounds. Duplicate IDs
+/// retain file offsets, not another payload copy; compare exact bytes on demand.
+pub(crate) fn visit_jsonl_records(
+    path: &std::path::Path,
+    mut visit: impl FnMut(JsonlEventRecord, usize) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const FRAME_BYTES: usize = 8 * 1024 * 1024;
+    const JOURNAL_BYTES: u64 = 1024 * 1024 * 1024;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err("historical input must be a regular file".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
+            return Err("historical input must not be a reparse point".into());
+        }
+    }
+    if metadata.len() > JOURNAL_BYTES {
+        return Err("historical journal byte limit exceeded".into());
+    }
+    let mut reader = BufReader::new(file);
+    let mut seen_ids: BTreeMap<String, (u64, usize, [u8; 32])> = BTreeMap::new();
+    let mut identity_bytes = 0usize;
+    let mut start = 0u64;
+    let mut raw_bytes = Vec::new();
+    let mut record_count = 0usize;
+    loop {
+        raw_bytes.clear();
+        let read = reader
+            .by_ref()
+            .take(FRAME_BYTES as u64 + 1)
+            .read_until(b'\n', &mut raw_bytes)?;
+        if read == 0 {
+            break;
+        }
+        if read > FRAME_BYTES {
+            return Err("historical frame byte limit exceeded".into());
+        }
+        let end = start
+            .checked_add(read as u64)
+            .ok_or("historical journal byte limit exceeded")?;
+        if end > JOURNAL_BYTES {
+            return Err("historical journal byte limit exceeded".into());
+        }
         let object_end = if raw_bytes.ends_with(b"\r\n") {
             raw_bytes.len() - 2
         } else if raw_bytes.ends_with(b"\n") {
@@ -158,14 +225,14 @@ pub fn read_jsonl_records(
                 format!(
                     "invalid JSONL at {}:{}: {error}",
                     path.display(),
-                    records.len() + 1
+                    record_count + 1
                 )
             })?;
             let (value, kind) = validate_event_record(value).map_err(|error| {
                 format!(
                     "invalid event at {}:{}: {error}",
                     path.display(),
-                    records.len() + 1
+                    record_count + 1
                 )
             })?;
             let object = value
@@ -176,18 +243,36 @@ pub fn read_jsonl_records(
                 .and_then(Value::as_str)
                 .ok_or("validated event is missing event_id")?
                 .to_string();
-            if let Some(previous) = seen_ids.get(&event_id)
-                && previous.as_slice() != object_bytes
-            {
-                return Err("event_id_collision".into());
+            let digest: [u8; 32] = Sha256::digest(object_bytes).into();
+            if let Some(&(offset, length, previous_digest)) = seen_ids.get(&event_id) {
+                if length != object_bytes.len() || digest != previous_digest {
+                    return Err("event_id_collision".into());
+                }
+                let position = reader.stream_position()?;
+                reader.seek(SeekFrom::Start(offset))?;
+                let mut previous = vec![0; length];
+                reader.read_exact(&mut previous)?;
+                reader.seek(SeekFrom::Start(position))?;
+                if previous != object_bytes {
+                    return Err("event_id_collision".into());
+                }
+            } else {
+                if seen_ids.len() == 1_000_000 {
+                    return Err("historical identity limit exceeded".into());
+                }
+                identity_bytes += event_id.len();
+                if identity_bytes > 64 * 1024 * 1024 {
+                    return Err("historical identity byte limit exceeded".into());
+                }
+                seen_ids.insert(event_id, (start, object_bytes.len(), digest));
             }
-            seen_ids.insert(event_id, object_bytes.to_vec());
-            records.push(JsonlEventRecord { value, kind });
+            record_count += 1;
+            visit(JsonlEventRecord { value, kind }, read)?;
         }
         start = end;
     }
 
-    Ok(records)
+    Ok(())
 }
 
 fn compile_validator(schema_text: &str) -> Result<Validator, HistoricalEventValidationError> {
@@ -233,6 +318,23 @@ mod tests {
 
     fn fixture(raw: &str) -> Value {
         serde_json::from_str(raw).expect("historical fixture JSON")
+    }
+
+    #[test]
+    fn historical_reader_rejects_oversized_frames() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut value = fixture(EVENT_1_HEALTH);
+        let mut exact = serde_json::to_vec(&value).unwrap();
+        exact.resize(8 * 1024 * 1024, b' ');
+        fs::write(&path, &exact).unwrap();
+        assert_eq!(read_jsonl_records(&path).unwrap().len(), 1);
+        exact.push(b' ');
+        fs::write(&path, exact).unwrap();
+        assert!(read_jsonl_records(&path).is_err());
+        value["unknown_extension"] = json!("x".repeat(8 * 1024 * 1024));
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(read_jsonl_records(&path).is_err());
     }
 
     fn fixtures() -> [(&'static str, &'static str, Value); 4] {

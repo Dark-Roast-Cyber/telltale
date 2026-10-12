@@ -69,6 +69,37 @@ security claims.
 
 ## Security properties and residuals
 
+Development hardening makes `rules serve` genuinely read-only: the former
+`/api/rules/save` endpoint is removed. Edit rule files locally and restart the
+server to reload them. Validation and fixture preview remain available, bound
+to the exact listening IP and port in Host and (when supplied) Origin. Open the
+printed numeric address, not a hostname alias. No capability token is served
+over an unauthenticated loopback endpoint.
+
+The server caps headers at 16 KiB, JSON bodies at 64 KiB, and total request reads
+at two seconds; malformed clients do not terminate it. Submitted documents are
+limited to 16 rules, modifiers, and matchers, and previews to regular fixtures
+of at most 256 KiB. Larger packs should use `rules validate` offline. This is a
+conservative YAML subset: anchor/alias indicators at lexical token boundaries
+are rejected before expansion, including such indicators inside comments or
+quoted/block text. Offline rule loading retains full YAML support. This is a
+single-client local utility, not a multi-user service or an availability guarantee
+against sustained local connection floods.
+
+Copilot production acquisition now shares the 128 MiB source and 8 MiB physical
+line limits and admits at most 100,000 native events, including ignored output
+items. Limit failures are source-atomic and do not install accounting/progress.
+Source fingerprints stream at most 128 MiB instead of allocating another full
+source copy; fingerprinting does not establish acquisition success.
+
+Full-scan MCP collection is acquired once for inventory and usage inference:
+at most 10,000 visited entries, 64 configs, 1 MiB per config, 4 MiB aggregate
+read allowance (failed reads restore their reservation; only accepted bytes
+stay charged), and 256 servers.
+Workspace traversal failure or exhaustion emits an inventory error and discards
+the incomplete workspace selection, while retaining independently discovered
+fixed config paths. These bounds do not imply complete host-wide inventory.
+
 Telltale aims to preserve confidentiality at emitted textual boundaries,
 integrity of deterministic detection and terminal Event 3.0 output, durable
 first-write/no-silent-loss behavior when durable mode is selected, and

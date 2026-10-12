@@ -613,7 +613,7 @@ impl SinkSet {
         // so a crash gap cannot be mistaken for an uninspectable new batch.
         outbox.reconcile_jsonl(log_path, &sink_ids)?;
 
-        // Drain ready work while the admission owner is held. A successful
+        // Dispatch bounded ready work while the admission owner is held. A successful
         // acknowledgement can make room for the prospective batch; blocked
         // and retry-delayed rows remain counted and are not hot-looped.
         let clock = outbox::SystemDeliveryClock;
@@ -700,7 +700,7 @@ impl SinkSet {
         Ok(failures)
     }
 
-    /// Dispatch every currently eligible durable delivery. The outbox owns
+    /// Dispatch a bounded share of eligible deliveries for each sink. The outbox owns
     /// retry scheduling; this method never sleeps and each selected row gets
     /// at most one transport attempt before its state is committed.
     pub(crate) fn deliver_durable(&self) -> Result<Vec<SinkFailure>, Box<dyn std::error::Error>> {
@@ -760,7 +760,14 @@ impl SinkSet {
             else {
                 return Err(format!("durable sink identity '{sink_id}' is not configured").into());
             };
-            loop {
+            // Every sink receives its own share, even after a slow predecessor.
+            // The time budget stops new attempts; an in-flight attempt retains
+            // its configured transport deadline. Unselected rows remain pending.
+            let started = std::time::Instant::now();
+            for row in 0..16 {
+                if row > 0 && started.elapsed() >= std::time::Duration::from_millis(100) {
+                    break;
+                }
                 let Some(ready) = outbox.next_ready_delivery(sink_id, now)? else {
                     break;
                 };
@@ -2054,6 +2061,171 @@ mod tests {
                 .expect("first event lookup")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn slow_http_backlog_does_not_delay_fresh_first_write_by_backlog_length() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+        let directory = tempdir().unwrap();
+        let log_path = directory.path().join("events.jsonl");
+        let outbox_path = directory.path().join("private-outbox/outbox.sqlite");
+        let backlog = (0..100).map(|_| make_health_event()).collect::<Vec<_>>();
+        LocalJsonlSink::with_rotation(&log_path, RotationConfig::disabled())
+            .emit(&backlog)
+            .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}/ingest", listener.local_addr().unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let server = std::thread::spawn(move || {
+            let mut requests = 0;
+            while !server_stop.load(Ordering::Relaxed) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(error) => panic!("{error}"),
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                reader.read_exact(&mut vec![0; length]).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"code\":0}").unwrap();
+                requests += 1;
+            }
+            requests
+        });
+        let mut sinks = SinkSet::new();
+        sinks.add_canonical_first_write_path_with_rotation(
+            "jsonl",
+            Box::new(LocalJsonlSink::with_rotation(
+                &log_path,
+                RotationConfig::disabled(),
+            )),
+            log_path.clone(),
+            None,
+        );
+        sinks.add_best_effort(
+            "splunk_hec",
+            Box::new(
+                super::SplunkHecHttpSink::new(
+                    endpoint,
+                    "synthetic".into(),
+                    super::SplunkHecConfig::default(),
+                )
+                .with_name("remote"),
+            ),
+        );
+        sinks.enable_persistent_replay_with_capacity(
+            outbox_path.clone(),
+            vec!["remote".into()],
+            capacity_limits(1000, u64::MAX),
+        );
+        let fresh = make_health_event();
+        let started = Instant::now();
+        let admitted = sinks.persist_for_durable_replay(std::slice::from_ref(&fresh));
+        let latency = started.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        let requests = server.join().unwrap();
+        admitted.unwrap();
+        assert!((1..=16).contains(&requests));
+        assert!(
+            latency < Duration::from_secs(2),
+            "first-write latency: {latency:?}"
+        );
+        assert!(
+            fs::read_to_string(&log_path)
+                .unwrap()
+                .contains(&fresh.event_id)
+        );
+        let outbox = Outbox::open(&outbox_path).unwrap();
+        assert_eq!(
+            outbox
+                .get_delivery(&fresh.event_id, "remote")
+                .unwrap()
+                .unwrap()
+                .state,
+            DeliveryState::Pending
+        );
+        assert!(backlog.iter().any(|event| {
+            outbox
+                .get_delivery(&event.event_id, "remote")
+                .unwrap()
+                .unwrap()
+                .state
+                == DeliveryState::Pending
+        }));
+        eprintln!(
+            "synthetic backlog=100 delay=50ms requests={requests} first_write_ms={}",
+            latency.as_millis()
+        );
+    }
+
+    #[test]
+    fn durable_dispatch_bounds_each_sink_and_leaves_replayable_work() {
+        let directory = tempdir().unwrap();
+        let log_path = directory.path().join("events.jsonl");
+        let outbox_path = directory.path().join("private-outbox/outbox.sqlite");
+        let mut sinks = SinkSet::new();
+        sinks.add_canonical_first_write_path_with_rotation(
+            "jsonl",
+            Box::new(LocalJsonlSink::with_rotation(
+                &log_path,
+                RotationConfig::disabled(),
+            )),
+            log_path.clone(),
+            None,
+        );
+        let (first, first_calls) =
+            ScriptedDurableSink::new("first", (0..40).map(|_| ScriptedOutcome::Success));
+        let (second, second_calls) =
+            ScriptedDurableSink::new("second", (0..40).map(|_| ScriptedOutcome::Success));
+        sinks.add_best_effort_with_retry("synthetic", Box::new(first), retry_config(3, 1));
+        sinks.add_best_effort_with_retry("synthetic", Box::new(second), retry_config(3, 1));
+        sinks.enable_persistent_replay_with_capacity(
+            outbox_path.clone(),
+            vec!["first".into(), "second".into()],
+            capacity_limits(100, u64::MAX),
+        );
+        let events = (0..40).map(|_| make_health_event()).collect::<Vec<_>>();
+        sinks.persist_for_durable_replay(&events).unwrap();
+        sinks.deliver_durable().unwrap();
+        for calls in [&first_calls, &second_calls] {
+            assert!((1..=16).contains(&calls.lock().unwrap().len()));
+        }
+        let outbox = Outbox::open(&outbox_path).unwrap();
+        assert!(events.iter().any(|event| {
+            outbox
+                .get_delivery(&event.event_id, "first")
+                .unwrap()
+                .unwrap()
+                .state
+                == DeliveryState::Pending
+        }));
+        drop(outbox);
+        for _ in 0..40 {
+            sinks.deliver_durable().unwrap();
+        }
+        assert_eq!(first_calls.lock().unwrap().len(), 40);
+        assert_eq!(second_calls.lock().unwrap().len(), 40);
     }
 
     #[test]

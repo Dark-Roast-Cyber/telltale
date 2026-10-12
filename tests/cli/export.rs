@@ -2,6 +2,38 @@ use super::*;
 
 use telltale_detect::allowlist::{SuppressionMatch, suppress_detection};
 
+#[cfg(unix)]
+#[test]
+fn export_rejects_fifo_without_waiting_for_a_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("synthetic.fifo");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args(["export", "--format", "summary", "--log-path"])
+        .arg(fifo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let timed_out = loop {
+        if child.try_wait().unwrap().is_some() {
+            break false;
+        }
+        if started.elapsed() > std::time::Duration::from_secs(15) {
+            child.kill().unwrap();
+            break true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let output = child.wait_with_output().unwrap();
+    assert!(!timed_out, "FIFO export waited for a writer");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("regular file"));
+    assert!(output.stdout.is_empty());
+}
+
 #[test]
 fn inherited_noncanonical_environment_is_ignored_and_canonical_values_parse() {
     let temp = tempfile::tempdir().expect("tempdir");

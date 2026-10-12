@@ -11,6 +11,22 @@ canonical JSONL -> future vendor-neutral collector transport`; the current
 capability implements terminal serialization, the JSONL first write, and
 SQLite downstream replay state.
 ## Requirements
+### Requirement: Dispatch work is finite per sink
+
+Each dispatch invocation MUST select at most 16 rows per sink and stop selecting
+new rows for that sink after 100 ms of elapsed work. In-flight transport attempts
+retain their configured timeout. Every configured sink MUST receive its own
+share, independently of predecessor backlog length. Remaining rows MUST stay
+durable with unchanged retry state until selected by a later invocation.
+Admission MUST retain serialized ownership and reject capacity exhaustion if
+this bounded predrain cannot release sufficient headroom.
+
+#### Scenario: Backlog exceeds one cycle
+
+- **WHEN** ready rows exceed a sink's work share
+- **THEN** a finite prefix progresses and the rest remain replayable
+- **AND** other sinks and subsequent acquisition/admission cycles can progress
+
 ### Requirement: Delivery semantics are transport-neutral
 
 The system SHALL represent transport, delivery policy, and persistence role as
@@ -624,7 +640,7 @@ follow-up reconciliation.
 
 ### Requirement: Admission predrain releases acknowledged capacity only
 
-Before a prospective batch is checked, eligible ready
+Before a prospective batch is checked, a bounded per-sink share of eligible ready
 rows SHALL be attempted without sleeping or hot-looping: successfully
 acknowledged rows release pending capacity, while blocked and retry-delayed rows
 continue to consume it.
@@ -633,7 +649,7 @@ admit against the same observed headroom.
 
 #### Scenario: Admission predrain releases acknowledged capacity only
 
-- **WHEN** eligible ready rows are attempted before admission
+- **WHEN** a bounded share of eligible ready rows is attempted before admission
 - **THEN** acknowledged rows release capacity while blocked/retry-delayed rows retain it
 
 ### Requirement: Standalone durable dispatch uses the admission owner

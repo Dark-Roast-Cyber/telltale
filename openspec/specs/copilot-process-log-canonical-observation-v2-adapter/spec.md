@@ -7,6 +7,20 @@ native state machine and canonical mapping for production source evaluation.
 Source-backed legacy record projection is retired; Event3 remains the external
 projection.
 ## Requirements
+### Requirement: Physical production admission is bounded
+
+Acquisition MUST reject sources above 128 MiB, physical lines above 8 MiB
+(including terminators), or more than 100,000 retained native events, including
+controls and ignored accumulated items. Padding counts toward byte limits.
+Array admission MUST stop at the event budget rather than first allocating an
+unbounded array. Rejection MUST return no successful prefix, accounting, or
+progress. These inclusive physical limits do not claim an allocator/RSS bound.
+
+#### Scenario: Oversized ignored content
+
+- **WHEN** ignored lines, padding, or accumulated items exceed admission limits
+- **THEN** the complete acquisition fails without replacing a retained baseline
+
 ### Requirement: Stateful source-owned interpretation
 
 The Copilot process-log adapter MUST read the source into one source-owned

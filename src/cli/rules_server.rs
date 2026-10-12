@@ -1,11 +1,16 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+const MAX_HEADER_BYTES: usize = 16 * 1024;
+const MAX_BODY_BYTES: usize = 64 * 1024;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 use serde::Deserialize;
 
 use crate::rules::{
-    CompiledRuleSet, RuleLoadMode, RulePackPaths, RuleResolution, load_rule_set_from_documents,
+    CompiledRuleSet, RuleLoadMode, RulePackPaths, RuleResolution,
     resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements,
 };
 use telltale_schema::clients::{ClientId, SourceKind};
@@ -43,18 +48,18 @@ pub(crate) fn run_rules_server(
                 "/api/rules",
                 "/api/rules/validate",
                 "/api/rules/preview",
-                "/api/rules/save",
             ],
         }))?
     );
     std::io::stdout().flush()?;
     if once {
         let (stream, _) = listener.accept()?;
-        handle_rules_request(stream, &mut state, &config)?;
+        let _ = handle_rules_request(stream, &mut state, &config);
         return Ok(());
     }
     for stream in listener.incoming() {
-        handle_rules_request(stream?, &mut state, &config)?;
+        // A client disconnect, malformed request, or timeout is not a server failure.
+        let _ = handle_rules_request(stream?, &mut state, &config);
     }
     Ok(())
 }
@@ -62,7 +67,6 @@ pub(crate) fn run_rules_server(
 pub(crate) struct RuleServerConfig<'a> {
     pub(crate) rule_pack_paths: &'a RulePackPaths,
     pub(crate) explicit_rule_paths: &'a [PathBuf],
-    pub(crate) editable_rule_paths: &'a [PathBuf],
     pub(crate) override_paths: &'a [PathBuf],
     pub(crate) policy_path: Option<&'a Path>,
     pub(crate) rule_load_mode: RuleLoadMode,
@@ -80,10 +84,6 @@ impl RuleServerState {
             rule_set: resolution.rule_set,
             rule_summary,
         }
-    }
-
-    fn reload(&mut self, resolution: RuleResolution) {
-        *self = Self::new(resolution);
     }
 }
 
@@ -122,7 +122,6 @@ enum RuleServerRoute {
     Summary,
     Validate,
     Preview,
-    Save,
     NotFound,
 }
 
@@ -148,46 +147,138 @@ fn handle_rules_request(
         )?;
         return Ok(());
     }
-    let request = read_http_request(&stream)?;
-    write_rules_route_response(
+    stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
+    let request = match read_http_request(&mut stream) {
+        Ok(request) => request,
+        Err((status, reason)) => {
+            return write_http_response(&mut stream, status, reason, "text/plain", reason);
+        }
+    };
+    if write_rules_route_response(
         &mut stream,
         rule_server_route(&request),
         &request.body,
         state,
         config,
-    )?;
+    )
+    .is_err()
+    {
+        // Do not expose parser text, paths, request headers, or request bodies.
+        write_json_api_response(&mut stream, ApiResponse::bad_request("invalid request"))?;
+    }
     Ok(())
 }
 
-fn read_http_request(stream: &TcpStream) -> Result<HttpRequest, Box<dyn std::error::Error>> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-
-    let mut content_length = 0_usize;
-    loop {
-        let mut header = String::new();
-        reader.read_line(&mut header)?;
-        let trimmed = header.trim_end();
-        if trimmed.is_empty() {
-            break;
+fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, (u16, &'static str)> {
+    let bad = (400, "Bad Request");
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let mut bytes = Vec::new();
+    // Read only the bounded header before admitting a body. The absolute deadline
+    // also bounds clients that drip a byte before each socket timeout.
+    while !bytes.ends_with(b"\r\n\r\n") {
+        if bytes.len() == MAX_HEADER_BYTES {
+            return Err((431, "Request Header Fields Too Large"));
         }
-        if let Some(value) = trimmed.strip_prefix("Content-Length: ") {
-            content_length = value.parse::<usize>()?;
+        let mut byte = [0];
+        read_before_deadline(stream, &mut byte, deadline)?;
+        bytes.push(byte[0]);
+    }
+    let header = std::str::from_utf8(&bytes).map_err(|_| bad)?;
+    let mut lines = header.split("\r\n");
+    let parts = lines.next().ok_or(bad)?.split(' ').collect::<Vec<_>>();
+    if parts.len() != 3 || parts[2] != "HTTP/1.1" {
+        return Err(bad);
+    }
+    let (method, path) = (parts[0], parts[1]);
+    let mut headers = std::collections::BTreeMap::new();
+    for line in lines.take_while(|line| !line.is_empty()) {
+        let (name, value) = line.split_once(':').ok_or(bad)?;
+        if name.is_empty()
+            || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || headers
+                .insert(name.to_ascii_lowercase(), value.trim())
+                .is_some()
+        {
+            return Err(bad);
         }
     }
-
-    let mut body = vec![0_u8; content_length];
-    if content_length > 0 {
-        reader.read_exact(&mut body)?;
+    let authority = stream.local_addr().map_err(|_| bad)?.to_string();
+    if headers.get("host") != Some(&authority.as_str())
+        || headers
+            .get("origin")
+            .is_some_and(|origin| *origin != format!("http://{authority}"))
+        || headers
+            .get("sec-fetch-site")
+            .is_some_and(|site| !matches!(*site, "same-origin" | "none"))
+    {
+        return Err((403, "Forbidden"));
     }
-
-    let mut parts = request_line.split_whitespace();
+    if headers.contains_key("transfer-encoding") || headers.contains_key("expect") {
+        return Err(bad);
+    }
+    let content_length = headers
+        .get("content-length")
+        .map(|value| {
+            if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(bad);
+            }
+            value.parse::<usize>().map_err(|_| bad)
+        })
+        .transpose()?
+        .unwrap_or(0);
+    if content_length > MAX_BODY_BYTES {
+        return Err((413, "Content Too Large"));
+    }
+    if method == "POST"
+        && !headers.get("content-type").is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("application/json")
+        })
+    {
+        return Err((415, "Unsupported Media Type"));
+    }
+    let mut body = vec![0; content_length];
+    read_before_deadline(stream, &mut body, deadline)?;
     Ok(HttpRequest {
-        method: parts.next().unwrap_or_default().to_string(),
-        path: parts.next().unwrap_or_default().to_string(),
+        method: method.into(),
+        path: path.into(),
         body,
     })
+}
+
+fn read_before_deadline(
+    stream: &mut TcpStream,
+    mut bytes: &mut [u8],
+    deadline: Instant,
+) -> Result<(), (u16, &'static str)> {
+    while !bytes.is_empty() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or((408, "Request Timeout"))?;
+        stream
+            .set_read_timeout(Some(remaining))
+            .map_err(|_| (400, "Bad Request"))?;
+        match stream.read(bytes) {
+            Ok(0) => return Err((400, "Bad Request")),
+            Ok(count) => bytes = &mut bytes[count..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err((408, "Request Timeout"));
+            }
+            Err(_) => return Err((400, "Bad Request")),
+        }
+    }
+    Ok(())
 }
 
 fn rule_server_route(request: &HttpRequest) -> RuleServerRoute {
@@ -196,7 +287,6 @@ fn rule_server_route(request: &HttpRequest) -> RuleServerRoute {
         ("GET", "/api/rules") | ("HEAD", "/api/rules") => RuleServerRoute::Summary,
         ("POST", "/api/rules/validate") => RuleServerRoute::Validate,
         ("POST", "/api/rules/preview") => RuleServerRoute::Preview,
-        ("POST", "/api/rules/save") => RuleServerRoute::Save,
         _ => RuleServerRoute::NotFound,
     }
 }
@@ -206,7 +296,7 @@ fn write_rules_route_response(
     route: RuleServerRoute,
     body: &[u8],
     state: &mut RuleServerState,
-    config: &RuleServerConfig<'_>,
+    _config: &RuleServerConfig<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match route {
         RuleServerRoute::Editor => write_http_response(
@@ -220,30 +310,6 @@ fn write_rules_route_response(
         RuleServerRoute::Validate => write_json_api_response(stream, validate_rules_request(body)?),
         RuleServerRoute::Preview => {
             write_json_api_response(stream, preview_rules_request(body, &state.rule_set)?)
-        }
-        RuleServerRoute::Save => {
-            let response = save_rules_request(
-                body,
-                config.rule_pack_paths,
-                config.explicit_rule_paths,
-                config.editable_rule_paths,
-                config.override_paths,
-                config.policy_path,
-                config.rule_load_mode,
-            )?;
-            if response.status_code == 200 {
-                state.reload(
-                    resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-                        config.rule_pack_paths,
-                        config.explicit_rule_paths,
-                        config.policy_path,
-                        config.rule_load_mode,
-                        config.override_paths,
-                        &[],
-                    )?,
-                );
-            }
-            write_json_api_response(stream, response)
         }
         RuleServerRoute::NotFound => write_http_response(
             stream,
@@ -384,121 +450,53 @@ fn preview_rules_request(
     })))
 }
 
-#[derive(Debug, Deserialize)]
-struct RuleSaveRequest {
-    rules_yaml: String,
-    #[serde(default)]
-    policy_yaml: Option<String>,
-    /// Target rule file path. Must be one of the explicit editable --rules files.
-    /// Defaults to the first editable --rules file if omitted.
-    #[serde(default)]
-    path: Option<PathBuf>,
-}
-
-fn save_rules_request(
-    body: &[u8],
-    rule_pack_paths: &RulePackPaths,
-    explicit_rule_paths: &[PathBuf],
-    editable_rule_paths: &[PathBuf],
-    override_paths: &[PathBuf],
-    policy_path: Option<&Path>,
-    rule_load_mode: RuleLoadMode,
-) -> Result<ApiResponse, Box<dyn std::error::Error>> {
-    let request: RuleSaveRequest = serde_json::from_slice(body)?;
-
-    let target = match resolve_save_target(request.path.as_deref(), editable_rule_paths) {
-        Ok(target) => target,
-        Err(error) => return Ok(ApiResponse::bad_request(error)),
-    };
-
-    // Validate rules compile before writing.
-    if let Err(error) = compile_rule_yaml(&request.rules_yaml, request.policy_yaml.as_deref()) {
-        return Ok(ApiResponse::bad_request(error.to_string()));
-    }
-
-    // Validate the effective rule set that would be active after this save. This
-    // catches conflicts with bundled defaults or other configured rule files
-    // before any on-disk content is changed.
-    if let Err(error) = resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-        rule_pack_paths,
-        explicit_rule_paths,
-        policy_path,
-        rule_load_mode,
-        override_paths,
-        &[(target.clone(), request.rules_yaml.as_str())],
-    ) {
-        return Ok(ApiResponse::bad_request(error.to_string()));
-    }
-
-    // Backup existing file.
-    let backup = target.with_extension("yaml.bak");
-    if target.exists() {
-        std::fs::copy(&target, &backup)?;
-    }
-
-    // Atomic write: temp file in same directory, then rename.
-    let dir = target.parent().ok_or("rule file has no parent directory")?;
-    let tmp = dir.join(".telltale-rules-save.tmp");
-    std::fs::write(&tmp, &request.rules_yaml)?;
-    std::fs::rename(&tmp, &target)?;
-
-    Ok(ApiResponse::ok(serde_json::json!({
-        "status": "ok",
-        "saved": PrivacySanitizer::sanitize(SanitizationContext::Path, &target.to_string_lossy()),
-        "backup": PrivacySanitizer::sanitize(SanitizationContext::Path, &backup.to_string_lossy()),
-        "rule_count": request.rules_yaml.lines().filter(|l| l.contains("id:")).count(),
-    })))
-}
-
-fn resolve_save_target(
-    requested: Option<&Path>,
-    rule_paths: &[PathBuf],
-) -> Result<PathBuf, String> {
-    let editable_paths = rule_paths
-        .iter()
-        .map(|path| {
-            path.canonicalize()
-                .map_err(|error| format!("cannot resolve rule path '{}': {error}", path.display()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    if editable_paths.is_empty() {
-        return Err(
-            "no editable --rules path configured; start rules serve with --rules <path> to enable saving"
-                .to_string(),
-        );
-    }
-
-    let Some(requested) = requested else {
-        return Ok(rule_paths[0].clone());
-    };
-
-    let canonical_requested = match requested.canonicalize() {
-        Ok(path) => path,
-        Err(_) => {
-            return Err(format!(
-                "requested path '{}' is not one of the loaded rule files editable via --rules",
-                requested.display()
-            ));
-        }
-    };
-    editable_paths
-        .iter()
-        .position(|path| path == &canonical_requested)
-        .map(|index| rule_paths[index].clone())
-        .ok_or_else(|| {
-            format!(
-                "requested path '{}' is not one of the loaded rule files editable via --rules",
-                requested.display()
-            )
-        })
-}
-
 fn compile_rule_yaml(
     rules_yaml: &str,
     policy_yaml: Option<&str>,
 ) -> Result<CompiledRuleSet, Box<dyn std::error::Error>> {
-    load_rule_set_from_documents(&[rules_yaml], policy_yaml)
+    if rules_yaml.len() + policy_yaml.map_or(0, str::len) > MAX_BODY_BYTES {
+        return Err("rule editor document limit exceeded".into());
+    }
+    for document in std::iter::once(rules_yaml).chain(policy_yaml) {
+        reject_yaml_references(document)?;
+    }
+    let rules: telltale_rules::RuleSet = serde_yaml::from_str(rules_yaml)?;
+    let matchers: usize = rules
+        .rules
+        .iter()
+        .map(|rule| {
+            (if rule.regex.is_some() {
+                rule.targets.len()
+            } else {
+                0
+            }) + rule
+                .detection
+                .as_ref()
+                .map_or(0, |d| d.selection.len() + d.exclude.len())
+        })
+        .sum();
+    if rules.rules.len() > 16 || rules.modifiers.len() > 16 || matchers > 16 {
+        return Err("rule editor supports at most 16 rules, modifiers, and matchers per request; use rules validate for larger packs".into());
+    }
+    let policy = policy_yaml
+        .map(serde_yaml::from_str::<telltale_rules::RulePolicy>)
+        .transpose()?;
+    telltale_rules::merge_rule_sets(vec![rules])?.compile(policy.as_ref())
+}
+
+fn reject_yaml_references(document: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Conservative lexical admission, before serde_yaml can expand references.
+    // Delimiter-shaped markers in comments/quoted/block text are also refused;
+    // the offline CLI remains available for the full YAML language.
+    let mut boundary = true;
+    for ch in document.chars() {
+        if boundary && matches!(ch, '&' | '*') {
+            return Err("YAML anchors and aliases are not supported by the HTTP rule editor; use rules validate offline".into());
+        }
+        boundary =
+            ch.is_whitespace() || matches!(ch, '\u{feff}' | '[' | '{' | ',' | ':' | '?' | '-');
+    }
+    Ok(())
 }
 
 fn canonical_fixture_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -512,6 +510,10 @@ fn canonical_fixture_path(path: &Path) -> Result<PathBuf, Box<dyn std::error::Er
     let fixture_root = manifest_dir.join("tests/fixtures").canonicalize()?;
     if !canonical.starts_with(&fixture_root) {
         return Err("preview fixture must be under tests/fixtures".into());
+    }
+    let metadata = std::fs::metadata(&canonical)?;
+    if !metadata.is_file() || metadata.len() > 256 * 1024 {
+        return Err("preview requires a regular fixture of at most 256 KiB".into());
     }
     Ok(canonical)
 }
@@ -564,7 +566,7 @@ fn write_http_response(
 ) -> Result<(), Box<dyn std::error::Error>> {
     write!(
         stream,
-        "HTTP/1.1 {status_code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status_code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )?;
     Ok(())
@@ -594,6 +596,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 <body>
 <main>
 <h1>Telltale Rules</h1>
+<p>Read-only validation and preview. Edit rule files locally; saving over HTTP is disabled.</p>
 <table>
 <thead><tr><th>ID</th><th>Category</th><th>Severity</th><th>Score</th></tr></thead>
 <tbody id="rules"></tbody>
@@ -659,6 +662,44 @@ document.getElementById('preview-rules').addEventListener('click', () => {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn yaml_references_are_rejected_before_typed_expansion_in_both_documents() {
+        for raw in [
+            "&root {}",
+            "\u{feff}&root {}",
+            "a: &a [x]",
+            "a: [*a]",
+            "a: {x: &a y}",
+            "a:\u{85}&a x",
+            "a:\u{2028}*a",
+        ] {
+            assert!(super::reject_yaml_references(raw).is_err());
+        }
+        assert!(super::reject_yaml_references("regex: '.*foo[ab]*'\n").is_ok());
+        let rules = "version: 1\ndescription: synthetic\ndefaults: {case_insensitive: false, enabled: true}\nrules: []\nmodifiers: []\n";
+        assert!(
+            super::compile_rule_yaml(
+                rules,
+                Some("version: 1\nname: &name synthetic\ndisabled_rules: []\n")
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("YAML anchors and aliases")
+        );
+    }
+    #[test]
+    fn editor_compilation_counts_each_target_matcher() {
+        let raw = format!(
+            "version: 1\ndescription: synthetic\ndefaults: {{case_insensitive: false, enabled: true}}\nrules:\n  - id: synthetic\n    category: test\n    severity: low\n    score: 1\n    targets: [{}]\n    regex: 'x'\n    tags: []\n    explanation: synthetic\nmodifiers: []\n",
+            vec!["command"; 17].join(",")
+        );
+        assert!(
+            super::compile_rule_yaml(&raw, None)
+                .unwrap_err()
+                .to_string()
+                .contains("16")
+        );
+    }
     use super::{
         compile_rule_yaml, preview_rules_request, rule_summary_json, validate_rules_request,
     };
