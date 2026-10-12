@@ -16,15 +16,15 @@ use std::path::Path;
 use crate::{Event, Source};
 
 pub use telltale_sources::install_inventory::{
-    collect_install_inventory, collect_install_inventory_for_platform,
-    collect_install_inventory_with_context, collect_install_inventory_with_sources,
-    install_inventory_due, snapshot_to_event, AgentInstallObservation, InstallConfidence,
-    InstallInventoryContext, InstallInventorySnapshot, InstallPlatform, InstallSignal,
+    AgentInstallObservation, InstallConfidence, InstallInventoryContext, InstallInventorySnapshot,
+    InstallPlatform, InstallSignal, collect_install_inventory,
+    collect_install_inventory_for_platform, collect_install_inventory_with_context,
+    collect_install_inventory_with_sources, install_inventory_due, snapshot_to_event,
 };
 
 pub use telltale_detect::mcp::{
-    collect_mcp_inventory, McpConfigInput, McpInventoryInput, McpInventoryObservation,
-    McpInventoryState,
+    McpConfigInput, McpInventoryInput, McpInventoryObservation, McpInventoryState,
+    collect_mcp_inventory,
 };
 
 /// Read supported static MCP configurations under `root` and return the existing
@@ -145,15 +145,19 @@ command = "TT_SECOND_FAKE_COMMAND"
             McpConfigInput::new(crate::ClientId::Claude, "claude.project_mcp_config", path);
         let inventory = collect_mcp_inventory(&McpInventoryInput::Configs(vec![config; 5]));
         assert_eq!(inventory.len(), 5);
-        assert!(inventory
-            .iter()
-            .all(|s| s.state() == McpInventoryState::Error));
+        assert!(
+            inventory
+                .iter()
+                .all(|s| s.state() == McpInventoryState::Error)
+        );
         assert!(inventory.iter().all(|s| s.server_name().is_none()));
         // Oversized files fail before any bytes are read, so each keeps its own
         // limit error and the aggregate budget is not exhausted.
-        assert!(inventory
-            .iter()
-            .all(|s| s.reason() == Some("source_limit_exceeded")));
+        assert!(
+            inventory
+                .iter()
+                .all(|s| s.reason() == Some("source_limit_exceeded"))
+        );
     }
 
     #[test]
@@ -185,12 +189,16 @@ command = "TT_SECOND_FAKE_COMMAND"
         // Failed reads restore their reservation. The 65th candidate hits the
         // config cap without exhausting the byte budget.
         assert_eq!(inventory.len(), 65);
-        assert!(inventory
-            .iter()
-            .all(|s| s.state() == McpInventoryState::Error));
-        assert!(inventory[..64]
-            .iter()
-            .all(|s| s.reason() == Some("source_missing")));
+        assert!(
+            inventory
+                .iter()
+                .all(|s| s.state() == McpInventoryState::Error)
+        );
+        assert!(
+            inventory[..64]
+                .iter()
+                .all(|s| s.reason() == Some("source_missing"))
+        );
         assert_eq!(
             inventory.last().unwrap().reason(),
             Some("mcp_inventory_limit_exceeded")
@@ -200,12 +208,16 @@ command = "TT_SECOND_FAKE_COMMAND"
         let unsupported = McpConfigInput::new(crate::ClientId::Claude, "unsupported", path.clone());
         let inventory = collect_mcp_inventory(&McpInventoryInput::Configs(vec![unsupported; 65]));
         assert_eq!(inventory.len(), 65);
-        assert!(inventory
-            .iter()
-            .all(|s| s.state() == McpInventoryState::Error));
-        assert!(inventory[..64]
-            .iter()
-            .all(|s| s.reason() == Some("unsupported_mcp_source_identity")));
+        assert!(
+            inventory
+                .iter()
+                .all(|s| s.state() == McpInventoryState::Error)
+        );
+        assert!(
+            inventory[..64]
+                .iter()
+                .all(|s| s.reason() == Some("unsupported_mcp_source_identity"))
+        );
         assert_eq!(inventory[64].reason(), Some("mcp_inventory_limit_exceeded"));
         let mut raw = "{\"mcpServers\":{}}".to_string();
         raw.extend(std::iter::repeat_n(' ', 1024 * 1024 - raw.len()));
@@ -217,13 +229,17 @@ command = "TT_SECOND_FAKE_COMMAND"
         // limit rather than aggregate exhaustion. Empty server maps produce no
         // observations.
         assert_eq!(inventory.len(), 2);
-        assert!(inventory
-            .iter()
-            .all(|s| s.state() == McpInventoryState::Error));
+        assert!(
+            inventory
+                .iter()
+                .all(|s| s.state() == McpInventoryState::Error)
+        );
         assert!(inventory.iter().all(|s| s.server_name().is_none()));
-        assert!(inventory
-            .iter()
-            .all(|s| s.reason() == Some("source_limit_exceeded")));
+        assert!(
+            inventory
+                .iter()
+                .all(|s| s.reason() == Some("source_limit_exceeded"))
+        );
         for output in [
             format!("{inventory:?}"),
             serde_json::to_string(&inventory).unwrap(),
@@ -452,9 +468,11 @@ args = ["comma,inside", 'second']
         std::fs::remove_file(&path).unwrap();
         let errors = collect_mcp_inventory(&input);
         assert_eq!(errors[0].state(), McpInventoryState::Error);
-        assert!(!serde_json::to_string(&errors)
-            .unwrap()
-            .contains("TT_CONFIG_PATH_MARKER"));
+        assert!(
+            !serde_json::to_string(&errors)
+                .unwrap()
+                .contains("TT_CONFIG_PATH_MARKER")
+        );
     }
 
     #[test]
