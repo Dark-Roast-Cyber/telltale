@@ -446,6 +446,7 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
     let log_path = temp.path().join("telltale-events.jsonl");
     let state_path = temp.path().join("telltale-state.json");
     let (hec_endpoint, requests, shutdown, handle) = start_mock_hec_server();
+    let (proxy_endpoint, proxy_requests, proxy_shutdown, proxy_handle) = start_mock_hec_server();
 
     let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
         .args(["scan", "--once", "--no-local-config", "--root"])
@@ -456,12 +457,23 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         .arg(&state_path)
         .args(["--splunk-hec-endpoint", &hec_endpoint])
         .args(["--splunk-hec-token", "test-token"])
+        .env("ALL_PROXY", &proxy_endpoint)
+        .env("HTTP_PROXY", &proxy_endpoint)
+        .env("HTTPS_PROXY", &proxy_endpoint)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
         .arg("--install-inventory-disabled")
         .output()
         .expect("run telltale");
 
     shutdown.send(()).expect("stop mock hec server");
     handle.join().expect("mock hec thread");
+    proxy_shutdown.send(()).unwrap();
+    proxy_handle.join().unwrap();
+    assert!(
+        proxy_requests.try_recv().is_err(),
+        "loopback telemetry escaped via ambient proxy"
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -488,6 +500,55 @@ fn scan_once_can_emit_to_splunk_hec_without_disabling_jsonl() {
         0
     );
     assert!(envelope["event"].get("index").is_none());
+}
+
+#[test]
+fn https_sink_retains_proxy_connect_without_plaintext_credentials() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let (proxy, requests, shutdown, handle) = start_mock_http_server(
+        "",
+        1024,
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+        .args([
+            "scan",
+            "--once",
+            "--no-local-config",
+            "--install-inventory-disabled",
+            "--root",
+        ])
+        .arg(root)
+        .arg("--log-path")
+        .arg(temp.path().join("events.jsonl"))
+        .arg("--state-path")
+        .arg(temp.path().join("state.json"))
+        .args([
+            "--splunk-hec-endpoint",
+            "https://synthetic-collector.invalid/ingest",
+            "--splunk-hec-token",
+            "synthetic-transport-token",
+        ])
+        .env("ALL_PROXY", &proxy)
+        .env("HTTPS_PROXY", &proxy)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .output()
+        .unwrap();
+    shutdown.send(()).unwrap();
+    handle.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = requests
+        .try_recv()
+        .expect("HTTPS CONNECT reached configured proxy");
+    assert!(request.starts_with("CONNECT synthetic-collector.invalid:443 HTTP/1.1"));
+    assert!(!request.contains("synthetic-transport-token"));
 }
 
 #[test]
@@ -1432,6 +1493,8 @@ sinks:
     enabled: false
     endpoint: http://splunk.example.com:8088
     token: inline-lab-token
+    tls:
+      allow_insecure_http: true
 "#,
     )
     .expect("write outputs yaml");
@@ -1463,7 +1526,13 @@ sinks:
     assert_eq!(report["outputs"]["delivery"]["enabled_sink_count"], 1);
     assert_eq!(report["outputs"]["delivery"]["remote_sink_count"], 0);
     let warnings = report["outputs"]["warnings"].as_array().expect("warnings");
-    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings.len(), 2);
+    assert!(
+        warnings[1]
+            .as_str()
+            .unwrap()
+            .contains("allow_insecure_http")
+    );
     assert!(
         warnings[0]
             .as_str()

@@ -27,6 +27,34 @@ impl Default for RetryConfig {
 pub struct TlsOptions {
     pub ca_file: Option<PathBuf>,
     pub insecure_skip_verify: bool,
+    /// Explicit lab-only consent to send telemetry and credentials over remote HTTP.
+    pub allow_insecure_http: bool,
+}
+
+pub(crate) fn validate_endpoint(
+    endpoint: &str,
+    allow_insecure_http: bool,
+) -> Result<ureq::http::Uri, &'static str> {
+    let uri: ureq::http::Uri = endpoint.parse().map_err(|_| "invalid HTTP endpoint")?;
+    if endpoint.contains('#')
+        || uri.authority().is_none()
+        || uri.authority().is_some_and(|a| a.as_str().contains('@'))
+    {
+        return Err("HTTP endpoint must not contain credentials or fragments");
+    }
+    let host = uri.host().ok_or("HTTP endpoint requires a host")?;
+    let loopback = host
+        .trim_matches(['[', ']'])
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback());
+    match uri.scheme_str() {
+        Some("https") => Ok(uri),
+        Some("http") if loopback || allow_insecure_http => Ok(uri),
+        Some("http") => Err(
+            "non-loopback HTTP requires explicit lab-only tls.allow_insecure_http consent; use HTTPS",
+        ),
+        _ => Err("endpoint must use http:// or https://"),
+    }
 }
 
 #[derive(Debug)]
@@ -64,6 +92,7 @@ impl std::error::Error for HttpPostError {}
 pub struct HttpClient {
     agent: ureq::Agent,
     retry: RetryConfig,
+    allow_insecure_http: bool,
 }
 
 impl HttpClient {
@@ -87,7 +116,13 @@ impl HttpClient {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut builder = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
+            .max_redirects(0)
             .http_status_as_error(false);
+        if tls.allow_insecure_http && emit_warning {
+            eprintln!(
+                "warning: remote plaintext HTTP is enabled; credentials and telemetry are exposed outside a lab"
+            );
+        }
         if tls.ca_file.is_some() || tls.insecure_skip_verify {
             let mut tls_builder = ureq::tls::TlsConfig::builder();
             if let Some(ca_file) = &tls.ca_file {
@@ -125,6 +160,7 @@ impl HttpClient {
         Ok(Self {
             agent: builder.build().new_agent(),
             retry,
+            allow_insecure_http: tls.allow_insecure_http,
         })
     }
 
@@ -135,7 +171,18 @@ impl HttpClient {
         content_type: &str,
         body: &[u8],
     ) -> Result<HttpResponse, HttpPostError> {
+        let uri =
+            validate_endpoint(url, self.allow_insecure_http).map_err(|message| HttpPostError {
+                attempts: 0,
+                kind: HttpPostErrorKind::NoResponse,
+                message: message.into(),
+            })?;
         let mut request = self.agent.post(url).content_type(content_type);
+        if uri.scheme_str() == Some("http") {
+            // Never let an ambient proxy turn loopback's plaintext exemption
+            // into remote delivery. HTTPS retains its established proxy support.
+            request = request.config().proxy(None).build();
+        }
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -326,6 +373,84 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_policy_is_structural_and_plaintext_consent_is_explicit() {
+        for endpoint in [
+            "http://127.0.0.1:9999/ingest",
+            "http://[::1]/ingest",
+            "https://collector.example.invalid/ingest",
+        ] {
+            assert!(super::validate_endpoint(endpoint, false).is_ok());
+        }
+        for endpoint in [
+            "http://collector.example.invalid",
+            "http://localhost/",
+            "http://127.0.0.1.example.invalid",
+            "http://127.1/",
+        ] {
+            assert!(super::validate_endpoint(endpoint, false).is_err());
+            assert!(super::validate_endpoint(endpoint, true).is_ok());
+        }
+        for endpoint in [
+            "https://user:synthetic@collector.example.invalid",
+            "https://collector.example.invalid/#fragment",
+            "file:///synthetic",
+            "https:///missing",
+            "not-a-url",
+        ] {
+            assert!(
+                super::validate_endpoint(endpoint, true).is_err(),
+                "{endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn redirects_never_forward_authorization_or_payload() {
+        for status in [301, 302, 303, 307, 308] {
+            let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+            destination.set_nonblocking(true).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/ingest", listener.local_addr().unwrap());
+            let location = format!("http://{}/redirected", destination.local_addr().unwrap());
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                use std::io::BufRead;
+                let mut reader = std::io::BufReader::new(&mut stream);
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                reader.read_exact(&mut [0; 2]).unwrap();
+                write!(stream, "HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            });
+            let client = HttpClient::new(
+                Duration::from_secs(2),
+                fast_retry(1),
+                &TlsOptions::default(),
+            )
+            .unwrap();
+            let response = client.post_once(
+                &url,
+                &[("Authorization", "Bearer synthetic")],
+                "application/json",
+                b"{}",
+            );
+            server.join().unwrap();
+            assert_eq!(response.unwrap().status, status);
+            assert_eq!(
+                destination.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+    }
+
+    #[test]
     fn post_retries_5xx_until_success() {
         let (url, handle) = start_mock_server(vec![500, 500, 200]);
         let client = HttpClient::new(
@@ -459,6 +584,7 @@ mod tests {
             &TlsOptions {
                 ca_file: Some("/nonexistent/ca.pem".into()),
                 insecure_skip_verify: false,
+                allow_insecure_http: false,
             },
         )
         .err()

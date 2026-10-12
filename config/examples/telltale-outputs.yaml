@@ -39,6 +39,7 @@ sinks:
     # tls:
     #   ca_file: /etc/pki/tls/certs/corp-ca.pem
     #   insecure_skip_verify: false   # lab-only escape hatch; loud warning
+    #   allow_insecure_http: false    # explicit lab-only remote HTTP; loud warning
 
   # Elasticsearch Bulk API delivery. Uses `index` actions with _id=event_id so
   # retried batches overwrite instead of duplicating documents.

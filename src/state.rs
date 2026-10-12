@@ -1014,8 +1014,41 @@ pub fn source_fingerprint(source: &Source) -> String {
         }
         return format!("{:x}", hasher.finalize());
     }
-    if let Ok(bytes) = fs::read(&source.path) {
-        hasher.update(&bytes);
+    // Acquisition owns validity and progress. Fingerprinting must not reread a
+    // rejected source into an unbounded allocation (including scanner errors).
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    if let Ok(mut file) = options.open(&source.path)
+        && let Ok(metadata) = file.metadata()
+        && metadata.is_file()
+        && metadata.len() <= 128 * 1024 * 1024
+    {
+        use std::io::Read;
+        let mut candidate = hasher.clone();
+        let mut buffer = [0; 8192];
+        let mut total = 0usize;
+        loop {
+            match file.read(&mut buffer) {
+                Ok(0) => {
+                    hasher = candidate;
+                    break;
+                }
+                Ok(count) => {
+                    total += count;
+                    if total > 128 * 1024 * 1024 {
+                        break;
+                    }
+                    candidate.update(&buffer[..count]);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
     }
     format!("{:x}", hasher.finalize())
 }
@@ -1070,6 +1103,32 @@ pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fingerprints_stream_valid_bytes_and_do_not_read_oversized_sources() {
+        use sha2::{Digest, Sha256};
+        let dir = tempfile::tempdir().unwrap();
+        let source = telltale_schema::source::Source {
+            client: telltale_schema::clients::ClientId::Copilot,
+            kind: telltale_schema::clients::SourceKind::CopilotProcessLog,
+            source_id: "copilot.process_log".into(),
+            path: dir.path().join("synthetic.log"),
+        };
+        let bytes = vec![b'x'; 8193];
+        std::fs::write(&source.path, &bytes).unwrap();
+        let mut expected = Sha256::new();
+        expected.update(source.path.to_string_lossy().as_bytes());
+        let path_hash = format!("{:x}", expected.clone().finalize());
+        expected.update(bytes);
+        assert_eq!(
+            super::source_fingerprint(&source),
+            format!("{:x}", expected.finalize())
+        );
+        std::fs::File::create(&source.path)
+            .unwrap()
+            .set_len(128 * 1024 * 1024 + 1)
+            .unwrap();
+        assert_eq!(super::source_fingerprint(&source), path_hash);
+    }
     use std::path::Path;
 
     use serde_json::Value;

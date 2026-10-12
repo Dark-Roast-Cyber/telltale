@@ -50,6 +50,9 @@ struct EventBackedTimelineSummary {
 pub(crate) fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
     validate_export_config(&config)?;
     let range = parse_export_range(&config)?;
+    if !config.timeline && !config.correlate {
+        return stream_export(&config, &range);
+    }
 
     let events = super::read_jsonl_events(config.log_path)?;
     validate_imported_event_accounting(&events)?;
@@ -74,6 +77,89 @@ pub(crate) fn run_export(config: ExportConfig<'_>) -> Result<(), Box<dyn std::er
         .map(|events| events.iter().collect::<Vec<_>>())
         .unwrap_or(filtered);
     print_export_events(&output_events, config.format)
+}
+
+fn stream_export(
+    config: &ExportConfig<'_>,
+    range: &ParsedExportRange,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let severity_filters = lowercase_set(config.severities);
+    let client_filters = string_set(config.clients);
+    let session_filters = string_set(config.session_ids);
+    let rule_filters = string_set(config.rule_ids);
+    let mut counts = export_summary_counts(&[]);
+    let mut count = 0usize;
+    // Stage sanitized output so a malformed tail or collision cannot produce a
+    // successful-looking prefix on stdout. TempFile removes the spool on error.
+    let mut spool = if config.format == super::ExportFormat::Summary {
+        None
+    } else {
+        Some(crate::file_lock::TempFile::create(
+            &std::env::temp_dir().join("telltale-export"),
+            0o600,
+        )?)
+    };
+    let mut output_bytes = 0usize;
+    super::historical::visit_jsonl_records(config.log_path, |record, _| {
+        let event = record.value;
+        validate_imported_event_accounting(std::slice::from_ref(&event))?;
+        if !event_matches_export_filters(
+            &event,
+            &severity_filters,
+            &client_filters,
+            &session_filters,
+            &rule_filters,
+            range.since,
+            range.until,
+        ) {
+            return Ok(());
+        }
+        count += 1;
+        if let Some(spool) = &mut spool {
+            let mut terminal = event;
+            sanitize_serialized_event(&mut terminal);
+            let mut bytes = Vec::new();
+            if config.format == super::ExportFormat::ElasticBulk {
+                let action = crate::sink::elastic_bulk_action_json(
+                    crate::sink::DEFAULT_ELASTIC_INDEX,
+                    terminal.get("event_id").and_then(|v| v.as_str()),
+                );
+                serde_json::to_writer(&mut bytes, &action)?;
+                bytes.push(b'\n');
+            }
+            serde_json::to_writer(&mut bytes, &terminal)?;
+            bytes.push(b'\n');
+            output_bytes = output_bytes
+                .checked_add(bytes.len())
+                .ok_or("export output limit exceeded")?;
+            if output_bytes > 1024 * 1024 * 1024 {
+                return Err("export output limit exceeded".into());
+            }
+            spool.write_all(&bytes)?;
+        } else {
+            let next = export_summary_counts(&[&event]);
+            for (target, source) in [
+                (&mut counts.event_types, next.event_types),
+                (&mut counts.severities, next.severities),
+                (&mut counts.clients, next.clients),
+                (&mut counts.rule_ids, next.rule_ids),
+            ] {
+                for (key, value) in source {
+                    if target.len() == 100_000 && !target.contains_key(&key) {
+                        return Err("export summary key limit exceeded".into());
+                    }
+                    *target.entry(key).or_default() += value;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    if let Some(spool) = spool {
+        std::io::copy(&mut spool.open_reader()?, &mut std::io::stdout().lock())?;
+    } else {
+        print_summary_counts(count, &counts);
+    }
+    Ok(())
 }
 
 fn validate_export_config(config: &ExportConfig<'_>) -> Result<(), Box<dyn std::error::Error>> {
@@ -1223,8 +1309,11 @@ fn parse_export_filter_timestamp(
 
 fn print_export_summary(events: &[&serde_json::Value]) {
     let counts = export_summary_counts(events);
+    print_summary_counts(events.len(), &counts);
+}
 
-    println!("events: {}", events.len());
+fn print_summary_counts(count: usize, counts: &ExportSummaryCounts) {
+    println!("events: {count}");
     print_count_section("event_types", &counts.event_types);
     print_count_section("severities", &counts.severities);
     print_count_section("clients", &counts.clients);

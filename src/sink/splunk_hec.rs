@@ -194,6 +194,7 @@ fn splunk_transport_error(err: crate::sink::http::HttpPostError) -> DeliveryErro
 
 fn splunk_status_error(status: u16, attempts: u32) -> DeliveryError {
     let class = match status {
+        300..=399 => DeliveryErrorClass::SinkResponseBlocked,
         401 | 403 => DeliveryErrorClass::AuthenticationBlocked { status },
         status => DeliveryErrorClass::HttpStatus { status },
     };
@@ -202,6 +203,16 @@ fn splunk_status_error(status: u16, attempts: u32) -> DeliveryError {
         attempts,
         format!("Splunk HEC request failed with HTTP {status}"),
     )
+}
+
+#[test]
+fn redirects_are_releasable_not_poison() {
+    for status in [301, 302, 303, 307, 308] {
+        assert_eq!(
+            splunk_status_error(status, 1).class,
+            DeliveryErrorClass::SinkResponseBlocked
+        );
+    }
 }
 
 fn append_json_field<T: serde::Serialize>(

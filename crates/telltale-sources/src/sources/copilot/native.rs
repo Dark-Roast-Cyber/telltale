@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
-use std::fs;
 
 use crate::acquisition::{AcquisitionError, SessionMetadata};
 use serde_json::Value;
 use telltale_schema::record::RecordKind;
 
-use crate::source_read::SourceReadError;
+use crate::source_read::{
+    BoundedReadError, PRODUCTION_NATIVE_UNITS, PRODUCTION_RECORD_BYTES, PRODUCTION_SOURCE_BYTES,
+    SourceReadError, bounded_file_bytes,
+};
 use telltale_schema::clients::ClientId;
 use telltale_schema::source::Source;
 
@@ -63,12 +65,18 @@ fn copilot_metadata(value: &Value) -> Result<SessionMetadata, AcquisitionError> 
 pub(crate) fn extract_copilot_native_events(
     source: &Source,
 ) -> Result<Vec<CopilotNativeEvent>, SourceReadError> {
-    let raw = fs::read_to_string(&source.path)?;
+    let bytes = bounded_file_bytes(&source.path, PRODUCTION_SOURCE_BYTES)
+        .map_err(SourceReadError::Bounded)?;
+    let raw = std::str::from_utf8(&bytes)
+        .map_err(|_| SourceReadError::Bounded(BoundedReadError::MalformedSource))?;
     let mut events = Vec::new();
     let mut canonical_active_session_id = None;
     let mut item_ordinals = BTreeMap::<String, u64>::new();
 
-    for line in raw.lines() {
+    for line in raw.split_inclusive('\n') {
+        if line.len() > PRODUCTION_RECORD_BYTES {
+            return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
+        }
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -84,20 +92,26 @@ pub(crate) fn extract_copilot_native_events(
         {
             let source_session_id = copilot_workspace_session_id(message);
             canonical_active_session_id = source_session_id.clone();
-            events.push(CopilotNativeEvent::WorkspaceInitialized { source_session_id });
+            push_event(
+                &mut events,
+                CopilotNativeEvent::WorkspaceInitialized { source_session_id },
+            )?;
             continue;
         }
 
         if accumulated.is_none() && matches!(control, Some(TrustedControl::SessionCompleted)) {
             canonical_active_session_id = None;
-            events.push(CopilotNativeEvent::SessionCompleted);
+            push_event(&mut events, CopilotNativeEvent::SessionCompleted)?;
         }
 
         let Some((_, json_str)) = accumulated else {
             if accumulated_line {
-                events.push(CopilotNativeEvent::MalformedStructuredOutput {
-                    canonical_session_id: canonical_active_session_id.clone(),
-                });
+                push_event(
+                    &mut events,
+                    CopilotNativeEvent::MalformedStructuredOutput {
+                        canonical_session_id: canonical_active_session_id.clone(),
+                    },
+                )?;
             }
             continue;
         };
@@ -105,19 +119,25 @@ pub(crate) fn extract_copilot_native_events(
         if let Some(TrustedControl::WorkspaceInitialized { message }) = control {
             let source_session_id = copilot_workspace_session_id(message);
             canonical_active_session_id = source_session_id.clone();
-            events.push(CopilotNativeEvent::WorkspaceInitialized { source_session_id });
+            push_event(
+                &mut events,
+                CopilotNativeEvent::WorkspaceInitialized { source_session_id },
+            )?;
         }
 
-        let parsed = serde_json::from_str::<Value>(json_str);
+        let parsed = bounded_output_items(json_str, PRODUCTION_NATIVE_UNITS - events.len())?;
         let items = match parsed {
-            Ok(Value::Array(items)) => items,
-            Ok(_) | Err(_) => {
-                events.push(CopilotNativeEvent::MalformedStructuredOutput {
-                    canonical_session_id: canonical_active_session_id.clone(),
-                });
+            Some(items) => items,
+            None => {
+                push_event(
+                    &mut events,
+                    CopilotNativeEvent::MalformedStructuredOutput {
+                        canonical_session_id: canonical_active_session_id.clone(),
+                    },
+                )?;
                 if matches!(control, Some(TrustedControl::SessionCompleted)) {
                     canonical_active_session_id = None;
-                    events.push(CopilotNativeEvent::SessionCompleted);
+                    push_event(&mut events, CopilotNativeEvent::SessionCompleted)?;
                 }
                 continue;
             }
@@ -144,21 +164,75 @@ pub(crate) fn extract_copilot_native_events(
                 *ordinal += 1;
                 current
             });
-            events.push(CopilotNativeEvent::AccumulatedOutputItem {
-                canonical_session_id: canonical_active_session_id.clone(),
-                ordinal,
-                timestamp: timestamp.clone(),
-                item: Box::new(item),
-            });
+            push_event(
+                &mut events,
+                CopilotNativeEvent::AccumulatedOutputItem {
+                    canonical_session_id: canonical_active_session_id.clone(),
+                    ordinal,
+                    timestamp: timestamp.clone(),
+                    item: Box::new(item),
+                },
+            )?;
         }
 
         if matches!(control, Some(TrustedControl::SessionCompleted)) {
             canonical_active_session_id = None;
-            events.push(CopilotNativeEvent::SessionCompleted);
+            push_event(&mut events, CopilotNativeEvent::SessionCompleted)?;
         }
     }
 
     Ok(events)
+}
+
+fn push_event(
+    events: &mut Vec<CopilotNativeEvent>,
+    event: CopilotNativeEvent,
+) -> Result<(), SourceReadError> {
+    if events.len() == PRODUCTION_NATIVE_UNITS {
+        return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
+    }
+    events.push(event);
+    Ok(())
+}
+
+// Admit array elements incrementally, including ignored variants, rather than
+// allocating an arbitrary Value array before discovering that it exceeds budget.
+fn bounded_output_items(raw: &str, limit: usize) -> Result<Option<Vec<Value>>, SourceReadError> {
+    use serde::de::{Deserializer, SeqAccess, Visitor};
+    struct Items<'a> {
+        limit: usize,
+        exceeded: &'a mut bool,
+    }
+    impl<'de> Visitor<'de> for Items<'_> {
+        type Value = Vec<Value>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an output array")
+        }
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut items = Vec::new();
+            while items.len() < self.limit {
+                match seq.next_element()? {
+                    Some(item) => items.push(item),
+                    None => return Ok(items),
+                }
+            }
+            if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                *self.exceeded = true;
+                return Err(serde::de::Error::custom("output item limit exceeded"));
+            }
+            Ok(items)
+        }
+    }
+    let mut exceeded = false;
+    let mut deserializer = serde_json::Deserializer::from_str(raw);
+    let parsed = deserializer.deserialize_seq(Items {
+        limit,
+        exceeded: &mut exceeded,
+    });
+    if exceeded {
+        return Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded));
+    }
+    Ok(parsed.ok().filter(|_| deserializer.end().is_ok()))
 }
 
 impl CopilotOutputItem {
@@ -248,6 +322,50 @@ mod tests {
             source_id: "copilot.process_log".to_owned(),
             path,
         }
+    }
+
+    #[test]
+    fn production_limits_reject_ignored_bytes_and_accumulated_items_atomically() {
+        use crate::acquisition::{AcquisitionError, AcquisitionOptions, acquire_source};
+        use telltale_schema::observation::ObservedAt;
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("bounded.log");
+        let input = source(path.clone());
+        let prefix = "Workspace initialized: synthetic-session (checkpoints: 0)\n";
+        fs::write(&path, " ".repeat(8 * 1024 * 1024)).unwrap();
+        assert!(extract_copilot_native_events(&input).unwrap().is_empty());
+        let at_limit = format!(
+            "{prefix}Accumulated output items: [{}]\n",
+            vec!["{}"; 99_999].join(",")
+        );
+        fs::write(&path, at_limit).unwrap();
+        assert_eq!(
+            extract_copilot_native_events(&input).unwrap().len(),
+            100_000
+        );
+        for raw in [
+            format!("{prefix}{}", " ".repeat(8 * 1024 * 1024 + 1)),
+            format!(
+                "{prefix}Accumulated output items: [{}]\n",
+                vec!["{}"; 100_001].join(",")
+            ),
+        ] {
+            fs::write(&path, raw).unwrap();
+            assert!(extract_copilot_native_events(&input).is_err());
+            assert_eq!(
+                acquire_source(
+                    &input,
+                    AcquisitionOptions::new(ObservedAt::new("2026-09-04T12:00:00Z").unwrap())
+                )
+                .err(),
+                Some(AcquisitionError::BoundedSourceRead(
+                    crate::source_read::BoundedReadError::LimitExceeded
+                ))
+            );
+        }
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(128 * 1024 * 1024 + 1).unwrap();
+        assert!(extract_copilot_native_events(&input).is_err());
     }
 
     #[test]

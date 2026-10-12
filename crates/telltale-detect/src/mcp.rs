@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -266,25 +265,7 @@ pub fn collect_mcp_inventory(input: &McpInventoryInput) -> Vec<McpInventoryObser
             path: input.path,
             format: definition.format,
         };
-        let read_allowance = remaining_bytes.min(1024 * 1024 + 1);
-        remaining_bytes -= read_allowance;
-        let parsed = match telltale_sources::install_inventory::read_inventory_config_bytes(
-            &config.path,
-            read_allowance - 1,
-        ) {
-            Ok(bytes) => {
-                remaining_bytes += read_allowance - bytes.len();
-                match std::str::from_utf8(&bytes) {
-                    Ok(raw) => Ok(parse_mcp_config_text(
-                        &config,
-                        raw,
-                        256 - observations.len(),
-                    )),
-                    Err(_) => Err("malformed_source"),
-                }
-            }
-            Err(reason) => Err(reason),
-        };
+        let parsed = read_mcp_config(&config, &mut remaining_bytes, 256 - observations.len());
         match parsed {
             Err(reason) => {
                 base.reason = Some(reason);
@@ -395,33 +376,76 @@ fn serialize_inventory_client<S: serde::Serializer>(
 }
 
 pub fn discover_mcp_inventory(root: &Path) -> Vec<(Source, Event)> {
-    let mut events = Vec::new();
-    for config in discover_mcp_configs(root) {
+    discover_mcp_scan(root).events
+}
+
+/// One bounded scan-local acquisition supplies both inventory and usage inference.
+#[derive(Default)]
+pub struct McpScan {
+    pub servers: Vec<McpServerInventory>,
+    pub events: Vec<(Source, Event)>,
+}
+
+pub fn discover_mcp_scan(root: &Path) -> McpScan {
+    let mut result = McpScan::default();
+    let (configs, discovery_error) = discover_mcp_configs(root);
+    if let Some(reason) = discovery_error {
+        result.events.push((
+            Source {
+                client: ClientId::Claude,
+                kind: SourceKind::Json,
+                source_id: "claude.workspace_mcp_config".into(),
+                path: root.into(),
+            },
+            mcp_inventory_error_event(ClientId::Claude, std::io::Error::other(reason)),
+        ));
+    }
+    let mut remaining_bytes = 4 * 1024 * 1024;
+    for config in configs {
         let source = Source {
             client: config.client,
             kind: SourceKind::Json,
             source_id: config.id.to_string(),
             path: config.path.clone(),
         };
-        match parse_mcp_config(&config) {
-            Ok(inventory) => {
-                events.extend(
+        match read_mcp_config(&config, &mut remaining_bytes, 256 - result.servers.len()) {
+            Ok(mut inventory) => {
+                if config.format == ConfigFormat::Toml {
+                    // Preserve the established Event3/usage-inference contract.
+                    for server in &mut inventory {
+                        server.declared_tools.clear();
+                    }
+                }
+                if inventory.iter().any(|server| {
+                    server.unsupported_reason.as_deref() == Some("mcp_server_limit_exceeded")
+                }) {
+                    result.events.push((
+                        source,
+                        mcp_inventory_error_event(
+                            config.client,
+                            std::io::Error::other("mcp_inventory_limit_exceeded"),
+                        ),
+                    ));
+                    continue;
+                }
+                result.events.extend(
                     inventory
-                        .into_iter()
-                        .map(|server| (source.clone(), mcp_inventory_event(&server))),
+                        .iter()
+                        .map(|server| (source.clone(), mcp_inventory_event(server))),
                 );
+                result.servers.extend(inventory);
             }
-            Err(error) => events.push((source, mcp_inventory_error_event(config.client, error))),
+            Err(reason) => result.events.push((
+                source,
+                mcp_inventory_error_event(config.client, std::io::Error::other(reason)),
+            )),
         }
     }
-    events
+    result
 }
 
 pub fn discover_mcp_inventory_servers(root: &Path) -> Vec<McpServerInventory> {
-    discover_mcp_configs(root)
-        .into_iter()
-        .flat_map(|config| parse_mcp_config(&config).unwrap_or_default())
-        .collect()
+    discover_mcp_scan(root).servers
 }
 
 /// Configuration-derived inference over one acquisition, not observed server provenance.
@@ -460,7 +484,7 @@ pub fn project_mcp_usage(
                 let usage = session
                     .servers
                     .entry(server.server_name.clone())
-                    .or_insert_with(|| McpServerUsage::new(server.clone()));
+                    .or_insert_with(|| McpServerUsage::new((*server).clone()));
                 let tool_count = usage.tools_used.entry(tool_name.clone()).or_default();
                 *tool_count = tool_count
                     .checked_add(count)
@@ -500,12 +524,12 @@ pub fn project_mcp_usage(
 }
 
 #[derive(Debug, Default)]
-struct McpToolIndex {
-    tools: BTreeMap<(ClientId, String), Vec<McpServerInventory>>,
+struct McpToolIndex<'a> {
+    tools: BTreeMap<(ClientId, String), Vec<&'a McpServerInventory>>,
 }
 
-impl McpToolIndex {
-    fn from_servers(servers: &[McpServerInventory]) -> Self {
+impl<'a> McpToolIndex<'a> {
+    fn from_servers(servers: &'a [McpServerInventory]) -> Self {
         let mut index = Self::default();
         for server in servers.iter().filter(|server| server.supported) {
             for tool_name in &server.declared_tools {
@@ -513,7 +537,7 @@ impl McpToolIndex {
                     .tools
                     .entry((server.client, normalize_tool_name(tool_name)))
                     .or_default()
-                    .push(server.clone());
+                    .push(server);
             }
         }
         index
@@ -523,7 +547,7 @@ impl McpToolIndex {
         self.tools.is_empty()
     }
 
-    fn lookup(&self, client: ClientId, tool_name: &str) -> Option<&[McpServerInventory]> {
+    fn lookup(&self, client: ClientId, tool_name: &str) -> Option<&[&'a McpServerInventory]> {
         self.tools
             .get(&(client, normalize_tool_name(tool_name)))
             .map(Vec::as_slice)
@@ -612,21 +636,61 @@ struct DiscoveredMcpConfig {
     format: ConfigFormat,
 }
 
-fn discover_mcp_configs(root: &Path) -> Vec<DiscoveredMcpConfig> {
+fn discover_mcp_configs(root: &Path) -> (Vec<DiscoveredMcpConfig>, Option<&'static str>) {
     let mut configs = MCP_CONFIGS
         .iter()
         .filter_map(|definition| {
             let path = root.join(definition.relative_path);
-            path.is_file().then_some(DiscoveredMcpConfig {
-                client: definition.client,
-                id: definition.id,
-                path,
-                format: definition.format,
-            })
+            path.symlink_metadata()
+                .is_ok()
+                .then_some(DiscoveredMcpConfig {
+                    client: definition.client,
+                    id: definition.id,
+                    path,
+                    format: definition.format,
+                })
         })
         .collect::<Vec<_>>();
-
-    configs.extend(discover_workspace_mcp_configs(root));
+    let fixed_count = configs.len();
+    let mut discovery_error = None;
+    if root.is_dir() {
+        // Count every visited entry, including errors and irrelevant files. Do
+        // not sort directory entries: WalkDir sorting would allocate before the cap.
+        for (index, entry) in WalkDir::new(root).max_depth(4).into_iter().enumerate() {
+            if index == 10_000 {
+                discovery_error = Some("mcp_traversal_limit_exceeded");
+                break;
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    discovery_error = Some("mcp_discovery_unreadable");
+                    break;
+                }
+            };
+            if entry.file_name() != ".mcp.json" {
+                continue;
+            }
+            if configs.iter().any(|config| config.path == entry.path()) {
+                continue;
+            }
+            if configs.len() == 64 {
+                discovery_error = Some("mcp_inventory_limit_exceeded");
+                break;
+            }
+            configs.push(DiscoveredMcpConfig {
+                client: ClientId::Claude,
+                id: "claude.workspace_mcp_config",
+                path: entry.into_path(),
+                format: ConfigFormat::Json,
+            });
+        }
+    }
+    if discovery_error.is_some() {
+        // Keep independently acquired fixed paths. An incomplete filesystem walk
+        // must not choose an arbitrary traversal-order subset for usage inference.
+        configs.truncate(fixed_count);
+    }
     configs.sort_by(|left, right| {
         (
             left.client.as_str(),
@@ -640,44 +704,26 @@ fn discover_mcp_configs(root: &Path) -> Vec<DiscoveredMcpConfig> {
             ))
     });
     configs.dedup_by(|left, right| left.client == right.client && left.path == right.path);
-    configs
+    (configs, discovery_error)
 }
 
-fn discover_workspace_mcp_configs(root: &Path) -> Vec<DiscoveredMcpConfig> {
-    if !root.is_dir() {
-        return Vec::new();
-    }
-
-    WalkDir::new(root)
-        .max_depth(4)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .filter(|path| path.file_name().and_then(|name| name.to_str()) == Some(".mcp.json"))
-        .map(|path| DiscoveredMcpConfig {
-            client: ClientId::Claude,
-            id: "claude.workspace_mcp_config",
-            path,
-            format: ConfigFormat::Json,
-        })
-        .collect()
-}
-
-fn parse_mcp_config(
+fn read_mcp_config(
     config: &DiscoveredMcpConfig,
-) -> Result<Vec<McpServerInventory>, std::io::Error> {
-    let raw = fs::read_to_string(&config.path)?;
-    let mut inventory = parse_mcp_config_text(config, &raw, usize::MAX);
-    if config.format == ConfigFormat::Toml {
-        // Preserve the established Event3/usage-inference contract: Codex TOML
-        // tool declarations are counted by the static facade, not attributed
-        // to observed calls by the legacy discovery entry point.
-        for server in &mut inventory {
-            server.declared_tools.clear();
-        }
+    remaining_bytes: &mut usize,
+    server_limit: usize,
+) -> Result<Vec<McpServerInventory>, &'static str> {
+    if *remaining_bytes == 0 {
+        return Err("mcp_inventory_limit_exceeded");
     }
-    Ok(inventory)
+    let allowance = (*remaining_bytes).min(1024 * 1024 + 1);
+    *remaining_bytes -= allowance;
+    let bytes = telltale_sources::install_inventory::read_inventory_config_bytes(
+        &config.path,
+        allowance - 1,
+    )?;
+    *remaining_bytes += allowance - bytes.len();
+    let raw = std::str::from_utf8(&bytes).map_err(|_| "malformed_source")?;
+    Ok(parse_mcp_config_text(config, raw, server_limit))
 }
 
 fn parse_mcp_config_text(
@@ -1415,6 +1461,88 @@ fn host_from_url(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_candidate_limit_preserves_fixed_inventory_and_reports_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"fixed":{"command":"synthetic"}}}"#,
+        )
+        .unwrap();
+        for index in 0..63 {
+            let workspace = dir.path().join(format!("workspace-{index}"));
+            std::fs::create_dir(&workspace).unwrap();
+            std::fs::write(workspace.join(".mcp.json"), "{}").unwrap();
+        }
+        let (_, error) = super::discover_mcp_configs(dir.path());
+        assert_eq!(error, None);
+        let workspace = dir.path().join("workspace-overflow");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::write(workspace.join(".mcp.json"), "{}").unwrap();
+        let result = super::discover_mcp_scan(dir.path());
+        assert_eq!(result.servers.len(), 1);
+        assert_eq!(result.servers[0].server_name, "fixed");
+        assert!(result.events.iter().any(|(_, event)| {
+            event
+                .evidence
+                .iter()
+                .any(|e| e.redacted_value == "mcp_inventory_limit_exceeded")
+        }));
+    }
+
+    #[test]
+    fn workspace_entry_limit_keeps_fixed_paths_and_counts_irrelevant_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".mcp.json"), "{}").unwrap();
+        for index in 0..10_000 {
+            std::fs::File::create(dir.path().join(format!("irrelevant-{index}"))).unwrap();
+        }
+        let (configs, error) = super::discover_mcp_configs(dir.path());
+        assert_eq!(configs.len(), 1);
+        assert_eq!(error, Some("mcp_traversal_limit_exceeded"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_workspace_does_not_discard_fixed_paths() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".mcp.json"), "{}").unwrap();
+        let private = dir.path().join("unreadable");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let permissions_enforced = std::fs::read_dir(&private).is_err();
+        let (configs, error) = super::discover_mcp_configs(dir.path());
+        std::fs::set_permissions(private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(configs.len(), 1);
+        if permissions_enforced {
+            assert_eq!(error, Some("mcp_discovery_unreadable"));
+        }
+    }
+    #[test]
+    fn production_inventory_rejects_oversized_padding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mcp.json");
+        let raw = r#"{"mcpServers":{"synthetic":{"command":"synthetic"}}}"#;
+        std::fs::write(
+            &path,
+            format!("{raw}{}", " ".repeat(1024 * 1024 - raw.len())),
+        )
+        .unwrap();
+        assert_eq!(super::discover_mcp_inventory_servers(dir.path()).len(), 1);
+        std::fs::write(
+            &path,
+            format!("{raw}{}", " ".repeat(1024 * 1024 + 1 - raw.len())),
+        )
+        .unwrap();
+        assert!(super::discover_mcp_inventory_servers(dir.path()).is_empty());
+        assert!(
+            super::discover_mcp_inventory(dir.path())[0]
+                .1
+                .tags
+                .contains(&"mcp_inventory_error".into())
+        );
+    }
     use std::fs;
     use std::path::PathBuf;
 
@@ -1442,7 +1570,7 @@ mod tests {
             format: ConfigFormat::Toml,
         };
         fs::write(&config.path, "[mcp_servers.s]\ncommand = 'node'\nargs = []\n[mcp_servers.s.env]\ncommand = 'TT_ENV_COMMAND_VALUE'\nurl = 'TT_ENV_URL_VALUE'\n").unwrap();
-        let servers = super::parse_mcp_config(&config).unwrap();
+        let servers = super::read_mcp_config(&config, &mut (4 * 1024 * 1024), 256).unwrap();
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].server_name, "s");
         assert_eq!(servers[0].command.as_deref(), Some("node"));

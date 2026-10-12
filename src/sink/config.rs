@@ -70,6 +70,15 @@ impl SinkSpec {
         };
         tls.as_ref().is_some_and(|tls| tls.insecure_skip_verify)
     }
+
+    pub fn allows_insecure_http(&self) -> bool {
+        let tls = match &self.kind {
+            SinkKind::Jsonl(_) => &None,
+            SinkKind::SplunkHec(spec) => &spec.tls,
+            SinkKind::ElasticBulk(spec) => &spec.tls,
+        };
+        tls.as_ref().is_some_and(|tls| tls.allow_insecure_http)
+    }
 }
 
 pub(crate) fn effective_delivery_posture(
@@ -150,6 +159,8 @@ pub struct TlsSpec {
     pub ca_file: Option<PathBuf>,
     #[serde(default)]
     pub insecure_skip_verify: bool,
+    #[serde(default)]
+    pub allow_insecure_http: bool,
 }
 
 fn retry_config_from_spec(spec: Option<&RetrySpec>) -> RetryConfig {
@@ -169,6 +180,7 @@ fn tls_options_from_spec(spec: Option<&TlsSpec>) -> TlsOptions {
         Some(spec) => TlsOptions {
             ca_file: spec.ca_file.clone(),
             insecure_skip_verify: spec.insecure_skip_verify,
+            allow_insecure_http: spec.allow_insecure_http,
         },
     }
 }
@@ -176,14 +188,24 @@ fn tls_options_from_spec(spec: Option<&TlsSpec>) -> TlsOptions {
 fn validate_http_endpoint(
     sink_name: &str,
     endpoint: &str,
+    allow_insecure_http: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-        Ok(())
-    } else {
-        Err(format!(
-            "sink '{sink_name}': endpoint must start with http:// or https://, got '{endpoint}'"
-        )
-        .into())
+    super::http::validate_endpoint(endpoint, allow_insecure_http)
+        .map(|_| ())
+        .map_err(|reason| format!("sink '{sink_name}': {reason}").into())
+}
+
+#[test]
+fn endpoints_reject_remote_plaintext_and_embedded_credentials() {
+    for endpoint in [
+        "http://collector.example.invalid/ingest",
+        "https://user:synthetic@collector.example.invalid/ingest",
+        "https://collector.example.invalid/ingest#fragment",
+    ] {
+        assert!(
+            validate_http_endpoint("synthetic", endpoint, false).is_err(),
+            "{endpoint}"
+        );
     }
 }
 
@@ -628,7 +650,11 @@ fn build_sink_set_with_presence_and_delivery_with_activation(
                     );
                 }
                 SinkKind::SplunkHec(hec) => {
-                    validate_http_endpoint(&spec.name, &hec.endpoint)?;
+                    validate_http_endpoint(
+                        &spec.name,
+                        &hec.endpoint,
+                        hec.tls.as_ref().is_some_and(|tls| tls.allow_insecure_http),
+                    )?;
                     let token = hec.token.resolve(&format!("sink '{}' token", spec.name))?;
                     let retry = retry_config_from_spec(hec.retry.as_ref());
                     let defaults = SplunkHecConfig::default();
@@ -651,7 +677,14 @@ fn build_sink_set_with_presence_and_delivery_with_activation(
                     sinks.add_best_effort_with_retry("splunk_hec", Box::new(sink), retry);
                 }
                 SinkKind::ElasticBulk(elastic) => {
-                    validate_http_endpoint(&spec.name, &elastic.endpoint)?;
+                    validate_http_endpoint(
+                        &spec.name,
+                        &elastic.endpoint,
+                        elastic
+                            .tls
+                            .as_ref()
+                            .is_some_and(|tls| tls.allow_insecure_http),
+                    )?;
                     let retry = retry_config_from_spec(elastic.retry.as_ref());
                     let index = elastic
                         .index
@@ -703,6 +736,7 @@ fn build_sink_set_with_presence_and_delivery_with_activation(
     }
 
     if let Some((endpoint, token)) = cli_hec {
+        validate_http_endpoint(CLI_SPLUNK_HEC_SINK_NAME, endpoint, false)?;
         sinks.add_best_effort(
             "splunk_hec",
             Box::new(SplunkHecHttpSink::new(
@@ -970,7 +1004,7 @@ version: 1
 sinks:
   - name: corp-elastic
     type: elastic_bulk
-    endpoint: http://elastic.example.com:9200
+    endpoint: https://elastic.example.com:9200
     api_key: key
     username: user
     password: pass
@@ -1076,7 +1110,7 @@ sinks:
   - name: corp-splunk
     type: splunk_hec
     enabled: false
-    endpoint: http://splunk.example.com:8088
+    endpoint: https://splunk.example.com:8088
     token: { env: TELLTALE_TEST_UNSET_TOKEN_VAR }
 "#,
         );
@@ -1099,7 +1133,7 @@ version: 1
 sinks:
   - name: corp-splunk
     type: splunk_hec
-    endpoint: http://splunk.example.com:8088
+    endpoint: https://splunk.example.com:8088
     token: { env: TELLTALE_TEST_UNSET_TOKEN_VAR }
 "#,
         );

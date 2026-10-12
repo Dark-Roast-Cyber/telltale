@@ -392,8 +392,12 @@ fn acquire_source_impl(
                 .map_err(map_qwen_error)?
         }
         ClientId::Copilot => {
-            let events =
-                extract_copilot_native_events(source).map_err(|_| AcquisitionError::SourceRead)?;
+            let events = extract_copilot_native_events(source).map_err(|error| match error {
+                SourceReadError::Bounded(reason @ BoundedReadError::LimitExceeded) => {
+                    AcquisitionError::BoundedSourceRead(reason)
+                }
+                _ => AcquisitionError::SourceRead,
+            })?;
             use crate::sources::copilot::native::CopilotNativeEvent;
             use telltale_schema::record::RecordKind;
             for event in &events {

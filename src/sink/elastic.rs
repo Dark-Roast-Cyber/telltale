@@ -142,6 +142,7 @@ fn elastic_transport_error(err: crate::sink::http::HttpPostError) -> DeliveryErr
 
 fn elastic_status_error(status: u16, attempts: u32) -> DeliveryError {
     let class = match status {
+        300..=399 => DeliveryErrorClass::SinkResponseBlocked,
         401 | 403 => DeliveryErrorClass::AuthenticationBlocked { status },
         status => DeliveryErrorClass::HttpStatus { status },
     };
@@ -150,6 +151,16 @@ fn elastic_status_error(status: u16, attempts: u32) -> DeliveryError {
         attempts,
         format!("Elasticsearch bulk request failed with HTTP {status}"),
     )
+}
+
+#[test]
+fn redirects_are_releasable_not_poison() {
+    for status in [301, 302, 303, 307, 308] {
+        assert_eq!(
+            elastic_status_error(status, 1).class,
+            DeliveryErrorClass::SinkResponseBlocked
+        );
+    }
 }
 
 fn validate_bulk_response(body: &str, attempts: u32) -> Result<(), Box<dyn std::error::Error>> {

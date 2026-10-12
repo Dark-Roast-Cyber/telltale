@@ -146,9 +146,9 @@ pub(crate) fn read_jsonl_values_with_limits(
     read_production_jsonl(fs::File::open(&source.path)?)
 }
 
-const PRODUCTION_RECORD_BYTES: usize = 8 * 1024 * 1024;
-const PRODUCTION_SOURCE_BYTES: usize = 128 * 1024 * 1024;
-const PRODUCTION_NATIVE_UNITS: usize = 100_000;
+pub(crate) const PRODUCTION_RECORD_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const PRODUCTION_SOURCE_BYTES: usize = 128 * 1024 * 1024;
+pub(crate) const PRODUCTION_NATIVE_UNITS: usize = 100_000;
 
 fn production_limit_error() -> SourceReadError {
     std::io::Error::new(

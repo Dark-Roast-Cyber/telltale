@@ -7,7 +7,7 @@ use time::OffsetDateTime;
 
 use crate::allowlist::{load_allowlist, suppress_detection};
 use crate::baseline::BaselineDeviationConfig;
-use crate::cli::historical::{EventRecordKind, JsonlEventRecord, read_jsonl_records};
+use crate::cli::historical::{EventRecordKind, JsonlEventRecord, visit_jsonl_records};
 use crate::discovery::is_fixture_root;
 use crate::event::{
     Event, Evidence, HealthEventInput, OperationalAlertConfig, OperationalAlertInput,
@@ -20,7 +20,7 @@ use crate::file_lock::validate_runtime_paths;
 use crate::install_inventory::{
     collect_install_inventory, install_inventory_due, snapshot_to_event,
 };
-use crate::mcp::{discover_mcp_inventory, discover_mcp_inventory_servers};
+use crate::mcp::discover_mcp_scan;
 use crate::process_chain::ProcessChainConfig;
 use crate::rules::{
     RuleLoadMode, RulePackPaths,
@@ -290,10 +290,10 @@ fn run_scan_for_platform(
     )?;
     let process_chain_rules = load_process_chain_rules_if_enabled();
     let process_config = ProcessChainConfig::default();
-    let mcp_servers = if config.execution.emit_activity && !targeted {
-        discover_mcp_inventory_servers(config.execution.root)
+    let mcp_scan = if config.execution.emit_activity && !targeted {
+        discover_mcp_scan(config.execution.root)
     } else {
-        Vec::new()
+        Default::default()
     };
     let processed_sources = sources
         .iter()
@@ -302,7 +302,7 @@ fn run_scan_for_platform(
                 source,
                 &state,
                 canonical::CanonicalProcessingOptions {
-                    mcp_servers: &mcp_servers,
+                    mcp_servers: &mcp_scan.servers,
                     dry_run: config.execution.dry_run,
                     backfill: config.backfill,
                     baseline_deviation: BaselineDeviationConfig {
@@ -365,9 +365,7 @@ fn run_scan_for_platform(
     }
     // MCP discovery walks host-wide config directories; targeted scans only
     // re-examine changed session sources, so leave it to full scans.
-    if config.execution.emit_activity && !targeted {
-        activities.extend(discover_mcp_inventory(config.execution.root));
-    }
+    activities.extend(mcp_scan.events);
     let mut detection_flow = detection_flow_accounting(&detections);
     let mut suppressed_count = 0_usize;
     for (source, detection) in &mut detections {
@@ -1080,44 +1078,49 @@ fn journal_status_json(
     if !log_path.exists() {
         return Err(("no_native_health", "no_native_health".into()));
     }
-    let records = read_jsonl_records(log_path).map_err(|error| ("journal_read_failed", error))?;
-    if records.is_empty() {
-        return Err(("no_native_health", "no_native_health".into()));
-    }
-    let native_health_index = records.iter().rposition(|record| {
-        record.kind == EventRecordKind::Native && event_record_has_type(record, "health")
-    });
-    let status = if let Some(health_index) = native_health_index {
-        let detection_count = records[health_index + 1..]
-            .iter()
-            .filter(|record| {
-                record.kind == EventRecordKind::Native && event_record_has_type(record, "detection")
-            })
-            .count();
+    let mut native_seen = false;
+    let mut historical_seen = false;
+    let mut native_health = None;
+    let mut historical_health = None;
+    let mut native_detections = 0;
+    let mut historical_detections = 0;
+    visit_jsonl_records(log_path, |record, _| {
+        match record.kind {
+            EventRecordKind::Native => {
+                native_seen = true;
+                if event_record_has_type(&record, "health") {
+                    native_health = Some(record.value);
+                    native_detections = 0;
+                } else if event_record_has_type(&record, "detection") {
+                    native_detections += 1;
+                }
+            }
+            EventRecordKind::Historical => {
+                historical_seen = true;
+                if event_record_has_type(&record, "health") {
+                    historical_health = Some(record.value);
+                } else if event_record_has_type(&record, "detection") {
+                    historical_detections += 1;
+                }
+            }
+        }
+        Ok(())
+    })
+    .map_err(|error| ("journal_read_failed", error))?;
+    let status = if let Some(health) = native_health {
         status_json(
             "ok",
-            Some(&records[health_index].value),
-            detection_count,
+            Some(&health),
+            native_detections,
             log_path,
             state_path,
             durable_health,
         )
-    } else if records
-        .iter()
-        .all(|record| record.kind == EventRecordKind::Historical)
-    {
-        let health = records
-            .iter()
-            .rev()
-            .find(|record| event_record_has_type(record, "health"));
-        let detection_count = records
-            .iter()
-            .filter(|record| event_record_has_type(record, "detection"))
-            .count();
+    } else if historical_seen && !native_seen {
         status_json(
             "historical_only",
-            health.map(|record| &record.value),
-            detection_count,
+            historical_health.as_ref(),
+            historical_detections,
             log_path,
             state_path,
             durable_health,
