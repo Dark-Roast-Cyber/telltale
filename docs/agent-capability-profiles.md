@@ -95,8 +95,8 @@ Source: `opencode.sqlite`.
 | Call ID, error state, content parts | Partial | Selected tool parts preserve reported call identity and lifecycle facts. |
 
 The `opencode.sqlite` canonical adapter feeds the production Detection v2 source
-runtime. Caller-supplied record evaluation is a separate API and is not produced
-from this store.
+runtime. Caller-supplied record evaluation was removed; use the
+[embedding surface](embedding.md) for source scans.
 
 ### GitHub Copilot
 

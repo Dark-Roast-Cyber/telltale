@@ -279,7 +279,7 @@ PRs, issues, feedback, and active engagement are very welcome. We would especial
 - `schemas/` — JSON schema for emitted events
 - `config/rules/tool-call-regex.yaml` — bundled detection rules
 - `config/allowlists.yaml` — suppression examples
-- `docs/` — public technical documentation
+- `docs/` — public technical documentation; start at `docs/README.md`
 - `openspec/specs/` — durable public behavioral requirements
 
 For project direction and planning ownership, see [ROADMAP.md](ROADMAP.md). Detailed active implementation planning and scratch context are intentionally kept out of the public release boundary.
@@ -288,44 +288,20 @@ For project direction and planning ownership, see [ROADMAP.md](ROADMAP.md). Deta
 
 For approachable guides on agentic forensics, Telltale, and the broader Agent Archaeology practice, see [AgentArchaeology.ai](https://agentarchaeology.ai/).
 
-### Upstream technical docs
+The [documentation map](docs/README.md) is the routing index for this
+repository. Use it to choose the current contract, and do not treat an accepted
+future page as shipped behavior. Start with:
 
-These files are the source-of-truth for Telltale's current implementation, rules, schemas, and accepted future architecture:
-
-- [Roadmap](ROADMAP.md) — milestone-level project direction and planning/source-of-truth ownership
 - [Install](docs/install.md) — build, verify, and deploy
-- [Architecture](docs/architecture.md) — pipeline stages and module boundaries
-- [Semantic foundation](docs/semantic-foundation.md) — accepted future semantic boundaries
-- [Event4 architecture](docs/event4.md) — accepted contract with a non-production foundation
-- [Canonical Observation v2](docs/canonical-observation-v2.md) — current source-evidence contract
-- [Detection v2](docs/detection-v2.md) — current canonical runtime evaluator and compatibility model
-- [Telemetry/output architecture](docs/telemetry-output-architecture.md) — accepted future output boundary
-- [Development principles](docs/development-principles.md) — authoritative architecture and development philosophy
-- [Detection model](docs/detection-model.md) — risk scoring, rule categories, thresholds
-- [Telemetry output](docs/telemetry-output.md) — JSONL event schema and forwarding
-- [Detection content standard](docs/detection-content-standard.md) — quality bar for bundled rules
-- [Threat taxonomy](docs/threat-taxonomy.md) — operational threat categories
-- [Privacy model](docs/privacy-model.md) — redaction policy and evidence boundaries
-- [Release readiness](docs/release-readiness.md) — preflight checklist for public releases
-- [Versioning and releases](docs/versioning.md) — package, CLI, schema, and tag version policy
+- [Source validation matrix](docs/source-validation-matrix.md) — which source claims are supported
+- [Embedding](docs/embedding.md) — supported Rust host surface
+- [Telemetry output](docs/telemetry-output.md) — current Event 3.0 JSONL and forwarding
+- [0.7.0 migration](docs/migrations/0.7.0.md) — current upgrade line
 
-### Additional references
-
-- [Session sources](docs/session-sources.md) — discovery paths per client
-- [Agent capability profiles](docs/agent-capability-profiles.md) — per-client field availability
-- [MCP tool inventory](docs/mcp-tool-inventory.md) — MCP configuration inventory emission
-- [Policy modes](docs/policy-modes.md) — observe, alert, simulate-block modes
-- [Policy authoring](docs/agent-policy-authoring.md) — turning human policy into detection content
-- [Adding an agent source](docs/adding-agent-source.md) — contributor checklist for new agent/session-source support
-- [Use cases](docs/use-cases.md) — concrete detection use cases with fixture guidance
-- [Source validation matrix](docs/source-validation-matrix.md) — coverage and validation gates
-- [Requirements](docs/requirements.md) — functional, security, and operational requirements
-- [Trust boundaries](docs/trust-boundaries.md) — trust model for untrusted agent content
-- [License and packaging](docs/license-and-packaging.md) — Apache-2.0 core and separate-license boundary
-
-Use the release readiness checklist before tagging or publishing release
-artifacts; it includes the public repository boundary review for staged or
-tagged content.
+Formal behavioral requirements live in `openspec/specs/`. Milestone direction
+is [ROADMAP.md](ROADMAP.md). Use the [release readiness checklist](docs/release-readiness.md) before tagging
+or publishing release artifacts; it includes the public repository boundary
+review for staged or tagged content.
 
 ## License
 

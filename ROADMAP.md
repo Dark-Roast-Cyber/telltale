@@ -173,6 +173,7 @@ state.
 | --- | --- |
 | `README.md` | Current product overview, supported user-facing behavior, and entry points |
 | `ROADMAP.md` | Public milestone-level direction and sequencing |
+| `docs/README.md` | Reader routing index. It does not override a linked contract. |
 | `docs/` | Durable architecture, contracts, operating guidance, and contributor documentation |
 | `openspec/specs/` | Durable formal behavioral requirements |
 | GitHub Issues | Accepted, bounded backlog and work items |

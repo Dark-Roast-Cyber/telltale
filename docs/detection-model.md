@@ -60,7 +60,8 @@ See [threat-taxonomy.md](threat-taxonomy.md) for the Telltale category contract,
 A second rule vocabulary evaluates command-derived parent/child relationships
 and standalone indicators from canonical Tool evidence through Detection v2.
 Its session results project to `process_chain` events through the Event3
-compatibility boundary. Direct-record APIs retain Rule v1 compatibility only.
+compatibility boundary. Rule v1 content is evaluated over canonical observations;
+direct-record evaluation APIs were removed.
 
 Process-chain rules add the `defense_evasion`, `command_and_control`,
 `discovery`, `credential_access`, `lateral_movement`, `impact`, and `collection`

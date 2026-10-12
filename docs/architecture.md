@@ -19,13 +19,12 @@ response metadata carried by emitted Event 3.0 events.
 
 ## Current runtime and future boundaries
 
-The accepted future semantic contracts are documented in the [semantic
-foundation](semantic-foundation.md), [Event4](event4.md), [Canonical Observation
-v2](canonical-observation-v2.md), [Detection v2](detection-v2.md), and
-[telemetry/output architecture](telemetry-output-architecture.md) pages. They
-are accepted architecture, with the Detection v2 runtime now authoritative for
-the canonical scan/watch/embedding path. Event4 production persistence and
-output are not implemented; neither is Telemetry/Output v2. The public
+The [semantic foundation](semantic-foundation.md), [Canonical Observation
+v2](canonical-observation-v2.md), and [Detection v2](detection-v2.md) describe
+the active canonical scan/watch/embedding path. [Event4](event4.md) and
+[telemetry/output architecture](telemetry-output-architecture.md) describe
+accepted future boundaries: production Event4 persistence/output and
+Telemetry/Output v2 are not implemented. The public
 `telltale_sources::acquisition` module owns authoritative cross-source
 Canonical Observation v2 acquisition for all eight target identities. It is the
 single router: source-native extraction flows into source-owned canonical
@@ -134,20 +133,24 @@ arguments only, without URL/path/network manufacturing from other facts.
 
 ## Module Boundaries
 
-- `discovery`: knows where each agent stores sessions.
-- `sources`: per-agent native extraction and canonical mapping. See
-  [Adding an Agent Source](adding-agent-source.md) for the current checklist.
-  There is no parser registration table and no source-backed record projection.
-- `acquisition`: the public `telltale_sources::acquisition` single router for
-  source-native extraction, source-owned canonical mapping, and acquisition
-  batches across the supported identities. Its source mappers are crate-private.
-- `rules`: loads and validates detection content; Rule v1 remains a content
-  compatibility format during Detection v2 convergence.
-- `scoring`: legacy record-level compatibility scoring remains available while
-  canonical runtime scoring is owned by Detection v2.
-- `event`: redaction, schema-shaped event builders, evidence hashes, and local JSONL serialization.
-- `sink`: vendor-neutral event delivery boundary. Sink-specific envelopes belong here, while the canonical event payload stays unchanged.
-- `state`: scan checkpoints and duplicate suppression.
+Start at the boundary that owns the behavior, then read its callers and nearby
+tests. These are code navigation links, not an additional public API promise;
+[embedding](embedding.md) defines the supported host surface.
+
+| Boundary | Code entry point | Responsibility |
+| --- | --- | --- |
+| CLI scan/watch | [src/cli/scan.rs](../src/cli/scan.rs), [scan modules](../src/cli/scan/) | Configuration, changed-source selection, watch lifecycle, and orchestration. |
+| Embedding | [core facade](../crates/telltale/src/lib.rs), [canonical runtime](../crates/telltale/src/canonical_runtime.rs) | `Pipeline` returns values to hosts; shared source processing is an internal cross-crate seam, not an embedding API. |
+| Sources | [acquisition](../crates/telltale-sources/src/acquisition.rs), [source modules](../crates/telltale-sources/src/sources/) | One exact-identity router to native extraction and canonical mapping. See [adding a source](adding-agent-source.md). |
+| Content | [rules crate](../crates/telltale-rules/README.md) | Loads and validates Rule v1 content, evaluated by Detection v2 rather than a second engine. |
+| Detection | [Detection v2](../crates/telltale-detect/src/v2/) | Canonical evaluation, findings, scoring, and Event3 compatibility projection. Record-level scoring APIs were removed. |
+| Schema and privacy | [schema crate](../crates/telltale-schema/README.md), [event module](../crates/telltale-schema/src/event/) | Observation/event types, contribution types, redaction, hashes, validation, and serialization. |
+| Delivery and checkpoints | [sinks](../src/sink/), [state](../src/state.rs) | CLI-owned delivery, persistence, and duplicate suppression; vendor envelopes do not change canonical payloads. |
+| Tests | [CLI tests](../tests/cli/), [evaluation corpus](../tests/evaluation/README.md) | End-to-end behavior and synthetic characterization; crate-local tests cover semantic boundaries. |
+
+Dependencies point from applications and consumers toward the reusable crates.
+The core does not depend on the CLI, Console, or downstream integrations. Shared
+semantics belong in their owning crate, not in parallel CLI and host implementations.
 
 ## Normalized Record Types
 

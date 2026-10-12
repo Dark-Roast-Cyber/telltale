@@ -2,9 +2,8 @@
 //! per-agent native extraction, canonical acquisition, and installed-agent inventory.
 //!
 //! Source modules read local agent session stores into source-native facts and
-//! Canonical Observation v2. Caller-supplied normalized records are a separate
-//! compatibility path and are not produced here. Detection, scoring, and
-//! delivery live in the downstream crates.
+//! Canonical Observation v2. There is no normalized-record compatibility path.
+//! Detection, scoring, and delivery live in the downstream crates.
 
 pub mod acquisition;
 pub mod clients;

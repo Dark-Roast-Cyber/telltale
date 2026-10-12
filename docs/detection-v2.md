@@ -667,8 +667,8 @@ The eight stable v1 targets remain exactly `arguments`, `assistant_context`,
 The compiler maps effective Rule v1 IDs and metadata into observation-match
 detector definitions with `rule_version: 1`; IDs are not renamed. Detection v2
 resolves canonical applicability, capabilities, and truthful selector values,
-then applies the same compiled Rule v1 predicates (including target-local
-exclusions) as the I/O-free Rule v1 API and direct-record compatibility.
+then applies compiled Rule v1 predicates (including target-local exclusions)
+over canonical observations. Direct-record evaluation APIs were removed.
 Modifiers remain Rule v1 compatibility session constructs: the content evaluator
 triggers them from matched atomic Rule v1 IDs and categories, but they never
 become DetectorResults, Signals, Findings, or native v2 correlation detectors.
