@@ -491,13 +491,14 @@ emitted by scans or CLI watch.
   sanitized, and environment values and secrets are never emitted. No hidden
   directory walks.
 - Bounds: 64 configuration candidates, 1 MiB accepted per file, a 4 MiB aggregate
-  read budget including one-byte overrun probes, and 256 observations plus one
-  content-free exhaustion observation. Each read reserves at most 1 MiB + 1 byte,
-  capped by the remaining budget; only successful reads refund unused allowance,
-  and failed reads keep their full reservation. Unsupported identities read
-  nothing. Reduced capacity can reject an otherwise valid file
-  (`source_limit_exceeded`); exhausted bounds report
-  `mcp_inventory_limit_exceeded`, never partial content.
+  read budget, and 256 observations plus one content-free exhaustion observation.
+  Each read reserves at most 1 MiB + 1 byte, including a one-byte overrun probe,
+  capped by the remaining budget. Successful reads refund unused allowance,
+  including the probe. Failed reads restore the full reservation because the
+  reader returns no bytes; only accepted bytes stay charged. Unsupported
+  identities read nothing. Reduced capacity can reject an otherwise valid file
+  (`source_limit_exceeded`) without consuming the remaining budget; exhausted
+  bounds report `mcp_inventory_limit_exceeded`, never partial content.
 - MCP inspection is static and never connects to a server. Codex TOML handling
   is a bounded single-line subset (quoted sections, environment keys, arrays);
   unsupported MCP syntax yields an explicit unsupported outcome, and only

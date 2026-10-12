@@ -185,16 +185,16 @@ command = "TT_SECOND_FAKE_COMMAND"
         std::fs::remove_file(&path).unwrap();
         let inventory =
             collect_mcp_inventory(&McpInventoryInput::Configs(vec![config.clone(); 65]));
-        // Failed attempts retain their full allowance, including the probe;
-        // the fourth attempt uses the remainder and the fifth reports exhaustion.
-        assert_eq!(inventory.len(), 5);
+        // Failed reads restore their reservation. The 65th candidate hits the
+        // config cap without exhausting the byte budget.
+        assert_eq!(inventory.len(), 65);
         assert!(
             inventory
                 .iter()
                 .all(|s| s.state() == McpInventoryState::Error)
         );
         assert!(
-            inventory[..4]
+            inventory[..64]
                 .iter()
                 .all(|s| s.reason() == Some("source_missing"))
         );
@@ -223,8 +223,10 @@ command = "TT_SECOND_FAKE_COMMAND"
         std::fs::write(&path, raw).unwrap();
         let inventory = collect_mcp_inventory(&McpInventoryInput::Configs(vec![config; 5]));
         // The first three successful exact-MiB reads refund their unused probes.
-        // The fourth has only 1 MiB left including its probe, so cannot accept
-        // another exact-MiB file. Empty server maps produce no observations.
+        // The fourth and fifth do not fit in the remaining 1 MiB including the
+        // probe. Each rejection restores its reservation, so both report a file
+        // limit rather than aggregate exhaustion. Empty server maps produce no
+        // observations.
         assert_eq!(inventory.len(), 2);
         assert!(
             inventory
@@ -232,8 +234,11 @@ command = "TT_SECOND_FAKE_COMMAND"
                 .all(|s| s.state() == McpInventoryState::Error)
         );
         assert!(inventory.iter().all(|s| s.server_name().is_none()));
-        assert_eq!(inventory[0].reason(), Some("source_limit_exceeded"));
-        assert_eq!(inventory[1].reason(), Some("mcp_inventory_limit_exceeded"));
+        assert!(
+            inventory
+                .iter()
+                .all(|s| s.reason() == Some("source_limit_exceeded"))
+        );
         for output in [
             format!("{inventory:?}"),
             serde_json::to_string(&inventory).unwrap(),

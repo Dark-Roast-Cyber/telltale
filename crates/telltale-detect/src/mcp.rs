@@ -198,8 +198,9 @@ impl McpInventoryObservation {
 /// Explicit invalid identities and file failures remain visible as bounded errors.
 /// At most 64 configs and 256 server/error observations are processed, plus one
 /// content-free exhaustion observation. Accepted content is at most 1 MiB per
-/// file; the 4 MiB read budget includes each attempt's one-byte overrun probe.
-/// Failed reads retain their full reserved allowance since consumption is unknown.
+/// file. Each read reserves at most 1 MiB + 1 byte, including the overrun probe,
+/// capped by the remaining 4 MiB budget. A failed read restores that reservation
+/// because the reader returns no bytes; only accepted bytes stay charged.
 pub fn collect_mcp_inventory(input: &McpInventoryInput) -> Vec<McpInventoryObservation> {
     let configs: Vec<McpConfigInput> = match input {
         McpInventoryInput::Configs(configs) => configs.iter().take(65).cloned().collect(),
@@ -717,10 +718,16 @@ fn read_mcp_config(
     }
     let allowance = (*remaining_bytes).min(1024 * 1024 + 1);
     *remaining_bytes -= allowance;
-    let bytes = telltale_sources::install_inventory::read_inventory_config_bytes(
+    let bytes = match telltale_sources::install_inventory::read_inventory_config_bytes(
         &config.path,
         allowance - 1,
-    )?;
+    ) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            *remaining_bytes += allowance;
+            return Err(reason);
+        }
+    };
     *remaining_bytes += allowance - bytes.len();
     let raw = std::str::from_utf8(&bytes).map_err(|_| "malformed_source")?;
     Ok(parse_mcp_config_text(config, raw, server_limit))
@@ -1491,6 +1498,43 @@ mod tests {
     }
 
     #[test]
+    fn failed_workspace_reads_do_not_starve_fixed_mcp_configs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codex")).unwrap();
+        std::fs::write(
+            dir.path().join(".codex/config.toml"),
+            "[mcp_servers.fixed]\ncommand = 'synthetic'\n",
+        )
+        .unwrap();
+        for index in 0..4 {
+            let workspace = dir.path().join(format!("workspace-{index}"));
+            std::fs::create_dir(&workspace).unwrap();
+            std::fs::create_dir(workspace.join(".mcp.json")).unwrap();
+        }
+        let result = super::discover_mcp_scan(dir.path());
+        assert!(
+            result.servers.iter().any(|server| {
+                server.server_name == "fixed" && server.client == ClientId::Codex
+            })
+        );
+        let error_reasons: Vec<_> = result
+            .events
+            .iter()
+            .filter_map(|(_, event)| {
+                event.evidence.iter().find_map(|evidence| {
+                    (evidence.field == "mcp_inventory_error")
+                        .then_some(evidence.redacted_value.as_str())
+                })
+            })
+            .collect();
+        assert_eq!(error_reasons.len(), 4);
+        assert!(error_reasons.iter().all(|reason| {
+            *reason == "non_regular_source" || *reason == "source_permission_denied"
+        }));
+        assert!(!error_reasons.contains(&"mcp_inventory_limit_exceeded"));
+    }
+
+    #[test]
     fn workspace_entry_limit_keeps_fixed_paths_and_counts_irrelevant_entries() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".mcp.json"), "{}").unwrap();
@@ -1936,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn static_inventory_failed_reads_conservatively_exhaust_the_byte_budget() {
+    fn static_inventory_failed_reads_do_not_consume_the_byte_budget() {
         let temp = tempdir().unwrap();
         let directory_reason = telltale_sources::install_inventory::read_inventory_config_bytes(
             temp.path(),
@@ -1951,6 +1995,8 @@ mod tests {
             // Windows rejects directory opens before regular-file metadata validation.
             assert_eq!(directory_reason, "source_permission_denied");
         }
+        let valid = temp.path().join("valid.json");
+        fs::write(&valid, r#"{"mcpServers":{"kept":{"command":"node"}}}"#).unwrap();
         for (path, reason) in [
             (temp.path().join("missing.json"), "source_missing"),
             (temp.path().to_path_buf(), directory_reason),
@@ -1963,24 +2009,20 @@ mod tests {
                         path.clone(),
                     )
                 })
+                .chain(std::iter::once(super::McpConfigInput::new(
+                    ClientId::Claude,
+                    "claude.project_mcp_config",
+                    valid.clone(),
+                )))
                 .collect();
             let observations =
                 super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
-            assert_eq!(observations.len(), 5);
-            assert!(
-                observations
-                    .iter()
-                    .all(|item| item.state() == super::McpInventoryState::Error)
-            );
-            assert!(
-                observations[..4]
-                    .iter()
-                    .all(|item| item.reason() == Some(reason))
-            );
-            assert_eq!(
-                observations[4].reason(),
-                Some("mcp_inventory_limit_exceeded")
-            );
+            assert_eq!(observations.len(), 9);
+            assert!(observations[..8].iter().all(|item| {
+                item.reason() == Some(reason) && item.state() == super::McpInventoryState::Error
+            }));
+            assert_eq!(observations[8].state(), super::McpInventoryState::Supported);
+            assert_eq!(observations[8].server_name(), Some("kept"));
         }
     }
 
@@ -2018,47 +2060,57 @@ mod tests {
     }
 
     #[test]
-    fn static_inventory_reserves_overrun_probe_at_aggregate_boundary() {
+    fn static_inventory_charges_only_accepted_bytes_at_aggregate_boundary() {
         let temp = tempdir().unwrap();
-        let path = temp.path().join("config.json");
-        let missing = temp.path().join("missing.json");
-        let tiny = temp.path().join("tiny.json");
-        fs::write(&tiny, "x").unwrap();
+        let exact = temp.path().join("exact.json");
         let mut raw = r#"{"mcpServers":{"fixture":{"command":"node"}}}"#.to_owned();
-        raw.push_str(&" ".repeat(1024 * 1024 - 4 - raw.len()));
-        fs::write(&path, raw).unwrap();
-        // One successful read plus three unknown-consumption failures leaves
-        // exactly one byte: only the overrun probe, no accepted content.
-        let configs = [
-            path,
-            missing.clone(),
-            missing.clone(),
-            missing,
-            tiny.clone(),
-            tiny,
-        ]
-        .into_iter()
-        .map(|path| super::McpConfigInput::new(ClientId::Claude, "claude.project_mcp_config", path))
-        .collect();
+        raw.push_str(&" ".repeat(1024 * 1024 - raw.len()));
+        fs::write(&exact, &raw).unwrap();
+        let oversized = temp.path().join("oversized.json");
+        fs::write(&oversized, format!("{raw} ")).unwrap();
+        let tiny = temp.path().join("tiny.json");
+        fs::write(&tiny, r#"{"mcpServers":{"kept":{"command":"node"}}}"#).unwrap();
+        // Three exact-MiB reads leave 1 MiB. The oversized file does not fit in
+        // that remainder including its probe, fails closed, and restores the
+        // reservation so the tiny file is still accepted.
+        let configs = [exact.clone(), exact.clone(), exact.clone(), oversized, tiny]
+            .into_iter()
+            .map(|path| {
+                super::McpConfigInput::new(ClientId::Claude, "claude.project_mcp_config", path)
+            })
+            .collect();
         let observations =
             super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
-        assert_eq!(observations.len(), 6);
-        assert_eq!(observations[0].state(), super::McpInventoryState::Supported);
+        assert_eq!(observations.len(), 5);
         assert!(
-            observations[1..4]
+            observations[..3]
                 .iter()
-                .all(|item| item.reason() == Some("source_missing"))
+                .all(|item| item.state() == super::McpInventoryState::Supported)
         );
-        assert_eq!(observations[4].reason(), Some("source_limit_exceeded"));
-        assert_eq!(
-            observations[5].reason(),
-            Some("mcp_inventory_limit_exceeded")
-        );
+        assert_eq!(observations[3].reason(), Some("source_limit_exceeded"));
+        assert_eq!(observations[4].state(), super::McpInventoryState::Supported);
+        assert_eq!(observations[4].server_name(), Some("kept"));
+
+        // An exact-MiB file does not fit in a 1 MiB remainder once the probe is
+        // reserved. That rejection must not consume the remainder.
+        let after = temp.path().join("after.json");
+        fs::write(&after, r#"{"mcpServers":{"after":{"command":"node"}}}"#).unwrap();
+        let configs = [exact.clone(), exact.clone(), exact.clone(), exact, after]
+            .into_iter()
+            .map(|path| {
+                super::McpConfigInput::new(ClientId::Claude, "claude.project_mcp_config", path)
+            })
+            .collect();
+        let observations =
+            super::collect_mcp_inventory(&super::McpInventoryInput::Configs(configs));
+        assert_eq!(observations.len(), 5);
         assert!(
-            observations[4..]
+            observations[..3]
                 .iter()
-                .all(|item| item.server_name().is_none())
+                .all(|item| item.state() == super::McpInventoryState::Supported)
         );
+        assert_eq!(observations[3].reason(), Some("source_limit_exceeded"));
+        assert_eq!(observations[4].server_name(), Some("after"));
     }
 
     #[test]

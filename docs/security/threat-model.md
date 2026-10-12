@@ -94,7 +94,8 @@ source copy; fingerprinting does not establish acquisition success.
 
 Full-scan MCP collection is acquired once for inventory and usage inference:
 at most 10,000 visited entries, 64 configs, 1 MiB per config, 4 MiB aggregate
-read allowance (failed attempts retain their reservation), and 256 servers.
+read allowance (failed reads restore their reservation; only accepted bytes
+stay charged), and 256 servers.
 Workspace traversal failure or exhaustion emits an inventory error and discards
 the incomplete workspace selection, while retaining independently discovered
 fixed config paths. These bounds do not imply complete host-wide inventory.
