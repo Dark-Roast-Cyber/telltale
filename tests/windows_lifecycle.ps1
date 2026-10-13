@@ -358,7 +358,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $scratch 'metadata.tmp'), '{partial json')
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).directory_created) 'recovery preserves fresh directory ownership'
-    Assert-True (@(Get-ChildItem -LiteralPath $layout.InstallDirectory -Filter '*.new').Count -eq 0) 'metadata staging remains outside installation'
+    Assert-True (@(Get-ChildItem -LiteralPath $layout.InstallDirectory -Force | Where-Object { $_.Extension -cin @('.new', '.tmp') }).Count -eq 0) 'metadata staging remains outside installation'
     & $uninstaller @layout -Confirm:$false
     Assert-True (-not (Test-Path -LiteralPath $layout.InstallDirectory)) 'recovered fresh installation removes owned empty root'
 
