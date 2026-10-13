@@ -481,6 +481,15 @@ if ($TestScheduledTask) {
         Invoke-TTNative $Python @((Join-Path $root 'scripts/validate-event-jsonl'), '--schema', (Join-Path $root 'schemas/event.schema.json'), '--events', $log) | Out-Null
         $restored = Set-TTTask $savedXml
         Assert-True ((Get-TTTextHash $restored) -ceq (Get-TTTextHash $savedXml)) 'original managed task declaration restored'
+        # This disposable runner can default newly generated files to the
+        # Administrators group. Model ordinary user ownership only for these
+        # two fresh synthetic outputs; the product must still reject group owners.
+        foreach ($file in @($log, $state)) {
+            Assert-TTFile $file
+            $owner = (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value
+            if ($owner -ne $script:TTSid -and $owner -ne 'S-1-5-32-544') { throw 'Unexpected synthetic runtime file owner.' }
+            Set-TTCreatedOwner $file
+        }
         & $uninstaller @layout -PurgeData -Confirm:$false
         Assert-True (Test-Path -LiteralPath $configFile) 'data purge retains authored configuration'
         $configHash = Get-TTHash $configFile
@@ -500,8 +509,11 @@ if ($TestScheduledTask) {
             $canonicalState = Join-Path $canonical.DataDirectory 'State\telltale-state.json'
             Assert-True ((Test-Path -LiteralPath $canonicalLog) -and (Test-Path -LiteralPath $canonicalState)) 'canonical runtime defaults stay separate from executable'
             Invoke-TTNative $Python @((Join-Path $root 'scripts/validate-event-jsonl'), '--schema', (Join-Path $root 'schemas/event.schema.json'), '--events', $canonicalLog) | Out-Null
-            foreach ($name in @('Logs', 'State')) {
-                foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $canonical.DataDirectory $name) -Force)) { Set-TTCreatedOwner $file.FullName }
+            foreach ($file in @($canonicalLog, $canonicalState)) {
+                Assert-TTFile $file
+                $owner = (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value
+                if ($owner -ne $script:TTSid -and $owner -ne 'S-1-5-32-544') { throw 'Unexpected synthetic runtime file owner.' }
+                Set-TTCreatedOwner $file
             }
             & $uninstaller -Confirm:$false
             Assert-True ((Test-Path -LiteralPath $canonicalLog) -and (Test-Path -LiteralPath $canonicalState)) 'canonical default uninstall retains data'
