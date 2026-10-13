@@ -753,7 +753,12 @@ Each selected row MUST be one native unit: user `UserMessage`; assistant
 `AssistantMessage` plus `ToolCall` per tool entry and `ToolResult` per terminal
 entry; shell `ToolCall` plus `ToolResult` when terminal; and the auxiliary
 classes above. Tool usage and contributions MUST be recorded per tool entry and
-shell row. Session metadata MUST come from message `agent`/`model` and the
+shell row. Contribution input MUST be request-side only: the tool entry's input
+and the shell row's `command`. Tool results,
+error objects and shell output MUST NOT be contribution input, so their paths
+and hosts are not counted and cannot cause contribution rejection. Canonical
+result bounds remain unchanged, and the existing fail-closed contribution bounds
+still apply to request input. Session metadata MUST come from message `agent`/`model` and the
 joined session `agent`/`model`, with contradictions kept ambiguous and malformed
 model values failing as invalid attestation. Coverage remains `PartialSource`.
 
@@ -761,3 +766,13 @@ model values failing as invalid attestation. Coverage remains `PartialSource`.
 
 - **WHEN** a user row and an assistant row with one completed tool entry are acquired
 - **THEN** two native units count one user, one assistant, one tool call and one tool result
+
+#### Scenario: Returned payloads are not contributions
+
+- **WHEN** a direct-text completed tool result or shell output holds a host, or a token longer than 4,096 bytes that looks like a path, within unchanged canonical bounds
+- **THEN** it does not cause `invalid_native_contribution`, and only hosts and path classes from tool input and shell commands are counted
+
+#### Scenario: Request input keeps fail-closed contribution bounds
+
+- **WHEN** tool input holds a path-like token longer than 4,096 bytes
+- **THEN** acquisition fails with `invalid_native_contribution`

@@ -1581,3 +1581,83 @@ fn repeated_acquisition_is_deterministic_in_session_seq_order() {
         [Some(1), Some(1), Some(2)]
     );
 }
+
+/// Activity contributions come from what the agent requested (tool input and
+/// the user shell command). Tool results, errors
+/// and shell output are returned data: a long encoded token there (within the
+/// 65,536-byte direct-text budget) must not reject the source, and paths or
+/// hosts there are not the agent's activity.
+#[test]
+fn contributions_count_requests_not_returned_payloads() {
+    use telltale_schema::activity_facts::PathClass;
+
+    // Base64 contains '/' and has no whitespace: one long token.
+    let encoded = format!("iVBORw0KGgo/{}", "QUJD/".repeat(1_000));
+    let store = Store::v2();
+    store.message(
+        "msg_tools",
+        1,
+        T0 + 3_000,
+        assistant(
+            json!([
+                completed_tool("call_fetch", "bash",
+                    json!({"command": "curl https://requested.example.test/x ~/.ssh/config"}),
+                    &format!("see https://returned.example.test/ {encoded}"), T0),
+                {"type": "tool", "id": "call_read", "name": "read", "executed": false,
+                 "state": {"status": "completed", "input": {"filePath": "./synthetic.png"},
+                           "content": [{"type": "file", "uri": "https://file.example.test/a.png",
+                                        "mime": "image/png"}]},
+                 "time": {"created": T0, "ran": T0 + 1, "completed": T0 + 2}},
+                {"type": "tool", "id": "call_fail", "name": "bash", "executed": false,
+                 "state": {"status": "error", "input": {"command": "false"},
+                           "error": {"type": "tool.execution", "message": "https://error.example.test/"}},
+                 "time": {"created": T0, "ran": T0 + 1, "completed": T0 + 2}},
+            ]),
+            T0,
+        ),
+    );
+    store.message(
+        "msg_shell",
+        2,
+        T0 + 4_000,
+        json!({"type": "shell", "shellID": "sh_1", "command": "cat synthetic.b64",
+               "status": "exited", "exit": 0,
+               "output": {"output": encoded, "cursor": 1, "size": 1, "truncated": false},
+               "time": {"created": T0, "completed": T0 + 1}}),
+    );
+    let batch = store.acquire_default();
+    let contributions = &batch.accounting.sessions[0].counts.contributions;
+    assert_eq!(
+        contributions.network_hosts.keys().collect::<Vec<_>>(),
+        vec!["requested.example.test"]
+    );
+    assert_eq!(
+        contributions.path_classes.get(&PathClass::SecretStore),
+        Some(&1)
+    );
+    assert_eq!(contributions.tool_calls.get("bash"), Some(&2));
+    assert_eq!(contributions.tool_calls.get("read"), Some(&1));
+    assert_eq!(contributions.tool_calls.get("shell"), Some(&1));
+
+    // The fail-closed bound still applies to request input.
+    let rejected = Store::v2();
+    rejected.message(
+        "msg_tools",
+        1,
+        T0 + 3_000,
+        assistant(
+            json!([completed_tool(
+                "call_write",
+                "write",
+                json!({"filePath": "./out.b64", "content": encoded}),
+                "ok",
+                T0
+            )]),
+            T0,
+        ),
+    );
+    assert_eq!(
+        rejected.acquire_default_error(),
+        AcquisitionError::InvalidContribution
+    );
+}

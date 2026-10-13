@@ -23,7 +23,10 @@ For v2, one `session_message` row is one native unit. Only the message columns
 and the session `agent`/`model` are selected; other session columns and tables
 are never read. Assistant `text`, user text and tool entries are mapped;
 reasoning, attachments and switch, synthetic, system, skill, compaction and idle
-rows are counted but not mapped. Unknown variants fail the source.
+rows are counted but not mapped. Unknown variants fail the source. Activity
+contributions (tool names, path classes, network hosts) come only from tool
+input and shell commands; tool results, errors and
+shell output are not scanned for them.
 
 Every tool entry emits `ToolRequested`. Completed and error entries also emit
 `ToolResultReturned`; an error reports `Failed`, including user declines,
@@ -281,6 +284,11 @@ one scanner error and five static MCP inventory activity events) validated
 against Event 3.0 with format checking. Repeats emitted zero new objects, but
 the source still failed: successful ingestion and incremental settling were
 **blocked**, not passed. Existing fail-closed contribution bounds were not relaxed.
+The v2 adapter then scanned terminal tool results and shell output for contributions;
+a synthetic test reproduces `invalid_native_contribution`
+from a long encoded token in a tool result. Contributions are now request-side
+only, with the bound unchanged for input. The earlier run does not establish
+successful ingestion with the request-side fix.
 
 No denial/interruption was deliberately generated. Historical user `!` shell
 rows existed but their mapping was not live-validated. Changes occurred during

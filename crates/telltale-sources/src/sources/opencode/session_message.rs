@@ -187,6 +187,8 @@ pub(crate) struct OpenCodeShell {
 pub(crate) struct OpenCodeToolAccounting<'a> {
     pub(crate) name: Option<&'a str>,
     pub(crate) timestamp: Option<&'a str>,
+    /// Request-side strings only (tool input, user shell command); returned
+    /// results, errors and output are not activity.
     pub(crate) contribution_strings: Vec<String>,
 }
 
@@ -227,9 +229,9 @@ impl OpenCodeSessionMessageRecord {
                     .map(|tool| OpenCodeToolAccounting {
                         name: tool.name.as_deref(),
                         timestamp: tool.created.as_deref(),
-                        contribution_strings: [&tool.input, &tool.result]
-                            .into_iter()
-                            .flatten()
+                        contribution_strings: tool
+                            .input
+                            .iter()
                             .flat_map(collect_string_values)
                             .collect(),
                     })
@@ -238,11 +240,7 @@ impl OpenCodeSessionMessageRecord {
             OpenCodeSessionMessageBody::Shell(shell) => vec![OpenCodeToolAccounting {
                 name: Some(SHELL_TOOL_NAME),
                 timestamp: shell.created.as_deref(),
-                contribution_strings: [&shell.command, &shell.output]
-                    .into_iter()
-                    .flatten()
-                    .cloned()
-                    .collect(),
+                contribution_strings: shell.command.iter().cloned().collect(),
             }],
             _ => Vec::new(),
         }
