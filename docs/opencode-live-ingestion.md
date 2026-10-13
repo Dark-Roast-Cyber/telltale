@@ -30,12 +30,16 @@ Every tool entry emits `ToolRequested`. Completed and error entries also emit
 which OpenCode stores as `aborted` errors. Execution stages are emitted for
 `executed: true`. OpenCode sets that field from provider execution, so local
 tools report `false`. Telltale keeps the value as a reported fact and does not
-claim local execution from it. The agent `shell` tool is the exception: its
-completed metadata reports how the command settled (`exit`, `signal` or
+claim local execution from it. The built-in agent `shell` tool is the exception:
+its completed metadata reports how the command settled (`exit`, `signal` or
 `timeout`) only after the command ran, so such an entry also emits
-`ToolExecutionCompleted` with the reported exit code. Exit code zero is not
-reported as success, and background commands, which return before they settle,
-make no claim. User `!` shell commands (`shell` rows) map to
+`ToolExecutionCompleted`. Both outcome stages carry an exit code when reported,
+a reported signal as `tool.signal`, and `timeout: true` as `Failed`. An exit
+code alone, including zero, is neither success nor failure. Background commands,
+which return before they settle, make no claim from metadata. `shellID` can also
+occur in running/error metadata and never becomes a correlation. Plugins can
+replace `shell`: these are source-reported outcomes, not authenticated OS-side
+effects. User `!` shell commands (`shell` rows) map to
 a `shell` tool with reported start, exit code, output and `timeout`/`killed`
 status.
 

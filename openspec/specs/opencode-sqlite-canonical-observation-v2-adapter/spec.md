@@ -629,7 +629,7 @@ report ToolExecution capability `Unknown`.
 
 ### Requirement: OpenCode v2 shell-tool settlements report completed execution
 
-OpenCode's `shell` tool writes its completed state `metadata` as `{status,
+OpenCode's built-in `shell` tool writes its completed state `metadata` as `{status,
 truncated, exit?, signal?, timeout?, shellID?}` only after the command was
 authorized, ran and settled; a background command returns `status: "running"`
 before it settles (OpenCode v2.0.27, `packages/core/src/tool/plugin/shell.ts`
@@ -645,10 +645,12 @@ Reported status `Failed`. An exit code, including zero, MUST NOT become
 `Succeeded` or `Failed`. Any other metadata shape, any other tool name, and
 running or error entries MUST make no execution claim from metadata alone and
 MUST NOT fail the row because of metadata, which is an open record. Existing
-`executed: true` execution-stage semantics remain unchanged. The settlement MUST NOT change
-identity, cursors or the ToolExecution capability, which stays `Unknown`, and
-MUST NOT produce OS observations. `shellID` is reported only for background
-commands and MUST NOT become a correlation.
+`executed: true` execution-stage semantics remain unchanged. The settlement MUST
+NOT change identity, cursors or the ToolExecution capability, which stays `Unknown`, and
+MUST NOT produce OS observations. Metadata `shellID` can identify a background
+or in-progress command, including in an error snapshot, and MUST NOT become a
+correlation. A plugin can replace the tool registered as `shell`; matching
+metadata is source-reported evidence, not authenticated OS-side execution.
 
 #### Scenario: A settled shell tool reports completion and its exit code
 
