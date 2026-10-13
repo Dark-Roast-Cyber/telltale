@@ -1600,10 +1600,22 @@ fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
     assert!(workflow.contains("  fmt:\n"));
     assert!(workflow.contains("- run: make --silent fmt"));
     assert!(makefile.contains("fmt:\n\tcargo fmt --all --check"));
-    assert!(
-        !workflow.contains("cargo fmt"),
-        "platform jobs must not duplicate the centralized format command"
-    );
+    // A separately staged Git consumer has its own manifest and formatting
+    // check. Native repository jobs must use the centralized format result.
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&workflow).expect("parse CI workflow");
+    for platform in ["windows", "macos"] {
+        for step in yaml["jobs"][platform]["steps"]
+            .as_sequence()
+            .expect("native platform steps")
+        {
+            if let Some(command) = step["run"].as_str() {
+                assert!(
+                    !command.contains("cargo fmt"),
+                    "{platform} must not duplicate the centralized format command"
+                );
+            }
+        }
+    }
 }
 
 #[test]
