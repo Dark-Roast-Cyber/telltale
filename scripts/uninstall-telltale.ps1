@@ -38,24 +38,7 @@ $purgeFiles = if ($performPurge) { @(Get-TTPurgeFiles $data) } else { @() }
 if ($PurgeData -and -not $performPurge) { Write-Output 'No managed data receipt remains; unowned data is retained.' }
 $configFiles = @()
 if ($PurgeConfiguration) {
-    # Configuration discovery is rooted separately; do not follow environment overrides
-    # or accept caller-selected agent session stores as a cleanup target.
-    $configRoot = Get-TTPath (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.config\telltale')
-    if (Test-Path -LiteralPath $configRoot) {
-        Assert-TTOwner $configRoot
-        $knownDirectories = @('organization-rules.d', 'rules.d', 'ui-rules.d', 'overrides.d', 'policies.d', 'allowlists.d', 'outputs.d')
-        foreach ($directory in @(Get-ChildItem -LiteralPath $configRoot -Force)) {
-            Get-TTPath $directory.FullName | Out-Null
-            if (-not $directory.PSIsContainer -or $directory.Name -cnotin $knownDirectories) { throw 'Unrecognized user configuration; purge refused.' }
-            Assert-TTOwner $directory.FullName
-            foreach ($file in @(Get-ChildItem -LiteralPath $directory.FullName -Force)) {
-                if ($file.Extension -cnotin @('.yaml', '.yml')) { throw 'Unrecognized configuration file; purge refused.' }
-                Assert-TTFile $file.FullName -Owned
-                Assert-TTUnlocked $file.FullName
-                $configFiles += $file.FullName
-            }
-        }
-    }
+    $configFiles = @(Get-TTConfigurationFiles)
 }
 $plan = @()
 if ($null -ne $receipt) {
@@ -88,6 +71,7 @@ try {
         if ($current -cne $snapshot[$path]) { throw 'Lifecycle ownership changed while reviewing the plan; inspect and rerun cleanup.' }
     }
     if ($performPurge -and ((@(Get-TTPurgeFiles $data) -join "`n") -cne ($purgeFiles -join "`n"))) { throw 'Purge inventory changed while reviewing the plan; inspect and rerun cleanup.' }
+    if ($PurgeConfiguration -and ((@(Get-TTConfigurationFiles) -join "`n") -cne ($configFiles -join "`n"))) { throw 'Configuration inventory changed while reviewing the plan; inspect and rerun cleanup.' }
     if ($null -ne $receipt) {
         $lock = Open-TTLock $install
         # Recheck identities after acquiring the exclusive lifecycle lock.

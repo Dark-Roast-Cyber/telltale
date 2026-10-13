@@ -123,8 +123,10 @@ function Read-TTJson([string]$Path) {
 }
 
 function Write-TTJson([string]$Path, $Value) {
-    # Callers hold the lifecycle lock; never overwrite an unidentified temporary file.
-    $stage = "$Path.new"
+    # Atomic rename requires the same volume. All managed destinations are under
+    # LocalApplicationData, with reparse points forbidden. A killed writer can
+    # leave a scratch file here, but never an incomplete installation member.
+    $stage = Join-Path $script:TTLocal ("telltale-metadata-{0}.tmp" -f [guid]::NewGuid())
     $stream = [IO.File]::Open($stage, 'CreateNew', 'Write', 'None')
     try {
         try {
@@ -138,8 +140,7 @@ function Write-TTJson([string]$Path, $Value) {
             [IO.File]::Replace($stage, $Path, [NullString]::Value)
         } else { [IO.File]::Move($stage, $Path) }
     } catch {
-        # This invocation created the file exclusively; ordinary failures must
-        # not strand temporary metadata. Process-death leftovers stay fail-closed.
+        # Only this invocation's exclusively created scratch file is removed.
         if (Test-Path -LiteralPath $stage) { Assert-TTFile $stage -Owned; Remove-Item -LiteralPath $stage -Force }
         throw
     }
@@ -291,12 +292,41 @@ function Set-TTUserPath($Value, $Expected) {
     [TelltaleLifecycle.Native]::EnvironmentChanged()
 }
 
-function Get-TTPathWithoutEntry([string]$Value, [string]$Entry) {
+function Get-TTPathWithoutEntry($Value, [string]$Entry) {
+    if ($null -eq $Value) { return $null }
     $parts = @($Value -split ';')
-    $matches = @($parts | Where-Object { $_ -ceq $Entry })
-    if ($matches.Count -eq 0 -and -not @($parts | Where-Object { $_.TrimEnd('\') -ieq $Entry }).Count) { return $Value }
-    if ($matches.Count -ne 1) { throw 'Managed PATH entry changed or duplicated; resolve it before cleanup.' }
-    return (@($parts | Where-Object { $_ -cne $Entry }) -join ';')
+    $matches = @($parts | Where-Object { $_.TrimEnd('\') -ieq $Entry })
+    if ($matches.Count -eq 0) { return $Value }
+    if ($matches.Count -ne 1) { throw 'Managed PATH entry duplicated; resolve it before cleanup.' }
+    $retained = @($parts | Where-Object { $_.TrimEnd('\') -ine $Entry })
+    if ($retained.Count -eq 0) { return $null }
+    return ($retained -join ';')
+}
+
+function Get-TTConfigurationFiles {
+    # Match src/config.rs user_config_root; Windows USERPROFILE is not a fallback.
+    $base = [Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME')
+    if ($base) { $root = Join-Path $base 'telltale' }
+    else {
+        $base = [Environment]::GetEnvironmentVariable('HOME')
+        if (-not $base) { return }
+        $root = Join-Path $base '.config\telltale'
+    }
+    $root = Get-TTPath $root
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    Assert-TTOwner $root
+    $tiers = @('organization-rules.d', 'rules.d', 'ui-rules.d', 'overrides.d', 'policies.d', 'allowlists.d', 'outputs.d')
+    foreach ($directory in @(Get-ChildItem -LiteralPath $root -Force)) {
+        Get-TTPath $directory.FullName | Out-Null
+        if (-not $directory.PSIsContainer -or $directory.Name -cnotin $tiers) { throw 'Unrecognized user configuration; purge refused.' }
+        Assert-TTOwner $directory.FullName
+        foreach ($file in @(Get-ChildItem -LiteralPath $directory.FullName -Force)) {
+            if ($file.Extension -cnotin @('.yaml', '.yml')) { throw 'Unrecognized configuration file; purge refused.' }
+            Assert-TTFile $file.FullName -Owned
+            Assert-TTUnlocked $file.FullName
+            $file.FullName
+        }
+    }
 }
 
 function Get-TTDataReceipt([string]$Data) {
@@ -459,7 +489,7 @@ function Restore-TTTransaction([string]$Install, [string]$Data) {
         if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
         if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Force }
         Remove-Item -LiteralPath $journalPath -Force
-        return
+        return [pscustomobject]@{ DirectoryCreated = [bool]$journal.next.directory_created }
     }
     $task = Get-TTTask
     if ($null -ne $task) {
@@ -497,5 +527,6 @@ function Restore-TTTransaction([string]$Install, [string]$Data) {
     if ($undoPath -and $userPath -cne $restoredPath) { Set-TTUserPath $restoredPath -Expected $userPath }
     if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Force }
     Remove-Item -LiteralPath $journalPath -Force
-    Write-Output 'Recovered the interrupted installation; previous installation restored.'
+    Write-Verbose 'Recovered the interrupted installation; previous installation restored.'
+    return [pscustomobject]@{ DirectoryCreated = [bool]$journal.next.directory_created }
 }

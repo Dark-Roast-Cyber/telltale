@@ -87,7 +87,7 @@ try {
         }
     } else { New-TTDirectory $install }
     $lock = Open-TTLock $install
-    Restore-TTTransaction $install $data
+    $recovery = Restore-TTTransaction $install $data
     $previous = Get-TTReceipt $install $data
     if ($null -ne $previous -and $previous.PSObject.Properties['uninstalling'] -and $previous.uninstalling) { throw 'Complete the interrupted uninstall before installing.' }
     $task = Assert-TTTask $previous
@@ -96,7 +96,8 @@ try {
     $binary = Join-Path $install 'telltale.exe'
     Assert-TTUnlocked $binary
     $id = if ($null -ne $previous) { $previous.id } else { [guid]::NewGuid().ToString() }
-    $directoryOwned = if ($null -ne $previous) { $previous.PSObject.Properties['directory_created'] -and $previous.directory_created } else { $createdDirectory }
+    $directoryOwned = if ($null -ne $previous) { $previous.PSObject.Properties['directory_created'] -and $previous.directory_created }
+        else { $createdDirectory -or ($null -ne $recovery -and $recovery.DirectoryCreated) }
     $pathBefore = if ($AddToPath) { Get-TTUserPath } else { $null }
     $pathAfter = $pathBefore
     $pathOwned = $null -ne $previous -and $previous.path_added
@@ -111,8 +112,9 @@ try {
     Write-TTJson $journalPath $journal
     try {
         $stage = Join-Path $install 'staged.exe'
-        Copy-Item -LiteralPath $candidate -Destination $stage
-        Set-TTCreatedOwner $stage
+        # Candidate copying and verification completed outside the installation.
+        # A same-volume atomic rename cannot expose a partially copied staged.exe.
+        [IO.File]::Move($candidate, $stage)
         if ((Get-TTHash $stage) -cne $hash) { throw 'Staged executable digest mismatch.' }
         if ($null -ne $task) {
             $journal.task_transition_xml = Get-TTTaskEnabledXml $task.Xml $false
@@ -155,7 +157,7 @@ try {
         Remove-Item -LiteralPath $journalPath -Force
     } catch {
         $failure = $_
-        try { Restore-TTTransaction $install $data }
+        try { Restore-TTTransaction $install $data | Out-Null }
         catch { throw "Installation failed; recovery requires attention. Original: $failure Recovery: $_" }
         throw $failure
     }

@@ -309,7 +309,58 @@ try {
     Assert-Fails { Assert-TTChecksum $sums 'test.zip' $digest } 'duplicate checksum'
     Assert-True ((Get-TTPathWithoutEntry "one;$temp;two" $temp) -ceq 'one;two') 'PATH cleanup preserves unrelated entries'
     Assert-True ((Get-TTPathWithoutEntry 'one;two' $temp) -ceq 'one;two') 'already removed PATH entry is harmless'
+    Assert-True ($null -eq (Get-TTPathWithoutEntry $temp $temp)) 'sole owned PATH entry restores absent value'
+    Assert-True ((Get-TTPathWithoutEntry ("one;" + $temp.ToUpperInvariant() + '\;two') $temp) -ceq 'one;two') 'unique normalized PATH entry can be removed'
+    Assert-True ((Get-TTPathWithoutEntry ";$temp" $temp) -ceq '') 'preexisting empty PATH component retained'
     Assert-Fails { Get-TTPathWithoutEntry "$temp;$temp" $temp } 'duplicated PATH ownership rejected'
+
+    # Runtime configuration resolver, isolated from real user configuration.
+    $oldXdg = $env:XDG_CONFIG_HOME
+    $oldHome = $env:HOME
+    try {
+        $env:XDG_CONFIG_HOME = Join-Path $temp 'synthetic-xdg'
+        $env:HOME = Join-Path $temp 'synthetic-home'
+        $configFile = Join-Path $env:XDG_CONFIG_HOME 'telltale/outputs.d/synthetic.yaml'
+        New-TTDirectory (Join-Path $env:XDG_CONFIG_HOME 'telltale')
+        New-TTDirectory (Split-Path -Parent $configFile)
+        [IO.File]::WriteAllText($configFile, 'version: 1')
+        Set-TTCreatedOwner $configFile
+        Assert-True ((@(Get-TTConfigurationFiles) -join '') -ceq $configFile.Replace('/', '\')) 'XDG configuration root and outputs tier match runtime'
+        $env:XDG_CONFIG_HOME = $null
+        Assert-True (@(Get-TTConfigurationFiles).Count -eq 0) 'HOME fallback ignores other XDG configuration'
+        $homeFile = Join-Path $env:HOME '.config/telltale/rules.d/synthetic.yml'
+        New-TTDirectory (Join-Path $env:HOME '.config/telltale')
+        New-TTDirectory (Split-Path -Parent $homeFile)
+        [IO.File]::WriteAllText($homeFile, 'version: 1')
+        Set-TTCreatedOwner $homeFile
+        Assert-True (@(Get-TTConfigurationFiles).Count -eq 1) 'HOME configuration fallback'
+        $env:HOME = $null
+        Assert-True (@(Get-TTConfigurationFiles).Count -eq 0) 'absent runtime variables select no USERPROFILE configuration'
+        $env:XDG_CONFIG_HOME = '..\agent-store'
+        Assert-Fails { Get-TTConfigurationFiles } 'relative configuration root rejected'
+    } finally { $env:XDG_CONFIG_HOME = $oldXdg; $env:HOME = $oldHome }
+
+    # Interrupted writes are confined to invocation scratch outside the install;
+    # only an atomic move exposes a complete stage or metadata member.
+    $layout = New-TestLayout 'first-install-recovery'
+    New-TTDirectory $layout.InstallDirectory
+    $next = ($receipt | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
+    $next.install = $layout.InstallDirectory
+    $next.data = $layout.DataDirectory
+    $next.directory_created = $true
+    $next.binary_sha256 = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+    $next.task_xml = $null
+    $next.path_added = $false
+    Write-TTJson (Join-Path $layout.InstallDirectory 'transaction.json') @{ previous = $null; next = $next; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
+    $scratch = Join-Path $temp 'interrupted-scratch'
+    New-TTDirectory $scratch
+    [IO.File]::WriteAllText((Join-Path $scratch 'candidate.exe'), 'partial copy')
+    [IO.File]::WriteAllText((Join-Path $scratch 'metadata.tmp'), '{partial json')
+    & $installer @layout -DevelopmentBinary $binary
+    Assert-True ((Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory).directory_created) 'recovery preserves fresh directory ownership'
+    Assert-True (@(Get-ChildItem -LiteralPath $layout.InstallDirectory -Filter '*.new').Count -eq 0) 'metadata staging remains outside installation'
+    & $uninstaller @layout -Confirm:$false
+    Assert-True (-not (Test-Path -LiteralPath $layout.InstallDirectory)) 'recovered fresh installation removes owned empty root'
 
     # Emulate process interruption after staging, then after executable replacement.
     foreach ($replace in @($false, $true)) {
@@ -365,7 +416,9 @@ if ($TestScheduledTask) {
     $liveTemp = Get-TTPath (Join-Path $testParent ("telltale-lifecycle-live-{0}" -f [guid]::NewGuid()))
     $layout = @{ InstallDirectory = (Join-Path $liveTemp 'Application With Spaces'); DataDirectory = (Join-Path $liveTemp 'Runtime Data') }
     $savedXml = $null
-    $configRoot = Get-TTPath (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.config\telltale')
+    $savedXdg = $env:XDG_CONFIG_HOME
+    $env:XDG_CONFIG_HOME = Join-Path $liveTemp 'synthetic-xdg'
+    $configRoot = Get-TTPath (Join-Path $env:XDG_CONFIG_HOME 'telltale')
     if (Test-Path -LiteralPath $configRoot) { throw 'Disposable runner configuration collision; no existing configuration will be modified.' }
     $configDirectory = Join-Path $configRoot 'rules.d'
     $configFile = Join-Path $configDirectory 'synthetic-user-rule.yaml'
@@ -428,6 +481,7 @@ if ($TestScheduledTask) {
         }
         Write-Output 'Disposable-runner live Scheduled Task and PATH lifecycle passed.'
     } finally {
+        $env:XDG_CONFIG_HOME = $savedXdg
         if ($savedXml -and $null -ne (Get-TTTask)) {
             # Only this test owns the exact saved receipt and its synthetic variant.
             Set-TTTask $savedXml | Out-Null
@@ -436,8 +490,5 @@ if ($TestScheduledTask) {
         $checkedLive = Get-TTPath $liveTemp
         if (-not $checkedLive.StartsWith($testParent + '\telltale-lifecycle-live-', [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected live test cleanup root.' }
         if (Test-Path -LiteralPath $checkedLive) { Remove-Item -LiteralPath $checkedLive -Recurse -Force }
-        if (Test-Path -LiteralPath $configFile) { Assert-TTFile $configFile -Owned; Remove-Item -LiteralPath $configFile -Force }
-        if (Test-Path -LiteralPath $configDirectory) { [IO.Directory]::Delete($configDirectory) }
-        if (Test-Path -LiteralPath $configRoot) { [IO.Directory]::Delete($configRoot) }
     }
 }

@@ -18,7 +18,7 @@ are retained locally; private paths and raw telemetry are not public evidence.
 | --- | --- |
 | Latest stable install | `v0.6.0`, source `f8e00162a3f9ac1cf8d2f270e6db078d3917d186`: exact Release/assets/checksums, source-bound attestation, nine-member ZIP, version and bundled rules passed in an isolated path with spaces. |
 | Explicit published install | `v0.7.0-rc.2`, source `c3132f22f0758912fbcbc7451f5fefee514c5bdb`: the same checks passed in PowerShell 7 and 5.1; uninstall and later explicit purge passed. This is installer evidence for RC2, not RC3 qualification. |
-| Development lifecycle | `tests/windows_lifecycle.ps1 -BinaryPath target/release/telltale.exe`: 76 assertions passed in each supported shell, including task-transition interruptions. Development receipts explicitly say unpublished local build. |
+| Development lifecycle | `tests/windows_lifecycle.ps1 -BinaryPath target/release/telltale.exe`: 87 assertions passed in each supported shell, including task-transition interruptions, recovered directory ownership, runtime configuration resolution and normalized PATH cleanup. Development receipts explicitly say unpublished local build. |
 | Execution | Bundled rules, one expected synthetic MCP detection, complete Draft 2020-12 Event 3.0 validation and zero configured remote sinks passed. |
 | Ownership and retention | Same-version repeat, different development digest, relative source after changing PowerShell location, unrelated-file retention, legacy detection, modified binary/task refusal and standard retention passed. |
 | Adversarial/recovery | Missing explicit Release without fallback, checksum failures, DOS aliases, traversal/ADS/UNC, junctions, hard links, locked/running executable, metadata-write failure, partial rollback, staged interruption and read-only WhatIf passed. A separate process proved installation/data-only purge serialization. |
@@ -26,6 +26,7 @@ are retained locally; private paths and raw telemetry are not public evidence.
 | Rust formatting/Clippy | `cargo fmt --all --check` and `cargo clippy --locked --all-targets -- -D warnings` passed with Rust 1.98.0 Windows GNU. |
 | Debug Rust suites | CLI 241, default library suites 1,164, CI gates 1, Codex completion 14, package metadata 8 and provenance 2 passed; two library tests were ignored. Initial failures from inherited PATH, missing Python, line endings and loaded-host timing were retained and resolved by scoped tooling fixes and focused reruns. |
 | Complete optimized Rust gate | `cargo test --locked --release -- --test-threads=4`: exit 0, 1,465 tests/doctests passed, two ignored. |
+| Windows CI follow-up | The initial native CI run failed an existing rules-server assertion after receiving only a formatted HTTP status prefix. The response is now assembled before writing; all six rules-server integration tests passed locally in optimized and debug builds, and strict Clippy passed again. Fresh PR CI must validate the final commit. |
 | Development build | Windows GNU optimized build passed. This is not the official MSVC static-CRT configuration. |
 | Local MSVC build/runtime gate | Attempted; unavailable Microsoft linker/SDK prevented the build and resulting-binary import inspection. The authoritative Windows CI build uses `-C target-feature=+crt-static` and `verify-windows-runtime.ps1`. |
 

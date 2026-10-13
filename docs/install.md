@@ -284,6 +284,12 @@ password, daemon or MSI is created. Existing tasks must match the exact receipt;
 conflicting or modified tasks are retained and block changes. Opting in authorizes
 scans of supported agent stores under the user's profile at logon.
 
+Executable copying and metadata writes use scratch files outside the installation,
+then atomically rename complete files into place. Retry recovers journaled changes.
+A killed process may leave a `telltale-install-<GUID>` directory or
+`telltale-metadata-<GUID>.tmp` in LocalApplicationData; these scratch leftovers do
+not block retry and are retained for separate inspection rather than adopted for purge.
+
 ### Windows uninstall and explicit purge
 
 ```powershell
@@ -299,7 +305,7 @@ scans of supported agent stores under the user's profile at logon.
 
 Normal uninstall verifies receipts, executable digest and task identity, stops
 and removes the managed task, removes managed executable/metadata and undoes only
-its own exact user PATH entry. It retains logs, state, detection history,
+its own unique user PATH entry (case and trailing slash differences are accepted). It retains logs, state, detection history,
 configuration and the data-ownership receipt, so later explicit purge remains
 possible. `-WhatIf` performs read-only inspection. Automation may explicitly
 supply `-Confirm:$false` after reviewing the plan.
@@ -309,8 +315,12 @@ recognized generated filenames. Existing directories are retained without
 adoption. Unexpected files, owners, links or locks block purge; it never
 recursively deletes a shared directory. Partial failures return errors and retain
 retry metadata where possible. `-PurgeConfiguration` separately selects regular
-YAML files in recognized tier directories under the current user's
-`.config\telltale`; other roots and environment overrides remain outside cleanup.
+YAML files under the runtime's user configuration root: `$env:XDG_CONFIG_HOME\telltale`
+when set, otherwise `$env:HOME\.config\telltale` when HOME is set. With neither
+variable set, no user configuration is selected; USERPROFILE is not a fallback.
+Recognized tiers are `organization-rules.d`, `rules.d`, `ui-rules.d`, `overrides.d`,
+`policies.d`, `allowlists.d`, and `outputs.d`. Explicit/project configuration roots
+remain outside cleanup. Unsafe or relative environment-selected roots fail closed.
 All underlying Claude Code, Codex, OpenCode, Gemini and other coding-agent session
 stores remain untouched. Emusary's embedded libraries, installation and data are
 outside this standalone lifecycle.

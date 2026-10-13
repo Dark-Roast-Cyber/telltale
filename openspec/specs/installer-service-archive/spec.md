@@ -14,7 +14,9 @@ source commit, SHA256SUMS, GitHub asset digest, source/ref/digest-bound attestat
 canonical nine-member ZIP and executable version before installation mutation.
 An explicit failed tag SHALL never fall back. Trusted local development binaries
 SHALL be recorded as unpublished. Binary files SHALL be separate from retained
-runtime defaults. Scheduling and PATH changes SHALL require explicit opt-in.
+runtime defaults. Installation SHALL require explicit opt-in to register or
+enable scheduling and to add a PATH entry. Uninstall SHALL clean up these owned
+resources without requiring installation opt-in switches again.
 
 #### Scenario: Windows installation and repeat installation
 
@@ -25,9 +27,9 @@ runtime defaults. Scheduling and PATH changes SHALL require explicit opt-in.
 
 ### Requirement: Windows retention and explicit purge
 
-Default uninstall SHALL remove only installer-owned executables, metadata,
+Default uninstall SHALL remove only installer-owned executables, installation metadata,
 scheduled execution and PATH entries while retaining logs, state, history and
-configuration. Confirmed purge SHALL preview exact owned generated-data leaves;
+configuration and the data-ownership receipt. Confirmed purge SHALL preview exact owned generated-data leaves;
 configuration SHALL require separate explicit selection. Cleanup SHALL not
 recursively remove shared directories or underlying coding-agent session stores.
 Legacy manual installations SHALL be detected and retained without adoption or
