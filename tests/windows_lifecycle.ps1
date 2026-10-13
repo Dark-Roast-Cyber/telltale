@@ -61,6 +61,8 @@ namespace TelltaleLifecycleTests {
         public static Task Current;
         public Task GetTask(string name) { if (Current == null) throw new FileNotFoundException(); return Current; }
         public Task RegisterTask(string name, string xml, int flags, string sid, object password, int logon, object security) {
+            if (xml.IndexOf("encoding=\"UTF-8\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                throw new ArgumentException("Task XML must match UTF-16 COM transport.");
             Current = new Task(xml); return Current;
         }
         public void DeleteTask(string name, int flags) { Current = null; }
@@ -186,6 +188,7 @@ try {
     & $installer @layout -DevelopmentBinary $binary -WithScheduledTask
     Assert-True ((Get-TTTask).Enabled) 'task opt-in enables after install'
     [xml]$taskXml = (Get-TTTask).Xml
+    Assert-True ($taskXml.FirstChild.Encoding -ceq 'UTF-16') 'task declaration matches native COM string transport'
     Assert-True ($taskXml.Task.Principals.Principal.UserId -ceq $script:TTSid -and $taskXml.Task.Principals.Principal.RunLevel -ceq 'LeastPrivilege') 'current-user least-privilege task'
     Assert-True ($taskXml.Task.Triggers.LogonTrigger.Repetition.Interval -ceq 'PT30M' -and $taskXml.Task.Actions.Exec.Arguments.Contains('"')) 'template cadence and quoting'
     & $installer @layout -DevelopmentBinary $binary

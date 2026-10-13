@@ -242,6 +242,9 @@ function Remove-TTTask($Task) {
 
 function New-TTTaskXml([string]$Install, [string]$Data, [string]$Id) {
     [xml]$xml = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../config/examples/telltale-scan-task.xml'))
+    # RegisterTask accepts a UTF-16 COM BSTR. The UTF-8 file declaration must
+    # describe that transport or the native scheduler rejects the document.
+    $xml.FirstChild.Encoding = 'UTF-16'
     $xml.Task.RegistrationInfo.Description = "Telltale installer $Id"
     $xml.Task.Triggers.LogonTrigger.UserId = $script:TTSid
     $xml.Task.Principals.Principal.UserId = $script:TTSid
