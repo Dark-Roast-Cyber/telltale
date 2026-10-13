@@ -215,7 +215,7 @@ append, fresh-process repeats, required output failure, cursor retention on
 rejection, repair and restart. Existing multi-page WAL snapshot, inclusive ties,
 overlap updates, late-page rejection and activation tests remain relevant.
 
-Live validation is limited to one Windows OpenCode Desktop v2.0.24 store on
+Earlier live validation used one Windows OpenCode Desktop v2.0.24 store on
 2026-10-06, using default discovery, bundled rules, `--no-local-config`, isolated
 temporary logs/state and no `--allow-fixtures`. Transcripts and private workstation
 evidence stay outside the repository. Append is claimed live only if upstream
@@ -256,3 +256,34 @@ Subsequent candidate test-harness repairs address the confirmed concurrency
 defects with focused Linux synthetic validation; they do not retroactively pass
 that Windows run. The exact original eight failing test names are unavailable,
 and no native Windows rerun is available. Required candidate gates remain pending.
+
+### OpenCode v2 session-message validation
+
+On 2026-10-13, bounded live validation used OpenCode v2.0.28 on Fedora Linux 44,
+read-only aggregate SQLite queries, discovery, bundled rules, `--no-local-config`,
+isolated temporary logs/state and no `--allow-fixtures`. The v2.0.28 tagged shell,
+result, publisher and updater code matched the settlement evidence path.
+
+Five generated agent `shell` calls all reported `executed: false` and `time.ran`.
+Foreground exit 0, exit 3, timeout and signal calls each emitted request,
+execution-completed and result stages; the background call emitted only request
+and result (14 observations across five calls). Exit codes carried no status;
+the signal was `SIGTERM`; timeout reported `Failed` without an exit or signal.
+Background metadata remained `running` with `shellID` after the command finished.
+A bounded recent acquisition returned 16 native rows and 50 observations; one
+local error and one running entry gained no execution stage. Historical shell
+error metadata also carried `shellID`, refuting the background-only description.
+
+The default bootstrap and two CLI repeats each reported one parse-error source,
+zero parsed records and `invalid_native_contribution`, before canonical mapping.
+No SQLite cursor was installed. All seven emitted JSONL objects (one health,
+one scanner error and five static MCP inventory activity events) validated
+against Event 3.0 with format checking. Repeats emitted zero new objects, but
+the source still failed: successful ingestion and incremental settling were
+**blocked**, not passed. Existing fail-closed contribution bounds were not relaxed.
+
+No denial/interruption was deliberately generated. Historical user `!` shell
+rows existed but their mapping was not live-validated. Changes occurred during
+the scan series, so unchanged-store repeat behavior, controlled live append,
+other OpenCode versions/platforms and release qualification remain unvalidated.
+Temporary data and harnesses were deleted; tests remain synthetic.
