@@ -323,10 +323,11 @@ jobs:
           lock = Path(os.environ["TELLTALE_GIT_CONSUMER_ROOT"]) / "tests/embedding-consumer/Cargo.lock"
           packages = tomllib.loads(lock.read_text())["package"]
           expected = {"telltale-core", "telltale-detect", "telltale-sources", "telltale-rules", "telltale-schema"}
-          actual = {p["name"]: p for p in packages if p["name"] in expected}
-          assert set(actual) == expected, "Incomplete Git consumer dependency graph"
+          actual = [p for p in packages if p["name"] in expected]
+          assert {p["name"] for p in actual} == expected and len(actual) == len(expected), "Incomplete or duplicate Git consumer dependency graph"
           source = "git+https://github.com/Dark-Roast-Cyber/telltale.git?rev=" + os.environ["SOURCE_SHA"] + "#" + os.environ["SOURCE_SHA"]
-          assert all(p.get("source") == source for p in actual.values()), "Git consumer source identity drift"
+          version = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
+          assert all(p.get("source") == source and p["version"] == version for p in actual), "Git consumer source/version identity drift"
           print("Standalone Git consumer resolved all five Telltale dependencies to " + os.environ["SOURCE_SHA"])
           PY
           sh "$consumer_root/scripts/embedding-contract-check"
