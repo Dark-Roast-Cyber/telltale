@@ -17,10 +17,17 @@ published RC3 qualification. RC2 clean-Windows/no-Redistributable qualification
 passed as recorded in Issue #87 on 2026-10-12 America/Phoenix; Task Scheduler smoke
 was not run there. RC2 clean Linux, canary and stable promotion remain separate.
 
-Before recording a proposed RC3 freeze: merge the reviewed implementation,
-prepare all package manifests/lockfiles together, check that the tag/Release is
-unused, and obtain fresh CI/CodeQL and release preflight evidence tied to the
-reviewed exact source commit. Preserve all RC2 pins and historical evidence.
+The implementation landed through [PR #96](https://github.com/Dark-Roast-Cyber/telltale/pull/96)
+at `883bab7cc846c06e30c3976385cceb9c387125f1`. Package manifests and both
+lockfiles are now coordinated at `0.7.0-rc.3`; this is unpublished source
+preparation. Before recording a proposed freeze, merge the reviewed version
+preparation, recheck that the tag/Release is unused, and obtain fresh CI/CodeQL
+at the exact merged SHA. The normal CI prospective-source job checks that SHA,
+trusted full history, canonical local release context, release preflight,
+independently locked embedding contracts, the supported Rust 1.88 subset and
+a fresh exact-SHA standalone Git consumer. Preflight skips downloaded-archive
+inspection when unpublished archives are absent; it does not qualify artifacts.
+No release workflow is dispatched. Preserve all RC2 pins and historical evidence.
 
 A public release should include the open-source core, public technical
 documentation, synthetic fixtures, schemas, bundled rules, and reviewed example
@@ -770,7 +777,7 @@ appear in the index and verifying that it resolves without a local patch before
 publishing the next dependent package. After all six packages are available,
 repeat the external consumer and CLI installation checks with every local
 `patch.crates-io` override removed. Those final checks must resolve only the
-`=0.7.0-rc.2` registry packages while that remains the workspace version, before
+`=0.7.0-rc.3` registry packages while that remains the workspace version, before
 publication is declared complete. That
 crates.io pass is a separate later distribution action, not a prerequisite for
 creating the stable Git tag or GitHub binary Release. Deferring it does not
