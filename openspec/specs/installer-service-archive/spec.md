@@ -4,7 +4,41 @@
 
 Define the canonical current-user Telltale install, archive, and service safety
 contract.
+Requirements describing systemd and Linux user destinations remain Linux-specific;
+the Windows lifecycle requirements below define the standalone Windows boundary.
 ## Requirements
+### Requirement: Windows standalone current-user lifecycle
+
+Windows installation SHALL verify the selected official Release, exact tag,
+source commit, SHA256SUMS, GitHub asset digest, source/ref/digest-bound attestation,
+canonical nine-member ZIP and executable version before installation mutation.
+An explicit failed tag SHALL never fall back. Trusted local development binaries
+SHALL be recorded as unpublished. Binary files SHALL be separate from retained
+runtime defaults. Scheduling and PATH changes SHALL require explicit opt-in.
+
+#### Scenario: Windows installation and repeat installation
+
+- **WHEN** a validated source is installed or reinstalled
+- **THEN** current-user receipts, a lifecycle lock and staged replacement bind ownership and recovery
+- **AND** only the current-user least-privilege TelltaleScan may be managed from the authoritative XML template
+- **AND** ambiguous tasks, modified binaries, unexpected files, links and unsafe paths fail closed
+
+### Requirement: Windows retention and explicit purge
+
+Default uninstall SHALL remove only installer-owned executables, metadata,
+scheduled execution and PATH entries while retaining logs, state, history and
+configuration. Confirmed purge SHALL preview exact owned generated-data leaves;
+configuration SHALL require separate explicit selection. Cleanup SHALL not
+recursively remove shared directories or underlying coding-agent session stores.
+Legacy manual installations SHALL be detected and retained without adoption or
+state migration. Failures SHALL be reported as incomplete, with safe retries.
+
+#### Scenario: Read-only cleanup preview
+
+- **WHEN** Windows uninstall runs with WhatIf
+- **THEN** it inspects ownership and reports intended deletion without mutation
+- **AND** default uninstall and repeated cleanup retain all unowned resources
+
 ### Requirement: Canonical clean-install identity
 
 The user installer SHALL install only the platform-canonical `telltale`

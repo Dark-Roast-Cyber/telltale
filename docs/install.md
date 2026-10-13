@@ -17,7 +17,7 @@ For the next minor line, see the [0.7.0 migration guide](migrations/0.7.0.md).
 ## Prerequisites
 
 - Rust toolchain with `cargo` when building from source
-- Python 3 for strict release metadata validation by the repository installer
+- Python 3 for strict release metadata validation by the Linux repository installer
 - Local access to the agent session stores you want to scan
 - Optional: a SIEM or log shipper for the generated JSONL event stream
 
@@ -218,55 +218,109 @@ launchctl load ~/Library/LaunchAgents/ai.agentarchaeology.telltale.plist
 
 ### Windows
 
-Download the canonical release archive and extract `telltale.exe`:
+Use the reviewed repository scripts from this checkout with Windows PowerShell
+5.1 or PowerShell 7 and a current authenticated GitHub CLI (`gh`). Installation
+selects the latest official stable Release (`v0.6.0` currently) and verifies the
+exact release/tag/commit, GitHub asset digests, `SHA256SUMS`, source/ref/digest-bound
+GitHub attestation, canonical nine-member ZIP and executable version before
+changing the installation:
 
 ```powershell
-# PowerShell
-$release = Invoke-RestMethod "https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/latest"
-$tag = $release.tag_name
-$asset = $release.assets | Where-Object { $_.name -eq "telltale-$tag-x86_64-pc-windows-msvc.zip" }
-Invoke-WebRequest $asset.browser_download_url -OutFile "telltale-$tag.zip"
-Expand-Archive "telltale-$tag.zip" -DestinationPath "$env:LOCALAPPDATA\Telltale"
+# If this shell blocks scripts, allow the reviewed scripts for this process only:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\scripts\install-telltale.ps1
+# Optional, separately selected changes:
+.\scripts\install-telltale.ps1 -AddToPath
+.\scripts\install-telltale.ps1 -WithScheduledTask
+# Approved published prerelease; no fallback to stable or main:
+.\scripts\install-telltale.ps1 -ReleaseTag v0.7.0-rc.2
 ```
 
-Or build from source:
+The current-user executable and `install-receipt.json` live under
+`%LOCALAPPDATA%\Programs\Telltale`. Runtime defaults remain
+`%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` and
+`%LOCALAPPDATA%\Telltale\State\telltale-state.json`. No elevation is needed.
+Scheduling and PATH changes are disabled by default. Reinstallation retains
+installation identity and an existing managed schedule. Open a new terminal
+after opting into PATH. The scripts are repository tooling, not additional
+release ZIP members; there is no production checksum bypass.
+
+An exclusive current-user lifecycle mutex, file lock, journal, staged executable, digest-bound backup and
+atomic file replacement support rollback. A running or locked executable blocks
+replacement safely: close it and retry. Rerun the installer after interruption;
+changed recovery files or task declarations fail closed for operator inspection.
+
+For isolated tests, `-InstallDirectory` and `-DataDirectory` accept separate,
+dedicated directories inside the current user's LocalApplicationData folder.
+These overrides do not change CLI defaults: use explicit scan paths. Unsafe
+aliases (including DOS short paths), PATH separator/expansion characters,
+reparse points, hard-linked installed files, unrelated installation
+contents and missing ownership receipts are rejected. The boundary trusts the
+current user; it does not defend against a malicious process running as that
+same user during a transaction.
+
+Or build from source for development-only installation:
 
 ```powershell
-git clone https://github.com/Dark-Roast-Cyber/telltale.git
-cd telltale
-cargo build --release
-Copy-Item target\release\telltale.exe $env:LOCALAPPDATA\Telltale\telltale.exe
+$env:RUSTFLAGS = '-C target-feature=+crt-static'
+cargo build --locked --release --target x86_64-pc-windows-msvc
+.\scripts\verify-windows-runtime.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe
+.\scripts\install-telltale.ps1 -DevelopmentBinary .\target\x86_64-pc-windows-msvc\release\telltale.exe
 ```
 
-Add `$env:LOCALAPPDATA\Telltale` to your `PATH` to run `telltale` from any
-terminal. The default `user` path profile writes telemetry to
-`%LOCALAPPDATA%\Telltale\Logs\telltale-events.jsonl` and state to
-`%LOCALAPPDATA%\Telltale\State\telltale-state.json`. No elevation is needed for
-scans — run as your user.
-
-For periodic scans, create a Scheduled Task at user logon:
-
-```powershell
-$action = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\Telltale\telltale.exe" -Argument "scan --once --emit-activity --root $env:USERPROFILE"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RepeatInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 365)
-Register-ScheduledTask -TaskName "TelltaleScan" -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited
-```
+`-DevelopmentBinary` is a trusted local input, copied and checked for version and
+bundled rules. Its receipt says `development-local`; it is never reported as
+a verified published artifact. It cannot be combined with `-ReleaseTag`.
 
 ### Windows Scheduled Task example
 
-The Windows task example is `config/examples/telltale-scan-task.xml`.
-Replace both `YOUR_WINDOWS_USERNAME` values with the account that should run the
-task, then import it from PowerShell; the canonical runtime executable is
-`telltale.exe`:
+`-WithScheduledTask` derives `TelltaleScan` from
+`config/examples/telltale-scan-task.xml`: current-user SID, interactive logon,
+least privilege, every 30 minutes for 365 days after logon, IgnoreNew instances,
+and a one-hour execution limit. It binds absolute executable and working-directory
+paths and quotes scan-root/state/log arguments. Registration starts disabled;
+enablement follows committed binary replacement. No service, SYSTEM identity,
+password, daemon or MSI is created. Existing tasks must match the exact receipt;
+conflicting or modified tasks are retained and block changes. Opting in authorizes
+scans of supported agent stores under the user's profile at logon.
+
+### Windows uninstall and explicit purge
 
 ```powershell
-$xml = Get-Content .\config\examples\telltale-scan-task.xml -Raw
-Register-ScheduledTask -TaskName TelltaleScan -Xml $xml
+.\scripts\uninstall-telltale.ps1 -WhatIf
+.\scripts\uninstall-telltale.ps1
+# Preview exact generated-data deletions, then confirm:
+.\scripts\uninstall-telltale.ps1 -PurgeData -WhatIf
+.\scripts\uninstall-telltale.ps1 -PurgeData
+# Separate explicit consent for recognized user-authored configuration:
+.\scripts\uninstall-telltale.ps1 -PurgeData -PurgeConfiguration -WhatIf
+.\scripts\uninstall-telltale.ps1 -PurgeData -PurgeConfiguration
 ```
 
-This phase does not provide a Windows `install.ps1` installer; native task
-migration remains a separate release gate.
+Normal uninstall verifies receipts, executable digest and task identity, stops
+and removes the managed task, removes managed executable/metadata and undoes only
+its own exact user PATH entry. It retains logs, state, detection history,
+configuration and the data-ownership receipt, so later explicit purge remains
+possible. `-WhatIf` performs read-only inspection. Automation may explicitly
+supply `-Confirm:$false` after reviewing the plan.
+
+Purge owns only Logs/State directories originally created by the installer and
+recognized generated filenames. Existing directories are retained without
+adoption. Unexpected files, owners, links or locks block purge; it never
+recursively deletes a shared directory. Partial failures return errors and retain
+retry metadata where possible. `-PurgeConfiguration` separately selects regular
+YAML files in recognized tier directories under the current user's
+`.config\telltale`; other roots and environment overrides remain outside cleanup.
+All underlying Claude Code, Codex, OpenCode, Gemini and other coding-agent session
+stores remain untouched. Emusary's embedded libraries, installation and data are
+outside this standalone lifecycle.
+
+The old `%LOCALAPPDATA%\Telltale\telltale.exe` layout is detected and retained.
+Manual executables and tasks have no installer ownership proof. Legacy cleanup
+requires separate operator inspection and manual removal of verified artifacts;
+these scripts do not adopt it or migrate old state. RC2 remains immutable
+published history. Proposed RC3 needs reviewed source preparation and fresh
+applicable gates; these scripts do not tag or publish it.
 
 ## Build From Source
 
