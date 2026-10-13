@@ -7,6 +7,21 @@ material from this checkout to the public remote.
 
 ## Scope
 
+Windows lifecycle source preparation for proposed `v0.7.0-rc.3` adds the
+current-user repository installer/uninstaller without changing the release
+inventory, Event 3.0, persisted formats or Rust embedding interfaces. The
+`windows_lifecycle.ps1` regression matrix uses synthetic inputs and dedicated
+temporary directories; its live Task Scheduler mode is restricted to disposable
+GitHub Actions runners. A developer host run does not establish clean-host or
+published RC3 qualification. RC2 clean-Windows/no-Redistributable qualification
+passed as recorded in Issue #87 on 2026-10-12 America/Phoenix; Task Scheduler smoke
+was not run there. RC2 clean Linux, canary and stable promotion remain separate.
+
+Before recording a proposed RC3 freeze: merge the reviewed implementation,
+prepare all package manifests/lockfiles together, check that the tag/Release is
+unused, and obtain fresh CI/CodeQL and release preflight evidence tied to the
+reviewed exact source commit. Preserve all RC2 pins and historical evidence.
+
 A public release should include the open-source core, public technical
 documentation, synthetic fixtures, schemas, bundled rules, and reviewed example
 configuration. It should not include local scanner state, telemetry logs, raw
@@ -115,7 +130,8 @@ does not replace those artifacts or the separately pinned controlled-development
 `v0.7.0-rc.2` is published as prerelease Release ID `409281155` from frozen
 source `c3132f22f0758912fbcbc7451f5fefee514c5bdb` (Issue #87). Exact-source
 preflight, five-platform native verification of the published artifacts and the
-full settled soak passed; clean-host gates are blocked (see the checklist below).
+full settled soak passed. Its clean-Windows/no-Redistributable gate also passed
+as recorded in Issue #87; clean Linux remains blocked (see the checklist below).
 It is a qualified-in-part prerelease, not a stable release. RC1 evidence applies
 solely to the immutable RC1 artifact. A validation-relevant change after
 publication requires the next unused RC; the published tag, Release and assets
@@ -278,8 +294,8 @@ commit/push and subsequent lifecycle checks require separate authorization.
 | Public facade feature matrix and Rust 1.88 subset | PASS at `c3132f2`: all eight feature combinations and the explicit Rust 1.88.0 subset (160 tests each); no global workspace/CLI MSRV claim. |
 | Exact standalone Git consumer, CI/CodeQL and preflight | PASS at `c3132f2`: Git-rev consumer across five feature sets, CI 10/10, CodeQL 3/3, `make release-preflight` exit 0 on clean canonical `main`. |
 | Real downstream-consumer candidate adoption | PENDING integration gate: isolated public-facade suites (33 + 75 tests) passed, but require final candidate rebinding and native Windows build/integration evidence for an integrated claim. Not a dependency of standalone Telltale. |
-| Native platforms and performance | Functional PASS on GitHub-hosted runners for all five targets (published-artifact run `38098389234`). Bounded cold/warm/steady/saturated performance on native Windows, Linux ARM and macOS is NOT RUN. No native Windows access; unavailable required targets remain blocked, not passed by Linux tests. |
-| Five-platform RC2 artifacts and clean-host qualification | Artifacts PASS: Release `409281155`, checksums, attestations and native execution verified. Clean Linux installer/G-SERVICE and clean Windows no-Redistributable: BLOCKED (no authorized clean host). RC1 evidence is historical only. |
+| Native platforms and performance | Functional PASS on GitHub-hosted runners for all five targets (published-artifact run `38098389234`), with clean Windows qualification recorded in Issue #87. Bounded cold/warm/steady/saturated performance on native Windows, Linux ARM and macOS is NOT RUN; those benchmarks remain pending despite functional Windows access. |
+| Five-platform RC2 artifacts and clean-host qualification | Artifacts PASS: Release `409281155`, checksums, attestations and native execution verified. Clean Windows no-Redistributable PASS (Issue #87); Task Scheduler smoke was not run. Clean Linux installer/G-SERVICE remains BLOCKED (no authorized clean host). RC1 evidence is historical only. |
 
 The [selected-window aggregate limitation](opencode-live-ingestion.md#failure-recovery-and-coverage)
 is nonblocking only for the existing session-aggregate/conditional-replay contract,

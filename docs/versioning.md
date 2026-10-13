@@ -7,6 +7,15 @@ format.
 
 ## Current Series
 
+Windows lifecycle preparation targets the next unused `v0.7.0-rc.3`, after
+the implementation and a separate coordinated package-version change are reviewed
+and merged. No RC3 source freeze is accepted by this text. Windows installation
+defaults to the official stable Release; `-ReleaseTag` selects one exact published
+candidate without fallback. Development-local receipts are not artifact qualification.
+Scripts remain outside the canonical nine-member archive. Publication, native
+artifact verification, candidate-specific clean-host qualification, canary and
+stable promotion stay separate under Issue #87.
+
 - `v0.1.0` is the first public binary release.
 - `0.2.0` is the prior maturity release.
 - `0.3.0` is the prior released line for the event and scoring contract.

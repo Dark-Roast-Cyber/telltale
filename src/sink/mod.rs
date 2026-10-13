@@ -2091,6 +2091,9 @@ mod tests {
                     }
                     Err(error) => panic!("{error}"),
                 };
+                // Darwin can inherit the listener's nonblocking mode. Request
+                // reads must block with the bounded timeout below.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();

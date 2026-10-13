@@ -4,6 +4,23 @@
 
 ---
 
+## Unreleased — proposed 0.7.0-rc.3 preparation
+
+- The current-user Windows installer verifies exact Release identity,
+  checksums, canonical ZIP contents, binary version and source-bound attestation.
+  Binary files are separate from existing per-user Logs/State defaults.
+- The uninstaller verifies receipt ownership, executable digest and exact task identity.
+- Optional least-privilege `TelltaleScan` and reversible installer-owned PATH
+  changes; development-local installation is explicitly unpublished.
+- Digest-bound receipts, staged replacement and transaction recovery. Default
+  uninstall retains data; confirmed purge removes owned generated data, with
+  configuration requiring separate explicit selection. Legacy installs are retained.
+- Synthetic Windows lifecycle regressions and disposable-runner scheduling
+  validation. ZIP inventory, embedding APIs and Event 3.0 are unchanged.
+  RC3 tagging/publication and qualification remain separate gates.
+
+---
+
 ## 0.7.0-rc.2 — published prerelease (five-platform native verified)
 
 - Typed, wire-neutral Rust embedding contract: `PipelineError` and

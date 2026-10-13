@@ -3326,16 +3326,12 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
         "### Windows",
         "### Windows Scheduled Task example",
     );
-    let source_build = text_between(windows, "Or build from source:", "For periodic scans");
-    assert!(source_build.contains("target\\release\\telltale.exe"));
-    assert!(source_build.contains("telltale-events.jsonl"));
-    assert!(source_build.contains("telltale-state.json"));
-    let archive_download = text_between(
-        windows,
-        "Download the canonical release archive",
-        "Or build from source:",
-    );
-    assert!(archive_download.contains("telltale.exe"));
+    assert!(windows.contains("scripts\\install-telltale.ps1"));
+    assert!(windows.contains("-ReleaseTag v0.7.0-rc.2"));
+    assert!(windows.contains("-DevelopmentBinary"));
+    assert!(windows.contains("Programs\\Telltale"));
+    assert!(windows.contains("telltale-events.jsonl"));
+    assert!(windows.contains("telltale-state.json"));
 
     let readiness =
         fs::read_to_string("docs/release-readiness.md").expect("read release readiness docs");
