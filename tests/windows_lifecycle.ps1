@@ -441,6 +441,35 @@ try {
 }
 if ($TestScheduledTask) {
     if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Live Task Scheduler testing is restricted to the disposable CI runner.' }
+    function Set-SyntheticRuntimeOwner($Layout) {
+        # Only fresh outputs of this runner's synthetic scan may be normalized.
+        # First prove that group ownership still blocks purge without mutation.
+        $files = @()
+        $groupOwned = $false
+        foreach ($name in @('Logs/telltale-events.jsonl', 'Logs/telltale-events.jsonl.lock',
+                'State/telltale-state.json', 'State/telltale-state.json.lock',
+                'State/telltale-state.json.baseline.json', 'State/telltale-state.json.baseline.json.lock')) {
+            $file = Join-Path $Layout.DataDirectory $name
+            if (-not (Test-Path -LiteralPath $file)) { continue }
+            Assert-TTFile $file
+            $owner = (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value
+            if ($owner -ne $script:TTSid -and $owner -ne 'S-1-5-32-544') { throw 'Unexpected synthetic runtime file owner.' }
+            $groupOwned = $groupOwned -or $owner -eq 'S-1-5-32-544'
+            $files += $file
+        }
+        if ($groupOwned) {
+            $before = (Get-TreeDigest $Layout.InstallDirectory) + (Get-TreeDigest $Layout.DataDirectory)
+            $beforePath = Get-TTUserPath
+            $task = Get-TTTask
+            $beforeTask = if ($task) { '{0}:{1}' -f (Get-TTTextHash $task.Xml), $task.Enabled } else { '' }
+            Assert-Fails { & $uninstaller @Layout -PurgeData -Confirm:$false } 'group-owned synthetic output blocks purge'
+            $task = Get-TTTask
+            $afterTask = if ($task) { '{0}:{1}' -f (Get-TTTextHash $task.Xml), $task.Enabled } else { '' }
+            Assert-True (($before -ceq ((Get-TreeDigest $Layout.InstallDirectory) + (Get-TreeDigest $Layout.DataDirectory))) -and
+                $beforePath -ceq (Get-TTUserPath) -and $beforeTask -ceq $afterTask) 'refused group-owned purge leaves files, task and PATH unchanged'
+        }
+        foreach ($file in $files) { Set-TTCreatedOwner $file }
+    }
     # The disposable CI account has no personal agent stores. Never run the
     # production home-root action: replace it temporarily with explicit synthetic paths.
     if ($null -ne (Get-TTTask)) { throw 'CI task collision; refusing to change an existing task.' }
@@ -481,15 +510,8 @@ if ($TestScheduledTask) {
         Invoke-TTNative $Python @((Join-Path $root 'scripts/validate-event-jsonl'), '--schema', (Join-Path $root 'schemas/event.schema.json'), '--events', $log) | Out-Null
         $restored = Set-TTTask $savedXml
         Assert-True ((Get-TTTextHash $restored) -ceq (Get-TTTextHash $savedXml)) 'original managed task declaration restored'
-        # This disposable runner can default newly generated files to the
-        # Administrators group. Model ordinary user ownership only for these
-        # two fresh synthetic outputs; the product must still reject group owners.
-        foreach ($file in @($log, $state)) {
-            Assert-TTFile $file
-            $owner = (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value
-            if ($owner -ne $script:TTSid -and $owner -ne 'S-1-5-32-544') { throw 'Unexpected synthetic runtime file owner.' }
-            Set-TTCreatedOwner $file
-        }
+        Assert-TTFile $state
+        Set-SyntheticRuntimeOwner $layout
         & $uninstaller @layout -PurgeData -Confirm:$false
         Assert-True (Test-Path -LiteralPath $configFile) 'data purge retains authored configuration'
         $configHash = Get-TTHash $configFile
@@ -509,12 +531,7 @@ if ($TestScheduledTask) {
             $canonicalState = Join-Path $canonical.DataDirectory 'State\telltale-state.json'
             Assert-True ((Test-Path -LiteralPath $canonicalLog) -and (Test-Path -LiteralPath $canonicalState)) 'canonical runtime defaults stay separate from executable'
             Invoke-TTNative $Python @((Join-Path $root 'scripts/validate-event-jsonl'), '--schema', (Join-Path $root 'schemas/event.schema.json'), '--events', $canonicalLog) | Out-Null
-            foreach ($file in @($canonicalLog, $canonicalState)) {
-                Assert-TTFile $file
-                $owner = (Get-Acl -LiteralPath $file).GetOwner([Security.Principal.SecurityIdentifier]).Value
-                if ($owner -ne $script:TTSid -and $owner -ne 'S-1-5-32-544') { throw 'Unexpected synthetic runtime file owner.' }
-                Set-TTCreatedOwner $file
-            }
+            Set-SyntheticRuntimeOwner $canonical
             & $uninstaller -Confirm:$false
             Assert-True ((Test-Path -LiteralPath $canonicalLog) -and (Test-Path -LiteralPath $canonicalState)) 'canonical default uninstall retains data'
             & $uninstaller -PurgeData -Confirm:$false
