@@ -91,8 +91,8 @@ Source: `opencode.sqlite`.
 | Model, provider, agent | Full | Preserved from source JSON and, for v2, the session row. |
 | Workspace | Partial | Preserved only when the SQLite row reports it. |
 | Timestamp and session ID | Full | SQLite rows provide source timing and session context. |
-| Process ID and exit code | Partial | PID is never reported. Exit code is reported only for v2 user shell (`!`) commands. |
-| Tool execution | Partial | Legacy `running`/terminal parts report execution. v2 tool entries claim execution only when `executed: true`, so local tools report it as Unknown. v2 shell commands report it. |
+| Process ID and exit code | Partial | PID is never reported. Exit code is reported only for v2 user shell (`!`) commands and settled v2 agent `shell` tool calls. |
+| Tool execution | Partial | Legacy `running`/terminal parts report execution. v2 tool entries claim execution when `executed: true` or when a completed agent `shell` tool reports how its command settled; other local tools stay Unknown. v2 shell commands report it. |
 | Call ID, error state, content parts | Partial | Reported call IDs and error states are preserved. |
 
 The `opencode.sqlite` canonical adapter feeds the production Detection v2 source

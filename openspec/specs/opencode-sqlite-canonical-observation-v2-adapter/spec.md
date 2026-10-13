@@ -601,15 +601,17 @@ entries MUST also emit `ToolResultReturned` at `time.completed`: a completed
 result is the sole text content as a direct string, otherwise the structured
 `content` array under ordinary bounds; an error result is the structured
 `error` object with reported status `Failed`. Streaming and running entries
-MUST NOT emit an outcome. Execution stages MUST be emitted only when the entry
-reports `executed: true` (running: `ToolExecutionStarted` at `time.ran`;
-terminal with `time.ran`: `ToolExecutionCompleted`). Because OpenCode sets
-`executed` from provider execution, `false` or absence MUST make no execution
-claim either way, and its reported value MUST be preserved as the Reported
-`tool.executed` facet. The adapter MUST NOT emit `Succeeded`, exit codes, PIDs,
-approval or Process, File or Network observations for tool entries, and MUST NOT
-map an `aborted` error (including a user decline) to anything but `Failed`. The
-entry `id` MUST be the SourceReported `correlation.call_id`; a missing id or
+MUST NOT emit an outcome. Execution stages MUST be emitted only from source
+evidence: an entry reporting `executed: true` (running: `ToolExecutionStarted`
+at `time.ran`; terminal with `time.ran`: `ToolExecutionCompleted`), or a
+completed entry named `shell` whose state `metadata` reports a settlement.
+Because OpenCode sets `executed` from provider execution, `false` or absence
+MUST make no execution claim by itself, and its reported value MUST be
+preserved as the Reported `tool.executed` facet. The adapter MUST NOT emit
+`Succeeded`, PIDs, approval or Process, File or Network observations for tool
+entries, MUST NOT emit an exit code except from a `shell` settlement, and MUST
+NOT map an `aborted` error (including a user decline) to anything but `Failed`.
+The entry `id` MUST be the SourceReported `correlation.call_id`; a missing id or
 name, a non-boolean `executed`, a non-object state, empty completed content or
 an input of the wrong shape MUST fail closed (`missing_tool_id`,
 `missing_tool_name`, `invalid_tool_state`). Tool-entry and message observations
@@ -624,6 +626,39 @@ report ToolExecution capability `Unknown`.
 
 - **WHEN** an entry reports `streaming`, or `running` with `executed: false`
 - **THEN** only `ToolRequested` is emitted
+
+### Requirement: OpenCode v2 shell-tool settlements report completed execution
+
+OpenCode's `shell` tool writes its completed state `metadata` as `{status,
+truncated, exit?, signal?, timeout?, shellID?}` only after the command was
+authorized, ran and settled; a background command returns `status: "running"`
+before it settles (OpenCode v2.0.27, `packages/core/src/tool/plugin/shell.ts`
+and `packages/core/src/shell/result.ts`). A completed entry named `shell` whose
+`metadata` is an object with `status: "completed"`, whose present `exit` is an
+integer, whose present `signal` is a non-empty string and whose present
+`timeout` is a boolean, and which reports an `exit`, a `signal` or `timeout:
+true`, MUST emit one `ToolExecutionCompleted` at `time.completed` between its
+`ToolRequested` and `ToolResultReturned`, whatever `executed` reports. Both
+outcome stages MUST carry the reported `exit` as Reported `exit_code`, a
+reported `signal` as the Reported `tool.signal` facet, and `timeout: true` as
+Reported status `Failed`. An exit code, including zero, MUST NOT become
+`Succeeded` or `Failed`. Any other metadata shape, any other tool name, and
+running or error entries MUST make no execution claim from metadata alone and
+MUST NOT fail the row because of metadata, which is an open record. Existing
+`executed: true` execution-stage semantics remain unchanged. The settlement MUST NOT change
+identity, cursors or the ToolExecution capability, which stays `Unknown`, and
+MUST NOT produce OS observations. `shellID` is reported only for background
+commands and MUST NOT become a correlation.
+
+#### Scenario: A settled shell tool reports completion and its exit code
+
+- **WHEN** a completed `shell` entry with `executed: false` reports metadata `{status: "completed", exit: 2}`
+- **THEN** it emits `ToolRequested`, `ToolExecutionCompleted` and `ToolResultReturned`, both outcome stages carry `exit_code` 2 and neither reports a status
+
+#### Scenario: Unsettled or unrecognized shell metadata makes no claim
+
+- **WHEN** a completed `shell` entry reports background metadata `{status: "running"}`, no metadata, or an `exit` that is not an integer
+- **THEN** it emits only `ToolRequested` and `ToolResultReturned`, without `exit_code`
 
 ### Requirement: OpenCode v2 user shell messages report harness execution
 

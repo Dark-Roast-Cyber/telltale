@@ -145,7 +145,21 @@ pub(crate) struct OpenCodeAssistantTool {
     pub(crate) created: Option<String>,
     pub(crate) ran: Option<String>,
     pub(crate) completed: Option<String>,
+    /// Settlement the `shell` tool reported in its completed metadata.
+    pub(crate) shell_settlement: Option<Box<OpenCodeShellSettlement>>,
     pub(crate) malformed: bool,
+}
+
+/// The `shell` tool writes `{status, truncated, exit?, signal?, timeout?,
+/// shellID?}` into its completed state only after the command was authorized,
+/// ran and settled (`packages/core/src/tool/plugin/shell.ts`,
+/// `packages/core/src/shell/result.ts`). A background command returns with
+/// `status: "running"` instead and is not a settlement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OpenCodeShellSettlement {
+    pub(crate) exit: Option<i64>,
+    pub(crate) signal: Option<String>,
+    pub(crate) timeout: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -587,9 +601,16 @@ fn decode_tool(entry: &Value) -> OpenCodeAssistantTool {
     let time = entry.get("time");
     malformed |= time.is_some_and(|time| !time.is_object());
     let time_field = |key: &str| time.and_then(|time| source_time_field(time.get(key), key));
+    let name = non_empty_string(entry.get("name"));
+    let shell_settlement = match (status, name.as_deref()) {
+        (OpenCodeToolStatus::Completed, Some(SHELL_TOOL_NAME)) => {
+            state.and_then(|state| shell_settlement(state.get("metadata")?))
+        }
+        _ => None,
+    };
     OpenCodeAssistantTool {
         id: non_empty_string(entry.get("id")),
-        name: non_empty_string(entry.get("name")),
+        name,
         executed,
         status,
         input,
@@ -597,8 +618,42 @@ fn decode_tool(entry: &Value) -> OpenCodeAssistantTool {
         created: time_field("created"),
         ran: time_field("ran"),
         completed: time_field("completed"),
+        shell_settlement,
         malformed,
     }
+}
+
+/// Tool metadata is an open record, so a shape this adapter does not recognize
+/// is not a settlement and not a malformed row: it only withholds the claim.
+fn shell_settlement(metadata: &Value) -> Option<Box<OpenCodeShellSettlement>> {
+    let metadata = metadata.as_object()?;
+    if metadata.get("status").and_then(Value::as_str) != Some("completed") {
+        return None;
+    }
+    let exit = match metadata.get("exit") {
+        None => None,
+        Some(exit) => Some(exit.as_i64()?),
+    };
+    let signal = match metadata.get("signal") {
+        None => None,
+        Some(signal) => Some(
+            signal
+                .as_str()
+                .filter(|signal| !signal.is_empty())?
+                .to_owned(),
+        ),
+    };
+    let timeout = match metadata.get("timeout") {
+        None => false,
+        Some(timeout) => timeout.as_bool()?,
+    };
+    (exit.is_some() || signal.is_some() || timeout).then(|| {
+        Box::new(OpenCodeShellSettlement {
+            exit,
+            signal,
+            timeout,
+        })
+    })
 }
 
 fn decode_shell(data: &Map<String, Value>) -> OpenCodeShell {

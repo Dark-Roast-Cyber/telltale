@@ -143,8 +143,10 @@ impl Context<'_> {
 
     /// One content entry records the model's tool request and, once terminal,
     /// its outcome. The request is always its own observation; the outcome is
-    /// `ToolResultReturned`. Execution stages are emitted only when the entry
-    /// reports `executed: true`; `false` and absence make no execution claim.
+    /// `ToolResultReturned`. Execution stages need source evidence: the entry
+    /// reports `executed: true`, or a completed `shell` tool reports how its
+    /// command settled. `executed: false` and absence make no claim by
+    /// themselves, and error or running entries never gain one from metadata.
     fn tool(
         &self,
         tool: &OpenCodeAssistantTool,
@@ -172,19 +174,15 @@ impl Context<'_> {
             ));
         }
         let mut stages = vec![(ObservationStage::ToolRequested, tool.created.as_deref())];
-        if tool.executed == Some(true) {
-            match tool.status {
-                OpenCodeToolStatus::Running => {
-                    stages.push((ObservationStage::ToolExecutionStarted, tool.ran.as_deref()))
-                }
-                OpenCodeToolStatus::Completed | OpenCodeToolStatus::Error if tool.ran.is_some() => {
-                    stages.push((
-                        ObservationStage::ToolExecutionCompleted,
-                        tool.completed.as_deref(),
-                    ));
-                }
-                _ => {}
-            }
+        let reported_completion =
+            tool.executed == Some(true) && tool.status.is_terminal() && tool.ran.is_some();
+        if tool.executed == Some(true) && tool.status == OpenCodeToolStatus::Running {
+            stages.push((ObservationStage::ToolExecutionStarted, tool.ran.as_deref()));
+        } else if reported_completion || tool.shell_settlement.is_some() {
+            stages.push((
+                ObservationStage::ToolExecutionCompleted,
+                tool.completed.as_deref(),
+            ));
         }
         if tool.status.is_terminal() {
             stages.push((
@@ -207,7 +205,17 @@ impl Context<'_> {
                 body = body.with_result(tool_result(result)?);
                 metadata.push(("tool.result", FactProvenance::Reported));
             }
-            if outcome && tool.status == OpenCodeToolStatus::Error {
+            let settlement = tool.shell_settlement.as_ref().filter(|_| outcome);
+            if let Some(exit) = settlement.and_then(|settlement| settlement.exit) {
+                body = body.with_exit_code(exit);
+                metadata.push(("tool.exit_code", FactProvenance::Reported));
+            }
+            // An exit code alone is neither success nor failure; a reported
+            // timeout fails the call like a timed-out user shell command.
+            if outcome
+                && (tool.status == OpenCodeToolStatus::Error
+                    || settlement.is_some_and(|settlement| settlement.timeout))
+            {
                 body = body.with_reported_status(ToolStatus::Failed);
                 metadata.push(("tool.reported_status", FactProvenance::Reported));
             }
@@ -231,6 +239,11 @@ impl Context<'_> {
                         SemanticFacet::new(JsonValue::Bool(executed)),
                     )?
                     .fact_metadata("tool.executed", normal_reported()?);
+            }
+            if let Some(signal) = settlement.and_then(|settlement| settlement.signal.as_deref()) {
+                builder = builder
+                    .facet("tool.signal", SemanticFacet::new(JsonValue::string(signal)))?
+                    .fact_metadata("tool.signal", normal_reported()?);
             }
             builder = builder.correlation(
                 CorrelationIds::new().with_call_id(CorrelationId::source_reported(call_id)?),

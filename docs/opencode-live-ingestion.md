@@ -27,10 +27,15 @@ rows are counted but not mapped. Unknown variants fail the source.
 
 Every tool entry emits `ToolRequested`. Completed and error entries also emit
 `ToolResultReturned`; an error reports `Failed`, including user declines,
-which OpenCode stores as `aborted` errors. Execution stages are emitted only
-for `executed: true`. OpenCode sets that field from provider execution, so
-local tools report `false`. Telltale keeps the value as a reported fact and does
-not claim local execution from it. User `!` shell commands (`shell` rows) map to
+which OpenCode stores as `aborted` errors. Execution stages are emitted for
+`executed: true`. OpenCode sets that field from provider execution, so local
+tools report `false`. Telltale keeps the value as a reported fact and does not
+claim local execution from it. The agent `shell` tool is the exception: its
+completed metadata reports how the command settled (`exit`, `signal` or
+`timeout`) only after the command ran, so such an entry also emits
+`ToolExecutionCompleted` with the reported exit code. Exit code zero is not
+reported as success, and background commands, which return before they settle,
+make no claim. User `!` shell commands (`shell` rows) map to
 a `shell` tool with reported start, exit code, output and `timeout`/`killed`
 status.
 
