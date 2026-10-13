@@ -107,7 +107,7 @@ try {
     }
     $next = [ordered]@{ installer = $script:TTInstaller; sid = $script:TTSid; id = $id; install = $install; data = $data; directory_created = [bool]$directoryOwned; binary_sha256 = $hash; version = $version; source = $source; path_added = $pathOwned; task_xml = if ($null -ne $previous) { $previous.task_xml } else { $null } }
     Initialize-TTData $data
-    $journal = [ordered]@{ previous = $previous; next = $next; task_transition_xml = $null; committed = $false; path_applied = $false; path_changed = $pathBefore -cne $pathAfter; path_before = $pathBefore; path_after = $pathAfter }
+    $journal = [ordered]@{ previous = $previous; next = $next; previous_task_enabled = [bool]$taskWasEnabled; task_transition_xml = $null; committed = $false; path_applied = $false; path_changed = $pathBefore -cne $pathAfter; path_before = $pathBefore; path_after = $pathAfter }
     $journalPath = Join-Path $install 'transaction.json'
     Write-TTJson $journalPath $journal
     try {
@@ -119,8 +119,7 @@ try {
         if ($null -ne $task) {
             $journal.task_transition_xml = Get-TTTaskEnabledXml $task.Xml $false
             Write-TTJson $journalPath $journal
-            $task.Enabled = $false
-            $next.task_xml = $task.Xml
+            $next.task_xml = Set-TTTask $journal.task_transition_xml
             Write-TTJson $journalPath $journal
         }
         if ($WithScheduledTask -and $null -eq $task) {
@@ -144,8 +143,10 @@ try {
             $task = Assert-TTTask $next
             $journal.task_transition_xml = Get-TTTaskEnabledXml $task.Xml $true
             Write-TTJson $journalPath $journal
-            $task.Enabled = $true
-            $next.task_xml = $task.Xml
+            # Register the enabled definition explicitly. A registered task's
+            # Xml getter can retain its old declaration after Enabled is set.
+            $next.task_xml = Set-TTTask $journal.task_transition_xml
+            if (-not (Assert-TTTask $next).Enabled) { throw 'Managed task did not enable.' }
             Write-TTJson $journalPath $journal
             Write-TTJson (Join-Path $install 'install-receipt.json') $next
         }

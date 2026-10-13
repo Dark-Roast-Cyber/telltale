@@ -48,19 +48,26 @@ using System.Xml;
 namespace TelltaleLifecycleTests {
     public class Task {
         XmlDocument document = new XmlDocument();
-        public Task(string xml) { document.LoadXml(xml); State = 3; }
+        bool enabled;
+        public Task(string xml) { document.LoadXml(xml); State = 3; enabled = document.GetElementsByTagName("Settings")[0]["Enabled"].InnerText == "true"; }
         public string Xml { get { return document.OuterXml; } }
         public int State { get; set; }
         public bool Enabled {
-            get { return document.GetElementsByTagName("Settings")[0]["Enabled"].InnerText == "true"; }
-            set { document.GetElementsByTagName("Settings")[0]["Enabled"].InnerText = value ? "true" : "false"; }
+            // Model the native cached XML getter: changing Enabled alone does
+            // not replace this object's captured definition.
+            get { return enabled; }
+            set { enabled = value; }
         }
         public void Stop(int flags) { State = 3; }
     }
     public class Folder {
         public static Task Current;
+        public static bool FailRegistrationOnce;
         public Task GetTask(string name) { if (Current == null) throw new FileNotFoundException(); return Current; }
         public Task RegisterTask(string name, string xml, int flags, string sid, object password, int logon, object security) {
+            if (FailRegistrationOnce) { FailRegistrationOnce = false; throw new IOException("Injected interruption before task registration."); }
+            if (flags == 4 && Current == null) throw new FileNotFoundException();
+            if (flags == 2 && Current != null) throw new IOException("Task already exists.");
             if (xml.IndexOf("encoding=\"UTF-8\"", StringComparison.OrdinalIgnoreCase) >= 0)
                 throw new ArgumentException("Task XML must match UTF-16 COM transport.");
             Current = new Task(xml); return Current;
@@ -189,10 +196,18 @@ try {
     Assert-True ((Get-TTTask).Enabled) 'task opt-in enables after install'
     [xml]$taskXml = (Get-TTTask).Xml
     Assert-True ($taskXml.FirstChild.Encoding -ceq 'UTF-16') 'task declaration matches native COM string transport'
+    Assert-True ($taskXml.Task.Settings.Enabled -ceq 'true') 'enabled task export can be registered again without disabling execution'
     Assert-True ($taskXml.Task.Principals.Principal.UserId -ceq $script:TTSid -and $taskXml.Task.Principals.Principal.RunLevel -ceq 'LeastPrivilege') 'current-user least-privilege task'
     Assert-True ($taskXml.Task.Triggers.LogonTrigger.Repetition.Interval -ceq 'PT30M' -and $taskXml.Task.Actions.Exec.Arguments.Contains('"')) 'template cadence and quoting'
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ((Get-TTTask).Enabled) 'repeat preserves managed schedule'
+    (Get-TTTask).Enabled = $false
+    $taskMetadata = Join-Path $layout.InstallDirectory 'install-receipt.json'
+    $taskMetadataLock = [IO.File]::Open($taskMetadata, 'Open', 'Read', 'Read')
+    try { Assert-Fails { & $installer @layout -DevelopmentBinary $variant } 'failed reinstall of disabled task reports failure' }
+    finally { $taskMetadataLock.Dispose() }
+    & $installer @layout -DevelopmentBinary $binary
+    Assert-True (-not (Get-TTTask).Enabled) 'rollback and retry preserve a manually disabled managed task'
     [TelltaleLifecycleTests.Folder]::Current = $null
     & $installer @layout -DevelopmentBinary $binary
     Assert-True ($null -eq (Get-TTTask)) 'plain reinstall preserves a deliberately removed task'
@@ -402,9 +417,22 @@ try {
         else { Assert-True ((Get-TTTask).Enabled) 'interrupted disable restores original managed schedule' }
         & $uninstaller @layout -Confirm:$false
     }
+    $layout = New-TestLayout 'rollback-registration-interruption'
+    & $installer @layout -DevelopmentBinary $binary -WithScheduledTask
+    $previous = Get-TTReceipt $layout.InstallDirectory $layout.DataDirectory
+    $next = ($previous | ConvertTo-Json -Depth 12 | ConvertFrom-Json)
+    $disabledXml = Get-TTTaskEnabledXml $previous.task_xml $false
+    [TelltaleLifecycleTests.Folder]::Current = [TelltaleLifecycleTests.Task]::new($disabledXml)
+    Write-TTJson (Join-Path $layout.InstallDirectory 'transaction.json') @{ previous = $previous; next = $next; previous_task_enabled = $true; task_transition_xml = $disabledXml; committed = $false; path_changed = $false; path_before = $null; path_after = $null }
+    [TelltaleLifecycleTests.Folder]::FailRegistrationOnce = $true
+    Assert-Fails { & $installer @layout -DevelopmentBinary $binary } 'interruption immediately before rollback task registration reported'
+    & $installer @layout -DevelopmentBinary $binary
+    Assert-True ((Get-TTTask).Enabled) 'original transition proof survives interrupted rollback registration'
+    & $uninstaller @layout -Confirm:$false
     Write-Output "Windows lifecycle regression matrix passed: $script:assertions assertions. Synthetic root: $temp"
 } finally {
     [TelltaleLifecycleTests.Folder]::Current = $null
+    [TelltaleLifecycleTests.Folder]::FailRegistrationOnce = $false
     Remove-Item Function:New-Object
     # A fresh GUID root, checked again after junction tests; never delete canonical directories.
     $checkedTemp = Get-TTPath $temp

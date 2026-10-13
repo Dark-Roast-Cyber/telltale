@@ -223,8 +223,9 @@ function Assert-TTTask($Receipt) {
 function Set-TTTask([string]$Xml, [switch]$CreateOnly) {
     $service = New-Object -ComObject 'Schedule.Service'
     $service.Connect()
-    # TASK_CREATE_OR_UPDATE=6, TASK_LOGON_INTERACTIVE_TOKEN=3. No password or elevation.
-    $flags = if ($CreateOnly) { 2 } else { 6 }
+    # TASK_CREATE=2, TASK_UPDATE=4, TASK_LOGON_INTERACTIVE_TOKEN=3.
+    # Updating an owned task must never recreate one that disappeared.
+    $flags = if ($CreateOnly) { 2 } else { 4 }
     $task = $service.GetFolder('\').RegisterTask('TelltaleScan', $Xml, $flags, $script:TTSid, $null, 3, $null)
     return $task.Xml
 }
@@ -500,6 +501,7 @@ function Restore-TTTransaction([string]$Install, [string]$Data) {
         if ($null -ne $journal.previous -and $journal.previous.task_xml) { $taskHashes += Get-TTTextHash $journal.previous.task_xml }
         if ($journal.next.task_xml) { $taskHashes += Get-TTTextHash $journal.next.task_xml }
         if ($journal.PSObject.Properties['task_transition_xml'] -and $journal.task_transition_xml) { $taskHashes += Get-TTTextHash $journal.task_transition_xml }
+        if ($journal.PSObject.Properties['rollback_task_xml'] -and $journal.rollback_task_xml) { $taskHashes += Get-TTTextHash $journal.rollback_task_xml }
         if ((Get-TTTextHash $task.Xml) -cnotin $taskHashes) { throw 'Task changed during transaction; recovery refused.' }
     }
     # Recover PATH only when it is exactly one of the two journaled values.
@@ -517,7 +519,16 @@ function Restore-TTTransaction([string]$Install, [string]$Data) {
             throw 'Previous executable is unavailable; recovery refused.'
         }
         if ($journal.previous.task_xml -and $null -ne $task) {
-            $restoredXml = Set-TTTask $journal.previous.task_xml
+            $rollbackXml = $journal.previous.task_xml
+            if ($journal.PSObject.Properties['previous_task_enabled']) {
+                if ($journal.previous_task_enabled -isnot [bool]) { throw 'Invalid previous task enablement.' }
+                $rollbackXml = Get-TTTaskEnabledXml $rollbackXml $journal.previous_task_enabled
+            }
+            # Keep the original transition proof until rollback registration
+            # finishes. A crash before registration still leaves that task live.
+            $journal | Add-Member -NotePropertyName rollback_task_xml -NotePropertyValue $rollbackXml -Force
+            Write-TTJson $journalPath $journal
+            $restoredXml = Set-TTTask $rollbackXml
             $journal.previous.task_xml = $restoredXml
         } elseif ($null -ne $task) { Remove-TTTask $task }
         else { $journal.previous.task_xml = $null }
