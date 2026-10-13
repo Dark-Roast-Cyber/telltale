@@ -7,10 +7,16 @@ format.
 
 ## Current Series
 
-Windows lifecycle preparation targets the next unused `v0.7.0-rc.3`, after
-the implementation and a separate coordinated package-version change are reviewed
-and merged. No RC3 source freeze is accepted by this text. Windows installation
-defaults to the official stable Release; `-ReleaseTag` selects one exact published
+The workspace and the embedding consumer's independently locked Telltale
+dependencies are prepared at `0.7.0-rc.3` for the prospective unused tag
+`v0.7.0-rc.3`. The Windows lifecycle
+implementation landed in [PR #96](https://github.com/Dark-Roast-Cyber/telltale/pull/96),
+merge `883bab7cc846c06e30c3976385cceb9c387125f1`. Normal CI checks the exact
+reviewed source SHA, prospective release preflight, supported embedding contracts,
+the Rust 1.88 embedding subset and a fresh standalone Git consumer. A proposed
+freeze must be recorded separately in Issue #87 after this preparation is reviewed,
+merged and checked at its exact commit. No RC3 freeze is accepted by this text.
+Windows installation defaults to the official stable Release; `-ReleaseTag` selects one exact published
 candidate without fallback. Development-local receipts are not artifact qualification.
 Scripts remain outside the canonical nine-member archive. Publication, native
 artifact verification, candidate-specific clean-host qualification, canary and
@@ -38,8 +44,10 @@ stable promotion stay separate under Issue #87.
   promotion.
 - `v0.7.0-rc.2` is published as prerelease Release ID `409281155` from source
   SHA `c3132f22f0758912fbcbc7451f5fefee514c5bdb`; five-platform native
-  verification passed in run `38098389234`. Clean-host qualification and stable
-  promotion remain pending. RC1 evidence applies only to its immutable published
+  verification passed in run `38098389234`. RC2 clean Windows without a
+  Redistributable passed as recorded in Issue #87; Task Scheduler smoke was not
+  run there. Clean Linux, canary and stable promotion remain pending.
+  RC1 evidence applies only to its immutable published
   candidate. A further tagged candidate needs the next unused RC version.
 - The published `v0.6.0-rc.3` prerelease is Release ID `386482697` from source
   SHA `db9cf63434a6e1fdf1373e82d96d709f6fbabc58`. Publication/provenance and the
@@ -252,7 +260,7 @@ Follow the gate's order, waiting after each
 publish until that prerequisite resolves from the index without a local patch.
 After all six packages are available, remove every local `patch.crates-io`
 override and confirm the clean consumers and CLI installation using only pinned
-`=0.7.0-rc.2` registry dependencies while that remains the workspace package
+`=0.7.0-rc.3` registry dependencies while that remains the workspace package
 version. Advance that pin with each reviewed lockstep package version.
 Do not declare publication complete before those unpatched checks
 pass, and do not publish credentials or local release state.
@@ -261,7 +269,8 @@ pass, and do not publish credentials or local release state.
 
 The established supported candidate convention is `<minor>.0-rc.N` (a
 canonical nonnegative integer N without leading zeros), only when external
-validation is useful. The published prerelease candidate is `v0.7.0-rc.1`. A
+validation is useful. The latest published prerelease is `v0.7.0-rc.2`;
+`v0.7.0-rc.3` is source preparation only. A
 pre-release tag and package version must still match exactly, and pre-releases
 do not carry stable compatibility guarantees. GitHub Release metadata must set
 `prerelease=true`; an RC must never be made the normal latest stable Release.

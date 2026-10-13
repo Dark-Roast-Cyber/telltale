@@ -19,7 +19,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.7.0-rc.2"
+version = "0.7.0-rc.3"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Dark Roast Cyber"]
@@ -41,12 +41,12 @@ hmac = "0.12"
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 unicode-normalization = "0.1"
 uuid = { version = "1.11", features = ["v4"] }
-telltale-schema = { path = "crates/telltale-schema", version = "=0.7.0-rc.2" }
-telltale-inference = { path = "crates/telltale-inference", version = "=0.7.0-rc.2" }
-telltale-rules = { path = "crates/telltale-rules", version = "=0.7.0-rc.2" }
-telltale-sources = { path = "crates/telltale-sources", version = "=0.7.0-rc.2" }
-telltale-detect = { path = "crates/telltale-detect", version = "=0.7.0-rc.2" }
-telltale-core = { path = "crates/telltale", version = "=0.7.0-rc.2" }
+telltale-schema = { path = "crates/telltale-schema", version = "=0.7.0-rc.3" }
+telltale-inference = { path = "crates/telltale-inference", version = "=0.7.0-rc.3" }
+telltale-rules = { path = "crates/telltale-rules", version = "=0.7.0-rc.3" }
+telltale-sources = { path = "crates/telltale-sources", version = "=0.7.0-rc.3" }
+telltale-detect = { path = "crates/telltale-detect", version = "=0.7.0-rc.3" }
+telltale-core = { path = "crates/telltale", version = "=0.7.0-rc.3" }
 
 [package]
 name = "telltale-cli"
