@@ -34,7 +34,9 @@ use crate::sources::opencode::canonical::{
     OpenCodeCanonicalError, project_opencode_native_records,
 };
 #[cfg(feature = "opencode-sqlite")]
-use crate::sources::opencode::native::extract_sqlite_native_source;
+use crate::sources::opencode::native::{OpenCodeNativeExtraction, extract_opencode_native_source};
+#[cfg(feature = "opencode-sqlite")]
+use crate::sources::opencode::session_message_canonical::project_opencode_session_messages;
 use crate::sources::qwen::canonical::{
     QwenCanonicalError, QwenCanonicalOptions, project_qwen_native_records,
 };
@@ -102,10 +104,21 @@ mod accounting_tests;
 #[path = "acquisition_bound_tests.rs"]
 mod bound_tests;
 
+/// Progress names its coordinate space. A legacy `part` high-water and an
+/// OpenCode v2 `session_message` high-water are different cursors: neither may
+/// resume, regress-check or skip the other schema's history.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum AcquisitionProgress {
     None,
-    OpenCodeSqlite { part_max_time_updated: Option<i64> },
+    /// Legacy `message`/`part` store: selected part `time_updated` high-water.
+    OpenCodeSqlite {
+        part_max_time_updated: Option<i64>,
+    },
+    /// OpenCode v2 `session_v2`/`session_message` store: selected message
+    /// `time_updated` high-water.
+    OpenCodeSessionMessages {
+        message_max_time_updated: Option<i64>,
+    },
 }
 
 pub(crate) const SQLITE_PART_LIMIT: i64 = 5_000;
@@ -115,6 +128,9 @@ pub const OPENCODE_SQLITE_RESUME_OVERLAP_MS: i64 = 10 * 60 * 1_000;
 /// Parts a resumed OpenCode read may select before failing as `LimitExceeded`.
 pub const OPENCODE_SQLITE_RESUME_PART_LIMIT: i64 = 25_000;
 
+/// Read controls for both OpenCode schemas. The store's schema is selected in
+/// the read snapshot, and only the controls for that schema apply: `part_*` and
+/// `resume_high_water` to legacy stores, `message_*` to OpenCode v2 stores.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct OpenCodeSqliteReadOptions {
     pub part_min_time_updated: Option<i64>,
@@ -123,6 +139,12 @@ pub struct OpenCodeSqliteReadOptions {
     /// high-water; otherwise the read fails as [`AcquisitionError::ResumeRegressed`]
     /// before selecting parts. Set by callers that hold a resume position.
     pub resume_high_water: Option<i64>,
+    /// Inclusive `session_message.time_updated` lower bound for an incremental
+    /// OpenCode v2 read; `None` selects the newest `message_limit` rows.
+    pub message_min_time_updated: Option<i64>,
+    pub message_limit: i64,
+    /// The `session_message` counterpart of [`Self::resume_high_water`].
+    pub message_resume_high_water: Option<i64>,
 }
 
 impl OpenCodeSqliteReadOptions {
@@ -137,6 +159,22 @@ impl OpenCodeSqliteReadOptions {
             ),
             part_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
             resume_high_water: Some(high_water),
+            ..Self::default()
+        }
+    }
+
+    /// Also resume an OpenCode v2 store after a recorded `session_message`
+    /// `time_updated` high-water, with the same overlap, incremental row limit
+    /// and regression check as the legacy part cursor. Legacy controls are
+    /// unchanged, so one options value can carry both cursors.
+    pub fn resume_session_messages_after(self, high_water: i64) -> Self {
+        Self {
+            message_min_time_updated: Some(
+                high_water.saturating_sub(OPENCODE_SQLITE_RESUME_OVERLAP_MS),
+            ),
+            message_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
+            message_resume_high_water: Some(high_water),
+            ..self
         }
     }
 }
@@ -147,6 +185,9 @@ impl Default for OpenCodeSqliteReadOptions {
             part_min_time_updated: None,
             part_limit: SQLITE_PART_LIMIT,
             resume_high_water: None,
+            message_min_time_updated: None,
+            message_limit: SQLITE_PART_LIMIT,
+            message_resume_high_water: None,
         }
     }
 }
@@ -176,6 +217,9 @@ pub enum AcquisitionError {
     /// deletion). Recover with
     /// a read that carries no resume position.
     ResumeRegressed,
+    /// The store holds only part of a supported native schema, or lacks its
+    /// required columns. No other schema is read in its place.
+    UnsupportedSourceSchema,
     BoundedSourceRead(BoundedReadError),
     InvalidAttestation,
     ConflictingSessionOwnership,
@@ -202,6 +246,7 @@ impl AcquisitionError {
             Self::SourceRead => "source_read",
             Self::CapabilityNotCompiled => "capability_not_compiled",
             Self::ResumeRegressed => "resume_regressed",
+            Self::UnsupportedSourceSchema => "unsupported_source_schema",
             Self::BoundedSourceRead(reason) => reason.code(),
             Self::InvalidAttestation => "invalid_session_attestation",
             Self::ConflictingSessionOwnership => "conflicting_session_ownership",
@@ -500,39 +545,73 @@ pub fn acquire_opencode_sqlite(
     #[cfg(feature = "opencode-sqlite")]
     {
         let extraction =
-            extract_sqlite_native_source(source, read).map_err(|error| match error {
-                // A resumed read that selected more parts than its limit: recoverable
+            extract_opencode_native_source(source, read).map_err(|error| match error {
+                // A resumed read that selected more rows than its limit: recoverable
                 // by a fresh bootstrap read, unlike an unreadable source.
                 SourceReadError::Bounded(BoundedReadError::LimitExceeded) => {
                     AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded)
                 }
                 SourceReadError::ResumeRegressed => AcquisitionError::ResumeRegressed,
+                SourceReadError::UnsupportedSchema => AcquisitionError::UnsupportedSourceSchema,
                 _ => AcquisitionError::SourceRead,
             })?;
-        let progress = AcquisitionProgress::OpenCodeSqlite {
-            part_max_time_updated: extraction.sqlite_part_max_time_updated,
-        };
         let mut accounting = AccountingBuilder::default();
-        for record in &extraction.records {
-            let facts = record.accounting();
-            account_unit(
-                &mut accounting,
-                facts.session_id,
-                facts.attestation,
-                &[facts.kind],
-                facts.tool_name,
-                facts.timestamp,
-                &facts.contribution_strings,
-            )?;
-        }
-        let observations =
-            project_opencode_native_records(&extraction.records, &options.observed_at)
-                .map_err(map_canonical_error)?;
+        let (observations, progress) = match extraction {
+            OpenCodeNativeExtraction::Legacy(extraction) => {
+                for record in &extraction.records {
+                    let facts = record.accounting();
+                    account_unit(
+                        &mut accounting,
+                        facts.session_id,
+                        facts.attestation,
+                        &[facts.kind],
+                        facts.tool_name,
+                        facts.timestamp,
+                        &facts.contribution_strings,
+                    )?;
+                }
+                (
+                    project_opencode_native_records(&extraction.records, &options.observed_at)
+                        .map_err(map_canonical_error)?,
+                    AcquisitionProgress::OpenCodeSqlite {
+                        part_max_time_updated: extraction.sqlite_part_max_time_updated,
+                    },
+                )
+            }
+            OpenCodeNativeExtraction::SessionMessages(extraction) => {
+                for record in &extraction.records {
+                    let session = record.session_id.as_deref();
+                    accounting.record(session, &record.attestation, &record.accounting_kinds())?;
+                    for tool in record.tool_accounting() {
+                        accounting.tool_usage(
+                            session,
+                            RecordKind::ToolCall,
+                            tool.name,
+                            tool.timestamp,
+                        )?;
+                        accounting.contribute(
+                            session,
+                            RecordKind::ToolCall,
+                            tool.name,
+                            None,
+                            tool.contribution_strings.iter().map(String::as_str),
+                        )?;
+                    }
+                }
+                (
+                    project_opencode_session_messages(&extraction.records, &options.observed_at)
+                        .map_err(map_canonical_error)?,
+                    AcquisitionProgress::OpenCodeSessionMessages {
+                        message_max_time_updated: extraction.message_max_time_updated,
+                    },
+                )
+            }
+        };
 
         Ok(AcquisitionBatch {
             observations,
             progress,
-            // A coherent selected-part snapshot is still not whole-database
+            // A coherent selected snapshot is still not whole-database
             // replacement coverage, even without a lower bound.
             accounting: accounting.finish(AccountingCoverage::PartialSource),
         })
@@ -833,6 +912,7 @@ mod tests {
                         part_min_time_updated: Some(99),
                         part_limit: 1,
                         resume_high_water: None,
+                        ..Default::default()
                     }
                 )),
                 AcquisitionError::UnsupportedSourceIdentity
@@ -1569,6 +1649,7 @@ mod tests {
                     part_min_time_updated: min,
                     part_limit: limit,
                     resume_high_water: None,
+                    ..Default::default()
                 },
             )
         };
@@ -1639,6 +1720,7 @@ mod tests {
                     part_min_time_updated: Some(1_000),
                     part_limit: 5,
                     resume_high_water: None,
+                    ..Default::default()
                 },
             )),
             AcquisitionError::BoundedSourceRead(BoundedReadError::LimitExceeded),
@@ -1685,6 +1767,7 @@ mod tests {
             part_min_time_updated: Some(3_000),
             part_limit: 1,
             resume_high_water: None,
+            ..Default::default()
         };
 
         let acquired = acquire_opencode_sqlite(&source, options(), read).unwrap();

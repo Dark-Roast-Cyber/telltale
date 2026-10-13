@@ -38,6 +38,9 @@ use telltale_schema::source::Source;
 use telltale_sources::acquisition::OpenCodeSqliteReadOptions;
 
 const OPENCODE_SQLITE_PART_TABLE: &str = "part";
+/// OpenCode v2 progress uses its own cursor key, so a legacy part watermark
+/// never resumes, regress-checks or skips `session_message` history.
+const OPENCODE_SQLITE_SESSION_MESSAGE_TABLE: &str = "session_message";
 
 #[cfg(test)]
 mod activation_tests;
@@ -332,12 +335,12 @@ fn run_scan_for_platform(
     let mut detections = Vec::new();
     let mut rebuild = config.rebuild_baselines;
     for (source, result) in sources.iter().zip(processed_sources) {
-        if let Some(last_time_updated) =
-            result.sqlite_progress_candidate(config.execution.dry_run, config.backfill)
+        if let Some((table, last_time_updated)) =
+            result.sqlite_progress_cursor(config.execution.dry_run, config.backfill)
         {
             state.observe_sqlite_ingestion_cursor(
                 source,
-                OPENCODE_SQLITE_PART_TABLE,
+                table,
                 last_time_updated,
                 observed_at_unix_ms,
             );
@@ -850,6 +853,13 @@ fn opencode_read_options_for_scan_source(
         state.sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_PART_TABLE)
     {
         options = OpenCodeSqliteReadOptions::resume_after(last_seen);
+    }
+    // The store's schema is selected in the read snapshot; each cursor applies
+    // only to its own schema, and a missing one means a bootstrap read.
+    if let Some(last_seen) =
+        state.sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
+    {
+        options = options.resume_session_messages_after(last_seen);
     }
     options
 }

@@ -26,6 +26,10 @@ pub enum SourceReadError {
     Locked,
     #[cfg_attr(not(feature = "opencode-sqlite"), allow(dead_code))]
     ResumeRegressed,
+    /// A store has only part of a supported native schema, or lacks its
+    /// required columns. Never falls back to another schema.
+    #[cfg_attr(not(feature = "opencode-sqlite"), allow(dead_code))]
+    UnsupportedSchema,
     SchemaDrift {
         client: ClientId,
         source_id: String,
@@ -42,6 +46,7 @@ impl fmt::Display for SourceReadError {
             Self::Sqlite => formatter.write_str("sqlite error"),
             Self::Locked => formatter.write_str("sqlite locked"),
             Self::ResumeRegressed => formatter.write_str("resume_regressed"),
+            Self::UnsupportedSchema => formatter.write_str("unsupported_source_schema"),
             Self::SchemaDrift {
                 client,
                 source_id,

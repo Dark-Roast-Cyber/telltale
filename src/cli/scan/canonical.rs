@@ -16,9 +16,10 @@ use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
 use telltale_sources::acquisition::{AcquisitionProgress, SourceAccounting};
 
 use super::{
-    Event, ProcessChainConfig, ScanState, Source, SourceProcessingStatus,
-    is_opencode_sqlite_source, opencode_read_options_for_scan_source,
-    should_stage_sqlite_ingestion_cursors, sqlite_progress_candidate,
+    Event, OPENCODE_SQLITE_PART_TABLE, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE, ProcessChainConfig,
+    ScanState, Source, SourceProcessingStatus, is_opencode_sqlite_source,
+    opencode_read_options_for_scan_source, should_stage_sqlite_ingestion_cursors,
+    sqlite_progress_candidate,
 };
 
 pub(super) struct CanonicalProcessingResult {
@@ -47,17 +48,36 @@ pub(super) struct CanonicalProcessingOptions<'a> {
 }
 
 impl CanonicalProcessingResult {
-    /// Eligible for staging only; this operation never mutates ScanState.
-    pub(super) fn sqlite_progress_candidate(&self, dry_run: bool, backfill: bool) -> Option<i64> {
+    /// The cursor table this result's progress belongs to, and its high-water.
+    /// Eligible for staging only; this operation never mutates ScanState. Legacy
+    /// `part` and OpenCode v2 `session_message` progress stage separate cursors.
+    pub(super) fn sqlite_progress_cursor(
+        &self,
+        dry_run: bool,
+        backfill: bool,
+    ) -> Option<(&'static str, i64)> {
         if !should_stage_sqlite_ingestion_cursors(dry_run, backfill) {
             return None;
         }
-        match self.progress {
-            AcquisitionProgress::None => None,
+        let (table, high_water) = match self.progress {
+            AcquisitionProgress::None => return None,
             AcquisitionProgress::OpenCodeSqlite {
                 part_max_time_updated,
-            } => sqlite_progress_candidate(true, part_max_time_updated, self.status),
-        }
+            } => (OPENCODE_SQLITE_PART_TABLE, part_max_time_updated),
+            AcquisitionProgress::OpenCodeSessionMessages {
+                message_max_time_updated,
+            } => (
+                OPENCODE_SQLITE_SESSION_MESSAGE_TABLE,
+                message_max_time_updated,
+            ),
+        };
+        sqlite_progress_candidate(true, high_water, self.status).map(|value| (table, value))
+    }
+
+    #[cfg(test)]
+    pub(super) fn sqlite_progress_candidate(&self, dry_run: bool, backfill: bool) -> Option<i64> {
+        self.sqlite_progress_cursor(dry_run, backfill)
+            .map(|(_, high_water)| high_water)
     }
 }
 

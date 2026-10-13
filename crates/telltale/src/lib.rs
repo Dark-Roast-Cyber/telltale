@@ -192,6 +192,16 @@ pub struct SourceScan {
 }
 
 const RESUME_TOKEN_PREFIX: &str = "resume:v1:opencode.sqlite:";
+/// Marks an OpenCode v2 `session_message` position inside the v1 token family.
+const SESSION_MESSAGE_COORDINATE: &str = "session_message:";
+
+/// The progress coordinate a token resumes. A legacy `part` position never
+/// resumes an OpenCode v2 `session_message` store, or the reverse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResumeCoordinate {
+    Part,
+    SessionMessage,
+}
 
 /// Opaque, versioned position after a successful scan of a resumable source
 /// (`opencode.sqlite` today). It is bound to one source, monotone, and carries
@@ -202,14 +212,20 @@ const RESUME_TOKEN_PREFIX: &str = "resume:v1:opencode.sqlite:";
 pub struct ResumeToken {
     text: String,
     binding: String,
+    coordinate: ResumeCoordinate,
     high_water: i64,
 }
 
 impl ResumeToken {
-    fn new(binding: String, high_water: i64) -> Self {
+    fn new(binding: String, coordinate: ResumeCoordinate, high_water: i64) -> Self {
+        let coordinate_text = match coordinate {
+            ResumeCoordinate::Part => "",
+            ResumeCoordinate::SessionMessage => SESSION_MESSAGE_COORDINATE,
+        };
         Self {
-            text: format!("{RESUME_TOKEN_PREFIX}{high_water}:{binding}"),
+            text: format!("{RESUME_TOKEN_PREFIX}{coordinate_text}{high_water}:{binding}"),
             binding,
+            coordinate,
             high_water,
         }
     }
@@ -221,10 +237,14 @@ impl ResumeToken {
 
     /// Parse a persisted token. Unknown versions and malformed text are errors.
     pub fn parse(text: &str) -> Result<Self, ResumeTokenError> {
-        let (high_water, binding) = text
+        let rest = text
             .strip_prefix(RESUME_TOKEN_PREFIX)
-            .and_then(|rest| rest.split_once(':'))
             .ok_or(ResumeTokenError)?;
+        let (coordinate, rest) = match rest.strip_prefix(SESSION_MESSAGE_COORDINATE) {
+            Some(rest) => (ResumeCoordinate::SessionMessage, rest),
+            None => (ResumeCoordinate::Part, rest),
+        };
+        let (high_water, binding) = rest.split_once(':').ok_or(ResumeTokenError)?;
         let high_water = high_water
             .parse::<i64>()
             .ok()
@@ -237,7 +257,7 @@ impl ResumeToken {
         {
             return Err(ResumeTokenError);
         }
-        Ok(Self::new(binding.to_owned(), high_water))
+        Ok(Self::new(binding.to_owned(), coordinate, high_water))
     }
 }
 
@@ -259,6 +279,42 @@ impl std::fmt::Display for ResumeTokenError {
 }
 
 impl std::error::Error for ResumeTokenError {}
+
+/// The selected schema's high-water, never earlier than a token of the same
+/// coordinate. A token for the other schema does not bound the new one; when the
+/// selected schema reported nothing yet, the resumed token is returned unchanged.
+fn resume_token(
+    source: &Source,
+    progress: telltale_sources::acquisition::AcquisitionProgress,
+    resumed_from: Option<(ResumeCoordinate, i64)>,
+) -> Option<ResumeToken> {
+    use telltale_sources::acquisition::AcquisitionProgress;
+    if !is_resumable(source) {
+        return None;
+    }
+    let (coordinate, high_water) = match progress {
+        AcquisitionProgress::OpenCodeSqlite {
+            part_max_time_updated,
+        } => (ResumeCoordinate::Part, part_max_time_updated),
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated,
+        } => (ResumeCoordinate::SessionMessage, message_max_time_updated),
+        AcquisitionProgress::None => return None,
+    };
+    let prior = resumed_from
+        .filter(|(resumed, _)| *resumed == coordinate)
+        .map(|(_, high_water)| high_water);
+    match high_water.max(prior) {
+        Some(high_water) => Some(ResumeToken::new(
+            resume_binding(source),
+            coordinate,
+            high_water,
+        )),
+        None => resumed_from.map(|(resumed, high_water)| {
+            ResumeToken::new(resume_binding(source), resumed, high_water)
+        }),
+    }
+}
 
 fn is_resumable(source: &Source) -> bool {
     source.client == ClientId::OpenCode
@@ -406,7 +462,11 @@ impl SourceScan {
         self.resume_token.as_ref()
     }
 
-    fn from_result(source: Source, result: SourceOutcome, resumed_from: Option<i64>) -> Self {
+    fn from_result(
+        source: Source,
+        result: SourceOutcome,
+        resumed_from: Option<(ResumeCoordinate, i64)>,
+    ) -> Self {
         let success = result.and_then(|mut result| {
             let occurrences = std::mem::take(&mut result.occurrences)
                 .into_iter()
@@ -451,14 +511,7 @@ impl SourceScan {
                 }),
                 failure: None,
                 visibility_limits: result.visibility_limits,
-                resume_token: match result.progress {
-                    telltale_sources::acquisition::AcquisitionProgress::OpenCodeSqlite {
-                        part_max_time_updated,
-                    } if is_resumable(&source) => part_max_time_updated
-                        .max(resumed_from)
-                        .map(|high_water| ResumeToken::new(resume_binding(&source), high_water)),
-                    _ => None,
-                },
+                resume_token: resume_token(&source, result.progress, resumed_from),
                 source,
             },
             Err(error) => Self {
@@ -654,7 +707,7 @@ impl Pipeline {
         let resumed_from = match resume {
             None => None,
             Some(token) if is_resumable(source) && token.binding == resume_binding(source) => {
-                Some(token.high_water)
+                Some((token.coordinate, token.high_water))
             }
             Some(_) => return Err(PipelineError::InvalidResumeToken),
         };
@@ -664,8 +717,16 @@ impl Pipeline {
             source,
             observed_at,
             Some(options),
-            resumed_from
-                .map(telltale_sources::acquisition::OpenCodeSqliteReadOptions::resume_after),
+            resumed_from.map(|(coordinate, high_water)| {
+                use telltale_sources::acquisition::OpenCodeSqliteReadOptions;
+                // A token resumes only its own schema; the other schema reads its
+                // bounded bootstrap selection instead of inheriting this position.
+                match coordinate {
+                    ResumeCoordinate::Part => OpenCodeSqliteReadOptions::resume_after(high_water),
+                    ResumeCoordinate::SessionMessage => OpenCodeSqliteReadOptions::default()
+                        .resume_session_messages_after(high_water),
+                }
+            }),
             rules,
             process_rules,
         );

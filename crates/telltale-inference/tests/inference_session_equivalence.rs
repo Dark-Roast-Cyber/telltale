@@ -363,6 +363,7 @@ fn native_with_args(client: ClientId, args: &Value, result: &str) -> Vec<Canonic
                 part_min_time_updated: None,
                 part_limit: 100,
                 resume_high_water: None,
+                ..Default::default()
             },
         )
         .unwrap()
@@ -1415,6 +1416,7 @@ fn native_execution_is_an_expected_difference_not_a_returned_result() {
             part_min_time_updated: None,
             part_limit: 100,
             resume_high_water: None,
+            ..Default::default()
         },
     )
     .unwrap()
