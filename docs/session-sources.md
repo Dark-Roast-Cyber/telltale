@@ -125,7 +125,9 @@ OpenCode adapter notes:
   and inventory, not successful full-store live ingestion or complete history.
   Detailed evidence remains local; canonical limits were not relaxed.
 
-- Newer data lives in `opencode.db`, table `message`, with JSON in `data`.
+- `opencode.db` holds either the legacy `message`/`part` tables or, from
+  OpenCode v2, `session_v2`/`session_message`. One schema is read per scan; see
+  [OpenCode live ingestion](opencode-live-ingestion.md#native-schemas).
 - SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a bounded `SourceReadError::Locked` failure instead of hanging indefinitely.
 - Per-source acquisition reads are sequential; a single slow or contended source blocks the current scan (known limitation).
 - OpenCode per-message model attribution reflects the model that generated each message, which may differ from the session's primary model when sub-agents are used.

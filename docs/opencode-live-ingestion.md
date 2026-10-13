@@ -6,6 +6,49 @@ limit. One supported large result rejected the entire acquisition. The older
 parser passed these outputs through without this canonical policy. Restoring
 the unbounded parser would lose the newer resource admission guarantees.
 
+## Native schemas
+
+Each scan reads exactly one schema, chosen inside the same read snapshot as
+its rows:
+
+- **OpenCode v2** (`session_v2` and `session_message`, verified against
+  OpenCode v2.0.27): read whenever both tables and their required columns exist,
+  even beside legacy tables. Legacy rows in such a store are not read.
+- **Legacy** (`message` and `part`): read when neither v2 table exists. Its
+  behavior below is unchanged.
+- **Incomplete v2** (one table, or a missing required column): the source fails
+  as `unsupported_source_schema`. It never falls back to legacy rows.
+
+For v2, one `session_message` row is one native unit. Only the message columns
+and the session `agent`/`model` are selected; other session columns and tables
+are never read. Assistant `text`, user text and tool entries are mapped;
+reasoning, attachments and switch, synthetic, system, skill, compaction and idle
+rows are counted but not mapped. Unknown variants fail the source.
+
+Every tool entry emits `ToolRequested`. Completed and error entries also emit
+`ToolResultReturned`; an error reports `Failed`, including user declines,
+which OpenCode stores as `aborted` errors. Execution stages are emitted only
+for `executed: true`. OpenCode sets that field from provider execution, so
+local tools report `false`. Telltale keeps the value as a reported fact and does
+not claim local execution from it. User `!` shell commands (`shell` rows) map to
+a `shell` tool with reported start, exit code, output and `timeout`/`killed`
+status.
+
+Identity is the message ID plus the assistant `content` index. It survives
+copying the database, vacuuming and in-place updates. Selection uses the
+`time_updated` column, which OpenCode refreshes on every in-place update without
+changing `seq`. Bootstrap takes the newest 5,000 messages; incremental reads take
+up to 25,000 from the prior message high-water minus ten minutes, with the same
+keyset pages, exhaustion check, regression check and failure atomicity as
+parts. Events are evaluated in session `seq` order. Known gaps: forked
+sessions copy history with the parent's older `time_updated`, reverts delete
+rows, and a clock rollback can hide updates outside the overlap.
+
+v2 progress is a separate `session_message` cursor (CLI) or a
+`resume:v1:opencode.sqlite:session_message:` token (embedding). A legacy `part`
+cursor never resumes a v2 store, so a migrated store bootstraps instead of
+skipping history older than the legacy watermark; the `part` cursor is kept.
+
 ## Supported text
 
 Direct `tool.result` strings share the existing message-text budget: 65,536 UTF-8

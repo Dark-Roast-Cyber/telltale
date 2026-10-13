@@ -86,13 +86,14 @@ Source: `opencode.sqlite`.
 
 | Capability | Status | Notes |
 | --- | --- | --- |
-| User and assistant messages | Full | Parsed from SQLite message and part data. |
-| Tool calls and results | Full | Selected tool parts preserve their direct lifecycle facts. |
-| Model, provider, agent | Full | Preserved from source JSON. |
+| User and assistant messages | Full | Legacy message and part data, or OpenCode v2 `session_message` user text and assistant text entries. Reasoning is not retained. |
+| Tool calls and results | Full | Legacy tool parts keep their direct lifecycle. v2 tool entries emit a request and, when terminal, a returned result. |
+| Model, provider, agent | Full | Preserved from source JSON and, for v2, the session row. |
 | Workspace | Partial | Preserved only when the SQLite row reports it. |
 | Timestamp and session ID | Full | SQLite rows provide source timing and session context. |
-| Process ID and exit code | Absent | Not reported. |
-| Call ID, error state, content parts | Partial | Selected tool parts preserve reported call identity and lifecycle facts. |
+| Process ID and exit code | Partial | PID is never reported. Exit code is reported only for v2 user shell (`!`) commands. |
+| Tool execution | Partial | Legacy `running`/terminal parts report execution. v2 tool entries claim execution only when `executed: true`, so local tools report it as Unknown. v2 shell commands report it. |
+| Call ID, error state, content parts | Partial | Reported call IDs and error states are preserved. |
 
 The `opencode.sqlite` canonical adapter feeds the production Detection v2 source
 runtime. Caller-supplied record evaluation was removed; use the

@@ -39,7 +39,7 @@ ToolExecution **Unknown**.
 | Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Workspace, process ID and exit code absent; timestamps and call ID/error state/parts conditional |
 | OpenClaw | `openclaw.agents` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
 | Qwen CLI | `qwen.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed only | Workspace, process ID and exit code absent; ToolExecution unknown |
-| OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Workspace conditional; process ID and exit code absent; call ID/error state/parts conditional |
+| OpenCode | `opencode.sqlite` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation (legacy schema); v2 `session_message` schema fixture-backed only | Workspace conditional; process ID absent; exit code only for v2 shell commands; v2 tool execution unknown unless `executed: true`; call ID/error state/parts conditional |
 | Copilot | `copilot.process_log` | ✅ | ✅ | ✅ | ✅ | ⚠️ | ✅ | — | ✅ Fixture-backed + bounded live validation | UC-001 capability-indeterminate: UserContext unsupported; content parts absent; tool results conditional; ToolExecution unknown |
 
 ## Coverage Gates

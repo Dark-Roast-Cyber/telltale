@@ -437,6 +437,13 @@ source, return `None`.
 - Persist `ResumeToken::as_str()` only after durably accepting that scan's
   findings; restore it with `ResumeToken::parse`, which rejects unknown versions
   and malformed text with `ResumeTokenError`.
+- A token names its coordinate: legacy part tokens keep their form, and OpenCode
+  v2 stores issue `resume:v1:opencode.sqlite:session_message:` tokens. A token
+  for the other schema is not applied; the scan reads that store's bootstrap
+  selection and returns a token for the schema it read. A store with an
+  incomplete v2 schema fails as `UnsupportedSourceSchema`
+  (`unsupported_source_schema`) without a token; keep the prior token and scan
+  again once the store's schema is complete.
 - A resumed scan reads parts updated since the token's high-water minus a fixed
   ten-minute overlap, the same policy as the CLI cursor. Expect actions from the
   overlap again and deduplicate with replay identity or source-bound coordinates.

@@ -3,7 +3,14 @@
 ## Purpose
 This specification covers the current OpenCode `opencode.sqlite` adapter.
 One SQLite-native interpretation feeds the authoritative Canonical Observation
-v2 acquisition API used by the production source runtime. Older OpenCode source
+v2 acquisition API used by the production source runtime. The adapter reads two
+native SQLite schemas: the legacy `message`/`part` schema and the OpenCode v2
+`session_v2`/`session_message` schema (verified against OpenCode v2.0.27,
+commit `1f4d07a4a519185955ae8ab2ea3607805509e386`). Requirements that name
+`message`, `part` or part progress apply to legacy stores; requirements that
+name `session_message` apply to OpenCode v2 stores; all other requirements apply
+to both. "Canonical Observation v2" is Telltale's evidence model, unrelated to
+the OpenCode v2 storage schema. Older OpenCode source
 layouts and source-backed record/export compatibility are not part of this
 contract. This production adapter is not an investigation provider: on-demand
 OpenCode investigation is deferred and MUST fail before source I/O or native
@@ -12,7 +19,7 @@ projection.
 ## Requirements
 ### Requirement: One OpenCode SQLite-native interpretation
 
-The `opencode.sqlite` adapter MUST read the existing SQLite message and
+For a legacy store, the `opencode.sqlite` adapter MUST read the existing SQLite message and
 cursor-bounded selected `text`/`tool` part rows into one OpenCode-specific native
 interpretation containing only facts needed by canonical mapping, native
 accounting, and bounded read progress. It MUST NOT retain `ParsedRecord`,
@@ -523,3 +530,197 @@ the token, or a clock rollback while such parts remain.
 
 - **WHEN** a host resumes against a store with no integer-timed part at or after the token's high-water (restored, replaced, newest parts deleted, or part table removed)
 - **THEN** the scan fails as `ResumeRegressed` with no token or coverage, and a tokenless scan recovers; it issues a new token once the store has a part high-water
+
+### Requirement: One native schema is selected inside the read snapshot
+
+Each extraction MUST select exactly one native schema with the first reads of
+its read-only transaction, before any row is selected, so a concurrent migration
+cannot split selection from the rows it governs. A store with both
+`session_message` and `session_v2` tables, each with its required columns
+(`id`, `session_id`, `type`, `seq`, `time_updated`, `data`; and `id`, `agent`,
+`model`), MUST be read as OpenCode v2, even when legacy tables exist; legacy rows
+in such a store MUST NOT be read or emitted. A store with neither table MUST use
+the unchanged legacy path. A store with only one of the two tables, or without a
+required column, MUST fail as `unsupported_source_schema` with no observations,
+accounting or progress, and MUST NOT fall back to legacy history.
+
+#### Scenario: A migrated store does not emit stale or duplicate history
+
+- **WHEN** a store holds complete v2 tables and legacy rows that look newer
+- **THEN** only v2 rows are acquired and progress names the `session_message` coordinate
+
+#### Scenario: An incomplete v2 schema fails closed
+
+- **WHEN** a store holds `session_message` without `session_v2`, or lacks a required column, with or without legacy tables
+- **THEN** acquisition fails as `unsupported_source_schema` without reading legacy rows
+
+### Requirement: OpenCode v2 rows feed canonical acquisition directly
+
+OpenCode v2 rows MUST be interpreted into OpenCode-specific native records and
+mapped by the same acquisition API, exact `(OpenCode, opencode.sqlite)`
+identity, collector budgets, Detection v2 evaluation and Event 3.0 projection.
+They MUST NOT be converted into the legacy native model, `ParsedRecord` or a
+second detection path. Projection MUST select only `session_message.rowid`,
+`id`, `session_id`, `type`, `seq`, `time_updated` and `data`, plus the
+left-joined `session_v2.agent` and `session_v2.model`; other session columns and
+other tables, including credential tables, MUST NOT be selected. `data` MUST be
+a string encoding a JSON object without `id` or `type` members, `type` a string,
+`seq` a non-negative integer and `time_updated` an integer; any other value MUST
+fail the source atomically with a fixed, payload-free SourceRead detail.
+
+#### Scenario: A fresh v2 store is not an empty success
+
+- **WHEN** a store has only v2 tables with a user message and assistant tool content
+- **THEN** acquisition returns their canonical observations and v2 progress, not zero records
+
+### Requirement: OpenCode v2 message variants map truthfully
+
+A `user` row MUST map `data.text` to one User `MessageObserved`. Each assistant
+`content` entry MUST map by type: `text` to an Assistant `MessageObserved`;
+`reasoning` to nothing (raw reasoning is not retained); `tool` to tool
+observations. Recognized `agent-switched`, `model-switched` and
+`location-switched` rows MUST count as native `SessionMeta`, and `synthetic`,
+`system`, `skill`, `compaction` and `idle` rows as `Other`, without
+observations. Unknown message types, assistant content types, tool statuses and
+shell statuses, non-array assistant content and non-string text MUST fail
+closed with fixed codes (`unknown_message_variant`, `unknown_content_variant`,
+`unknown_tool_status`, `unknown_shell_status`, `invalid_assistant_content`,
+`invalid_message_text`). Assistant-level error, finish, token and cost fields
+and user attachments are not mapped.
+
+#### Scenario: Auxiliary variants are accounted, not interpreted
+
+- **WHEN** a store holds switch, synthetic, system, skill, compaction and idle rows
+- **THEN** they are counted as native units with no observation and no failure
+
+### Requirement: OpenCode v2 tool requests and outcomes are separate
+
+Every tool entry MUST emit `ToolRequested` at `time.created`, with the raw
+streaming input string or the input object as arguments. Completed and error
+entries MUST also emit `ToolResultReturned` at `time.completed`: a completed
+result is the sole text content as a direct string, otherwise the structured
+`content` array under ordinary bounds; an error result is the structured
+`error` object with reported status `Failed`. Streaming and running entries
+MUST NOT emit an outcome. Execution stages MUST be emitted only when the entry
+reports `executed: true` (running: `ToolExecutionStarted` at `time.ran`;
+terminal with `time.ran`: `ToolExecutionCompleted`). Because OpenCode sets
+`executed` from provider execution, `false` or absence MUST make no execution
+claim either way, and its reported value MUST be preserved as the Reported
+`tool.executed` facet. The adapter MUST NOT emit `Succeeded`, exit codes, PIDs,
+approval or Process, File or Network observations for tool entries, and MUST NOT
+map an `aborted` error (including a user decline) to anything but `Failed`. The
+entry `id` MUST be the SourceReported `correlation.call_id`; a missing id or
+name, a non-boolean `executed`, a non-object state, empty completed content or
+an input of the wrong shape MUST fail closed (`missing_tool_id`,
+`missing_tool_name`, `invalid_tool_state`). Tool-entry and message observations
+report ToolExecution capability `Unknown`.
+
+#### Scenario: Denied and unexecuted tools are not successes
+
+- **WHEN** an entry reports `error` after a decline, or after malformed input without `time.ran`
+- **THEN** it emits only `ToolRequested` and a `Failed` `ToolResultReturned`
+
+#### Scenario: Running and streaming tools have no outcome
+
+- **WHEN** an entry reports `streaming`, or `running` with `executed: false`
+- **THEN** only `ToolRequested` is emitted
+
+### Requirement: OpenCode v2 user shell messages report harness execution
+
+A `shell` row MUST map to Tool observations named `shell` (Parsed from the row
+type), with the reported `command` as string arguments and Reported
+`command.text`, and `shellID` as `correlation.call_id`. Every shell row MUST
+emit `ToolExecutionStarted` at `time.created`; `exited`, `timeout` and `killed`
+rows MUST also emit `ToolExecutionCompleted` at `time.completed`, plus
+`ToolResultReturned` when output is reported. The reported `exit` MUST become
+`exit_code`; `timeout` reports `Failed` and `killed` reports `Cancelled`; an
+exit code of zero MUST NOT become `Succeeded`. Shell observations report
+ToolExecution capability `Supported` and MUST NOT produce OS observations.
+
+#### Scenario: A completed shell command keeps its reported exit code
+
+- **WHEN** a shell row reports `exited`, exit 0 and output
+- **THEN** started, completed (exit code 0, no status) and result observations are emitted
+
+### Requirement: OpenCode v2 identity is coordinate-based
+
+Observations MUST use the row `id` as `SourceProvenance::native_id`, the
+assistant `content` index as `child_ordinal` (zero for user and shell rows),
+`seq` as the producer-local source sequence, and the `session_id` column as the
+SourceReported session. Rowid, `seq`, `time_updated`, path and content MUST NOT
+enter identity, so identities are stable across relocation, vacuum, rowid
+changes and in-place lifecycle updates. A missing row id MUST fail as
+`replay_unverifiable`, a repeated row id in one selection as
+`ambiguous_source_identity`, and a missing session as `missing_session_id`.
+A source-side replacement that reorders `content` can rebind child identity.
+
+#### Scenario: Lifecycle updates keep message and child identities
+
+- **WHEN** an assistant row is updated in place from streaming/running to completed/error, copied to another path, or stored under different rowids
+- **THEN** every previously emitted observation keeps its identity and new outcome stages are added
+
+### Requirement: OpenCode v2 selection and progress use the update coordinate
+
+Bootstrap MUST select the newest `message_limit` rows (default 5,000) by
+`(time_updated, rowid)` descending and return them ascending. Incremental reads
+MUST use an inclusive `time_updated` lower bound, strictly ascending integer
+`(time_updated, rowid)` keyset pages of at most 5,000 rows, and checked L+1
+lookahead; more than L rows MUST fail atomically as `LimitExceeded`. Every
+selected row MUST have an integer `time_updated`. Returned records MUST be
+ordered by source session and `seq`. Progress MUST be
+`OpenCodeSessionMessages { message_max_time_updated }`, never part progress. A
+resumed read (`resume_session_messages_after`) MUST apply the shared ten-minute
+overlap and 25,000-row limit, and MUST fail as `resume_regressed` before
+selection when no integer `time_updated` at or after the high-water remains.
+In-place updates refresh `time_updated` without changing `seq`, so they MUST be
+reselected; a `seq` cursor is not used. Admission caps, the five-second busy
+timeout and one snapshot covering every page and committed WAL contents are
+shared with legacy reads.
+
+#### Scenario: An in-place update below the highest seq is reselected
+
+- **WHEN** an earlier-`seq` row is updated after the stored high-water
+- **THEN** the next incremental read selects it, ordered by `seq`, and advances progress
+
+#### Scenario: Equal timestamps and late failures
+
+- **WHEN** many rows share `time_updated` across pages, or a later page holds malformed data or a non-integer coordinate
+- **THEN** ties are returned once in rowid order, and a late failure returns no prefix or progress
+
+#### Scenario: Known v2 coverage limits
+
+- **WHEN** OpenCode copies forked history with its parent's `time_updated`, deletes reverted rows, or the clock moves backwards
+- **THEN** rows older than the overlap stay unread; deleting the newest rows can trigger `resume_regressed`
+
+### Requirement: Legacy and v2 progress are never interchanged
+
+The CLI MUST store v2 progress under the `session_message` cursor table and
+legacy progress under `part`, and each cursor MUST apply only to its own schema;
+a v2 store without a `session_message` cursor MUST bootstrap, and an existing
+`part` cursor MUST be left unchanged. Embedded legacy tokens keep the form
+`resume:v1:opencode.sqlite:<high-water>:<binding>`; v2 tokens MUST use
+`resume:v1:opencode.sqlite:session_message:<high-water>:<binding>`. A token for
+the other schema MUST read the selected schema's bootstrap selection; the
+returned token MUST carry the selected schema's high-water, or the unchanged
+resumed token when that schema has none. Failure, dry-run and backfill rules and
+durability gating are unchanged.
+
+#### Scenario: A legacy watermark does not skip migrated history
+
+- **WHEN** a store with a stored `part` cursor migrates to v2 tables whose rows are older than that cursor
+- **THEN** the v2 rows are acquired by bootstrap, a `session_message` cursor is staged, and the `part` cursor is unchanged
+
+### Requirement: OpenCode v2 accounting counts native rows
+
+Each selected row MUST be one native unit: user `UserMessage`; assistant
+`AssistantMessage` plus `ToolCall` per tool entry and `ToolResult` per terminal
+entry; shell `ToolCall` plus `ToolResult` when terminal; and the auxiliary
+classes above. Tool usage and contributions MUST be recorded per tool entry and
+shell row. Session metadata MUST come from message `agent`/`model` and the
+joined session `agent`/`model`, with contradictions kept ambiguous and malformed
+model values failing as invalid attestation. Coverage remains `PartialSource`.
+
+#### Scenario: Accounting follows native rows
+
+- **WHEN** a user row and an assistant row with one completed tool entry are acquired
+- **THEN** two native units count one user, one assistant, one tool call and one tool result
