@@ -33,8 +33,9 @@ foundational rewrites. Respect accepted scope and release freeze boundaries.
 ## Implement and prove
 
 Make one coherent change. Update affected callers and remove superseded private
-code, fixtures, and documentation in that same bounded change when safe. Keep
-regressions through durable behavior, not copies of every retired helper test.
+code, fixtures, and documentation in that same bounded change when safe. Preserve
+regression coverage with durable behavioral tests, not copies of every retired
+helper test.
 Preserve error distinctions, source progress/cursor rules, privacy before export,
 resource bounds, event wire/persistence contracts, and delivery/recovery behavior
 where touched. Consult their authoritative documents instead of reconstructing
