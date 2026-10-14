@@ -150,6 +150,11 @@ impl JsonValue {
             }
             return Ok(Self::Object(converted));
         }
+        if let serde_json::Value::String(text) = value
+            && is_bare_command_tool(name)
+        {
+            return Self::try_from_source_message_text(text);
+        }
         Self::try_from_source_value(value)
     }
 
@@ -657,11 +662,40 @@ pub(crate) fn bounded_tool_arguments_bytes(
             .checked_add(text_bytes)
             .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes));
     }
+    if let JsonValue::String(text) = value
+        && is_bare_command_tool(name)
+    {
+        return bounded_message_text_bytes(text);
+    }
     let bytes = bounded_json_bytes(value, 1)?;
     if bytes > LOCAL_MAX_VALUE_BYTES {
         return Err(ObservationError::bound(BoundDimension::EncodedBytes));
     }
     Ok(bytes)
+}
+
+/// The command a tool's arguments carry as authored text: its `command`
+/// member, or the whole arguments when they are the command string itself.
+pub(crate) fn authored_command<'a>(
+    name: Option<&str>,
+    arguments: &'a JsonValue,
+) -> Option<&'a str> {
+    match arguments {
+        JsonValue::String(text) if is_bare_command_tool(name) => Some(text),
+        JsonValue::Object(members) if is_authored_text_argument(name, "command") => {
+            match members.get("command") {
+                Some(JsonValue::String(text)) => Some(text),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// OpenCode v2 stores a user `!` command as `shell` arguments that are the
+/// command string itself. Legacy `bash` input must still be an object.
+fn is_bare_command_tool(name: Option<&str>) -> bool {
+    name == Some("shell")
 }
 
 /// Exact `(tool, field)` pairs whose string values are authored text. Tool

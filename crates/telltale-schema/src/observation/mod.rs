@@ -1744,11 +1744,14 @@ fn validate_metadata_coverage(
     Ok(())
 }
 
+/// Checks every field and facet bound and the observation aggregate, and
+/// returns the semantic bytes retained, counting every stored copy.
 fn validate_semantic_json_bounds(
     body: &ObservationBody,
     facets: &BTreeMap<String, SemanticFacet>,
 ) -> Result<usize, ObservationError> {
     let mut total = 0usize;
+    let mut retained = 0usize;
     let mut sizes = Vec::new();
     for (path, value) in body.semantic_fields() {
         let bytes = (|| match (body, path.as_str(), &value) {
@@ -1796,28 +1799,39 @@ fn validate_semantic_json_bounds(
     for (name, facet) in facets {
         // A command that is an authored-text argument keeps that budget here,
         // so detection sees the whole command it was parsed from.
-        let bytes = match (CanonicalFieldCategory::facet(name), body, facet.value()) {
-            (
-                CanonicalFieldCategory::CommandText,
-                ObservationBody::Tool(tool),
-                JsonValue::String(text),
-            ) if value::is_authored_text_argument(tool.name(), "command") => {
-                value::bounded_message_text_bytes(text)
-            }
+        let category = CanonicalFieldCategory::facet(name);
+        let command = match (category, body) {
+            (CanonicalFieldCategory::CommandText, ObservationBody::Tool(tool)) => tool
+                .arguments()
+                .and_then(|arguments| value::authored_command(tool.name(), arguments)),
+            _ => None,
+        };
+        let bytes = match (command, facet.value()) {
+            (Some(_), JsonValue::String(text)) => value::bounded_message_text_bytes(text),
             _ => bounded_semantic_value_bytes(facet.value()),
         }
-        .map_err(|error| error.with_bound_category(CanonicalFieldCategory::facet(name)))?;
+        .map_err(|error| error.with_bound_category(category))?;
         let _ = bytes;
-        sizes.push((
-            CanonicalFieldCategory::facet(name),
-            facet.value().encoded_byte_len()?,
-        ));
+        let encoded = facet.value().encoded_byte_len()?;
+        // A command facet that repeats that argument exactly adds no content,
+        // so the observation's aggregate counts it once. Retained bytes still
+        // count both copies.
+        let repeated = matches!(
+            (command, facet.value()),
+            (Some(command), JsonValue::String(text)) if command == text
+        );
+        sizes.push((category, if repeated { 0 } else { encoded }));
+        retained = retained
+            .checked_add(if repeated { encoded } else { 0 })
+            .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
     }
     for (category, bytes) in sizes {
         total = add_semantic_bytes(total, bytes)
             .map_err(|error| error.with_bound_category(category))?;
     }
-    Ok(total)
+    total
+        .checked_add(retained)
+        .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))
 }
 
 fn bounded_semantic_value_bytes(value: &JsonValue) -> Result<usize, ObservationError> {

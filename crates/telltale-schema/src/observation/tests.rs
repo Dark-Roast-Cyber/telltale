@@ -206,6 +206,36 @@ fn authored_text_arguments_are_exact_tool_field_pairs() {
     )
     .unwrap();
     assert!(build(tool_body("shell", shell), Some(&long)).is_ok());
+
+    // A command near the direct-text budget fits once: the command facet that
+    // repeats it adds nothing to the observation aggregate, whether the
+    // arguments hold it as `command` or are the command string itself (a
+    // user `!` command). A facet that differs from the argument still counts.
+    let near = "y".repeat(60_000);
+    for input in [
+        serde_json::json!({"command": near}),
+        serde_json::json!(near),
+    ] {
+        let arguments = JsonValue::try_from_source_tool_arguments(Some("shell"), &input).unwrap();
+        let observation = build(tool_body("shell", arguments.clone()), Some(&near)).unwrap();
+        // Retained bytes still count both copies.
+        assert!(
+            observation.retained_byte_len() > 2 * near.len(),
+            "{input:.20}"
+        );
+        let other = format!("{near}!");
+        let error = build(tool_body("shell", arguments), Some(&other)).unwrap_err();
+        assert_eq!(error.bound_dimension(), Some(BoundDimension::EncodedBytes));
+    }
+    // A bare command string keeps the direct-text maximum, and only as the
+    // v2 `shell` tool's arguments.
+    let over = serde_json::json!("z".repeat(MESSAGE_MAX_TEXT_BYTES + 1));
+    assert!(JsonValue::try_from_source_tool_arguments(Some("shell"), &over).is_err());
+    let bare = serde_json::json!(long);
+    for name in ["exec", "bash"] {
+        assert!(JsonValue::try_from_source_tool_arguments(Some(name), &bare).is_err());
+    }
+
     let error = build(
         tool_body("exec", JsonValue::object([]).unwrap()),
         Some(&long),
@@ -1656,7 +1686,7 @@ fn semantic_body_and_facet_values_are_bounded_without_payload_errors() {
     let body_error = CanonicalObservationV2::builder(
         ObservationBody::Tool(
             ToolObservation::new()
-                .with_name("shell")
+                .with_name("exec")
                 .unwrap()
                 .with_arguments(JsonValue::String("S".repeat(LOCAL_MAX_STRING_BYTES + 1))),
         ),
