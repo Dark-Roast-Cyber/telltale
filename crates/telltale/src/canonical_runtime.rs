@@ -207,73 +207,69 @@ fn process_source_inner(
         let units = window.map(|_| window_units(&batch.observations));
         let work = EvaluationWorkBudget::default();
         let capacity = std::cell::Cell::new(false);
-        match finish_batch_with_work(
+        let result = finish_batch_with_work(
             source, &instance, batch, context, detailed, &work, &capacity,
-        ) {
-            // An OpenCode v2 window is a selection, not the whole source: when
-            // evaluating or projecting it exceeds the work budget or retained
-            // capacity, evaluate a smaller one. Every attempt must shrink the
-            // window, so this always ends.
-            Err(failure)
-                if matches!(
-                    failure.stage,
-                    FailureStage::Evaluation | FailureStage::Projection
-                ) && (work.is_exhausted() || capacity.get())
-                    && let Some(bounds) = sqlite
-                    && let Some(bytes) = window
-                    && bytes > 1
-                    && previous_window.is_none_or(|previous| bytes < previous) =>
-            {
-                previous_window = Some(bytes);
-                sqlite = Some(OpenCodeSqliteReadOptions {
-                    message_window_bytes: Some(bytes / 2),
-                    ..bounds
-                });
-            }
-            // The smallest window still exceeds evaluation work or projection
-            // capacity: quarantine its rows by coordinates, like rows over a
-            // size bound, so one row cannot stop a forensic drain. The same
-            // selection is re-read and evaluated without them.
-            Err(failure)
-                if matches!(
-                    failure.stage,
-                    FailureStage::Evaluation | FailureStage::Projection
-                ) && (work.is_exhausted() || capacity.get())
-                    && let Some(bounds) = sqlite
-                    && let Some(units) = units =>
-            {
-                let mut batch = acquire_opencode_sqlite(
-                    &resolved,
-                    AcquisitionOptions::new(observed_at.clone()),
-                    bounds,
-                )
-                .map_err(|error| SourceFailure {
-                    stage: FailureStage::Acquisition,
-                    progress: AcquisitionProgress::None,
-                    acquisition: Some(error),
-                })?;
-                batch.observations.clear();
-                batch.quarantined.extend(units);
-                return finish_batch_with_work(
-                    source,
-                    &instance,
-                    batch,
-                    context,
-                    detailed,
-                    &EvaluationWorkBudget::default(),
-                    &std::cell::Cell::new(false),
-                )
-                .map(|mut result| {
-                    result.window_bytes = bounds.message_window_bytes;
-                    result
-                });
-            }
-            result => {
-                return result.map(|mut result| {
-                    result.window_bytes = sqlite.and_then(|bounds| bounds.message_window_bytes);
-                    result
-                });
-            }
+        );
+        let over_capacity = result.as_ref().is_err_and(|failure| {
+            matches!(
+                failure.stage,
+                FailureStage::Evaluation | FailureStage::Projection
+            )
+        }) && (work.is_exhausted() || capacity.get());
+        // An OpenCode v2 window is a selection, not the whole source: when
+        // evaluating or projecting it exceeds the work budget or retained
+        // capacity, evaluate a smaller one. Every attempt must shrink the
+        // window, so this always ends.
+        if over_capacity
+            && let Some(bounds) = sqlite
+            && let Some(bytes) = window
+            && bytes > 1
+            && previous_window.is_none_or(|previous| bytes < previous)
+        {
+            previous_window = Some(bytes);
+            sqlite = Some(OpenCodeSqliteReadOptions {
+                message_window_bytes: Some(bytes / 2),
+                ..bounds
+            });
+        }
+        // The smallest window still exceeds evaluation work or projection
+        // capacity: quarantine its rows by coordinates, like rows over a
+        // size bound, so one row cannot stop a forensic drain. The same
+        // selection is re-read and evaluated without them.
+        else if over_capacity
+            && let Some(bounds) = sqlite
+            && let Some(units) = units
+        {
+            let mut batch = acquire_opencode_sqlite(
+                &resolved,
+                AcquisitionOptions::new(observed_at.clone()),
+                bounds,
+            )
+            .map_err(|error| SourceFailure {
+                stage: FailureStage::Acquisition,
+                progress: AcquisitionProgress::None,
+                acquisition: Some(error),
+            })?;
+            batch.observations.clear();
+            batch.quarantined.extend(units);
+            return finish_batch_with_work(
+                source,
+                &instance,
+                batch,
+                context,
+                detailed,
+                &EvaluationWorkBudget::default(),
+                &std::cell::Cell::new(false),
+            )
+            .map(|mut result| {
+                result.window_bytes = bounds.message_window_bytes;
+                result
+            });
+        } else {
+            return result.map(|mut result| {
+                result.window_bytes = sqlite.and_then(|bounds| bounds.message_window_bytes);
+                result
+            });
         }
     }
 }
