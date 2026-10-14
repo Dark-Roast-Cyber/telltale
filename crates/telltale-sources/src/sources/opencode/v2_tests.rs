@@ -1397,6 +1397,7 @@ fn equal_timestamps_cross_pages_and_late_failures_reject_the_source() {
             limit,
             page,
             &mut SqliteAdmission::default(),
+            usize::MAX,
         )
     };
     for page in [1, 2, 5, 6] {
@@ -1461,9 +1462,15 @@ fn read_snapshot_pins_every_page_including_committed_wal_contents() {
             )
             .unwrap();
     });
-    let (records, ..) =
-        extract_incremental_messages(&snapshot, T0, 10, 1, &mut SqliteAdmission::default())
-            .unwrap();
+    let (records, ..) = extract_incremental_messages(
+        &snapshot,
+        T0,
+        10,
+        1,
+        &mut SqliteAdmission::default(),
+        usize::MAX,
+    )
+    .unwrap();
     assert_eq!(records.len(), 3, "later pages read the pinned snapshot");
     snapshot.commit().unwrap();
     assert_eq!(
@@ -1502,9 +1509,13 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
         store.message(&format!("msg_{seq}"), seq, T0, user("row", T0));
     }
     let mut rows = SqliteAdmission::with_limits(usize::MAX, 2);
-    assert!(extract_incremental_messages(&store.connection, T0, 10, 2, &mut rows).is_err());
+    assert!(
+        extract_incremental_messages(&store.connection, T0, 10, 2, &mut rows, usize::MAX).is_err()
+    );
     let mut exact = SqliteAdmission::with_limits(usize::MAX, 3);
-    assert!(extract_incremental_messages(&store.connection, T0, 10, 2, &mut exact).is_ok());
+    assert!(
+        extract_incremental_messages(&store.connection, T0, 10, 2, &mut exact, usize::MAX).is_ok()
+    );
 
     // All-text results use the direct-text budget; results with file parts
     // stay structured and keep ordinary nested string bounds.
@@ -1810,6 +1821,52 @@ fn authored_text_and_returned_payloads_use_direct_text_budgets() {
 /// One oversized row must not blind the source: it is quarantined with its
 /// coordinates (never its content) and every other row is still evaluated.
 /// Malformed, unknown and identity failures still fail the source.
+/// A command near the direct-text budget maps whole, for the agent shell
+/// tool and for a user `!` command, so detection sees its end. Its
+/// `command.text` facet repeats the argument and is counted once.
+#[test]
+fn long_shell_commands_map_whole_instead_of_quarantining() {
+    let command = format!("{} synthetic-long-command-end", "x ".repeat(30_000));
+    let store = Store::v2();
+    store.message(
+        "msg_agent",
+        1,
+        T0 + 1,
+        assistant(
+            json!([completed_tool(
+                "call_long",
+                "shell",
+                json!({"command": command}),
+                "ok",
+                T0
+            )]),
+            T0,
+        ),
+    );
+    store.message(
+        "msg_user",
+        2,
+        T0 + 2,
+        json!({"type": "shell", "shellID": "sh_long", "command": command, "status": "exited", "exit": 0,
+               "output": {"output": "ok\n", "cursor": 3, "size": 3, "truncated": false},
+               "time": {"created": T0, "completed": T0 + 1_000}}),
+    );
+    let batch = store.acquire_default();
+    assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+    use ObservationStage::*;
+    for observation in [
+        find(&batch, "msg_agent", 0, ToolRequested),
+        find(&batch, "msg_agent", 0, ToolResultReturned),
+        find(&batch, "msg_user", 0, ToolExecutionStarted),
+        find(&batch, "msg_user", 0, ToolResultReturned),
+    ] {
+        assert_eq!(
+            observation.facets()["command.text"].value(),
+            &JsonValue::string(&command)
+        );
+    }
+}
+
 #[test]
 fn oversized_rows_are_quarantined_without_blinding_the_source() {
     let secret = "synthetic-quarantine-secret";
@@ -1888,6 +1945,121 @@ fn oversized_rows_are_quarantined_without_blinding_the_source() {
         mapping_code(store.acquire_default_error()),
         "invalid_assistant_content"
     );
+}
+
+/// An incremental read stops before the row that would exceed its stored-byte
+/// budget, reporting that row's `time_updated` as the next coordinate, so a
+/// large backlog is read a window at a time. The first row is always taken.
+#[test]
+fn incremental_reads_stop_at_their_stored_byte_budget() {
+    let store = Store::v2();
+    for seq in 1..=5 {
+        store.message(
+            &format!("msg_{seq}"),
+            seq,
+            T0 + seq,
+            user(&"x".repeat(1_000), T0),
+        );
+    }
+    let read = |bytes| {
+        extract_incremental_messages(
+            &store.connection,
+            T0,
+            10,
+            2,
+            &mut SqliteAdmission::default(),
+            bytes,
+        )
+        .unwrap()
+    };
+    let (records, truncated, next) = read(2_500);
+    assert_eq!(records.len(), 2);
+    assert!(truncated);
+    assert_eq!(next, Some(T0 + 3));
+    let (records, truncated, next) = read(1);
+    assert_eq!(records.len(), 1);
+    assert!(truncated);
+    assert_eq!(next, Some(T0 + 2));
+    let (records, truncated, next) = read(usize::MAX);
+    assert_eq!(records.len(), 5);
+    assert!(!truncated);
+    assert_eq!(next, None);
+}
+
+/// OpenCode stores the tool name a model requested, even one the canonical
+/// body cannot hold. That row is quarantined like an oversized one instead of
+/// failing the source.
+#[test]
+fn unrepresentable_tool_names_are_quarantined() {
+    let store = Store::v2();
+    store.message(
+        "msg_odd",
+        1,
+        T0 + 1,
+        assistant(
+            json!([completed_tool(
+                "call_odd",
+                "tool\nname",
+                json!({}),
+                "ok",
+                T0
+            )]),
+            T0,
+        ),
+    );
+    store.message("msg_after", 2, T0 + 2, user("after", T0));
+    let batch = store.acquire_default();
+    let [unit] = batch.quarantined.as_slice() else {
+        panic!("{:?}", batch.quarantined)
+    };
+    assert_eq!(unit.native_id, "msg_odd");
+    assert_eq!(unit.code, "invalid_body");
+    let ids = shape(&batch)
+        .into_iter()
+        .map(|(id, ..)| id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids, ["msg_after"].map(str::to_owned).into());
+}
+
+/// A stored payload over the 8 MiB read cell limit is never loaded. Its row
+/// is quarantined by coordinates with its kind from the `type` column, and
+/// the rest of the selection is evaluated.
+#[test]
+fn oversized_cells_are_quarantined_without_being_read() {
+    let secret = "synthetic-oversized-cell-secret";
+    let store = Store::v2();
+    store.message("msg_before", 1, T0 + 1, user("before", T0));
+    store.message(
+        "msg_huge",
+        2,
+        T0 + 2,
+        user(&format!("{secret} {}", "x".repeat(9 << 20)), T0),
+    );
+    store.message("msg_after", 3, T0 + 3, user("after", T0));
+    let batch = store.acquire_default();
+    assert_eq!(
+        batch.progress,
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(T0 + 3),
+            window_complete: true,
+        }
+    );
+    let ids = shape(&batch)
+        .into_iter()
+        .map(|(id, ..)| id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids, ["msg_after", "msg_before"].map(str::to_owned).into());
+    let [unit] = batch.quarantined.as_slice() else {
+        panic!("{:?}", batch.quarantined)
+    };
+    assert_eq!(unit.native_id, "msg_huge");
+    assert_eq!(unit.source_sequence, 2);
+    assert_eq!(unit.code, "oversized_native_cell");
+    assert_eq!(unit.bound, None);
+    assert!(!format!("{unit:?}").contains(secret));
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 3);
+    assert_eq!(counts.record_counts.user_message, 3);
 }
 
 /// A selection larger than one window's retained budget or row limit is

@@ -31,12 +31,15 @@ use super::session_message::{
 /// (`packages/core/src/tool/plugin/{read,write,edit}.ts`).
 const V2_FILE_TOOLS: &[&str] = &["read", "write", "edit"];
 
-/// The mapping of one native row. A row whose observations exceed a canonical
-/// size bound is quarantined as a unit; integrity failures (missing identity,
-/// malformed or unknown variants) still fail the whole source.
+/// The mapping of one native row. A row whose own values exceed a canonical
+/// size bound or cannot be represented is quarantined as a unit; integrity
+/// failures (missing identity, malformed or unknown variants) still fail the
+/// whole source.
 pub(crate) enum RowProjection {
     Mapped(Vec<CanonicalObservationV2>),
     Quarantined(ObservationError),
+    /// The row's `data` cell was too large to read at all.
+    OversizedCell,
 }
 
 /// Projects rows one at a time so each row is admitted or quarantined whole.
@@ -77,11 +80,11 @@ impl<'a> SessionMessageProjector<'a> {
             observed_at: self.observed_at,
         };
         let mut observations = Vec::new();
-        // Every entry is still checked after a size failure, so quarantine can
+        // Every entry is still checked after a value failure, so quarantine can
         // never hide a malformed or unknown entry later in the same row.
         let mut oversized = None;
         let mut admit = |result: Result<(), OpenCodeCanonicalError>| match result {
-            Err(OpenCodeCanonicalError::Observation(error)) if is_size_failure(&error) => {
+            Err(OpenCodeCanonicalError::Observation(error)) if is_row_value_failure(&error) => {
                 oversized.get_or_insert(error);
                 Ok(())
             }
@@ -129,6 +132,7 @@ impl<'a> SessionMessageProjector<'a> {
                 admit(context.shell(shell, &mut observations))?;
             }
             OpenCodeSessionMessageBody::Auxiliary(_) => {}
+            OpenCodeSessionMessageBody::Oversized(_) => return Ok(RowProjection::OversizedCell),
             OpenCodeSessionMessageBody::Unsupported => {
                 return Err(mapping(
                     "unknown_message_variant",
@@ -143,10 +147,12 @@ impl<'a> SessionMessageProjector<'a> {
     }
 }
 
-/// Bound rejections from this row's own values, as opposed to integrity or
-/// source-wide capacity failures.
-fn is_size_failure(error: &ObservationError) -> bool {
-    error.code() == "unbounded_value"
+/// Rejections of this row's own values, as opposed to integrity or
+/// source-wide capacity failures: a value over a size bound, or a model-chosen
+/// value the canonical body cannot hold, such as a requested tool name with a
+/// line break, which OpenCode stores as requested.
+fn is_row_value_failure(error: &ObservationError) -> bool {
+    matches!(error.code(), "unbounded_value" | "invalid_body")
 }
 
 struct Context<'a> {

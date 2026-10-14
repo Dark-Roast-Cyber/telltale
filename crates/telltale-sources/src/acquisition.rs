@@ -66,6 +66,11 @@ pub struct AcquisitionBatch {
     /// Native units excluded because their own values exceed a size bound.
     /// Every other unit was still mapped; progress still covers these units.
     pub quarantined: Vec<QuarantinedUnit>,
+    /// For a cut OpenCode v2 window: the lowest `time_updated` a next window
+    /// may re-read so that it repeats at most half of this window's retained
+    /// bytes. Re-reading from there lets a next window extend back past this
+    /// window's high-water and still make progress.
+    pub message_overlap_from: Option<i64>,
 }
 
 /// Where a quarantined native unit is, and which bound it exceeded. It
@@ -75,8 +80,11 @@ pub struct QuarantinedUnit {
     pub session_id: Option<String>,
     pub native_id: String,
     pub source_sequence: u64,
-    /// `unbounded_value` (a canonical value bound) or
-    /// `invalid_native_contribution` (a request-input contribution bound).
+    /// `unbounded_value` (a canonical value bound),
+    /// `invalid_native_contribution` (a request-input contribution bound) or
+    /// `oversized_native_cell` (a stored payload over the read cell limit,
+    /// never loaded) or `evaluation_capacity_exceeded` (rows whose smallest
+    /// window still exceeded evaluation work or projection capacity).
     pub code: &'static str,
     /// The canonical field category and dimension, when the bound reports one.
     pub bound: Option<CanonicalBoundContext>,
@@ -202,6 +210,18 @@ impl OpenCodeSqliteReadOptions {
             message_min_time_updated: Some(high_water.saturating_add(1)),
             message_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
             message_resume_high_water: Some(high_water),
+            ..self
+        }
+    }
+
+    /// Every OpenCode v2 message from the earliest, for a forensic history
+    /// read; a cut selection is drained with
+    /// [`Self::continue_session_messages_after`].
+    pub fn session_message_history(self) -> Self {
+        Self {
+            message_min_time_updated: Some(i64::MIN),
+            message_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
+            message_resume_high_water: None,
             ..self
         }
     }
@@ -549,6 +569,7 @@ fn acquire_source_impl(
         progress: AcquisitionProgress::None,
         accounting: accounting.finish(AccountingCoverage::CompleteSource),
         quarantined: Vec::new(),
+        message_overlap_from: None,
     })
 }
 
@@ -598,6 +619,7 @@ pub fn acquire_opencode_sqlite(
             })?;
         let mut accounting = AccountingBuilder::default();
         let mut quarantined = Vec::new();
+        let mut message_overlap_from = None;
         let (observations, progress) = match extraction {
             OpenCodeNativeExtraction::Legacy(extraction) => {
                 for record in &extraction.records {
@@ -659,6 +681,7 @@ pub fn acquire_opencode_sqlite(
                         RowProjection::Quarantined(error) => {
                             Err((error.code(), error.bound_context()))
                         }
+                        RowProjection::OversizedCell => Err(("oversized_native_cell", None)),
                     };
                     if let Ok(observations) = &outcome {
                         let bytes = observations
@@ -710,6 +733,44 @@ pub fn acquire_opencode_sqlite(
                     }
                 }
                 let high_water = window.last().map(|(record, ..)| record.time_updated);
+                if !window_complete {
+                    // Whole `time_updated` groups from the end, while they
+                    // hold at most half of this window's rows and of what it
+                    // retained.
+                    let bytes = |outcome: &Result<Vec<CanonicalObservationV2>, _>| {
+                        outcome.as_ref().map_or(0, |observations| {
+                            observations
+                                .iter()
+                                .map(CanonicalObservationV2::retained_byte_len)
+                                .fold(0usize, usize::saturating_add)
+                        })
+                    };
+                    let half = window
+                        .iter()
+                        .map(|(_, _, outcome)| bytes(outcome))
+                        .fold(0usize, usize::saturating_add)
+                        / 2;
+                    let mut tail = 0usize;
+                    let mut group = 0usize;
+                    let mut index = window.len();
+                    while index > 0 {
+                        let (record, _, outcome) = &window[index - 1];
+                        group = group.saturating_add(bytes(outcome));
+                        let starts_group =
+                            index == 1 || window[index - 2].0.time_updated != record.time_updated;
+                        if starts_group {
+                            if tail.saturating_add(group) > half
+                                || window.len() - (index - 1) > window.len() / 2
+                            {
+                                break;
+                            }
+                            tail += group;
+                            group = 0;
+                            message_overlap_from = Some(record.time_updated);
+                        }
+                        index -= 1;
+                    }
+                }
                 // Evaluation and accounting follow source order.
                 window.sort_by(|(left, ..), (right, ..)| {
                     (left.session_id.as_deref(), left.seq)
@@ -765,6 +826,7 @@ pub fn acquire_opencode_sqlite(
             observations,
             progress,
             quarantined,
+            message_overlap_from,
             // A coherent selected snapshot is still not whole-database
             // replacement coverage, even without a lower bound.
             accounting: accounting.finish(AccountingCoverage::PartialSource),

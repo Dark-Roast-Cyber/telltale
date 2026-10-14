@@ -603,7 +603,7 @@ fn sqlite_time_updated(value: &Value) -> Option<i64> {
     value.get("time_updated").and_then(Value::as_i64)
 }
 
-const SQLITE_CELL_BYTES: usize = 8_388_608;
+pub(super) const SQLITE_CELL_BYTES: usize = 8_388_608;
 const SQLITE_ENVELOPE_BYTES: usize = 134_217_728;
 const SQLITE_ROWS: usize = 100_000;
 

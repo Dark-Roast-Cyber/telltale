@@ -8,11 +8,12 @@
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Map, Value};
+use telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES;
 use telltale_schema::record::RecordKind;
 
 use super::native::{
-    OpenCodeSqliteReadOptions, SqliteAdmission, part_read_error, source_time_field,
-    sqlite_table_exists, stream_sqlite_rows,
+    OpenCodeSqliteReadOptions, SQLITE_CELL_BYTES, SqliteAdmission, part_read_error,
+    source_time_field, sqlite_table_exists, stream_sqlite_rows,
 };
 use crate::acquisition::{AcquisitionError, SessionMetadata, session_identity};
 use crate::source_read::{SourceReadError, collect_string_values};
@@ -23,10 +24,27 @@ const SESSION_COLUMNS: &[&str] = &["id", "agent", "model"];
 
 /// Only these columns are projected; credential, path, title, permission and
 /// other session columns are never selected.
+/// A `data` cell over the admission cell limit (8,388,608 bytes) is never
+/// loaded: only its size is, and the row is quarantined by its coordinates.
 const SELECT: &str = "select m.rowid as __telltale_rowid, m.id as id, m.session_id as session_id, \
-     m.type as type, m.seq as seq, m.time_updated as time_updated, m.data as data, \
-     s.agent as __telltale_session_agent, s.model as __telltale_session_model \
-     from session_message m left join session_v2 s on s.id = m.session_id";
+     m.type as type, m.seq as seq, m.time_updated as time_updated, \
+     case when octet_length(m.data) > 8388608 then null else m.data end as data, \
+     octet_length(m.data) as __telltale_data_bytes, \
+     s.agent as __telltale_session_agent, s.model as __telltale_session_model";
+
+/// Rows for the rowids `keys` selects (as `key`), in update order. Only the
+/// keys are ordered and limited, so a page never sorts the payloads of rows it
+/// does not return; on a large store without a `time_updated` index that
+/// would read the whole table for every page.
+fn keyed_rows(keys: &str) -> String {
+    format!(
+        "{SELECT} from ({keys}) k join session_message m on m.rowid = k.key \
+         left join session_v2 s on s.id = m.session_id \
+         order by m.time_updated, m.rowid"
+    )
+}
+// The literal in `SELECT` is the admission cell limit.
+const _: () = assert!(SQLITE_CELL_BYTES == 8_388_608);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NativeSchema {
@@ -109,6 +127,9 @@ pub(crate) enum OpenCodeSessionMessageBody {
     /// (agent/model/location switches, synthetic, system, skill, compaction, idle).
     Auxiliary(RecordKind),
     Unsupported,
+    /// A row whose `data` cell exceeds the admission cell limit; it was not
+    /// read. The kind comes from the `type` column alone.
+    Oversized(RecordKind),
 }
 
 #[derive(Clone, Debug)]
@@ -233,7 +254,8 @@ impl OpenCodeSessionMessageRecord {
                 }
                 kinds
             }
-            OpenCodeSessionMessageBody::Auxiliary(kind) => vec![*kind],
+            OpenCodeSessionMessageBody::Auxiliary(kind)
+            | OpenCodeSessionMessageBody::Oversized(kind) => vec![*kind],
             OpenCodeSessionMessageBody::Unsupported => vec![RecordKind::Other],
         }
     }
@@ -314,6 +336,7 @@ pub(super) fn extract_session_messages(
             limit,
             crate::acquisition::SQLITE_PART_LIMIT,
             admission,
+            window_read_bytes(options.message_window_bytes),
         )?,
         None => extract_bootstrap_messages(conn, limit, admission)?,
     };
@@ -333,9 +356,9 @@ fn extract_bootstrap_messages(
     limit: i64,
     admission: &mut SqliteAdmission,
 ) -> Result<Selected, SourceReadError> {
-    let query = format!(
-        "select * from ({SELECT} order by m.time_updated desc, m.rowid desc limit ?1) \
-         order by time_updated, __telltale_rowid"
+    let query = keyed_rows(
+        "select rowid as key from session_message \
+         order by time_updated desc, rowid desc limit ?1",
     );
     let mut stmt = conn.prepare(&query)?;
     let mut records = Vec::new();
@@ -347,25 +370,40 @@ fn extract_bootstrap_messages(
     Ok((records, false, None))
 }
 
+/// Stored `data` bytes one incremental read takes for a window of this
+/// retained budget. Retained semantics repeat tool arguments on each stage,
+/// so twice the budget holds at least a full window while a read from a
+/// large backlog stops long before the row or admission envelope limits.
+fn window_read_bytes(window_bytes: Option<usize>) -> usize {
+    window_bytes
+        .map_or(MAX_CANONICAL_RETAINED_BYTES, |bytes| {
+            bytes.min(MAX_CANONICAL_RETAINED_BYTES)
+        })
+        .saturating_mul(2)
+}
+
 pub(super) fn extract_incremental_messages(
     conn: &Connection,
     min_time_updated: i64,
     limit: i64,
     page_size: i64,
     admission: &mut SqliteAdmission,
+    read_bytes: usize,
 ) -> Result<Selected, SourceReadError> {
     limit
         .checked_add(1)
         .ok_or_else(|| part_read_error("message limit overflow"))?;
-    let query = format!(
-        "{SELECT} where m.time_updated >= ?1 \
-           and (?2 is null or (m.time_updated, m.rowid) > (?2, ?3)) \
-         order by m.time_updated, m.rowid limit ?4"
+    let query = keyed_rows(
+        "select rowid as key from session_message where time_updated >= ?1 \
+           and (?2 is null or (time_updated, rowid) > (?2, ?3)) \
+         order by time_updated, rowid limit ?4",
     );
     let mut stmt = conn.prepare(&query)?;
     let mut records = Vec::new();
     let mut remaining = limit;
     let mut after: Option<(i64, i64)> = None;
+    let mut read = 0usize;
+    let mut full = false;
     loop {
         let query_limit = page_size.min(remaining + 1);
         let delivered = stream_sqlite_rows(
@@ -383,6 +421,18 @@ pub(super) fn extract_incremental_messages(
                 if key.0 < min_time_updated || after.is_some_and(|previous| key <= previous) {
                     return Err(part_read_error("invalid message continuation order"));
                 }
+                // The first row is always taken, so every read advances.
+                let bytes = value
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .map_or(0, str::len);
+                if !records.is_empty() && read.saturating_add(bytes) > read_bytes {
+                    full = true;
+                    return Err(SourceReadError::Bounded(
+                        crate::source_read::BoundedReadError::LimitExceeded,
+                    ));
+                }
+                read += bytes;
                 records.push(decode_row(value)?);
                 remaining -= 1;
                 after = Some(key);
@@ -390,10 +440,11 @@ pub(super) fn extract_incremental_messages(
             },
         );
         let delivered = match delivered {
-            // The row cap fires before a lookahead row is admitted: more rows
-            // exist, and the caller rolls to the next window.
+            // The row cap fires before a lookahead row is admitted, and the
+            // read budget before a row that would exceed it: more rows exist,
+            // and the caller rolls to the next window.
             Err(SourceReadError::Bounded(crate::source_read::BoundedReadError::LimitExceeded))
-                if remaining == 0 =>
+                if remaining == 0 || full =>
             {
                 // Only the next coordinate, never its payload: it tells the
                 // caller whether the cut splits a `time_updated` group.
@@ -456,6 +507,28 @@ fn decode_row(row: Value) -> Result<OpenCodeSessionMessageRecord, SourceReadErro
             Ok(Value::Object(data)) => data,
             _ => return Err(invalid_message()),
         },
+        Some(Value::Null)
+            if row
+                .get("__telltale_data_bytes")
+                .and_then(Value::as_u64)
+                .is_some_and(|bytes| bytes > SQLITE_CELL_BYTES as u64) =>
+        {
+            let kind = match kind.as_str() {
+                "user" => RecordKind::UserMessage,
+                "assistant" => RecordKind::AssistantMessage,
+                "shell" => RecordKind::ToolCall,
+                _ => RecordKind::Other,
+            };
+            return Ok(OpenCodeSessionMessageRecord {
+                source_id: non_empty_string(row.get("id")),
+                session_id: non_empty_string(row.get("session_id")),
+                seq,
+                time_updated,
+                attestation: attestation(&row, &Map::new()),
+                occurrence_time: None,
+                body: OpenCodeSessionMessageBody::Oversized(kind),
+            });
+        }
         _ => return Err(invalid_message()),
     };
     // OpenCode strips `id` and `type` before storing `data`; a copy there would
