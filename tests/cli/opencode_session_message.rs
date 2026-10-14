@@ -978,3 +978,78 @@ fn opencode_v2_row_over_evaluation_capacity_is_quarantined() {
     );
     assert_eq!(harness.cursors()["session_message"], T0 + 2_000);
 }
+
+/// A bundled two-step correlation whose first step closes one window and whose
+/// second step opens the next is still detected: the next window re-reads the
+/// tail of the last one. A routine drain and a history pass each report it
+/// exactly once.
+#[test]
+fn opencode_v2_correlation_straddling_a_window_cut_is_detected_once() {
+    let harness = Harness::new();
+    let writer = Connection::open(&harness.database).unwrap();
+    writer.execute_batch(SESSION_SCHEMA).unwrap();
+    session(&writer, "ses_straddle");
+    // About 85 of these patch rows fill one window under the synthetic rules,
+    // so the first window ends a few rows after the first step at row 81 and
+    // the second step at row 96 is read only by the next window.
+    let patch = format!("*** Begin Patch\n{}", "+line\n".repeat(7_000));
+    let rows = 96;
+    for seq in 1..=rows {
+        let mut tool = bash(
+            &format!("call_{seq}"),
+            match seq {
+                81 => "cmd /c hostname",
+                96 => "cmd /c whoami",
+                _ => "true",
+            },
+            serde_json::json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        );
+        if !matches!(seq, 81 | 96) {
+            tool["name"] = serde_json::json!("patch");
+            tool["state"]["input"] = serde_json::json!({"patchText": patch});
+        }
+        message(
+            &writer,
+            &format!("msg_{seq:03}"),
+            "ses_straddle",
+            seq,
+            T0 + seq * 1_000,
+            assistant(tool),
+        );
+    }
+    drop(writer);
+    let correlations = |events: &[Value]| {
+        events
+            .iter()
+            .filter(|event| {
+                event["rule_ids"][0] == "procchain.correlation.host_then_account_discovery"
+            })
+            .count()
+    };
+    // Window 1 holds rows 1-86; window 2 re-reads its 43-row tail (rows
+    // 44-86, including the first step) and adds rows 87-96. Three records
+    // per row. A changed cut fails here rather than passing vacuously.
+    let straddled = |summary: &Value| {
+        let processing = &summary["source_processing"];
+        assert_eq!(processing["evaluated_window_count"], 2, "{processing}");
+        assert_eq!(processing["parsed_record_count"], (rows + 43) * 3);
+    };
+
+    straddled(&harness.successful());
+    assert_eq!(correlations(&harness.events()), 1);
+
+    let log = harness.temp.path().join("history.jsonl");
+    let result = harness.history(&log);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    straddled(&serde_json::from_slice(&result.stdout).unwrap());
+    let events = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(correlations(&events), 1);
+}

@@ -843,6 +843,11 @@ shared with legacy reads.
 - **WHEN** the selected rows need more than the 8 MiB retained budget, or exceed the row limit
 - **THEN** one scan evaluates successive overlapping windows, finds every detection, and ends with the cursor at the newest row and no drain pending
 
+#### Scenario: A correlation straddling a window cut is detected once
+
+- **WHEN** the first step of a bundled correlation lies in the re-read tail of a cut window and its second step only in the next window
+- **THEN** a routine drain and a history scan each report the correlation exactly once
+
 #### Scenario: A burst inside the overlap still drains
 
 - **WHEN** more rows than one window holds lie inside the overlap before the resume high-water
