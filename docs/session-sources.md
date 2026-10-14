@@ -125,8 +125,9 @@ OpenCode adapter notes:
   and inventory, not successful full-store live ingestion or complete history.
   Detailed evidence remains local; canonical limits were not relaxed.
 
-- `opencode.db` holds either the legacy `message`/`part` tables or, from
-  OpenCode v2, `session_v2`/`session_message`. One schema is read per scan; see
+- `opencode.db` holds the legacy `message`/`part` tables, OpenCode v2
+  `session_v2`/`session_message`, or both after a migration. One schema is
+  read per scan, and complete v2 tables take precedence; see
   [OpenCode live ingestion](opencode-live-ingestion.md#native-schemas).
 - SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a bounded `SourceReadError::Locked` failure instead of hanging indefinitely.
 - Per-source acquisition reads are sequential; a single slow or contended source blocks the current scan (known limitation).
@@ -145,7 +146,7 @@ This section describes legacy `message`/`part` stores. OpenCode v2
 the row limit or the 8 MiB retained budget is drained in overlapping windows
 within one scan (up to 64), and later scans continue any remainder. Only a
 window that cannot pass its resume point fails. For a forensic pass over a
-whole v2 store, use `telltale scan --once --history all --log-path <file>`,
+whole v2 store, use `telltale scan --once --history all --client opencode --log-path <file>`,
 which reads from the earliest message and never touches scan state. See
 [OpenCode live ingestion](opencode-live-ingestion.md).
 

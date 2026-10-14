@@ -188,11 +188,14 @@ second detector or an Event 3 conversion loop.
   Limited evaluation still returns its successful findings.
 - `resume_token()` is a position to resume a resumable source from; see
   [resuming OpenCode scans](#resuming-opencode-scans).
-- `quarantined()` lists native units a successful scan excluded because their
-  own values exceed a size bound, as `QuarantinedUnit` coordinates (session,
-  native ID, source sequence, code, bound context) without content. Every other
-  unit was evaluated; progress covers these units. OpenCode v2 is currently the
-  only source that quarantines.
+- `quarantined()` lists native units a successful scan excluded, as
+  `QuarantinedUnit` coordinates (session, native ID, source sequence, code and,
+  when the bound reports one, bound context) without content. A unit is
+  excluded for an oversized or invalid value of its own, or as
+  `evaluation_capacity_exceeded` when even the smallest window of rows exceeds
+  evaluation work or projection capacity. Progress covers these units; the
+  other units in the window were evaluated. OpenCode v2 is currently the only
+  source that quarantines.
 
 ### Rule v1 URL target
 
