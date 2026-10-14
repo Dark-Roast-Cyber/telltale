@@ -9,9 +9,7 @@ use crate::source_read::SourceReadError;
 use std::fmt;
 
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::observation::{
-    CanonicalBoundContext, CanonicalObservationV2, MAX_CANONICAL_RETAINED_BYTES, ObservedAt,
-};
+use telltale_schema::observation::{CanonicalBoundContext, CanonicalObservationV2, ObservedAt};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -606,6 +604,7 @@ pub fn acquire_opencode_sqlite(
     }
     #[cfg(feature = "opencode-sqlite")]
     {
+        use telltale_schema::observation::MAX_CANONICAL_RETAINED_BYTES;
         let extraction =
             extract_opencode_native_source(source, read).map_err(|error| match error {
                 // A resumed read that selected more rows than its limit: recoverable
