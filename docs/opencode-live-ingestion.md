@@ -6,6 +6,114 @@ limit. One supported large result rejected the entire acquisition. The older
 parser passed these outputs through without this canonical policy. Restoring
 the unbounded parser would lose the newer resource admission guarantees.
 
+## Native schemas
+
+Each scan reads exactly one schema, chosen inside the same read snapshot as
+its rows:
+
+- **OpenCode v2** (`session_v2` and `session_message`, verified against
+  OpenCode v2.0.27): read whenever both tables and their required columns exist,
+  even beside legacy tables. Legacy rows in such a store are not read.
+- **Legacy** (`message` and `part`): read when neither v2 table exists. Its
+  behavior below is unchanged.
+- **Incomplete v2** (one table, or a missing required column): the source fails
+  as `unsupported_source_schema`. It never falls back to legacy rows.
+
+For v2, one `session_message` row is one native unit. Only the message columns
+and the session `agent`/`model` are selected; other session columns and tables
+are never read. Assistant `text`, user text and tool entries are mapped;
+reasoning, attachments and switch, synthetic, system, skill, compaction and idle
+rows are counted but not mapped. Unknown variants fail the source. Activity
+contributions (tool names, path classes, network hosts) come only from tool
+input and shell commands; tool results, errors and
+shell output are not scanned for them.
+
+Every tool entry emits `ToolRequested`. Completed and error entries also emit
+`ToolResultReturned`; an error reports `Failed`, including user declines,
+which OpenCode stores as `aborted` errors. Execution stages are emitted for
+`executed: true`. OpenCode sets that field from provider execution, so local
+tools report `false`. Telltale keeps the value as a reported fact and does not
+claim local execution from it. The built-in agent `shell` tool is the exception:
+its completed metadata reports how the command settled (`exit`, `signal` or
+`timeout`) only after the command ran, so such an entry also emits
+`ToolExecutionCompleted`. Both outcome stages carry an exit code when reported,
+a reported signal as `tool.signal`, and `timeout: true` as `Failed`. An exit
+code alone, including zero, is neither success nor failure. Background commands,
+which return before they settle, make no claim from metadata. `shellID` can also
+occur in running/error metadata and never becomes a correlation. Plugins can
+replace `shell`: these are source-reported outcomes, not authenticated OS-side
+effects. User `!` shell commands (`shell` rows) map to
+a `shell` tool with reported start, exit code, output and `timeout`/`killed`
+status.
+
+Identity is the message ID plus the assistant `content` index. It survives
+copying the database, vacuuming and in-place updates. Selection uses the
+`time_updated` column, which OpenCode refreshes on every in-place update without
+changing `seq`. Bootstrap takes the newest 5,000 messages; incremental reads take
+up to 25,000 from the prior message high-water minus ten minutes, with the same
+keyset pages, exhaustion check and regression check as parts. An incremental
+read stops early once the stored payloads it took reach twice the window budget,
+so a large backlog is read a window at a time. A v2 selection is evaluated in
+**rolling windows**:
+- a window ends on a message boundary when it reaches the row limit or the
+  8 MiB retained-semantics budget, and never splits rows that share one
+  `time_updated`;
+- one scan drains a cut selection window after window, up to 64 windows. Each
+  next window re-reads the tail of the last one (at most half of it, and at
+  most one hour before its high-water), so a correlation that straddles the cut
+  is still evaluated whole. Detections found again in that tail are
+  deduplicated like those of the routine overlap; when the tail alone would
+  fill a window, the next one starts strictly after the high-water;
+- if bundled rules exhaust the evaluation work budget on a window, or its
+  detections exceed the retained projection capacity (4,096 items, 4 MiB), the
+  scan re-reads a window at half its size until it fits. Later windows of that
+  scan keep the size that fit, and it doubles again after four windows fit.
+  Rows whose smallest window still does not fit are quarantined as
+  `evaluation_capacity_exceeded`, so one dense row cannot stop a drain;
+- `source_processing.evaluated_window_count` counts the windows. A source
+  still cut after 64 windows is counted in `incomplete_window_source_count`;
+  its cursor carries a `draining` flag and the next scan continues strictly
+  after it. Embedding scans evaluate one window per call, with
+  `session_message_drain:` tokens. The ten-minute overlap returns once a
+  window completes;
+- only one timestamp holding more rows than a whole window fails, as
+  `LimitExceeded`.
+
+Rows that cannot be mapped within a size bound are quarantined by coordinates,
+never by content, while the rest is evaluated: a row over the 64 KB text
+budgets, a request input over a contribution bound, a requested tool name the
+canonical body cannot hold (`invalid_body`), a stored payload over
+the 8 MiB read cell limit (`oversized_native_cell`), which is never loaded,
+and rows that exceed evaluation capacity even alone
+(`evaluation_capacity_exceeded`).
+Shell commands, including user `!` commands, keep the 64 KB direct-text budget;
+the `command.text` copy of a command counts once toward an observation's 64 KB
+total.
+
+**History scans.** A first scan samples only the newest 5,000 messages. For a
+forensic pass over everything a v2 store still holds, run:
+
+```sh
+telltale scan --once --history all --client opencode --log-path ./history.jsonl
+```
+
+It reads from the earliest message in overlapping windows without the
+64-window limit, prints `history: N windows evaluated` to stderr every 50
+windows, deduplicates detections within the run, and never reads,
+locks or writes scan state, so it can run beside a routine scanner and
+repeating it reports again. The stdout summary carries `"history": "all"` with
+the usual window, quarantine and failure counts. Legacy `part` stores keep
+their newest-5,000 bootstrap.
+
+Events are evaluated in session `seq` order. Known gaps: forked
+sessions copy history with the parent's older `time_updated`, reverts delete
+rows, and a clock rollback can hide updates outside the overlap.
+
+v2 progress is a separate `session_message` cursor (CLI) or a
+`resume:v1:opencode.sqlite:session_message:` token (embedding). A legacy `part`
+cursor never resumes a v2 store, so a migrated store bootstraps instead of
+skipping history older than the legacy watermark; the `part` cursor is kept.
+
 ## Supported text
 
 Direct `tool.result` strings share the existing message-text budget: 65,536 UTF-8
@@ -19,6 +127,32 @@ defines this as full authored patch text. The exception requires the exact tool
 and field name and a string value. Nested lookalikes, other tools and other
 arguments do not qualify. The object with `patchText` replaced by null must still
 fit ordinary structured bounds. No patch parser or execution claim is introduced.
+
+OpenCode v2 stores get the same 65,536-byte budget for these exact argument
+fields: `shell`/`bash` `command`, `patch`/`apply_patch` `patchText`, `write`
+`content`, `edit` `oldString`/`newString`, `execute` `code` and
+`subagent`/`task` `prompt`. A `shell` or `bash` command's `command.text` carries
+the whole command, so a rule can match text at its end. For v2 results:
+- all-text results are joined into one text;
+- error results are their message text, with the reported error type kept as
+  `tool.error_type`;
+- `data:` file URIs keep only their media type, with the dropped length as
+  `tool.result.omitted_bytes`.
+
+v2 `read`, `write` and `edit` paths become `resource.path`. A command duplicated
+in arguments and `command.text` fits up to roughly 32 KB within the
+per-observation aggregate.
+
+A v2 row whose own values still exceed a bound is **quarantined**, not fatal:
+- it emits nothing and contributes nothing;
+- it is listed by session, message ID, `seq` and bound code (never content) in
+  the scan summary's `source_processing.quarantined_units`;
+- it marks the source with one degraded `scanner_error`;
+- the rest of the selection is evaluated, and the cursor moves past it.
+
+Malformed or unknown rows, identity failures and aggregate caps still fail the
+source. Padding a payload past the limits therefore produces a located finding
+instead of blinding the scan.
 
 Both fields remain subject to the unchanged **65,536 encoded semantic bytes per
 observation**, including other facts and facets. JSON quotes, escaping and NFC
@@ -163,7 +297,7 @@ append, fresh-process repeats, required output failure, cursor retention on
 rejection, repair and restart. Existing multi-page WAL snapshot, inclusive ties,
 overlap updates, late-page rejection and activation tests remain relevant.
 
-Live validation is limited to one Windows OpenCode Desktop v2.0.24 store on
+Earlier live validation used one Windows OpenCode Desktop v2.0.24 store on
 2026-10-06, using default discovery, bundled rules, `--no-local-config`, isolated
 temporary logs/state and no `--allow-fixtures`. Transcripts and private workstation
 evidence stay outside the repository. Append is claimed live only if upstream
@@ -204,3 +338,50 @@ Subsequent candidate test-harness repairs address the confirmed concurrency
 defects with focused Linux synthetic validation; they do not retroactively pass
 that Windows run. The exact original eight failing test names are unavailable,
 and no native Windows rerun is available. Required candidate gates remain pending.
+
+### OpenCode v2 session-message validation
+
+On 2026-10-13, bounded live validation used OpenCode v2.0.28 on Fedora Linux 44,
+read-only aggregate SQLite queries, discovery, bundled rules, `--no-local-config`,
+isolated temporary logs/state and no `--allow-fixtures`. The v2.0.28 tagged shell,
+result, publisher and updater code matched the settlement evidence path.
+
+Five generated agent `shell` calls all reported `executed: false` and `time.ran`.
+Foreground exit 0, exit 3, timeout and signal calls each emitted request,
+execution-completed and result stages; the background call emitted only request
+and result (14 observations across five calls). Exit codes carried no status;
+the signal was `SIGTERM`; timeout reported `Failed` without an exit or signal.
+Background metadata remained `running` with `shellID` after the command finished.
+A bounded recent acquisition returned 16 native rows and 50 observations; one
+local error and one running entry gained no execution stage. Historical shell
+error metadata also carried `shellID`, refuting the background-only description.
+
+The default bootstrap and two CLI repeats each reported one parse-error source,
+zero parsed records and `invalid_native_contribution`, before canonical mapping.
+No SQLite cursor was installed. All seven emitted JSONL objects (one health,
+one scanner error and five static MCP inventory activity events) validated
+against Event 3.0 with format checking. Repeats emitted zero new objects, but
+the source still failed: successful ingestion and incremental settling were
+**blocked**, not passed. Existing fail-closed contribution bounds were not relaxed.
+The v2 adapter then scanned terminal tool results and shell output for contributions;
+a synthetic test reproduces `invalid_native_contribution`
+from a long encoded token in a tool result. Contributions are now request-side
+only, with the bound unchanged for input. The earlier run does not establish
+successful ingestion with the request-side fix.
+
+No denial/interruption was deliberately generated. Historical user `!` shell
+rows existed but their mapping was not live-validated. Changes occurred during
+the scan series, so unchanged-store repeat behavior, controlled live append,
+other OpenCode versions/platforms and release qualification remain unvalidated.
+Temporary data and harnesses were deleted; tests remain synthetic.
+
+On 2026-10-14, with request-side contributions, row quarantine and window
+draining in place, a read-only validation with aggregate evidence only drained
+the newest 5,000 messages in 2 scans in about 30 seconds (previously 31 scans
+and about 9.5 minutes). A `--history all` pass over the whole store evaluated
+1,627 windows and 996,406 records (re-reads included) in about 13 minutes with
+no source failure, reported 292 quarantined units by coordinates, and emitted
+16,758 objects that all validated against Event 3.0. That build reported a
+quarantined row again when an overlapping window re-read it, so 292 is an
+upper bound on distinct quarantined rows; such a row is now reported once. Correlations straddling a window
+cut are covered by synthetic tests only. The limits listed above still apply.

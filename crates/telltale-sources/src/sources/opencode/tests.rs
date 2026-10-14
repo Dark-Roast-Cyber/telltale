@@ -220,6 +220,7 @@ fn part_cursor_is_inclusive_and_reports_selected_high_water() {
                 part_min_time_updated: Some(2_000),
                 part_limit: 1,
                 resume_high_water: None,
+                ..Default::default()
             },
         ),
         Err(SourceReadError::Bounded(
@@ -232,6 +233,7 @@ fn part_cursor_is_inclusive_and_reports_selected_high_water() {
             part_min_time_updated: Some(2_000),
             part_limit: 2,
             resume_high_water: None,
+            ..Default::default()
         },
     )
     .expect("bounded read");
@@ -304,6 +306,7 @@ fn part_cursor_join_qualifies_time_updated() {
             part_min_time_updated: Some(1_001),
             part_limit: 100,
             resume_high_water: None,
+            ..Default::default()
         },
     )
     .expect("joined cursor read");
@@ -358,6 +361,7 @@ fn incremental_parts_reject_non_integer_continuation_time() {
                 part_min_time_updated: Some(0),
                 part_limit: 10,
                 resume_high_water: None,
+                ..Default::default()
             }
         )
         .is_err()
@@ -439,6 +443,7 @@ fn read_snapshot_excludes_concurrent_message_and_part_updates() {
         part_min_time_updated: Some(10),
         part_limit: 6000,
         resume_high_water: None,
+        ..Default::default()
     };
     let acquired = extract_sqlite_native_source(&source(path.clone()), options).unwrap();
     assert!(mutated.get(), "writer must commit between production pages");

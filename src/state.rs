@@ -58,6 +58,11 @@ pub struct SqliteIngestionCursor {
     pub table: String,
     pub last_time_updated: i64,
     pub observed_at_unix_ms: u64,
+    /// The last read ended a cut OpenCode v2 window at `last_time_updated`:
+    /// continue strictly after it, without the overlap, until a window
+    /// completes. Absent in state written before rolling windows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub draining: bool,
 }
 
 pub use telltale_schema::source::SourceInventoryChangeSummary;
@@ -357,6 +362,12 @@ impl ScanState {
             .map(|cursor| cursor.last_time_updated)
     }
 
+    pub fn sqlite_ingestion_cursor_draining(&self, source: &Source, table: &str) -> bool {
+        self.sqlite_ingestion_cursors
+            .get(&sqlite_ingestion_cursor_key(source, table))
+            .is_some_and(|cursor| cursor.draining)
+    }
+
     pub fn observe_sqlite_ingestion_cursor(
         &mut self,
         source: &Source,
@@ -371,8 +382,51 @@ impl ScanState {
             .map_or(last_time_updated, |prior| {
                 last_time_updated.max(prior.last_time_updated)
             });
+        self.insert_sqlite_ingestion_cursor(
+            source,
+            table,
+            last_time_updated,
+            observed_at_unix_ms,
+            false,
+        );
+    }
+
+    /// Record the end of a cut window; the next read continues strictly after
+    /// it, without the overlap. A window that began inside the overlap can end
+    /// before the prior high-water, whose rows were already evaluated, so the
+    /// position never moves backwards.
+    pub fn observe_sqlite_ingestion_drain(
+        &mut self,
+        source: &Source,
+        table: &str,
+        last_time_updated: i64,
+        observed_at_unix_ms: u64,
+    ) {
+        let last_time_updated = self
+            .sqlite_ingestion_cursors
+            .get(&sqlite_ingestion_cursor_key(source, table))
+            .map_or(last_time_updated, |prior| {
+                last_time_updated.max(prior.last_time_updated)
+            });
+        self.insert_sqlite_ingestion_cursor(
+            source,
+            table,
+            last_time_updated,
+            observed_at_unix_ms,
+            true,
+        );
+    }
+
+    fn insert_sqlite_ingestion_cursor(
+        &mut self,
+        source: &Source,
+        table: &str,
+        last_time_updated: i64,
+        observed_at_unix_ms: u64,
+        draining: bool,
+    ) {
         self.sqlite_ingestion_cursors.insert(
-            key,
+            sqlite_ingestion_cursor_key(source, table),
             SqliteIngestionCursor {
                 client: source.client.as_str().to_string(),
                 source_id: source.source_id.clone(),
@@ -380,6 +434,7 @@ impl ScanState {
                 table: table.to_string(),
                 last_time_updated,
                 observed_at_unix_ms,
+                draining,
             },
         );
     }
@@ -623,6 +678,7 @@ fn validate_state_families(
                     "table",
                     "last_time_updated",
                     "observed_at_unix_ms",
+                    "draining",
                 ],
             )?;
             if native {

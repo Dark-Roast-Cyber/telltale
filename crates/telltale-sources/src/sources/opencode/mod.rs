@@ -8,9 +8,15 @@ pub(crate) mod canonical;
 mod install;
 #[cfg(feature = "opencode-sqlite")]
 pub(crate) mod native;
+#[cfg(feature = "opencode-sqlite")]
+pub(crate) mod session_message;
+#[cfg(feature = "opencode-sqlite")]
+pub(crate) mod session_message_canonical;
 
 #[cfg(all(test, feature = "opencode-sqlite"))]
 mod tests;
+#[cfg(all(test, feature = "opencode-sqlite"))]
+mod v2_tests;
 
 pub(crate) use install::INSTALL;
 pub(crate) use install::desktop_install_signals;

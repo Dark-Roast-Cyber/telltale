@@ -16,7 +16,8 @@ use telltale_schema::event::path_hash;
 use telltale_schema::observation::{CorrelationId, CorrelationOrigin, ObservedAt};
 use telltale_sources::acquisition::{
     AcquisitionBatch, AcquisitionError, AcquisitionOptions, AcquisitionProgress,
-    OpenCodeSqliteReadOptions, SourceAccounting, acquire_opencode_sqlite, acquire_source,
+    OpenCodeSqliteReadOptions, QuarantinedUnit, SourceAccounting, acquire_opencode_sqlite,
+    acquire_source,
 };
 
 pub struct SourceResult {
@@ -30,6 +31,28 @@ pub struct SourceResult {
     pub accounting: SourceAccounting,
     pub baseline_replacement: BaselineReplacement,
     pub policy_accounting: Option<Result<PolicyMatchAccounting, PolicyMatchAccountingError>>,
+    /// Native units excluded for exceeding a size bound; the rest were evaluated.
+    pub quarantined: Vec<QuarantinedUnit>,
+    /// The OpenCode v2 window budget this result fit in, when the read set
+    /// one or evaluation had to shrink it; a caller draining further windows
+    /// starts from it.
+    pub window_bytes: Option<usize>,
+    /// Where a next OpenCode v2 window may start re-reading this cut window;
+    /// see [`AcquisitionBatch::message_overlap_from`].
+    pub message_overlap_from: Option<i64>,
+}
+
+/// Content-free `scanner_error` marking a source that was evaluated without
+/// its quarantined units. Coordinates stay in the caller's local report.
+pub fn quarantine_event(source: &Source) -> Event {
+    let mut event =
+        telltale_schema::event::scanner_error_event(source, &"canonical_units_quarantined");
+    for evidence in &mut event.evidence {
+        if evidence.field == "source_path" {
+            evidence.redacted_value = "canonical source".into();
+        }
+    }
+    event
 }
 
 /// Stage at which one source failed; re-exported as `SourceFailureStage`.
@@ -113,6 +136,7 @@ fn verified_source(source: &Source) -> Result<(Source, CorrelationId), Processin
     Ok((resolved, instance))
 }
 
+#[derive(Clone, Copy)]
 pub struct SourceContext<'a> {
     pub mcp_servers: &'a [telltale_detect::mcp::McpServerInventory],
     pub rules: &'a RuleV1CompatibilityPlan,
@@ -155,18 +179,125 @@ fn process_source_inner(
         progress: AcquisitionProgress::None,
         acquisition: None,
     })?;
-    let options = AcquisitionOptions::new(observed_at);
-    let batch = match sqlite {
-        Some(bounds) => acquire_opencode_sqlite(&resolved, options, bounds),
-        None => acquire_source(&resolved, options),
+    let mut sqlite = sqlite;
+    let mut previous_window = None;
+    loop {
+        let options = AcquisitionOptions::new(observed_at.clone());
+        let batch = match sqlite {
+            Some(bounds) => acquire_opencode_sqlite(&resolved, options, bounds),
+            None => acquire_source(&resolved, options),
+        }
+        .map_err(|error| SourceFailure {
+            stage: FailureStage::Acquisition,
+            progress: AcquisitionProgress::None,
+            acquisition: Some(error),
+        })?;
+        let window = matches!(
+            batch.progress,
+            AcquisitionProgress::OpenCodeSessionMessages { .. }
+        )
+        .then(|| {
+            batch
+                .observations
+                .iter()
+                .map(telltale_schema::observation::CanonicalObservationV2::retained_byte_len)
+                .fold(0usize, usize::saturating_add)
+        });
+        // The rows of this window, should even its smallest size not fit.
+        let units = window.map(|_| window_units(&batch.observations));
+        let work = EvaluationWorkBudget::default();
+        let capacity = std::cell::Cell::new(false);
+        let result = finish_batch_with_work(
+            source, &instance, batch, context, detailed, &work, &capacity,
+        );
+        let over_capacity = result.as_ref().is_err_and(|failure| {
+            matches!(
+                failure.stage,
+                FailureStage::Evaluation | FailureStage::Projection
+            )
+        }) && (work.is_exhausted() || capacity.get());
+        // An OpenCode v2 window is a selection, not the whole source: when
+        // evaluating or projecting it exceeds the work budget or retained
+        // capacity, evaluate a smaller one. Every attempt must shrink the
+        // window, so this always ends.
+        if over_capacity
+            && let Some(bounds) = sqlite
+            && let Some(bytes) = window
+            && bytes > 1
+            && previous_window.is_none_or(|previous| bytes < previous)
+        {
+            previous_window = Some(bytes);
+            sqlite = Some(OpenCodeSqliteReadOptions {
+                message_window_bytes: Some(bytes / 2),
+                ..bounds
+            });
+        }
+        // The smallest window still exceeds evaluation work or projection
+        // capacity: quarantine its rows by coordinates, like rows over a
+        // size bound, so one row cannot stop a forensic drain. The same
+        // selection is re-read and evaluated without them.
+        else if over_capacity
+            && let Some(bounds) = sqlite
+            && let Some(units) = units
+        {
+            let mut batch = acquire_opencode_sqlite(
+                &resolved,
+                AcquisitionOptions::new(observed_at.clone()),
+                bounds,
+            )
+            .map_err(|error| SourceFailure {
+                stage: FailureStage::Acquisition,
+                progress: AcquisitionProgress::None,
+                acquisition: Some(error),
+            })?;
+            batch.observations.clear();
+            batch.quarantined.extend(units);
+            return finish_batch_with_work(
+                source,
+                &instance,
+                batch,
+                context,
+                detailed,
+                &EvaluationWorkBudget::default(),
+                &std::cell::Cell::new(false),
+            )
+            .map(|mut result| {
+                result.window_bytes = bounds.message_window_bytes;
+                result
+            });
+        } else {
+            return result.map(|mut result| {
+                result.window_bytes = sqlite.and_then(|bounds| bounds.message_window_bytes);
+                result
+            });
+        }
     }
-    .map_err(|error| SourceFailure {
-        stage: FailureStage::Acquisition,
-        progress: AcquisitionProgress::None,
-        acquisition: Some(error),
-    })?;
-    finish_batch_with_options(source, &instance, batch, context, detailed)
 }
+
+/// Coordinates of each native unit with observations in a window.
+fn window_units(
+    observations: &[telltale_schema::observation::CanonicalObservationV2],
+) -> Vec<QuarantinedUnit> {
+    let mut seen = std::collections::BTreeSet::new();
+    observations
+        .iter()
+        .filter_map(|observation| {
+            let source = observation.source();
+            let native_id = source.native_id()?;
+            seen.insert(native_id).then(|| QuarantinedUnit {
+                session_id: observation.session_id().map(|id| id.value().to_owned()),
+                native_id: native_id.to_owned(),
+                source_sequence: source.source_sequence().unwrap_or_default(),
+                code: EVALUATION_CAPACITY_EXCEEDED,
+                bound: None,
+            })
+        })
+        .collect()
+}
+
+/// Quarantine code for rows whose smallest window still exceeds evaluation
+/// work or retained projection capacity.
+pub const EVALUATION_CAPACITY_EXCEEDED: &str = "evaluation_capacity_exceeded";
 
 /// Source-atomic composition after acquisition by this module.
 #[cfg(test)]
@@ -176,22 +307,41 @@ fn finish_batch(
     batch: AcquisitionBatch,
     context: SourceContext<'_>,
 ) -> Result<SourceResult, SourceFailure> {
-    finish_batch_with_options(source, instance, batch, context, None)
+    finish_batch_with_work(
+        source,
+        instance,
+        batch,
+        context,
+        None,
+        &EvaluationWorkBudget::default(),
+        &std::cell::Cell::new(false),
+    )
 }
 
-fn finish_batch_with_options(
+fn finish_batch_with_work(
     source: &Source,
     instance: &CorrelationId,
     batch: AcquisitionBatch,
     context: SourceContext<'_>,
     detailed: Option<&telltale_detect::v2::DetailedEvaluationOptions>,
+    work: &EvaluationWorkBudget,
+    // Set when evaluation or projection failed on a capacity bound, which a
+    // smaller selection can satisfy, rather than on invalid input.
+    capacity: &std::cell::Cell<bool>,
 ) -> Result<SourceResult, SourceFailure> {
+    let bounded = |error: ProcessingError, stage| {
+        capacity.set(error == ProcessingError::Bounds);
+        SourceFailure {
+            stage,
+            progress: batch.progress,
+            acquisition: None,
+        }
+    };
     let fail = |stage| SourceFailure {
         stage,
         progress: batch.progress,
         acquisition: None,
     };
-    let work = EvaluationWorkBudget::default();
     let input = CanonicalSourceInput {
         client: source.client,
         source_id: &source.source_id,
@@ -204,11 +354,11 @@ fn finish_batch_with_options(
             context.rules,
             context.process,
             options,
-            &work,
+            work,
         ),
-        None => evaluate_source_with_work_budget(input, context.rules, context.process, &work),
+        None => evaluate_source_with_work_budget(input, context.rules, context.process, work),
     }
-    .map_err(|_| fail(FailureStage::Evaluation))?;
+    .map_err(|error| bounded(error, FailureStage::Evaluation))?;
     let sessions = batch
         .accounting
         .sessions
@@ -234,7 +384,7 @@ fn finish_batch_with_options(
             sessions: &sessions,
         },
     )
-    .map_err(|_| fail(FailureStage::Projection))?;
+    .map_err(|error| bounded(error, FailureStage::Projection))?;
     let activity = evaluate_activity(
         &evaluation,
         &batch.accounting,
@@ -256,7 +406,7 @@ fn finish_batch_with_options(
             },
             rules,
             None,
-            &work,
+            work,
         )
     });
     if work.is_exhausted() {
@@ -321,6 +471,9 @@ fn finish_batch_with_options(
         accounting: batch.accounting,
         baseline_replacement: activity.replacement,
         policy_accounting,
+        quarantined: batch.quarantined,
+        window_bytes: None,
+        message_overlap_from: batch.message_overlap_from,
     })
 }
 

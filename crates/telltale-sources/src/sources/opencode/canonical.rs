@@ -485,22 +485,7 @@ fn emit_tool_observation(
     }
 
     if let Some(arguments) = arguments {
-        let parsed = parsed_argument_view(arguments);
-        if let Some(command) = argument_string(parsed.as_ref().or(Some(arguments)), "command")
-            .or_else(|| argument_string(parsed.as_ref().or(Some(arguments)), "cmd"))
-        {
-            builder = builder
-                .facet(
-                    "command.text",
-                    SemanticFacet::new(JsonValue::string(command)),
-                )?
-                .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
-        }
-        if let Some(path) = argument_string(parsed.as_ref().or(Some(arguments)), "file_path") {
-            builder = builder
-                .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
-                .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
-        }
+        builder = with_argument_facets(builder, arguments)?;
     }
 
     if let Some(call_id) = call_id {
@@ -512,6 +497,31 @@ fn emit_tool_observation(
     }
     observations.push(builder.build()?)?;
     Ok(())
+}
+
+/// Clear command and file-path arguments become Parsed facets; they never
+/// produce File, Process, or Network observations.
+pub(super) fn with_argument_facets(
+    mut builder: ObservationBuilder,
+    arguments: &Value,
+) -> Result<ObservationBuilder, OpenCodeCanonicalError> {
+    let parsed = parsed_argument_view(arguments);
+    if let Some(command) = argument_string(parsed.as_ref().or(Some(arguments)), "command")
+        .or_else(|| argument_string(parsed.as_ref().or(Some(arguments)), "cmd"))
+    {
+        builder = builder
+            .facet(
+                "command.text",
+                SemanticFacet::new(JsonValue::string(command)),
+            )?
+            .fact_metadata("command.text", normal(FactProvenance::Parsed)?);
+    }
+    if let Some(path) = argument_string(parsed.as_ref().or(Some(arguments)), "file_path") {
+        builder = builder
+            .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
+            .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+    }
+    Ok(builder)
 }
 
 fn common_builder(
@@ -573,11 +583,11 @@ fn capabilities() -> CapabilityContext {
         .with_override(CapabilityId::UserContext, CapabilityAvailability::Supported)
 }
 
-fn normal_reported() -> Result<FactMetadata, OpenCodeCanonicalError> {
+pub(super) fn normal_reported() -> Result<FactMetadata, OpenCodeCanonicalError> {
     normal(FactProvenance::Reported)
 }
 
-fn normal(provenance: FactProvenance) -> Result<FactMetadata, OpenCodeCanonicalError> {
+pub(super) fn normal(provenance: FactProvenance) -> Result<FactMetadata, OpenCodeCanonicalError> {
     Ok(match provenance {
         FactProvenance::Reported => FactMetadata::reported()?,
         FactProvenance::Parsed => FactMetadata::parsed()?,
@@ -610,11 +620,11 @@ fn is_message_type(kind: &str) -> bool {
     )
 }
 
-fn mapping(code: &'static str, detail: &'static str) -> OpenCodeCanonicalError {
+pub(super) fn mapping(code: &'static str, detail: &'static str) -> OpenCodeCanonicalError {
     OpenCodeCanonicalError::Mapping { code, detail }
 }
 
-fn require_source_id(value: Option<&str>) -> Result<&str, OpenCodeCanonicalError> {
+pub(super) fn require_source_id(value: Option<&str>) -> Result<&str, OpenCodeCanonicalError> {
     value.ok_or_else(|| {
         mapping(
             "replay_unverifiable",
@@ -776,6 +786,7 @@ mod tests {
                 part_min_time_updated: Some(1_001),
                 part_limit: 1,
                 resume_high_water: None,
+                ..Default::default()
             },
         )
         .unwrap();

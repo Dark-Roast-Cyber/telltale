@@ -125,7 +125,10 @@ OpenCode adapter notes:
   and inventory, not successful full-store live ingestion or complete history.
   Detailed evidence remains local; canonical limits were not relaxed.
 
-- Newer data lives in `opencode.db`, table `message`, with JSON in `data`.
+- `opencode.db` holds the legacy `message`/`part` tables, OpenCode v2
+  `session_v2`/`session_message`, or both after a migration. One schema is
+  read per scan, and complete v2 tables take precedence; see
+  [OpenCode live ingestion](opencode-live-ingestion.md#native-schemas).
 - SQLite sources open with a 5-second `busy_timeout` so scans fail fast when OpenCode holds a write lock, surfacing a bounded `SourceReadError::Locked` failure instead of hanging indefinitely.
 - Per-source acquisition reads are sequential; a single slow or contended source blocks the current scan (known limitation).
 - OpenCode per-message model attribution reflects the model that generated each message, which may differ from the session's primary model when sub-agents are used.
@@ -137,6 +140,15 @@ OpenCode adapter notes:
 - Telltale needs all roles and tool records, not only assistant token-usage rows.
 
 ### OpenCode incremental saturation and recovery
+
+This section describes legacy `message`/`part` stores. OpenCode v2
+(`session_message`) stores evaluate rolling windows instead: a selection over
+the row limit or the 8 MiB retained budget is drained in overlapping windows
+within one scan (up to 64), and later scans continue any remainder. Only a
+window that cannot pass its resume point fails. For a forensic pass over a
+whole v2 store, use `telltale scan --once --history all --client opencode --log-path <file>`,
+which reads from the earliest message and never touches scan state. See
+[OpenCode live ingestion](opencode-live-ingestion.md).
 
 Current development supports source-atomic recovery of an incremental selection
 up to 25,000 text/tool parts. Queries return at most 5,000 parts per page from
