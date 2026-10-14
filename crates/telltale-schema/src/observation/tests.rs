@@ -142,6 +142,85 @@ fn apply_patch_text_is_a_narrow_bounded_argument_exception() {
 }
 
 #[test]
+fn authored_text_arguments_are_exact_tool_field_pairs() {
+    let long = "x".repeat(20_000);
+    let tool_body = |name: &str, arguments: JsonValue| {
+        ObservationBody::Tool(
+            ToolObservation::new()
+                .with_name(name)
+                .unwrap()
+                .with_arguments(arguments),
+        )
+    };
+    let build = |body: ObservationBody, command: Option<&str>| {
+        let mut builder = CanonicalObservationV2::builder(
+            body,
+            ObservationStage::ToolRequested,
+            ObservedAt::new(OBSERVED_AT).unwrap(),
+            source(),
+        )
+        .fact_metadata("tool.name", FactMetadata::reported().unwrap())
+        .fact_metadata("tool.arguments", FactMetadata::reported().unwrap());
+        if let Some(command) = command {
+            builder = builder
+                .facet(
+                    "command.text",
+                    SemanticFacet::new(JsonValue::string(command)),
+                )
+                .unwrap()
+                .fact_metadata("command.text", FactMetadata::parsed().unwrap());
+        }
+        builder.build()
+    };
+    for (name, field) in [
+        ("patch", "patchText"),
+        ("shell", "command"),
+        ("bash", "command"),
+        ("write", "content"),
+        ("edit", "oldString"),
+        ("edit", "newString"),
+        ("execute", "code"),
+        ("subagent", "prompt"),
+        ("task", "prompt"),
+    ] {
+        let input = serde_json::json!({field: long, "path": "./a"});
+        let arguments = JsonValue::try_from_source_tool_arguments(Some(name), &input).unwrap();
+        assert!(
+            build(tool_body(name, arguments), None).is_ok(),
+            "{name}.{field}"
+        );
+        // The same field on another tool, or another field, keeps ordinary bounds.
+        assert!(JsonValue::try_from_source_tool_arguments(Some("exec"), &input).is_err());
+        let other = serde_json::json!({field: "ok", "path": long});
+        assert!(JsonValue::try_from_source_tool_arguments(Some(name), &other).is_err());
+    }
+    // A non-string field keeps ordinary conversion instead of failing the call.
+    let array = serde_json::json!({"command": ["sh", "-c", "true"]});
+    let arguments = JsonValue::try_from_source_tool_arguments(Some("shell"), &array).unwrap();
+    assert!(build(tool_body("shell", arguments), None).is_ok());
+
+    // Command text keeps the direct-text budget only for an authored command.
+    let shell = JsonValue::try_from_source_tool_arguments(
+        Some("shell"),
+        &serde_json::json!({"command": long}),
+    )
+    .unwrap();
+    assert!(build(tool_body("shell", shell), Some(&long)).is_ok());
+    let error = build(
+        tool_body("exec", JsonValue::object([]).unwrap()),
+        Some(&long),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.bound_context(),
+        Some(CanonicalBoundContext {
+            category: CanonicalFieldCategory::CommandText,
+            dimension: BoundDimension::StringBytes,
+        })
+    );
+}
+
+#[test]
 fn message_text_recursive_failures_precede_partition_encoded_overflow() {
     for prefix in [
         JsonValue::Array(vec![JsonValue::string("\u{1}".repeat(2_731))]),

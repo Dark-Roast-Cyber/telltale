@@ -104,20 +104,18 @@ impl JsonValue {
         }
     }
 
-    /// The known apply_patch API carries authored text, rather than a scalar
-    /// control argument. Validate the ordinary skeleton before admitting text.
+    /// Exact tool argument fields that carry authored text (patches, commands,
+    /// file bodies, prompts) rather than scalar controls get the direct-text
+    /// budget. Validate the ordinary skeleton before admitting text.
     pub fn try_from_source_tool_arguments(
         name: Option<&str>,
         value: &serde_json::Value,
     ) -> Result<Self, ObservationError> {
-        if name == Some("apply_patch")
-            && let serde_json::Value::Object(members) = value
-            && let Some(patch) = members.get("patchText")
+        if let serde_json::Value::Object(members) = value
+            && let Some(fields) = authored_text_fields(name, |field| {
+                members.get(field).map(serde_json::Value::as_str)
+            })?
         {
-            let text = patch
-                .as_str()
-                .ok_or_else(|| ObservationError::new(ValidationCode::InvalidBody))?;
-            let patch = Self::try_from_source_message_text(text)?;
             if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
                 return Err(ObservationError::bound(BoundDimension::ObjectMembers));
             }
@@ -131,7 +129,7 @@ impl JsonValue {
                 .map(|(key, value)| {
                     Ok((
                         key.clone(),
-                        if key == "patchText" {
+                        if fields.contains(&key.as_str()) {
                             Self::Null
                         } else {
                             Self::convert_source_value(value, 2)?
@@ -146,7 +144,10 @@ impl JsonValue {
             let Self::Object(mut converted) = skeleton else {
                 unreachable!()
             };
-            converted.insert("patchText".into(), patch);
+            for field in fields {
+                let text = members[field].as_str().expect("selected text field");
+                converted.insert(field.into(), Self::try_from_source_message_text(text)?);
+            }
             return Ok(Self::Object(converted));
         }
         Self::try_from_source_value(value)
@@ -617,27 +618,33 @@ pub(crate) fn bounded_tool_arguments_bytes(
     name: Option<&str>,
     value: &JsonValue,
 ) -> Result<usize, ObservationError> {
-    if name == Some("apply_patch")
-        && let JsonValue::Object(members) = value
-        && let Some(patch) = members.get("patchText")
+    if let JsonValue::Object(members) = value
+        && let Some(fields) = authored_text_fields(name, |field| {
+            members.get(field).map(|item| match item {
+                JsonValue::String(text) => Some(text.as_str()),
+                _ => None,
+            })
+        })?
     {
-        let JsonValue::String(text) = patch else {
-            return Err(ObservationError::new(ValidationCode::InvalidBody));
-        };
         if members.len() > LOCAL_MAX_OBJECT_MEMBERS {
             return Err(ObservationError::bound(BoundDimension::ObjectMembers));
         }
-        // Count a borrowed skeleton, with patchText replaced by null. Builder
-        // validation must not clone an unchecked nested value before admission.
+        // Count a borrowed skeleton, with each text field replaced by null.
+        // Builder validation must not clone an unchecked nested value first.
         let mut bytes = 2usize;
+        let mut text_bytes = 0usize;
         for (index, (key, item)) in members.iter().enumerate() {
             if key.len() > LOCAL_MAX_KEY_BYTES {
                 return Err(ObservationError::bound(BoundDimension::KeyBytes));
             }
-            let item_bytes = if key == "patchText" {
-                4
-            } else {
-                bounded_json_bytes(item, 2)?
+            let item_bytes = match item {
+                JsonValue::String(text) if fields.contains(&key.as_str()) => {
+                    text_bytes = text_bytes
+                        .checked_add(bounded_message_text_bytes(text)?)
+                        .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes))?;
+                    4
+                }
+                _ => bounded_json_bytes(item, 2)?,
             };
             bytes = bytes
                 .checked_add(escaped_string_bytes(key) + 1 + item_bytes + usize::from(index != 0))
@@ -646,13 +653,64 @@ pub(crate) fn bounded_tool_arguments_bytes(
         if bytes > LOCAL_MAX_VALUE_BYTES {
             return Err(ObservationError::bound(BoundDimension::EncodedBytes));
         }
-        return Ok(bytes - 4 + bounded_message_text_bytes(text)?);
+        return (bytes - 4 * fields.len())
+            .checked_add(text_bytes)
+            .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes));
     }
     let bytes = bounded_json_bytes(value, 1)?;
     if bytes > LOCAL_MAX_VALUE_BYTES {
         return Err(ObservationError::bound(BoundDimension::EncodedBytes));
     }
     Ok(bytes)
+}
+
+/// Exact `(tool, field)` pairs whose string values are authored text. Tool
+/// names are the OpenCode names (`apply_patch` for legacy stores; `patch`,
+/// `shell`, `write`, `edit`, `execute`, `subagent` for v2; `bash` and `task`
+/// as stored by earlier releases); other adapters do not use these names with
+/// string fields.
+const AUTHORED_TEXT_ARGUMENTS: &[(&str, &[&str])] = &[
+    ("apply_patch", &["patchText"]),
+    ("patch", &["patchText"]),
+    ("shell", &["command"]),
+    ("bash", &["command"]),
+    ("write", &["content"]),
+    ("edit", &["oldString", "newString"]),
+    ("execute", &["code"]),
+    ("subagent", &["prompt"]),
+    ("task", &["prompt"]),
+];
+
+pub(crate) fn is_authored_text_argument(name: Option<&str>, field: &str) -> bool {
+    AUTHORED_TEXT_ARGUMENTS
+        .iter()
+        .any(|(tool, fields)| Some(*tool) == name && fields.contains(&field))
+}
+
+/// The authored-text fields present as strings in these arguments, or `None`
+/// when none apply. A non-string field keeps ordinary conversion, except
+/// `apply_patch.patchText`, whose non-string value has always been invalid.
+fn authored_text_fields<'a>(
+    name: Option<&str>,
+    field_text: impl Fn(&str) -> Option<Option<&'a str>>,
+) -> Result<Option<Vec<&'static str>>, ObservationError> {
+    let Some((tool, fields)) = AUTHORED_TEXT_ARGUMENTS
+        .iter()
+        .find(|(tool, _)| Some(*tool) == name)
+    else {
+        return Ok(None);
+    };
+    let mut present = Vec::new();
+    for field in *fields {
+        match field_text(field) {
+            Some(Some(_)) => present.push(*field),
+            Some(None) if *tool == "apply_patch" => {
+                return Err(ObservationError::new(ValidationCode::InvalidBody));
+            }
+            _ => {}
+        }
+    }
+    Ok((!present.is_empty()).then_some(present))
 }
 
 pub(crate) fn escaped_string_bytes(value: &str) -> usize {

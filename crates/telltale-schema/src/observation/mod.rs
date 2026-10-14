@@ -1794,8 +1794,19 @@ fn validate_semantic_json_bounds(
         ));
     }
     for (name, facet) in facets {
-        let bytes = bounded_semantic_value_bytes(facet.value())
-            .map_err(|error| error.with_bound_category(CanonicalFieldCategory::facet(name)))?;
+        // A command that is an authored-text argument keeps that budget here,
+        // so detection sees the whole command it was parsed from.
+        let bytes = match (CanonicalFieldCategory::facet(name), body, facet.value()) {
+            (
+                CanonicalFieldCategory::CommandText,
+                ObservationBody::Tool(tool),
+                JsonValue::String(text),
+            ) if value::is_authored_text_argument(tool.name(), "command") => {
+                value::bounded_message_text_bytes(text)
+            }
+            _ => bounded_semantic_value_bytes(facet.value()),
+        }
+        .map_err(|error| error.with_bound_category(CanonicalFieldCategory::facet(name)))?;
         let _ = bytes;
         sizes.push((
             CanonicalFieldCategory::facet(name),
