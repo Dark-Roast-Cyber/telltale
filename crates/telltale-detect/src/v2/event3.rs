@@ -120,7 +120,12 @@ impl ProcessProjection {
             )
             .map_err(|_| DetectionError::InvalidBounds)
         };
-        let source_process_name = input.parent.normalized_name();
+        // A POSIX command shows no parent process, so only standalone
+        // indicators match it. Event 3.0 requires a source process name; the
+        // parent is reported as unknown (and stays inferred), never invented.
+        let source_process_name = Some(input.parent.normalized_name())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| UNKNOWN_SOURCE_PROCESS.to_owned());
         let source_process_path = input.parent.path.as_deref().map(&mut redact).transpose()?;
         let source_process_command_line = input
             .parent
@@ -136,7 +141,11 @@ impl ProcessProjection {
             .as_deref()
             .map(&mut redact)
             .transpose()?;
-        let parent_process_name = input.grandparent.as_ref().map(|p| p.normalized_name());
+        let parent_process_name = input
+            .grandparent
+            .as_ref()
+            .map(|p| p.normalized_name())
+            .filter(|name| !name.is_empty());
         let parent_process_path = input
             .grandparent
             .as_ref()
@@ -495,6 +504,10 @@ fn evidence(
 
 /// All-or-nothing projection. Optional metadata is caller-attested compatibility
 /// context, not inferred from client labels or arbitrary tool arguments.
+/// Source process name for a process-chain detection whose parent the
+/// command line does not show.
+const UNKNOWN_SOURCE_PROCESS: &str = "unknown";
+
 pub fn project_event3(
     evaluation: &CanonicalSourceEvaluation,
     context: &Event3CompatibilityContext<'_>,
