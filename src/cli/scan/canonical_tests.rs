@@ -27,7 +27,7 @@ fn runtime_failures_become_private_scanner_errors_without_staging_eligibility() 
         assert_eq!(result.progress, progress);
         assert_eq!(result.sqlite_progress_candidate(false, false), None);
         assert_eq!(result.completion, None);
-        assert!(result.accounting.is_none());
+        assert!(result.accounting.is_empty());
         assert_eq!(
             result.baseline_replacement,
             BaselineReplacement::NoReplacement
@@ -76,7 +76,7 @@ fn ownership_failure_returns_neither_accounting_nor_eligible_progress() {
         None,
     );
     assert_eq!(result.status, SourceProcessingStatus::Failed);
-    assert!(result.accounting.is_none());
+    assert!(result.accounting.is_empty());
     assert_eq!(result.progress, AcquisitionProgress::None);
     assert_eq!(result.sqlite_progress_candidate(false, false), None);
     assert!(
@@ -113,7 +113,7 @@ fn contribution_budget_failure_returns_no_accounting_or_eligible_progress() {
         None,
     );
     assert_eq!(result.status, SourceProcessingStatus::Failed);
-    assert!(result.accounting.is_none());
+    assert!(result.accounting.is_empty());
     assert_eq!(result.progress, AcquisitionProgress::None);
     assert_eq!(result.sqlite_progress_candidate(false, false), None);
     assert!(
@@ -490,7 +490,7 @@ fn ordinary_zero_findings_and_missing_source_are_explicit() {
     assert!(result.completion.is_some());
     assert_eq!(result.progress, AcquisitionProgress::None);
     assert_eq!(result.sqlite_progress_candidate(false, false), None);
-    let accounting = result.accounting.as_ref().unwrap();
+    let accounting = result.accounting.first().unwrap();
     assert_eq!(
         accounting.coverage,
         telltale_sources::acquisition::AccountingCoverage::CompleteSource
@@ -527,7 +527,7 @@ fn projection_borrows_only_known_metadata_and_retains_ambiguity_for_b3b() {
     assert_eq!(event.agent.as_deref(), Some("native-agent"));
     assert_eq!(event.provider.as_deref(), Some("native-provider"));
     assert_eq!(event.model, None);
-    let accounting = result.accounting.unwrap();
+    let accounting = result.accounting.into_iter().next().unwrap();
     assert_eq!(
         accounting.sessions[0].metadata.model,
         AttestedValue::Ambiguous
@@ -556,7 +556,7 @@ fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progr
     assert_eq!(result.events.len(), 1);
     assert_eq!(result.events[0].event_type, "activity");
     assert_eq!(
-        result.accounting.unwrap().sessions[0]
+        result.accounting.into_iter().next().unwrap().sessions[0]
             .metadata
             .model
             .known(),
@@ -588,7 +588,7 @@ fn metadata_only_sessions_do_not_break_projection_and_ambiguous_sqlite_can_progr
     // URL is an observable tool-argument fact; text parts have none.
     assert_eq!(result.completion, Some(EvaluationCompletion::Complete));
     assert_eq!(
-        result.accounting.as_ref().unwrap().sessions[0]
+        result.accounting.first().unwrap().sessions[0]
             .metadata
             .model,
         AttestedValue::Ambiguous
@@ -695,7 +695,7 @@ fn saturated_incremental_scan_never_stages_cursor_or_baseline() {
         assert_eq!(failed.status, SourceProcessingStatus::Failed);
         assert_eq!(failed.events.len(), 1);
         assert_eq!(failed.events[0].event_type, "scanner_error");
-        assert!(failed.accounting.is_none());
+        assert!(failed.accounting.is_empty());
         assert_eq!(failed.progress, AcquisitionProgress::None);
         assert_eq!(failed.sqlite_progress_candidate(false, false), None);
         assert_eq!(
@@ -790,7 +790,7 @@ correlations:
     let first = read(&state);
     assert_eq!(first.status, SourceProcessingStatus::Succeeded);
     assert_eq!(
-        first.accounting.as_ref().unwrap().sessions[0]
+        first.accounting.first().unwrap().sessions[0]
             .counts
             .native_units,
         5003
@@ -932,7 +932,7 @@ fn malformed_message_after_valid_part_never_stages_scan_progress_or_baseline() {
     assert_eq!(failed.events.len(), 1);
     assert_eq!(failed.events[0].event_type, "scanner_error");
     assert_eq!(failed.progress, AcquisitionProgress::None);
-    assert!(failed.accounting.is_none());
+    assert!(failed.accounting.is_empty());
     assert_eq!(failed.sqlite_progress_candidate(false, false), None);
     assert_eq!(
         failed.baseline_replacement,
@@ -970,7 +970,7 @@ fn benign_opencode_sqlite_partial_source_has_no_canonical_detection() {
     );
     assert_eq!(result.status, SourceProcessingStatus::Succeeded);
     assert_eq!(
-        result.accounting.as_ref().unwrap().coverage,
+        result.accounting.first().unwrap().coverage,
         AccountingCoverage::PartialSource
     );
     assert_eq!(
@@ -1016,7 +1016,7 @@ fn sqlite_partial_success_retains_progress_without_installing_and_reuses_read_po
         }
     );
     assert_eq!(result.sqlite_progress_candidate(false, false), Some(1000));
-    let accounting = result.accounting.as_ref().unwrap();
+    let accounting = result.accounting.first().unwrap();
     assert_eq!(
         accounting.coverage,
         telltale_sources::acquisition::AccountingCoverage::PartialSource
@@ -1046,7 +1046,7 @@ fn sqlite_partial_success_retains_progress_without_installing_and_reuses_read_po
         None,
     );
     assert_eq!(live.status, SourceProcessingStatus::Failed);
-    assert!(live.accounting.is_none());
+    assert!(live.accounting.is_empty());
     assert_eq!(live.sqlite_progress_candidate(false, false), None);
     assert_eq!(live.events.len(), 1);
     assert_eq!(live.events[0].event_type, "scanner_error");
@@ -1073,7 +1073,7 @@ fn sqlite_partial_success_retains_progress_without_installing_and_reuses_read_po
         );
         assert_eq!(full.progress, result.progress);
         assert_eq!(
-            full.accounting.as_ref().unwrap().coverage,
+            full.accounting.first().unwrap().coverage,
             telltale_sources::acquisition::AccountingCoverage::PartialSource
         );
         assert_eq!(full.sqlite_progress_candidate(dry_run, backfill), None);
@@ -1167,7 +1167,7 @@ fn all_eight_identities_acquire_evaluate_project_without_legacy_records() {
             "{}",
             source.source_id
         );
-        assert_eq!(result.accounting.as_ref(), Some(&batch.accounting));
+        assert_eq!(result.accounting.first(), Some(&batch.accounting));
         assert!(
             result
                 .events

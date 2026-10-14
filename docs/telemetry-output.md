@@ -225,12 +225,18 @@ otherwise ambiguous zero-detection result without exposing session content:
 - `source_processing` reports selected sources, successful parses, empty and
   failed parses, the number of normalized records, and fixed counts for user,
   assistant, tool-call, tool-result, session-metadata, and other records.
-  `incomplete_window_source_count` counts sources whose evaluated window was
-  cut by a row or retained budget; the next scan continues the backlog.
+  `evaluated_window_count` counts evaluated windows; it exceeds the parsed
+  source count when a backlog was drained in several windows.
+  `incomplete_window_source_count` counts sources whose last evaluated window
+  was still cut when the scan stopped draining; the next scan continues the
+  backlog. A `--history all` scan adds `"history": "all"`.
   `quarantined_unit_count` counts native units excluded for exceeding a size
   bound, and `quarantined_units` lists up to 1,000 of them as `{source,
   session_id, native_id, source_sequence, code, bound_category,
-  bound_dimension}`. These are coordinates only, never content. Quarantine makes
+  bound_dimension}`, where `code` is `unbounded_value`,
+  `invalid_native_contribution`, `invalid_body` (a value the canonical body
+  cannot hold, such as a requested tool name with a line break),
+  `oversized_native_cell` or `evaluation_capacity_exceeded`. These are coordinates only, never content. Quarantine makes
   `selected_source_coverage` `partial`.
   Development builds after RC1 additionally report
   `evaluation_complete_source_count`, `visibility_limited_source_count`,

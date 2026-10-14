@@ -638,16 +638,25 @@ budget instead of the 4,096-byte ordinary string bound, with every other member
 under ordinary bounds: `shell` and `bash` `command`, `patch` and `apply_patch`
 `patchText`, `write` `content`, `edit` `oldString` and `newString`, `execute`
 `code`, and `subagent` and `task` `prompt`. A non-string value in one of these
-fields MUST keep ordinary conversion. For `shell` and `bash`, the Parsed
-`command.text` facet MUST carry the same full command under the same budget,
-so detection sees the whole command. The observation's 65,536-byte encoded
-aggregate still applies. v2 `read`, `write` and `edit` `path` MUST become the
+fields MUST keep ordinary conversion. A user `!` command's `shell` arguments,
+which are the command string itself, MUST use the same budget; legacy `bash`
+input that is a bare string keeps ordinary bounds. For `shell` and `bash`, the
+Parsed `command.text` facet MUST carry the same full command under the same
+budget, so detection sees the whole command. The observation's 65,536-byte
+encoded aggregate still applies, but a `command.text` facet that repeats the
+tool's authored command exactly MUST count once toward it; retained bytes still
+count both copies. v2 `read`, `write` and `edit` `path` MUST become the
 Parsed `resource.path` facet; `path` on other tools is not a resource.
 
 #### Scenario: A long command is detected by its full text
 
 - **WHEN** a v2 `shell` entry's `command` is 20,000 bytes with a rule marker at its end
 - **THEN** it maps without failure, `command.text` carries the full command and the rule matches
+
+#### Scenario: A command near the direct-text budget is not quarantined
+
+- **WHEN** an agent `shell` entry's `command`, or a user `!` shell row's command, is 60,000 bytes
+- **THEN** the row maps, and every stage's `command.text` carries the full command
 
 #### Scenario: The same field on another tool keeps ordinary bounds
 
@@ -661,7 +670,12 @@ exceeds a contribution bound, MUST be quarantined as a unit. It emits no
 observations, tool usage or contributions, and it still counts as a native
 unit. It MUST be reported on the acquisition batch by session id, message id,
 `seq`, code (`unbounded_value` or `invalid_native_contribution`) and bound
-category and dimension, without content. The rest of the selection MUST still
+category and dimension, without content. A row whose model-chosen value the
+canonical body cannot hold, such as a requested tool name with a line break,
+MUST be quarantined the same way as `invalid_body`. A row whose stored `data`
+exceeds the 8,388,608-byte read cell limit MUST NOT be loaded: only its size is read, and
+the row MUST be quarantined as `oversized_native_cell`, counted as one native
+unit of the kind its `type` column names. The rest of the selection MUST still
 be mapped and evaluated, and progress MUST cover the quarantined row. Every
 entry of a quarantined row MUST still be checked, so a missing identity,
 malformed or unknown entry, aggregate retention cap or contribution-key
@@ -673,6 +687,11 @@ coordinates (at most 1,000, with a complete count) in the stdout scan summary.
 
 - **WHEN** one row holds a 200,000-byte command and other rows hold detectable activity
 - **THEN** the other rows are evaluated and detected, the padded row is reported with its coordinates and no content, and the cursor advances past it
+
+#### Scenario: A payload over the read cell limit does not fail the source
+
+- **WHEN** one row's stored `data` is 9 MiB
+- **THEN** it is quarantined as `oversized_native_cell` without being read, and the other rows are evaluated
 
 #### Scenario: Quarantine never hides an integrity failure
 
@@ -754,7 +773,11 @@ Bootstrap MUST select the newest `message_limit` rows (default 5,000) by
 `(time_updated, rowid)` descending and return them ascending. Incremental reads
 MUST use an inclusive `time_updated` lower bound, strictly ascending integer
 `(time_updated, rowid)` keyset pages of at most 5,000 rows, and checked L+1
-lookahead. Every selected row MUST have an integer `time_updated`.
+lookahead. Every selected row MUST have an integer `time_updated`. An
+incremental read MUST stop before the row whose stored `data` would take it
+past twice the window's retained budget, always taking the first row, and
+report that row's `time_updated` as the next coordinate; the selection is then
+cut, as at the row limit.
 
 Rows MUST be mapped in update order into one window. The window MUST end on a
 row boundary when the row limit is reached or when the next row would exceed
@@ -766,17 +789,37 @@ admitted row's `time_updated` and `window_complete` is false when the window
 was cut. A cut window MUST end on a whole `time_updated` group: when the
 first row it leaves out shares the last admitted row's timestamp, admitted
 rows with that timestamp are deferred too, and only a single timestamp that
-fills a window fails as `LimitExceeded`. After a cut, the next read MUST
-continue strictly after the high-water without the overlap
-(`continue_session_messages_after`), so a backlog drains even when one window
-cannot hold the overlap. The ten-minute overlap MUST resume once a window
-completes. The CLI cursor records this as an optional `draining` flag, and
-embedding tokens use the `session_message_drain:` coordinate. A drain position
-MUST NOT move behind the position it resumed from. Canonical source
-processing MUST re-read a window at half its retained size when evaluating
-or projecting it exhausts the shared evaluation work budget or a retained
-projection capacity bound, until it fits or cannot shrink. The stdout
-summary MUST count cut windows as `incomplete_window_source_count`. A
+fills a window fails as `LimitExceeded`. A cut window MUST also report
+`message_overlap_from`: the earliest `time_updated` from which whole timestamp
+groups at the end of the window hold at most half of its rows and half of its
+retained bytes.
+
+One CLI scan MUST drain a cut selection window after window, up to 64 windows.
+Each next window MUST re-read from `message_overlap_from`, but no earlier than
+one hour before the high-water, so a correlation straddling the cut is
+evaluated whole; when that window would not advance past the high-water, the
+scan MUST read strictly after it instead (`continue_session_messages_after`),
+as it MUST when the overlapped window fails or quarantines rows for
+evaluation capacity.
+A window that fit after shrinking MUST set the size of the next one, and the
+size MUST double again after four consecutive windows fit it. Events of
+every window are released together with the final position; a later window
+that fails keeps the earlier windows and their position, and is reported.
+Repeated detections from re-read rows are deduplicated like those of the
+routine overlap, and re-read rows count again in summary record counts. After
+the window limit, the next scan MUST continue strictly after the high-water.
+The ten-minute overlap MUST resume once a window completes. The CLI cursor
+records a drain as an optional `draining` flag, and embedding tokens use the
+`session_message_drain:` coordinate; an embedding scan evaluates one window. A
+drain position MUST NOT move behind the position it resumed from. Canonical
+source processing MUST re-read a window at half its retained size when
+evaluating or projecting it exhausts the shared evaluation work budget or a
+retained projection capacity bound, until it fits. When even the smallest
+window does not fit, its rows MUST be quarantined by coordinates as
+`evaluation_capacity_exceeded`, and the window is evaluated without them. The
+stdout
+summary MUST count windows as `evaluated_window_count`, and sources whose
+last window was still cut as `incomplete_window_source_count`. A
 resumed read (`resume_session_messages_after`) MUST apply the shared ten-minute
 overlap and 25,000-row limit, and MUST fail as `resume_regressed` before
 selection when no integer `time_updated` at or after the high-water remains.
@@ -795,10 +838,10 @@ shared with legacy reads.
 - **WHEN** many rows share `time_updated` across pages, or a later page holds malformed data or a non-integer coordinate
 - **THEN** ties are returned once in rowid order, and a late failure returns no prefix or progress
 
-#### Scenario: A backlog larger than one window drains across scans
+#### Scenario: A backlog larger than one window drains in one scan
 
 - **WHEN** the selected rows need more than the 8 MiB retained budget, or exceed the row limit
-- **THEN** each scan evaluates one window, advances the cursor and reports the window incomplete, until a scan reports it complete
+- **THEN** one scan evaluates successive overlapping windows, finds every detection, and ends with the cursor at the newest row and no drain pending
 
 #### Scenario: A burst inside the overlap still drains
 
@@ -808,12 +851,29 @@ shared with legacy reads.
 #### Scenario: Evaluation work shrinks the window
 
 - **WHEN** bundled rules exhaust the evaluation work budget on a full retained window, or its detections exceed retained projection capacity
-- **THEN** the scan evaluates a smaller window instead of failing, and later scans drain the rest
+- **THEN** the scan evaluates smaller windows instead of failing and drains the rest in the same scan
 
 #### Scenario: Known v2 coverage limits
 
 - **WHEN** OpenCode copies forked history with its parent's `time_updated`, deletes reverted rows, or the clock moves backwards
 - **THEN** rows older than the overlap stay unread; deleting the newest rows can trigger `resume_regressed`
+
+### Requirement: A history scan reads a v2 store from its earliest message
+
+`telltale scan --once --history all` MUST read each OpenCode v2 store from
+its earliest message (`session_message_history`) and drain it in overlapping
+windows without a window limit. It MUST require `--once` and an explicit
+`--log-path`, and MUST NOT be combined with `--backfill`,
+`--rebuild-baselines` or `--interval-seconds`. It MUST neither read, lock nor
+write scan state: detections are deduplicated within the run only, so
+repeating it reports again. It MUST skip install inventory and baseline
+replacement, and the stdout summary MUST carry `"history": "all"`. Legacy
+`part` stores keep their bootstrap selection.
+
+#### Scenario: History reaches messages a first scan skips
+
+- **WHEN** a v2 store holds more than 5,000 messages and the oldest one holds a detection
+- **THEN** a first routine scan misses it, a history scan reports it, and the routine state file is unchanged
 
 ### Requirement: Legacy and v2 progress are never interchanged
 

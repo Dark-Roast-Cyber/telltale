@@ -179,6 +179,7 @@ pub(crate) fn run_watch(
     let (mut source_index, mut watch_discovery) = watch_index_from_sources(sources, discovery);
     let scan_config = ScanConfig {
         execution: config.execution,
+        history: false,
         backfill: false,
         rebuild_baselines: false,
         max_sources: None,

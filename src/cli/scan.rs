@@ -91,6 +91,9 @@ pub(crate) struct ScanExecutionConfig<'a> {
 pub(crate) struct ScanConfig<'a> {
     pub(crate) execution: ScanExecutionConfig<'a>,
     pub(crate) backfill: bool,
+    /// Forensic history pass: every OpenCode v2 message from the earliest,
+    /// deduplicated within this run only. Scan state is never read or written.
+    pub(crate) history: bool,
     pub(crate) rebuild_baselines: bool,
     pub(crate) max_sources: Option<usize>,
 }
@@ -235,7 +238,9 @@ fn run_scan_for_platform(
     } else {
         Some((sources.clone(), source_discovery.clone()))
     };
-    let state_lock = if config.execution.dry_run {
+    // A history pass never touches scan state, so it needs no lock and can
+    // run beside a routine scanner.
+    let state_lock = if config.execution.dry_run || config.history {
         None
     } else {
         Some(StateLock::acquire(config.execution.state_path)?)
@@ -262,7 +267,11 @@ fn run_scan_for_platform(
     let rule_count = rule_set.rule_count();
     let active_policy_name = rule_set.policy_name().map(str::to_string);
     let allowlist = load_allowlist(config.execution.allowlist_path)?;
-    let mut state = ScanState::load_snapshot(config.execution.state_path)?;
+    let mut state = if config.history {
+        ScanState::default()
+    } else {
+        ScanState::load_snapshot(config.execution.state_path)?
+    };
     let state_probe = match save_policy {
         StateSavePolicy::Always => None,
         StateSavePolicy::OnChange => Some(StateChangeProbe::capture(&state)),
@@ -272,6 +281,7 @@ fn run_scan_for_platform(
     let observed_at_unix_ms = u64::try_from(observed_at_unix_ms).unwrap_or_default();
     let mut install_inventory_event = None;
     if config.execution.clients.is_empty()
+        && !config.history
         && let Some(interval_seconds) = install_inventory_interval_seconds
         && install_inventory_due(
             state.install_inventory.as_ref(),
@@ -308,6 +318,7 @@ fn run_scan_for_platform(
                     mcp_servers: &mcp_scan.servers,
                     dry_run: config.execution.dry_run,
                     backfill: config.backfill,
+                    history: config.history,
                     baseline_deviation: BaselineDeviationConfig {
                         enabled: config.execution.emit_activity
                             && config.execution.baseline_deviation_scoring,
@@ -477,7 +488,7 @@ fn run_scan_for_platform(
 
     let mut sink_failures: Vec<SinkFailure> = Vec::new();
     let delivery_posture = config.execution.sinks.delivery_posture();
-    let should_save = if config.execution.dry_run {
+    let should_save = if config.execution.dry_run || config.history {
         false
     } else {
         match &state_probe {
@@ -491,17 +502,19 @@ fn run_scan_for_platform(
         None
     };
     if !config.execution.dry_run {
-        let state_lock = state_lock
-            .as_ref()
-            .ok_or("state lock missing before durable delivery")?;
-        state_lock.verify()?;
+        let verify_lock = || match &state_lock {
+            Some(lock) => lock.verify(),
+            None if config.history => Ok(()),
+            None => Err("state lock missing before durable delivery".into()),
+        };
+        verify_lock()?;
         if config.execution.sinks.has_persistent_replay() {
             sink_failures = config
                 .execution
                 .sinks
                 .persist_for_durable_replay_with_failures(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
-                state_lock.verify()?;
+                verify_lock()?;
                 prepared_state.install_replace(config.execution.state_path)?;
             }
             sink_failures.extend(config.execution.sinks.deliver_durable()?);
@@ -514,7 +527,7 @@ fn run_scan_for_platform(
         } else {
             sink_failures = config.execution.sinks.deliver(&emitted_events)?;
             if let Some(prepared_state) = prepared_state {
-                state_lock.verify()?;
+                verify_lock()?;
                 prepared_state.install_replace(config.execution.state_path)?;
             }
         }
@@ -574,6 +587,10 @@ fn run_scan_for_platform(
         effective_configuration: &effective_configuration,
         durable_health: config.execution.sinks.durable_health_json(),
     });
+    let mut summary = summary;
+    if config.history {
+        summary["history"] = "all".into();
+    }
     println!("{}", serde_json::to_string(&summary)?);
     Ok(ScanRunResult {
         full_scan_discovery,
@@ -738,9 +755,13 @@ struct SourceProcessingAccounting {
     accounting_partial_source_count: usize,
     failures: BTreeMap<SourceFailureCategory, usize>,
     quarantined_unit_count: usize,
-    /// Sources whose evaluated window was cut by a row or retained budget;
+    /// Sources whose last evaluated window was still cut when the scan
+    /// stopped draining, at the per-scan window limit or a failed window;
     /// the next scan continues from the advanced cursor.
     incomplete_window_source_count: usize,
+    /// Windows evaluated across all sources; above the parsed source count
+    /// when a backlog was drained in several windows.
+    evaluated_window_count: usize,
     /// Coordinates only, never content; listed up to a fixed bound.
     quarantined_units: Vec<serde_json::Value>,
 }
@@ -824,51 +845,56 @@ fn source_processing_accounting(
             };
             *accounting.failures.entry(key).or_default() += 1;
         }
-        match &result.accounting {
-            Some(source) => {
-                match source.coverage {
-                    AccountingCoverage::CompleteSource => {
-                        accounting.accounting_complete_source_count += 1
-                    }
-                    AccountingCoverage::PartialSource => {
-                        accounting.accounting_partial_source_count += 1
-                    }
-                }
-                accounting.parse_success_source_count += 1;
-                let prior_record_count = accounting.parsed_record_count;
-                for counts in source
-                    .sessions
-                    .iter()
-                    .map(|session| &session.counts)
-                    .chain(std::iter::once(&source.unscoped))
-                {
-                    let counts = &counts.record_counts;
-                    for (kind, count) in [
-                        ("user_message", counts.user_message),
-                        ("assistant_message", counts.assistant_message),
-                        ("tool_call", counts.tool_call),
-                        ("tool_result", counts.tool_result),
-                        ("session_meta", counts.session_meta),
-                        ("other", counts.other),
-                    ] {
-                        accounting.parsed_record_count = accounting
-                            .parsed_record_count
-                            .checked_add(count)
-                            .ok_or(RiskAccountingError::Overflow)?;
-                        let total = accounting
-                            .record_kind_counts
-                            .get_mut(kind)
-                            .expect("record kind accounting key");
-                        *total = total
-                            .checked_add(count)
-                            .ok_or(RiskAccountingError::Overflow)?;
-                    }
-                }
-                if accounting.parsed_record_count == prior_record_count {
-                    accounting.empty_source_count += 1;
+        accounting.evaluated_window_count += result.accounting.len();
+        if result.accounting.is_empty() {
+            accounting.parse_error_source_count += 1;
+            continue;
+        }
+        // A drained source is one source however many windows it took; any
+        // partial window makes its coverage partial.
+        if result
+            .accounting
+            .iter()
+            .all(|source| matches!(source.coverage, AccountingCoverage::CompleteSource))
+        {
+            accounting.accounting_complete_source_count += 1;
+        } else {
+            accounting.accounting_partial_source_count += 1;
+        }
+        accounting.parse_success_source_count += 1;
+        let prior_record_count = accounting.parsed_record_count;
+        for source in &result.accounting {
+            for counts in source
+                .sessions
+                .iter()
+                .map(|session| &session.counts)
+                .chain(std::iter::once(&source.unscoped))
+            {
+                let counts = &counts.record_counts;
+                for (kind, count) in [
+                    ("user_message", counts.user_message),
+                    ("assistant_message", counts.assistant_message),
+                    ("tool_call", counts.tool_call),
+                    ("tool_result", counts.tool_result),
+                    ("session_meta", counts.session_meta),
+                    ("other", counts.other),
+                ] {
+                    accounting.parsed_record_count = accounting
+                        .parsed_record_count
+                        .checked_add(count)
+                        .ok_or(RiskAccountingError::Overflow)?;
+                    let total = accounting
+                        .record_kind_counts
+                        .get_mut(kind)
+                        .expect("record kind accounting key");
+                    *total = total
+                        .checked_add(count)
+                        .ok_or(RiskAccountingError::Overflow)?;
                 }
             }
-            None => accounting.parse_error_source_count += 1,
+        }
+        if accounting.parsed_record_count == prior_record_count {
+            accounting.empty_source_count += 1;
         }
     }
 
@@ -1354,6 +1380,7 @@ impl SourceProcessingAccounting {
             "selected_source_coverage": self.selected_source_coverage(),
             "failures": failures,
             "incomplete_window_source_count": self.incomplete_window_source_count,
+            "evaluated_window_count": self.evaluated_window_count,
             "quarantined_unit_count": self.quarantined_unit_count,
             "quarantined_units": self.quarantined_units,
         })
@@ -1802,6 +1829,7 @@ mod tests {
         let runtime = serde_json::json!({});
         let effective_configuration = serde_json::json!({});
         let config = ScanConfig {
+            history: false,
             execution: ScanExecutionConfig {
                 root: &root,
                 log_path: &log_path,
@@ -1979,7 +2007,7 @@ mod tests {
             progress: AcquisitionProgress::None,
             completion: None,
             failure: None,
-            accounting,
+            accounting: accounting.into_iter().collect(),
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,
             quarantined: Vec::new(),

@@ -33,6 +33,13 @@ pub struct SourceResult {
     pub policy_accounting: Option<Result<PolicyMatchAccounting, PolicyMatchAccountingError>>,
     /// Native units excluded for exceeding a size bound; the rest were evaluated.
     pub quarantined: Vec<QuarantinedUnit>,
+    /// The OpenCode v2 window budget this result fit in, when the read set
+    /// one or evaluation had to shrink it; a caller draining further windows
+    /// starts from it.
+    pub window_bytes: Option<usize>,
+    /// Where a next OpenCode v2 window may start re-reading this cut window;
+    /// see [`AcquisitionBatch::message_overlap_from`].
+    pub message_overlap_from: Option<i64>,
 }
 
 /// Content-free `scanner_error` marking a source that was evaluated without
@@ -196,6 +203,8 @@ fn process_source_inner(
                 .map(telltale_schema::observation::CanonicalObservationV2::retained_byte_len)
                 .fold(0usize, usize::saturating_add)
         });
+        // The rows of this window, should even its smallest size not fit.
+        let units = window.map(|_| window_units(&batch.observations));
         let work = EvaluationWorkBudget::default();
         let capacity = std::cell::Cell::new(false);
         match finish_batch_with_work(
@@ -221,10 +230,78 @@ fn process_source_inner(
                     ..bounds
                 });
             }
-            result => return result,
+            // The smallest window still exceeds evaluation work or projection
+            // capacity: quarantine its rows by coordinates, like rows over a
+            // size bound, so one row cannot stop a forensic drain. The same
+            // selection is re-read and evaluated without them.
+            Err(failure)
+                if matches!(
+                    failure.stage,
+                    FailureStage::Evaluation | FailureStage::Projection
+                ) && (work.is_exhausted() || capacity.get())
+                    && let Some(bounds) = sqlite
+                    && let Some(units) = units =>
+            {
+                let mut batch = acquire_opencode_sqlite(
+                    &resolved,
+                    AcquisitionOptions::new(observed_at.clone()),
+                    bounds,
+                )
+                .map_err(|error| SourceFailure {
+                    stage: FailureStage::Acquisition,
+                    progress: AcquisitionProgress::None,
+                    acquisition: Some(error),
+                })?;
+                batch.observations.clear();
+                batch.quarantined.extend(units);
+                return finish_batch_with_work(
+                    source,
+                    &instance,
+                    batch,
+                    context,
+                    detailed,
+                    &EvaluationWorkBudget::default(),
+                    &std::cell::Cell::new(false),
+                )
+                .map(|mut result| {
+                    result.window_bytes = bounds.message_window_bytes;
+                    result
+                });
+            }
+            result => {
+                return result.map(|mut result| {
+                    result.window_bytes = sqlite.and_then(|bounds| bounds.message_window_bytes);
+                    result
+                });
+            }
         }
     }
 }
+
+/// Coordinates of each native unit with observations in a window.
+fn window_units(
+    observations: &[telltale_schema::observation::CanonicalObservationV2],
+) -> Vec<QuarantinedUnit> {
+    let mut seen = std::collections::BTreeSet::new();
+    observations
+        .iter()
+        .filter_map(|observation| {
+            let source = observation.source();
+            let native_id = source.native_id()?;
+            seen.insert(native_id).then(|| QuarantinedUnit {
+                session_id: observation.session_id().map(|id| id.value().to_owned()),
+                native_id: native_id.to_owned(),
+                source_sequence: source.source_sequence().unwrap_or_default(),
+                code: EVALUATION_CAPACITY_EXCEEDED,
+                bound: None,
+            })
+        })
+        .collect()
+}
+
+/// Quarantine code for rows whose smallest window still exceeds evaluation
+/// work or retained projection capacity.
+pub const EVALUATION_CAPACITY_EXCEEDED: &str = "evaluation_capacity_exceeded";
 
 /// Source-atomic composition after acquisition by this module.
 #[cfg(test)]
@@ -399,6 +476,8 @@ fn finish_batch_with_work(
         baseline_replacement: activity.replacement,
         policy_accounting,
         quarantined: batch.quarantined,
+        window_bytes: None,
+        message_overlap_from: batch.message_overlap_from,
     })
 }
 

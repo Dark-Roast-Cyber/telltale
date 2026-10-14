@@ -51,24 +51,59 @@ copying the database, vacuuming and in-place updates. Selection uses the
 `time_updated` column, which OpenCode refreshes on every in-place update without
 changing `seq`. Bootstrap takes the newest 5,000 messages; incremental reads take
 up to 25,000 from the prior message high-water minus ten minutes, with the same
-keyset pages, exhaustion check and regression check as parts. A v2 selection is
-evaluated as one **rolling window**:
-- the window ends on a message boundary when it reaches the row limit or the
-  8 MiB retained-semantics budget;
-- the cursor moves to the last evaluated message, and
-  `source_processing.incomplete_window_source_count` reports the cut;
-- a cut window never splits rows that share one `time_updated`, so the next
-  scan continues strictly after it without the overlap, and repeated scans
-  drain any backlog. The CLI cursor carries a `draining` flag, and embedding
-  tokens use `session_message_drain:`. The ten-minute overlap returns once a
-  window completes, so each later window again reaches back past its
-  checkpoint;
+keyset pages, exhaustion check and regression check as parts. An incremental
+read stops early once the stored payloads it took reach twice the window budget,
+so a large backlog is read a window at a time. A v2 selection is evaluated in
+**rolling windows**:
+- a window ends on a message boundary when it reaches the row limit or the
+  8 MiB retained-semantics budget, and never splits rows that share one
+  `time_updated`;
+- one scan drains a cut selection window after window, up to 64 windows. Each
+  next window re-reads the tail of the last one (at most half of it, and at
+  most one hour before its high-water), so a correlation that straddles the cut
+  is still evaluated whole. Detections found again in that tail are
+  deduplicated like those of the routine overlap; when the tail alone would
+  fill a window, the next one starts strictly after the high-water;
 - if bundled rules exhaust the evaluation work budget on a window, or its
   detections exceed the retained projection capacity (4,096 items, 4 MiB), the
-  scan re-reads a window at half its size until it fits. Each scan rediscovers
-  that size, so a detection-dense backlog drains in many short windows;
+  scan re-reads a window at half its size until it fits. Later windows of that
+  scan keep the size that fit, and it doubles again after four windows fit.
+  Rows whose smallest window still does not fit are quarantined as
+  `evaluation_capacity_exceeded`, so one dense row cannot stop a drain;
+- `source_processing.evaluated_window_count` counts the windows. A source
+  still cut after 64 windows is counted in `incomplete_window_source_count`;
+  its cursor carries a `draining` flag and the next scan continues strictly
+  after it. Embedding scans evaluate one window per call, with
+  `session_message_drain:` tokens. The ten-minute overlap returns once a
+  window completes;
 - only one timestamp holding more rows than a whole window fails, as
   `LimitExceeded`.
+
+Rows that cannot be mapped within a size bound are quarantined by coordinates,
+never by content, while the rest is evaluated: a row over the 64 KB text
+budgets, a request input over a contribution bound, a requested tool name the
+canonical body cannot hold (`invalid_body`), a stored payload over
+the 8 MiB read cell limit (`oversized_native_cell`), which is never loaded,
+and rows that exceed evaluation capacity even alone
+(`evaluation_capacity_exceeded`).
+Shell commands, including user `!` commands, keep the 64 KB direct-text budget;
+the `command.text` copy of a command counts once toward an observation's 64 KB
+total.
+
+**History scans.** A first scan samples only the newest 5,000 messages. For a
+forensic pass over everything a v2 store still holds, run:
+
+```sh
+telltale scan --once --history all --client opencode --log-path ./history.jsonl
+```
+
+It reads from the earliest message in overlapping windows without the
+64-window limit, prints `history: N windows evaluated` to stderr every 50
+windows, deduplicates detections within the run, and never reads,
+locks or writes scan state, so it can run beside a routine scanner and
+repeating it reports again. The stdout summary carries `"history": "all"` with
+the usual window, quarantine and failure counts. Legacy `part` stores keep
+their newest-5,000 bootstrap.
 
 Events are evaluated in session `seq` order. Known gaps: forked
 sessions copy history with the parent's older `time_updated`, reverts delete

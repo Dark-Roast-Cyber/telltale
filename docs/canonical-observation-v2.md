@@ -138,7 +138,10 @@ Schema also caps the sum of encoded semantic body-field and facet **values** at
 objects, and content-part kind/value wrappers; it excludes semantic path/facet
 labels, fact metadata, identity/provenance envelopes, and local evidence (which
 retain their independent bounds). A raw string at the text maximum can therefore
-fail aggregate validation. Recursive part validation precedes the structured
+fail aggregate validation. One exception: a `command.text` facet that repeats a
+tool's authored command exactly (its `command` argument for `shell` or `bash`,
+or `shell` arguments that are the command string) counts once toward the
+aggregate, while retained bytes count both copies. Recursive part validation precedes the structured
 partition's encoded limit; observation aggregate validation follows all field
 and facet validation. Aggregate size uses canonical JSON number spelling, while
 ordinary/local finite-float validation retains its legacy `to_string` sizing.

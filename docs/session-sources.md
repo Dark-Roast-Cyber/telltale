@@ -142,9 +142,12 @@ OpenCode adapter notes:
 
 This section describes legacy `message`/`part` stores. OpenCode v2
 (`session_message`) stores evaluate rolling windows instead: a selection over
-the row limit or the 8 MiB retained budget is cut, the cursor advances, and
-later scans drain the backlog. Only a window that cannot pass its resume point
-fails. See [OpenCode live ingestion](opencode-live-ingestion.md).
+the row limit or the 8 MiB retained budget is drained in overlapping windows
+within one scan (up to 64), and later scans continue any remainder. Only a
+window that cannot pass its resume point fails. For a forensic pass over a
+whole v2 store, use `telltale scan --once --history all --log-path <file>`,
+which reads from the earliest message and never touches scan state. See
+[OpenCode live ingestion](opencode-live-ingestion.md).
 
 Current development supports source-atomic recovery of an incremental selection
 up to 25,000 text/tool parts. Queries return at most 5,000 parts per page from
