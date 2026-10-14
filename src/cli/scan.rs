@@ -408,8 +408,9 @@ fn run_scan_for_platform(
     let scan_duration_ms = scan_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     // Targeted scans see only a slice of the source inventory; comparing that
     // slice against prior observations would misreport every unscanned source
-    // as removed, so inventory-change tracking is left to full scans.
-    let source_inventory_change = if targeted {
+    // as removed, so inventory-change tracking is left to full scans. A
+    // history scan has no prior state and would report a baseline every run.
+    let source_inventory_change = if targeted || config.history {
         None
     } else {
         Some(state.source_inventory_change_summary(&sources))

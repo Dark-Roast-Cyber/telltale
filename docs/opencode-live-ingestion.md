@@ -380,6 +380,8 @@ draining in place, a read-only validation with aggregate evidence only drained
 the newest 5,000 messages in 2 scans in about 30 seconds (previously 31 scans
 and about 9.5 minutes). A `--history all` pass over the whole store evaluated
 1,627 windows and 996,406 records (re-reads included) in about 13 minutes with
-no source failure, quarantined 292 rows by coordinates, and emitted 16,758
-objects that all validated against Event 3.0. Correlations straddling a window
+no source failure, reported 292 quarantined units by coordinates, and emitted
+16,758 objects that all validated against Event 3.0. That build reported a
+quarantined row again when an overlapping window re-read it, so 292 is an
+upper bound on distinct quarantined rows; such a row is now reported once. Correlations straddling a window
 cut are covered by synthetic tests only. The limits listed above still apply.

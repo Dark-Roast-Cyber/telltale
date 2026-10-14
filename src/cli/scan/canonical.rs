@@ -210,6 +210,13 @@ pub(super) fn process_canonical_source(
             .as_ref()
             .ok()
             .and_then(|result| result.message_overlap_from);
+        // A quarantined row in the re-read tail is quarantined again; it is
+        // still one excluded unit and needs no second scanner error.
+        let next = next.map(|mut next| {
+            next.quarantined
+                .retain(|unit| !result.quarantined.iter().any(|(_, seen)| seen == unit));
+            next
+        });
         let next = adapt_result(source, next);
         result.events.extend(next.events);
         result.quarantined.extend(next.quarantined);

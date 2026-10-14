@@ -860,6 +860,21 @@ fn opencode_v2_history_reads_the_whole_store_without_scan_state() {
             assert!(event_schema_validator().is_valid(event), "{event}");
         }
         assert_eq!(detections(&events, "synthetic.v2.command"), pass);
+        // Without prior state an inventory comparison would report a fresh
+        // baseline on every pass, so a history scan reports none.
+        for health in events
+            .iter()
+            .filter(|event| event["event_type"] == "health")
+        {
+            assert!(
+                health["evidence"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|evidence| evidence["field"] != "source_inventory_change"),
+                "{health}"
+            );
+        }
         // Routine state is neither read nor written.
         assert_eq!(fs::read(&harness.state).unwrap(), routine_state);
     }
@@ -1052,4 +1067,60 @@ fn opencode_v2_correlation_straddling_a_window_cut_is_detected_once() {
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(correlations(&events), 1);
+}
+
+/// A quarantined row in the re-read tail of a cut window is quarantined again
+/// by the next window, but it is still one excluded unit.
+#[test]
+fn opencode_v2_quarantined_row_in_a_reread_tail_is_reported_once() {
+    let harness = Harness::new();
+    let writer = Connection::open(&harness.database).unwrap();
+    writer.execute_batch(SESSION_SCHEMA).unwrap();
+    session(&writer, "ses_tail");
+    // The same two-window layout as the straddling correlation above, with
+    // the oversized row inside window 1's re-read tail.
+    let patch = format!("*** Begin Patch\n{}", "+line\n".repeat(7_000));
+    let padded = format!("printf {}", "x ".repeat(100_000));
+    let rows = 96;
+    for seq in 1..=rows {
+        let mut tool = bash(
+            &format!("call_{seq}"),
+            if seq == 81 { &padded } else { "true" },
+            serde_json::json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        );
+        if seq != 81 {
+            tool["name"] = serde_json::json!("patch");
+            tool["state"]["input"] = serde_json::json!({"patchText": patch});
+        }
+        message(
+            &writer,
+            &format!("msg_{seq:03}"),
+            "ses_tail",
+            seq,
+            T0 + seq * 1_000,
+            assistant(tool),
+        );
+    }
+    drop(writer);
+    let reported_once = |summary: &Value| {
+        let processing = &summary["source_processing"];
+        assert_eq!(processing["evaluated_window_count"], 2, "{processing}");
+        assert_eq!(processing["quarantined_unit_count"], 1, "{processing}");
+        assert_eq!(
+            processing["quarantined_units"].as_array().unwrap().len(),
+            1,
+            "{processing}"
+        );
+        assert_eq!(processing["quarantined_units"][0]["native_id"], "msg_081");
+    };
+
+    reported_once(&harness.successful());
+    let log = harness.temp.path().join("history.jsonl");
+    let result = harness.history(&log);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    reported_once(&serde_json::from_slice(&result.stdout).unwrap());
 }

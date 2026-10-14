@@ -230,8 +230,10 @@ otherwise ambiguous zero-detection result without exposing session content:
   `incomplete_window_source_count` counts sources whose last evaluated window
   was still cut when the scan stopped draining; the next scan continues the
   backlog. A `--history all` scan adds `"history": "all"`.
-  `quarantined_unit_count` counts native units excluded for exceeding a size
-  bound, and `quarantined_units` lists up to 1,000 of them as `{source,
+  `quarantined_unit_count` counts native units excluded for an oversized or
+  invalid value or for exceeding evaluation capacity, once each even when an
+  overlapping window re-reads them, and `quarantined_units` lists up to 1,000
+  of them as `{source,
   session_id, native_id, source_sequence, code, bound_category,
   bound_dimension}`, where `code` is `unbounded_value`,
   `invalid_native_contribution`, `invalid_body` (a value the canonical body

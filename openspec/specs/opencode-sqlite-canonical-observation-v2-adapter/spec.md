@@ -806,7 +806,8 @@ size MUST double again after four consecutive windows fit it. Events of
 every window are released together with the final position; a later window
 that fails keeps the earlier windows and their position, and is reported.
 Repeated detections from re-read rows are deduplicated like those of the
-routine overlap, and re-read rows count again in summary record counts. After
+routine overlap, and re-read rows count again in summary record counts, but
+a quarantined row that is re-read MUST be reported once. After
 the window limit, the next scan MUST continue strictly after the high-water.
 The ten-minute overlap MUST resume once a window completes. The CLI cursor
 records a drain as an optional `draining` flag, and embedding tokens use the
@@ -871,8 +872,8 @@ windows without a window limit. It MUST require `--once` and an explicit
 `--log-path`, and MUST NOT be combined with `--backfill`,
 `--rebuild-baselines` or `--interval-seconds`. It MUST neither read, lock nor
 write scan state: detections are deduplicated within the run only, so
-repeating it reports again. It MUST skip install inventory and baseline
-replacement, and the stdout summary MUST carry `"history": "all"`. Legacy
+repeating it reports again. It MUST skip install inventory, source
+inventory-change reporting and baseline replacement, and the stdout summary MUST carry `"history": "all"`. Legacy
 `part` stores keep their bootstrap selection.
 
 #### Scenario: History reaches messages a first scan skips
