@@ -35,7 +35,11 @@ Start with focused checks; `make check-fast` is the local engineering slice and
 Event 3.0, provenance, local-event-feed, embedding, installation, or platform gates
 when that contract changes. Required CI/release checks still apply.
 
-Use synthetic fixtures and temporary state, not personal agent databases,
-credentials, or a live scanner/service. Preserve unrelated working changes.
-A local pass does not qualify Windows, packaged artifacts, remote CI, or release
-identity. Report the actual tested revision, checks, and missing gates.
+Prefer synthetic fixtures and temporary state. Never use personal agent
+stores or real credentials as test data, or activate a live scanner/service
+merely for convenience. Exercise approved, bounded real platform, service,
+installation, and recovery checks when acceptance requires them. Preserve
+unrelated working changes.
+`make ci-local` validates normalized packages and package consumers, but does
+not qualify Windows/macOS, published/native release artifacts, remote CI, or
+release identity. Report the tested revision, checks, and missing gates.
