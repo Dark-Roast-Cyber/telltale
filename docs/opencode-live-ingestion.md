@@ -51,8 +51,26 @@ copying the database, vacuuming and in-place updates. Selection uses the
 `time_updated` column, which OpenCode refreshes on every in-place update without
 changing `seq`. Bootstrap takes the newest 5,000 messages; incremental reads take
 up to 25,000 from the prior message high-water minus ten minutes, with the same
-keyset pages, exhaustion check, regression check and failure atomicity as
-parts. Events are evaluated in session `seq` order. Known gaps: forked
+keyset pages, exhaustion check and regression check as parts. A v2 selection is
+evaluated as one **rolling window**:
+- the window ends on a message boundary when it reaches the row limit or the
+  8 MiB retained-semantics budget;
+- the cursor moves to the last evaluated message, and
+  `source_processing.incomplete_window_source_count` reports the cut;
+- a cut window never splits rows that share one `time_updated`, so the next
+  scan continues strictly after it without the overlap, and repeated scans
+  drain any backlog. The CLI cursor carries a `draining` flag, and embedding
+  tokens use `session_message_drain:`. The ten-minute overlap returns once a
+  window completes, so each later window again reaches back past its
+  checkpoint;
+- if bundled rules exhaust the evaluation work budget on a window, or its
+  detections exceed the retained projection capacity (4,096 items, 4 MiB), the
+  scan re-reads a window at half its size until it fits. Each scan rediscovers
+  that size, so a detection-dense backlog drains in many short windows;
+- only one timestamp holding more rows than a whole window fails, as
+  `LimitExceeded`.
+
+Events are evaluated in session `seq` order. Known gaps: forked
 sessions copy history with the parent's older `time_updated`, reverts delete
 rows, and a clock rollback can hide updates outside the overlap.
 
@@ -74,6 +92,32 @@ defines this as full authored patch text. The exception requires the exact tool
 and field name and a string value. Nested lookalikes, other tools and other
 arguments do not qualify. The object with `patchText` replaced by null must still
 fit ordinary structured bounds. No patch parser or execution claim is introduced.
+
+OpenCode v2 stores get the same 65,536-byte budget for these exact argument
+fields: `shell`/`bash` `command`, `patch`/`apply_patch` `patchText`, `write`
+`content`, `edit` `oldString`/`newString`, `execute` `code` and
+`subagent`/`task` `prompt`. A `shell` or `bash` command's `command.text` carries
+the whole command, so a rule can match text at its end. For v2 results:
+- all-text results are joined into one text;
+- error results are their message text, with the reported error type kept as
+  `tool.error_type`;
+- `data:` file URIs keep only their media type, with the dropped length as
+  `tool.result.omitted_bytes`.
+
+v2 `read`, `write` and `edit` paths become `resource.path`. A command duplicated
+in arguments and `command.text` fits up to roughly 32 KB within the
+per-observation aggregate.
+
+A v2 row whose own values still exceed a bound is **quarantined**, not fatal:
+- it emits nothing and contributes nothing;
+- it is listed by session, message ID, `seq` and bound code (never content) in
+  the scan summary's `source_processing.quarantined_units`;
+- it marks the source with one degraded `scanner_error`;
+- the rest of the selection is evaluated, and the cursor moves past it.
+
+Malformed or unknown rows, identity failures and aggregate caps still fail the
+source. Padding a payload past the limits therefore produces a located finding
+instead of blinding the scan.
 
 Both fields remain subject to the unchanged **65,536 encoded semantic bytes per
 observation**, including other facts and facets. JSON quotes, escaping and NFC

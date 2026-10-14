@@ -9,7 +9,9 @@ use crate::source_read::SourceReadError;
 use std::fmt;
 
 use telltale_schema::clients::{ClientId, SourceKind};
-use telltale_schema::observation::{CanonicalBoundContext, CanonicalObservationV2, ObservedAt};
+use telltale_schema::observation::{
+    CanonicalBoundContext, CanonicalObservationV2, MAX_CANONICAL_RETAINED_BYTES, ObservedAt,
+};
 use telltale_schema::record::RecordKind;
 use telltale_schema::source::Source;
 
@@ -36,7 +38,7 @@ use crate::sources::opencode::canonical::{
 #[cfg(feature = "opencode-sqlite")]
 use crate::sources::opencode::native::{OpenCodeNativeExtraction, extract_opencode_native_source};
 #[cfg(feature = "opencode-sqlite")]
-use crate::sources::opencode::session_message_canonical::project_opencode_session_messages;
+use crate::sources::opencode::session_message_canonical::{RowProjection, SessionMessageProjector};
 use crate::sources::qwen::canonical::{
     QwenCanonicalError, QwenCanonicalOptions, project_qwen_native_records,
 };
@@ -61,6 +63,23 @@ pub struct AcquisitionBatch {
     pub observations: Vec<CanonicalObservationV2>,
     pub progress: AcquisitionProgress,
     pub accounting: SourceAccounting,
+    /// Native units excluded because their own values exceed a size bound.
+    /// Every other unit was still mapped; progress still covers these units.
+    pub quarantined: Vec<QuarantinedUnit>,
+}
+
+/// Where a quarantined native unit is, and which bound it exceeded. It
+/// carries coordinates only, never source content.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuarantinedUnit {
+    pub session_id: Option<String>,
+    pub native_id: String,
+    pub source_sequence: u64,
+    /// `unbounded_value` (a canonical value bound) or
+    /// `invalid_native_contribution` (a request-input contribution bound).
+    pub code: &'static str,
+    /// The canonical field category and dimension, when the bound reports one.
+    pub bound: Option<CanonicalBoundContext>,
 }
 
 /// One source projection owns this collector; capacity is checked before each
@@ -114,10 +133,13 @@ pub enum AcquisitionProgress {
     OpenCodeSqlite {
         part_max_time_updated: Option<i64>,
     },
-    /// OpenCode v2 `session_v2`/`session_message` store: selected message
-    /// `time_updated` high-water.
+    /// OpenCode v2 `session_v2`/`session_message` store: the `time_updated`
+    /// high-water of the evaluated window. `window_complete` is false when the
+    /// row limit or retained budget cut the selection; resuming from the
+    /// high-water (minus the overlap) continues the backlog.
     OpenCodeSessionMessages {
         message_max_time_updated: Option<i64>,
+        window_complete: bool,
     },
 }
 
@@ -145,6 +167,10 @@ pub struct OpenCodeSqliteReadOptions {
     pub message_limit: i64,
     /// The `session_message` counterpart of [`Self::resume_high_water`].
     pub message_resume_high_water: Option<i64>,
+    /// Retained-semantics budget for one OpenCode v2 window, at most the
+    /// source-wide budget; `None` uses the source-wide budget. Callers lower
+    /// it when evaluating a full window would exceed their work budget.
+    pub message_window_bytes: Option<usize>,
 }
 
 impl OpenCodeSqliteReadOptions {
@@ -167,6 +193,19 @@ impl OpenCodeSqliteReadOptions {
     /// `time_updated` high-water, with the same overlap, incremental row limit
     /// and regression check as the legacy part cursor. Legacy controls are
     /// unchanged, so one options value can carry both cursors.
+    /// Continue a cut OpenCode v2 window strictly after its high-water,
+    /// without the overlap, so a backlog drains even when one window cannot
+    /// hold the overlap. Resume with [`Self::resume_session_messages_after`]
+    /// once a window reports itself complete.
+    pub fn continue_session_messages_after(self, high_water: i64) -> Self {
+        Self {
+            message_min_time_updated: Some(high_water.saturating_add(1)),
+            message_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
+            message_resume_high_water: Some(high_water),
+            ..self
+        }
+    }
+
     pub fn resume_session_messages_after(self, high_water: i64) -> Self {
         Self {
             message_min_time_updated: Some(
@@ -188,6 +227,7 @@ impl Default for OpenCodeSqliteReadOptions {
             message_min_time_updated: None,
             message_limit: SQLITE_PART_LIMIT,
             message_resume_high_water: None,
+            message_window_bytes: None,
         }
     }
 }
@@ -508,6 +548,7 @@ fn acquire_source_impl(
         observations,
         progress: AcquisitionProgress::None,
         accounting: accounting.finish(AccountingCoverage::CompleteSource),
+        quarantined: Vec::new(),
     })
 }
 
@@ -556,6 +597,7 @@ pub fn acquire_opencode_sqlite(
                 _ => AcquisitionError::SourceRead,
             })?;
         let mut accounting = AccountingBuilder::default();
+        let mut quarantined = Vec::new();
         let (observations, progress) = match extraction {
             OpenCodeNativeExtraction::Legacy(extraction) => {
                 for record in &extraction.records {
@@ -579,30 +621,141 @@ pub fn acquire_opencode_sqlite(
                 )
             }
             OpenCodeNativeExtraction::SessionMessages(extraction) => {
+                // Map rows in update order and end the window on the row
+                // boundary where retained semantics would exceed the
+                // source-wide budget. Later rows roll to the next window.
+                let window_bytes = read
+                    .message_window_bytes
+                    .map_or(MAX_CANONICAL_RETAINED_BYTES, |bytes| {
+                        bytes.min(MAX_CANONICAL_RETAINED_BYTES)
+                    });
+                let mut projector = SessionMessageProjector::new(&options.observed_at);
+                let mut window = Vec::new();
+                let mut retained = 0usize;
+                let mut cut = false;
                 for record in &extraction.records {
+                    let tools = record.tool_accounting();
+                    let mut outcome = match projector.row(record).map_err(map_canonical_error)? {
+                        RowProjection::Mapped(observations) => {
+                            // Check this row's request input alone before any
+                            // shared accounting changes, so a rejected token
+                            // quarantines the row instead of half-counting it.
+                            let mut keys = 0;
+                            match tools.iter().try_for_each(|tool| {
+                                ActivityContributions::default().observe(
+                                    tool.name,
+                                    None,
+                                    tool.contribution_strings.iter().map(String::as_str),
+                                    &mut keys,
+                                )
+                            }) {
+                                Ok(()) => Ok(observations),
+                                Err(AcquisitionError::InvalidContribution) => {
+                                    Err(("invalid_native_contribution", None))
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        }
+                        RowProjection::Quarantined(error) => {
+                            Err((error.code(), error.bound_context()))
+                        }
+                    };
+                    if let Ok(observations) = &outcome {
+                        let bytes = observations
+                            .iter()
+                            .map(CanonicalObservationV2::retained_byte_len)
+                            .fold(0usize, usize::saturating_add);
+                        if retained.saturating_add(bytes) > window_bytes {
+                            if !window.is_empty() {
+                                cut = true;
+                                break;
+                            }
+                            if bytes > MAX_CANONICAL_RETAINED_BYTES {
+                                // A single row larger than any window.
+                                outcome = Err(("unbounded_value", None));
+                            } else {
+                                // The first row always fits a reduced window.
+                                retained += bytes;
+                            }
+                        } else {
+                            retained += bytes;
+                        }
+                    }
+                    window.push((record, tools, outcome));
+                }
+                let window_complete = !cut && !extraction.truncated;
+                // The first row this window left out.
+                let next = if cut {
+                    extraction
+                        .records
+                        .get(window.len())
+                        .map(|record| record.time_updated)
+                } else {
+                    extraction.next_time_updated
+                };
+                let last = window.last().map(|(record, ..)| record.time_updated);
+                if !window_complete && next.is_none_or(|next| Some(next) == last) {
+                    // A cut window ends on a whole `time_updated` group, so
+                    // continuing strictly after its high-water skips nothing.
+                    while window.len() > 1
+                        && window.last().map(|(record, ..)| record.time_updated) == last
+                    {
+                        window.pop();
+                    }
+                    if window.last().map(|(record, ..)| record.time_updated) == last {
+                        // One timestamp holds more rows than a whole window.
+                        return Err(AcquisitionError::BoundedSourceRead(
+                            BoundedReadError::LimitExceeded,
+                        ));
+                    }
+                }
+                let high_water = window.last().map(|(record, ..)| record.time_updated);
+                // Evaluation and accounting follow source order.
+                window.sort_by(|(left, ..), (right, ..)| {
+                    (left.session_id.as_deref(), left.seq)
+                        .cmp(&(right.session_id.as_deref(), right.seq))
+                });
+                let mut collector = CanonicalCollector::default();
+                for (record, tools, outcome) in window {
                     let session = record.session_id.as_deref();
                     accounting.record(session, &record.attestation, &record.accounting_kinds())?;
-                    for tool in record.tool_accounting() {
-                        accounting.tool_usage(
-                            session,
-                            RecordKind::ToolCall,
-                            tool.name,
-                            tool.timestamp,
-                        )?;
-                        accounting.contribute(
-                            session,
-                            RecordKind::ToolCall,
-                            tool.name,
-                            None,
-                            tool.contribution_strings.iter().map(String::as_str),
-                        )?;
+                    match outcome {
+                        Ok(observations) => {
+                            for tool in &tools {
+                                accounting.tool_usage(
+                                    session,
+                                    RecordKind::ToolCall,
+                                    tool.name,
+                                    tool.timestamp,
+                                )?;
+                                accounting.contribute(
+                                    session,
+                                    RecordKind::ToolCall,
+                                    tool.name,
+                                    None,
+                                    tool.contribution_strings.iter().map(String::as_str),
+                                )?;
+                            }
+                            for observation in observations {
+                                collector
+                                    .push(observation)
+                                    .map_err(|error| map_canonical_error(error.into()))?;
+                            }
+                        }
+                        Err((code, bound)) => quarantined.push(QuarantinedUnit {
+                            session_id: record.session_id.clone(),
+                            native_id: record.source_id.clone().unwrap_or_default(),
+                            source_sequence: record.seq,
+                            code,
+                            bound,
+                        }),
                     }
                 }
                 (
-                    project_opencode_session_messages(&extraction.records, &options.observed_at)
-                        .map_err(map_canonical_error)?,
+                    collector.finish(),
                     AcquisitionProgress::OpenCodeSessionMessages {
-                        message_max_time_updated: extraction.message_max_time_updated,
+                        message_max_time_updated: high_water,
+                        window_complete,
                     },
                 )
             }
@@ -611,6 +764,7 @@ pub fn acquire_opencode_sqlite(
         Ok(AcquisitionBatch {
             observations,
             progress,
+            quarantined,
             // A coherent selected snapshot is still not whole-database
             // replacement coverage, even without a lower bound.
             accounting: accounting.finish(AccountingCoverage::PartialSource),

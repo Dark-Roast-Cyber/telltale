@@ -87,7 +87,7 @@ Source: `opencode.sqlite`.
 | Capability | Status | Notes |
 | --- | --- | --- |
 | User and assistant messages | Full | Legacy message and part data, or OpenCode v2 `session_message` user text and assistant text entries. Reasoning is not retained. |
-| Tool calls and results | Full | Legacy tool parts keep their direct lifecycle. v2 tool entries emit a request and, when terminal, a returned result. |
+| Tool calls and results | Full | Legacy tool parts keep their direct lifecycle. v2 tool entries emit a request and, when terminal, a returned result; long authored text (commands, patches, file bodies, prompts) keeps a 64 KB budget, and v2 file tools report their `path`. Rows still over a bound are quarantined and reported by coordinates. |
 | Model, provider, agent | Full | Preserved from source JSON and, for v2, the session row. |
 | Workspace | Partial | Preserved only when the SQLite row reports it. |
 | Timestamp and session ID | Full | SQLite rows provide source timing and session context. |

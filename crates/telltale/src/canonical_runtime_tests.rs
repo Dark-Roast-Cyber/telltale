@@ -23,6 +23,7 @@ fn pre_policy_compatibility_retention_failure_remains_diagnostic_only() {
         &source,
         &CorrelationId::source_reported("instance").unwrap(),
         AcquisitionBatch {
+            quarantined: Vec::new(),
             observations,
             progress: AcquisitionProgress::None,
             accounting: SourceAccounting::default(),
@@ -70,6 +71,7 @@ fn pre_policy_true_shared_work_exhaustion_discards_authoritative_success() {
         &source,
         &CorrelationId::source_reported("instance").unwrap(),
         AcquisitionBatch {
+            quarantined: Vec::new(),
             observations,
             progress: AcquisitionProgress::None,
             accounting: SourceAccounting::default(),
@@ -354,6 +356,7 @@ modifiers:
         &source,
         &instance,
         AcquisitionBatch {
+            quarantined: Vec::new(),
             observations,
             progress: AcquisitionProgress::None,
             accounting,
@@ -425,6 +428,7 @@ fn mcp_projection_is_atomic_with_late_activity_failure() {
         &source,
         &CorrelationId::new("instance", CorrelationOrigin::TelltaleOriginated).unwrap(),
         AcquisitionBatch {
+            quarantined: Vec::new(),
             observations: vec![message("one", Some("s"))],
             progress: AcquisitionProgress::None,
             accounting,
@@ -467,6 +471,7 @@ fn activity_failure_discards_successful_source_output() {
         &source,
         &CorrelationId::source_reported("instance").unwrap(),
         AcquisitionBatch {
+            quarantined: Vec::new(),
             observations: vec![message("one", Some("s"))],
             progress: AcquisitionProgress::OpenCodeSqlite {
                 part_max_time_updated: Some(42),
@@ -539,6 +544,7 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
             &source,
             &instance,
             AcquisitionBatch {
+                quarantined: Vec::new(),
                 accounting: SourceAccounting::default(),
                 observations,
                 progress,
@@ -566,6 +572,7 @@ fn evaluation_and_projection_failures_discard_successful_source_output() {
         &wrong_source,
         &instance,
         AcquisitionBatch {
+            quarantined: Vec::new(),
             accounting: SourceAccounting::default(),
             observations: vec![message("one", Some("same-session"))],
             progress,
@@ -594,6 +601,7 @@ fn metadata_origin_must_match_not_just_visible_session_id() {
         &source,
         &instance,
         AcquisitionBatch {
+            quarantined: Vec::new(),
             observations: vec![message("one", Some("s"))],
             progress: AcquisitionProgress::None,
             accounting: SourceAccounting {

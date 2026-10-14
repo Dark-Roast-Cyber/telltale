@@ -74,9 +74,13 @@ fn require_columns(
 
 #[derive(Debug)]
 pub(crate) struct OpenCodeSessionMessageExtraction {
-    /// Ordered by source session and `seq`, not by selection order.
+    /// Ascending by `(time_updated, rowid)`: the order windows are cut in.
+    /// Evaluation reorders admitted rows by source session and `seq`.
     pub(crate) records: Vec<OpenCodeSessionMessageRecord>,
-    pub(crate) message_max_time_updated: Option<i64>,
+    /// More rows matched than the row limit selected.
+    pub(crate) truncated: bool,
+    /// When truncated, the first unselected row's `time_updated`.
+    pub(crate) next_time_updated: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,6 +88,8 @@ pub(crate) struct OpenCodeSessionMessageRecord {
     pub(crate) source_id: Option<String>,
     pub(crate) session_id: Option<String>,
     pub(crate) seq: u64,
+    /// The update coordinate this row was selected by.
+    pub(crate) time_updated: i64,
     pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) occurrence_time: Option<String>,
     pub(crate) body: OpenCodeSessionMessageBody,
@@ -139,15 +145,25 @@ pub(crate) struct OpenCodeAssistantTool {
     pub(crate) status: OpenCodeToolStatus,
     /// Streaming input is the raw string; later states carry the input object.
     pub(crate) input: Option<Value>,
-    /// Completed: the sole text content as a direct string, otherwise the
-    /// `content` array. Error: the structured `error` object.
+    /// Completed: all-text content joined as direct text (upstream joins shell
+    /// result messages the same way), otherwise the `content` array with
+    /// `data:` URI payloads reduced to their media type. Error: `error.message`
+    /// as direct text, or the structured `error` object when it has none.
     pub(crate) result: Option<Value>,
+    /// Reported `error.type`, and bytes of `data:` URI payloads not retained.
+    pub(crate) result_facts: Option<Box<OpenCodeToolResultFacts>>,
     pub(crate) created: Option<String>,
     pub(crate) ran: Option<String>,
     pub(crate) completed: Option<String>,
     /// Settlement the `shell` tool reported in its completed metadata.
     pub(crate) shell_settlement: Option<Box<OpenCodeShellSettlement>>,
     pub(crate) malformed: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct OpenCodeToolResultFacts {
+    pub(crate) error_type: Option<String>,
+    pub(crate) omitted_bytes: Option<u64>,
 }
 
 /// The `shell` tool writes `{status, truncated, exit?, signal?, timeout?,
@@ -291,7 +307,7 @@ pub(super) fn extract_session_messages(
         }
     }
     let limit = options.message_limit.max(1);
-    let (mut records, message_max_time_updated) = match options.message_min_time_updated {
+    let (records, truncated, next_time_updated) = match options.message_min_time_updated {
         Some(min_time_updated) => extract_incremental_messages(
             conn,
             min_time_updated,
@@ -301,17 +317,16 @@ pub(super) fn extract_session_messages(
         )?,
         None => extract_bootstrap_messages(conn, limit, admission)?,
     };
-    // Selection follows update coordinates; evaluation follows source order.
-    records.sort_by(|left, right| {
-        (left.session_id.as_deref(), left.seq).cmp(&(right.session_id.as_deref(), right.seq))
-    });
     Ok(OpenCodeSessionMessageExtraction {
         records,
-        message_max_time_updated,
+        truncated,
+        next_time_updated,
     })
 }
 
-type Selected = (Vec<OpenCodeSessionMessageRecord>, Option<i64>);
+/// Selected rows in update order, whether the row limit cut the selection,
+/// and then the first unselected row's `time_updated`.
+type Selected = (Vec<OpenCodeSessionMessageRecord>, bool, Option<i64>);
 
 fn extract_bootstrap_messages(
     conn: &Connection,
@@ -324,14 +339,12 @@ fn extract_bootstrap_messages(
     );
     let mut stmt = conn.prepare(&query)?;
     let mut records = Vec::new();
-    let mut max_time_updated = None;
     stream_sqlite_rows(&mut stmt, [limit], admission, None, |value| {
-        let (time_updated, _) = continuation_key(&value)?;
-        max_time_updated = max_time_updated.max(Some(time_updated));
         records.push(decode_row(value)?);
         Ok(())
     })?;
-    Ok((records, max_time_updated))
+    // Bootstrap samples the newest rows by design; it is not a cut backlog.
+    Ok((records, false, None))
 }
 
 pub(super) fn extract_incremental_messages(
@@ -375,12 +388,32 @@ pub(super) fn extract_incremental_messages(
                 after = Some(key);
                 Ok(())
             },
-        )?;
+        );
+        let delivered = match delivered {
+            // The row cap fires before a lookahead row is admitted: more rows
+            // exist, and the caller rolls to the next window.
+            Err(SourceReadError::Bounded(crate::source_read::BoundedReadError::LimitExceeded))
+                if remaining == 0 =>
+            {
+                // Only the next coordinate, never its payload: it tells the
+                // caller whether the cut splits a `time_updated` group.
+                let (time, rowid) = after.expect("a full selection has a last row");
+                let next = conn.query_row(
+                    "select time_updated from session_message \
+                     where (time_updated, rowid) > (?1, ?2) \
+                     order by time_updated, rowid limit 1",
+                    [time, rowid],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                return Ok((records, true, Some(next)));
+            }
+            other => other?,
+        };
         let exhausted = delivered
             < usize::try_from(query_limit)
                 .map_err(|_| part_read_error("message page limit overflow"))?;
         if exhausted {
-            return Ok((records, after.map(|key| key.0)));
+            return Ok((records, false, None));
         }
         #[cfg(test)]
         super::native::run_incremental_page_callback();
@@ -409,6 +442,10 @@ fn decode_row(row: Value) -> Result<OpenCodeSessionMessageRecord, SourceReadErro
         Some(Value::String(kind)) => kind,
         _ => return Err(invalid_message()),
     };
+    let time_updated = row
+        .get("time_updated")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| part_read_error("invalid message continuation time"))?;
     let seq = row
         .get("seq")
         .and_then(Value::as_i64)
@@ -458,6 +495,7 @@ fn decode_row(row: Value) -> Result<OpenCodeSessionMessageRecord, SourceReadErro
         source_id,
         session_id,
         seq,
+        time_updated,
         attestation,
         occurrence_time,
         body,
@@ -571,24 +609,28 @@ fn decode_tool(entry: &Value) -> OpenCodeAssistantTool {
             )
             | (OpenCodeToolStatus::Unsupported, _)
     );
+    let mut facts = OpenCodeToolResultFacts::default();
     let result = match status {
         OpenCodeToolStatus::Completed => match state.and_then(|state| state.get("content")) {
-            Some(Value::Array(content)) if !content.is_empty() => Some(match content.as_slice() {
-                [single]
-                    if single.get("type").and_then(Value::as_str) == Some("text")
-                        && single.get("text").is_some_and(Value::is_string) =>
-                {
-                    single["text"].clone()
-                }
-                _ => Value::Array(content.clone()),
-            }),
+            Some(Value::Array(content)) if !content.is_empty() => {
+                Some(completed_result(content, &mut facts))
+            }
             _ => {
                 malformed = true;
                 None
             }
         },
         OpenCodeToolStatus::Error => match state.and_then(|state| state.get("error")) {
-            Some(error @ Value::Object(_)) => Some(error.clone()),
+            Some(Value::Object(error)) => {
+                facts.error_type = error
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+                Some(match error.get("message") {
+                    Some(message @ Value::String(_)) => message.clone(),
+                    _ => Value::Object(error.clone()),
+                })
+            }
             _ => {
                 malformed = true;
                 None
@@ -613,12 +655,48 @@ fn decode_tool(entry: &Value) -> OpenCodeAssistantTool {
         status,
         input,
         result,
+        result_facts: (facts != OpenCodeToolResultFacts::default()).then(|| Box::new(facts)),
         created: time_field("created"),
         ran: time_field("ran"),
         completed: time_field("completed"),
         shell_settlement,
         malformed,
     }
+}
+
+fn completed_result(content: &[Value], facts: &mut OpenCodeToolResultFacts) -> Value {
+    let texts = content
+        .iter()
+        .map(
+            |part| match (part.get("type").and_then(Value::as_str), part.get("text")) {
+                (Some("text"), Some(Value::String(text))) => Some(text.as_str()),
+                _ => None,
+            },
+        )
+        .collect::<Option<Vec<_>>>();
+    if let Some(texts) = texts {
+        return Value::String(texts.join("\n\n"));
+    }
+    Value::Array(
+        content
+            .iter()
+            .map(|part| {
+                let mut part = part.clone();
+                if part.get("type").and_then(Value::as_str) == Some("file")
+                    && let Some(Value::String(uri)) = part.get_mut("uri")
+                    && let Some(rest) = uri.strip_prefix("data:")
+                {
+                    let media = rest.split([';', ',']).next().unwrap_or_default();
+                    let kept = format!("data:{media}");
+                    let omitted = (uri.len() - kept.len()) as u64;
+                    facts.omitted_bytes =
+                        Some(facts.omitted_bytes.unwrap_or(0).saturating_add(omitted));
+                    *uri = kept;
+                }
+                part
+            })
+            .collect(),
+    )
 }
 
 /// Tool metadata is an open record, so a shape this adapter does not recognize

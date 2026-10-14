@@ -13,8 +13,8 @@ use telltale_schema::observation::{
     CanonicalFieldCategory, CanonicalObservationV2, CapabilityAvailability, CapabilityContext,
     CapabilityId, CorrelationId, CorrelationIds, FactProvenance, Fidelity, IngestionMode,
     JsonValue, MessageObservation, MessageRole, ObservationBody, ObservationBuilder,
-    ObservationStage, ObservedAt, SemanticFacet, SourceProvenance, SourceTimestamp,
-    ToolObservation, ToolStatus,
+    ObservationError, ObservationStage, ObservedAt, SemanticFacet, SourceProvenance,
+    SourceTimestamp, ToolObservation, ToolStatus,
 };
 
 use super::canonical::{
@@ -26,17 +26,40 @@ use super::session_message::{
     OpenCodeSessionMessageRecord, OpenCodeShell, OpenCodeShellStatus, OpenCodeToolStatus,
     SHELL_TOOL_NAME,
 };
-use crate::acquisition::CanonicalCollector;
 
-pub(crate) fn project_opencode_session_messages(
-    records: &[OpenCodeSessionMessageRecord],
-    observed_at: &ObservedAt,
-) -> Result<Vec<CanonicalObservationV2>, OpenCodeCanonicalError> {
-    let mut identities = BTreeSet::new();
-    let mut observations = CanonicalCollector::default();
-    for record in records {
+/// OpenCode v2 tools whose `path` input names the file read or changed
+/// (`packages/core/src/tool/plugin/{read,write,edit}.ts`).
+const V2_FILE_TOOLS: &[&str] = &["read", "write", "edit"];
+
+/// The mapping of one native row. A row whose observations exceed a canonical
+/// size bound is quarantined as a unit; integrity failures (missing identity,
+/// malformed or unknown variants) still fail the whole source.
+pub(crate) enum RowProjection {
+    Mapped(Vec<CanonicalObservationV2>),
+    Quarantined(ObservationError),
+}
+
+/// Projects rows one at a time so each row is admitted or quarantined whole.
+/// Source-wide retention stays with the caller's collector.
+pub(crate) struct SessionMessageProjector<'a> {
+    identities: BTreeSet<&'a str>,
+    observed_at: &'a ObservedAt,
+}
+
+impl<'a> SessionMessageProjector<'a> {
+    pub(crate) fn new(observed_at: &'a ObservedAt) -> Self {
+        Self {
+            identities: BTreeSet::new(),
+            observed_at,
+        }
+    }
+
+    pub(crate) fn row(
+        &mut self,
+        record: &'a OpenCodeSessionMessageRecord,
+    ) -> Result<RowProjection, OpenCodeCanonicalError> {
         let id = require_source_id(record.source_id.as_deref())?;
-        if !identities.insert(id) {
+        if !self.identities.insert(id) {
             return Err(mapping(
                 "ambiguous_source_identity",
                 "OpenCode session message identity is not unique",
@@ -51,11 +74,22 @@ pub(crate) fn project_opencode_session_messages(
                     "OpenCode session message has no source session",
                 )
             })?,
-            observed_at,
+            observed_at: self.observed_at,
+        };
+        let mut observations = Vec::new();
+        // Every entry is still checked after a size failure, so quarantine can
+        // never hide a malformed or unknown entry later in the same row.
+        let mut oversized = None;
+        let mut admit = |result: Result<(), OpenCodeCanonicalError>| match result {
+            Err(OpenCodeCanonicalError::Observation(error)) if is_size_failure(&error) => {
+                oversized.get_or_insert(error);
+                Ok(())
+            }
+            other => other,
         };
         match &record.body {
             OpenCodeSessionMessageBody::User { text } => {
-                context.message(MessageRole::User, text.as_deref(), 0, &mut observations)?;
+                admit(context.message(MessageRole::User, text.as_deref(), 0, &mut observations))?;
             }
             OpenCodeSessionMessageBody::Assistant { content } => {
                 let content = content.as_deref().ok_or_else(|| {
@@ -72,15 +106,15 @@ pub(crate) fn project_opencode_session_messages(
                         )
                     })?;
                     match entry {
-                        OpenCodeAssistantContent::Text(text) => context.message(
+                        OpenCodeAssistantContent::Text(text) => admit(context.message(
                             MessageRole::Assistant,
                             text.as_deref(),
                             child,
                             &mut observations,
-                        )?,
+                        ))?,
                         OpenCodeAssistantContent::Reasoning => {}
                         OpenCodeAssistantContent::Tool(tool) => {
-                            context.tool(tool, child, &mut observations)?;
+                            admit(context.tool(tool, child, &mut observations))?;
                         }
                         OpenCodeAssistantContent::Unsupported => {
                             return Err(mapping(
@@ -91,7 +125,9 @@ pub(crate) fn project_opencode_session_messages(
                     }
                 }
             }
-            OpenCodeSessionMessageBody::Shell(shell) => context.shell(shell, &mut observations)?,
+            OpenCodeSessionMessageBody::Shell(shell) => {
+                admit(context.shell(shell, &mut observations))?;
+            }
             OpenCodeSessionMessageBody::Auxiliary(_) => {}
             OpenCodeSessionMessageBody::Unsupported => {
                 return Err(mapping(
@@ -100,8 +136,17 @@ pub(crate) fn project_opencode_session_messages(
                 ));
             }
         }
+        Ok(match oversized {
+            Some(error) => RowProjection::Quarantined(error),
+            None => RowProjection::Mapped(observations),
+        })
     }
-    Ok(observations.finish())
+}
+
+/// Bound rejections from this row's own values, as opposed to integrity or
+/// source-wide capacity failures.
+fn is_size_failure(error: &ObservationError) -> bool {
+    error.code() == "unbounded_value"
 }
 
 struct Context<'a> {
@@ -117,7 +162,7 @@ impl Context<'_> {
         role: MessageRole,
         text: Option<&str>,
         child: u32,
-        observations: &mut CanonicalCollector,
+        observations: &mut Vec<CanonicalObservationV2>,
     ) -> Result<(), OpenCodeCanonicalError> {
         let text = text.ok_or_else(|| {
             mapping(
@@ -137,7 +182,7 @@ impl Context<'_> {
             )?
             .fact_metadata("message.role", normal_reported()?)
             .fact_metadata("message.content", normal_reported()?);
-        observations.push(builder.build()?)?;
+        observations.push(builder.build()?);
         Ok(())
     }
 
@@ -151,7 +196,7 @@ impl Context<'_> {
         &self,
         tool: &OpenCodeAssistantTool,
         child: u32,
-        observations: &mut CanonicalCollector,
+        observations: &mut Vec<CanonicalObservationV2>,
     ) -> Result<(), OpenCodeCanonicalError> {
         let call_id = tool
             .id
@@ -229,8 +274,17 @@ impl Context<'_> {
             for (path, provenance) in metadata {
                 builder = builder.fact_metadata(path, normal(provenance)?);
             }
-            if let Some(Value::Object(_)) = &tool.input {
+            if let Some(Value::Object(input)) = &tool.input {
                 builder = with_argument_facets(builder, tool.input.as_ref().expect("checked"))?;
+                // v2 file tools name the file `path`; other tools' `path` is a
+                // search root or working directory, not the resource acted on.
+                if V2_FILE_TOOLS.contains(&name)
+                    && let Some(Value::String(path)) = input.get("path")
+                {
+                    builder = builder
+                        .facet("resource.path", SemanticFacet::new(JsonValue::string(path)))?
+                        .fact_metadata("resource.path", normal(FactProvenance::Parsed)?);
+                }
             }
             if let Some(executed) = tool.executed {
                 builder = builder
@@ -240,6 +294,28 @@ impl Context<'_> {
                     )?
                     .fact_metadata("tool.executed", normal_reported()?);
             }
+            let facts = tool.result_facts.as_deref().filter(|_| outcome);
+            if let Some(error_type) = facts.and_then(|facts| facts.error_type.as_deref()) {
+                builder = builder
+                    .facet(
+                        "tool.error_type",
+                        SemanticFacet::new(JsonValue::string(error_type)),
+                    )?
+                    .fact_metadata("tool.error_type", normal_reported()?);
+            }
+            if let Some(omitted) = facts.and_then(|facts| facts.omitted_bytes) {
+                builder = builder
+                    .facet(
+                        "tool.result.omitted_bytes",
+                        SemanticFacet::new(JsonValue::Integer(
+                            i64::try_from(omitted).unwrap_or(i64::MAX),
+                        )),
+                    )?
+                    .fact_metadata(
+                        "tool.result.omitted_bytes",
+                        normal(FactProvenance::Derived)?,
+                    );
+            }
             if let Some(signal) = settlement.and_then(|settlement| settlement.signal.as_deref()) {
                 builder = builder
                     .facet("tool.signal", SemanticFacet::new(JsonValue::string(signal)))?
@@ -248,7 +324,7 @@ impl Context<'_> {
             builder = builder.correlation(
                 CorrelationIds::new().with_call_id(CorrelationId::source_reported(call_id)?),
             );
-            observations.push(builder.build()?)?;
+            observations.push(builder.build()?);
         }
         Ok(())
     }
@@ -259,7 +335,7 @@ impl Context<'_> {
     fn shell(
         &self,
         shell: &OpenCodeShell,
-        observations: &mut CanonicalCollector,
+        observations: &mut Vec<CanonicalObservationV2>,
     ) -> Result<(), OpenCodeCanonicalError> {
         if shell.malformed {
             return Err(mapping(
@@ -342,7 +418,7 @@ impl Context<'_> {
                     CorrelationIds::new().with_call_id(CorrelationId::source_reported(shell_id)?),
                 );
             }
-            observations.push(builder.build()?)?;
+            observations.push(builder.build()?);
         }
         Ok(())
     }

@@ -335,15 +335,20 @@ fn run_scan_for_platform(
     let mut detections = Vec::new();
     let mut rebuild = config.rebuild_baselines;
     for (source, result) in sources.iter().zip(processed_sources) {
-        if let Some((table, last_time_updated)) =
-            result.sqlite_progress_cursor(config.execution.dry_run, config.backfill)
-        {
-            state.observe_sqlite_ingestion_cursor(
+        match result.sqlite_progress_cursor(config.execution.dry_run, config.backfill) {
+            Some((table, last_time_updated, true)) => state.observe_sqlite_ingestion_drain(
                 source,
                 table,
                 last_time_updated,
                 observed_at_unix_ms,
-            );
+            ),
+            Some((table, last_time_updated, false)) => state.observe_sqlite_ingestion_cursor(
+                source,
+                table,
+                last_time_updated,
+                observed_at_unix_ms,
+            ),
+            None => {}
         }
         if let BaselineReplacement::Replace(summaries) = result.baseline_replacement {
             state.record_baseline_source_contribution(
@@ -732,7 +737,16 @@ struct SourceProcessingAccounting {
     accounting_complete_source_count: usize,
     accounting_partial_source_count: usize,
     failures: BTreeMap<SourceFailureCategory, usize>,
+    quarantined_unit_count: usize,
+    /// Sources whose evaluated window was cut by a row or retained budget;
+    /// the next scan continues from the advanced cursor.
+    incomplete_window_source_count: usize,
+    /// Coordinates only, never content; listed up to a fixed bound.
+    quarantined_units: Vec<serde_json::Value>,
 }
+
+/// Quarantined units listed in one summary; the count is always complete.
+const MAX_REPORTED_QUARANTINED_UNITS: usize = 1_000;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct SourceFailureCategory {
@@ -776,6 +790,29 @@ fn source_processing_accounting(
                 accounting.visibility_limited_source_count += 1
             }
             None => {}
+        }
+        if matches!(
+            result.progress,
+            telltale_sources::acquisition::AcquisitionProgress::OpenCodeSessionMessages {
+                window_complete: false,
+                ..
+            }
+        ) {
+            accounting.incomplete_window_source_count += 1;
+        }
+        for (source_id, unit) in &result.quarantined {
+            accounting.quarantined_unit_count += 1;
+            if accounting.quarantined_units.len() < MAX_REPORTED_QUARANTINED_UNITS {
+                accounting.quarantined_units.push(serde_json::json!({
+                    "source": source_id,
+                    "session_id": unit.session_id,
+                    "native_id": unit.native_id,
+                    "source_sequence": unit.source_sequence,
+                    "code": unit.code,
+                    "bound_category": unit.bound.map(|bound| format!("{:?}", bound.category)),
+                    "bound_dimension": unit.bound.map(|bound| format!("{:?}", bound.dimension)),
+                }));
+            }
         }
         if let Some(failure) = &result.failure {
             let context = failure.acquisition.and_then(|error| error.bound_context());
@@ -859,7 +896,13 @@ fn opencode_read_options_for_scan_source(
     if let Some(last_seen) =
         state.sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
     {
-        options = options.resume_session_messages_after(last_seen);
+        options = if state
+            .sqlite_ingestion_cursor_draining(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
+        {
+            options.continue_session_messages_after(last_seen)
+        } else {
+            options.resume_session_messages_after(last_seen)
+        };
     }
     options
 }
@@ -1272,6 +1315,8 @@ impl SourceProcessingAccounting {
         if self.selected_source_count == 0 {
             "no_sources"
         } else if self.parse_error_source_count > 0
+            || self.quarantined_unit_count > 0
+            || self.incomplete_window_source_count > 0
             || self.visibility_limited_source_count > 0
             || self.accounting_partial_source_count > 0
         {
@@ -1308,6 +1353,9 @@ impl SourceProcessingAccounting {
             "accounting_partial_source_count": self.accounting_partial_source_count,
             "selected_source_coverage": self.selected_source_coverage(),
             "failures": failures,
+            "incomplete_window_source_count": self.incomplete_window_source_count,
+            "quarantined_unit_count": self.quarantined_unit_count,
+            "quarantined_units": self.quarantined_units,
         })
     }
 }
@@ -1934,6 +1982,7 @@ mod tests {
             accounting,
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,
+            quarantined: Vec::new(),
         };
         let mut nonempty = SourceAccounting::default();
         nonempty.sessions.push(SessionAccounting {

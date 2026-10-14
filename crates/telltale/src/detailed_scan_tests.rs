@@ -994,3 +994,104 @@ fn resume_binding_uses_exact_path_bytes() {
         Err(PipelineError::InvalidResumeToken)
     ));
 }
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn opencode_v2_quarantined_rows_are_reported_by_coordinates_on_success() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("v2.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        r#"CREATE TABLE session_v2 (id TEXT PRIMARY KEY, agent TEXT, model TEXT);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+            time_created INTEGER, time_updated INTEGER, data TEXT);
+        INSERT INTO session_v2 VALUES ('ses', 'build', '{"id":"m","providerID":"p"}');"#,
+    )
+    .unwrap();
+    for (id, seq, command) in [
+        ("fits", 1, "ls".to_owned()),
+        (
+            "padded",
+            2,
+            format!("synthetic-padded-secret {}", "x ".repeat(100_000)),
+        ),
+    ] {
+        let data = serde_json::json!({
+            "agent": "build", "model": {"id": "m", "providerID": "p"}, "time": {"created": 1_789_603_200_000_i64},
+            "content": [{"type": "tool", "id": format!("call-{id}"), "name": "shell", "executed": false,
+                "state": {"status": "running", "input": {"command": command}, "metadata": {}},
+                "time": {"created": 1_789_603_200_000_i64}}]
+        });
+        conn.execute(
+            "INSERT INTO session_message VALUES (?1, 'ses', 'assistant', ?2, 0, ?2, ?3)",
+            rusqlite::params![id, seq, data.to_string()],
+        )
+        .unwrap();
+    }
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path,
+    };
+    let scan = Pipeline::builder()
+        .build()
+        .unwrap()
+        .scan_source_detailed_resuming(&source, None, &DetailedEvaluationOptions::default())
+        .unwrap();
+    assert!(scan.failure().is_none(), "{:?}", scan.failure());
+    assert!(scan.resume_token().is_some());
+    let [unit] = scan.quarantined() else {
+        panic!("{:?}", scan.quarantined())
+    };
+    assert_eq!(unit.native_id, "padded");
+    assert_eq!(unit.source_sequence, 2);
+    assert!(!format!("{unit:?}").contains("synthetic-padded-secret"));
+}
+
+#[test]
+fn opencode_v2_cut_windows_issue_monotone_drain_tokens() {
+    use telltale_sources::acquisition::AcquisitionProgress;
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path: std::path::PathBuf::from("/synthetic/opencode.db"),
+    };
+    let progress = |high_water, window_complete| AcquisitionProgress::OpenCodeSessionMessages {
+        message_max_time_updated: Some(high_water),
+        window_complete,
+    };
+    let cut = resume_token(&source, progress(5, false), None).unwrap();
+    assert!(
+        cut.as_str()
+            .starts_with("resume:v1:opencode.sqlite:session_message_drain:5:")
+    );
+    assert_eq!(ResumeToken::parse(cut.as_str()).unwrap(), cut);
+    // A cut window that began inside the overlap never moves the position back.
+    let resumed = resume_token(
+        &source,
+        progress(5, false),
+        Some((ResumeCoordinate::SessionMessage, 9)),
+    )
+    .unwrap();
+    assert!(resumed.as_str().contains(":session_message_drain:9:"));
+    // A complete window returns to the overlapping resume form.
+    let done = resume_token(
+        &source,
+        progress(12, true),
+        Some((ResumeCoordinate::SessionMessageDrain, 9)),
+    )
+    .unwrap();
+    assert!(done.as_str().contains(":session_message:12:"));
+    // Drain tokens never resume the legacy part schema.
+    let legacy = resume_token(
+        &source,
+        AcquisitionProgress::OpenCodeSqlite {
+            part_max_time_updated: Some(3),
+        },
+        Some((ResumeCoordinate::SessionMessageDrain, 9)),
+    )
+    .unwrap();
+    assert!(legacy.as_str().starts_with("resume:v1:opencode.sqlite:3:"));
+}

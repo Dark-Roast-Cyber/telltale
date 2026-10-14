@@ -13,7 +13,7 @@ use telltale_schema::event::path_hash;
 use telltale_schema::observation::ObservedAt;
 #[cfg(test)]
 use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
-use telltale_sources::acquisition::{AcquisitionProgress, SourceAccounting};
+use telltale_sources::acquisition::{AcquisitionProgress, QuarantinedUnit, SourceAccounting};
 
 use super::{
     Event, OPENCODE_SQLITE_PART_TABLE, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE, ProcessChainConfig,
@@ -36,6 +36,8 @@ pub(super) struct CanonicalProcessingResult {
             telltale_detect::v2::PolicyMatchAccountingError,
         >,
     >,
+    /// Source ID and coordinates of units excluded for exceeding a size bound.
+    pub quarantined: Vec<(String, QuarantinedUnit)>,
 }
 
 #[derive(Default)]
@@ -55,29 +57,32 @@ impl CanonicalProcessingResult {
         &self,
         dry_run: bool,
         backfill: bool,
-    ) -> Option<(&'static str, i64)> {
+    ) -> Option<(&'static str, i64, bool)> {
         if !should_stage_sqlite_ingestion_cursors(dry_run, backfill) {
             return None;
         }
-        let (table, high_water) = match self.progress {
+        let (table, high_water, draining) = match self.progress {
             AcquisitionProgress::None => return None,
             AcquisitionProgress::OpenCodeSqlite {
                 part_max_time_updated,
-            } => (OPENCODE_SQLITE_PART_TABLE, part_max_time_updated),
+            } => (OPENCODE_SQLITE_PART_TABLE, part_max_time_updated, false),
             AcquisitionProgress::OpenCodeSessionMessages {
                 message_max_time_updated,
+                window_complete,
             } => (
                 OPENCODE_SQLITE_SESSION_MESSAGE_TABLE,
                 message_max_time_updated,
+                !window_complete,
             ),
         };
-        sqlite_progress_candidate(true, high_water, self.status).map(|value| (table, value))
+        sqlite_progress_candidate(true, high_water, self.status)
+            .map(|value| (table, value, draining))
     }
 
     #[cfg(test)]
     pub(super) fn sqlite_progress_candidate(&self, dry_run: bool, backfill: bool) -> Option<i64> {
         self.sqlite_progress_cursor(dry_run, backfill)
-            .map(|(_, high_water)| high_water)
+            .map(|(_, high_water, _)| high_water)
     }
 }
 
@@ -132,7 +137,18 @@ fn adapt_result(
 ) -> CanonicalProcessingResult {
     match result {
         Ok(result) => CanonicalProcessingResult {
-            events: result.events,
+            events: {
+                let mut events = result.events;
+                if !result.quarantined.is_empty() {
+                    events.push(telltale_core::canonical_runtime::quarantine_event(source));
+                }
+                events
+            },
+            quarantined: result
+                .quarantined
+                .into_iter()
+                .map(|unit| (source.source_id.clone(), unit))
+                .collect(),
             status: SourceProcessingStatus::from_canonical(Ok(result.completion)),
             progress: result.progress,
             completion: Some(result.completion),
@@ -150,6 +166,7 @@ fn adapt_result(
             accounting: None,
             baseline_replacement: BaselineReplacement::NoReplacement,
             policy_accounting: None,
+            quarantined: Vec::new(),
         },
     }
 }

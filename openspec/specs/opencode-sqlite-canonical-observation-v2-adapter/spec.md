@@ -598,9 +598,13 @@ and user attachments are not mapped.
 Every tool entry MUST emit `ToolRequested` at `time.created`, with the raw
 streaming input string or the input object as arguments. Completed and error
 entries MUST also emit `ToolResultReturned` at `time.completed`: a completed
-result is the sole text content as a direct string, otherwise the structured
-`content` array under ordinary bounds; an error result is the structured
-`error` object with reported status `Failed`. Streaming and running entries
+result whose parts are all text is those texts joined by a blank line as one
+direct string, otherwise the structured `content` array under ordinary bounds
+with each `data:` URI reduced to `data:<media type>` and the dropped length as
+the Derived `tool.result.omitted_bytes` facet; an error result is
+`error.message` as direct text (the structured `error` object when it has no
+string message), with `error.type` as the Reported `tool.error_type` facet and
+reported status `Failed`. Streaming and running entries
 MUST NOT emit an outcome. Execution stages MUST be emitted only from source
 evidence: an entry reporting `executed: true` (running: `ToolExecutionStarted`
 at `time.ran`; terminal with `time.ran`: `ToolExecutionCompleted`), or a
@@ -626,6 +630,54 @@ report ToolExecution capability `Unknown`.
 
 - **WHEN** an entry reports `streaming`, or `running` with `executed: false`
 - **THEN** only `ToolRequested` is emitted
+
+### Requirement: OpenCode v2 authored text uses the direct-text budget
+
+Exact `(tool, field)` argument strings MUST use the 65,536-byte direct-text
+budget instead of the 4,096-byte ordinary string bound, with every other member
+under ordinary bounds: `shell` and `bash` `command`, `patch` and `apply_patch`
+`patchText`, `write` `content`, `edit` `oldString` and `newString`, `execute`
+`code`, and `subagent` and `task` `prompt`. A non-string value in one of these
+fields MUST keep ordinary conversion. For `shell` and `bash`, the Parsed
+`command.text` facet MUST carry the same full command under the same budget,
+so detection sees the whole command. The observation's 65,536-byte encoded
+aggregate still applies. v2 `read`, `write` and `edit` `path` MUST become the
+Parsed `resource.path` facet; `path` on other tools is not a resource.
+
+#### Scenario: A long command is detected by its full text
+
+- **WHEN** a v2 `shell` entry's `command` is 20,000 bytes with a rule marker at its end
+- **THEN** it maps without failure, `command.text` carries the full command and the rule matches
+
+#### Scenario: The same field on another tool keeps ordinary bounds
+
+- **WHEN** an `exec` tool's argument `command`, or a `shell` tool's other argument, is over 4,096 bytes
+- **THEN** that value keeps the ordinary bound
+
+### Requirement: Oversized OpenCode v2 rows are quarantined, not fatal
+
+A row whose own values exceed a canonical value bound, or whose request input
+exceeds a contribution bound, MUST be quarantined as a unit. It emits no
+observations, tool usage or contributions, and it still counts as a native
+unit. It MUST be reported on the acquisition batch by session id, message id,
+`seq`, code (`unbounded_value` or `invalid_native_contribution`) and bound
+category and dimension, without content. The rest of the selection MUST still
+be mapped and evaluated, and progress MUST cover the quarantined row. Every
+entry of a quarantined row MUST still be checked, so a missing identity,
+malformed or unknown entry, aggregate retention cap or contribution-key
+capacity still fails the whole source as before. The scanner MUST emit one
+content-free degraded `scanner_error` per affected source and list the
+coordinates (at most 1,000, with a complete count) in the stdout scan summary.
+
+#### Scenario: One padded row does not blind the source
+
+- **WHEN** one row holds a 200,000-byte command and other rows hold detectable activity
+- **THEN** the other rows are evaluated and detected, the padded row is reported with its coordinates and no content, and the cursor advances past it
+
+#### Scenario: Quarantine never hides an integrity failure
+
+- **WHEN** an oversized row is followed by a row whose assistant content is not an array
+- **THEN** the source fails with `invalid_assistant_content`
 
 ### Requirement: OpenCode v2 shell-tool settlements report completed execution
 
@@ -702,10 +754,29 @@ Bootstrap MUST select the newest `message_limit` rows (default 5,000) by
 `(time_updated, rowid)` descending and return them ascending. Incremental reads
 MUST use an inclusive `time_updated` lower bound, strictly ascending integer
 `(time_updated, rowid)` keyset pages of at most 5,000 rows, and checked L+1
-lookahead; more than L rows MUST fail atomically as `LimitExceeded`. Every
-selected row MUST have an integer `time_updated`. Returned records MUST be
-ordered by source session and `seq`. Progress MUST be
-`OpenCodeSessionMessages { message_max_time_updated }`, never part progress. A
+lookahead. Every selected row MUST have an integer `time_updated`.
+
+Rows MUST be mapped in update order into one window. The window MUST end on a
+row boundary when the row limit is reached or when the next row would exceed
+the 8 MiB retained-semantics budget. A single row larger than that budget is
+quarantined. Admitted rows MUST be evaluated in source session and `seq`
+order. Progress MUST be `OpenCodeSessionMessages { message_max_time_updated,
+window_complete }`, never part progress, where the high-water is the last
+admitted row's `time_updated` and `window_complete` is false when the window
+was cut. A cut window MUST end on a whole `time_updated` group: when the
+first row it leaves out shares the last admitted row's timestamp, admitted
+rows with that timestamp are deferred too, and only a single timestamp that
+fills a window fails as `LimitExceeded`. After a cut, the next read MUST
+continue strictly after the high-water without the overlap
+(`continue_session_messages_after`), so a backlog drains even when one window
+cannot hold the overlap. The ten-minute overlap MUST resume once a window
+completes. The CLI cursor records this as an optional `draining` flag, and
+embedding tokens use the `session_message_drain:` coordinate. A drain position
+MUST NOT move behind the position it resumed from. Canonical source
+processing MUST re-read a window at half its retained size when evaluating
+or projecting it exhausts the shared evaluation work budget or a retained
+projection capacity bound, until it fits or cannot shrink. The stdout
+summary MUST count cut windows as `incomplete_window_source_count`. A
 resumed read (`resume_session_messages_after`) MUST apply the shared ten-minute
 overlap and 25,000-row limit, and MUST fail as `resume_regressed` before
 selection when no integer `time_updated` at or after the high-water remains.
@@ -723,6 +794,21 @@ shared with legacy reads.
 
 - **WHEN** many rows share `time_updated` across pages, or a later page holds malformed data or a non-integer coordinate
 - **THEN** ties are returned once in rowid order, and a late failure returns no prefix or progress
+
+#### Scenario: A backlog larger than one window drains across scans
+
+- **WHEN** the selected rows need more than the 8 MiB retained budget, or exceed the row limit
+- **THEN** each scan evaluates one window, advances the cursor and reports the window incomplete, until a scan reports it complete
+
+#### Scenario: A burst inside the overlap still drains
+
+- **WHEN** more rows than one window holds lie inside the overlap before the resume high-water
+- **THEN** the cut window's successors continue strictly after each high-water until a window completes
+
+#### Scenario: Evaluation work shrinks the window
+
+- **WHEN** bundled rules exhaust the evaluation work budget on a full retained window, or its detections exceed retained projection capacity
+- **THEN** the scan evaluates a smaller window instead of failing, and later scans drain the rest
 
 #### Scenario: Known v2 coverage limits
 
@@ -756,9 +842,9 @@ classes above. Tool usage and contributions MUST be recorded per tool entry and
 shell row. Contribution input MUST be request-side only: the tool entry's input
 and the shell row's `command`. Tool results,
 error objects and shell output MUST NOT be contribution input, so their paths
-and hosts are not counted and cannot cause contribution rejection. Canonical
-result bounds remain unchanged, and the existing fail-closed contribution bounds
-still apply to request input. Session metadata MUST come from message `agent`/`model` and the
+and hosts are not counted and cannot cause contribution rejection. The
+existing contribution bounds still apply to request input; a row that exceeds
+them is quarantined (see the quarantine requirement). Session metadata MUST come from message `agent`/`model` and the
 joined session `agent`/`model`, with contradictions kept ambiguous and malformed
 model values failing as invalid attestation. Coverage remains `PartialSource`.
 
@@ -772,7 +858,7 @@ model values failing as invalid attestation. Coverage remains `PartialSource`.
 - **WHEN** a direct-text completed tool result or shell output holds a host, or a token longer than 4,096 bytes that looks like a path, within unchanged canonical bounds
 - **THEN** it does not cause `invalid_native_contribution`, and only hosts and path classes from tool input and shell commands are counted
 
-#### Scenario: Request input keeps fail-closed contribution bounds
+#### Scenario: Request input keeps its contribution bound
 
 - **WHEN** tool input holds a path-like token longer than 4,096 bytes
-- **THEN** acquisition fails with `invalid_native_contribution`
+- **THEN** the row is quarantined with code `invalid_native_contribution` and contributes nothing

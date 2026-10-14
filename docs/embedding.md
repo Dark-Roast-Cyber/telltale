@@ -26,7 +26,7 @@ refresh. Returning a finding is not durable delivery.
 
 | Class | Surface | Meaning |
 | --- | --- | --- |
-| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `resume_token()`), `ActionFinding` accessors (including `session_event_index()`), `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
+| Supported | `scan_sources_detailed`, `scan_root_detailed`, `scan_source_detailed_resuming` with `ResumeToken`, `DetailedEvaluationOptions`, `SourceScan` (fields plus `failure()`, `coverage()`, `visibility_limits()`, `quarantined()`, `resume_token()`), `ActionFinding` accessors (including `session_event_index()`), `semantic_provenance`, `bundled_rule_catalog`, `producer_provenance_manifest`, `PipelineError`, discovery helpers, `inventory`, `Event3Record`, `LocalEventFeed`, `opencode-sqlite` | The adoption path. Changes are deliberate and documented in the [migration guide](migrations/0.7.0.md). |
 | Compatibility | `scan_sources`, `scan_root`, `scan_*_with_occurrences` | Session Event 3 and observation linkage for existing callers. Kept for 0.7; new integrations use detailed scans. |
 | Unstable | `investigation`, `assignment` (`protected-assignment`) | Usable, but may change or be removed with notice. |
 | Not an API | `canonical_runtime`, lower-level crate modules | Implementation seams, not a source-adapter, detector, or plugin ABI. |
@@ -188,6 +188,11 @@ second detector or an Event 3 conversion loop.
   Limited evaluation still returns its successful findings.
 - `resume_token()` is a position to resume a resumable source from; see
   [resuming OpenCode scans](#resuming-opencode-scans).
+- `quarantined()` lists native units a successful scan excluded because their
+  own values exceed a size bound, as `QuarantinedUnit` coordinates (session,
+  native ID, source sequence, code, bound context) without content. Every other
+  unit was evaluated; progress covers these units. OpenCode v2 is currently the
+  only source that quarantines.
 
 ### Rule v1 URL target
 
@@ -438,7 +443,11 @@ source, return `None`.
   findings; restore it with `ResumeToken::parse`, which rejects unknown versions
   and malformed text with `ResumeTokenError`.
 - A token names its coordinate: legacy part tokens keep their form, and OpenCode
-  v2 stores issue `resume:v1:opencode.sqlite:session_message:` tokens. A token
+  v2 stores issue `resume:v1:opencode.sqlite:session_message:` tokens. After a
+  window that was cut (`resume_token()` from a scan whose v2 window did not
+  hold the whole selection), they issue `session_message_drain:` tokens. Those
+  continue strictly after the position without the overlap, so persisting each
+  token and scanning again drains a backlog. A token
   for the other schema is not applied; the scan reads that store's bootstrap
   selection and returns a token for the schema it read. A store with an
   incomplete v2 schema fails as `UnsupportedSourceSchema`

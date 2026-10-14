@@ -140,6 +140,12 @@ OpenCode adapter notes:
 
 ### OpenCode incremental saturation and recovery
 
+This section describes legacy `message`/`part` stores. OpenCode v2
+(`session_message`) stores evaluate rolling windows instead: a selection over
+the row limit or the 8 MiB retained budget is cut, the cursor advances, and
+later scans drain the backlog. Only a window that cannot pass its resume point
+fails. See [OpenCode live ingestion](opencode-live-ingestion.md).
+
 Current development supports source-atomic recovery of an incremental selection
 up to 25,000 text/tool parts. Queries return at most 5,000 parts per page from
 one read snapshot, including ties in `time_updated`; the complete selection is
