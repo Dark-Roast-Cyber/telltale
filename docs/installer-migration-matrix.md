@@ -1,5 +1,16 @@
 # Linux installer matrix
 
+The current-user Windows lifecycle uses `scripts/install-telltale.ps1` and
+`scripts/uninstall-telltale.ps1`; commands and retention/purge behavior are in
+[Install](install.md#windows). It separates Programs/Telltale executable ownership
+from existing Logs/State defaults, uses exact release/source/digest verification,
+and enables only the explicitly requested `TelltaleScan`. Receipts, atomic staged
+replacement and a journal bind recovery to owned bytes. Uninstall retains data;
+confirmed purge selects only owned generated data, with configuration selected
+separately. Links, modified executables/tasks, unowned files and ambiguous paths
+fail closed. Legacy manual installs are detected and retained, without migration.
+This standalone lifecycle has no authority over embedding consumers or agent stores.
+
 This matrix describes the current-user Linux installer. It owns only canonical
 Telltale destinations and never probes or modifies unrelated host resources.
 

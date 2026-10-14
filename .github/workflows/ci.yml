@@ -183,6 +183,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw 'telltale.exe --version smoke failed'
           }
+      - name: Windows install and uninstall regression matrix
+        shell: pwsh
+        run: |
+          python -m pip install 'jsonschema>=4.18,<5'
+          if ($LASTEXITCODE -ne 0) { throw 'Event 3.0 validator dependency setup failed' }
+          .\tests\windows_lifecycle.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe -TestScheduledTask
 
   macos:
     name: macOS (aarch64-apple-darwin)
@@ -215,3 +221,117 @@ jobs:
           ./target/release/telltale scan --once --dry-run \
             --emit-activity --emit-session-risk-summary \
             --root tests/fixtures/session_stores
+
+  source-preflight:
+    name: Prospective source preflight (exact SHA)
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Inspect exact source and prospective identity
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git remote get-url origin)" = "https://github.com/Dark-Roast-Cyber/telltale"
+          test "$(git remote get-url --push origin)" = "https://github.com/Dark-Roast-Cyber/telltale"
+          echo "Reviewed source: $SOURCE_SHA"
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          export TELLTALE_SOURCE_TAG="v$version"
+          if git show-ref --verify --quiet "refs/tags/$TELLTALE_SOURCE_TAG"; then
+            echo "prospective=false" >> "$GITHUB_OUTPUT"
+            echo "Existing immutable tag $TELLTALE_SOURCE_TAG; prospective pre-tag checks are not applicable."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os
+          import urllib.error
+          import urllib.request
+          url = "https://api.github.com/repos/Dark-Roast-Cyber/telltale/releases/tags/" + os.environ["TELLTALE_SOURCE_TAG"]
+          request = urllib.request.Request(url, headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"], "Accept": "application/vnd.github+json"})
+          try:
+              with urllib.request.urlopen(request):
+                  raise SystemExit("Prospective version already has a published Release")
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+          PY
+          echo "prospective=true" >> "$GITHUB_OUTPUT"
+          # A local runner branch provides the canonical Make release context.
+          # No tag or remote branch is created or changed.
+          git switch -c main "$SOURCE_SHA"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        if: steps.identity.outputs.prospective == 'true'
+        with:
+          toolchain: 1.95.0
+          components: clippy,rustfmt
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        if: steps.identity.outputs.prospective == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-preflight-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-preflight-
+      - name: Run prospective source release preflight
+        if: steps.identity.outputs.prospective == 'true'
+        run: make --silent CARGO_LOCKED=--locked PUBLIC_RELEASE_REMOTE=https://github.com/Dark-Roast-Cyber/telltale release-preflight
+      - name: Check independently locked embedding contracts
+        if: steps.identity.outputs.prospective == 'true'
+        run: make --silent embedding-contract-check
+      - name: Check the supported Rust 1.88 embedding subset
+        if: steps.identity.outputs.prospective == 'true'
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          make --silent embedding-rust188-check
+      - name: Check a fresh standalone Git consumer at the exact source
+        if: steps.identity.outputs.prospective == 'true'
+        run: |
+          consumer_root=$(mktemp -d "$RUNNER_TEMP/telltale-git-consumer.XXXXXX")
+          export TELLTALE_GIT_CONSUMER_ROOT="$consumer_root"
+          mkdir -p "$consumer_root/tests/fixtures/session_stores/opencode" "$consumer_root/scripts"
+          cp -R tests/embedding-consumer "$consumer_root/tests/"
+          cp tests/fixtures/session_stores/opencode/opencode.db "$consumer_root/tests/fixtures/session_stores/opencode/"
+          cp scripts/embedding-contract-check "$consumer_root/scripts/"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import tomllib
+          root = Path(os.environ["TELLTALE_GIT_CONSUMER_ROOT"])
+          manifest = root / "tests/embedding-consumer/Cargo.toml"
+          version = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
+          original = 'path = "../../crates/telltale", version = "=' + version + '"'
+          replacement = 'git = "https://github.com/Dark-Roast-Cyber/telltale.git", rev = "' + os.environ["SOURCE_SHA"] + '", version = "=' + version + '"'
+          text = manifest.read_text()
+          assert text.count(original) == 1, "Unexpected external consumer dependency"
+          manifest.write_text(text.replace(original, replacement))
+          (manifest.parent / "Cargo.lock").unlink()
+          PY
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/git-consumer"
+          cargo generate-lockfile --manifest-path "$consumer_root/tests/embedding-consumer/Cargo.toml"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import tomllib
+          lock = Path(os.environ["TELLTALE_GIT_CONSUMER_ROOT"]) / "tests/embedding-consumer/Cargo.lock"
+          packages = tomllib.loads(lock.read_text())["package"]
+          expected = {"telltale-core", "telltale-detect", "telltale-sources", "telltale-rules", "telltale-schema"}
+          actual = [p for p in packages if p["name"] in expected]
+          assert {p["name"] for p in actual} == expected and len(actual) == len(expected), "Incomplete or duplicate Git consumer dependency graph"
+          source = "git+https://github.com/Dark-Roast-Cyber/telltale.git?rev=" + os.environ["SOURCE_SHA"] + "#" + os.environ["SOURCE_SHA"]
+          version = tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"]
+          assert all(p.get("source") == source and p["version"] == version for p in actual), "Git consumer source/version identity drift"
+          print("Standalone Git consumer resolved all five Telltale dependencies to " + os.environ["SOURCE_SHA"])
+          PY
+          sh "$consumer_root/scripts/embedding-contract-check"
+          cargo clippy --locked --manifest-path "$consumer_root/tests/embedding-consumer/Cargo.toml" --all-targets --all-features -- -D warnings
+          cargo fmt --manifest-path "$consumer_root/tests/embedding-consumer/Cargo.toml" --check
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"

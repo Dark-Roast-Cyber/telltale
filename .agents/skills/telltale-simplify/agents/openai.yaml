@@ -1,0 +1,3 @@
+interface:
+  display_name: "Telltale Simplification"
+  short_description: "Reduce Telltale complexity without weakening its contracts"

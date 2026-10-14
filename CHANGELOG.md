@@ -1,6 +1,35 @@
 # Changelog
 
-> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.2` is published as prerelease ID `409281155` from `c3132f22f0758912fbcbc7451f5fefee514c5bdb`; five-platform native verification passed in run `38098389234` using verifier tooling `8bc745fac485ffede1c4b06dbbc4ae6862ec5349`. Clean-host qualification and stable promotion remain pending. `v0.7.0-rc.1` (prerelease ID `397543935`) is superseded. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
+> **Release status:** [GitHub Releases](https://github.com/Dark-Roast-Cyber/telltale/releases) is authoritative for published artifacts. `v0.7.0-rc.3` is prepared source only. `v0.7.0-rc.2` is published as prerelease ID `409281155` from `c3132f22f0758912fbcbc7451f5fefee514c5bdb`; five-platform native verification passed in run `38098389234` using verifier tooling `8bc745fac485ffede1c4b06dbbc4ae6862ec5349`. RC2 clean Windows without a Redistributable passed (Issue #87); clean Linux, canary and stable promotion remain pending. `v0.7.0-rc.1` (prerelease ID `397543935`) is superseded. `v0.6.0` remains the official stable release and `v0.5.0` the previous stable. Historical `v0.6.0-rc.3` qualification does not qualify the new candidate. Retained weekly development notes are historical snapshots, not current release status.
+
+---
+
+## 0.7.0-rc.3 — prepared source (not tagged or published)
+
+- The current-user Windows installer verifies exact Release identity,
+  checksums, canonical ZIP contents, binary version and source-bound attestation.
+  Binary files are separate from existing per-user Logs/State defaults.
+- The uninstaller verifies receipt ownership, executable digest and exact task identity.
+- Optional least-privilege `TelltaleScan` and reversible installer-owned PATH
+  changes; development-local installation is explicitly unpublished.
+- Digest-bound receipts, staged replacement and transaction recovery. Default
+  uninstall retains data; confirmed purge removes owned generated data, with
+  configuration requiring separate explicit selection. Legacy installs are retained.
+- Synthetic Windows lifecycle regressions and disposable-runner scheduling
+  validation. ZIP inventory, embedding APIs and Event 3.0 are unchanged.
+  RC3 tagging/publication and qualification remain separate gates.
+- Bound untrusted rule-server requests, source admission, MCP inventory,
+  historical export and durable sink delivery. Failed MCP reads restore their
+  byte reservation; one unreadable configuration cannot starve later inputs.
+- Require HTTPS for remote HTTP sinks unless explicitly configured otherwise;
+  reject URL credentials/fragments and stop redirects for operator review.
+  The obsolete rule-save endpoint is removed.
+- Reject the Linux checksum-bypass option and replace the retired YAML parser
+  with `yaml_serde` / `libyaml-rs`, preserving the Serde YAML import surface.
+- Assemble rules-server HTTP responses before Windows socket writes and make
+  accepted-socket mode explicit in the macOS/Linux backlog regression.
+- Coordinate all workspace versions, internal requirements and both lockfiles;
+  add exact-source prospective preflight and embedding/Git-consumer CI evidence.
 
 ---
 
