@@ -350,6 +350,8 @@ Common event types include:
   severity. Targeted (watch) scans see only changed sources and do not raise it.
   State records the outage, so an unchanged outage alerts once. A full scan
   in which the client parses again clears it, so a recurrence alerts again.
+  `--backfill` re-emits all events, so each full backfill scan repeats the
+  alert while the outage lasts.
 - `correlation`: cross-session patterns built from emitted telemetry.
 - `process_chain`: process-relationship detections with risk attribution and a
   terminally sanitized `process` context.

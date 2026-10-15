@@ -671,9 +671,9 @@ fn client_parse_outcomes(
 fn source_parse_outage_alert(client: ClientId, selected: usize) -> Event {
     operational_alert_event(OperationalAlertInput {
         alert_type: "source_parse_outage".to_string(),
-        threshold: "min_parsed_sources_per_client=1".to_string(),
+        threshold: "min_processed_sources_per_client=1".to_string(),
         actual_value: format!(
-            "client={}; selected_sources={selected}; parsed_sources=0",
+            "client={}; selected_sources={selected}; processed_sources=0",
             client.as_str()
         ),
         scan_duration_ms: None,
@@ -1768,7 +1768,7 @@ mod tests {
         assert_eq!(evidence("alert_type"), Some("source_parse_outage"));
         assert_eq!(
             evidence("actual_value"),
-            Some("client=claude; selected_sources=2; parsed_sources=0")
+            Some("client=claude; selected_sources=2; processed_sources=0")
         );
         assert!(
             telltale_schema::event::Event3Record::from_json(&serde_json::to_vec(alert).unwrap())
