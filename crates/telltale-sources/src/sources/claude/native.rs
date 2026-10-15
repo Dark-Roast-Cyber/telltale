@@ -16,7 +16,6 @@ pub(crate) enum ClaudeContentBlock {
         id: Option<String>,
         name: Option<String>,
         input: Option<Value>,
-        input_present: bool,
     },
     ToolResult {
         tool_use_id: Option<String>,
@@ -24,6 +23,9 @@ pub(crate) enum ClaudeContentBlock {
         is_error: Option<bool>,
         is_error_present: bool,
     },
+    /// Reasoning and media blocks carry no text or tool facts; projection
+    /// drops them from the message instead of rejecting the record.
+    Ignored,
     Unknown,
 }
 
@@ -31,6 +33,8 @@ pub(crate) enum ClaudeContentBlock {
 pub(crate) struct ClaudeNativeRecord {
     pub(crate) attestation: Result<SessionMetadata, AcquisitionError>,
     pub(crate) source_sequence: u64,
+    /// Source-reported record `uuid`, used only to locate a quarantined record.
+    pub(crate) native_id: Option<String>,
     pub(crate) session_id: Option<String>,
     pub(crate) timestamp: Option<String>,
     pub(crate) discriminator: Option<String>,
@@ -85,6 +89,10 @@ pub(crate) fn extract_claude_native_records_with_limits(
         let native = ClaudeNativeRecord {
             attestation: ownership.and_then(|_| claude_attestation(&value)),
             source_sequence: source_sequence as u64,
+            native_id: value
+                .get("uuid")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             session_id,
             timestamp: nested_string_field(&value, "timestamp"),
             discriminator: claude_discriminator(&value).map(ToOwned::to_owned),
@@ -212,6 +220,27 @@ pub(crate) fn is_known_claude_discriminator(kind: &str) -> bool {
     )
 }
 
+/// Claude Code session bookkeeping records (titles, queue state, file
+/// snapshots, hook attachments). They are not conversation turns and carry no
+/// tool lifecycle, so projection skips them.
+pub(crate) fn is_claude_metadata_discriminator(kind: &str) -> bool {
+    matches!(
+        kind,
+        "attachment"
+            | "queue-operation"
+            | "last-prompt"
+            | "custom-title"
+            | "ai-title"
+            | "agent-name"
+            | "atis-latch"
+            | "file-history-snapshot"
+            | "file-history-delta"
+            | "summary"
+            | "system"
+            | "progress"
+    )
+}
+
 pub(crate) fn content_blocks(value: &Value) -> Option<&Vec<Value>> {
     value
         .get("message")
@@ -249,7 +278,6 @@ fn claude_content_block(value: &Value) -> ClaudeContentBlock {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             input: object.get("input").cloned(),
-            input_present: object.contains_key("input"),
         },
         Some("tool_result") => ClaudeContentBlock::ToolResult {
             tool_use_id: object
@@ -260,6 +288,9 @@ fn claude_content_block(value: &Value) -> ClaudeContentBlock {
             is_error: object.get("is_error").and_then(Value::as_bool),
             is_error_present: object.contains_key("is_error"),
         },
+        Some("thinking" | "redacted_thinking" | "image" | "document") => {
+            ClaudeContentBlock::Ignored
+        }
         _ => ClaudeContentBlock::Unknown,
     }
 }

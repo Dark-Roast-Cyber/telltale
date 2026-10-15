@@ -415,27 +415,89 @@ fn acquire_source_impl(
     }
 
     let mut accounting = AccountingBuilder::default();
+    let mut quarantined = Vec::new();
     let observations = match source.client {
         ClientId::Claude => {
             let records = extract_claude_native_records_with_limits(source, limits)
                 .map_err(|error| map_source_read(error, limits))?;
+            // Ownership and attestation are whole-source integrity: every
+            // record is counted, and checked, before any is projected.
             for record in &records {
-                let kind = record.accounting_kind();
-                account_unit(
-                    &mut accounting,
+                accounting.record(
                     record.session_id.as_deref(),
                     &record.attestation,
-                    &[kind],
-                    record.accounting_tool_name(),
-                    record.timestamp.as_deref(),
-                    record.contribution_strings(),
+                    &[record.accounting_kind()],
                 )?;
             }
-            project_claude_native_records(
+            let projection = project_claude_native_records(
                 &records,
                 &ClaudeCanonicalOptions::new(options.observed_at),
             )
-            .map_err(map_claude_error)?
+            .map_err(map_claude_error)?;
+            let mut excluded = projection
+                .quarantined
+                .iter()
+                .map(|unit| (unit.source_sequence, (unit.code, unit.bound)))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            for record in &records {
+                // Check this record's contribution alone before shared
+                // accounting changes, so a rejected token quarantines the
+                // record instead of half-counting it.
+                let mut keys = 0;
+                if !excluded.contains_key(&record.source_sequence)
+                    && let Err(error) = ActivityContributions::default().observe(
+                        record.accounting_tool_name(),
+                        None,
+                        record.contribution_strings().iter().map(String::as_str),
+                        &mut keys,
+                    )
+                {
+                    match error {
+                        AcquisitionError::InvalidContribution => {
+                            excluded.insert(
+                                record.source_sequence,
+                                ("invalid_native_contribution", None),
+                            );
+                        }
+                        error => return Err(error),
+                    }
+                }
+                if let Some((code, bound)) = excluded.get(&record.source_sequence) {
+                    quarantined.push(QuarantinedUnit {
+                        session_id: record.session_id.clone(),
+                        native_id: record.native_id.clone().unwrap_or_default(),
+                        source_sequence: record.source_sequence,
+                        code,
+                        bound: *bound,
+                    });
+                    continue;
+                }
+                let session = record.session_id.as_deref();
+                let kind = record.accounting_kind();
+                accounting.tool_usage(
+                    session,
+                    kind,
+                    record.accounting_tool_name(),
+                    record.timestamp.as_deref(),
+                )?;
+                accounting.contribute(
+                    session,
+                    kind,
+                    record.accounting_tool_name(),
+                    None,
+                    record.contribution_strings().iter().map(String::as_str),
+                )?;
+            }
+            projection
+                .observations
+                .into_iter()
+                .filter(|observation| {
+                    observation
+                        .source()
+                        .source_sequence()
+                        .is_none_or(|sequence| !excluded.contains_key(&sequence))
+                })
+                .collect()
         }
         ClientId::Codex => {
             let records = extract_codex_native_records_with_limits(source, limits)
@@ -565,8 +627,13 @@ fn acquire_source_impl(
     Ok(AcquisitionBatch {
         observations,
         progress: AcquisitionProgress::None,
-        accounting: accounting.finish(AccountingCoverage::CompleteSource),
-        quarantined: Vec::new(),
+        // Quarantined units were counted as records but not as activity.
+        accounting: accounting.finish(if quarantined.is_empty() {
+            AccountingCoverage::CompleteSource
+        } else {
+            AccountingCoverage::PartialSource
+        }),
+        quarantined,
         message_overlap_from: None,
     })
 }
@@ -870,9 +937,10 @@ fn map_canonical_error(error: OpenCodeCanonicalError) -> AcquisitionError {
 fn map_claude_error(error: ClaudeCanonicalError) -> AcquisitionError {
     match error {
         ClaudeCanonicalError::Mapping { code, .. } => AcquisitionError::CanonicalMapping { code },
-        ClaudeCanonicalError::Observation(error) => {
-            AcquisitionError::CanonicalValidation { code: error.code() }
-        }
+        ClaudeCanonicalError::Observation(error) => match error.bound_context() {
+            Some(context) => AcquisitionError::CanonicalBoundValidation { context },
+            None => AcquisitionError::CanonicalValidation { code: error.code() },
+        },
     }
 }
 
@@ -1393,6 +1461,18 @@ mod tests {
                 ),
             ] {
                 std::fs::write(&path, payload).unwrap();
+                if client == ClientId::Claude
+                    && expected
+                        == (AcquisitionError::CanonicalMapping {
+                            code: "unknown_discriminator",
+                        })
+                {
+                    // Claude quarantines an unknown record by itself.
+                    let batch = super::acquire_source(&source, options()).unwrap();
+                    assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
+                    assert!(!format!("{:?}", batch.quarantined).contains("private-"));
+                    continue;
+                }
                 let error = acquisition_error(super::acquire_source(&source, options()));
                 assert_eq!(error, expected);
                 let rendered = format!("{error} {error:?}");

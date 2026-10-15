@@ -6,6 +6,13 @@
 
 ## 0.7.0-rc.3 — prepared source (not tagged or published)
 
+- Fix Claude Code ingestion for current 2.1.x transcripts, including the Claude
+  desktop app's Code tab on Windows. Bookkeeping records are skipped, and
+  `thinking`/media blocks are dropped. Tool arguments and results live once on
+  the Tool observation, with the authored-text budget for Claude command, file
+  body, edit and prompt fields. Previously each of these failed the whole
+  transcript. An unknown record or block, or an oversized record, is now
+  quarantined by itself and reported without content, like OpenCode v2 rows.
 - The current-user Windows installer verifies exact Release identity,
   checksums, canonical ZIP contents, binary version and source-bound attestation.
   Binary files are separate from existing per-user Logs/State defaults.

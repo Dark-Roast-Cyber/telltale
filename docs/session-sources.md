@@ -44,7 +44,7 @@ than by exact private path or transcript content.
 | Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows unvalidated | Codex CLI docs confirm `~/.codex/sessions`; Telltale also supports `archived_sessions` and `headless` under the same root. |
 | Codex | `codex.archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `%CODEX_HOME%\archived_sessions` or `%USERPROFILE%\.codex\archived_sessions` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Codex | `codex.headless_sessions` | `$CODEX_HOME/headless` or `~/.codex/headless` | `$CODEX_HOME/headless` or `~/.codex/headless` | `%CODEX_HOME%\headless` or `%USERPROFILE%\.codex\headless` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
-| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows unvalidated | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. |
+| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows bounded live validation (desktop Code tab, 2026-10-14) | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. `CLAUDE_CONFIG_DIR` is not yet honored. |
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
 | OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | Windows platform data root plus `%XDG_DATA_HOME%\opencode\opencode.db` when set and `~/.local/share/opencode/opencode.db` | Confirmed Linux/macOS; Windows discovery/inventory live-checked | Windows checks the platform data root (`LOCALAPPDATA`, then `APPDATA`, then `~/AppData/Local`) alongside XDG candidates. Desktop v2.0.24 discovery/inventory validation and the live acquisition limit are recorded below. |
@@ -202,6 +202,25 @@ Claude Code adapter notes:
 - JSONL entries commonly use top-level `type` values such as `user` and `assistant`.
 - Message payloads can live under `message.role`, `message.model`, and `message.content`.
 - `message.content` arrays may include `text`, `tool_use`, and `tool_result` blocks; the adapter maps `tool_use` and `tool_result` blocks to their canonical Tool semantics.
+- The Claude desktop app's Code tab writes the same transcripts as the CLI;
+  its own `%APPDATA%\Claude\claude-code-sessions` metadata only references
+  them by `cliSessionId`.
+- Bookkeeping records between turns (`attachment`, `queue-operation`,
+  `last-prompt`, `custom-title`, `ai-title`, `agent-name`, `atis-latch`,
+  `file-history-snapshot`, `file-history-delta`, `summary`, `system`,
+  `progress`) are skipped.
+- `thinking`, `redacted_thinking`, `image`, and `document` blocks are dropped
+  from messages; reasoning text is not retained.
+- A message's `tool_use`/`tool_result` part keeps only its call id, name and
+  error state. Arguments and results are carried once, on the linked Tool
+  observation. `Bash`/`PowerShell` `command`, `Write` `content`, `Edit`
+  `old_string`/`new_string`, `NotebookEdit` `new_source` and `Task`/`Agent`
+  `prompt` get the authored-text budget, and an all-text result array is
+  joined into one direct string.
+- An unknown record type or content block, or a record whose own values
+  exceed a canonical bound, is quarantined by itself and reported by session,
+  record `uuid`, sequence and bound, never content; the rest of the
+  transcript is still evaluated and coverage is reported as partial.
 
 Qwen adapter notes:
 

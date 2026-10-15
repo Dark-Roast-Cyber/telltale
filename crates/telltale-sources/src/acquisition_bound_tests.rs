@@ -155,6 +155,11 @@ fn long_message_text_is_narrowly_acquired_by_each_json_and_process_adapter() {
                             .iter()
                             .any(|part| part.value() == &JsonValue::string(&text))
                 );
+            } else if client == ClientId::Claude {
+                // Claude quarantines the oversized record by itself.
+                let batch = result.unwrap();
+                assert!(batch.observations.is_empty());
+                assert_eq!(batch.quarantined[0].code, "unbounded_value");
             } else {
                 assert_eq!(result.err().unwrap().code(), "unbounded_value");
             }
