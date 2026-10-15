@@ -1470,11 +1470,17 @@ fn unscoped_native_contributions_and_private_failures() {
     let text = format!("https://PRIVATE{}", "x".repeat(4096));
     let value = serde_json::json!({"type":"assistant","session_id":"s","content":[{"type":"tool_use","id":"call-a","name":"shell","input":{}}],"sibling_context":text});
     std::fs::write(&source.path, value.to_string()).unwrap();
-    let error = acquire_source(&source, options())
-        .err()
-        .expect("oversized discarded contribution must fail");
-    assert_eq!(error, AcquisitionError::InvalidContribution);
-    assert!(!format!("{error} {error:?}").contains("PRIVATE"));
+    // Claude quarantines the record by itself, as OpenCode v2 does a row; the
+    // source is still evaluated and nothing private is reported.
+    let batch = acquire_source(&source, options()).unwrap();
+    assert!(batch.observations.is_empty());
+    assert_eq!(batch.quarantined.len(), 1);
+    assert_eq!(batch.quarantined[0].code, "invalid_native_contribution");
+    let counts = &batch.accounting.sessions[0].counts;
+    assert_eq!(counts.native_units, 1);
+    assert!(counts.contributions.tool_calls.is_empty());
+    assert!(counts.tool_usage.is_empty());
+    assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
 }
 
 #[test]

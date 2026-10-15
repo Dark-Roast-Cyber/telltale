@@ -701,8 +701,9 @@ fn is_bare_command_tool(name: Option<&str>) -> bool {
 /// Exact `(tool, field)` pairs whose string values are authored text. Tool
 /// names are the OpenCode names (`apply_patch` for legacy stores; `patch`,
 /// `shell`, `write`, `edit`, `execute`, `subagent` for v2; `bash` and `task`
-/// as stored by earlier releases); other adapters do not use these names with
-/// string fields.
+/// as stored by earlier releases) and the capitalized Claude Code names
+/// (`Bash`, `PowerShell`, `Write`, `Edit`, `NotebookEdit`, `Task`, `Agent`);
+/// other adapters do not use these names with string fields.
 const AUTHORED_TEXT_ARGUMENTS: &[(&str, &[&str])] = &[
     ("apply_patch", &["patchText"]),
     ("patch", &["patchText"]),
@@ -713,6 +714,13 @@ const AUTHORED_TEXT_ARGUMENTS: &[(&str, &[&str])] = &[
     ("execute", &["code"]),
     ("subagent", &["prompt"]),
     ("task", &["prompt"]),
+    ("Bash", &["command"]),
+    ("PowerShell", &["command"]),
+    ("Write", &["content"]),
+    ("Edit", &["old_string", "new_string"]),
+    ("NotebookEdit", &["new_source"]),
+    ("Task", &["prompt"]),
+    ("Agent", &["prompt"]),
 ];
 
 pub(crate) fn is_authored_text_argument(name: Option<&str>, field: &str) -> bool {
