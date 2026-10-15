@@ -337,6 +337,18 @@ fn run_scan_for_platform(
         })
         .collect::<Vec<_>>();
     let source_processing = source_processing_accounting(&processed_sources)?;
+    // Targeted scans see only changed sources, so only a full scan can say a
+    // client lost every source.
+    let parse_outages = if targeted {
+        Vec::new()
+    } else {
+        source_parse_outages(
+            sources
+                .iter()
+                .zip(&processed_sources)
+                .map(|(source, result)| (source.client, result.accounting.is_empty())),
+        )
+    };
     let policy_accounting = compute_policy_match_accounting(
         policy_active,
         pre_policy_rules.as_ref().is_some_and(Result::is_ok),
@@ -458,6 +470,13 @@ fn run_scan_for_platform(
     );
     detection_flow.emitted_detection_count += selected.emitted_detection_count;
     detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
+    // An outage alert accompanies the client's new or changed scanner_error
+    // events, so an unchanged outage stays as quiet as its suppressed errors.
+    emitted_events.extend(source_parse_outage_alerts(
+        parse_outages
+            .iter()
+            .filter(|(client, _)| selected.scanner_error_clients.contains(client)),
+    ));
     emitted_events.extend(selected.events);
 
     let health_emitted = config.execution.dry_run
@@ -625,11 +644,55 @@ fn scanner_health_alerts(
     alerts
 }
 
+/// Clients whose every selected source failed to parse, with the selected
+/// source count. Per-source `scanner_error` stays `informational` under the
+/// frozen Event 3.0 contract; losing every source of a client is a monitoring
+/// outage and is raised once per client as a `warning` operational alert.
+fn source_parse_outages(
+    results: impl IntoIterator<Item = (ClientId, bool)>,
+) -> Vec<(ClientId, usize)> {
+    let mut per_client = BTreeMap::<&'static str, (ClientId, usize, bool)>::new();
+    for (client, failed) in results {
+        let entry = per_client
+            .entry(client.as_str())
+            .or_insert((client, 0, true));
+        entry.1 += 1;
+        entry.2 &= failed;
+    }
+    per_client
+        .into_values()
+        .filter(|(_, _, all_failed)| *all_failed)
+        .map(|(client, selected, _)| (client, selected))
+        .collect()
+}
+
+fn source_parse_outage_alerts<'a>(
+    outages: impl IntoIterator<Item = &'a (ClientId, usize)>,
+) -> Vec<Event> {
+    outages
+        .into_iter()
+        .map(|(client, selected)| {
+            operational_alert_event(OperationalAlertInput {
+                alert_type: "source_parse_outage".to_string(),
+                threshold: "min_parsed_sources_per_client=1".to_string(),
+                actual_value: format!(
+                    "client={}; selected_sources={selected}; parsed_sources=0",
+                    client.as_str()
+                ),
+                scan_duration_ms: None,
+                scanner_error_count: None,
+            })
+        })
+        .collect()
+}
+
 struct SelectedSourceEvents {
     events: Vec<Event>,
     emitted_detection_count: usize,
     deduplicated_detection_count: usize,
     scanner_error_emitted: bool,
+    /// Clients with at least one emitted, not deduplicated, `scanner_error`.
+    scanner_error_clients: BTreeSet<ClientId>,
 }
 
 /// Select in emission order, recording fingerprints only in the in-memory state.
@@ -648,6 +711,7 @@ fn select_source_events(
         emitted_detection_count: 0,
         deduplicated_detection_count: 0,
         scanner_error_emitted: false,
+        scanner_error_clients: BTreeSet::new(),
     };
     for (source, activity) in activities {
         if backfill || state.should_emit(&source, &activity) {
@@ -665,7 +729,10 @@ fn select_source_events(
             }
         }
         if should_emit {
-            selected.scanner_error_emitted |= detection.event_type == "scanner_error";
+            if detection.event_type == "scanner_error" {
+                selected.scanner_error_emitted = true;
+                selected.scanner_error_clients.insert(source.client);
+            }
             selected.events.push(detection);
         }
     }
@@ -1667,6 +1734,43 @@ mod tests {
                 "errors={errors}, duration={duration}",
             );
         }
+    }
+
+    #[test]
+    fn source_parse_outage_alerts_only_when_every_source_of_a_client_fails() {
+        let outages = source_parse_outages([
+            (ClientId::Claude, true),
+            (ClientId::Codex, true),
+            (ClientId::Claude, true),
+            (ClientId::Codex, false),
+            (ClientId::Qwen, false),
+        ]);
+        assert_eq!(outages, vec![(ClientId::Claude, 2)]);
+        assert!(source_parse_outages([]).is_empty());
+
+        let alerts = source_parse_outage_alerts(&outages);
+        assert_eq!(alerts.len(), 1);
+        let alert = &alerts[0];
+        assert_eq!(alert.event_type, "operational_alert");
+        assert_eq!(alert.severity, "warning");
+        assert_eq!(alert.check_name.as_deref(), Some("operational_alert"));
+        assert_eq!(alert.status.as_deref(), Some("degraded"));
+        let evidence = |field: &str| {
+            alert
+                .evidence
+                .iter()
+                .find(|evidence| evidence.field == field)
+                .map(|evidence| evidence.redacted_value.as_str())
+        };
+        assert_eq!(evidence("alert_type"), Some("source_parse_outage"));
+        assert_eq!(
+            evidence("actual_value"),
+            Some("client=claude; selected_sources=2; parsed_sources=0")
+        );
+        assert!(
+            telltale_schema::event::Event3Record::from_json(&serde_json::to_vec(alert).unwrap())
+                .is_ok()
+        );
     }
 
     #[test]

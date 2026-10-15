@@ -275,3 +275,65 @@ fn current_claude_code_transcript_is_parsed_and_detected() {
         assert!(!text.contains("Synthetic private reasoning"));
     }
 }
+
+#[test]
+fn claude_config_dir_relocated_transcripts_are_discovered() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let config_dir = temp.path().join("relocated-claude");
+    let project = config_dir.join("projects/C--Users-synthetic-repo");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join(format!("{SESSION}.jsonl")),
+        transcript().join("\n") + "\n",
+    )
+    .unwrap();
+    let rules = temp.path().join("rules.yaml");
+    fs::write(&rules, RULES).unwrap();
+
+    let scan = |config_dir: Option<&std::path::Path>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_telltale"));
+        command
+            .env_clear()
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .current_dir(temp.path())
+            .args([
+                "scan",
+                "--once",
+                "--client",
+                "claude",
+                "--no-local-config",
+                "--dry-run",
+                "--install-inventory-disabled",
+                "--no-default-rules",
+                "--rules",
+            ])
+            .arg(&rules)
+            .arg("--log-path")
+            .arg(temp.path().join("events.jsonl"))
+            .arg("--state-path")
+            .arg(temp.path().join("state.json"));
+        if let Some(config_dir) = config_dir {
+            command.env("CLAUDE_CONFIG_DIR", config_dir);
+        }
+        let result = command.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        serde_json::from_slice::<Value>(&result.stdout).unwrap()
+    };
+
+    let unset = scan(None);
+    assert_eq!(
+        unset["source_processing"]["selected_source_count"], 0,
+        "{unset}"
+    );
+    let relocated = scan(Some(&config_dir));
+    let processing = &relocated["source_processing"];
+    assert_eq!(processing["selected_source_count"], 1, "{relocated}");
+    assert_eq!(processing["parse_success_source_count"], 1, "{relocated}");
+}
