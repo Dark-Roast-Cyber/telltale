@@ -222,7 +222,8 @@ impl ScanState {
 
     /// Records that a full scan saw `client` lose every source. True when the
     /// outage is new: it stays recorded, and quiet, until a full scan sees the
-    /// client parse again, so a recurrence after recovery alerts again.
+    /// client process a source successfully, so a recurrence after recovery
+    /// alerts again.
     pub fn enter_source_outage(&mut self, client: &str) -> bool {
         self.seen_detection_fingerprints
             .insert(source_outage_fingerprint(client))

@@ -25,8 +25,8 @@
   (`alert_type=source_parse_outage`, `check_name=operational_alert`).
   Per-source `scanner_error` stays `informational`, as the Event 3.0 contract
   requires. Outside `--backfill`, which re-emits every scan's events, an
-  unchanged outage alerts once; after a full scan sees the client parse again,
-  a recurrence alerts again.
+  unchanged outage alerts once; after a full scan in which a source of the client
+  processes successfully, a recurrence alerts again.
 - The current-user Windows installer verifies exact Release identity,
   checksums, canonical ZIP contents, binary version and source-bound attestation.
   Binary files are separate from existing per-user Logs/State defaults.

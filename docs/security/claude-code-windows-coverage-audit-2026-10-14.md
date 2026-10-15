@@ -198,8 +198,8 @@ failure) are resolved. The stale validation claim is not part of this change.
   check name already exist in the contract. The existing
   `scanner_error_threshold_exceeded` alert only fires above three errors, so
   it missed a single-transcript outage. State records the outage, so an
-  unchanged outage alerts once; a full scan in which the client parses again
-  clears it, so a recurrence after recovery alerts again. `--backfill`
+  unchanged outage alerts once; a full scan in which one of its sources processes
+  successfully clears it, so a recurrence after recovery alerts again. `--backfill`
   re-emits everything, so it repeats the alert on each full scan. Targeted watch
   scans do not raise it, because they see only the changed sources.
 - **Tests.** `install_inventory::tests::windows_claude_desktop_bundle_is_confirmed_without_path_or_node`,

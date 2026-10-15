@@ -471,7 +471,8 @@ fn run_scan_for_platform(
     detection_flow.emitted_detection_count += selected.emitted_detection_count;
     detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
     // An outage alerts when it starts, stays quiet while unchanged, and alerts
-    // again if it recurs after a full scan saw the client parse.
+    // again if it recurs after a full scan saw one of the client's sources
+    // process successfully.
     let mut outage_alerts = Vec::new();
     for &(client, selected_sources, all_failed) in &parse_outcomes {
         if !all_failed {

@@ -349,7 +349,8 @@ Common event types include:
   `scanner_error` stays `informational`, as Event 3.0 fixes that family's
   severity. Targeted (watch) scans see only changed sources and do not raise it.
   State records the outage, so an unchanged outage alerts once. A full scan
-  in which the client parses again clears it, so a recurrence alerts again.
+  in which one of the client's sources processes successfully clears it, so a
+  recurrence alerts again.
   `--backfill` re-emits all events, so each full backfill scan repeats the
   alert while the outage lasts.
 - `correlation`: cross-session patterns built from emitted telemetry.
