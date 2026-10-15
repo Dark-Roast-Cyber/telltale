@@ -122,6 +122,11 @@ Codex, OpenCode, Claude Code, and Copilot have received bounded live validation:
 - **OpenCode**: Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` (complete)
 - **Copilot**: `logs/copilot/process-*.log` (complete)
 - **Claude Code**: `~/.claude/projects/` (complete) — bounded `--client claude --max-sources 5 --dry-run` parsed 5 sources with 5 activities and 1 benign detection, zero scanner errors; repeated at cap 10 with consistent results.
+  On 2026-10-14 a Windows 11 audit found that Claude Code 2.1.x transcripts
+  (CLI and desktop Code tab) no longer parsed: bookkeeping records, `thinking`
+  blocks and nested or large tool inputs each failed the whole file. After the
+  fix, a bounded Windows `--client claude --dry-run` re-validation is recorded
+  in `docs/security/claude-code-windows-coverage-audit-2026-10-14.md`.
 
 Future live-validation notes should record the client filter and source cap
 used, for example `--client codex --max-sources 5 --dry-run`, rather than exact
