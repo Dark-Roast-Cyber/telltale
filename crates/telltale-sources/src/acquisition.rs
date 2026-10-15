@@ -442,9 +442,11 @@ fn acquire_source_impl(
             for record in &records {
                 // Check this record's contribution alone before shared
                 // accounting changes, so a rejected token quarantines the
-                // record instead of half-counting it.
+                // record instead of half-counting it. Accounting counts only
+                // tool calls, so only they are checked.
                 let mut keys = 0;
-                if !excluded.contains_key(&record.source_sequence)
+                if record.accounting_kind() == RecordKind::ToolCall
+                    && !excluded.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,
@@ -524,9 +526,11 @@ fn acquire_source_impl(
             for record in &records {
                 // Check this record's contribution alone before shared
                 // accounting changes, so a rejected token quarantines the
-                // record instead of half-counting it.
+                // record instead of half-counting it. Accounting counts only
+                // tool calls, so only they are checked.
                 let mut keys = 0;
-                if !excluded.contains_key(&record.source_sequence)
+                if record.accounting_kind() == RecordKind::ToolCall
+                    && !excluded.contains_key(&record.source_sequence)
                     && let Err(error) = ActivityContributions::default().observe(
                         record.accounting_tool_name(),
                         None,

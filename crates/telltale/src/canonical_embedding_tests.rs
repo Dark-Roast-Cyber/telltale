@@ -526,7 +526,9 @@ fn canonical_embedding_bound_context_survives_without_event3_changes() {
         let events = pipeline
             .scan_sources(std::slice::from_ref(&source))
             .unwrap();
-        // Event 3 is unchanged: no bound vocabulary or content reaches it.
+        // The valid prefix survives the quarantine, and Event 3 is unchanged:
+        // no bound vocabulary or content reaches it.
+        assert!(events.iter().any(|(_, e)| e.event_type == "activity"));
         assert!(events.iter().all(|(_, e)| e.event_type != "scanner_error"));
         let rendered =
             serde_json::to_string(&events.iter().map(|(_, e)| e).collect::<Vec<_>>()).unwrap();

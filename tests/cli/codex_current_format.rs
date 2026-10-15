@@ -200,6 +200,10 @@ fn current_codex_rollouts_are_parsed_and_detected() {
     );
     let summary: Value = serde_json::from_slice(&result.stdout).unwrap();
     let processing = &summary["source_processing"];
+    assert_eq!(
+        processing["selected_source_coverage"], "partial",
+        "{summary}"
+    );
     assert_eq!(processing["parse_success_source_count"], 2, "{summary}");
     assert_eq!(processing["parse_error_source_count"], 0, "{summary}");
     assert_eq!(processing["failures"], serde_json::json!([]), "{summary}");

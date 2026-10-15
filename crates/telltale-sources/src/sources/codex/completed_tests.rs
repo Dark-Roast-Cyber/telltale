@@ -1022,23 +1022,39 @@ fn completed_world_state_rejects_wrong_shapes_and_late_failures_atomically() {
             }
         }
         invalid.push(good["payload"].clone());
+        // Records whose discriminator is unknown, rather than a wrong
+        // world-state shape.
+        let mut unknown = Vec::new();
         for wrapper in ["event_msg", "response_item", "unknown"] {
             let mut bad = good.clone();
             bad["type"] = json!(wrapper);
-            invalid.push(bad);
-            invalid.push(json!({"type":wrapper,"payload":good}));
+            if wrapper == "response_item" {
+                invalid.push(bad);
+            } else {
+                unknown.push(bad);
+            }
+            unknown.push(json!({"type":wrapper,"payload":good}));
         }
         invalid.push(json!({"type":"world_state","payload":{"payload":{"full":true,"state":{}}}}));
-        for bad in invalid {
-            // A wrong world-state shape fails the source; a wrapper whose
+        let cases = invalid
+            .into_iter()
+            .map(|bad| (bad, false))
+            .chain(unknown.into_iter().map(|bad| (bad, true)));
+        for (bad, quarantines) in cases {
+            // A wrong world-state shape fails the source; a record whose
             // discriminator is unknown is quarantined by itself. Neither is
             // ever projected.
+            let label = bad.to_string();
             match acquire(
                 source,
                 &[meta(), good.clone(), completed("UserMessage", "u"), bad],
             ) {
-                Err(error) => assert!(!format!("{error:?} {error}").contains("PRIVATE-WORLD")),
+                Err(error) => {
+                    assert!(!quarantines, "{label}: {}", error.code());
+                    assert!(!format!("{error:?} {error}").contains("PRIVATE-WORLD"));
+                }
                 Ok(batch) => {
+                    assert!(quarantines, "{label}");
                     assert_eq!(batch.observations.len(), 1);
                     assert_eq!(batch.quarantined.len(), 1);
                     assert_eq!(batch.quarantined[0].code, "unknown_discriminator");

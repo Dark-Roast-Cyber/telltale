@@ -438,6 +438,9 @@ fn codex_auxiliary_rejects_wrong_wrappers_and_quarantines_late_unknowns() {
         let payload = auxiliary["payload"].clone();
         rejected.extend([payload.clone(), json!({"type":"unknown_wrapper","payload":payload}), json!({"type":auxiliary["type"],"payload":{"payload":payload}}), json!({"type":if auxiliary["type"] == "event_msg" {"response_item"} else {"event_msg"},"payload":payload})]);
     }
+    // Unknown event_msg variants must quarantine by themselves, never fail
+    // the source.
+    let mut unknown_variants = Vec::new();
     for kind in [
         "exec_command_begin",
         "exec_command_end",
@@ -447,15 +450,31 @@ fn codex_auxiliary_rejects_wrong_wrappers_and_quarantines_late_unknowns() {
         "turn_complete",
         "future_variant",
     ] {
-        rejected
-            .push(json!({"type":"event_msg","payload":{"type":kind,"item":{"type":"Reasoning"}}}));
+        let value = json!({"type":"event_msg","payload":{"type":kind,"item":{"type":"Reasoning"}}});
+        if kind == "item_completed" {
+            rejected.push(value);
+        } else {
+            unknown_variants.push(value);
+        }
     }
     rejected.extend([
         json!({"type":"event_msg","payload":{"type":null}}),
         json!({"type":"response_item","payload":{"type":123}}),
     ]);
-    for value in rejected {
+    let write = |value: &serde_json::Value| {
         std::fs::write(&source.path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"session_id\":\"s\"}}}}\n{{\"type\":\"user\",\"content\":\"synthetic\"}}\n{accepted}\n{value}\n")).unwrap();
+    };
+    for value in unknown_variants {
+        write(&value);
+        let batch = acquire_source(&source, options())
+            .unwrap_or_else(|error| panic!("{value}: {}", error.code()));
+        assert_eq!(batch.observations.len(), 1, "{value}");
+        assert_eq!(batch.quarantined.len(), 1, "{value}");
+        assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
+        assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
+    }
+    for value in rejected {
+        write(&value);
         let result = acquire_source(&source, options());
         if value["type"] == "response_item" && value["payload"]["type"] == 123 {
             assert_eq!(result.err().unwrap().code(), "unsupported_record");
@@ -1799,4 +1818,26 @@ fn copilot_ignored_items_cannot_attest_or_conflict_with_recognized_metadata() {
             }
         }
     }
+}
+
+#[test]
+fn codex_contribution_preflight_checks_only_tool_calls() {
+    // Only tool calls contribute activity facts, so a tool result whose name
+    // would be rejected as a contribution label must not be quarantined.
+    let directory = tempdir().unwrap();
+    let source = Source {
+        client: ClientId::Codex,
+        source_id: "codex.sessions".into(),
+        kind: SourceKind::Jsonl,
+        path: directory.path().join("synthetic.jsonl"),
+    };
+    let message = serde_json::json!({"type":"tool","name":"shell\u{7}","state":{"status":"completed","output":"synthetic"}});
+    std::fs::write(
+        &source.path,
+        format!("{{\"type\":\"session_meta\",\"payload\":{{\"session_id\":\"s\"}}}}\n{message}\n"),
+    )
+    .unwrap();
+    let batch = acquire_source(&source, options()).unwrap();
+    assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+    assert_eq!(batch.observations.len(), 1);
 }
