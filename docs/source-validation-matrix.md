@@ -33,7 +33,7 @@ ToolExecution **Unknown**.
 
 | Client | Source Identity | Discovery | Native + canonical benign | Canonical tool call | Canonical tool result | UC-001 | UC-002 | UC-003 | Support Status / Live Validation | Capability gaps |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex | `codex.sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Fixture-backed + bounded live validation | Workspace conditional; process ID and exit code absent; call ID/error state/parts conditional |
+| Codex | `codex.sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Fixture-backed + bounded live validation | Workspace conditional; process ID absent; exit code only on completed commands; call ID/error state/parts conditional |
 | Codex | `codex.archived_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Same as `codex.sessions` |
 | Codex | `codex.headless_sessions` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Same as `codex.sessions` |
 | Claude Code | `claude.projects` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | ✅ Fixture-backed + bounded live validation | Workspace, process ID and exit code absent; timestamps and call ID/error state/parts conditional |
@@ -119,6 +119,12 @@ gates above exist in the same change.
 Codex, OpenCode, Claude Code, and Copilot have received bounded live validation:
 
 - **Codex**: `~/.codex/sessions/`, `archived_sessions/`, and `headless/` (complete)
+  On 2026-10-14 a Windows 11 host had every Codex rollout fail acquisition:
+  forked threads' `history_base`, new bookkeeping records, completed items the
+  adapter did not know, and long tool output each failed the whole file. After
+  the fix, a `--client codex --dry-run` re-validation parsed 25 of 26 sources
+  (4,306 records; 440 units quarantined by themselves). The one remaining
+  source is acquired but exceeds the per-source evaluation work budget.
 - **OpenCode**: Linux `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` (complete)
 - **Copilot**: `logs/copilot/process-*.log` (complete)
 - **Claude Code**: `~/.claude/projects/` (complete) — bounded `--client claude --max-sources 5 --dry-run` parsed 5 sources with 5 activities and 1 benign detection, zero scanner errors; repeated at cap 10 with consistent results.

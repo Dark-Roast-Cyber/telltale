@@ -635,30 +635,31 @@ fn scan_dry_run_reports_selected_source_coverage_without_private_details() {
         "PRIVATE-COVERAGE-CONTENT invalid json\n",
     )
     .unwrap();
-    fs::write(directory.join("bound.jsonl"), format!("{}\n{}\n", serde_json::json!({"type":"user","session_id":"PRIVATE-COVERAGE-SESSION","content":"ok"}), serde_json::json!({"type":"user","session_id":"PRIVATE-COVERAGE-SESSION","content":"PRIVATE-COVERAGE-CONTENT".repeat(4000)}))).unwrap();
+    // A record over a canonical bound is quarantined by itself. Its report
+    // names the session by design, so this source uses a non-sentinel id.
+    fs::write(directory.join("bound.jsonl"), format!("{}\n{}\n", serde_json::json!({"type":"user","session_id":"synthetic-bound-session","content":"ok"}), serde_json::json!({"type":"user","session_id":"synthetic-bound-session","content":"PRIVATE-COVERAGE-CONTENT".repeat(4000)}))).unwrap();
     let mixed = scan();
     let processing = &mixed["source_processing"];
     assert_eq!(processing["selected_source_count"], 3);
-    assert_eq!(processing["parse_success_source_count"], 1);
-    assert_eq!(processing["parse_error_source_count"], 2);
+    assert_eq!(processing["parse_success_source_count"], 2);
     assert_eq!(
-        processing["parsed_record_count"], 1,
+        processing["parse_error_source_count"], 1,
         "rejected source is atomic"
     );
     assert_eq!(processing["selected_source_coverage"], "partial");
     let failures = processing["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 1);
     assert!(failures.iter().any(|f| f["stage"] == "Acquisition"
         && f["acquisition_code"] == "source_read"
         && f["source_count"] == 1));
-    assert!(
-        failures
-            .iter()
-            .any(|f| f["acquisition_code"] == "unbounded_value"
-                && f["bound_category"] == "MessageContent"
-                && f["bound_dimension"] == "StringBytes"
-                && f["source_count"] == 1)
-    );
+    let quarantined = processing["quarantined_units"].as_array().unwrap();
+    assert_eq!(quarantined.len(), 1);
+    assert_eq!(quarantined[0]["code"], "unbounded_value");
+    assert_eq!(quarantined[0]["bound_category"], "MessageContent");
+    assert_eq!(quarantined[0]["bound_dimension"], "StringBytes");
+    assert_eq!(quarantined[0]["source_sequence"], 1);
     fs::remove_file(&source).unwrap();
+    fs::remove_file(directory.join("bound.jsonl")).unwrap();
     let rejected = scan();
     assert_eq!(
         rejected["source_processing"]["parse_success_source_count"],
