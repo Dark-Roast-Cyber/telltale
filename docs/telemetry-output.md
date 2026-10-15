@@ -341,7 +341,18 @@ Common event types include:
 - `scanner_error`: source-acquisition or scan errors that should be visible to operators.
 - `operational_alert`: operator-facing threshold and delivery alerts, including
   `alert_type=sink_delivery_failure` when a configured remote sink (Splunk HEC,
-  Elastic bulk) could not be delivered to after retries.
+  Elastic bulk) could not be delivered to after retries, and
+  `alert_type=source_parse_outage` (check name `operational_alert`) once per
+  client when a full scan selected sources for that client and every one failed
+  processing (acquisition, parsing, evaluation or a later stage).
+  That client is unmonitored, so the alert is a `warning`; each per-source
+  `scanner_error` stays `informational`, as Event 3.0 fixes that family's
+  severity. Targeted (watch) scans see only changed sources and do not raise it.
+  State records the outage, so an unchanged outage alerts once. A full scan
+  in which one of the client's sources processes successfully clears it, so a
+  recurrence alerts again.
+  `--backfill` re-emits all events, so each full backfill scan repeats the
+  alert while the outage lasts.
 - `correlation`: cross-session patterns built from emitted telemetry.
 - `process_chain`: process-relationship detections with risk attribution and a
   terminally sanitized `process` context.

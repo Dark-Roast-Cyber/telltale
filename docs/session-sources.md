@@ -18,7 +18,13 @@ Code-style extension IDs, and globalStorage presence. On Windows, OpenCode
 Desktop also has metadata-only executable probes under
 `~/AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe` and
 `~/AppData/Roaming/ai.opencode.desktop/cli/*/opencode-cli.exe`; these do not
-require a PATH shim or Node installation. Install inventory runs on
+require a PATH shim or Node installation. The Claude desktop app bundles
+Claude Code at `~/AppData/Roaming/Claude/claude-code/<version>/<hash>/claude.exe`,
+and the MSIX package `Claude_pzs8sxrjxfjjc` mirrors it under
+`~/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code`;
+both are probed the same way (`claude-desktop`, `claude-desktop-packaged`).
+macOS and Linux desktop bundle locations are not probed until confirmed on a
+real install. Install inventory runs on
 a configurable cadence and never reads transcript/session contents.
 
 ## Host Discovery Candidates
@@ -44,7 +50,7 @@ than by exact private path or transcript content.
 | Codex | `codex.sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `$CODEX_HOME/sessions` or `~/.codex/sessions` | `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` | Confirmed root; Windows unvalidated | Codex CLI docs confirm `~/.codex/sessions`; Telltale also supports `archived_sessions` and `headless` under the same root. |
 | Codex | `codex.archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `$CODEX_HOME/archived_sessions` or `~/.codex/archived_sessions` | `%CODEX_HOME%\archived_sessions` or `%USERPROFILE%\.codex\archived_sessions` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
 | Codex | `codex.headless_sessions` | `$CODEX_HOME/headless` or `~/.codex/headless` | `$CODEX_HOME/headless` or `~/.codex/headless` | `%CODEX_HOME%\headless` or `%USERPROFILE%\.codex\headless` | Confirmed root; Windows unvalidated | Same root model as `codex.sessions`. |
-| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows bounded live validation (desktop Code tab, 2026-10-14) | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. `CLAUDE_CONFIG_DIR` is not yet honored. |
+| Claude Code | `claude.projects` | `~/.claude/projects` | `~/.claude/projects` | `%USERPROFILE%\.claude\projects` | Candidate; Windows bounded live validation (desktop Code tab, 2026-10-14) | Claude docs confirm `~/.claude/` as the user root; Telltale resolves project JSONL sessions through the platform-aware home root. When `CLAUDE_CONFIG_DIR` is set in the scanner's environment, `$CLAUDE_CONFIG_DIR/projects` is searched as well; `~/.claude/projects` stays a root because a scanner service may not share the user's environment. An explicit `--root` ignores the variable. |
 | Qwen CLI | `qwen.projects` | `~/.qwen/projects` | `~/.qwen/projects` | `%USERPROFILE%\.qwen\projects` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; upstream and live Windows validation remain incomplete. |
 | OpenClaw | `openclaw.agents` | `~/.openclaw/agents` | `~/.openclaw/agents` | `%USERPROFILE%\.openclaw\agents` | Candidate; Windows unvalidated | Telltale supports this path through the platform-aware home root; the upstream workspace/storage split still needs review. |
 | OpenCode | `opencode.sqlite` | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` | `~/Library/Application Support/opencode/opencode.db` | Windows platform data root plus `%XDG_DATA_HOME%\opencode\opencode.db` when set and `~/.local/share/opencode/opencode.db` | Confirmed Linux/macOS; Windows discovery/inventory live-checked | Windows checks the platform data root (`LOCALAPPDATA`, then `APPDATA`, then `~/AppData/Local`) alongside XDG candidates. Desktop v2.0.24 discovery/inventory validation and the live acquisition limit are recorded below. |
@@ -221,6 +227,9 @@ Claude Code adapter notes:
   exceed a canonical bound, is quarantined by itself and reported by session,
   record `uuid`, sequence and bound, never content; the rest of the
   transcript is still evaluated and coverage is reported as partial.
+- A full scan in which every selected Claude source fails processing, at
+  acquisition, parsing, evaluation or any later stage, also emits a `warning` `operational_alert` with `alert_type=source_parse_outage`; see
+  [telemetry-output.md](telemetry-output.md).
 
 Qwen adapter notes:
 
