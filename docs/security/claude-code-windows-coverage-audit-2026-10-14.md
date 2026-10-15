@@ -175,9 +175,10 @@ failure) are resolved. The stale validation claim is not part of this change.
   metadata only: it lists directories and checks for a regular file, so it
   never opens or runs the binary. A present bundle is `executable` evidence,
   so a desktop-only host is `confirmed`. The `AgentInstallDef` snapshot in
-  `registry.rs` is unchanged. The two new signals do change the inventory hash
-  once, so every host re-emits `install_inventory` after upgrade, as happened
-  with the OpenCode desktop probes. macOS and Linux bundle locations were not
+  `registry.rs` is unchanged. On Windows the two new signals change the
+  inventory hash once. Inventory emission is interval-gated, not
+  hash-triggered, so the new hash appears in the next scheduled
+  `install_inventory` event after upgrade. Other platforms are unchanged. macOS and Linux bundle locations were not
   confirmed on a real install, so they are not probed.
 - **`CLAUDE_CONFIG_DIR` (resolved).** When the variable is set in the
   scanner's environment, `claude.projects` discovery, bounded discovery and
@@ -190,15 +191,15 @@ failure) are resolved. The stale validation claim is not part of this change.
   fixes `scanner_error` at `informational`. Both the producer validator and the
   consumer reject anything else, and Event 3.0 is frozen, so raising it would
   break every downstream consumer. A full scan in which every selected source
-  of a client fails to parse now also emits one `warning` `operational_alert`
+  of a client fails processing now also emits one `warning` `operational_alert`
   for that client, with `alert_type=source_parse_outage`, the generic
   `check_name=operational_alert`, and content-free evidence
   (`client=claude; selected_sources=N; parsed_sources=0`). That family and
   check name already exist in the contract. The existing
   `scanner_error_threshold_exceeded` alert only fires above three errors, so
-  it missed a single-transcript outage. The alert goes out only with that
-  client's newly emitted `scanner_error` events, so an unchanged outage alerts
-  once and stays quiet after that, like the errors themselves. Targeted watch
+  it missed a single-transcript outage. State records the outage, so an
+  unchanged outage alerts once; a full scan in which the client parses again
+  clears it, so a recurrence after recovery alerts again. Targeted watch
   scans do not raise it, because they see only the changed sources.
 - **Tests.** `install_inventory::tests::windows_claude_desktop_bundle_is_confirmed_without_path_or_node`,
   `discovery::tests::claude_config_dir_adds_a_relocated_projects_root`,

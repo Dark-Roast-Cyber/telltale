@@ -339,10 +339,10 @@ fn run_scan_for_platform(
     let source_processing = source_processing_accounting(&processed_sources)?;
     // Targeted scans see only changed sources, so only a full scan can say a
     // client lost every source.
-    let parse_outages = if targeted {
+    let parse_outcomes = if targeted {
         Vec::new()
     } else {
-        source_parse_outages(
+        client_parse_outcomes(
             sources
                 .iter()
                 .zip(&processed_sources)
@@ -470,19 +470,25 @@ fn run_scan_for_platform(
     );
     detection_flow.emitted_detection_count += selected.emitted_detection_count;
     detection_flow.state_deduplicated_detection_count += selected.deduplicated_detection_count;
-    // An outage alert accompanies the client's new or changed scanner_error
-    // events, so an unchanged outage stays as quiet as its suppressed errors.
-    emitted_events.extend(source_parse_outage_alerts(
-        parse_outages
-            .iter()
-            .filter(|(client, _)| selected.scanner_error_clients.contains(client)),
-    ));
+    // An outage alerts when it starts, stays quiet while unchanged, and alerts
+    // again if it recurs after a full scan saw the client parse.
+    let mut outage_alerts = Vec::new();
+    for &(client, selected_sources, all_failed) in &parse_outcomes {
+        if !all_failed {
+            state.clear_source_outage(client.as_str());
+        } else if state.enter_source_outage(client.as_str()) || config.backfill {
+            outage_alerts.push(source_parse_outage_alert(client, selected_sources));
+        }
+    }
+    let outage_alert_emitted = !outage_alerts.is_empty();
+    emitted_events.extend(outage_alerts);
     emitted_events.extend(selected.events);
 
     let health_emitted = config.execution.dry_run
         || config.backfill
         || inventory_health_change
         || selected.scanner_error_emitted
+        || outage_alert_emitted
         || has_operational_alerts;
     let emitted_count = emitted_events.len() as u64;
     let health = health_event_with_metadata(HealthEventInput {
@@ -644,13 +650,13 @@ fn scanner_health_alerts(
     alerts
 }
 
-/// Clients whose every selected source failed to parse, with the selected
-/// source count. Per-source `scanner_error` stays `informational` under the
-/// frozen Event 3.0 contract; losing every source of a client is a monitoring
-/// outage and is raised once per client as a `warning` operational alert.
-fn source_parse_outages(
+/// Per client: the selected source count and whether every selected source
+/// failed processing. Per-source `scanner_error` stays `informational` under
+/// the frozen Event 3.0 contract; losing every source of a client is a
+/// monitoring outage and is raised per client as a `warning` operational alert.
+fn client_parse_outcomes(
     results: impl IntoIterator<Item = (ClientId, bool)>,
-) -> Vec<(ClientId, usize)> {
+) -> Vec<(ClientId, usize, bool)> {
     let mut per_client = BTreeMap::<&'static str, (ClientId, usize, bool)>::new();
     for (client, failed) in results {
         let entry = per_client
@@ -659,31 +665,20 @@ fn source_parse_outages(
         entry.1 += 1;
         entry.2 &= failed;
     }
-    per_client
-        .into_values()
-        .filter(|(_, _, all_failed)| *all_failed)
-        .map(|(client, selected, _)| (client, selected))
-        .collect()
+    per_client.into_values().collect()
 }
 
-fn source_parse_outage_alerts<'a>(
-    outages: impl IntoIterator<Item = &'a (ClientId, usize)>,
-) -> Vec<Event> {
-    outages
-        .into_iter()
-        .map(|(client, selected)| {
-            operational_alert_event(OperationalAlertInput {
-                alert_type: "source_parse_outage".to_string(),
-                threshold: "min_parsed_sources_per_client=1".to_string(),
-                actual_value: format!(
-                    "client={}; selected_sources={selected}; parsed_sources=0",
-                    client.as_str()
-                ),
-                scan_duration_ms: None,
-                scanner_error_count: None,
-            })
-        })
-        .collect()
+fn source_parse_outage_alert(client: ClientId, selected: usize) -> Event {
+    operational_alert_event(OperationalAlertInput {
+        alert_type: "source_parse_outage".to_string(),
+        threshold: "min_parsed_sources_per_client=1".to_string(),
+        actual_value: format!(
+            "client={}; selected_sources={selected}; parsed_sources=0",
+            client.as_str()
+        ),
+        scan_duration_ms: None,
+        scanner_error_count: None,
+    })
 }
 
 struct SelectedSourceEvents {
@@ -691,8 +686,6 @@ struct SelectedSourceEvents {
     emitted_detection_count: usize,
     deduplicated_detection_count: usize,
     scanner_error_emitted: bool,
-    /// Clients with at least one emitted, not deduplicated, `scanner_error`.
-    scanner_error_clients: BTreeSet<ClientId>,
 }
 
 /// Select in emission order, recording fingerprints only in the in-memory state.
@@ -711,7 +704,6 @@ fn select_source_events(
         emitted_detection_count: 0,
         deduplicated_detection_count: 0,
         scanner_error_emitted: false,
-        scanner_error_clients: BTreeSet::new(),
     };
     for (source, activity) in activities {
         if backfill || state.should_emit(&source, &activity) {
@@ -729,10 +721,7 @@ fn select_source_events(
             }
         }
         if should_emit {
-            if detection.event_type == "scanner_error" {
-                selected.scanner_error_emitted = true;
-                selected.scanner_error_clients.insert(source.client);
-            }
+            selected.scanner_error_emitted |= detection.event_type == "scanner_error";
             selected.events.push(detection);
         }
     }
@@ -1738,19 +1727,33 @@ mod tests {
 
     #[test]
     fn source_parse_outage_alerts_only_when_every_source_of_a_client_fails() {
-        let outages = source_parse_outages([
+        let outcomes = client_parse_outcomes([
             (ClientId::Claude, true),
             (ClientId::Codex, true),
             (ClientId::Claude, true),
             (ClientId::Codex, false),
             (ClientId::Qwen, false),
         ]);
-        assert_eq!(outages, vec![(ClientId::Claude, 2)]);
-        assert!(source_parse_outages([]).is_empty());
+        assert_eq!(
+            outcomes,
+            vec![
+                (ClientId::Claude, 2, true),
+                (ClientId::Codex, 2, false),
+                (ClientId::Qwen, 1, false),
+            ]
+        );
+        assert!(client_parse_outcomes([]).is_empty());
 
-        let alerts = source_parse_outage_alerts(&outages);
-        assert_eq!(alerts.len(), 1);
-        let alert = &alerts[0];
+        // New outage alerts; unchanged stays quiet; recovery re-arms it.
+        let mut state = ScanState::default();
+        assert!(state.enter_source_outage("claude"));
+        assert!(!state.enter_source_outage("claude"));
+        assert!(state.enter_source_outage("codex"));
+        state.clear_source_outage("claude");
+        assert!(state.enter_source_outage("claude"));
+        assert!(!state.enter_source_outage("codex"));
+
+        let alert = &source_parse_outage_alert(ClientId::Claude, 2);
         assert_eq!(alert.event_type, "operational_alert");
         assert_eq!(alert.severity, "warning");
         assert_eq!(alert.check_name.as_deref(), Some("operational_alert"));

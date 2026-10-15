@@ -227,8 +227,8 @@ Claude Code adapter notes:
   exceed a canonical bound, is quarantined by itself and reported by session,
   record `uuid`, sequence and bound, never content; the rest of the
   transcript is still evaluated and coverage is reported as partial.
-- A full scan in which every selected Claude source fails to parse also emits a
-  `warning` `operational_alert` with `alert_type=source_parse_outage`; see
+- A full scan in which every selected Claude source fails processing, at
+  acquisition, parsing, evaluation or any later stage, also emits a `warning` `operational_alert` with `alert_type=source_parse_outage`; see
   [telemetry-output.md](telemetry-output.md).
 
 Qwen adapter notes:
