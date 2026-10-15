@@ -1838,6 +1838,6 @@ fn codex_contribution_preflight_checks_only_tool_calls() {
     )
     .unwrap();
     let batch = acquire_source(&source, options()).unwrap();
-    assert!(batch.quarantined.is_empty(), "{:?}", batch.quarantined);
+    assert_eq!(batch.quarantined.len(), 0);
     assert_eq!(batch.observations.len(), 1);
 }
