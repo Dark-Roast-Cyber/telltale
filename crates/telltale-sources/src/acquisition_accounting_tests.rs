@@ -8,7 +8,7 @@ fn options() -> AcquisitionOptions {
 }
 
 #[test]
-fn codex_developer_input_text_canonical_string_bound_is_source_atomic() {
+fn codex_developer_input_text_canonical_string_bound_quarantines_the_record() {
     use telltale_schema::observation::{JsonValue, MessageRole, ObservationBody};
     let directory = tempdir().unwrap();
     let prefix = concat!(
@@ -49,19 +49,22 @@ fn codex_developer_input_text_canonical_string_bound_is_source_atomic() {
                 );
                 assert_eq!(batch.accounting.sessions[0].counts.native_units, 3);
             } else {
-                let error = result
-                    .err()
-                    .expect("late bound failure must reject whole source");
+                // The oversized record is left out by itself; the user
+                // message before it is still acquired.
+                let batch = result.expect("late bound failure quarantines one record");
+                assert_eq!(batch.observations.len(), 1);
+                assert_eq!(batch.quarantined.len(), 1);
+                assert_eq!(batch.quarantined[0].code, "unbounded_value");
+                assert_eq!(batch.quarantined[0].source_sequence, 2);
                 assert_eq!(
-                    error,
-                    AcquisitionError::CanonicalBoundValidation {
-                        context: telltale_schema::observation::CanonicalBoundContext {
-                            category: telltale_schema::observation::CanonicalFieldCategory::MessageContentParts,
-                            dimension: telltale_schema::observation::BoundDimension::StringBytes,
-                        }
-                    }
+                    batch.quarantined[0].bound,
+                    Some(telltale_schema::observation::CanonicalBoundContext {
+                        category: telltale_schema::observation::CanonicalFieldCategory::MessageContentParts,
+                        dimension: telltale_schema::observation::BoundDimension::StringBytes,
+                    })
                 );
-                assert!(!format!("{error} {error:?}").contains(marker));
+                assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+                assert!(!format!("{:?}", batch.quarantined).contains(marker));
             }
         }
     }
@@ -217,6 +220,14 @@ fn codex_instruction_roles_preserve_order_identity_and_other_accounting() {
             ),
         ] {
             std::fs::write(&source.path, format!("{contents}\n{{\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"{role}\",\"content\":{content}}}}}\n")).unwrap();
+            if code == "unknown_content_block" {
+                // An unknown block quarantines its record by itself.
+                let batch = acquire_source(&source, options()).unwrap();
+                assert_eq!(batch.quarantined.len(), 1);
+                assert_eq!(batch.quarantined[0].code, code);
+                assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
+                continue;
+            }
             let error = acquire_source(&source, options())
                 .err()
                 .expect("source-atomic rejection");
@@ -238,9 +249,16 @@ fn codex_auxiliary_records() -> Vec<serde_json::Value> {
         json!({"type":"turn_context","payload":{"model":"synthetic-model","model_provider":"synthetic-provider"}}),
         json!({"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"PRIVATE reasoning"}],"content":[{"type":"reasoning_text","text":"PRIVATE reasoning"}]}}),
     ];
+    // Bookkeeping that current Codex releases write between conversation items.
+    records.extend([
+        json!({"type":"token_usage_record","payload":{"turn_id":"turn-a","response_id":"response-a","usage":{"input_tokens":1,"output_tokens":2}}}),
+        json!({"type":"compacted","payload":{"message":"PRIVATE summary","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"PRIVATE history"}]}]}}),
+    ]);
     for kind in [
         "task_started",
         "task_complete",
+        "turn_aborted",
+        "thread_settings_applied",
         "token_count",
         "agent_reasoning",
         "agent_reasoning_raw_content",
@@ -360,7 +378,7 @@ fn codex_auxiliary_preserves_messages_tools_ordinals_and_replay() {
                 assistant_message: 1,
                 tool_call: 1,
                 tool_result: 1,
-                other: 10
+                other: codex_auxiliary_records().len() as u64
             }
         );
         for (index, ((actual, repeated), expected)) in batch
@@ -374,7 +392,8 @@ fn codex_auxiliary_preserves_messages_tools_ordinals_and_replay() {
             assert_eq!(actual.correlation(), expected.correlation());
             assert_eq!(actual.session_id().unwrap().value(), "s");
             assert_eq!(actual.source().adapter_id(), source_id);
-            assert_eq!(actual.sequence(), Some([1, 2, 13, 14][index]));
+            let after = 3 + codex_auxiliary_records().len() as u64;
+            assert_eq!(actual.sequence(), Some([1, 2, after, after + 1][index]));
             assert_eq!(actual.observation_id(), repeated.observation_id());
             assert_eq!(actual.source(), repeated.source());
             assert_eq!(
@@ -391,7 +410,7 @@ fn codex_auxiliary_preserves_messages_tools_ordinals_and_replay() {
 }
 
 #[test]
-fn codex_auxiliary_rejects_wrong_wrappers_and_late_unknowns_atomically() {
+fn codex_auxiliary_rejects_wrong_wrappers_and_quarantines_late_unknowns() {
     use serde_json::json;
     let directory = tempdir().unwrap();
     let source = Source {
@@ -437,29 +456,42 @@ fn codex_auxiliary_rejects_wrong_wrappers_and_late_unknowns_atomically() {
     ]);
     for value in rejected {
         std::fs::write(&source.path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"session_id\":\"s\"}}}}\n{{\"type\":\"user\",\"content\":\"synthetic\"}}\n{accepted}\n{value}\n")).unwrap();
-        let error = acquire_source(&source, options())
-            .err()
-            .expect("whole acquisition must fail");
+        let result = acquire_source(&source, options());
         if value["type"] == "response_item" && value["payload"]["type"] == 123 {
-            assert_eq!(error.code(), "unsupported_record");
+            assert_eq!(result.err().unwrap().code(), "unsupported_record");
         } else if value["payload"]["type"] == "item_completed" {
             assert_eq!(
-                error.code(),
+                result.err().unwrap().code(),
                 "source_read",
                 "completed coordinates are missing"
             );
         } else {
-            assert_eq!(error.code(), "unknown_discriminator", "{value}");
+            match result {
+                // An unknown discriminator quarantines its record by itself;
+                // the user message is still acquired.
+                Ok(batch) => {
+                    assert_eq!(batch.observations.len(), 1, "{value}");
+                    assert_eq!(batch.quarantined.len(), 1, "{value}");
+                    assert_eq!(batch.quarantined[0].code, "unknown_discriminator");
+                    assert!(!format!("{:?}", batch.quarantined).contains("PRIVATE"));
+                }
+                // A wrong wrapper on a known type, or an untyped record, is
+                // still schema drift for the whole source.
+                Err(error) => {
+                    assert!(
+                        matches!(error.code(), "source_read" | "unsupported_record"),
+                        "{value}: {}",
+                        error.code()
+                    );
+                    assert!(!format!("{error:?}").contains("PRIVATE"));
+                }
+            }
         }
-        assert!(!format!("{error:?}").contains("PRIVATE"));
     }
     std::fs::write(&source.path, format!("{{\"type\":\"session_meta\",\"payload\":{{\"session_id\":\"s\"}}}}\n{accepted}\n{{\"type\":\"assistant\",\"content\":[{{\"type\":\"future_block\",\"text\":\"PRIVATE\"}}]}}\n")).unwrap();
-    assert!(matches!(
-        acquire_source(&source, options()),
-        Err(AcquisitionError::CanonicalMapping {
-            code: "unknown_content_block"
-        })
-    ));
+    let batch = acquire_source(&source, options()).unwrap();
+    assert_eq!(batch.quarantined.len(), 1);
+    assert_eq!(batch.quarantined[0].code, "unknown_content_block");
 }
 
 #[test]
@@ -472,7 +504,17 @@ fn codex_auxiliary_preserves_metadata_and_session_validation() {
         kind: SourceKind::Jsonl,
         path: directory.path().join("synthetic.jsonl"),
     };
-    for auxiliary in codex_auxiliary_records() {
+    // Bookkeeping payloads are opaque: a token usage record's payload names
+    // the root session, not this thread. Their envelope is still validated.
+    let (opaque, auxiliaries): (Vec<_>, Vec<_>) = codex_auxiliary_records()
+        .into_iter()
+        .partition(|v| matches!(v["type"].as_str(), Some("token_usage_record" | "compacted")));
+    for mut value in opaque {
+        value["session_id"] = json!(42);
+        std::fs::write(&source.path, value.to_string()).unwrap();
+        assert!(acquire_source(&source, options()).is_err(), "{value}");
+    }
+    for auxiliary in auxiliaries {
         for invalid in [
             json!({"session_id":"a", "payload_session_id":"b"}),
             json!({"session_id":"a", "model":123}),

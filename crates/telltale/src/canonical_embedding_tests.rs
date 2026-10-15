@@ -492,8 +492,9 @@ fn canonical_embedding_bound_context_survives_without_event3_changes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("synthetic-private-bound.jsonl");
     let marker = "SYNTHETIC-PRIVATE-BOUND-";
-    let prefix = serde_json::json!({"type":"user", "session_id":marker, "content":"ok"});
-    let rejected = serde_json::json!({"type":"user", "session_id":marker, "content":format!("{marker}{}", "x".repeat(65_537))});
+    let prefix =
+        serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":"ok"});
+    let rejected = serde_json::json!({"type":"user", "session_id":"synthetic-session", "content":format!("{marker}{}", "x".repeat(65_537))});
     std::fs::write(&path, format!("{prefix}\n{rejected}\n")).unwrap();
     let pipeline = Pipeline::builder().build().unwrap();
     for (source_id, kind) in [
@@ -510,31 +511,25 @@ fn canonical_embedding_bound_context_survives_without_event3_changes() {
         let results = pipeline
             .scan_canonical_sources(std::slice::from_ref(&source), clock())
             .unwrap();
-        let failure = results[0]
-            .1
-            .as_ref()
-            .err()
-            .expect("source-atomic rejection");
+        // The oversized record is quarantined by itself; its bound context
+        // reaches the embedding on the quarantined unit.
+        let result = results[0].1.as_ref().expect("record quarantine");
+        assert_eq!(result.quarantined.len(), 1);
         assert_eq!(
-            failure.progress,
-            telltale_sources::acquisition::AcquisitionProgress::None
-        );
-        assert_eq!(
-            failure.acquisition.unwrap().bound_context(),
+            result.quarantined[0].bound,
             Some(CanonicalBoundContext {
                 category: CanonicalFieldCategory::MessageContent,
                 dimension: BoundDimension::StringBytes
             })
         );
-        let diagnostic = format!("{failure:?} {failure}");
-        assert!(!diagnostic.contains(marker), "runtime diagnostic leaked");
+        assert!(!format!("{:?}", result.quarantined).contains(marker));
         let events = pipeline
             .scan_sources(std::slice::from_ref(&source))
             .unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].1.event_type, "scanner_error");
-        let event = serde_json::to_string(&events[0].1).unwrap();
-        assert!(event.contains("canonical_acquisition_failed"));
+        // Event 3 is unchanged: no bound vocabulary or content reaches it.
+        assert!(events.iter().all(|(_, e)| e.event_type != "scanner_error"));
+        let rendered =
+            serde_json::to_string(&events.iter().map(|(_, e)| e).collect::<Vec<_>>()).unwrap();
         for forbidden in [
             marker,
             "synthetic-private-bound",
@@ -543,7 +538,7 @@ fn canonical_embedding_bound_context_survives_without_event3_changes() {
             "unbounded_value",
         ] {
             assert!(
-                !event.contains(forbidden),
+                !rendered.contains(forbidden),
                 "frozen Event3 projection changed or leaked"
             );
         }

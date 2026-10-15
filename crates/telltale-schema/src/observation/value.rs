@@ -151,7 +151,7 @@ impl JsonValue {
             return Ok(Self::Object(converted));
         }
         if let serde_json::Value::String(text) = value
-            && is_bare_command_tool(name)
+            && is_bare_text_tool(name)
         {
             return Self::try_from_source_message_text(text);
         }
@@ -663,7 +663,7 @@ pub(crate) fn bounded_tool_arguments_bytes(
             .ok_or_else(|| ObservationError::bound(BoundDimension::EncodedBytes));
     }
     if let JsonValue::String(text) = value
-        && is_bare_command_tool(name)
+        && is_bare_text_tool(name)
     {
         return bounded_message_text_bytes(text);
     }
@@ -696,6 +696,14 @@ pub(crate) fn authored_command<'a>(
 /// command string itself. Legacy `bash` input must still be an object.
 fn is_bare_command_tool(name: Option<&str>) -> bool {
     name == Some("shell")
+}
+
+/// Tools whose whole argument may be one authored string: the bare command
+/// tool, and the Codex freeform custom tools `exec` (a code-mode script) and
+/// `apply_patch` (a patch). Only a string argument gets the text budget; an
+/// object argument keeps the exact field pairs below.
+fn is_bare_text_tool(name: Option<&str>) -> bool {
+    is_bare_command_tool(name) || matches!(name, Some("exec" | "apply_patch"))
 }
 
 /// Exact `(tool, field)` pairs whose string values are authored text. Tool

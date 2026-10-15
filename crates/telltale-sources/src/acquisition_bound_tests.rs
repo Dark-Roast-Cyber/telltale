@@ -155,8 +155,8 @@ fn long_message_text_is_narrowly_acquired_by_each_json_and_process_adapter() {
                             .iter()
                             .any(|part| part.value() == &JsonValue::string(&text))
                 );
-            } else if client == ClientId::Claude {
-                // Claude quarantines the oversized record by itself.
+            } else if matches!(client, ClientId::Claude | ClientId::Codex) {
+                // Claude and Codex quarantine the oversized record by itself.
                 let batch = result.unwrap();
                 assert!(batch.observations.is_empty());
                 assert_eq!(batch.quarantined[0].code, "unbounded_value");
@@ -234,10 +234,12 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
                 .collect(),
         )
     };
+    // A direct result string, or an `exec` script, gets the text budget; a
+    // string nested in a structured value keeps the ordinary bound.
     let dimensions = [
         (
-            json!("é".repeat(2048)),
-            json!(format!("{}x", "é".repeat(2048))),
+            json!(["é".repeat(2048)]),
+            json!([format!("{}x", "é".repeat(2048))]),
             BoundDimension::StringBytes,
         ),
         (nested(5), nested(6), BoundDimension::Depth),
@@ -271,10 +273,24 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
             path: directory.path().join("synthetic-bound.jsonl"),
         };
         let acquire = |record: Value| {
-            // Late failures may not expose the already-valid message or accounting.
             let prefix = json!({"type":"user", "session_id":"synthetic", "content":"ok"});
             std::fs::write(&source.path, format!("{prefix}\n{record}\n")).unwrap();
             acquire_source(&source, options())
+        };
+        // A late bound failure quarantines that record alone; the valid
+        // message before it is still acquired and the source is partial.
+        let quarantined = |record: Value| {
+            let batch = acquire(record).expect("record quarantine");
+            assert_eq!(batch.observations.len(), 1);
+            assert_eq!(batch.quarantined.len(), 1);
+            assert_eq!(batch.quarantined[0].code, "unbounded_value");
+            assert_eq!(batch.quarantined[0].source_sequence, 1);
+            assert_eq!(batch.accounting.coverage, AccountingCoverage::PartialSource);
+            let diagnostic = format!("{:?}", batch.quarantined);
+            for forbidden in ["synthetic_key", "synthetic-bound", "private_key", "exec"] {
+                assert!(!diagnostic.contains(forbidden), "source content retained");
+            }
+            batch.quarantined[0].bound
         };
         for (exact, excess, dimension) in &dimensions {
             for (key, kind, category) in [
@@ -300,28 +316,13 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
                     retained == Some(&JsonValue::try_from_source_value(exact).unwrap()),
                     "payload changed"
                 );
-                let error = acquire(record(excess))
-                    .err()
-                    .expect("whole-source rejection");
                 assert_eq!(
-                    error.bound_context(),
+                    quarantined(record(excess)),
                     Some(CanonicalBoundContext {
                         category,
                         dimension: *dimension
                     })
                 );
-                assert_eq!(error.to_string(), "unbounded_value");
-                let diagnostic = format!("{error:?}");
-                for forbidden in [
-                    "synthetic_key",
-                    "synthetic-bound",
-                    "synthetic",
-                    "exec",
-                    "arguments",
-                    "output",
-                ] {
-                    assert!(!diagnostic.contains(forbidden), "source content retained");
-                }
             }
         }
         for (record, category, dimension) in [
@@ -356,17 +357,12 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
                 BoundDimension::StringBytes,
             ),
         ] {
-            let error = acquire(record).err().expect("assembled bound rejection");
             assert_eq!(
-                error.bound_context(),
+                quarantined(record),
                 Some(CanonicalBoundContext {
                     category,
                     dimension
                 })
-            );
-            assert!(
-                !format!("{error:?} {error}").contains("private_key"),
-                "key leaked"
             );
         }
         let decomposed = "e\u{301}".repeat(1366);
@@ -378,13 +374,10 @@ fn codex_bound_diagnostics_cover_conversion_and_assembled_values() {
             message.content_parts()[0].value() == &JsonValue::string(&decomposed),
             "NFC projection changed"
         );
-        let error = acquire(
-            json!({"type":"user", "session_id":"synthetic", "content":"e\u{301}".repeat(21_846)}),
-        )
-        .err()
-        .expect("original scalar byte check");
         assert_eq!(
-            error.bound_context(),
+            quarantined(
+                json!({"type":"user", "session_id":"synthetic", "content":"e\u{301}".repeat(21_846)})
+            ),
             Some(CanonicalBoundContext {
                 category: CanonicalFieldCategory::MessageContent,
                 dimension: BoundDimension::StringBytes
