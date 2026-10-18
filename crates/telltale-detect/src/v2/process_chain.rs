@@ -461,7 +461,11 @@ fn normalize_match(
     .with_confidence(confidence(&detection.confidence)?)
     .with_techniques(techniques)?
     .with_correlation_scope(CorrelationScope::Process)
-    .with_dedupe_key(&detection.dedup_key)?;
+    .with_dedupe_key(if detection.signal_type == "atomic" {
+        atomic_dedupe_key(&detection.dedup_key)
+    } else {
+        detection.dedup_key.clone()
+    })?;
 
     DetectorResult::evaluated(
         detector,
@@ -479,6 +483,19 @@ fn occurred_at(observation: &CanonicalObservationV2) -> Option<OffsetDateTime> {
     observation
         .occurred_at()
         .and_then(|timestamp| OffsetDateTime::parse(timestamp.as_str(), &Rfc3339).ok())
+}
+
+fn atomic_dedupe_key(reported: &str) -> String {
+    if super::types::bounded_opaque(reported, super::types::MAX_ID_BYTES).is_ok() {
+        return reported.to_owned();
+    }
+    // Matcher keys can include a normalized executable basename containing
+    // spaces. Preserve that identity without putting unsafe text in an opaque
+    // detector key or dropping the source's otherwise valid findings.
+    let mut digest = sha2::Sha256::new();
+    digest.update(b"telltale:process-atomic-dedupe:v1\0");
+    digest.update(reported.as_bytes());
+    format!("process:sha256:{:x}", digest.finalize())
 }
 
 fn correlation_result(
@@ -1038,6 +1055,48 @@ correlations: []
             .unwrap_err(),
             DetectionError::InvalidMetadata
         );
+    }
+
+    #[test]
+    fn unsafe_process_dedupe_text_keeps_bounded_stable_distinct_findings() {
+        let rules = load_process_chain_rules(r#"
+version: 1
+description: synthetic executable names
+defaults: { enabled: true, risk_entity: host, suppression_window_seconds: 3600 }
+categories:
+  discovery: { detection_class: security_detection, analytic_intent: alert, investigation_fields: [], falsepositives: [] }
+rules: []
+standalone:
+  - { id: procchain.synthetic.helper, title: helper, category: discovery, severity: informational, score: 0, confidence: low, match: process_name, patterns: ["helper"], mitre: [T1082], reason: synthetic }
+correlations: []
+"#).unwrap();
+        let key = |name: &str| {
+            let command = format!("\"{name}.exe\" --version");
+            let result = evaluate_tool_process_chains(
+                &rules,
+                &requested_command(&command, "synthetic-name"),
+                &ProcessChainContext::default(),
+            )
+            .unwrap();
+            assert_eq!(result.len(), 1);
+            result[0].dedupe_key().unwrap().to_owned()
+        };
+        let first = key("helper utility");
+        assert!(first.starts_with("process:sha256:"));
+        assert_eq!(first, key("helper utility"));
+        assert_ne!(first, key("helper other"));
+        assert_eq!(
+            key("helper"),
+            "standalone:procchain.synthetic.helper:helper"
+        );
+        for raw in ["", "a/b", "a\\b", "a..b", "a\nb", &"x".repeat(100)] {
+            let normalized = atomic_dedupe_key(raw);
+            assert!(
+                super::super::types::bounded_opaque(&normalized, super::super::types::MAX_ID_BYTES)
+                    .is_ok()
+            );
+            assert_eq!(normalized, atomic_dedupe_key(raw));
+        }
     }
 
     #[test]

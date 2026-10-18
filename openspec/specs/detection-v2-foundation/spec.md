@@ -39,6 +39,20 @@ browser.surface, browser.origin_class, browser.navigation_id
 ```
 
 ## Requirements
+### Requirement: Generated process keys preserve bounded opaque identity
+
+Generated standalone process matcher keys that contain text outside the bounded
+opaque identifier grammar SHALL use a deterministic, domain-separated SHA-256
+identity. Existing valid keys SHALL remain unchanged; distinct full matcher
+keys SHALL remain distinct, and authored chain-key validation SHALL remain
+strict. A valid executable basename containing spaces MUST NOT cause an
+otherwise supported source's process findings to fail evaluation.
+
+#### Scenario: Executable basename contains spaces
+
+- **WHEN** a generated standalone matcher key includes a valid executable basename containing spaces
+- **THEN** the finding retains a bounded stable identity without weakening authored chain-key validation
+
 ### Requirement: Detector result materialization
 
 The implementation MUST expose the closed detector taxonomy and exact five
