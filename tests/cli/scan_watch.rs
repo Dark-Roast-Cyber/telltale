@@ -8157,9 +8157,23 @@ fn operational_alert_not_emitted_when_scanner_errors_below_threshold() {
     assert!(
         !events
             .iter()
-            .any(|event| event["event_type"] == "operational_alert"),
-        "operational_alert should not be emitted when errors are below threshold"
+            .any(|event| event["check_name"] == "scanner_error_threshold"),
+        "the threshold alert should not be emitted when errors are below threshold"
     );
+    // The malformed transcript is the only Codex source, so the client lost
+    // every source: that is the separate outage alert.
+    let alerts = events
+        .iter()
+        .filter(|event| event["event_type"] == "operational_alert")
+        .collect::<Vec<_>>();
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    assert_eq!(alerts[0]["check_name"], "operational_alert");
+    assert_eq!(alerts[0]["severity"], "warning");
+    assert_eq!(
+        alerts[0]["evidence"][0]["redacted_value"],
+        "source_parse_outage"
+    );
+    assert!(event_schema_validator().is_valid(alerts[0]));
 }
 
 #[test]
@@ -8249,5 +8263,13 @@ fn scanner_error_events_dedup_on_subsequent_scans() {
         health_events.len(),
         1,
         "second scan should not emit health for an unchanged scanner_error"
+    );
+    assert_eq!(
+        all_events
+            .iter()
+            .filter(|event| event["event_type"] == "operational_alert")
+            .count(),
+        1,
+        "an unchanged outage alerts once, with its first scanner_error"
     );
 }

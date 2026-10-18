@@ -220,6 +220,20 @@ impl ScanState {
         true
     }
 
+    /// Records that a full scan saw `client` lose every source. True when the
+    /// outage is new: it stays recorded, and quiet, until a full scan sees the
+    /// client process a source successfully, so a recurrence after recovery
+    /// alerts again.
+    pub fn enter_source_outage(&mut self, client: &str) -> bool {
+        self.seen_detection_fingerprints
+            .insert(source_outage_fingerprint(client))
+    }
+
+    pub fn clear_source_outage(&mut self, client: &str) {
+        self.seen_detection_fingerprints
+            .remove(&source_outage_fingerprint(client));
+    }
+
     #[cfg(test)]
     fn replace_baseline_snapshots(&mut self, snapshots: Vec<BaselineSummary>) {
         self.baseline_snapshots = BaselineSnapshotStore {
@@ -1107,6 +1121,15 @@ pub fn source_fingerprint(source: &Source) -> String {
         }
     }
     format!("{:x}", hasher.finalize())
+}
+
+/// Kept among the detection fingerprints, so outage tracking needs no state
+/// schema change; the prefix keeps it apart from any event fingerprint.
+fn source_outage_fingerprint(client: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("telltale:source_parse_outage:{client}").as_bytes())
+    )
 }
 
 pub fn detection_fingerprint(event: &Event, source_fingerprint: &str) -> String {

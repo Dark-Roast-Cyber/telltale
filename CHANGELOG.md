@@ -13,6 +13,20 @@
   body, edit and prompt fields. Previously each of these failed the whole
   transcript. An unknown record or block, or an oversized record, is now
   quarantined by itself and reported without content, like OpenCode v2 rows.
+- Claude install inventory recognizes the Claude desktop app's bundled Claude
+  Code (`%APPDATA%\Claude\claude-code\<version>\<hash>\claude.exe` and its MSIX
+  mirror) as metadata-only `executable` evidence. On Windows these signals
+  change the inventory hash once; the next scheduled `install_inventory` event
+  carries it.
+- `claude.projects` discovery adds `$CLAUDE_CONFIG_DIR/projects` beside
+  `~/.claude/projects` when the variable is set in the scanner's environment.
+- A full scan in which every selected source of one client fails processing
+  emits one `warning` `operational_alert` per client
+  (`alert_type=source_parse_outage`, `check_name=operational_alert`).
+  Per-source `scanner_error` stays `informational`, as the Event 3.0 contract
+  requires. Outside `--backfill`, which re-emits every scan's events, an
+  unchanged outage alerts once; after a full scan in which a source of the client
+  processes successfully, a recurrence alerts again.
 - The current-user Windows installer verifies exact Release identity,
   checksums, canonical ZIP contents, binary version and source-bound attestation.
   Binary files are separate from existing per-user Logs/State defaults.

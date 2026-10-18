@@ -32,16 +32,48 @@ const SELECT: &str = "select m.rowid as __telltale_rowid, m.id as id, m.session_
      octet_length(m.data) as __telltale_data_bytes, \
      s.agent as __telltale_session_agent, s.model as __telltale_session_model";
 
-/// Rows for the rowids `keys` selects (as `key`), in update order. Only the
-/// keys are ordered and limited, so a page never sorts the payloads of rows it
-/// does not return; on a large store without a `time_updated` index that
-/// would read the whole table for every page.
-fn keyed_rows(keys: &str) -> String {
+/// One projected row by rowid.
+fn keyed_row() -> String {
     format!(
-        "{SELECT} from ({keys}) k join session_message m on m.rowid = k.key \
-         left join session_v2 s on s.id = m.session_id \
-         order by m.time_updated, m.rowid"
+        "{SELECT} from session_message m left join session_v2 s on s.id = m.session_id \
+         where m.rowid = ?1"
     )
+}
+
+/// The rows for the rowids `keys` selects, in the order it selects them, with
+/// `stream_sqlite_rows`'s `remaining` contract. Only the keys are ordered and
+/// limited: a page never sorts the payloads of rows it does not return (on a
+/// large store without a `time_updated` index that would read the whole table
+/// for every page), and no payload passes through an SQLite sorter, which
+/// spills to a temporary file once it outgrows the page cache. That file
+/// would copy source content to disk, and fails to open where SQLite resolves
+/// no writable temporary directory (Windows without `TEMP` or `TMP`).
+fn stream_keyed_rows<P: rusqlite::Params>(
+    conn: &Connection,
+    keys: &mut rusqlite::Statement<'_>,
+    params: P,
+    admission: &mut SqliteAdmission,
+    remaining: Option<i64>,
+    mut consume: impl FnMut(Value) -> Result<(), SourceReadError>,
+) -> Result<usize, SourceReadError> {
+    let keys = keys
+        .query_map(params, |row| row.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut row = conn.prepare(&keyed_row())?;
+    let mut delivered = 0usize;
+    for key in keys {
+        if remaining.is_some_and(|remaining| delivered as i64 >= remaining) {
+            return Err(SourceReadError::Bounded(
+                crate::source_read::BoundedReadError::LimitExceeded,
+            ));
+        }
+        // The same snapshot selected the key, so its row is there.
+        if stream_sqlite_rows(&mut row, [key], admission, None, &mut consume)? != 1 {
+            return Err(part_read_error("missing keyed message row"));
+        }
+        delivered += 1;
+    }
+    Ok(delivered)
 }
 // The literal in `SELECT` is the admission cell limit.
 const _: () = assert!(SQLITE_CELL_BYTES == 8_388_608);
@@ -356,13 +388,13 @@ fn extract_bootstrap_messages(
     limit: i64,
     admission: &mut SqliteAdmission,
 ) -> Result<Selected, SourceReadError> {
-    let query = keyed_rows(
-        "select rowid as key from session_message \
-         order by time_updated desc, rowid desc limit ?1",
-    );
-    let mut stmt = conn.prepare(&query)?;
+    let mut keys = conn.prepare(
+        "select key from (select rowid as key, time_updated from session_message \
+           order by time_updated desc, rowid desc limit ?1) \
+         order by time_updated, key",
+    )?;
     let mut records = Vec::new();
-    stream_sqlite_rows(&mut stmt, [limit], admission, None, |value| {
+    stream_keyed_rows(conn, &mut keys, [limit], admission, None, |value| {
         records.push(decode_row(value)?);
         Ok(())
     })?;
@@ -393,12 +425,11 @@ pub(super) fn extract_incremental_messages(
     limit
         .checked_add(1)
         .ok_or_else(|| part_read_error("message limit overflow"))?;
-    let query = keyed_rows(
+    let mut keys = conn.prepare(
         "select rowid as key from session_message where time_updated >= ?1 \
            and (?2 is null or (time_updated, rowid) > (?2, ?3)) \
          order by time_updated, rowid limit ?4",
-    );
-    let mut stmt = conn.prepare(&query)?;
+    )?;
     let mut records = Vec::new();
     let mut remaining = limit;
     let mut after: Option<(i64, i64)> = None;
@@ -406,8 +437,9 @@ pub(super) fn extract_incremental_messages(
     let mut full = false;
     loop {
         let query_limit = page_size.min(remaining + 1);
-        let delivered = stream_sqlite_rows(
-            &mut stmt,
+        let delivered = stream_keyed_rows(
+            conn,
+            &mut keys,
             rusqlite::params![
                 min_time_updated,
                 after.map(|key| key.0),
