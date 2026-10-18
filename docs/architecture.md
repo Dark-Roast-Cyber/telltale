@@ -26,7 +26,7 @@ the active canonical scan/watch/embedding path. [Event4](event4.md) and
 accepted future boundaries: production Event4 persistence/output and
 Telemetry/Output v2 are not implemented. The public
 `telltale_sources::acquisition` module owns authoritative cross-source
-Canonical Observation v2 acquisition for all eight target identities. It is the
+Canonical Observation v2 acquisition for the supported sources. It is the
 single router: source-native extraction flows into source-owned canonical
 mapping and then an acquisition batch consumed by the shared runtime.
 
@@ -39,21 +39,12 @@ kernel before Event3 compatibility projection; it does not manufacture Canonical
 observations. Advanced detector runtime and a
 Detection Content v2 loader are not implemented.
 
-Canonical Observation v2 core types are implemented in `telltale-schema`.
-Source-native production projections exist for Claude Code
-(`claude.projects`), the principal Codex session identities, OpenCode
-(`opencode.sqlite`), OpenClaw (`openclaw.agents`), Qwen (`qwen.projects`), and
-Copilot (`copilot.process_log`). Copilot native-v2
-capabilities are ToolCall **Supported**, UserContext **Unsupported**, and
-ToolExecution **Unknown**.
-
-Production adapter acquisition convergence now covers all eight identities at the
-public `telltale_sources::acquisition` boundary, satisfying and completing
-ROADMAP step 4. Source mappers remain crate-private; acquisition is the single
-cross-source router and there is no parallel canonical facade. Event 3.0 remains
-the frozen current compatibility contract. The pipeline below describes the
-activated canonical runtime.
-Event4 remains inactive. Direct runtime telemetry, including any future
+Canonical Observation v2 core types are implemented in `telltale-schema`;
+source mappers remain crate-private, with no parallel cross-source canonical
+facade. The [source validation matrix](source-validation-matrix.md) owns supported
+identities and validation depth; [agent capability profiles](agent-capability-profiles.md)
+owns per-source visibility. Event 3.0 remains the frozen current compatibility
+contract. Direct runtime telemetry, including any future
 OpenShell source that reports Process, Network, Runtime, policy, enforcement, or
 action-result evidence, remains separate from command-derived Tool
 interpretation; no OpenShell integration exists today.
@@ -65,24 +56,14 @@ change the supported source denominator or Event3-only output.
 
 ## 0.7 convergence boundary
 
-The 0.7 production migration is intentionally scoped to the source families that
-matter for the long-lived baseline:
-
-| Agent family | Required 0.7 source identity |
-| --- | --- |
-| Claude Code | `claude.projects` |
-| Codex | `codex.sessions`, `codex.archived_sessions`, `codex.headless_sessions` |
-| OpenCode | `opencode.sqlite` |
-| OpenClaw | `openclaw.agents` |
-| Qwen | `qwen.projects` |
-| GitHub Copilot | `copilot.process_log` |
+The [source denominator specification](../openspec/specs/source-support-denominator/spec.md)
+owns the exact supported client/source pairs and retired identities. The
+[0.7 migration guide](migrations/0.7.0.md#supported-source-denominator) describes
+the operator-facing transition; retired identities are not hidden production
+paths or migration candidates.
 
 Claude and Codex desktop-app-specific acquisition is deferred when it needs a
 separate source contract.
-
-`gemini.tmp`, `opencode.legacy_json`, `opencode.project_json`, `roocode.tasks`,
-`kilocode.tasks`, and `codex.project_sessions` are retired. They are not hidden
-production paths or migration candidates. OpenCode retains only `opencode.sqlite`.
 
 The migration established one source/acquisition and Detection v2 path for
 CLI scan/watch and supported embedding, including Rule v1 modifiers,
@@ -125,9 +106,11 @@ telltale_sources::acquisition -> Detection v2 evaluation/scoring -> Event3 proje
 The caller owns event policy, checkpoints, and delivery. The default sink appends
 local JSONL; optional Splunk HEC and Elastic exports wrap the same canonical
 payload. Rule v1 remains a content-compatibility view evaluated over canonical
-observations; there is no record-level detection API. `observed_at` is explicit caller input. OpenCode-only bounded read
-controls and high-water progress are operational metadata, not evidence; the
-other seven identities return no progress. Copilot's local state is rebuilt per
+observations; there is no record-level detection API. `observed_at` is explicit
+caller input. OpenCode-only bounded read controls and schema-specific part/message
+high-water progress are operational metadata, not evidence; other sources return
+no progress. [OpenCode live ingestion](opencode-live-ingestion.md) owns selection,
+continuation, and recovery limits. Copilot's local state is rebuilt per
 acquisition and is not durable. The `compat.v1.url` view reads URL-keyed tool
 arguments only, without URL/path/network manufacturing from other facts.
 

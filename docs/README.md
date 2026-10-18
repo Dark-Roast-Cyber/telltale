@@ -36,6 +36,7 @@ avoid another status file, duplicate plan, or decision catalog.
 | Upgrade or roll back? | [Controlled deployment](controlled-deployment.md), [installer matrix](installer-migration-matrix.md), [migration contract](migration-contract.md), [0.7 migration](migrations/0.7.0.md) |
 | Source identities and validation depth? | [Source validation matrix](source-validation-matrix.md) |
 | Discovery paths and per-source visibility? | [Session sources](session-sources.md), [agent capability profiles](agent-capability-profiles.md) |
+| Acquisition scope, accounting coverage, or source failures? | [Canonical acquisition](canonical-observation-v2.md#acquisition-convergence-status), [source denominator](../openspec/specs/source-support-denominator/spec.md), [accounting coverage](../openspec/specs/canonical-accounting-coverage/spec.md) |
 | OpenCode admission, cursor behavior, or recovery limits? | [OpenCode live ingestion](opencode-live-ingestion.md) |
 | Pipeline, dependency boundaries, and code ownership? | [Architecture](architecture.md), [development principles](development-principles.md) |
 | Source-evidence model and semantic flow? | [Canonical Observation v2](canonical-observation-v2.md), [semantic foundation](semantic-foundation.md) |

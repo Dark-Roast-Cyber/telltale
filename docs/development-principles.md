@@ -414,12 +414,11 @@ privacy/security guarantees, and data-loss/delivery guarantees.
 
 Internal crate layout, private traits, module organization, and experimental implementation details may be refactored aggressively when doing so improves the architecture.
 
-## Current Architectural Priority
+## Canonical Integration Boundary
 
-The supported source denominator has completed its transition to source-native
-Canonical Observation v2 acquisition and Detection v2 evaluation. The current
-priority is hardening that singular 0.7 baseline rather than rebuilding a
-flattened-record source path.
+[Architecture](architecture.md) owns the current runtime composition;
+[the roadmap](../ROADMAP.md) owns milestone priorities. Do not rebuild a
+flattened-record source path alongside canonical acquisition and evaluation.
 
 Future direct integrations, realtime enforcement, and gateway work should emit
 or consume canonical observations directly. Structured tool calls, exact
