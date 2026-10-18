@@ -15,8 +15,9 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
-    NATIVE_SCHEMA_VERSION, is_canonical_opaque_identifier_for_kind, parse_event_timestamp,
-    validate_risk_accounting_scope, validate_rule_ids,
+    NATIVE_SCHEMA_VERSION, VALID_ANALYTIC_INTENTS, VALID_DETECTION_CLASSES, VALID_SIGNAL_TYPES,
+    is_canonical_opaque_identifier_for_kind, parse_event_timestamp, validate_risk_accounting_scope,
+    validate_rule_ids,
 };
 use crate::scoring::{RiskContribution, canonicalize_contributions, checked_risk_sum};
 
@@ -880,25 +881,9 @@ fn has_invalid_taxonomy(object: &serde_json::Map<String, Value>) -> bool {
                 "warning",
             ],
         ),
-        (
-            "detection_classes",
-            &[
-                "security_detection",
-                "policy_violation",
-                "threat_hunting",
-                "compliance_observation",
-                "operational_health",
-                "baseline_deviation",
-            ],
-        ),
-        (
-            "signal_types",
-            &["atomic", "chain", "correlation", "baseline_deviation"],
-        ),
-        (
-            "analytic_intents",
-            &["alert", "hunt", "enrich", "baseline", "audit"],
-        ),
+        ("detection_classes", VALID_DETECTION_CLASSES),
+        ("signal_types", VALID_SIGNAL_TYPES),
+        ("analytic_intents", VALID_ANALYTIC_INTENTS),
         ("confidence", &["low", "medium", "high"]),
         ("risk_entity_type", &["host", "user", "session"]),
     ];
@@ -920,16 +905,9 @@ fn has_invalid_taxonomy(object: &serde_json::Map<String, Value>) -> bool {
 
 fn values_for(field: &str) -> &'static [&'static str] {
     match field {
-        "detection_classes" => &[
-            "security_detection",
-            "policy_violation",
-            "threat_hunting",
-            "compliance_observation",
-            "operational_health",
-            "baseline_deviation",
-        ],
-        "signal_types" => &["atomic", "chain", "correlation", "baseline_deviation"],
-        "analytic_intents" => &["alert", "hunt", "enrich", "baseline", "audit"],
+        "detection_classes" => VALID_DETECTION_CLASSES,
+        "signal_types" => VALID_SIGNAL_TYPES,
+        "analytic_intents" => VALID_ANALYTIC_INTENTS,
         _ => &[],
     }
 }
@@ -2144,6 +2122,119 @@ mod tests {
             ("process_chain", process),
             ("correlation", correlation),
         ]
+    }
+
+    #[test]
+    fn taxonomy_agrees_across_frozen_schema_producer_import_and_typed_consumer() {
+        let schema: Value = serde_json::from_str(EVENT3_SCHEMA).expect("frozen schema");
+        let mut event = positive_constructor_corpus().remove(0).1;
+        event.detection_classes = crate::event::VALID_DETECTION_CLASSES
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+        event.signal_types = crate::event::VALID_SIGNAL_TYPES
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+        event.analytic_intents = crate::event::VALID_ANALYTIC_INTENTS
+            .iter()
+            .map(|value| value.to_string())
+            .collect();
+        let native = serde_json::to_value(&event).expect("all taxonomy values emit");
+        for field in ["detection_classes", "signal_types", "analytic_intents"] {
+            assert_eq!(
+                native[field],
+                schema["$defs"]["detection"]["allOf"][1]["properties"][field]["items"]["enum"],
+                "{field}"
+            );
+        }
+        let mut imported = native.clone();
+        crate::event::sanitize_serialized_event(&mut imported);
+        for field in ["detection_classes", "signal_types", "analytic_intents"] {
+            assert_eq!(imported[field], native[field], "{field}");
+        }
+        let record = Event3Record::from_json(&serde_json::to_vec(&imported).expect("JSON"))
+            .expect("all taxonomy values consume");
+        let Event3Family::Detection(detection) = record.family() else {
+            panic!("expected detection");
+        };
+        assert_eq!(
+            detection.detection_classes.len(),
+            event.detection_classes.len()
+        );
+        assert_eq!(detection.signal_types.len(), event.signal_types.len());
+        assert_eq!(
+            detection.analytic_intents.len(),
+            event.analytic_intents.len()
+        );
+    }
+
+    #[test]
+    fn taxonomy_rejects_unknown_empty_and_near_miss_values_at_each_boundary() {
+        let event = positive_constructor_corpus().remove(0).1;
+        for (field, kind) in [
+            ("detection_classes", "detection-class"),
+            ("signal_types", "signal-type"),
+            ("analytic_intents", "analytic-intent"),
+        ] {
+            for invalid in ["", "unknown", "ALERT", "atomic ", " alert", "alert\u{a0}"] {
+                let mut native = event.clone();
+                match field {
+                    "detection_classes" => native.detection_classes = vec![invalid.to_string()],
+                    "signal_types" => native.signal_types = vec![invalid.to_string()],
+                    "analytic_intents" => native.analytic_intents = vec![invalid.to_string()],
+                    _ => unreachable!(),
+                }
+                assert!(serde_json::to_vec(&native).is_err(), "{field}");
+                let mut imported = serde_json::to_value(&event).expect("detection JSON");
+                imported[field] = serde_json::json!([invalid]);
+                let error = Event3Record::from_json(&serde_json::to_vec(&imported).expect("JSON"))
+                    .expect_err("unknown taxonomy");
+                assert_eq!(error.category(), Event3ErrorCategory::Semantic, "{field}");
+                crate::event::sanitize_serialized_event(&mut imported);
+                assert_eq!(
+                    imported[field],
+                    serde_json::json!([crate::event::opaque_identifier(kind, invalid)]),
+                    "{field}"
+                );
+                assert!(
+                    Event3Record::from_json(&serde_json::to_vec(&imported).expect("JSON")).is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn taxonomy_family_profiles_remain_narrower_than_the_shared_vocabulary() {
+        for (name, event) in positive_constructor_corpus()
+            .into_iter()
+            .filter(|(name, _)| matches!(*name, "operational_alert" | "correlation"))
+        {
+            for field in ["detection_classes", "signal_types", "analytic_intents"] {
+                let mut native = event.clone();
+                // Valid global values, but outside each of these family profiles.
+                match field {
+                    "detection_classes" => {
+                        native.detection_classes = vec!["threat_hunting".to_string()]
+                    }
+                    "signal_types" => native.signal_types = vec!["baseline_deviation".to_string()],
+                    "analytic_intents" => native.analytic_intents = vec!["hunt".to_string()],
+                    _ => unreachable!(),
+                }
+                assert!(serde_json::to_vec(&native).is_err(), "{name}: {field}");
+                let mut wire = serde_json::to_value(&event).expect("family JSON");
+                wire[field] = match field {
+                    "detection_classes" => serde_json::json!(native.detection_classes),
+                    "signal_types" => serde_json::json!(native.signal_types),
+                    "analytic_intents" => serde_json::json!(native.analytic_intents),
+                    _ => unreachable!(),
+                };
+                assert!(
+                    Event3Record::from_json(&serde_json::to_vec(&wire).expect("JSON")).is_err(),
+                    "{name}: {field}"
+                );
+            }
+        }
     }
 
     #[test]

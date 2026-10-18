@@ -41,7 +41,6 @@ Telltale uses ATLAS for offline analyst context only. It never fetches ATLAS at 
 | --- | --- | --- |
 | `AML.TA0005` | Execution | Shell/interpreter execution and prompt injection. |
 | `AML.TA0006` | Persistence | Agent configuration modification and tool poisoning context. |
-| `AML.TA0007` | Defense Evasion | Guardrail modification and obfuscation-related future mappings. |
 | `AML.TA0008` | Discovery | Agent configuration and runtime capability discovery. |
 | `AML.TA0010` | Exfiltration | Outbound upload, encoded egress, DNS exfiltration, and agent-tool exfiltration. |
 | `AML.TA0013` | Credential Access | Secret files, private keys, cloud credential stores, and agent configuration credentials. |
@@ -77,7 +76,7 @@ These techniques are not automatically emitted by current bundled rules. They id
 
 ## Coverage Table
 
-The table covers every bundled rule, chain modifier, and example rule in the repository. The ATLAS Tags column reflects the rule YAML as shipped today. Rules without `atlas_tags` are intentionally untagged. Prefer no ATLAS tag over a weak mapping.
+The table covers the Rule v1 pack in `config/rules/tool-call-regex.yaml`, its chain modifiers, and the example rules in this file. It does not inventory the bundled process-chain pack. The ATLAS Tags column reflects that Rule v1 YAML as shipped today. Rules without `atlas_tags` are intentionally untagged. Prefer no ATLAS tag over a weak mapping.
 
 ### Bundled Rules (`config/rules/tool-call-regex.yaml`)
 
@@ -130,7 +129,7 @@ Current shipped/example rule metadata remains:
 - Bundled chain modifiers: 8 (3 with ATLAS tags, 5 intentionally untagged)
 - Example rules: 2 (2 with ATLAS tags)
 - Distinct ATLAS technique IDs currently emitted: 8 (`AML.T0050`, `AML.T0051`, `AML.T0025`, `AML.T0055`, `AML.T0057`, `AML.T0081`, `AML.T0084`, `AML.T0086`)
-- Distinct ATLAS tactics represented by those technique relationships: 6 (`AML.TA0005`, `AML.TA0006`, `AML.TA0007`, `AML.TA0008`, `AML.TA0010`, `AML.TA0013`)
+- Distinct ATLAS tactics represented by those technique relationships: 5 (`AML.TA0005`, `AML.TA0006`, `AML.TA0008`, `AML.TA0010`, `AML.TA0013`). `AML.TA0007` is not represented by the emitted technique IDs; guardrail and obfuscation mappings remain future work.
 
 The ATLAS 2026.09 review does not silently change rule metadata. Updating `atlas_tags` is a detection-content change and should move with the relevant rule semantics and fixtures.
 

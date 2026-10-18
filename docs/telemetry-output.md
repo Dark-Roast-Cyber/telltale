@@ -8,9 +8,10 @@ to a local file; optional delivery paths can wrap the same event body for a
 specific sink without changing the event schema.
 
 Event 3.0 remains the current supported and frozen compatibility/output
-contract. The accepted future Event4 and CanonicalPayload architecture is
-documented in [Telemetry/output architecture](telemetry-output-architecture.md)
-and is not implemented.
+contract. Production Event4 output and CanonicalPayload are inactive. A
+non-production Event4 4.0 foundation exists in `telltale-schema`; sinks do not
+emit it. The accepted future boundary is documented in
+[Telemetry/output architecture](telemetry-output-architecture.md).
 
 ## Default JSONL Sink
 
@@ -332,8 +333,10 @@ Common event types include:
 
 - `activity`: redacted per-session activity summaries.
 - `activity` with `check_name=install_inventory`: metadata-only installed-agent
-  inventory collected on a cadence. Evidence records agent names, confidence,
-  signal types, and path hashes rather than raw transcript or session contents.
+  inventory collected on a cadence. Evidence records agent, confidence, and
+  `kind:name` signals. Path material stays inside the hashed agent JSON, not
+  as readable evidence text, and the event does not include raw transcript or
+  session contents.
 - `detection`: rule matches, risk scores, categories, and response guidance.
 - `session_risk_summary`: optional per-session rollups from already-redacted
   activity and detection events.
@@ -613,8 +616,8 @@ Values are independent for each stable sink identity. `pending_depth` and
 on the oldest event creation timestamp among those rows. `dead_count` counts
 permanent/dead rows and is not part of pending depth; `acked` rows are excluded
 from both. `last_success_at` and `last_error.at` are persisted Unix
-milliseconds from sink state transitions. `last_error` contains only the
-structured error `class` and, when applicable, an HTTP `status`; it never
+milliseconds from sink state transitions. `last_error` contains `at`, the
+structured error `class`, and, when applicable, an HTTP `status`; it never
 contains response bodies or event bytes.
 
 `mode` is `not_configured` when no durable outbox is selected and

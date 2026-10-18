@@ -79,6 +79,11 @@ so a large backlog is read a window at a time. A v2 selection is evaluated in
 - only one timestamp holding more rows than a whole window fails, as
   `LimitExceeded`.
 
+Drain checkpoints and tokens remain monotone. If a cut falls below the prior
+checkpoint, a subsequent strict read starts after that checkpoint, not the raw
+cut, and can skip late or backdated rows in the unfinished overlap. Recovery of
+that overlap is not guaranteed by the current checkpoint contract.
+
 Rows that cannot be mapped within a size bound are quarantined by coordinates,
 never by content, while the rest is evaluated: a row over the 64 KB text
 budgets, a request input over a contribution bound, a requested tool name the

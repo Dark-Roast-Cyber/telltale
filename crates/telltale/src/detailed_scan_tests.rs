@@ -472,7 +472,7 @@ fn action_identities_are_pinned_to_their_algorithm_versions() {
             startup.native_profile_version(),
             startup.replay_algorithm_version(),
         ),
-        (2, 2, 1)
+        (2, 3, 1)
     );
     // Identities exclude paths: two roots must produce the same values.
     let mut seen = Vec::new();
@@ -501,7 +501,7 @@ fn action_identities_are_pinned_to_their_algorithm_versions() {
     assert_eq!(semantic, startup.identity());
     assert_eq!(
         semantic,
-        "semantic:v1:sha256:561edc37e9ef08cd55298cbfa99b5b524f0230dbca8d688a3a94d5e0477d9fc5"
+        "semantic:v1:sha256:bda2d01993e71fc1dad76e603ea276db1f5cd1bf38507c1e007997ac5b826627"
     );
     assert_eq!(
         coordinate,
@@ -1094,4 +1094,64 @@ fn opencode_v2_cut_windows_issue_monotone_drain_tokens() {
     )
     .unwrap();
     assert!(legacy.as_str().starts_with("resume:v1:opencode.sqlite:3:"));
+}
+
+#[cfg(feature = "opencode-sqlite")]
+#[test]
+fn opencode_v2_resume_drains_one_window_strictly_then_restores_overlap() {
+    let root = tempfile::tempdir().unwrap();
+    let source = Source {
+        client: ClientId::OpenCode,
+        source_id: "opencode.sqlite".into(),
+        kind: SourceKind::Sqlite,
+        path: root.path().join("windows.db"),
+    };
+    let mut conn = rusqlite::Connection::open(&source.path).unwrap();
+    conn.execute_batch(
+        r#"CREATE TABLE session_v2 (id TEXT PRIMARY KEY, agent TEXT, model TEXT);
+        CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT,
+            seq INTEGER, time_updated INTEGER, data TEXT);
+        INSERT INTO session_v2 VALUES ('ses', NULL, NULL);
+        INSERT INTO session_message VALUES ('1', 'ses', 'system', 1, 1, '{}');"#,
+    )
+    .unwrap();
+    let pipeline = Pipeline::builder().build().unwrap();
+    let options = DetailedEvaluationOptions::default();
+    let scan = |token: Option<&ResumeToken>| {
+        let result = pipeline
+            .scan_source_detailed_resuming(&source, token, &options)
+            .unwrap();
+        assert!(result.failure().is_none(), "{:?}", result.failure());
+        ResumeToken::parse(result.resume_token().unwrap().as_str()).unwrap()
+    };
+    let bootstrap = scan(None);
+    assert_eq!(bootstrap.coordinate, ResumeCoordinate::SessionMessage);
+    assert_eq!(bootstrap.high_water, 1);
+
+    let transaction = conn.transaction().unwrap();
+    {
+        let mut insert = transaction
+            .prepare("INSERT INTO session_message VALUES (?1, 'ses', 'system', ?2, ?2, '{}')")
+            .unwrap();
+        for position in 2..=25_002 {
+            insert
+                .execute(rusqlite::params![position.to_string(), position])
+                .unwrap();
+        }
+    }
+    transaction.commit().unwrap();
+    let cut = scan(Some(&bootstrap));
+    assert_eq!(cut.coordinate, ResumeCoordinate::SessionMessageDrain);
+    assert_eq!(cut.high_water, 25_000);
+    let complete = scan(Some(&cut));
+    assert_eq!(complete.coordinate, ResumeCoordinate::SessionMessage);
+    assert_eq!(complete.high_water, 25_002);
+    // All rows are inside the ten-minute overlap: a complete token re-reads
+    // enough to cut again, whereas the drain token above selected only two.
+    let overlapping = scan(Some(&complete));
+    assert_eq!(
+        overlapping.coordinate,
+        ResumeCoordinate::SessionMessageDrain
+    );
+    assert_eq!(overlapping.high_water, complete.high_water);
 }

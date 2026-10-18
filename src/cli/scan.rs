@@ -992,7 +992,9 @@ fn opencode_read_options_for_scan_source(
 }
 
 fn is_opencode_sqlite_source(source: &Source) -> bool {
-    source.client == ClientId::OpenCode && source.kind == SourceKind::Sqlite
+    source.client == ClientId::OpenCode
+        && source.kind == SourceKind::Sqlite
+        && source.source_id == "opencode.sqlite"
 }
 
 #[derive(Debug)]
@@ -1880,6 +1882,83 @@ mod tests {
                 .part_limit,
             5_000
         );
+    }
+
+    #[test]
+    fn opencode_sqlite_scan_options_require_exact_source_identity() {
+        let source = opencode_test_source();
+        let mut wrong_client = source.clone();
+        wrong_client.client = ClientId::Codex;
+        let mut wrong_kind = source.clone();
+        wrong_kind.kind = SourceKind::Jsonl;
+        let mut wrong_id = source.clone();
+        wrong_id.source_id = "opencode.sqlite.lookalike".into();
+        for source in [wrong_client, wrong_kind, wrong_id] {
+            let mut state = ScanState::default();
+            state.observe_sqlite_ingestion_cursor(
+                &source,
+                OPENCODE_SQLITE_SESSION_MESSAGE_TABLE,
+                1_000_000,
+                42,
+            );
+            assert!(!is_opencode_sqlite_source(&source), "{source:?}");
+            assert_eq!(
+                opencode_read_options_for_scan_source(&source, &state, false, false),
+                OpenCodeSqliteReadOptions::default(),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_v2_scan_options_preserve_stored_monotone_watermark_and_drain_mode() {
+        let source = opencode_test_source();
+        let mut state = ScanState::default();
+        // Save/load preserves the monotone watermark and selected drain mode,
+        // not a raw cut below that watermark. This does not prove replay of
+        // late/backdated rows remaining in an unfinished overlap window.
+        for (high_water, draining) in [(1_000_000, false), (900_000, true), (800_000, false)] {
+            if draining {
+                state.observe_sqlite_ingestion_drain(
+                    &source,
+                    OPENCODE_SQLITE_SESSION_MESSAGE_TABLE,
+                    high_water,
+                    42,
+                );
+            } else {
+                state.observe_sqlite_ingestion_cursor(
+                    &source,
+                    OPENCODE_SQLITE_SESSION_MESSAGE_TABLE,
+                    high_water,
+                    42,
+                );
+            }
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("state.json");
+            state.save(&path).unwrap();
+            state = ScanState::load(&path).unwrap();
+            let expected = if draining {
+                OpenCodeSqliteReadOptions::default().continue_session_messages_after(1_000_000)
+            } else {
+                OpenCodeSqliteReadOptions::default().resume_session_messages_after(1_000_000)
+            };
+            assert_eq!(
+                opencode_read_options_for_scan_source(&source, &state, false, false),
+                expected
+            );
+            for (backfill, dry_run) in [(true, false), (false, true)] {
+                assert_eq!(
+                    opencode_read_options_for_scan_source(&source, &state, backfill, dry_run),
+                    OpenCodeSqliteReadOptions::default()
+                );
+            }
+            let mut other_source = source.clone();
+            other_source.path = PathBuf::from("/synthetic/other.db");
+            assert_eq!(
+                opencode_read_options_for_scan_source(&other_source, &state, false, false),
+                OpenCodeSqliteReadOptions::default()
+            );
+        }
     }
 
     fn opencode_test_source() -> Source {

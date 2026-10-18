@@ -36,10 +36,12 @@ crate a stable embedding API.
 
 ### Qualification status
 
-The published `v0.7.0-rc.2` prerelease implements this contract; it is not a
-stable API freeze or a fully qualified release (clean-host gates are pending). Published RC1 evidence does not cover
-post-RC1 additions, and a passing host test of a Git pin is integration evidence,
-not release qualification. Candidate gates live in
+Published `v0.7.0-rc.2` implements the pre-v2 facade, not this whole contract.
+OpenCode v2 resume, `session_message_drain`, and quarantine described here are
+later than RC2. Neither published RC1 nor RC2 qualifies this tree. RC2 is not a
+stable API freeze or a fully qualified release (clean-host gates are pending).
+A passing host test of a Git pin is integration evidence, not release
+qualification. Candidate gates live in
 [release readiness](release-readiness.md#post-rc1-embedding-qualification).
 
 ## Getting the crate
@@ -109,8 +111,11 @@ A compile-tested example lives at `crates/telltale/examples/embed_scan.rs`
 (`cargo run -p telltale-core --example embed_scan -- <session-root>`; use a
 synthetic fixture root).
 
-The builder mirrors the CLI's rule semantics. Rule documents are strings, not
-paths, so the rule engine works without filesystem access:
+The builder shares the CLI's rule content, defaults, policy, and evaluation
+semantics. It accepts document strings, not filesystem paths, and rejects
+duplicate IDs across documents, including bundled defaults. It does not implement
+the CLI's filesystem-managed tiers, same-ID replacement, or override files
+([tier resolution](install.md#local-rule-policy-and-allowlist-config)):
 
 ```rust
 let pipeline = Pipeline::builder()
@@ -281,12 +286,15 @@ Three scores exist and must stay distinct: native finding risk
 - `Pipeline::semantic_provenance(&options)` computes the effective semantic
   identity before acquisition, for comparison with each result's
   `semantic_provenance`. It frames the effective rule fingerprint,
-  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (2),
+  `ACTION_SEMANTICS_VERSION` (2), the native action profile version (3),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` switch. It does not cover context options, host path
   resolution, binary identity, or per-event attestation; bind the binary or
   revision separately. `ProducerProvenanceManifestV1` has a different scope; see
   [producer provenance](telemetry-output.md#producer--detector-provenance-manifest).
+  Native profile 3 applies credential boundaries and example exclusions to the
+  same token; semantic identities change from profile 2, while replay identities
+  and Event 3 session semantics remain unchanged.
 - Identity grammar: `semantic:v1:sha256:` or `replay:v1:sha256:` followed by 64
   lowercase hex characters. Unknown future versions are contract evolution, not
   permission to invent a substitute. Golden values are pinned by tests and change
@@ -524,7 +532,7 @@ emitted by scans or CLI watch.
   is a bounded single-line subset (quoted sections, environment keys, arrays);
   unsupported MCP syntax yields an explicit unsupported outcome, and only
   unrelated multiline strings are skipped.
-- `InstallPlatform::Windows` matches `.exe`, `.cmd`, `.bat`, and `.ps1`.
+- `InstallPlatform::Windows` matches `.exe`, `.com`, `.cmd`, `.bat`, and `.ps1`.
   `collect_install_inventory_with_sources` marks agents present from exact
   supported sources as `InstallConfidence::Partial`, without reading contents.
 

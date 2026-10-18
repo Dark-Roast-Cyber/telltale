@@ -406,9 +406,9 @@ impl ScanState {
     }
 
     /// Record the end of a cut window; the next read continues strictly after
-    /// it, without the overlap. A window that began inside the overlap can end
-    /// before the prior high-water, whose rows were already evaluated, so the
-    /// position never moves backwards.
+    /// it, without the overlap. The stored position remains monotone even when
+    /// a cut ends below the prior high-water; it is not a raw continuation
+    /// coordinate for unfinished overlap below that watermark.
     pub fn observe_sqlite_ingestion_drain(
         &mut self,
         source: &Source,

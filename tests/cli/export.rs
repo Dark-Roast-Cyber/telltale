@@ -1131,6 +1131,173 @@ fn export_correlate_emits_cross_session_event() {
 }
 
 #[test]
+fn export_timeline_keeps_operational_warnings_out_of_risk_bands() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let warning = native_test_event(
+        "operational_alert",
+        "telltale-00000000-0000-4000-8000-000000000001",
+        "2026-05-01T00:00:00.000Z",
+        "warning",
+        "scanner",
+        "scanner",
+        &[],
+    );
+    fs::write(&log_path, format!("{warning}\n")).expect("write warning-only log");
+
+    for format in ["jsonl", "timeline-text"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+            .args(["export", "--log-path"])
+            .arg(&log_path)
+            .args(["--timeline", "--session-id", "scanner", "--format", format])
+            .output()
+            .expect("export warning-only timeline");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if format == "jsonl" {
+            let timeline: Value = serde_json::from_slice(&output.stdout).expect("timeline JSON");
+            assert_eq!(timeline["record_status"], "native");
+            assert_eq!(timeline["max_severity"], "warning");
+            assert_eq!(timeline["entries"][0]["severity"], "warning");
+            assert_eq!(timeline["detection_count"], 0);
+            assert_eq!(timeline["risk_summary"]["risky_action_count"], 0);
+            assert_eq!(timeline["risk_summary"]["max_severity"], "informational");
+        } else {
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(text.contains("Max severity: warning"));
+            assert!(text.contains("warning operational_alert"));
+            assert!(text.contains("risky_actions=0 max_severity=informational"));
+        }
+    }
+}
+
+#[test]
+fn export_timeline_warning_survives_informational_activity_in_either_order() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    let activity = native_test_event(
+        "activity",
+        "telltale-00000000-0000-4000-8000-000000000003",
+        "2026-05-01T00:01:00.000Z",
+        "informational",
+        "codex",
+        "warning-risk-session",
+        &[],
+    );
+    let mut failures = Vec::new();
+    for warning_time in ["2026-05-01T00:00:00Z", "2026-05-01T00:02:00Z"] {
+        let warning = serde_json::json!({
+            "schema_version": "1.0",
+            "event_id": "historical-warning",
+            "timestamp": warning_time,
+            "event_type": "operational_alert",
+            "severity": "warning",
+            "risk_score": 0,
+            "client": "codex",
+            "session_id": "warning-risk-session",
+        });
+        fs::write(&log_path, format!("{warning}\n{activity}\n"))
+            .expect("write warning and activity log");
+        for format in ["jsonl", "timeline-text"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+                .args(["export", "--log-path"])
+                .arg(&log_path)
+                .args([
+                    "--timeline",
+                    "--session-id",
+                    "warning-risk-session",
+                    "--format",
+                    format,
+                ])
+                .output()
+                .expect("export warning and activity timeline");
+            assert!(
+                output.status.success(),
+                "stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).expect("timeline UTF-8");
+            let retains_warning = if format == "jsonl" {
+                let timeline: Value = serde_json::from_str(&stdout).expect("timeline JSON");
+                assert_eq!(timeline["entry_count"], 2);
+                assert_eq!(timeline["detection_count"], 0);
+                assert_eq!(timeline["risk_summary"]["max_severity"], "informational");
+                timeline["max_severity"] == "warning"
+            } else {
+                assert!(stdout.contains("warning operational_alert"));
+                assert!(stdout.contains("informational activity"));
+                assert!(stdout.contains("risky_actions=0 max_severity=informational"));
+                stdout.contains("Max severity: warning")
+            };
+            if !retains_warning {
+                failures.push(format!("{warning_time} {format}: {stdout}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn export_timeline_warning_does_not_outrank_detection_risk_bands() {
+    let temp = tempdir().expect("tempdir");
+    let log_path = temp.path().join("events.jsonl");
+    for severity in ["low", "medium", "high", "critical"] {
+        let detection = native_test_event(
+            "detection",
+            "telltale-00000000-0000-4000-8000-000000000002",
+            "2026-05-01T00:01:00.000Z",
+            severity,
+            "codex",
+            "warning-risk-session",
+            &["rule.test"],
+        );
+        // Historical records can share a session with native detections.
+        for warning_time in ["2026-05-01T00:00:00Z", "2026-05-01T00:02:00Z"] {
+            let warning = serde_json::json!({
+                "schema_version": "1.0",
+                "event_id": "historical-warning",
+                "timestamp": warning_time,
+                "event_type": "operational_alert",
+                "severity": "warning",
+                "risk_score": 0,
+                "client": "codex",
+                "session_id": "warning-risk-session",
+            });
+            fs::write(&log_path, format!("{warning}\n{detection}\n"))
+                .expect("write mixed timeline log");
+            let output = Command::new(env!("CARGO_BIN_EXE_telltale"))
+                .args(["export", "--log-path"])
+                .arg(&log_path)
+                .args(["--timeline", "--session-id", "warning-risk-session"])
+                .output()
+                .expect("export mixed warning/detection timeline");
+            assert!(
+                output.status.success(),
+                "{severity}, {warning_time}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let timeline: Value = serde_json::from_slice(&output.stdout).expect("timeline JSON");
+            assert_eq!(timeline["record_status"], "mixed");
+            assert_eq!(timeline["entry_count"], 2);
+            assert_eq!(timeline["detection_count"], 1);
+            assert_eq!(timeline["max_severity"], severity);
+            assert_eq!(timeline["risk_summary"]["max_severity"], severity);
+            assert_eq!(timeline["risk_summary"]["risky_action_count"], 1);
+            assert!(
+                timeline["entries"]
+                    .as_array()
+                    .expect("timeline entries")
+                    .iter()
+                    .any(|entry| entry["severity"] == "warning")
+            );
+        }
+    }
+}
+
+#[test]
 fn export_timeline_produces_redacted_session_timeline() {
     let temp = tempdir().expect("tempdir");
     let log_path = temp.path().join("telltale-events.jsonl");

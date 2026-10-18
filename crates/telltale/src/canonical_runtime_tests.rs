@@ -9,6 +9,169 @@ fn clock() -> ObservedAt {
 }
 
 #[test]
+fn registry_acquisition_and_evaluation_domains_agree() {
+    use std::collections::BTreeSet;
+    use telltale_sources::acquisition::{AcquisitionOptions, acquire_source};
+
+    // Assignment admission is reviewed independently, not inherited from a new
+    // acquisition registration. This is an explicit subset of source support.
+    #[cfg(feature = "protected-assignment")]
+    let reviewed_assignments = BTreeSet::from([
+        ("claude_code", "claude.projects"),
+        ("codex", "codex.sessions"),
+        ("codex", "codex.archived_sessions"),
+        ("codex", "codex.headless_sessions"),
+        ("copilot", "copilot.process_log"),
+        ("openclaw", "openclaw.agents"),
+        ("opencode", "opencode.sqlite"),
+        ("qwen", "qwen.projects"),
+    ]);
+
+    let directory = tempdir().unwrap();
+    let codex = directory.path().join("codex.jsonl");
+    std::fs::write(&codex, concat!(
+        "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"synthetic\"}}\n",
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"needle\"}}\n"
+    )).unwrap();
+    let opencode = directory.path().join("opencode.db");
+    #[cfg(feature = "opencode-sqlite")]
+    {
+        let connection = rusqlite::Connection::open(&opencode).unwrap();
+        connection.execute_batch(
+            r#"CREATE TABLE session_v2 (id TEXT PRIMARY KEY, agent TEXT, model TEXT);
+            CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+                time_created INTEGER, time_updated INTEGER, data TEXT);
+            INSERT INTO session_v2 VALUES ('synthetic', 'build', NULL);
+            INSERT INTO session_message VALUES ('message', 'synthetic', 'user', 1, 0, 1,
+                '{"text":"needle","time":{"created":0}}');"#,
+        ).unwrap();
+    }
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/session_stores");
+    let registered = telltale_sources::clients::supported_clients()
+        .iter()
+        .flat_map(|client| {
+            client
+                .sources
+                .iter()
+                .map(move |source| (client.id, source.id, source.kind))
+        })
+        .collect::<BTreeSet<_>>();
+    let rules = plan("user_context");
+    let mut acquired = BTreeSet::new();
+    let mut evaluated = BTreeSet::new();
+    let mut not_compiled = BTreeSet::new();
+    for &(client, source_id, kind) in &registered {
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind,
+            path: match client {
+                ClientId::Codex => codex.clone(),
+                ClientId::Claude => {
+                    fixtures.join("claude/projects/project-b/session-tool-use.jsonl")
+                }
+                ClientId::OpenClaw => {
+                    fixtures.join("openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl")
+                }
+                ClientId::Qwen => {
+                    fixtures.join("qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl")
+                }
+                ClientId::Copilot => fixtures.join("copilot/process-uc001.log"),
+                ClientId::OpenCode => opencode.clone(),
+                _ => panic!("registered client needs a native conformance fixture"),
+            },
+        };
+        let observations = match acquire_source(&source, AcquisitionOptions::new(clock())) {
+            Ok(batch) => {
+                assert!(!batch.observations.is_empty(), "{source_id}");
+                acquired.insert((client, source_id, kind));
+                batch.observations
+            }
+            Err(AcquisitionError::CapabilityNotCompiled) if !cfg!(feature = "opencode-sqlite") => {
+                assert_eq!(client, ClientId::OpenCode);
+                assert!(!opencode.exists());
+                not_compiled.insert((client, source_id, kind));
+                Vec::new()
+            }
+            Err(error) => panic!("{source_id}: {error}"),
+        };
+        #[cfg(feature = "protected-assignment")]
+        for observation in &observations {
+            let provenance = observation.source();
+            let pair = (provenance.adapter_type(), provenance.adapter_id());
+            assert_eq!(
+                crate::assignment::AssignmentAdapterDomain::registered(pair.0, pair.1).is_ok(),
+                reviewed_assignments.contains(&pair),
+                "{source_id} assignment admission"
+            );
+        }
+        for &(candidate_client, candidate_id, _) in &registered {
+            let result = evaluate_source(
+                CanonicalSourceInput {
+                    client: candidate_client,
+                    source_id: candidate_id,
+                    source_instance: None,
+                    observations: &observations,
+                },
+                &rules,
+                None,
+            );
+            if candidate_client == client && candidate_id == source_id {
+                result.unwrap_or_else(|error| panic!("{source_id}: {error}"));
+                evaluated.insert((client, source_id, kind));
+            } else if !observations.is_empty() {
+                assert!(
+                    matches!(result, Err(ProcessingError::InvalidSource)),
+                    "{source_id} as {candidate_id}"
+                );
+            }
+        }
+        for candidate_client in telltale_sources::clients::supported_clients() {
+            if candidate_client.id != client {
+                assert!(matches!(
+                    evaluate_source(
+                        CanonicalSourceInput {
+                            client: candidate_client.id,
+                            source_id,
+                            source_instance: None,
+                            observations: &[],
+                        },
+                        &rules,
+                        None,
+                    ),
+                    Err(ProcessingError::InvalidSource)
+                ));
+            }
+        }
+    }
+    assert_eq!(evaluated, registered);
+    acquired.extend(not_compiled);
+    assert_eq!(acquired, registered);
+    #[cfg(feature = "protected-assignment")]
+    {
+        let mut admitted = BTreeSet::new();
+        for &(adapter_type, _) in &reviewed_assignments {
+            for &(_, source_id, _) in &registered {
+                match crate::assignment::AssignmentAdapterDomain::registered(
+                    adapter_type,
+                    source_id,
+                ) {
+                    Ok(_) => {
+                        admitted.insert((adapter_type, source_id));
+                    }
+                    Err(error) => assert_eq!(
+                        error.error_code(),
+                        crate::assignment::ProtectedAssignmentErrorCode::InvalidClaim
+                    ),
+                }
+            }
+        }
+        assert_eq!(admitted, reviewed_assignments);
+    }
+}
+
+#[test]
 fn pre_policy_compatibility_retention_failure_remains_diagnostic_only() {
     let dir = tempdir().unwrap();
     let source = source(dir.path().join("synthetic-policy.jsonl"));

@@ -19,15 +19,15 @@ policy YAML selects active rule categories and rule IDs, and the emitted
 deterministic response metadata is the review artifact downstream consumers
 use.
 
-Three policy modes are available in the current phase:
+There is no policy-mode flag and no `policy_mode` event field. `observe` and `alert` below describe configuration outcomes, not a mode enum. `simulate-block` is not implemented.
 
 ### `observe`
 
-Emit activity and health telemetry only. No detections or detection review metadata.
+Emit health telemetry, and activity only with `--emit-activity`. No detections or detection review metadata.
 
 | Behavior | Setting |
 | --- | --- |
-| Activity events | emitted |
+| Activity events | emitted only with `--emit-activity` |
 | Health events | emitted |
 | Detection events | suppressed |
 | Review metadata | not applicable |
@@ -81,15 +81,15 @@ This is the mode Telltale uses when `--policy` is omitted or when the loaded pol
 
 ### `simulate-block`
 
-Mark detections that *would* have been blocked without actually blocking anything. This mode produces the same telemetry as `alert` but adds a policy simulation tag so analysts can evaluate containment rules before enabling active enforcement.
+Not implemented. There is no `--mode` flag, and events are not stamped with `policy_mode`. The table below is not current behavior.
 
 | Behavior | Setting |
 | --- | --- |
-| Activity events | emitted |
-| Health events | emitted |
-| Detection events | emitted with `policy_mode: simulate-block` |
-| Review metadata | deterministic Event 3.0 response metadata |
-| Operational alerts | emitted |
+| Activity events | not implemented |
+| Health events | not implemented as a distinct mode |
+| Detection events | not implemented; no `policy_mode` field is emitted |
+| Review metadata | not implemented as a distinct mode |
+| Operational alerts | not implemented as a distinct mode |
 | Session termination | never |
 
 `simulate-block` is not yet implemented as a distinct CLI mode. Today, the same effect can be approximated by using a strict policy with `alert` behavior and reviewing the `response.recommended_action` field on detection events. A dedicated `--mode simulate-block` flag that stamps events with the policy mode is a future enhancement.
@@ -169,7 +169,7 @@ degradation) belong to the separately accepted policy layer.
 | --- | --- |
 | Allowlists | Suppressed detections are logged at `informational` with `suppressed` tag regardless of mode. |
 | Analyst review | Above-threshold events carry deterministic response metadata and optional anchors; suppressed detections remain informational. |
-| Response contract | `recommended_action` and `response_playbook` are emitted in all modes. `simulate-block` may add a `would_block` flag in the future. |
+| Response contract | `recommended_action` and `response_playbook` are emitted only on emitted, non-suppressed detections. `observe` emits no detections. Allowlist suppression clears `response`. `simulate-block` is not implemented. |
 | Operational alerts | Emitted in all modes. Not affected by detection policy mode. |
 | Correlation | Cross-session correlation operates on emitted detection events, so it works in `alert` and `simulate-block`. |
 

@@ -272,8 +272,8 @@ separate open PR is not by itself a release blocker.
 
 ### Post-RC1 embedding qualification
 
-The current RC2 development embedding facade is an intended 0.7.0 contract, not
-qualification evidence. Before claiming the upstream facade qualified, bind
+The published `v0.7.0-rc.2` embedding facade is an intended 0.7.0 contract, not
+qualification evidence for unpublished `0.7.0-rc.3`. Before claiming the upstream facade qualified, bind
 results to the reviewed candidate SHA and retain results for
 `make embedding-contract-check`, the explicit Rust 1.88 embedding subset, and an
 exact standalone Git consumer using strict Event 3 and the public facade. Native
@@ -856,9 +856,10 @@ The official `x86_64-pc-windows-msvc` release build sets
 staged `telltale.exe` that the ZIP helper consumes. The verifier fails closed if
 inspection fails or if imports include `VCRUNTIME*.dll`, `MSVCP*.dll`,
 `MSVCR*.dll`, or `CONCRT*.dll`. Linux and macOS release builds do not receive
-this Windows target feature. The published rc.3 artifact passed this
+this Windows target feature. The published `v0.6.0-rc.3` artifact passed this
 publication-time gate, five-platform native verification, and clean-Windows
-static-CRT and functional acceptance.
+static-CRT and functional acceptance. That result does not qualify unpublished
+`v0.7.0-rc.3`.
 
 The default installer selects the latest stable Release. For candidate
 validation, pass the exact tag, for example:

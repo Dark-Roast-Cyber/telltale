@@ -4,7 +4,7 @@ This document defines the quality bar for Telltale detection rules, fixtures, an
 
 ## Required Rule Metadata
 
-Every rule in `config/rules/tool-call-regex.yaml` must include:
+Every rule in `config/rules/tool-call-regex.yaml` must include the fields below. `detection_class`, `signal_type`, and `analytic_intent` may be omitted; the defaults in this table apply, and most bundled rules omit them.
 
 | Field | Purpose | Example |
 | --- | --- | --- |

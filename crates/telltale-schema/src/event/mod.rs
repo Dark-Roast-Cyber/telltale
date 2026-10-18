@@ -471,32 +471,13 @@ pub fn sanitize_serialized_event(event: &mut Value) {
         transform_serialized_string(event, "source_path_hash", terminal_evidence_hash);
         terminalize_serialized_source_counts(event);
         transform_serialized_identifier_array(event, "detection_classes", |value| {
-            terminal_imported_enum(
-                "detection-class",
-                &[
-                    "security_detection",
-                    "policy_violation",
-                    "threat_hunting",
-                    "compliance_observation",
-                    "operational_health",
-                    "baseline_deviation",
-                ],
-                value,
-            )
+            terminal_imported_enum("detection-class", VALID_DETECTION_CLASSES, value)
         });
         transform_serialized_identifier_array(event, "signal_types", |value| {
-            terminal_imported_enum(
-                "signal-type",
-                &["atomic", "chain", "correlation", "baseline_deviation"],
-                value,
-            )
+            terminal_imported_enum("signal-type", VALID_SIGNAL_TYPES, value)
         });
         transform_serialized_identifier_array(event, "analytic_intents", |value| {
-            terminal_imported_enum(
-                "analytic-intent",
-                &["alert", "hunt", "enrich", "baseline", "audit"],
-                value,
-            )
+            terminal_imported_enum("analytic-intent", VALID_ANALYTIC_INTENTS, value)
         });
         transform_serialized_string(event, "agent", |value| {
             terminal_imported_product_metadata(canonical_event, "agent", value)
@@ -1516,7 +1497,10 @@ const VALID_SEVERITIES: &[&str] = &[
     "critical",
     "warning",
 ];
-const VALID_DETECTION_CLASSES: &[&str] = &[
+// Shared with Rule v1 validation across crates, not a supported embedding API.
+// Family-specific profiles below intentionally accept narrower subsets.
+#[doc(hidden)]
+pub const VALID_DETECTION_CLASSES: &[&str] = &[
     "security_detection",
     "policy_violation",
     "threat_hunting",
@@ -1524,8 +1508,10 @@ const VALID_DETECTION_CLASSES: &[&str] = &[
     "operational_health",
     "baseline_deviation",
 ];
-const VALID_SIGNAL_TYPES: &[&str] = &["atomic", "chain", "correlation", "baseline_deviation"];
-const VALID_ANALYTIC_INTENTS: &[&str] = &["alert", "hunt", "enrich", "baseline", "audit"];
+#[doc(hidden)]
+pub const VALID_SIGNAL_TYPES: &[&str] = &["atomic", "chain", "correlation", "baseline_deviation"];
+#[doc(hidden)]
+pub const VALID_ANALYTIC_INTENTS: &[&str] = &["alert", "hunt", "enrich", "baseline", "audit"];
 const VALID_CONFIDENCES: &[&str] = &["low", "medium", "high"];
 const VALID_RISK_ENTITY_TYPES: &[&str] = &["host", "user", "session"];
 const VALID_PROCESS_RULE_SEVERITIES: &[&str] =
