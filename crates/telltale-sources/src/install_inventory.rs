@@ -239,6 +239,12 @@ fn observe_agent(
             &context.global_storage_roots,
         ));
     }
+    if def.agent == "claude" {
+        signals.extend(crate::sources::claude::desktop_install_signals(
+            &context.home,
+            platform,
+        ));
+    }
     if def.agent == "opencode" {
         signals.extend(crate::sources::opencode::desktop_install_signals(
             &context.home,
@@ -482,6 +488,68 @@ mod tests {
             assert!(agent.signals.iter().any(|signal| signal.present
                 && signal.kind == "executable"
                 && signal.path_hash.is_some()));
+            assert_eq!(
+                observe(InstallPlatform::Unix).confidence,
+                InstallConfidence::Absent
+            );
+        }
+    }
+
+    #[test]
+    fn windows_claude_desktop_bundle_is_confirmed_without_path_or_node() {
+        for (root, signal_name) in [
+            ("AppData/Roaming/Claude/claude-code", "claude-desktop"),
+            (
+                "AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code",
+                "claude-desktop-packaged",
+            ),
+        ] {
+            let temp = tempdir().unwrap();
+            let context = InstallInventoryContext {
+                home: temp.path().into(),
+                path_dirs: vec![],
+                extension_roots: vec![],
+                global_storage_roots: vec![],
+                node_roots: vec![],
+            };
+            let observe = |platform| {
+                collect_install_inventory_for_platform(&context, 1, platform)
+                    .agents
+                    .into_iter()
+                    .find(|agent| agent.agent == "claude")
+                    .unwrap()
+            };
+            let root = temp.path().join(root);
+            // Wrong depths and a directory named like the binary are not evidence.
+            std::fs::create_dir_all(root.join("2.1.295/d2e29494ec83/claude.exe")).unwrap();
+            std::fs::write(root.join("claude.exe"), b"synthetic").unwrap();
+            std::fs::write(root.join("2.1.295/claude.exe"), b"synthetic").unwrap();
+            assert_eq!(
+                observe(InstallPlatform::Windows).confidence,
+                InstallConfidence::Absent
+            );
+            // Joined per component, as the directory walk builds it, so the
+            // path hash compares equal on Windows.
+            let path = root.join("2.1.266").join("b6be4b20d80c").join("claude.exe");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"metadata-only-probe-must-not-execute").unwrap();
+            let agent = observe(InstallPlatform::Windows);
+            assert!(agent.installed);
+            assert_eq!(agent.confidence, InstallConfidence::Confirmed);
+            assert!(
+                !serde_json::to_string(&agent)
+                    .unwrap()
+                    .contains(temp.path().to_str().unwrap())
+            );
+            let present = agent
+                .signals
+                .iter()
+                .filter(|signal| signal.present)
+                .collect::<Vec<_>>();
+            assert_eq!(present.len(), 1);
+            assert_eq!(present[0].kind, "executable");
+            assert_eq!(present[0].name, signal_name);
+            assert_eq!(present[0].path_hash, Some(path_hash(&path)));
             assert_eq!(
                 observe(InstallPlatform::Unix).confidence,
                 InstallConfidence::Absent
