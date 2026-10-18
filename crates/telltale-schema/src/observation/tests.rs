@@ -232,8 +232,18 @@ fn authored_text_arguments_are_exact_tool_field_pairs() {
     let over = serde_json::json!("z".repeat(MESSAGE_MAX_TEXT_BYTES + 1));
     assert!(JsonValue::try_from_source_tool_arguments(Some("shell"), &over).is_err());
     let bare = serde_json::json!(long);
-    for name in ["exec", "bash"] {
+    for name in ["read", "bash"] {
         assert!(JsonValue::try_from_source_tool_arguments(Some(name), &bare).is_err());
+    }
+    // Codex freeform custom tools take one authored string: an `exec` script
+    // or an `apply_patch` patch. It gets the text budget but is not a command.
+    for name in ["exec", "apply_patch"] {
+        let arguments = JsonValue::try_from_source_tool_arguments(Some(name), &bare).unwrap();
+        assert!(build(tool_body(name, arguments.clone()), None).is_ok());
+        assert!(build(tool_body(name, arguments), Some(&long)).is_err());
+        assert!(JsonValue::try_from_source_tool_arguments(Some(name), &over).is_err());
+        let direct = JsonValue::String("S".repeat(LOCAL_MAX_STRING_BYTES + 1));
+        assert!(build(tool_body("read", direct), None).is_err());
     }
 
     let error = build(
@@ -1686,7 +1696,7 @@ fn semantic_body_and_facet_values_are_bounded_without_payload_errors() {
     let body_error = CanonicalObservationV2::builder(
         ObservationBody::Tool(
             ToolObservation::new()
-                .with_name("exec")
+                .with_name("read")
                 .unwrap()
                 .with_arguments(JsonValue::String("S".repeat(LOCAL_MAX_STRING_BYTES + 1))),
         ),

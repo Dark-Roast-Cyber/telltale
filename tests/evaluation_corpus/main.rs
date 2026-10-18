@@ -366,7 +366,12 @@ fn canonical_efficacy_rejection_and_ambiguous_outcomes_are_not_confusion_cases()
                 };
                 assert_eq!(tool.reported_status(), Some(expected));
                 assert_eq!(tool.name(), None);
-                assert_eq!(tool.result().is_some(), exit.is_some());
+                // Without output there is no result; the exit code is its own fact.
+                assert_eq!(tool.result(), None);
+                assert_eq!(
+                    tool.exit_code(),
+                    exit.as_ref().and_then(serde_json::Value::as_i64)
+                );
             }
         }
     }

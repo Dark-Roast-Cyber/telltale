@@ -9,6 +9,8 @@ use telltale_schema::observation::{
     SemanticFacet, SourceProvenance, SourceTimestamp, ToolObservation, ToolStatus,
 };
 
+use telltale_schema::observation::CanonicalBoundContext;
+
 use super::native::{
     CodexContentBlock, CodexNativeRecord, CodexToolFields, is_known_codex_discriminator,
 };
@@ -81,15 +83,77 @@ impl From<ObservationError> for CodexCanonicalError {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct CodexProjection {
+    pub(crate) observations: Vec<CanonicalObservationV2>,
+    /// Records left out by themselves; every other record was still mapped.
+    pub(crate) quarantined: Vec<CodexQuarantinedRecord>,
+}
+
+/// Coordinates of a record excluded from projection, never its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexQuarantinedRecord {
+    pub(crate) source_sequence: u64,
+    pub(crate) code: &'static str,
+    pub(crate) bound: Option<CanonicalBoundContext>,
+}
+
+/// Map each record on its own. A record whose type, completed item or content
+/// part this adapter does not map, or whose own values exceed a canonical
+/// bound, is quarantined so one record cannot blind the whole session.
+/// Integrity failures and the source-wide retained budget still fail the
+/// source.
 pub(crate) fn project_codex_native_records(
     records: &[CodexNativeRecord],
     options: &CodexCanonicalOptions,
-) -> Result<Vec<CanonicalObservationV2>, CodexCanonicalError> {
+) -> Result<CodexProjection, CodexCanonicalError> {
     let mut observations = crate::acquisition::CanonicalCollector::default();
+    let mut quarantined = Vec::new();
     for record in records {
-        project_record(record, options, &mut observations)?;
+        let mut unit = crate::acquisition::CanonicalCollector::default();
+        match project_record(record, options, &mut unit) {
+            Ok(()) => {
+                for observation in unit.finish() {
+                    observations.push(observation)?;
+                }
+            }
+            Err(error) => match quarantine_code(&error) {
+                Some(code) => quarantined.push(CodexQuarantinedRecord {
+                    source_sequence: record.source_sequence,
+                    code,
+                    bound: match &error {
+                        CodexCanonicalError::Observation(error) => error.bound_context(),
+                        CodexCanonicalError::Mapping { .. } => None,
+                    },
+                }),
+                None => return Err(error),
+            },
+        }
     }
-    Ok(observations.finish())
+    Ok(CodexProjection {
+        observations: observations.finish(),
+        quarantined,
+    })
+}
+
+fn quarantine_code(error: &CodexCanonicalError) -> Option<&'static str> {
+    match error {
+        CodexCanonicalError::Mapping { code, .. }
+            if matches!(
+                *code,
+                "unknown_discriminator"
+                    | "unknown_content_block"
+                    | "unsupported_completed_item"
+                    | "foreign_thread_item"
+            ) =>
+        {
+            Some(code)
+        }
+        CodexCanonicalError::Observation(error) if error.code() == "unbounded_value" => {
+            Some("unbounded_value")
+        }
+        _ => None,
+    }
 }
 
 fn project_record(
@@ -99,6 +163,12 @@ fn project_record(
 ) -> Result<(), CodexCanonicalError> {
     if record.auxiliary || record.mirrored {
         return Ok(());
+    }
+    if let Some(code) = record.quarantine {
+        return Err(mapping(
+            code,
+            "Codex record is recognized but not mapped by this adapter",
+        ));
     }
     if record.discriminator.as_deref().is_some_and(|kind| {
         !is_known_codex_discriminator(kind) && !is_known_canonical_discriminator(kind)
@@ -479,14 +549,15 @@ fn emit_tool(
         paths.push(("tool.name", FactProvenance::Reported));
     }
     if let Some(arguments) = &fields.arguments {
-        body = body.with_arguments(value_to_json(
-            arguments,
-            CanonicalFieldCategory::ToolArguments,
-        )?);
+        body = body.with_arguments(
+            JsonValue::try_from_source_tool_arguments(fields.name.as_deref(), arguments).map_err(
+                |error| error.with_bound_category(CanonicalFieldCategory::ToolArguments),
+            )?,
+        );
         paths.push(("tool.arguments", FactProvenance::Reported));
     }
     if let Some(result) = &fields.result {
-        body = body.with_result(value_to_json(result, CanonicalFieldCategory::ToolResult)?);
+        body = body.with_result(tool_result_json(result)?);
         paths.push(("tool.result", FactProvenance::Reported));
     } else if let Some(error) = &fields.error {
         body = body.with_result(value_to_json(error, CanonicalFieldCategory::ToolResult)?);
@@ -495,6 +566,10 @@ fn emit_tool(
     if let Some(is_error) = fields.is_error {
         body = body.with_is_error(is_error);
         paths.push(("tool.is_error", FactProvenance::Reported));
+    }
+    if let Some(exit_code) = fields.exit_code {
+        body = body.with_exit_code(exit_code);
+        paths.push(("tool.exit_code", FactProvenance::Reported));
     }
     if fields.completed_command {
         body = body.with_reported_status(match fields.status.as_deref() {
@@ -730,6 +805,30 @@ fn value_to_json(
         .map_err(|error| error.with_bound_category(category))?)
 }
 
+/// Direct output text gets the tool-result text budget. Codex stores custom
+/// tool output as `[{"type":"input_text","text":...}]`; an all-text array is
+/// joined into one direct string, and any other shape keeps ordinary
+/// structured conversion.
+fn tool_result_json(result: &Value) -> Result<JsonValue, CodexCanonicalError> {
+    let joined = joined_text_result(result);
+    Ok(
+        JsonValue::try_from_source_tool_result(joined.as_ref().unwrap_or(result))
+            .map_err(|error| error.with_bound_category(CanonicalFieldCategory::ToolResult))?,
+    )
+}
+
+fn joined_text_result(result: &Value) -> Option<Value> {
+    let items = result.as_array()?;
+    let texts = items
+        .iter()
+        .map(|item| match item.get("type").and_then(Value::as_str) {
+            Some("input_text" | "output_text" | "text") => item.get("text").and_then(Value::as_str),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!texts.is_empty()).then(|| Value::String(texts.join("\n")))
+}
+
 fn mapping(code: &'static str, detail: &'static str) -> CodexCanonicalError {
     CodexCanonicalError::Mapping { code, detail }
 }
@@ -794,6 +893,18 @@ mod tests {
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
         .expect("canonical observations")
+        .observations
+    }
+
+    /// One record's own mapping error, before projection quarantines it.
+    fn project_one(
+        record: &super::super::native::CodexNativeRecord,
+    ) -> Result<(), super::CodexCanonicalError> {
+        super::project_record(
+            record,
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+            &mut crate::acquisition::CanonicalCollector::default(),
+        )
     }
 
     #[test]
@@ -806,20 +917,27 @@ mod tests {
         let input = serde_json::json!({"type":"tool_call", "session_id":marker, "name":marker, "arguments":{marker:value}});
         let (_directory, source) =
             temp_source("codex.sessions", SourceKind::Jsonl, &input.to_string());
-        let error = project_codex_native_records(
-            &super::super::native::extract_codex_native_records(&source).unwrap(),
-            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
-        )
-        .unwrap_err();
+        let records = super::super::native::extract_codex_native_records(&source).unwrap();
+        let options = CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap());
+        let error = project_one(&records[0]).unwrap_err();
         let super::CodexCanonicalError::Observation(observation) = &error else {
             panic!("expected canonical validation")
         };
+        let bound = Some(CanonicalBoundContext {
+            category: CanonicalFieldCategory::ToolArguments,
+            dimension: BoundDimension::StringBytes,
+        });
+        assert_eq!(observation.bound_context(), bound);
+        // The projection quarantines that record alone, by coordinates.
+        let projection = project_codex_native_records(&records, &options).unwrap();
+        assert!(projection.observations.is_empty());
         assert_eq!(
-            observation.bound_context(),
-            Some(CanonicalBoundContext {
-                category: CanonicalFieldCategory::ToolArguments,
-                dimension: BoundDimension::StringBytes
-            })
+            projection.quarantined,
+            vec![super::CodexQuarantinedRecord {
+                source_sequence: 0,
+                code: "unbounded_value",
+                bound,
+            }]
         );
         assert_eq!(
             observation.to_string(),
@@ -916,12 +1034,14 @@ mod tests {
             &super::super::native::extract_codex_native_records(&source(first_path)).unwrap(),
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         let moved = project_codex_native_records(
             &super::super::native::extract_codex_native_records(&source(second_path)).unwrap(),
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         assert_eq!(first[0].observation_id(), moved[0].observation_id());
         assert_eq!(first[0].session_id().unwrap().value(), "synthetic-session");
 
@@ -936,7 +1056,8 @@ mod tests {
             &super::super::native::extract_codex_native_records(&source(changed_path)).unwrap(),
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         assert_eq!(first[0].observation_id(), changed[0].observation_id());
         assert_eq!(
             first[0]
@@ -972,12 +1093,14 @@ mod tests {
             &super::super::native::extract_codex_native_records(&source(first_path)).unwrap(),
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         let second = project_codex_native_records(
             &super::super::native::extract_codex_native_records(&source(second_path)).unwrap(),
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .unwrap();
+        .unwrap()
+        .observations;
         assert_ne!(first[0].observation_id(), second[0].observation_id());
     }
 
@@ -1294,12 +1417,19 @@ mod tests {
             SourceKind::Jsonl,
             "parser_maturity/non_discovered/unknown-variant.jsonl",
         );
-        let error = project_codex_native_records(
-            &super::super::native::extract_codex_native_records(&unknown_source).unwrap(),
+        let records = super::super::native::extract_codex_native_records(&unknown_source).unwrap();
+        let error = records
+            .iter()
+            .find_map(|record| project_one(record).err())
+            .expect("unknown discriminator");
+        assert_eq!(error.code(), "unknown_discriminator");
+        let projection = project_codex_native_records(
+            &records,
             &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
         )
-        .expect_err("unknown discriminator");
-        assert_eq!(error.code(), "unknown_discriminator");
+        .unwrap();
+        assert_eq!(projection.quarantined.len(), 1);
+        assert_eq!(projection.quarantined[0].code, "unknown_discriminator");
         assert!(
             !error
                 .to_string()
@@ -1326,19 +1456,23 @@ mod tests {
     }
 
     #[test]
-    fn unknown_content_block_fails_closed() {
+    fn unknown_content_block_quarantines_its_record() {
         let (_directory, source) = temp_source(
             "codex.sessions",
             SourceKind::Jsonl,
             r#"{"type":"assistant","content":[{"type":"future_block","value":"Synthetic payload marker."}]}"#,
         );
-        let error = project_codex_native_records(
-            &super::super::native::extract_codex_native_records(&source).unwrap(),
-            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
-        )
-        .expect_err("unknown block");
+        let records = super::super::native::extract_codex_native_records(&source).unwrap();
+        let error = project_one(&records[0]).expect_err("unknown block");
         assert_eq!(error.code(), "unknown_content_block");
         assert!(!error.to_string().contains("Synthetic payload marker"));
+        let projection = project_codex_native_records(
+            &records,
+            &CodexCanonicalOptions::new(ObservedAt::new(OBSERVED_AT).unwrap()),
+        )
+        .unwrap();
+        assert!(projection.observations.is_empty());
+        assert_eq!(projection.quarantined[0].code, "unknown_content_block");
     }
 
     #[test]
