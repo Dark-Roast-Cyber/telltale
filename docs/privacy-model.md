@@ -187,7 +187,7 @@ Telltale uses five evidence classes, ordered from safest to most sensitive:
 **Current implementation**: `path_hash()` and `evidence_hash()` in `crates/telltale-schema/src/event/inventory.rs`.
 
 **Current behavior**:
-- `evidence[].hash` is populated for all evidence items in detection events (tests assert `hash.is_some()`).
+- `evidence[].hash` is optional, including in detection events. Constructors set it for hash-bearing evidence; derived `repeat_count` and `allowlist` evidence can omit it.
 - `source_path_hash` on events is a SHA-256 of the source file path. The terminal boundary also protects manually mutated public Event values by preserving canonical lowercase-hex hashes and hashing any other non-empty value.
 - Correlation events hash `event_id` for cross-reference.
 

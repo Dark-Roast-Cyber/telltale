@@ -33,6 +33,32 @@ fn registry_acquisition_and_evaluation_domains_agree() {
         "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"synthetic\"}}\n",
         "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":\"needle\"}}\n"
     )).unwrap();
+    // Keep native inputs inside the package: workspace fixtures are not shipped
+    // with telltale-core, and this test also runs from normalized packages.
+    for (name, content) in [
+        (
+            "claude.jsonl",
+            r#"{"type":"user","sessionId":"synthetic","message":{"role":"user","content":"needle"}}"#,
+        ),
+        (
+            "openclaw.jsonl",
+            r#"{"type":"user","sessionId":"synthetic","content":"needle"}"#,
+        ),
+        (
+            "qwen.jsonl",
+            r#"{"type":"user","sessionId":"synthetic","content":"needle"}"#,
+        ),
+        (
+            "copilot.log",
+            concat!(
+                "Workspace initialized: synthetic (checkpoints: 0)\n",
+                "Accumulated output items (1): [{\"type\":\"function_call\",\"name\":\"view\",\"call_id\":\"synthetic-call\",\"arguments\":\"needle\"}]\n",
+                "Session completed.\n"
+            ),
+        ),
+    ] {
+        std::fs::write(directory.path().join(name), content).unwrap();
+    }
     let opencode = directory.path().join("opencode.db");
     #[cfg(feature = "opencode-sqlite")]
     {
@@ -46,8 +72,6 @@ fn registry_acquisition_and_evaluation_domains_agree() {
                 '{"text":"needle","time":{"created":0}}');"#,
         ).unwrap();
     }
-    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/session_stores");
     let registered = telltale_sources::clients::supported_clients()
         .iter()
         .flat_map(|client| {
@@ -68,16 +92,10 @@ fn registry_acquisition_and_evaluation_domains_agree() {
             kind,
             path: match client {
                 ClientId::Codex => codex.clone(),
-                ClientId::Claude => {
-                    fixtures.join("claude/projects/project-b/session-tool-use.jsonl")
-                }
-                ClientId::OpenClaw => {
-                    fixtures.join("openclaw/agents/project-b/uc001-openclaw-tool-result.jsonl")
-                }
-                ClientId::Qwen => {
-                    fixtures.join("qwen/projects/project-b/chats/uc001-qwen-tool-result.jsonl")
-                }
-                ClientId::Copilot => fixtures.join("copilot/process-uc001.log"),
+                ClientId::Claude => directory.path().join("claude.jsonl"),
+                ClientId::OpenClaw => directory.path().join("openclaw.jsonl"),
+                ClientId::Qwen => directory.path().join("qwen.jsonl"),
+                ClientId::Copilot => directory.path().join("copilot.log"),
                 ClientId::OpenCode => opencode.clone(),
                 _ => panic!("registered client needs a native conformance fixture"),
             },

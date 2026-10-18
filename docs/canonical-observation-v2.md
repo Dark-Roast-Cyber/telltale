@@ -446,7 +446,7 @@ Baseline state aggregates the latest retained contribution for
 each source instance; it is not a lifetime counter or a defined rolling window.
 Canonical scanning replaces a complete source contribution and evaluates activity against a
 snapshot taken before that update. The legacy OpenCode `message`/`part` store reads all messages but only a capped,
-cursor-filtered selection of parts, with ten minutes of resume overlap. When `session_message` and `session_v2` are complete, v2 reads a capped `session_message` window, not every message and not parts. Resume overlap is ten minutes; a cut window continues strictly after its high-water, with no overlap; a scanner drain may re-read up to one hour. Consequently,
+cursor-filtered selection of parts, with ten minutes of resume overlap. When `session_message` and `session_v2` are complete, v2 takes precedence even if legacy tables coexist: it reads a capped `session_message` window, not every message or any legacy rows. Resume overlap is ten minutes; a cut window continues strictly after its high-water, with no overlap; a scanner drain may re-read up to one hour. Consequently,
 replacement can discard older parts or messages outside the selection; addition would instead
 count overlap again. An unchanged-source fingerprint does not solve changed,
 partially overlapping batches.
