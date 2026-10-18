@@ -89,6 +89,14 @@ jobs:
         run: cargo fmt --all --check
       - name: Run Clippy with warnings denied
         run: cargo clippy --locked --all-targets -- -D warnings
+      # CI bootstrap exception; the venv also avoids externally managed Python.
+      - name: Install Event 3.0 validator dependency
+        shell: bash
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/telltale-schema-venv"
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
+          printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
       - name: Run full test suite
         run: cargo test --locked --quiet
       - name: Check public documentation boundary

@@ -1454,16 +1454,255 @@ fn workflow_step_index(steps: &[serde_yaml::Value], field: &str, marker: &str) -
         .filter_map(|(index, step)| {
             step[field]
                 .as_str()
-                .filter(|value| value.contains(marker))
+                .filter(|value| {
+                    if field == "uses" {
+                        value.split_once('@').map(|(action, _)| action)
+                            == Some(marker.trim_end_matches('@'))
+                    } else {
+                        value.contains(marker)
+                    }
+                })
                 .map(|_| index)
         })
         .collect::<Vec<_>>();
     assert_eq!(
         matches.len(),
         1,
-        "expected one {field} step containing {marker:?}"
+        "expected one {field} step matching {marker:?}"
     );
     matches[0]
+}
+
+fn workflow_steps<'a>(workflow: &'a serde_yaml::Value, job: &str) -> &'a [serde_yaml::Value] {
+    workflow["jobs"][job]["steps"]
+        .as_sequence()
+        .unwrap_or_else(|| panic!("missing steps for job {job}"))
+}
+
+fn workflow_run(steps: &[serde_yaml::Value], index: usize) -> &str {
+    steps[index]["run"].as_str().expect("workflow run script")
+}
+
+fn assert_default_success_gate(step: &serde_yaml::Value) {
+    assert!(step["continue-on-error"].is_null() || step["continue-on-error"] == false);
+    assert!(
+        step["if"].is_null(),
+        "gate must use the default success condition"
+    );
+}
+
+fn assert_release_publication_gates(workflow: &serde_yaml::Value) {
+    assert_eq!(
+        workflow["permissions"],
+        serde_yaml::to_value(BTreeMap::<String, String>::new()).unwrap()
+    );
+    assert_eq!(workflow["jobs"]["build"]["needs"], "preflight");
+    assert_eq!(
+        workflow["jobs"]["release"]["needs"],
+        serde_yaml::to_value(["preflight", "build"]).unwrap()
+    );
+    assert_eq!(
+        workflow["jobs"]["release"]["permissions"],
+        serde_yaml::to_value(BTreeMap::from([("contents", "write")])).unwrap()
+    );
+    let steps = workflow_steps(workflow, "release");
+    let manifest = workflow_step_index(steps, "run", "REQUIRE_SBOM=1");
+    let guard = workflow_step_index(steps, "run", "releases?per_page=100");
+    let reserve = workflow_step_index(steps, "run", "gh api --method POST");
+    let publish = workflow_step_index(steps, "uses", "softprops/action-gh-release");
+    assert!(manifest < guard && guard < reserve && reserve < publish);
+    assert!(workflow_run(steps, manifest).contains(
+        "make --silent RELEASE_ARTIFACT_DIR=release-downloads release-artifact-manifest"
+    ));
+    for index in [manifest, guard, reserve, publish] {
+        assert_default_success_gate(&steps[index]);
+    }
+    for index in [guard, reserve] {
+        assert_eq!(steps[index]["shell"], "bash");
+        assert_eq!(steps[index]["env"]["GH_TOKEN"], "${{ github.token }}");
+    }
+    assert_eq!(steps[publish]["with"]["tag_name"], "${{ github.ref_name }}");
+    assert_eq!(
+        steps[publish]["with"]["prerelease"],
+        "${{ contains(github.ref_name, '-') }}"
+    );
+    assert_eq!(steps[publish]["with"]["overwrite_files"], false);
+}
+
+fn assert_windows_ci_gates(workflow: &serde_yaml::Value) {
+    let steps = workflow_steps(workflow, "windows");
+    let helper = workflow_step_index(steps, "run", "tests\\release_windows_zip.ps1");
+    let verifier_tests = workflow_step_index(steps, "run", "tests\\verify_windows_runtime.ps1");
+    let clippy = workflow_step_index(steps, "run", "cargo clippy");
+    let clippy_args = workflow_run(steps, clippy)
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    assert!(
+        clippy_args.contains(&"--all-targets"),
+        "Windows Clippy must cover every target"
+    );
+    assert!(
+        clippy_args
+            .windows(3)
+            .any(|args| args == ["--", "-D", "warnings"]),
+        "Windows Clippy must deny warnings"
+    );
+    assert_eq!(
+        steps
+            .iter()
+            .filter(|step| step["run"] == "cargo test")
+            .count(),
+        1,
+        "one full Rust suite step"
+    );
+    let tests = steps
+        .iter()
+        .position(|step| step["run"] == "cargo test")
+        .expect("full Rust suite");
+    let build = workflow_step_index(
+        steps,
+        "run",
+        "cargo build --locked --release --target x86_64-pc-windows-msvc",
+    );
+    let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
+    let smoke = workflow_step_index(steps, "run", "telltale.exe --version");
+    assert!(helper < clippy && verifier_tests < clippy && clippy < tests);
+    assert!(tests < build && build < runtime && runtime < smoke);
+    for index in [helper, verifier_tests, clippy, tests, build, runtime, smoke] {
+        assert_default_success_gate(&steps[index]);
+    }
+    for index in [helper, verifier_tests, build, runtime, smoke] {
+        assert_eq!(steps[index]["shell"], "pwsh");
+    }
+    assert!(
+        workflow_run(steps, build).contains("$env:RUSTFLAGS = '-C target-feature=+crt-static'")
+    );
+    assert!(
+        workflow_run(steps, runtime)
+            .contains("-BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe")
+    );
+    assert!(workflow_run(steps, smoke).contains("$LASTEXITCODE -ne 0"));
+    assert!(workflow_run(steps, smoke).contains("throw"));
+}
+
+fn assert_release_archive_gates(workflow: &serde_yaml::Value) {
+    let steps = workflow_steps(workflow, "release");
+    let archives = workflow_step_index(
+        steps,
+        "run",
+        "telltale-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz",
+    );
+    let rust = workflow_step_index(steps, "uses", "dtolnay/rust-toolchain");
+    let graph = workflow_step_index(
+        steps,
+        "run",
+        "scripts/generate-sbom.py --check release-downloads/telltale-sbom.cdx.json",
+    );
+    let checksum = workflow_step_index(steps, "run", "xargs -0 sha256sum");
+    let required_sbom = workflow_step_index(
+        steps,
+        "run",
+        "test -f release-downloads/telltale-sbom.cdx.json",
+    );
+    let manifest = workflow_step_index(steps, "run", "REQUIRE_SBOM=1");
+    assert!(archives < rust && rust < graph && graph < checksum);
+    assert!(checksum < required_sbom && required_sbom < manifest);
+    assert_eq!(steps[rust]["with"]["toolchain"], "1.95.0");
+    for index in [archives, rust, graph, checksum, required_sbom, manifest] {
+        assert_default_success_gate(&steps[index]);
+        if index != rust {
+            assert_eq!(steps[index]["shell"], "bash");
+        }
+    }
+    assert!(
+        workflow_run(steps, required_sbom)
+            .contains("test ! -L release-downloads/telltale-sbom.cdx.json")
+    );
+    assert!(!steps.iter().any(|step| {
+        step["run"]
+            .as_str()
+            .is_some_and(|run| run.contains("security-tools"))
+    }));
+}
+
+fn assert_ci_metadata_gate(workflow: &serde_yaml::Value) {
+    let steps = workflow_steps(workflow, "test");
+    let gate = workflow_step_index(
+        steps,
+        "run",
+        "make --silent CARGO_LOCKED=--locked ci-linux-test",
+    );
+    assert_default_success_gate(&steps[gate]);
+    assert!(
+        !steps.iter().any(|step| step["run"]
+            .as_str()
+            .is_some_and(|run| run.contains("make --silent version-consistency-check"))),
+        "CI must use publication-safe metadata checks, not release-tag preflight"
+    );
+}
+
+fn assert_release_preflight_gates(workflow: &serde_yaml::Value) {
+    assert_release_publication_gates(workflow);
+    let steps = workflow_steps(workflow, "preflight");
+    let checkout = workflow_step_index(steps, "uses", "actions/checkout");
+    assert_eq!(steps[checkout]["with"]["fetch-depth"], 0);
+    for required in [
+        "git fetch --no-tags --force origin main:refs/remotes/origin/main",
+        "git merge-base --is-ancestor",
+        "python3 scripts/version-consistency-check --tag \"${GITHUB_REF_NAME}\"",
+        "python3 tests/version_consistency_test.py",
+        "cargo fmt --all --check",
+        "cargo clippy --locked --all-targets -- -D warnings",
+        "cargo test --locked --quiet",
+        "make --silent CARGO_LOCKED=--locked release-public-docs-check",
+        "make --silent CARGO_LOCKED=--locked release-canonical-identity-check",
+        "make --silent CARGO_LOCKED=--locked release-crate-manifest",
+        "make --silent CARGO_LOCKED=--locked package-verify",
+        "make --silent CARGO_LOCKED=--locked release-fixture-smoke",
+        "installer_path=scripts/install-telltale",
+        "git hash-object \"${installer_path}\"",
+        "git rev-parse \"${GITHUB_SHA}:${installer_path}\"",
+        "git ls-tree \"${GITHUB_SHA}\" -- \"${installer_path}\"",
+    ] {
+        let index = workflow_step_index(steps, "run", required);
+        assert_default_success_gate(&steps[index]);
+    }
+    for job in ["preflight", "build", "release"] {
+        for step in workflow_steps(workflow, job) {
+            if let Some(run) = step["run"].as_str() {
+                for forbidden in [
+                    "release-preflight",
+                    "release-context-check",
+                    "release-tag-review",
+                    "git branch --show-current",
+                    "git status --short",
+                ] {
+                    assert!(
+                        !run.contains(forbidden),
+                        "CI must not invoke local-only check {forbidden:?}"
+                    );
+                }
+            }
+        }
+    }
+    let build = workflow_steps(workflow, "build");
+    for (marker, condition, shell) in [
+        (
+            "telltale-bundle/telltale",
+            "matrix.archive == 'tar.gz'",
+            "bash",
+        ),
+        ("telltale-bundle/$binary", "matrix.archive == 'zip'", "pwsh"),
+    ] {
+        let index = workflow_step_index(build, "run", marker);
+        assert_eq!(build[index]["if"], condition);
+        assert_eq!(build[index]["shell"], shell);
+        assert!(
+            build[index]["continue-on-error"].is_null()
+                || build[index]["continue-on-error"] == false
+        );
+        assert!(workflow_run(build, index).contains("--version"));
+    }
 }
 
 #[test]
@@ -1549,40 +1788,10 @@ fn release_windows_zip_helper_is_the_fail_closed_gate_before_evidence() {
 
 #[test]
 fn windows_ci_runs_release_zip_helper_runtime_gate_and_rust_suite() {
-    let workflow = fs::read_to_string(".github/workflows/ci.yml")
-        .expect("CI workflow")
-        .replace("\r\n", "\n");
-    let windows = workflow.find("  windows:\n").expect("Windows CI job");
-    let macos = workflow[windows..]
-        .find("  macos:")
-        .map(|offset| windows + offset)
-        .expect("macOS CI job");
-    let job = &workflow[windows..macos];
-    let helper = job
-        .find("- name: Validate Windows release ZIP helper")
-        .expect("Windows helper test step");
-    let rust = job
-        .find("- run: cargo clippy --all-targets -- -D warnings")
-        .expect("Rust suite");
-    assert!(helper < rust);
-    assert!(job.contains("shell: pwsh\n        run: .\\tests\\release_windows_zip.ps1"));
-    assert!(job.contains("run: .\\tests\\verify_windows_runtime.ps1"));
-    assert!(job.contains("$env:RUSTFLAGS = '-C target-feature=+crt-static'"));
-    assert!(job.contains("cargo build --locked --release --target x86_64-pc-windows-msvc"));
-    let build = job
-        .find("- name: Build official Windows release configuration")
-        .expect("static CRT release build");
-    let runtime = job
-        .find("- name: Verify Windows release runtime imports")
-        .expect("PE runtime verifier");
-    let smoke = job
-        .find("- name: Smoke-test Windows release binary")
-        .expect("Windows release binary smoke");
-    assert!(rust < build && build < runtime && runtime < smoke);
-    assert!(job.contains(
-        "run: .\\scripts\\verify-windows-runtime.ps1 -BinaryPath .\\target\\x86_64-pc-windows-msvc\\release\\telltale.exe"
-    ));
-    assert!(job.contains("telltale.exe --version"));
+    let workflow =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow"))
+            .expect("CI YAML");
+    assert_windows_ci_gates(&workflow);
     let verifier_tests =
         fs::read_to_string("tests/verify_windows_runtime.ps1").expect("runtime verifier tests");
     assert!(
@@ -1597,12 +1806,13 @@ fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
         .expect("CI workflow")
         .replace("\r\n", "\n");
     let makefile = normalize_line_endings(fs::read_to_string("Makefile").expect("Makefile"));
-    assert!(workflow.contains("  fmt:\n"));
-    assert!(workflow.contains("- run: make --silent fmt"));
     assert!(makefile.contains("fmt:\n\tcargo fmt --all --check"));
     // A separately staged Git consumer has its own manifest and formatting
     // check. Native repository jobs must use the centralized format result.
     let yaml: serde_yaml::Value = serde_yaml::from_str(&workflow).expect("parse CI workflow");
+    let fmt = workflow_steps(&yaml, "fmt");
+    let index = workflow_step_index(fmt, "run", "make --silent fmt");
+    assert_default_success_gate(&fmt[index]);
     for platform in ["windows", "macos"] {
         for step in yaml["jobs"][platform]["steps"]
             .as_sequence()
@@ -1622,18 +1832,29 @@ fn ci_centralizes_rust_formatting_in_the_linux_format_job() {
 fn release_static_crt_is_scoped_to_windows_and_pe_check_fails_closed() {
     let workflow = read_release_workflow();
     assert_eq!(workflow.matches("target-feature=+crt-static").count(), 1);
-    let unix_build = text_between(
-        &workflow,
-        "- name: Build release binary (unix)",
-        "- name: Build release binary with static MSVC CRT (windows)",
+    let yaml = serde_yaml::from_str(&workflow).expect("release YAML");
+    let steps = workflow_steps(&yaml, "build");
+    let unix = workflow_step_index(
+        steps,
+        "run",
+        "cargo build --locked --release --target ${{ matrix.target }}",
     );
+    let windows = workflow_step_index(steps, "run", "target-feature=+crt-static");
+    let unix_build = workflow_run(steps, unix);
     assert!(!unix_build.contains("crt-static"));
-    let windows_build = text_between(
-        &workflow,
-        "- name: Build release binary with static MSVC CRT (windows)",
-        "- name: Stage and package release bundle (unix)",
+    assert_eq!(steps[unix]["if"], "matrix.archive == 'tar.gz'");
+    assert_eq!(
+        steps[windows]["if"],
+        "matrix.target == 'x86_64-pc-windows-msvc'"
     );
-    assert!(windows_build.contains("if: matrix.target == 'x86_64-pc-windows-msvc'"));
+    assert_eq!(steps[windows]["shell"], "pwsh");
+    for index in [unix, windows] {
+        assert!(
+            steps[index]["continue-on-error"].is_null()
+                || steps[index]["continue-on-error"] == false
+        );
+    }
+    let windows_build = workflow_run(steps, windows);
     assert!(windows_build.contains("$env:RUSTFLAGS = '-C target-feature=+crt-static'"));
     assert!(
         windows_build.contains("cargo build --locked --release --target x86_64-pc-windows-msvc")
@@ -1671,9 +1892,10 @@ fn public_docs_distinguish_published_static_crt_policy_from_clean_host_proof() {
         install_flat
             .contains("do not require a separately installed Microsoft Visual C++ Redistributable")
     );
-    assert!(install_flat.contains(
-        "candidate passed five-platform native verification and clean-Windows static-CRT and functional acceptance"
-    ));
+    assert_doc_links_to(
+        "docs/install.md",
+        &["docs/versioning.md", "docs/source-validation-matrix.md"],
+    );
     assert!(install_flat.contains("does not apply retroactively"));
 
     let readiness = fs::read_to_string("docs/release-readiness.md").expect("readiness docs");
@@ -1681,15 +1903,20 @@ fn public_docs_distinguish_published_static_crt_policy_from_clean_host_proof() {
     assert!(readiness_flat.contains("-C target-feature=+crt-static"));
     assert!(readiness_flat.contains("dumpbin /DEPENDENTS"));
     assert!(readiness_flat.contains("exact staged `telltale.exe`"));
-    assert!(readiness_flat.contains(
-        "publication-time gate, five-platform native verification, and clean-Windows static-CRT and functional acceptance"
-    ));
+    assert_doc_links_to("docs/release-readiness.md", &["docs/versioning.md"]);
+    // Historical artifact identities are pinned below; prose rewording is not
+    // evidence of native or clean-host execution.
+    assert!(readiness_flat.contains("clean-Windows"));
+    assert!(readiness_flat.contains("publication-time gate"));
 
     let release_readme = fs::read_to_string("release/README.md").expect("release README");
     let release_readme_flat = normalize_line_endings(release_readme).replace('\n', " ");
-    assert!(release_readme_flat.contains(
-        "`telltale.exe` packaged in the `x86_64-pc-windows-msvc` archive for this release"
-    ));
+    for identity in ["`telltale.exe`", "`x86_64-pc-windows-msvc`"] {
+        assert!(
+            release_readme_flat.contains(identity),
+            "missing Windows artifact identity {identity}"
+        );
+    }
     assert!(release_readme_flat.contains("does not require a separately installed Microsoft"));
     assert!(release_readme_flat.contains("Microsoft runtime DLLs are not bundled"));
 }
@@ -1697,47 +1924,18 @@ fn public_docs_distinguish_published_static_crt_policy_from_clean_host_proof() {
 #[cfg(unix)]
 #[test]
 fn release_workflow_requires_exact_current_tag_target_archive_set() {
-    let workflow = read_release_workflow();
-    let start = workflow
-        .find("- name: Validate exact current-tag target archive set")
-        .expect("exact target archive validation step");
-    let checksum = workflow[start..]
-        .find("- name: Generate checksums")
-        .map(|offset| start + offset)
-        .expect("checksum step");
-    let sbom_graph_check = workflow[start..]
-        .find("- name: Verify release SBOM matches tagged locked graph")
-        .map(|offset| start + offset)
-        .expect("SBOM graph check step");
-    let manifests = workflow
-        .find("- name: Validate assembled release artifact manifests")
-        .expect("assembled manifest validation step");
-    let release = workflow
-        .find("- name: Create GitHub Release")
-        .expect("GitHub Release step");
-    let archive_step_end = workflow[start..]
-        .find("- uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1")
-        .map(|offset| start + offset)
-        .expect("release job Rust setup step");
-    let step = &workflow[start..archive_step_end];
-    let run_start = step.find("run: |\n").expect("archive validation run block") + "run: |\n".len();
-    let indentation = step[run_start..]
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| &line[..line.len() - line.trim_start().len()])
-        .expect("archive validation indentation");
-    let script = step[run_start..]
-        .lines()
-        .map(|line| {
-            if line.trim().is_empty() {
-                ""
-            } else {
-                line.strip_prefix(indentation)
-                    .expect("archive validation indentation")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
+    assert_release_publication_gates(&workflow);
+    assert_release_archive_gates(&workflow);
+    let steps = workflow_steps(&workflow, "release");
+    let script = workflow_run(
+        steps,
+        workflow_step_index(
+            steps,
+            "run",
+            "telltale-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz",
+        ),
+    );
 
     let targets = [
         "x86_64-unknown-linux-gnu.tar.gz",
@@ -1748,42 +1946,10 @@ fn release_workflow_requires_exact_current_tag_target_archive_set() {
     ];
     for target in targets {
         assert!(
-            step.contains(&format!("telltale-${{GITHUB_REF_NAME}}-{target}")),
+            script.contains(&format!("telltale-${{GITHUB_REF_NAME}}-{target}")),
             "workflow is missing canonical target {target}"
         );
     }
-    for (name, offset) in [
-        ("SBOM graph check", sbom_graph_check),
-        ("checksum generation", checksum),
-        ("assembled manifest validation", manifests),
-        ("GitHub Release creation", release),
-    ] {
-        assert!(start < offset, "archive validation must precede {name}");
-    }
-    assert!(
-        sbom_graph_check < checksum,
-        "SBOM graph check must precede checksum generation"
-    );
-    let release_job = workflow
-        .split_once("\n  release:\n")
-        .map(|(_, job)| job)
-        .expect("release publication job");
-    let rust_setup = release_job
-        .find("uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1")
-        .expect("release job Rust setup");
-    let graph_command = release_job
-        .find("python3 scripts/generate-sbom.py --check release-downloads/telltale-sbom.cdx.json")
-        .expect("release job SBOM graph checker");
-    assert!(
-        rust_setup < graph_command,
-        "Rust setup must precede SBOM graph checking"
-    );
-    assert!(release_job.contains("toolchain: 1.95.0"));
-    assert!(release_job.contains("permissions:\n      contents: write"));
-    assert!(!release_job.contains("id-token: write"));
-    assert!(!release_job.contains("attestations: write"));
-    assert!(!release_job.contains("security-tools"));
-
     let temp = tempdir().expect("tempdir");
     let downloads = temp.path().join("release-downloads");
     fs::create_dir(&downloads).expect("release downloads");
@@ -1797,7 +1963,8 @@ fn release_workflow_requires_exact_current_tag_target_archive_set() {
 
     let run = |expected_success: bool| {
         let output = Command::new("bash")
-            .args(["-euo", "pipefail", "-c", &script])
+            .args(["-euo", "pipefail", "-c", script])
+            .env_remove("BASH_ENV")
             .env("GITHUB_REF_NAME", "v0.5.0-rc.1")
             .current_dir(temp.path())
             .output()
@@ -1875,270 +2042,164 @@ fn release_workflow_requires_exact_current_tag_target_archive_set() {
     )
     .expect("extra target archive");
     run(false);
+    fs::remove_file(downloads.join("telltale-v0.5.0-rc.1-x86_64-pc-windows-msvc-copy.zip"))
+        .unwrap();
+
+    for extra in [".unexpected", "notes.txt"] {
+        fs::write(downloads.join(extra), b"unexpected artifact").unwrap();
+        run(false);
+        fs::remove_file(downloads.join(extra)).unwrap();
+    }
+    let sbom = downloads.join("telltale-sbom.cdx.json");
+    fs::write(&sbom, b"synthetic SBOM").unwrap();
+    run(true);
+    fs::remove_file(&sbom).unwrap();
+    symlink(&symlink_target, &sbom).unwrap();
+    run(false);
 }
 
 #[test]
 fn release_workflow_has_ci_safe_preflight_and_native_smoke_gates() {
-    let workflow = read_release_workflow();
-    serde_yaml::from_str::<serde_yaml::Value>(&workflow).expect("release workflow YAML");
+    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release workflow YAML");
+    assert_release_preflight_gates(&workflow);
     let installer = fs::read_to_string("scripts/install-telltale").expect("installer script");
     assert!(installer.contains("INSTALLER_PROVENANCE=\"git-blob\""));
     assert!(!installer.contains("INSTALLER_COMMIT="));
-
-    for required in [
-        "preflight:",
-        "needs: preflight",
-        "needs: [preflight, build]",
-        "fetch-depth: 0",
-        "git fetch --no-tags --force origin main:refs/remotes/origin/main",
-        "git merge-base --is-ancestor",
-        "python3 scripts/version-consistency-check --tag \"${GITHUB_REF_NAME}\"",
-        "cargo fmt --all --check",
-        "python3 tests/version_consistency_test.py",
-        "cargo clippy --locked --all-targets -- -D warnings",
-        "cargo test --locked --quiet",
-        "make --silent CARGO_LOCKED=--locked release-public-docs-check",
-        "make --silent CARGO_LOCKED=--locked release-canonical-identity-check",
-        "make --silent CARGO_LOCKED=--locked release-crate-manifest",
-        "make --silent CARGO_LOCKED=--locked package-verify",
-        "make --silent CARGO_LOCKED=--locked release-fixture-smoke",
-        "cargo build --locked --release --target",
-        "Release gate: verify installer content provenance",
-        "installer_path=scripts/install-telltale",
-        "git hash-object \"${installer_path}\"",
-        "git rev-parse \"${GITHUB_SHA}:${installer_path}\"",
-        "git ls-tree \"${GITHUB_SHA}\" -- \"${installer_path}\"",
-        "Installer content blob",
-        "Validate assembled release artifact manifests",
-        "make --silent RELEASE_ARTIFACT_DIR=release-downloads release-artifact-manifest",
-        "Native staged binary --version smoke (unix)",
-        "Mandatory Windows staged binary --version smoke",
-    ] {
-        assert!(
-            workflow.contains(required),
-            "release workflow is missing {required:?}"
-        );
-    }
-
-    for forbidden in [
-        "release-preflight",
-        "release-context-check",
-        "release-tag-review",
-        "git branch --show-current",
-        "git status --short",
-    ] {
-        assert!(
-            !workflow.contains(forbidden),
-            "CI release workflow must not invoke local-only check {forbidden:?}"
-        );
-    }
-
-    let prerelease_line = workflow
-        .lines()
-        .find(|line| line.trim_start().starts_with("prerelease:"))
-        .expect("release action must set prerelease explicitly")
-        .trim();
-    assert_eq!(
-        prerelease_line,
-        "prerelease: ${{ contains(github.ref_name, '-') }}"
-    );
-    let rendered_rc = prerelease_line.replace("github.ref_name", "'v0.5.0-rc.1'");
-    let rendered_stable = prerelease_line.replace("github.ref_name", "'v0.5.0'");
-    assert_eq!(
-        rendered_rc,
-        "prerelease: ${{ contains('v0.5.0-rc.1', '-') }}"
-    );
-    assert_eq!(
-        rendered_stable,
-        "prerelease: ${{ contains('v0.5.0', '-') }}"
-    );
-    let evaluate_contains_dash = |rendered: &str| {
-        let tag = rendered
-            .split("contains('")
-            .nth(1)
-            .and_then(|value| value.split("', '-'").next())
-            .expect("rendered contains expression");
-        tag.contains('-')
-    };
-    assert!(evaluate_contains_dash(&rendered_rc));
-    assert!(!evaluate_contains_dash(&rendered_stable));
 }
 
 #[test]
 fn ci_keeps_metadata_gate_after_candidate_publication() {
-    let workflow = fs::read_to_string(".github/workflows/ci.yml")
-        .expect("CI workflow")
-        .replace("\r\n", "\n");
-    let test_job = workflow
-        .split_once("\n  test:\n")
-        .and_then(|(_, rest)| rest.split_once("\n  security:\n").map(|(job, _)| job))
-        .expect("CI test job");
-    assert!(test_job.contains("make --silent CARGO_LOCKED=--locked ci-linux-test"));
-    assert!(
-        !test_job.contains("make --silent version-consistency-check"),
-        "CI must use the publication-safe metadata target rather than release-tag preflight"
-    );
+    let workflow =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow"))
+            .expect("CI YAML");
+    assert_ci_metadata_gate(&workflow);
 }
 
-#[test]
-fn release_workflow_existing_release_guard_is_fail_closed_without_live_calls() {
-    let workflow = read_release_workflow();
-    let start = workflow
-        .find("- name: Fail closed if the tag already has a Release")
-        .expect("existing-release guard");
-    let end = workflow
-        .find("- name: Reserve GitHub Release")
-        .expect("release reservation");
-    assert!(
-        start < end,
-        "existing-release guard must precede release creation"
-    );
-    let guard = &workflow[start..end];
-    for required in [
-        "gh api --paginate --slurp",
-        "releases?per_page=100",
-        "match_state=",
-        "Could not validate the GitHub Releases response.",
-        "published assets are immutable",
-        "release.get(\"tag_name\")",
-    ] {
-        assert!(guard.contains(required), "guard is missing {required:?}");
-    }
-    assert!(guard.contains("exit 1"));
-    assert!(!guard.contains("releases/tags/"));
-}
-
-#[test]
-fn release_workflow_reserves_release_before_action_creation() {
-    let workflow = read_release_workflow();
-    let guard = workflow
-        .find("- name: Fail closed if the tag already has a Release")
-        .expect("existing-release guard");
-    let reservation = workflow
-        .find("- name: Reserve GitHub Release")
-        .expect("release reservation");
-    let action = workflow
-        .find("- name: Create GitHub Release")
-        .expect("release action");
-    assert!(guard < reservation && reservation < action);
-    let reservation_block = &workflow[reservation..action];
-    for required in [
-        "gh api --method POST --include --input -",
-        "repos/${GITHUB_REPOSITORY}/releases",
-        "\"draft\": True",
-        "prerelease",
-        "HTTP 201",
-        "reservation response was malformed or uncertain",
-    ] {
+fn assert_validator_bootstrap_jobs(workflow: &serde_yaml::Value, jobs: &[(&str, &[&str])]) {
+    for &(job, consumers) in jobs {
+        let steps = workflow_steps(workflow, job);
+        let setup = workflow_step_index(steps, "run", "-m pip install");
+        assert_eq!(steps[setup]["shell"], "bash", "{job}");
         assert!(
-            reservation_block.contains(required),
-            "reservation is missing {required:?}"
+            steps[setup]["continue-on-error"].is_null()
+                || steps[setup]["continue-on-error"] == false,
+            "{job}"
         );
+        let condition = if job == "source-preflight" {
+            serde_yaml::to_value("steps.identity.outputs.prospective == 'true'").unwrap()
+        } else {
+            serde_yaml::Value::Null
+        };
+        assert_eq!(steps[setup]["if"], condition, "{job}");
+        let script = workflow_run(steps, setup);
+        let python = if job == "windows" {
+            "python3"
+        } else {
+            "\"${RUNNER_TEMP}/telltale-schema-venv/bin/python\""
+        };
+        assert!(
+            script.contains(&format!(
+                "{python} -m pip install 'jsonschema[format-nongpl]>=4.18,<5'"
+            )),
+            "{job}: install into the test interpreter"
+        );
+        assert!(
+            script.contains(&format!("{python} scripts/validate-event-jsonl --help")),
+            "{job}: probe the actual driver"
+        );
+        if job != "windows" {
+            assert!(
+                script.contains("python3 -m venv \"${RUNNER_TEMP}/telltale-schema-venv\""),
+                "{job}: isolate from externally managed Python"
+            );
+            assert!(script.contains("printf '%s\\n' \"${RUNNER_TEMP}/telltale-schema-venv/bin\" >> \"${GITHUB_PATH}\""), "{job}: tests must use the provisioned interpreter");
+        }
+        for consumer in consumers {
+            let matches = steps
+                .iter()
+                .enumerate()
+                .filter(|(_, step)| {
+                    step["run"]
+                        .as_str()
+                        .is_some_and(|run| run.contains(consumer))
+                })
+                .collect::<Vec<_>>();
+            assert!(!matches.is_empty(), "{job}: missing consumer {consumer}");
+            for (index, step) in matches {
+                assert!(setup < index, "{job}: bootstrap must precede {consumer}");
+                assert_eq!(
+                    step["if"], condition,
+                    "{job}: consumer must share the prerequisite condition"
+                );
+            }
+        }
     }
-    assert!(workflow.contains("tag_name: ${{ github.ref_name }}"));
-    assert!(workflow.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
-    assert!(workflow.contains("overwrite_files: false"));
 }
 
-#[cfg(unix)]
-#[test]
-fn release_workflow_existing_release_guard_handles_representative_gh_responses() {
-    let workflow = read_release_workflow();
-    let guard_start = workflow
-        .find("- name: Fail closed if the tag already has a Release")
-        .expect("existing-release guard");
-    let run_start = workflow[guard_start..]
-        .find("run: |\n")
-        .map(|offset| guard_start + offset + "run: |\n".len())
-        .expect("guard run block");
-    let release_action_start = workflow[run_start..]
-        .find("- name: Reserve GitHub Release")
-        .map(|offset| run_start + offset)
-        .expect("guard run block terminator");
-    let run_end = workflow[..release_action_start]
-        .rfind('\n')
-        .expect("guard run block line boundary");
-    let indentation = workflow[run_start..run_end]
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| &line[..line.len() - line.trim_start().len()])
-        .expect("guard indentation");
-    let guard_script = workflow[run_start..run_end]
-        .lines()
-        .map(|line| {
-            if line.trim().is_empty() {
-                ""
-            } else {
-                line.strip_prefix(indentation).expect("guard indentation")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let temp = tempdir().expect("tempdir");
-    let fake_bin = temp.path().join("bin");
-    fs::create_dir(&fake_bin).expect("fake bin");
-    let fake_gh = fake_bin.join("gh");
-    fs::write(
-        &fake_gh,
-        r####"#!/bin/sh
-set -eu
-case "${FAKE_GH_RESPONSE:?}" in
-  published) printf '%s\n' '[[{"tag_name":"v0.5.0","draft":false,"prerelease":false}]]'; exit 0;;
-  draft) printf '%s\n' '[[{"tag_name":"v0.5.0","draft":true,"prerelease":false}]]'; exit 0;;
-  empty) printf '%s\n' '[]'; exit 0;;
-  api-error) printf '%s\n' 'API failure'; exit 1;;
-  malformed) printf '%s\n' '{"unexpected":[]}' ; exit 0;;
-  match-then-malformed) printf '%s\n' '[[{"tag_name":"v0.5.0"},{"draft":false}]]'; exit 0;;
-  missing-tag) printf '%s\n' '[[{"draft":false,"prerelease":false}]]'; exit 0;;
-  empty-tag) printf '%s\n' '[[{"tag_name":"","draft":false,"prerelease":false}]]'; exit 0;;
-  non-string-tag) printf '%s\n' '[[{"tag_name":123,"draft":false,"prerelease":false}]]'; exit 0;;
-  *) exit 2;;
-esac
-"####,
-    )
-    .expect("fake gh");
-    fs::set_permissions(&fake_gh, fs::Permissions::from_mode(0o755)).expect("executable fake gh");
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").expect("PATH")
+fn assert_ci_validator_bootstrap(workflow: &serde_yaml::Value) {
+    assert_validator_bootstrap_jobs(
+        workflow,
+        &[
+            ("test", &["ci-linux-test", "cargo test"]),
+            ("windows", &["cargo test", "windows_lifecycle.ps1"]),
+            ("macos", &["cargo test"]),
+            ("source-preflight", &["release-preflight"]),
+        ],
     );
+    let windows = workflow_steps(workflow, "windows");
+    let lifecycle = workflow_step_index(windows, "run", "windows_lifecycle.ps1");
+    assert!(
+        workflow_run(windows, lifecycle).contains("-Python python3"),
+        "lifecycle validation must reuse the same interpreter"
+    );
+}
 
-    for (response, expected_success, expected_output) in [
-        ("published", false, "already exists"),
-        ("draft", false, "already exists"),
-        ("empty", true, ""),
-        ("api-error", false, "Could not query"),
-        ("malformed", false, "Could not validate"),
-        ("match-then-malformed", false, "Could not validate"),
-        ("missing-tag", false, "Could not validate"),
-        ("empty-tag", false, "Could not validate"),
-        ("non-string-tag", false, "Could not validate"),
-    ] {
-        let output = Command::new("bash")
-            .args(["-euo", "pipefail", "-c", &guard_script])
-            .env("PATH", &path)
-            .env("FAKE_GH_RESPONSE", response)
-            .env("GH_TOKEN", "synthetic-token")
-            .env("GITHUB_REPOSITORY", "example/telltale")
-            .env("GITHUB_REF_NAME", "v0.5.0")
-            .output()
-            .expect("run release guard");
-        assert_eq!(
-            output.status.success(),
-            expected_success,
-            "response {response}"
-        );
-        let output_text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if !expected_output.is_empty() {
+#[test]
+fn ci_validator_bootstrap_precedes_consumers_and_rejects_bypasses() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
+    assert_ci_validator_bootstrap(&workflow);
+    for job in ["test", "windows", "macos", "source-preflight"] {
+        for fault in [
+            "missing",
+            "late",
+            "wrong-interpreter",
+            "ignore-failure",
+            "wrong-condition",
+            "missing-format-extra",
+        ] {
+            let mut bad = workflow.clone();
+            let steps = bad["jobs"][job]["steps"].as_sequence_mut().unwrap();
+            let setup = workflow_step_index(steps, "run", "-m pip install");
+            match fault {
+                "missing" => {
+                    steps.remove(setup);
+                }
+                "late" => {
+                    let step = steps.remove(setup);
+                    steps.push(step);
+                }
+                "wrong-interpreter" => {
+                    steps[setup]["run"] = serde_yaml::to_value(
+                        workflow_run(steps, setup).replace("python3", "python"),
+                    )
+                    .unwrap()
+                }
+                "ignore-failure" => {
+                    steps[setup]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+                }
+                "wrong-condition" => steps[setup]["if"] = serde_yaml::to_value("always()").unwrap(),
+                "missing-format-extra" => {
+                    steps[setup]["run"] = serde_yaml::to_value(
+                        workflow_run(steps, setup).replace("[format-nongpl]", ""),
+                    )
+                    .unwrap()
+                }
+                _ => unreachable!(),
+            }
             assert!(
-                output_text.contains(expected_output),
-                "response {response} output: {output_text}"
+                std::panic::catch_unwind(|| assert_ci_validator_bootstrap(&bad)).is_err(),
+                "accepted {job}/{fault}"
             );
         }
     }
@@ -2146,85 +2207,730 @@ esac
 
 #[cfg(unix)]
 #[test]
-fn release_workflow_reservation_uses_exact_draft_rc_inputs_without_live_calls() {
-    let workflow = read_release_workflow();
-    let reservation_start = workflow
-        .find("- name: Reserve GitHub Release")
-        .expect("release reservation");
-    let run_start = workflow[reservation_start..]
-        .find("run: |\n")
-        .map(|offset| reservation_start + offset + "run: |\n".len())
-        .expect("reservation run block");
-    let action_start = workflow[run_start..]
-        .find("- name: Create GitHub Release")
-        .map(|offset| run_start + offset)
-        .expect("release action");
-    let run_end = workflow[..action_start]
-        .rfind('\n')
-        .expect("reservation block line boundary");
-    let indentation = workflow[run_start..run_end]
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| &line[..line.len() - line.trim_start().len()])
-        .expect("reservation indentation");
-    let reservation_script = workflow[run_start..run_end]
-        .lines()
-        .map(|line| {
-            if line.trim().is_empty() {
-                ""
-            } else {
-                line.strip_prefix(indentation)
-                    .expect("reservation indentation")
+fn ci_validator_bootstrap_propagates_install_and_probe_failures() {
+    let ci =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
+    let release = serde_yaml::from_str(&read_release_workflow()).unwrap();
+    for (workflow, job) in [
+        (&ci, "test"),
+        (&ci, "windows"),
+        (&ci, "macos"),
+        (&ci, "source-preflight"),
+        (&release, "preflight"),
+    ] {
+        let steps = workflow_steps(workflow, job);
+        let script = workflow_run(steps, workflow_step_index(steps, "run", "-m pip install"));
+        for (install, probe) in [(0, 0), (17, 0), (0, 19)] {
+            let temp = tempdir().unwrap();
+            let python = temp.path().join("python3");
+            fs::write(&python, "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$CALLS\"\ncase \"$1:$2\" in\n-m:venv) exit 0;;\n-m:pip) exit \"$INSTALL_EXIT\";;\nscripts/validate-event-jsonl:--help) exit \"$PROBE_EXIT\";;\n*) exit 93;;\nesac\n").unwrap();
+            fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+            let bin = temp.path().join("telltale-schema-venv/bin");
+            fs::create_dir_all(&bin).unwrap();
+            fs::copy(&python, bin.join("python")).unwrap();
+            let calls = temp.path().join("calls.txt");
+            let after = temp.path().join("after-setup");
+            let output = Command::new("/bin/bash")
+                .env_clear()
+                .env("PATH", temp.path())
+                .env("CALLS", &calls)
+                .env("INSTALL_EXIT", install.to_string())
+                .env("PROBE_EXIT", probe.to_string())
+                .env("AFTER", &after)
+                .env("RUNNER_TEMP", temp.path())
+                .env("GITHUB_PATH", temp.path().join("github-path"))
+                .current_dir(temp.path())
+                .args(["-euo", "pipefail", "-c"])
+                .arg(format!("{script}\nprintf reached > \"$AFTER\""))
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(if install != 0 { install } else { probe }),
+                "{job}: {}",
+                native_output(&output)
+            );
+            assert_eq!(after.exists(), install == 0 && probe == 0, "{job}");
+            let mut expected = Vec::new();
+            if job != "windows" {
+                expected.push(format!(
+                    "-m venv {}",
+                    temp.path().join("telltale-schema-venv").display()
+                ));
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+            expected.push("-m pip install jsonschema[format-nongpl]>=4.18,<5".to_owned());
+            if install == 0 {
+                expected.push("scripts/validate-event-jsonl --help".to_owned());
+            }
+            assert_eq!(
+                fs::read_to_string(calls)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                expected,
+                "{job}"
+            );
+            if job != "windows" && install == 0 && probe == 0 {
+                assert_eq!(
+                    fs::read_to_string(temp.path().join("github-path"))
+                        .unwrap()
+                        .trim(),
+                    bin.to_str().unwrap()
+                );
+            }
+        }
+    }
+}
 
-    let temp = tempdir().expect("tempdir");
-    let fake_bin = temp.path().join("bin");
-    fs::create_dir(&fake_bin).expect("fake bin");
-    let fake_gh = fake_bin.join("gh");
-    fs::write(
-        &fake_gh,
-        r####"#!/bin/sh
-set -eu
-printf '%s\n' "$*" > "${FAKE_GH_ARGS:?}"
-cat > "${FAKE_GH_PAYLOAD:?}"
-printf '%s\n\n' 'HTTP/2 201 Created'
-printf '%s\n' '{"id":123,"tag_name":"v0.5.0-rc.1","draft":true,"prerelease":true}'
-"####,
+#[test]
+fn release_workflow_validator_bootstrap_precedes_consumers() {
+    let workflow: serde_yaml::Value = serde_yaml::from_str(&read_release_workflow()).unwrap();
+    let consumers = [(
+        "preflight",
+        &["cargo test", "release-public-docs-check"][..],
+    )];
+    assert_validator_bootstrap_jobs(&workflow, &consumers);
+    for fault in ["missing", "late", "ignored", "conditional", "plain-package"] {
+        let mut bad = workflow.clone();
+        let steps = bad["jobs"]["preflight"]["steps"].as_sequence_mut().unwrap();
+        let setup = workflow_step_index(steps, "run", "-m pip install");
+        match fault {
+            "missing" => {
+                steps.remove(setup);
+            }
+            "late" => {
+                let step = steps.remove(setup);
+                steps.push(step);
+            }
+            "ignored" => steps[setup]["continue-on-error"] = serde_yaml::to_value(true).unwrap(),
+            "conditional" => steps[setup]["if"] = serde_yaml::to_value("always()").unwrap(),
+            "plain-package" => {
+                steps[setup]["run"] =
+                    serde_yaml::to_value(workflow_run(steps, setup).replace("[format-nongpl]", ""))
+                        .unwrap()
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            std::panic::catch_unwind(|| assert_validator_bootstrap_jobs(&bad, &consumers)).is_err(),
+            "accepted {fault}"
+        );
+    }
+}
+
+#[test]
+fn release_native_validator_bootstrap_includes_format_dependency() {
+    let workflow = serde_yaml::from_str(
+        &fs::read_to_string(".github/workflows/release-native-verify.yml").unwrap(),
     )
-    .expect("fake gh");
-    fs::set_permissions(&fake_gh, fs::Permissions::from_mode(0o755)).expect("executable fake gh");
-    let args_path = temp.path().join("gh.args");
-    let payload_path = temp.path().join("gh.payload");
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").expect("PATH")
+    .unwrap();
+    let steps = workflow_steps(&workflow, "verify");
+    for (condition, python) in [
+        ("runner.os == 'Windows'", "python"),
+        (
+            "runner.os != 'Windows'",
+            "\"${RUNNER_TEMP}/telltale-schema-venv/bin/python\"",
+        ),
+    ] {
+        let setup = steps
+            .iter()
+            .position(|step| {
+                step["if"] == condition
+                    && step["run"]
+                        .as_str()
+                        .is_some_and(|run| run.contains("-m pip install"))
+            })
+            .unwrap();
+        let execute = steps
+            .iter()
+            .position(|step| {
+                step["if"] == condition
+                    && step["run"]
+                        .as_str()
+                        .is_some_and(|run| run.contains("--event-validator"))
+            })
+            .unwrap();
+        assert!(setup < execute);
+        assert!(steps[setup]["continue-on-error"].is_null());
+        let script = workflow_run(steps, setup);
+        assert!(script.contains("'jsonschema[format-nongpl]>=4.18,<5'"));
+        assert!(script.contains(&format!("{python} scripts/validate-event-jsonl --help")));
+        if python == "python" {
+            assert_eq!(
+                script.matches("if ($LASTEXITCODE -ne 0)").count(),
+                2,
+                "both native commands must fail closed"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ci_validator_bootstrap_local_gate_uses_uv_before_execution() {
+    let temp = tempdir().unwrap();
+    let uv = temp.path().join("uv");
+    fs::write(
+        &uv,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CALLS\"\nexit 17\n",
+    )
+    .unwrap();
+    fs::set_permissions(uv, fs::Permissions::from_mode(0o755)).unwrap();
+    let calls = temp.path().join("calls.txt");
+    // The fake uv never starts scripts/ci-local (and never installs anything).
+    let output = Command::new("make")
+        .env_clear()
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                temp.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("CALLS", &calls)
+        .current_dir(temp.path())
+        .args(["--no-print-directory", "--silent", "-f"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Makefile"))
+        .arg("ci-local")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "local gate must propagate bootstrap failure"
     );
-    let output = Command::new("bash")
-        .args(["-euo", "pipefail", "-c", &reservation_script])
-        .env("PATH", &path)
-        .env("FAKE_GH_ARGS", &args_path)
-        .env("FAKE_GH_PAYLOAD", &payload_path)
+    assert_eq!(
+        fs::read_to_string(calls)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        [
+            "run",
+            "--no-project",
+            "--no-config",
+            "--with",
+            "jsonschema[format-nongpl]>=4.18,<5",
+            "--",
+            "scripts/ci-local"
+        ]
+    );
+}
+
+#[test]
+fn release_workflow_existing_release_guard_is_fail_closed_without_live_calls() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
+    let steps = workflow_steps(&workflow, "release");
+    let guard = workflow_step_index(steps, "run", "releases?per_page=100");
+    let reserve = workflow_step_index(steps, "run", "gh api --method POST");
+    let publish = workflow_step_index(steps, "uses", "softprops/action-gh-release");
+    let manifest = workflow_step_index(steps, "run", "REQUIRE_SBOM=1");
+    for fault in [
+        "missing-guard",
+        "duplicate-guard",
+        "late-guard",
+        "ignore-failure",
+        "always",
+        "wrong-shell",
+        "missing-token",
+        "overwrite",
+        "wrong-tag",
+        "wrong-prerelease",
+        "permissions",
+        "missing-preflight",
+        "manifest-bypass",
+        "manifest-noop",
+    ] {
+        let mut bad = workflow.clone();
+        let steps = bad["jobs"]["release"]["steps"].as_sequence_mut().unwrap();
+        match fault {
+            "missing-guard" => {
+                steps.remove(guard);
+            }
+            "duplicate-guard" => steps.push(steps[guard].clone()),
+            "late-guard" => steps.swap(guard, reserve),
+            "ignore-failure" => {
+                steps[reserve]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "always" => steps[guard]["if"] = serde_yaml::to_value("always()").unwrap(),
+            "wrong-shell" => steps[reserve]["shell"] = serde_yaml::to_value("sh").unwrap(),
+            "missing-token" => steps[guard]["env"] = serde_yaml::Value::Null,
+            "overwrite" => {
+                steps[publish]["with"]["overwrite_files"] = serde_yaml::to_value(true).unwrap()
+            }
+            "wrong-tag" => {
+                steps[publish]["with"]["tag_name"] = serde_yaml::to_value("latest").unwrap()
+            }
+            "wrong-prerelease" => {
+                steps[publish]["with"]["prerelease"] = serde_yaml::to_value(false).unwrap()
+            }
+            "manifest-bypass" => {
+                steps[manifest]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "manifest-noop" => {
+                steps[manifest]["run"] = serde_yaml::to_value("REQUIRE_SBOM=1 true").unwrap()
+            }
+            "permissions" => {
+                bad["jobs"]["release"]["permissions"]["id-token"] =
+                    serde_yaml::to_value("write").unwrap()
+            }
+            "missing-preflight" => {
+                bad["jobs"]["release"]["needs"] = serde_yaml::to_value(["build"]).unwrap()
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            std::panic::catch_unwind(|| assert_release_publication_gates(&bad)).is_err(),
+            "accepted {fault}"
+        );
+    }
+}
+
+#[test]
+fn release_workflow_selectors_tolerate_presentation_and_pin_changes() {
+    let mut workflow: serde_yaml::Value = serde_yaml::from_str(&read_release_workflow()).unwrap();
+    let mut ci: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
+    for yaml in [&mut workflow, &mut ci] {
+        let jobs = yaml["jobs"].as_mapping_mut().unwrap();
+        let reordered = jobs
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        *jobs = reordered.into_iter().rev().collect();
+        for job in jobs.values_mut() {
+            job["name"] = serde_yaml::to_value("Renamed display label").unwrap();
+            for step in job["steps"].as_sequence_mut().unwrap() {
+                step["name"] = serde_yaml::to_value("Different step wording").unwrap();
+                if let Some(action) = step["uses"].as_str() {
+                    let (family, _) = action.split_once('@').unwrap();
+                    step["uses"] =
+                        serde_yaml::to_value(format!("{family}@{}", "a".repeat(40))).unwrap();
+                }
+            }
+        }
+        // YAML indentation, mapping order, comments and CRLF do not locate steps.
+        let text = format!(
+            "# presentation-only change\n{}",
+            serde_yaml::to_string(yaml).unwrap()
+        )
+        .replace('\n', "\r\n");
+        *yaml = serde_yaml::from_str(&text).unwrap();
+    }
+    assert_release_preflight_gates(&workflow);
+    assert_release_archive_gates(&workflow);
+    assert_windows_ci_gates(&ci);
+    assert_ci_metadata_gate(&ci);
+    let steps = workflow_steps(&workflow, "release");
+    let mut impostor = steps.to_vec();
+    let action = workflow_step_index(steps, "uses", "softprops/action-gh-release");
+    impostor[action]["uses"] = serde_yaml::to_value(format!(
+        "other/softprops/action-gh-release@{}",
+        "a".repeat(40)
+    ))
+    .unwrap();
+    assert!(
+        std::panic::catch_unwind(|| workflow_step_index(
+            &impostor,
+            "uses",
+            "softprops/action-gh-release"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn release_workflow_archive_and_preflight_gates_reject_bypass_mutations() {
+    let workflow: serde_yaml::Value = serde_yaml::from_str(&read_release_workflow()).unwrap();
+    let steps = workflow_steps(&workflow, "release");
+    let graph = workflow_step_index(steps, "run", "scripts/generate-sbom.py --check");
+    let checksum = workflow_step_index(steps, "run", "xargs -0 sha256sum");
+    let sbom = workflow_step_index(
+        steps,
+        "run",
+        "test -f release-downloads/telltale-sbom.cdx.json",
+    );
+    for fault in [
+        "late-graph",
+        "ignore-graph-failure",
+        "conditional-sbom",
+        "sbom-link",
+        "missing-archive-gate",
+    ] {
+        let mut bad = workflow.clone();
+        let steps = bad["jobs"]["release"]["steps"].as_sequence_mut().unwrap();
+        match fault {
+            "late-graph" => steps.swap(graph, checksum),
+            "ignore-graph-failure" => {
+                steps[graph]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "conditional-sbom" => steps[sbom]["if"] = serde_yaml::to_value("false").unwrap(),
+            "sbom-link" => {
+                steps[sbom]["run"] =
+                    serde_yaml::to_value("test -f release-downloads/telltale-sbom.cdx.json")
+                        .unwrap()
+            }
+            "missing-archive-gate" => {
+                steps.remove(workflow_step_index(
+                    workflow_steps(&workflow, "release"),
+                    "run",
+                    "telltale-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz",
+                ));
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            std::panic::catch_unwind(|| assert_release_archive_gates(&bad)).is_err(),
+            "accepted {fault}"
+        );
+    }
+    let mut bad = workflow.clone();
+    let steps = bad["jobs"]["preflight"]["steps"].as_sequence_mut().unwrap();
+    let fmt = workflow_step_index(steps, "run", "cargo fmt --all --check");
+    let removed = steps.remove(fmt);
+    // A command in the wrong job must not satisfy a preflight requirement.
+    bad["jobs"]["build"]["steps"]
+        .as_sequence_mut()
+        .unwrap()
+        .push(removed);
+    assert!(std::panic::catch_unwind(|| assert_release_preflight_gates(&bad)).is_err());
+}
+
+#[test]
+fn windows_ci_and_metadata_gates_reject_bypass_mutations() {
+    let ci: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(".github/workflows/ci.yml").unwrap()).unwrap();
+    let steps = workflow_steps(&ci, "windows");
+    let helper = workflow_step_index(steps, "run", "tests\\release_windows_zip.ps1");
+    let clippy = workflow_step_index(steps, "run", "cargo clippy");
+    let runtime = workflow_step_index(steps, "run", "scripts\\verify-windows-runtime.ps1");
+    for fault in [
+        "missing-helper",
+        "late-helper",
+        "wrong-shell",
+        "ignored-runtime",
+        "conditional-runtime",
+        "missing-all-targets",
+        "missing-deny-warnings",
+    ] {
+        let mut bad = ci.clone();
+        let steps = bad["jobs"]["windows"]["steps"].as_sequence_mut().unwrap();
+        match fault {
+            "missing-helper" => {
+                steps.remove(helper);
+            }
+            "late-helper" => steps.swap(helper, clippy),
+            "wrong-shell" => steps[helper]["shell"] = serde_yaml::to_value("bash").unwrap(),
+            "ignored-runtime" => {
+                steps[runtime]["continue-on-error"] = serde_yaml::to_value(true).unwrap()
+            }
+            "conditional-runtime" => {
+                steps[runtime]["if"] = serde_yaml::to_value("always()").unwrap()
+            }
+            "missing-all-targets" => {
+                steps[clippy]["run"] = serde_yaml::to_value("cargo clippy -- -D warnings").unwrap()
+            }
+            "missing-deny-warnings" => {
+                steps[clippy]["run"] = serde_yaml::to_value("cargo clippy --all-targets").unwrap()
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            std::panic::catch_unwind(|| assert_windows_ci_gates(&bad)).is_err(),
+            "accepted {fault}"
+        );
+    }
+    let mut bad = ci;
+    let steps = bad["jobs"]["test"]["steps"].as_sequence_mut().unwrap();
+    let gate = workflow_step_index(steps, "run", "ci-linux-test");
+    steps[gate]["run"] = serde_yaml::to_value("make --silent version-consistency-check").unwrap();
+    assert!(std::panic::catch_unwind(|| assert_ci_metadata_gate(&bad)).is_err());
+}
+
+#[test]
+fn release_workflow_reserves_release_before_action_creation() {
+    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
+    assert_release_publication_gates(&workflow);
+}
+
+#[cfg(unix)]
+fn assert_manifest_failure_propagates(script: &str) {
+    for exit_code in [0, 17] {
+        let temp = tempdir().expect("manifest invocation fixture");
+        let fake_make = temp.path().join("make");
+        fs::write(&fake_make, "#!/bin/sh\nset -eu\nprintf '%s\\n' \"${REQUIRE_SBOM-unset}\" \"$@\" > \"$FAKE_MANIFEST_CALL\"\nexit \"$FAKE_MANIFEST_EXIT\"\n").unwrap();
+        fs::set_permissions(&fake_make, fs::Permissions::from_mode(0o755)).unwrap();
+        let call = temp.path().join("call.txt");
+        let after = temp.path().join("after-gate");
+        let output = Command::new("/bin/bash")
+            .env_clear()
+            .env("PATH", temp.path())
+            .env("FAKE_MANIFEST_EXIT", exit_code.to_string())
+            .env("FAKE_MANIFEST_CALL", &call)
+            .env("AFTER_GATE", &after)
+            .current_dir(temp.path())
+            .args(["-euo", "pipefail", "-c"])
+            .arg(format!("{script}\nprintf 'reached' > \"$AFTER_GATE\""))
+            .output()
+            .expect("run manifest invocation");
+        assert_eq!(
+            fs::read_to_string(call)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            [
+                "1",
+                "--silent",
+                "RELEASE_ARTIFACT_DIR=release-downloads",
+                "release-artifact-manifest"
+            ]
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(exit_code),
+            "manifest failure was swallowed: {}",
+            native_output(&output)
+        );
+        assert_eq!(
+            after.exists(),
+            exit_code == 0,
+            "a failed gate must stop subsequent commands"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn release_workflow_manifest_invocation_propagates_actual_failure() {
+    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
+    let steps = workflow_steps(&workflow, "release");
+    let script = workflow_run(steps, workflow_step_index(steps, "run", "REQUIRE_SBOM=1"));
+    assert_manifest_failure_propagates(script);
+    assert_manifest_failure_propagates(&format!("if ! {script}; then exit 17; fi"));
+    for swallowed in [
+        format!("{script} || true"),
+        format!("set +e\n{script}\ntrue"),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| assert_manifest_failure_propagates(&swallowed)).is_err(),
+            "failure-propagation test accepted a swallowed helper failure"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn release_workflow_existing_release_guard_handles_representative_gh_responses() {
+    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
+    let steps = workflow_steps(&workflow, "release");
+    let script = workflow_run(
+        steps,
+        workflow_step_index(steps, "run", "releases?per_page=100"),
+    );
+    for (case, response, api_exit, expected_success) in [
+        (
+            "published",
+            r#"[[{"tag_name":"v0.5.0","draft":false,"prerelease":false}]]"#,
+            0,
+            false,
+        ),
+        (
+            "draft",
+            r#"[[{"tag_name":"v0.5.0","draft":true,"prerelease":false}]]"#,
+            0,
+            false,
+        ),
+        ("empty", "[]", 0, true),
+        (
+            "other-releases",
+            r#"[[{"tag_name":"v0.4.0"}],[{"tag_name":"v0.6.0"}]]"#,
+            0,
+            true,
+        ),
+        (
+            "later-page-match",
+            r#"[[{"tag_name":"v0.4.0"}],[{"tag_name":"v0.5.0"}]]"#,
+            0,
+            false,
+        ),
+        ("api-error", "API failure", 1, false),
+        ("invalid-json", "{invalid", 0, false),
+        ("wrong-top-level", r#"{"unexpected":[]}"#, 0, false),
+        ("non-list-page", r#"[[],{"tag_name":"v0.5.0"}]"#, 0, false),
+        ("scalar-release", "[[42]]", 0, false),
+        (
+            "match-then-malformed",
+            r#"[[{"tag_name":"v0.5.0"},{"draft":false}]]"#,
+            0,
+            false,
+        ),
+        (
+            "missing-tag",
+            r#"[[{"draft":false,"prerelease":false}]]"#,
+            0,
+            false,
+        ),
+        (
+            "empty-tag",
+            r#"[[{"tag_name":"","draft":false,"prerelease":false}]]"#,
+            0,
+            false,
+        ),
+        (
+            "non-string-tag",
+            r#"[[{"tag_name":123,"draft":false,"prerelease":false}]]"#,
+            0,
+            false,
+        ),
+    ] {
+        let temp = tempdir().expect("guard fixture");
+        let output = release_gh_command(temp.path(), response, api_exit)
+            .arg(script)
+            .env("GITHUB_REF_NAME", "v0.5.0")
+            .output()
+            .expect("run release guard");
+        assert_eq!(
+            output.status.success(),
+            expected_success,
+            "{case}: {}",
+            native_output(&output)
+        );
+        assert_eq!(
+            release_gh_calls(temp.path()),
+            vec![vec![
+                "api",
+                "--paginate",
+                "--slurp",
+                "repos/example/telltale/releases?per_page=100"
+            ]],
+            "{case}: only the paginated GET is permitted"
+        );
+        assert!(
+            !temp.path().join("gh-payload.json").exists(),
+            "{case}: guard must not publish"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn release_workflow_reservation_uses_exact_draft_rc_inputs_without_live_calls() {
+    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
+    let steps = workflow_steps(&workflow, "release");
+    let script = workflow_run(
+        steps,
+        workflow_step_index(steps, "run", "gh api --method POST"),
+    );
+    for (tag, prerelease) in [("v0.5.0-rc.1", true), ("v0.5.0", false)] {
+        let valid =
+            serde_json::json!({"id":123,"tag_name":tag,"draft":true,"prerelease":prerelease});
+        let mut cases = vec![
+            ("valid", 201, valid.to_string(), 0, true),
+            ("api-error", 201, valid.to_string(), 1, false),
+            ("wrong-http-status", 200, valid.to_string(), 0, false),
+            ("conflict", 409, valid.to_string(), 0, false),
+            ("invalid-json", 201, "{invalid".into(), 0, false),
+            ("empty-body", 201, String::new(), 0, false),
+            ("non-object", 201, "[]".into(), 0, false),
+        ];
+        for (field, value) in [
+            ("id", serde_json::json!("123")),
+            ("id", serde_json::json!(true)),
+            ("tag_name", serde_json::json!("v0.4.0")),
+            ("draft", serde_json::json!(false)),
+            ("prerelease", serde_json::json!(!prerelease)),
+        ] {
+            let mut bad = valid.clone();
+            bad[field] = value;
+            cases.push((field, 201, bad.to_string(), 0, false));
+        }
+        let mut missing = valid.clone();
+        missing.as_object_mut().unwrap().remove("id");
+        cases.push(("missing-id", 201, missing.to_string(), 0, false));
+        for (case, status, body, api_exit, expected_success) in cases {
+            let temp = tempdir().expect("reservation fixture");
+            let response = format!("HTTP/2 {status} Synthetic\n\n{body}\n");
+            let output = release_gh_command(temp.path(), &response, api_exit)
+                .arg(script)
+                .env("GITHUB_REF_NAME", tag)
+                .output()
+                .expect("run release reservation");
+            assert_eq!(
+                output.status.success(),
+                expected_success,
+                "{tag}/{case}: {}",
+                native_output(&output)
+            );
+            assert_eq!(
+                release_gh_calls(temp.path()),
+                vec![vec![
+                    "api",
+                    "--method",
+                    "POST",
+                    "--include",
+                    "--input",
+                    "-",
+                    "repos/example/telltale/releases"
+                ]],
+                "{tag}/{case}"
+            );
+            let payload: Value =
+                serde_json::from_slice(&fs::read(temp.path().join("gh-payload.json")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                payload,
+                serde_json::json!({"tag_name":tag,"name":tag,"draft":true,"prerelease":prerelease}),
+                "{tag}/{case}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+fn release_gh_command(root: &Path, response: &str, exit_code: i32) -> Command {
+    let bin = root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        r#"#!/bin/sh
+set -eu
+python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@" >> "$FAKE_GH_ARGS"
+case "$*" in
+  *"--method POST"*) cat > "$FAKE_GH_PAYLOAD";;
+esac
+cat "$FAKE_GH_RESPONSE"
+exit "$FAKE_GH_EXIT"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(gh, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(root.join("gh-response.txt"), response).unwrap();
+    let mut command = Command::new("bash");
+    command
+        .env_clear()
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").expect("PATH")),
+        )
         .env("GH_TOKEN", "synthetic-token")
         .env("GITHUB_REPOSITORY", "example/telltale")
-        .env("GITHUB_REF_NAME", "v0.5.0-rc.1")
-        .output()
-        .expect("run release reservation");
-    assert!(
-        output.status.success(),
-        "reservation failed: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let args = fs::read_to_string(args_path).unwrap();
-    assert!(args.contains("--method POST --include --input - repos/example/telltale/releases"));
-    let payload = fs::read_to_string(payload_path).unwrap();
-    assert!(payload.contains("\"tag_name\":\"v0.5.0-rc.1\""));
-    assert!(payload.contains("\"draft\":true"));
-    assert!(payload.contains("\"prerelease\":true"));
+        .env("FAKE_GH_ARGS", root.join("gh-args.jsonl"))
+        .env("FAKE_GH_PAYLOAD", root.join("gh-payload.json"))
+        .env("FAKE_GH_RESPONSE", root.join("gh-response.txt"))
+        .env("FAKE_GH_EXIT", exit_code.to_string())
+        .current_dir(root)
+        .args(["-euo", "pipefail", "-c"]);
+    command
+}
+
+#[cfg(unix)]
+fn release_gh_calls(root: &Path) -> Vec<Vec<String>> {
+    fs::read_to_string(root.join("gh-args.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("captured gh argv"))
+        .collect()
 }
 
 #[cfg(unix)]
@@ -2260,12 +2966,45 @@ fn public_docs_synthetic_service_qualification_uses_a_drop_in_override() {
     );
     let docs_flat = docs.replace('\n', " ");
 
+    let drop_in = markdown_code_blocks(&docs)
+        .find(|block| block.contains("[Service]") && block.contains("<qualification-root>"))
+        .expect("synthetic service drop-in example");
+    let values = |key: &str| {
+        drop_in
+            .lines()
+            .filter_map(|line| line.trim().split_once('='))
+            .filter(|(name, _)| *name == key)
+            .map(|(_, value)| value.trim())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values("EnvironmentFile"), [""]);
+    assert_eq!(
+        values("Environment"),
+        [
+            "\"TELLTALE_SCAN_ROOT=<qualification-root>/sessions\"",
+            "\"TELLTALE_LOG_PATH=<qualification-root>/events.jsonl\"",
+            "\"TELLTALE_STATE_PATH=<qualification-root>/state.json\"",
+        ]
+    );
+    let starts = values("ExecStart");
+    assert_eq!(starts.len(), 2, "reset, then one isolated invocation");
+    assert_eq!(starts[0], "");
+    for option in [
+        "\"<installed-candidate>\"",
+        "scan --once",
+        "--root \"${TELLTALE_SCAN_ROOT}\"",
+        "--no-local-config",
+    ] {
+        assert!(
+            starts[1].contains(option),
+            "missing qualification input {option}"
+        );
+    }
+    assert_eq!(values("PrivateTmp"), ["true"]);
+
     assert!(
         docs.contains("Do not use `telltale.env` as the synthetic override channel")
-            && docs.contains("EnvironmentFile=\n")
             && docs.contains("${XDG_RUNTIME_DIR}/telltale-qualification")
-            && docs.contains("ExecStart=\n")
-            && docs.contains("--no-local-config")
             && docs.contains("PrivateTmp=yes")
             && docs.contains("remote_sink_count = 0")
             && docs.contains("--property=EnvironmentFiles --property=Environment")
@@ -2277,41 +3016,33 @@ fn public_docs_synthetic_service_qualification_uses_a_drop_in_override() {
 #[test]
 fn public_docs_github_release_is_independent_of_crates_io_publication() {
     let versioning = fs::read_to_string("docs/versioning.md").expect("versioning docs");
-    assert!(
-        versioning.contains("later crates.io publication are separate operations"),
-        "versioning must keep GitHub Releases and crates.io as separate operations"
-    );
-    assert!(
-        versioning.contains("does not block stable GitHub"),
-        "versioning must say deferring crates.io does not block stable GitHub publication"
+    assert_doc_links_to(
+        "docs/README.md",
+        &[
+            "docs/versioning.md",
+            "docs/license-and-packaging.md",
+            "docs/release-readiness.md",
+        ],
     );
     assert!(
         versioning.contains(&format!("`={}`", env!("CARGO_PKG_VERSION"))),
         "versioning must retain the current registry pin"
     );
 
-    let readiness = normalize_line_endings(
-        fs::read_to_string("docs/release-readiness.md").expect("release readiness docs"),
-    );
-    assert!(
-        readiness.contains("For the actual publication pass"),
-        "release readiness must keep the crates.io publication-pass marker"
-    );
-    assert!(
-        readiness.contains("Deferring it does not\nblock a stable GitHub Release"),
-        "release readiness must say deferring crates.io does not block a stable GitHub Release"
-    );
-    assert!(
-        readiness.contains("not crates.io publication authorization"),
-        "release readiness must keep Cargo package readiness distinct from crates.io publication"
-    );
-
-    let packaging =
-        fs::read_to_string("docs/license-and-packaging.md").expect("license and packaging docs");
-    assert!(
-        packaging.contains("does not publish crates.io packages"),
-        "packaging docs must keep the binary workflow free of crates.io publication"
-    );
+    assert!(versioning.contains("scripts/version-consistency-check --publication-order"));
+    let workflow = serde_yaml::from_str(&read_release_workflow()).expect("release YAML");
+    assert_release_publication_gates(&workflow);
+    for job in ["preflight", "build", "release"] {
+        for step in workflow_steps(&workflow, job) {
+            if let Some(run) = step["run"].as_str() {
+                assert!(
+                    !run.lines()
+                        .any(|line| line.split_whitespace().take(2).eq(["cargo", "publish"])),
+                    "binary release workflow must not invoke cargo publish"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -2327,9 +3058,6 @@ fn public_docs_native_release_gate_guidance_is_complete() {
         "SKIPPED: EXTERNAL HEC ENVIRONMENT NOT AVAILABLE",
         "JSONL-parity",
         ".github/workflows/release-native-verify.yml",
-        "v0.6.0-rc.1` candidate",
-        "rc.7` is published and immutable",
-        "five target archives plus the fixed",
         "telltale-sbom.cdx.json",
         "REQUIRE_SBOM=1 make release-artifact-manifest",
         "security/operations.md#release-integrity-verification",
@@ -2339,6 +3067,52 @@ fn public_docs_native_release_gate_guidance_is_complete() {
             "release readiness docs are missing {required:?}"
         );
     }
+    let workflow: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(".github/workflows/release-native-verify.yml").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        workflow["on"]["workflow_dispatch"]["inputs"]["release_tag"]["type"],
+        "string"
+    );
+    assert_eq!(
+        workflow["permissions"],
+        serde_yaml::to_value(BTreeMap::<String, String>::new()).unwrap()
+    );
+    assert_eq!(
+        workflow["jobs"]["verify"]["permissions"],
+        serde_yaml::to_value(BTreeMap::from([
+            ("contents", "read"),
+            ("attestations", "read")
+        ]))
+        .unwrap()
+    );
+    assert_eq!(workflow["jobs"]["verify"]["strategy"]["fail-fast"], false);
+    let matrix = workflow["jobs"]["verify"]["strategy"]["matrix"]["include"]
+        .as_sequence()
+        .unwrap();
+    let actual = matrix
+        .iter()
+        .map(|row| (row["target"].as_str().unwrap(), row["os"].as_str().unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    let pin: Value =
+        serde_json::from_slice(&fs::read("scripts/release-native-verify-0.7.0-rc.2.json").unwrap())
+            .unwrap();
+    let expected = pin["targets"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(target, values)| (target.as_str(), values["runner"].as_str().unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        matrix.len(),
+        actual.len(),
+        "native targets must not be duplicated"
+    );
+    assert_eq!(
+        actual, expected,
+        "native runner coverage must match the pinned target contracts"
+    );
 }
 
 #[test]
@@ -3266,7 +4040,6 @@ fn run_native_verify_pin_probe(pin: &Value, target: &str, runner: &str) -> std::
         .expect("run native pin probe")
 }
 
-#[cfg(unix)]
 fn native_output(output: &std::process::Output) -> String {
     format!(
         "{}{}",
@@ -3280,25 +4053,25 @@ fn event_jsonl_validator_rejects_invalid_and_non_event_objects() {
     let temp = tempdir().expect("tempdir");
     let events = temp.path().join("events.jsonl");
     let schema = Path::new("schemas/event.schema.json");
-    for body in ["{not-json}\n", "null\n", "{}\n"] {
+    for (body, diagnostic) in [
+        ("", "Event 3.0 JSONL must not be empty"),
+        ("{not-json}\n", "Invalid JSON on line 1:"),
+        ("null\n", "Line 1 is not a JSON object"),
+        ("{}\n", "Schema validation failed on line 1 at"),
+    ] {
         fs::write(&events, body).expect("write invalid events");
         let output = event_validator_command(schema, &events);
         assert!(!output.status.success(), "validator accepted {body:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "wrong rejection reason for {body:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
 #[test]
 fn event_jsonl_validator_accepts_a_native_constructor_event() {
-    let probe = Command::new("python3")
-        .args(["-c", "import jsonschema"])
-        .output();
-    let Ok(probe) = probe else {
-        return;
-    };
-    if !probe.status.success() {
-        return;
-    }
-
     let temp = tempdir().expect("tempdir");
     let events = temp.path().join("events.jsonl");
     let event = native_test_event(
@@ -3325,6 +4098,132 @@ fn event_jsonl_validator_accepts_a_native_constructor_event() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    for field in ["event_id", "timestamp"] {
+        let mut invalid = event.clone();
+        invalid[field] = serde_json::json!("invalid-native-value");
+        fs::write(&events, format!("{invalid}\n")).unwrap();
+        let output = event_validator_command(Path::new("schemas/event.schema.json"), &events);
+        assert!(
+            !output.status.success(),
+            "validator accepted invalid {field}"
+        );
+        // The frozen schema's top-level anyOf reports at $, not the child field.
+        // The passing baseline above differs only in this one mutated field.
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("Schema validation failed on line 1 at $:"),
+            "{field}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn event_jsonl_validator_reports_missing_required_dependency_before_input() {
+    // Isolated Python without site-packages deterministically omits jsonschema;
+    // this tests the real driver's prerequisite failure, not schema conformance.
+    let output = Command::new("python3")
+        .args([
+            "-I",
+            "-S",
+            "scripts/validate-event-jsonl",
+            "--schema",
+            "missing-schema.json",
+            "--events",
+            "missing-events.jsonl",
+        ])
+        .output()
+        .expect("Python 3 is required for Event 3.0 validator tests");
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        diagnostic.contains("jsonschema is required to validate Event 3.0 JSONL"),
+        "{diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains("Could not load Event 3.0 schema or JSONL"),
+        "dependency preflight must precede input I/O"
+    );
+}
+
+#[test]
+fn event_jsonl_validator_tests_fail_preflight_without_required_dependency() {
+    let temp = tempdir().expect("missing-dependency fixture");
+    fs::write(
+        temp.path().join("jsonschema.py"),
+        "raise ImportError('synthetic missing required dependency')\n",
+    )
+    .unwrap();
+    for test in [
+        "release_public_boundary::event_jsonl_validator_rejects_invalid_and_non_event_objects",
+        "release_public_boundary::event_jsonl_validator_accepts_a_native_constructor_event",
+    ] {
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args([test, "--exact", "--nocapture"])
+            .env("PYTHONPATH", temp.path())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .expect("run validator test with missing jsonschema");
+        assert!(
+            !output.status.success(),
+            "{test} silently passed without jsonschema"
+        );
+        let diagnostic = native_output(&output);
+        assert!(
+            diagnostic.contains(
+                "Event 3.0 validator prerequisite failed (not schema-validation evidence)"
+            ),
+            "{test}: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("synthetic missing required dependency"),
+            "{test}: {diagnostic}"
+        );
+    }
+}
+
+#[test]
+fn event_jsonl_validator_rejects_missing_date_time_checker() {
+    // Use the real installed jsonschema, hiding ONLY its optional RFC 3339 backend.
+    // First demonstrate the library's permissive fallback, then require the real
+    // driver to reject readiness despite --help not reading any input files.
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            r#"
+import importlib.abc
+import runpy
+import sys
+
+class MissingRFC3339(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "rfc3339_validator":
+            raise ModuleNotFoundError("synthetic missing RFC 3339 backend")
+
+sys.meta_path.insert(0, MissingRFC3339())
+from jsonschema import FormatChecker
+assert FormatChecker().conforms("not-a-timestamp", "date-time")
+sys.argv = ["scripts/validate-event-jsonl", "--help"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"#,
+        ])
+        .output()
+        .expect("run actual validator without RFC 3339 backend");
+    assert!(
+        !output.status.success(),
+        "missing date-time checker appeared ready"
+    );
+    let diagnostic = native_output(&output);
+    assert!(
+        diagnostic.contains(
+            "Event 3.0 date-time validation requires 'jsonschema[format-nongpl]>=4.18,<5'"
+        ),
+        "{diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains("usage:"),
+        "must fail before argparse reports readiness"
+    );
 }
 
 #[test]
@@ -3339,7 +4238,40 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
         "### Windows Scheduled Task example",
     );
     assert!(windows.contains("scripts\\install-telltale.ps1"));
-    assert!(windows.contains("-ReleaseTag v0.7.0-rc.2"));
+    let published_tags = fs::read_dir("scripts")
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name().unwrap().to_str().is_some_and(|name| {
+                name.starts_with("release-native-verify-") && name.ends_with(".json")
+            })
+        })
+        .map(|path| {
+            serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap()["release_tag"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut tag_examples = 0;
+    for block in markdown_code_blocks(windows) {
+        let words = block.split_whitespace().collect::<Vec<_>>();
+        for arguments in words
+            .windows(2)
+            .filter(|arguments| arguments[0] == "-ReleaseTag")
+        {
+            let tag = arguments[1].trim_matches(['\'', '"']);
+            assert!(
+                published_tags.contains(tag),
+                "documented release selection needs a checked-in immutable pin: {tag}"
+            );
+            tag_examples += 1;
+        }
+    }
+    assert!(
+        tag_examples > 0,
+        "document an exact published candidate selection"
+    );
     assert!(windows.contains("-DevelopmentBinary"));
     assert!(windows.contains("Programs\\Telltale"));
     assert!(windows.contains("telltale-events.jsonl"));
@@ -3347,18 +4279,20 @@ fn public_docs_runtime_identity_guidance_is_canonical() {
 
     let readiness =
         fs::read_to_string("docs/release-readiness.md").expect("read release readiness docs");
-    let package_verify = text_between(
-        &readiness,
-        "`make package-verify` performs",
-        "For the actual publication pass",
+    assert!(readiness.contains("make package-verify"));
+    assert!(readiness.contains("telltale --version"));
+    assert_doc_links_to(
+        "docs/install.md",
+        &["docs/controlled-deployment.md", "docs/versioning.md"],
     );
-    assert!(package_verify.contains("canonical `telltale` install"));
-    assert!(package_verify.contains("telltale --version"));
-    assert!(package_verify.contains("Linux and macOS"));
-    let readiness_baseline =
-        text_between(&readiness, "# Release Readiness", "## Artifact Boundary");
-    assert!(readiness_baseline.contains("telltale --version"));
-    assert!(readiness_baseline.contains("Telltale"));
+    assert_doc_links_to(
+        "docs/controlled-deployment.md",
+        &[
+            "docs/install.md",
+            "docs/release-readiness.md",
+            "docs/versioning.md",
+        ],
+    );
 }
 
 #[test]
@@ -3386,18 +4320,51 @@ fn controlled_deployment_docs_require_exact_identity_and_one_remote_route() {
     assert!(recommendation.contains("not production authorization"));
     assert!(recommendation.contains("official stable release"));
     assert!(recommendation.contains("qualification and publication gates"));
-    assert!(!recommendation.contains("v0.5.0"));
-
     let install = fs::read_to_string("docs/install.md").expect("read install guide");
     assert!(install.contains("not proof of rollback from the current stable release"));
 
-    let outputs =
-        fs::read_to_string("config/examples/telltale-outputs.yaml").expect("read output example");
-    let hec = text_between(&outputs, "- name: corp-splunk", "- name: corp-elastic");
-    assert!(hec.contains("enabled: false"));
-    assert!(outputs.contains("UF-primary"));
+    let outputs: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string("config/examples/telltale-outputs.yaml").expect("read output example"),
+    )
+    .expect("output YAML");
+    let sinks = outputs["sinks"].as_sequence().unwrap();
+    let remote = sinks
+        .iter()
+        .filter(|sink| sink["type"] != "jsonl")
+        .collect::<Vec<_>>();
+    assert!(!remote.is_empty());
+    assert!(
+        remote.iter().all(|sink| sink["enabled"] == false),
+        "reviewed remote examples must be opt-in"
+    );
+    assert!(
+        sinks.iter().any(|sink| sink["type"] == "jsonl"
+            && (sink["enabled"].is_null() || sink["enabled"] == true)),
+        "local JSONL remains enabled"
+    );
 
     assert!(procedure.contains("monitor:///var/log/telltale/telltale-events.jsonl"));
+}
+
+fn markdown_code_blocks(markdown: &str) -> impl Iterator<Item = &str> {
+    markdown
+        .split("```")
+        .skip(1)
+        .step_by(2)
+        .filter_map(|block| block.split_once('\n').map(|(_, body)| body))
+}
+
+fn assert_doc_links_to(path: &str, expected: &[&str]) {
+    let targets = repo_local_markdown_links(Path::new(path))
+        .into_iter()
+        .map(|(_, target)| normalize_repo_path(&target))
+        .collect::<std::collections::BTreeSet<_>>();
+    for target in expected {
+        assert!(
+            targets.contains(*target),
+            "{path} must route readers to its owning contract {target}"
+        );
+    }
 }
 
 fn text_between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
@@ -3703,6 +4670,15 @@ fn public_text_surfaces() -> Vec<std::path::PathBuf> {
 }
 
 fn event_validator_command(schema: &Path, events: &Path) -> std::process::Output {
+    static PREREQUISITE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    PREREQUISITE.get_or_init(|| {
+        let output = Command::new("python3")
+            .args(["scripts/validate-event-jsonl", "--help"])
+            .output().expect("Python 3 is required for Event 3.0 validator tests");
+        assert!(output.status.success(),
+            "Event 3.0 validator prerequisite failed (not schema-validation evidence). Run with: uv run --no-project --with 'jsonschema[format-nongpl]>=4.18,<5' -- cargo test --locked --test cli event_jsonl_validator\n{}",
+            String::from_utf8_lossy(&output.stderr));
+    });
     Command::new("python3")
         .args(["scripts/validate-event-jsonl", "--schema"])
         .arg(schema)

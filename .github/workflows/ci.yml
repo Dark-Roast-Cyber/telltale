@@ -90,6 +90,14 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+      # CI bootstrap exception: hosted runners need not have uv installed.
+      - name: Install Event 3.0 validator dependency
+        shell: bash
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/telltale-schema-venv"
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
+          printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
       - name: Run Linux tests and contract checks
         run: make --silent CARGO_LOCKED=--locked ci-linux-test
       - name: Test protected assignment opt-in
@@ -156,6 +164,11 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+      - name: Install Event 3.0 validator dependency
+        shell: bash
+        run: |
+          python3 -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
+          python3 scripts/validate-event-jsonl --help >/dev/null
       - name: Validate Windows release ZIP helper
         shell: pwsh
         run: .\tests\release_windows_zip.ps1
@@ -185,10 +198,7 @@ jobs:
           }
       - name: Windows install and uninstall regression matrix
         shell: pwsh
-        run: |
-          python -m pip install 'jsonschema>=4.18,<5'
-          if ($LASTEXITCODE -ne 0) { throw 'Event 3.0 validator dependency setup failed' }
-          .\tests\windows_lifecycle.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe -TestScheduledTask
+        run: .\tests\windows_lifecycle.ps1 -BinaryPath .\target\x86_64-pc-windows-msvc\release\telltale.exe -TestScheduledTask -Python python3
 
   macos:
     name: macOS (aarch64-apple-darwin)
@@ -208,6 +218,13 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+      - name: Install Event 3.0 validator dependency
+        shell: bash
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/telltale-schema-venv"
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
+          printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - name: Test protected assignment unsupported-platform boundary
@@ -280,6 +297,14 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-preflight-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-preflight-
+      - name: Install Event 3.0 validator dependency
+        if: steps.identity.outputs.prospective == 'true'
+        shell: bash
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/telltale-schema-venv"
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
+          printf '%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin" >> "${GITHUB_PATH}"
       - name: Run prospective source release preflight
         if: steps.identity.outputs.prospective == 'true'
         run: make --silent CARGO_LOCKED=--locked PUBLIC_RELEASE_REMOTE=https://github.com/Dark-Roast-Cyber/telltale release-preflight

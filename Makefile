@@ -121,9 +121,9 @@ ci-version-consistency-check:
 	@python3 scripts/version-consistency-check --publication-order
 	@python3 tests/version_consistency_test.py
 
-## Run the canonical locked Linux pre-push CI gate
+## Run the canonical locked Linux pre-push CI gate with uv-managed validator dependencies
 ci-local:
-	@scripts/ci-local
+	@uv run --no-project --no-config --with 'jsonschema[format-nongpl]>=4.18,<5' -- scripts/ci-local
 
 ## Verify the frozen Event 3.0 consumer contract
 event3-contract-check:

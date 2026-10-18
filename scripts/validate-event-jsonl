@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Validate every Event 3.0 JSONL object with Draft 2020-12 JSON Schema.
 
-CI bootstrap exception: installing the PyPI ``jsonschema`` package is allowed
+Requires ``jsonschema[format-nongpl]>=4.18,<5`` including RFC 3339 date-time checks.
+CI bootstrap exception: installing this PyPI extra is allowed
 on GitHub-hosted runners because ``uv`` is not guaranteed on Windows/macOS
 images.
 """
@@ -16,7 +17,22 @@ from pathlib import Path
 try:
     from jsonschema import Draft202012Validator, FormatChecker
 except ImportError as error:
-    raise SystemExit(f"jsonschema is required to validate Event 3.0 JSONL: {error}")
+    raise SystemExit(
+        f"jsonschema is required to validate Event 3.0 JSONL: {error}; "
+        "install 'jsonschema[format-nongpl]>=4.18,<5'"
+    )
+
+# FormatChecker silently accepts an unknown format when its optional backend is
+# absent. Even --help must fail preflight rather than advertise a weakened driver.
+FORMAT_CHECKER = FormatChecker()
+if (
+    FORMAT_CHECKER.conforms("not-a-timestamp", "date-time")
+    or not FORMAT_CHECKER.conforms("2026-05-01T00:00:00Z", "date-time")
+):
+    raise SystemExit(
+        "Event 3.0 date-time validation requires 'jsonschema[format-nongpl]>=4.18,<5' "
+        "with a working RFC 3339 checker"
+    )
 
 
 def fail(message: str) -> int:
@@ -33,7 +49,7 @@ def main() -> int:
     try:
         schema = json.loads(args.schema.read_text(encoding="utf-8"))
         Draft202012Validator.check_schema(schema)
-        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+        validator = Draft202012Validator(schema, format_checker=FORMAT_CHECKER)
         with args.events.open(encoding="utf-8") as events:
             lines = events.readlines()
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:

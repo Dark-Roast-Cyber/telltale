@@ -165,7 +165,11 @@ jobs:
       - name: Install Event 3.0 JSON Schema validator (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: python -m pip install --user jsonschema
+        run: |
+          python -m pip install --user 'jsonschema[format-nongpl]>=4.18,<5'
+          if ($LASTEXITCODE -ne 0) { throw 'Event 3.0 validator dependency setup failed' }
+          python scripts/validate-event-jsonl --help
+          if ($LASTEXITCODE -ne 0) { throw 'Event 3.0 validator prerequisite check failed' }
 
       # CI bootstrap exception: uv is not guaranteed on GitHub-hosted Windows/macOS
       # images, and Homebrew Python on macOS rejects pip --user (PEP 668).
@@ -176,7 +180,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m venv "${RUNNER_TEMP}/telltale-schema-venv"
-          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install jsonschema
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" -m pip install 'jsonschema[format-nongpl]>=4.18,<5'
+          "${RUNNER_TEMP}/telltale-schema-venv/bin/python" scripts/validate-event-jsonl --help >/dev/null
           printf 'python=%s\n' "${RUNNER_TEMP}/telltale-schema-venv/bin/python" >> "${GITHUB_OUTPUT}"
 
       - name: Execute the downloaded Release binary (Windows)
