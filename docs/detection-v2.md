@@ -336,7 +336,7 @@ semantic identity before acquisition so a host can compare startup configuration
 with each detailed result:
 - The preimage frames: domain tag `telltale:action-semantic-provenance:v1\0`,
   the effective rule fingerprint from `export.fingerprint()`,
-  `ACTION_SEMANTICS_VERSION` (2), `NATIVE_ACTION_PROFILE_VERSION` (2),
+  `ACTION_SEMANTICS_VERSION` (2), `NATIVE_ACTION_PROFILE_VERSION` (3),
   `REPLAY_ALGORITHM_VERSION` (1), the effective linked download score, and the
   `process_chain` flag (including the bundled process chain YAML when enabled).
 - It does not hash context options, host YAML/path resolution, binary artifact
@@ -344,6 +344,10 @@ with each detailed result:
 - Hosts requiring binary identity must bind the exact binary and revision separately.
 - The existing closed `ProducerProvenanceManifestV1` has a different operational
   scope and is not replaced by this semantic identity.
+
+Native profile 3 applies credential boundaries and example exclusions to the same
+token. Hosts must rebaseline the semantic identity; replay identities and Event 3
+session scoring are unchanged. See [embedding](embedding.md#replay-identity-and-semantic-provenance).
 
 Same-pass context extraction allows hosts to retrieve surrounding conversation
 and tool call context without reopening SQLite databases or performing secondary reads:

@@ -13,7 +13,7 @@
   </a>
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/Supported_Agents-6-green?style=flat-square" alt="Supported Agents" />
-  <img src="https://img.shields.io/badge/Detection_Categories-13-orange?style=flat-square" alt="Detection Categories" />
+  <img src="https://img.shields.io/badge/Detection_Categories-20-orange?style=flat-square" alt="Detection Categories" />
 </p>
 
 Telltale is an open-source detection layer for AI coding agents, built as the foundation for Agent Detection and Response (ADR). It detects telltale signs of risky behavior, preserves redacted evidence, and exports telemetry for review, alerting, and future response workflows.
@@ -136,10 +136,11 @@ supported subsets. It is not a gateway, live-provider interoperability claim or
 additional production source.
 
 The repository remains a Cargo workspace with six official packages. The 0.6.x
-architecture-convergence sequence is complete; current 0.7.0 preparation includes
-embedding changes beyond the published `v0.7.0-rc.1` candidate. Five-platform native
-qualification of that historical RC1 artifact passed in run `36305581215` using
-verifier tooling
+architecture-convergence sequence is complete. The latest published prerelease is
+`v0.7.0-rc.2`; five-platform native verification of that artifact passed in run
+`38098389234` and does not qualify current source. Workspace `0.7.0-rc.3` is
+unpublished preparation. Historical RC1 native qualification passed in run
+`36305581215` using verifier tooling
 `c5c955f57a83cbfc7bd9827932a5e7d54a2fd077` against the immutable published
 artifacts, not the current source. Clean-host qualification and stable promotion
 remain separate.

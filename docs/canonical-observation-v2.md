@@ -138,8 +138,9 @@ cardinality, or encoded-size limits. Native accounting still precedes canonical
 mapping and its failures are not relabeled. There is no second parser, source
 reread, or parallel validator. Failed acquisition returns no successful prefix,
 accounting, or progress. Event3 scanner errors remain the generic
-`canonical_acquisition_failed` projection without this context. Other adapters
-retain their existing code-only acquisition errors.
+`canonical_acquisition_failed` projection without this context. All six adapters
+preserve bound context when their canonical validator supplies it; errors without
+that context retain their existing code-only classification.
 
 ### Bounded long-message matching (#79, development after RC1)
 
@@ -444,9 +445,9 @@ counts, and projection.
 Baseline state aggregates the latest retained contribution for
 each source instance; it is not a lifetime counter or a defined rolling window.
 Canonical scanning replaces a complete source contribution and evaluates activity against a
-snapshot taken before that update. OpenCode reads all messages but only a capped,
-cursor-filtered selection of parts, with ten minutes of overlap. Consequently,
-replacement can discard older parts outside the selection; addition would instead
+snapshot taken before that update. The legacy OpenCode `message`/`part` store reads all messages but only a capped,
+cursor-filtered selection of parts, with ten minutes of resume overlap. When `session_message` and `session_v2` are complete, v2 takes precedence even if legacy tables coexist: it reads a capped `session_message` window, not every message or any legacy rows. Resume overlap is ten minutes; a cut window continues strictly after its high-water, with no overlap; a scanner drain may re-read up to one hour. Consequently,
+replacement can discard older parts or messages outside the selection; addition would instead
 count overlap again. An unchanged-source fingerprint does not solve changed,
 partially overlapping batches.
 
@@ -457,7 +458,7 @@ a Claude file containing quarantined units and current bounded OpenCode reads
 are `PartialSource`. Exhaustive reading alone is therefore insufficient for
 replacement. This resolves the prerequisite for complete file support, but
 does not make an OpenCode partial batch a replacement or an additive population.
-The prior overlap analysis remains authoritative: a previous A+B read followed
+The overlap hazard remains: a previous A+B read followed
 by a B+C read would either lose A under replacement or train B twice under
 addition. Partial coverage is therefore disallowed for baseline storage, not a
 blocker to producing truthful file activity or to supporting a successful partial

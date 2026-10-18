@@ -332,9 +332,8 @@ fn resume_token(
         ),
         AcquisitionProgress::None => return None,
     };
-    // A cut window that began inside the overlap can end before the resumed
-    // position; rows up to that position were evaluated when it was issued,
-    // so continuing after the later of the two skips nothing new.
+    // Keep the same-schema checkpoint monotone, including cut windows. This
+    // does not guarantee re-reading unfinished overlap below the checkpoint.
     let prior = resumed_from
         .filter(|(resumed, _)| resumed.same_schema(coordinate))
         .map(|(_, high_water)| high_water);

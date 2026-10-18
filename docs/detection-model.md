@@ -242,10 +242,10 @@ Rule modifiers may key off categories or exact rule ids. Exact rule-id modifiers
 Not all agent sources expose the same fields. Detection and analyst review context
 should account for source-level gaps documented in [agent-capability-profiles.md](agent-capability-profiles.md). Key constraints:
 
-- **User intent context** is unavailable for Copilot process logs. Rules targeting `user_context` silently skip Copilot records.
+- **User intent context** is unavailable for Copilot process logs. Rules that require `user_context` or `assistant_context` are capability-indeterminate for Copilot, including rules that also list other targets. They are not silently skipped.
 - **Model/provider attribution** is weaker for Copilot and Claude. Cross-session correlation by model/provider is unreliable for these sources.
-- **`call_id` linking** is only natively available for Copilot. Tool-call/tool-result pairing for other sources relies on ordering and tool name matching.
-- **`is_error` detection** is universally lossy through the legacy conversion path.
+- **`call_id` linking** is source-dependent. Missing IDs are not fabricated.
+- **`is_error`** is used only when the source attests it.
 
 ## Baseline Deviation State
 

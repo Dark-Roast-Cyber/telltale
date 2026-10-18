@@ -147,7 +147,6 @@ Telltale uses five evidence classes, ordered from safest to most sensitive:
 
 **Examples**:
 - `client` (codex, opencode, copilot, claude, ...)
-- `source_kind` (jsonl, sqlite, copilot_process_log, ...)
 - `rule_ids` (secret.env.read, mcp.tool_metadata.prompt_injection, ...)
 - `categories` (secret_access, mcp_prompt_injection, ...)
 - `severity` (informational, low, medium, high, critical)
@@ -188,7 +187,7 @@ Telltale uses five evidence classes, ordered from safest to most sensitive:
 **Current implementation**: `path_hash()` and `evidence_hash()` in `crates/telltale-schema/src/event/inventory.rs`.
 
 **Current behavior**:
-- `evidence[].hash` is populated for all evidence items in detection events (tests assert `hash.is_some()`).
+- `evidence[].hash` is optional, including in detection events. Constructors set it for hash-bearing evidence; derived `repeat_count` and `allowlist` evidence can omit it.
 - `source_path_hash` on events is a SHA-256 of the source file path. The terminal boundary also protects manually mutated public Event values by preserving canonical lowercase-hex hashes and hashing any other non-empty value.
 - Correlation events hash `event_id` for cross-reference.
 
@@ -212,7 +211,7 @@ When `--baseline-deviation-scoring` is enabled, emitted activity evidence report
 
 ### 5. Never Emit
 
-**Definition**: Data that must never appear in Telltale events, regardless of configuration.
+**Definition**: Data that bounded redaction is intended to keep out of Telltale events. This is not a guarantee against unrecognized secrets, and configuration cannot turn the pattern scan into a secret classifier.
 
 **Examples**:
 - Raw API keys, tokens, passwords, secrets
@@ -223,7 +222,7 @@ When `--baseline-deviation-scoring` is enabled, emitted activity evidence report
 - Raw command output containing secrets
 - Session store file contents (only hashes and excerpts)
 
-**Current behavior**: The terminal Event serialization wrapper and final rendered diagnostic context prevent these from reaching canonical Event text or stderr/log diagnostics. Synthetic controlled-marker tests assert specific marker values do not survive serialized output.
+**Current behavior**: Terminal Event serialization and diagnostic rendering run a bounded pattern scan for known forms. Unrecognized secrets can still pass. Synthetic controlled-marker tests assert specific marker values do not survive serialized output. See the threat model: redaction is not perfect classification.
 
 ## Evidence Minimalism
 
@@ -249,7 +248,7 @@ The `Event` struct in `crates/telltale-schema/src/event/mod.rs` maps evidence cl
 | --- | --- | --- |
 | `client`, `session_id`, `severity`, `risk_score`, `rule_ids`, `categories`, `tags`, `tool_name`, `timestamp`, `event_type` | Safe metadata | Top-level structured fields |
 | `evidence[].redacted_value` | Redacted excerpt | Bounded, redacted text from session content, including workspace observations when a source exposes them |
-| `evidence[].hash` | Hashed value | SHA-256 of the original value |
+| `evidence[].hash` | Hashed value | SHA-256 of the original value when the constructor sets it. The schema field is optional. |
 | `evidence[].field` | Safe metadata | Identifies which source field the evidence came from |
 | `evidence[].rule_id` | Safe metadata | Links evidence to the rule that matched it |
 | `source_path_hash` | Hashed value | SHA-256 of the source file path |
@@ -273,7 +272,7 @@ Issue #26 must reuse `check_serialized_event_markers()` for every durable outbox
 | Value Type | Hash Function | When to Hash |
 | --- | --- | --- |
 | Source file path | SHA-256 (`path_hash()`) | Always, for `source_path_hash` and evidence |
-| Evidence original value | SHA-256 (`evidence_hash()`) | Always, for `evidence[].hash` |
+| Evidence original value | SHA-256 (`evidence_hash()`) | When the constructor sets `evidence[].hash`. Scanner-error, operational-alert, correlation, and some detection evidence omit it. |
 | Baseline network host label | SHA-256 with `sha256:` prefix | Persisted native scanner state stores hashed host identities; legacy raw labels are accepted only by the explicit state migration command and are hashed in its canonical output |
 | Unsafe session ID | SHA-256 of the `session-id:v1` domain-separated input | `terminal_session_id()` preserves only bounded credential-free IDs and hashes all other source-provided IDs |
 | Event ID | SHA-256 | In correlation events for cross-reference |

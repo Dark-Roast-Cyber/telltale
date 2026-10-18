@@ -358,7 +358,7 @@ deferred until a real source contract requires it.
 | `informational` | `true` when `risk_score` is 0. |
 | `confidence` | `low` / `medium` / `high`. |
 | `detection_reason` | Redacted analyst sentence. |
-| `mitre_attack_techniques` | Winner's techniques plus every deduplicated rule's. Canonical `T1234`/`T1234.001` IDs remain readable; unexpected values are emitted as deterministic `mitre:<sha256>` identifiers. |
+| `mitre_attack_techniques` | Winner's techniques plus every deduplicated rule's. Canonical `T1234`/`T1234.001` IDs remain readable. Malformed ATT&CK IDs fail closed; Event 3 emits canonical `T####` / `T####.###`, not hashed `mitre:` identifiers. |
 | `risk_entity_type` / `risk_entity_value` | `host`, `user`, or `session`. Degrades to `session` when a transcript names no host, rather than labelling a session ID as a host. |
 | `process.*` | Host, user, source/target/parent process name, path, PID, and command line; `source_event_id`; `source_process_inferred`; `rule_name`; `rule_severity`; `secondary_rule_ids`; `investigation_fields`; `falsepositives`; `dedup_key`; `suppression_window_seconds`; `risk_adjustment`. |
 

@@ -9,6 +9,120 @@ fn options() -> AcquisitionOptions {
 }
 
 #[test]
+fn adapter_error_mapping_preserves_existing_bound_context_and_codes() {
+    use telltale_schema::observation::{ObservationError, ValidationCode};
+
+    let bound =
+        JsonValue::try_from_source_value(&json!({"private_key":"x".repeat(4097)})).unwrap_err();
+    for error in [
+        bound.with_bound_category(CanonicalFieldCategory::ToolArguments),
+        bound,
+        ObservationError::from_validation_code(ValidationCode::InvalidTime),
+        ObservationError::from_validation_code(ValidationCode::UnboundedValue),
+    ] {
+        // Exercise error transport only, without adding legacy format coverage.
+        for mapped in [
+            map_openclaw_error(error.into()),
+            map_qwen_error(error.into()),
+            map_copilot_error(error.into()),
+        ] {
+            assert_eq!(mapped.code(), error.code());
+            assert_eq!(mapped.to_string(), error.code());
+            assert_eq!(mapped.bound_context(), error.bound_context());
+            assert_eq!(
+                matches!(mapped, AcquisitionError::CanonicalBoundValidation { .. }),
+                error.bound_context().is_some()
+            );
+            assert!(!format!("{mapped:?}").contains("private_key"));
+        }
+    }
+    for mapped in [
+        map_openclaw_error(OpenClawCanonicalError::Mapping {
+            code: "unknown_discriminator",
+            detail: "private-detail",
+        }),
+        map_qwen_error(QwenCanonicalError::Mapping {
+            code: "unknown_discriminator",
+            detail: "private-detail",
+        }),
+        map_copilot_error(CopilotCanonicalError::Mapping {
+            code: "unknown_discriminator",
+            detail: "private-detail",
+        }),
+    ] {
+        assert_eq!(
+            mapped,
+            AcquisitionError::CanonicalMapping {
+                code: "unknown_discriminator"
+            }
+        );
+        assert_eq!(mapped.bound_context(), None);
+        assert!(!format!("{mapped:?} {mapped}").contains("private-detail"));
+    }
+}
+
+#[test]
+fn qwen_and_copilot_acquisition_preserve_assembled_message_bound_context() {
+    let directory = tempfile::tempdir().unwrap();
+    for (client, source_id, kind, category) in [
+        (
+            ClientId::Qwen,
+            "qwen.projects",
+            SourceKind::Jsonl,
+            CanonicalFieldCategory::MessageContent,
+        ),
+        (
+            ClientId::Copilot,
+            "copilot.process_log",
+            SourceKind::CopilotProcessLog,
+            CanonicalFieldCategory::MessageContentParts,
+        ),
+    ] {
+        let source = Source {
+            client,
+            source_id: source_id.into(),
+            kind,
+            path: directory.path().join("synthetic-bound.log"),
+        };
+        for bytes in [65_536, 65_537] {
+            let text = format!("{}private-suffix", "x".repeat(bytes - 14));
+            let input = if client == ClientId::Copilot {
+                format!(
+                    "Workspace initialized: synthetic (checkpoints: 0)\nAccumulated output items (1): {}\n",
+                    json!([{"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":text}]}])
+                )
+            } else {
+                format!(
+                    "{}\n",
+                    json!({"type":"user", "sessionId":"synthetic", "content":text})
+                )
+            };
+            std::fs::write(&source.path, input).unwrap();
+            let error = acquire_source(&source, options())
+                .err()
+                .expect("bound failure must not return a partial batch");
+            assert_eq!(error.code(), "unbounded_value");
+            assert_eq!(error.to_string(), "unbounded_value");
+            // Conversion attribution is separate; missing context is not a guarantee.
+            if bytes == 65_536 {
+                assert_eq!(
+                    error.bound_context(),
+                    Some(CanonicalBoundContext {
+                        category,
+                        dimension: BoundDimension::EncodedBytes,
+                    }),
+                    "{client:?}, {bytes} bytes"
+                );
+            }
+            let diagnostic = format!("{error:?} {error}");
+            for forbidden in ["private-suffix", "synthetic", "output_text"] {
+                assert!(!diagnostic.contains(forbidden));
+            }
+        }
+    }
+}
+
+#[test]
 fn claude_tool_result_value_and_provenance_follow_native_representation() {
     use telltale_schema::observation::{FactProvenance, Sensitivity};
     let directory = tempfile::tempdir().unwrap();

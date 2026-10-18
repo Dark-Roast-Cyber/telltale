@@ -359,31 +359,6 @@ fn source_id_from_rule(rule: &RuleDefinition) -> &str {
     &rule.id
 }
 
-fn apply_rule_defaults(rule: &mut RuleDefinition, defaults: &RuleDefaults) {
-    if !defaults.enabled {
-        rule.enabled = false;
-    }
-    if defaults.case_insensitive {
-        if let Some(regex) = rule.regex.as_mut() {
-            *regex = format!("(?i:{regex})");
-        }
-        if let Some(detection) = rule.detection.as_mut() {
-            for regex in detection.selection.values_mut() {
-                *regex = format!("(?i:{regex})");
-            }
-            for regex in detection.exclude.values_mut() {
-                *regex = format!("(?i:{regex})");
-            }
-        }
-    }
-}
-
-fn apply_modifier_defaults(modifier: &mut ModifierDefinition, defaults: &RuleDefaults) {
-    if !defaults.enabled {
-        modifier.enabled = false;
-    }
-}
-
 fn upsert_modifier_definition(
     locations: &mut BTreeMap<String, DefinitionLocation>,
     modifiers: &mut Vec<ModifierDefinition>,
@@ -569,46 +544,171 @@ modifiers: []
     }
 
     #[test]
-    fn cli_resolution_applies_case_defaults_to_exclusions() {
+    fn cli_document_defaults_match_document_loader() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("rules.yaml");
-        fs::write(
-            &path,
-            r#"version: 1
-description: exclusion defaults
-defaults: {case_insensitive: true, enabled: true}
+        let other_path = temp.path().join("other.yaml");
+        let other = rule_yaml("test.other", "other", 7);
+        fs::write(&other_path, &other).expect("write other rules");
+        for (case_insensitive, enabled, definition_enabled) in [
+            (false, false, false),
+            (false, false, true),
+            (false, true, false),
+            (false, true, true),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+            (true, true, true),
+        ] {
+            let raw = format!(
+                r#"version: 1
+description: document defaults
+defaults: {{case_insensitive: {case_insensitive}, enabled: {enabled}}}
 rules:
+  - id: test.simple
+    category: test
+    severity: low
+    score: 2
+    targets: [command]
+    regex: needle
+    enabled: {definition_enabled}
+    tags: [test]
+    explanation: Synthetic test rule.
   - id: test.exclusion
     category: test
     severity: low
     score: 1
+    enabled: {definition_enabled}
     detection:
-      selection: {command: needle}
-      exclude: {command: quoted}
+      selection: {{command: needle}}
+      exclude: {{command: quoted}}
       condition: selection
     tags: [test]
     explanation: Synthetic test rule.
-modifiers: []
+modifiers:
+  - id: test.modifier
+    score: 3
+    enabled: {definition_enabled}
+    when_all_rule_ids: [test.simple, test.exclusion]
+    explanation: Synthetic test modifier.
 "#,
-        )
-        .expect("write rules");
-        let resolution =
-            resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
-                &RulePackPaths::default(),
-                &[path],
-                None,
-                RuleLoadMode::CustomOnly,
-                &[],
-                &[],
-            )
-            .expect("resolve rules");
-
-        assert!(
-            resolution
+            );
+            fs::write(&path, &raw).expect("write rules");
+            let resolution =
+                resolve_rule_set_from_pack_paths_with_mode_override_paths_and_replacements(
+                    &RulePackPaths {
+                        deployment: vec![path.clone()],
+                        ..RulePackPaths::default()
+                    },
+                    std::slice::from_ref(&other_path),
+                    None,
+                    RuleLoadMode::CustomOnly,
+                    &[],
+                    &[],
+                )
+                .expect("resolve rules");
+            let loaded =
+                super::load_rule_set_from_documents(&[&raw, &other], None).expect("load documents");
+            assert_eq!(
+                resolution.merged_rule_set.rules[0].enabled,
+                enabled && definition_enabled
+            );
+            assert_eq!(
+                resolution.merged_rule_set.modifiers[0].enabled,
+                enabled && definition_enabled
+            );
+            for text in [
+                "needle",
+                "NEEDLE",
+                "needle QUOTED",
+                "NEEDLE QUOTED",
+                "other",
+                "OTHER",
+            ] {
+                let cli_match = resolution.rule_set.evaluate(&[("command", text)]).unwrap();
+                let document_match = loaded.evaluate(&[("command", text)]).unwrap();
+                assert_eq!(
+                    cli_match.map(|matched| (matched.rule_ids, matched.score)),
+                    document_match.map(|matched| (matched.rule_ids, matched.score)),
+                    "case_insensitive={case_insensitive}, enabled={enabled}, definition_enabled={definition_enabled}, text={text}"
+                );
+            }
+            let matched = resolution
                 .rule_set
-                .evaluate(&[("command", "NEEDLE in a QUOTED example")])
-                .expect("evaluate")
-                .is_none()
+                .evaluate(&[("command", "needle")])
+                .unwrap();
+            assert_eq!(matched.is_some(), enabled && definition_enabled);
+            if let Some(matched) = matched {
+                assert_eq!(matched.score, 6);
+                assert_eq!(
+                    matched.rule_ids,
+                    ["test.simple", "test.exclusion", "test.modifier"]
+                );
+                let text = if case_insensitive {
+                    "NEEDLE QUOTED"
+                } else {
+                    "needle quoted"
+                };
+                let excluded = resolution
+                    .rule_set
+                    .evaluate(&[("command", text)])
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(excluded.rule_ids, ["test.simple"]);
+                assert_eq!(excluded.score, 2);
+            }
+            assert_eq!(
+                resolution
+                    .rule_set
+                    .evaluate(&[("command", "NEEDLE")])
+                    .unwrap()
+                    .is_some(),
+                case_insensitive && enabled && definition_enabled
+            );
+            assert_eq!(
+                resolution
+                    .rule_set
+                    .evaluate(&[("command", "other")])
+                    .unwrap()
+                    .unwrap()
+                    .score,
+                7
+            );
+        }
+    }
+
+    #[test]
+    fn pipeline_builder_documents_remain_additive_and_reject_duplicate_ids() {
+        let first = rule_yaml("test.first", "first", 1);
+        let second = rule_yaml("test.second", "second", 2);
+        let pipeline = telltale_core::Pipeline::builder()
+            .without_bundled_defaults()
+            .rules_document(&first)
+            .rules_document(&second)
+            .build()
+            .expect("additive documents");
+        assert_eq!(pipeline.rule_count(), 2);
+        for duplicate in [
+            first.clone(),
+            first.replace("enabled: true", "enabled: false"),
+        ] {
+            let error = telltale_core::Pipeline::builder()
+                .without_bundled_defaults()
+                .rules_document(&first)
+                .rules_document(duplicate)
+                .build()
+                .err()
+                .expect("duplicate document ID must not replace");
+            let telltale_core::PipelineError::Compilation(error) = error else {
+                panic!("expected duplicate compilation error");
+            };
+            assert_eq!(error.to_string(), "duplicate rule id: test.first");
+        }
+        assert!(
+            telltale_core::Pipeline::builder()
+                .rules_document(rule_yaml("secret.env.read", "replacement", 9))
+                .build()
+                .is_err()
         );
     }
 

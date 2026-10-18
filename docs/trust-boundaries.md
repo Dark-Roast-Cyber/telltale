@@ -118,7 +118,7 @@ The following content sources in agent session stores should be treated as untru
 **Why untrusted**: If a previous session was compromised, the injected content persists and influences future sessions. An attacker who achieves prompt injection in one session can plant instructions that activate in later sessions.
 
 **Telltale handling**:
-- Cross-session correlation (`src/correlation.rs`) detects repeated suspicious patterns across sessions from the same agent/model/provider.
+- Cross-session correlation (`crates/telltale-detect/src/correlation.rs`) detects repeated suspicious patterns across sessions from the same agent/model/provider.
 - Detection rules do not assume that prior session context is safe.
 
 ### 10. Generated Code That Asks for Follow-up Execution
@@ -177,7 +177,7 @@ When emitting events to SIEM:
 2. **Redacted excerpts are semi-trusted.** They contain bounded, redacted snippets of untrusted content. Evidence, command/result, URL, path, diagnostic, and summary contexts preserve only useful safe structure; process host/user and non-session entity values become deterministic opaque markers.
 3. **Hashes aid correlation but are not encryption.** `source_path_hash` and `evidence_hash` retain deterministic semantics. Low-entropy inputs can be subject to dictionary comparison.
 4. **Canonical JSONL is post-boundary only.** Durable first-write JSONL stores canonical Event 3.0 bytes after sanitization; it must not retain raw source-native records as a repair or replay source.
-5. **Never emit raw untrusted content.** Full session transcripts, raw tool arguments, raw tool results, raw MCP metadata, unsafe source-read or mapping errors, and unsafe sink errors must never appear in Events or stderr/log diagnostics. See [privacy-model.md](privacy-model.md) for the full evidence class contract.
+5. **Do not emit raw untrusted content.** Full session transcripts, raw tool arguments, raw tool results, raw MCP metadata, unsafe source-read or mapping errors, and unsafe sink errors are what bounded redaction is meant to keep out of Events and stderr/log diagnostics. Unrecognized secrets can still pass. See [privacy-model.md](privacy-model.md) for the full evidence class contract.
 
 The synthetic controlled-marker corpus covers detection, activity, health, scanner error, operational alert, session risk summary, correlation, process-chain, MCP, and JSONL output paths. It is an adversarial regression oracle, not a claim of perfect secret classification. The serialized-byte checker compares exact decoded JSON keys and string values; supported escaped and percent-encoded forms are established by separate sanitizer regressions rather than implicit normalization in the checker. The checker has explicit 1 MiB input and nesting limits, fails with marker-safe errors, and stops at the first marker. Issue #26 must apply it to outbox, retry, permanent-failure, and dead-letter payloads; no external service is authorized for that work.
 
