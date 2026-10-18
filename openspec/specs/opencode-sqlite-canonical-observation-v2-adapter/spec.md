@@ -462,8 +462,9 @@ persist cursor or scanner state.
 Failed extraction MUST NOT return observations, accounting, or progress.
 The
 scanner MUST stage a successful incremental high-water at no less than the
-previously stored high-water and MUST NOT stage cursor or baseline replacement
-on source failure.
+previously stored high-water. A failed window MUST NOT stage its cursor or
+baseline replacement; earlier successful v2 windows in the same scan remain
+eligible as specified by the rolling-window requirement below.
 Dry-run and backfill MUST NOT stage a cursor.
 An incremental poll MUST fail the source as `resume_regressed`, staging nothing,
 when no part with an integer `time_updated` at or after the stored high-water
@@ -474,7 +475,7 @@ persistence MUST still gate scanner-state installation.
 #### Scenario: OpenCode scanner progress is monotone and durability-gated
 
 - **WHEN** incremental acquisition fails or succeeds
-- **THEN** failure stages no state, successful high-water cannot regress, dry-run/backfill do not stage and durable output gates installation
+- **THEN** a failed window stages no progress or baseline, earlier successful v2 windows remain output-gated, successful checkpoint high-water cannot regress, and dry-run/backfill do not stage a cursor
 
 #### Scenario: A regressed store fails the scanner closed
 
@@ -501,8 +502,10 @@ MUST remain the generic stage code.
 
 A successful embedded `opencode.sqlite` scan MUST return a versioned
 `ResumeToken` bound to the exact source, including its exact platform-native
-path, and never earlier than the token it resumed from. A resumed scan with no
-newer parts MUST return the token it resumed from. A tokenless scan MUST return
+path, with an evaluated checkpoint never earlier than the same-schema token it
+resumed from. An idle complete-window resume MUST return the token it resumed
+from; an unfinished v2 window MUST retain its separate raw continuation even
+below that checkpoint. A tokenless scan MUST return
 none when no part high-water exists. A resumed scan MUST apply the CLI's single
 overlap and incremental part limit, selecting parts from the overlap-adjusted
 lower bound onward; exceeding the limit MUST fail as
@@ -808,11 +811,27 @@ that fails keeps the earlier windows and their position, and is reported.
 Repeated detections from re-read rows are deduplicated like those of the
 routine overlap, and re-read rows count again in summary record counts, but
 a quarantined row that is re-read MUST be reported once. After
-the window limit, the next scan MUST continue strictly after the high-water.
+the window limit or a later-window failure, the next scan MUST continue strictly
+after the last successful window's raw cut, even below the prior checkpoint.
 The ten-minute overlap MUST resume once a window completes. The CLI cursor
-records a drain as an optional `draining` flag, and embedding tokens use the
-`session_message_drain:` coordinate; an embedding scan evaluates one window. A
-drain position MUST NOT move behind the position it resumed from. Canonical
+MUST clear its drain even if that complete window selected no rows, retaining
+the prior checkpoint. The CLI cursor
+records a drain with `draining: true` and `continue_after_time_updated`; its
+`last_time_updated` checkpoint MUST remain monotone independently of that cut.
+Embedding cut tokens MUST use
+`resume:v1:opencode.sqlite:session_message_window:<checkpoint>:<cut>:<binding>`;
+an embedding scan evaluates one window. The cut MUST be an integer no greater
+than the checkpoint. Both coordinates MUST retain exact source/schema binding
+and required-output installation gating. Regression checks during a drain MUST
+use the monotone checkpoint, not a lower raw cut; the read-option continuation
+helper MUST preserve a higher regression floor already supplied by its caller.
+Older `draining` state without a cut and `session_message_drain:` tokens MUST
+remain accepted and replay the checkpoint's ten-minute overlap, because their
+raw cut cannot be recovered. New writes MUST include the raw cut; older readers
+MUST reject that unknown state field/token coordinate rather than reinterpret
+it. Complete state/tokens and legacy schema semantics remain unchanged.
+This upgrade MUST NOT claim to recover historical omissions outside the overlap.
+Canonical
 source processing MUST re-read a window at half its retained size when
 evaluating or projecting it exhausts the shared evaluation work budget or a
 retained projection capacity bound, until it fits. When even the smallest
@@ -852,7 +871,17 @@ shared with legacy reads.
 #### Scenario: A burst inside the overlap still drains
 
 - **WHEN** more rows than one window holds lie inside the overlap before the resume high-water
-- **THEN** the cut window's successors continue strictly after each high-water until a window completes
+- **THEN** the cut window's successors continue strictly after each raw cut until a window completes, without lowering the checkpoint
+
+#### Scenario: An unfinished overlap survives persisted restart
+
+- **WHEN** late rows within the overlap cut a window below the prior complete checkpoint, and the CLI stops at its window limit or a later-window failure, or an embedding host persists the cut token
+- **THEN** restarting continues after the raw cut and acquires the still-unseen overlap rows, the checkpoint stays monotone, and deleting rows at or above that checkpoint fails as `resume_regressed` even if rows remain after the cut
+
+#### Scenario: Older unfinished state replays safely on upgrade
+
+- **WHEN** an older draining state/token has only its clamped checkpoint
+- **THEN** the new reader replays that checkpoint's overlap and issues a separate raw cut if still unfinished, while older readers reject the new drain representation
 
 #### Scenario: Evaluation work shrinks the window
 
@@ -887,8 +916,9 @@ The CLI MUST store v2 progress under the `session_message` cursor table and
 legacy progress under `part`, and each cursor MUST apply only to its own schema;
 a v2 store without a `session_message` cursor MUST bootstrap, and an existing
 `part` cursor MUST be left unchanged. Embedded legacy tokens keep the form
-`resume:v1:opencode.sqlite:<high-water>:<binding>`; v2 tokens MUST use
-`resume:v1:opencode.sqlite:session_message:<high-water>:<binding>`. A token for
+`resume:v1:opencode.sqlite:<high-water>:<binding>`; complete v2 tokens MUST use
+`resume:v1:opencode.sqlite:session_message:<high-water>:<binding>`, and cut
+windows MUST use the two-coordinate form specified above. A token for
 the other schema MUST read the selected schema's bootstrap selection; the
 returned token MUST carry the selected schema's high-water, or the unchanged
 resumed token when that schema has none. Failure, dry-run and backfill rules and

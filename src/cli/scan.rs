@@ -358,7 +358,14 @@ fn run_scan_for_platform(
     let mut detections = Vec::new();
     let mut rebuild = config.rebuild_baselines;
     for (source, result) in sources.iter().zip(processed_sources) {
-        match result.sqlite_progress_cursor(config.execution.dry_run, config.backfill) {
+        match result.sqlite_progress_cursor(
+            config.execution.dry_run,
+            config.backfill,
+            state.sqlite_ingestion_cursor_time_updated(
+                source,
+                OPENCODE_SQLITE_SESSION_MESSAGE_TABLE,
+            ),
+        ) {
             Some((table, last_time_updated, true)) => state.observe_sqlite_ingestion_drain(
                 source,
                 table,
@@ -980,13 +987,12 @@ fn opencode_read_options_for_scan_source(
     if let Some(last_seen) =
         state.sqlite_ingestion_cursor_time_updated(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
     {
-        options = if state
-            .sqlite_ingestion_cursor_draining(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
+        options = options.resume_session_messages_after(last_seen);
+        if let Some(cut) =
+            state.sqlite_ingestion_continue_after(source, OPENCODE_SQLITE_SESSION_MESSAGE_TABLE)
         {
-            options.continue_session_messages_after(last_seen)
-        } else {
-            options.resume_session_messages_after(last_seen)
-        };
+            options = options.continue_session_messages_after(cut);
+        }
     }
     options
 }
@@ -1914,9 +1920,7 @@ mod tests {
     fn opencode_v2_scan_options_preserve_stored_monotone_watermark_and_drain_mode() {
         let source = opencode_test_source();
         let mut state = ScanState::default();
-        // Save/load preserves the monotone watermark and selected drain mode,
-        // not a raw cut below that watermark. This does not prove replay of
-        // late/backdated rows remaining in an unfinished overlap window.
+        // Save/load preserves both the monotone checkpoint and the raw cut.
         for (high_water, draining) in [(1_000_000, false), (900_000, true), (800_000, false)] {
             if draining {
                 state.observe_sqlite_ingestion_drain(
@@ -1938,7 +1942,9 @@ mod tests {
             state.save(&path).unwrap();
             state = ScanState::load(&path).unwrap();
             let expected = if draining {
-                OpenCodeSqliteReadOptions::default().continue_session_messages_after(1_000_000)
+                OpenCodeSqliteReadOptions::default()
+                    .resume_session_messages_after(1_000_000)
+                    .continue_session_messages_after(high_water)
             } else {
                 OpenCodeSqliteReadOptions::default().resume_session_messages_after(1_000_000)
             };

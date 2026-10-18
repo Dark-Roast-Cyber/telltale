@@ -141,8 +141,8 @@ pub enum AcquisitionProgress {
     },
     /// OpenCode v2 `session_v2`/`session_message` store: the `time_updated`
     /// high-water of the evaluated window. `window_complete` is false when the
-    /// row limit or retained budget cut the selection; resuming from the
-    /// high-water (minus the overlap) continues the backlog.
+    /// row limit or retained budget cut the selection. Continue strictly after
+    /// this raw cut while keeping a higher evaluated checkpoint separate.
     OpenCodeSessionMessages {
         message_max_time_updated: Option<i64>,
         window_complete: bool,
@@ -195,19 +195,19 @@ impl OpenCodeSqliteReadOptions {
         }
     }
 
-    /// Also resume an OpenCode v2 store after a recorded `session_message`
-    /// `time_updated` high-water, with the same overlap, incremental row limit
-    /// and regression check as the legacy part cursor. Legacy controls are
-    /// unchanged, so one options value can carry both cursors.
-    /// Continue a cut OpenCode v2 window strictly after its high-water,
+    /// Continue a cut OpenCode v2 window strictly after its raw cut,
     /// without the overlap, so a backlog drains even when one window cannot
-    /// hold the overlap. Resume with [`Self::resume_session_messages_after`]
-    /// once a window reports itself complete.
-    pub fn continue_session_messages_after(self, high_water: i64) -> Self {
+    /// hold the overlap. Retain any higher `message_resume_high_water` as the
+    /// regression floor; the cut may be below that checkpoint. Resume with
+    /// [`Self::resume_session_messages_after`] once a window reports itself complete.
+    pub fn continue_session_messages_after(self, cut: i64) -> Self {
         Self {
-            message_min_time_updated: Some(high_water.saturating_add(1)),
+            message_min_time_updated: Some(cut.saturating_add(1)),
             message_limit: OPENCODE_SQLITE_RESUME_PART_LIMIT,
-            message_resume_high_water: Some(high_water),
+            message_resume_high_water: Some(
+                self.message_resume_high_water
+                    .map_or(cut, |floor| floor.max(cut)),
+            ),
             ..self
         }
     }
@@ -224,6 +224,8 @@ impl OpenCodeSqliteReadOptions {
         }
     }
 
+    /// Resume an OpenCode v2 checkpoint with the shared ten-minute overlap,
+    /// incremental row limit and regression check. Legacy controls are unchanged.
     pub fn resume_session_messages_after(self, high_water: i64) -> Self {
         Self {
             message_min_time_updated: Some(
