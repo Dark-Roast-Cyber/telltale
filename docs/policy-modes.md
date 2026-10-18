@@ -23,15 +23,17 @@ There is no policy-mode flag and no `policy_mode` event field. `observe` and `al
 
 ### `observe`
 
-Suppress policy-controlled Rule v1 detections while retaining health telemetry
-and activity with `--emit-activity`. Process-chain detections are independently
+Suppress policy-controlled Rule v1 detections while retaining conditional health
+events and activity with `--emit-activity`. Health events are emitted for dry-run
+or backfill, inventory changes, scanner errors, outages, or operational alerts;
+an unchanged routine scan need not emit one. Process-chain detections are independently
 enabled by default; set `TELLTALE_PROCESS_CHAIN_DETECTIONS=0` as well for a
 detection-free baseline scan.
 
 | Behavior | Setting |
 | --- | --- |
 | Activity events | emitted only with `--emit-activity` |
-| Health events | emitted |
+| Health events | conditional on the changes, errors, execution settings, or alerts described above |
 | Detection events | Rule v1 candidates disabled by policy; process-chain events require the separate setting above |
 | Review metadata | absent only when neither detection path emits |
 | Operational alerts | emitted |
@@ -74,7 +76,7 @@ the default scan behavior, not a named mode or flag.
 | Behavior | Setting |
 | --- | --- |
 | Activity events | emitted (with `--emit-activity`) |
-| Health events | emitted |
+| Health events | conditional, as described under `observe` |
 | Detection events | emitted |
 | Review metadata | Native Event 3.0 uses deterministic response metadata and optional `timeline_anchors`; no embedded triage verdict |
 | Operational alerts | emitted |
@@ -91,8 +93,11 @@ than a fixed severity table):
 | 70–89 | high | deterministic response metadata | detection event with deterministic response metadata |
 | 90+ | critical | deterministic response metadata | detection event with deterministic response metadata |
 
-Without `--policy`, bundled Rule v1 detections remain active. A loaded policy
-filters that rule set; process-chain enablement is independent.
+Without an effective policy, policy filtering is not applied; rule packs and
+overrides still determine the active definitions. An explicit `--policy` selects
+the policy file; omitting it can still load an auto-discovered `policies.d` file.
+`--no-local-config` disables that discovery, not an explicit policy. An effective
+policy filters Rule v1 rules; process-chain enablement is independent.
 
 ### `simulate-block`
 
